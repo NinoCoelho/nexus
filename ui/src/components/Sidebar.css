@@ -336,6 +336,26 @@
   min-width: 180px;
 }
 
+/* Floating variant: detached from the row, positioned via inline top/left.
+   Takes precedence over the legacy absolute rules above. */
+.sidebar-context-menu--floating {
+  position: fixed;
+  top: auto;
+  right: auto;
+  padding: 4px 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  z-index: 300;
+  animation: ctx-menu-pop 100ms ease-out;
+}
+
+@keyframes ctx-menu-pop {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
 /* Spacer + bottom */
 .sidebar-spacer { flex: 1; }
 

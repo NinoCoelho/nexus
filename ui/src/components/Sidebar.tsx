@@ -141,8 +141,13 @@ export default function Sidebar({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
-  // Context menu
-  const [menuId, setMenuId] = useState<string | null>(null);
+  // Context menu — tracks the id + the anchor rect so we can render as a
+  // position:fixed popover outside the row's overflow-hidden clip.
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const menuId = menu?.id ?? null;
+  const setMenuId = (id: string | null) => {
+    if (id == null) setMenu(null);
+  };
   /** ids currently sending to the vault ("summary" mode can take seconds) */
   const [toVaultBusy, setToVaultBusy] = useState<Set<string>>(new Set());
 
@@ -333,7 +338,7 @@ export default function Sidebar({
                 onClick={() => onSessionSelect(s.id)}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  setMenuId(s.id);
+                  setMenu({ id: s.id, x: e.clientX, y: e.clientY });
                 }}
               >
                 {renamingId === s.id ? (
@@ -369,7 +374,12 @@ export default function Sidebar({
                       aria-label="Session actions"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setMenuId(menuId === s.id ? null : s.id);
+                        if (menu?.id === s.id) {
+                          setMenu(null);
+                        } else {
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setMenu({ id: s.id, x: r.right + 4, y: r.top });
+                        }
                       }}
                       title="More actions"
                     >
@@ -380,54 +390,6 @@ export default function Sidebar({
                       </svg>
                     </button>
                   </>
-                )}
-
-                {menuId === s.id && (
-                  <div
-                    className="sidebar-context-menu"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      className="sidebar-ctx-item"
-                      onClick={() => {
-                        setRenamingId(s.id);
-                        setRenameValue(s.title);
-                        setMenuId(null);
-                      }}
-                    >
-                      Rename
-                    </button>
-                    <button
-                      className="sidebar-ctx-item"
-                      onClick={() => void handleExport(s.id)}
-                    >
-                      Download .md
-                    </button>
-                    <div className="sidebar-ctx-divider" />
-                    <button
-                      className="sidebar-ctx-item"
-                      disabled={toVaultBusy.has(s.id)}
-                      onClick={() => void handleToVault(s.id, "raw")}
-                      title="Save the full transcript to the vault"
-                    >
-                      Send to vault (raw)
-                    </button>
-                    <button
-                      className="sidebar-ctx-item"
-                      disabled={toVaultBusy.has(s.id)}
-                      onClick={() => void handleToVault(s.id, "summary")}
-                      title="Have Nexus summarize this session and save the note"
-                    >
-                      Send to vault (summary)
-                    </button>
-                    <div className="sidebar-ctx-divider" />
-                    <button
-                      className="sidebar-ctx-item sidebar-ctx-item--danger"
-                      onClick={() => void handleDelete(s.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
                 )}
               </div>
             ))}
@@ -452,6 +414,67 @@ export default function Sidebar({
           {!collapsed && <span className="sidebar-nav-label">Settings</span>}
         </button>
       </div>
+
+      {/* Floating context menu — position:fixed so it escapes the row's
+          overflow:hidden clip. Anchored to the cursor (right-click) or
+          the ⋮ button's rect (left-click). */}
+      {menu && (() => {
+        const s = sessions.find((x) => x.id === menu.id);
+        if (!s) return null;
+        // Keep the menu on-screen: if the anchor is too close to the right
+        // edge, flip to the left of the cursor/button.
+        const width = 200;
+        const left = Math.min(menu.x, window.innerWidth - width - 8);
+        const top = Math.min(menu.y, window.innerHeight - 240);
+        return (
+          <div
+            className="sidebar-context-menu sidebar-context-menu--floating"
+            style={{ top, left, width }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="sidebar-ctx-item"
+              onClick={() => {
+                setRenamingId(s.id);
+                setRenameValue(s.title);
+                setMenu(null);
+              }}
+            >
+              Rename
+            </button>
+            <button
+              className="sidebar-ctx-item"
+              onClick={() => void handleExport(s.id)}
+            >
+              Download .md
+            </button>
+            <div className="sidebar-ctx-divider" />
+            <button
+              className="sidebar-ctx-item"
+              disabled={toVaultBusy.has(s.id)}
+              onClick={() => void handleToVault(s.id, "raw")}
+              title="Save the full transcript to the vault"
+            >
+              Send to vault (raw)
+            </button>
+            <button
+              className="sidebar-ctx-item"
+              disabled={toVaultBusy.has(s.id)}
+              onClick={() => void handleToVault(s.id, "summary")}
+              title="Have Nexus summarize this session and save the note"
+            >
+              Send to vault (summary)
+            </button>
+            <div className="sidebar-ctx-divider" />
+            <button
+              className="sidebar-ctx-item sidebar-ctx-item--danger"
+              onClick={() => void handleDelete(s.id)}
+            >
+              Delete
+            </button>
+          </div>
+        );
+      })()}
     </aside>
   );
 }
