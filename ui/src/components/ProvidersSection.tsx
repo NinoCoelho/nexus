@@ -17,15 +17,23 @@ interface AddState {
   name: string;
   base_url: string;
   key_env: string;
+  key_env_touched: boolean;
   api_key: string;
   type: "openai_compat" | "anthropic" | "ollama";
+}
+
+// Derive the conventional env var name for a provider.
+function defaultKeyEnv(providerName: string, type: AddState["type"]): string {
+  if (type === "ollama") return "";
+  const slug = providerName.trim().replace(/[^a-zA-Z0-9]+/g, "_").toUpperCase();
+  return slug ? `${slug}_API_KEY` : "";
 }
 
 export default function ProvidersSection({ providers, onRefresh }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditState>({ name: "", base_url: "", key_env: "", api_key: "" });
   const [adding, setAdding] = useState(false);
-  const [addForm, setAddForm] = useState<AddState>({ name: "", base_url: "", key_env: "", api_key: "", type: "openai_compat" });
+  const [addForm, setAddForm] = useState<AddState>({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", type: "openai_compat" });
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [confirmClearKey, setConfirmClearKey] = useState<string | null>(null);
@@ -100,7 +108,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
         await setProviderKey(addForm.name.trim(), addForm.api_key.trim());
       }
       setAdding(false);
-      setAddForm({ name: "", base_url: "", key_env: "", api_key: "", type: "openai_compat" });
+      setAddForm({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", type: "openai_compat" });
       onRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Add failed");
@@ -148,17 +156,17 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                 />
               </div>
               <div className="settings-field">
-                <label className="settings-field-label">API key</label>
+                <label className="settings-field-label">API key <span style={{opacity:0.7,fontWeight:400}}>(override)</span></label>
                 <input
                   className="settings-input"
                   type="password"
                   value={editForm.api_key}
                   onChange={(e) => setEditForm((f) => ({ ...f, api_key: e.target.value }))}
-                  placeholder="sk-..."
+                  placeholder="sk-…  (leave blank to use env var)"
                   autoComplete="off"
                 />
                 <span className="settings-field-hint">
-                  Stored locally at ~/.nexus/secrets.toml (0600). Leave blank to use the env var above.
+                  Optional — overrides the env var above. Stored at ~/.nexus/secrets.toml (0600).
                 </span>
               </div>
               {p.key_source === "inline" && (
@@ -232,7 +240,14 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
             <input
               className="settings-input"
               value={addForm.name}
-              onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+              onChange={(e) => {
+                const name = e.target.value;
+                setAddForm((f) => ({
+                  ...f,
+                  name,
+                  key_env: f.key_env_touched ? f.key_env : defaultKeyEnv(name, f.type),
+                }));
+              }}
               placeholder="my-provider"
               autoFocus
             />
@@ -242,21 +257,37 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
             <div className="seg-control">
               <button
                 className={`seg-btn${addForm.type === "openai_compat" ? " seg-btn--active" : ""}`}
-                onClick={() => setAddForm((f) => ({ ...f, type: "openai_compat", base_url: "" }))}
+                onClick={() => setAddForm((f) => ({
+                  ...f,
+                  type: "openai_compat",
+                  base_url: "",
+                  key_env: f.key_env_touched ? f.key_env : defaultKeyEnv(f.name, "openai_compat"),
+                }))}
                 type="button"
               >
                 OpenAI-compatible
               </button>
               <button
                 className={`seg-btn${addForm.type === "anthropic" ? " seg-btn--active" : ""}`}
-                onClick={() => setAddForm((f) => ({ ...f, type: "anthropic", base_url: "" }))}
+                onClick={() => setAddForm((f) => ({
+                  ...f,
+                  type: "anthropic",
+                  base_url: "",
+                  key_env: f.key_env_touched ? f.key_env : defaultKeyEnv(f.name, "anthropic"),
+                }))}
                 type="button"
               >
                 Anthropic
               </button>
               <button
                 className={`seg-btn${addForm.type === "ollama" ? " seg-btn--active" : ""}`}
-                onClick={() => setAddForm((f) => ({ ...f, type: "ollama", base_url: "http://localhost:11434", key_env: "", api_key: "" }))}
+                onClick={() => setAddForm((f) => ({
+                  ...f,
+                  type: "ollama",
+                  base_url: "http://localhost:11434",
+                  key_env: "",
+                  api_key: "",
+                }))}
                 type="button"
               >
                 Ollama
@@ -279,22 +310,25 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                 <input
                   className="settings-input"
                   value={addForm.key_env}
-                  onChange={(e) => setAddForm((f) => ({ ...f, key_env: e.target.value }))}
-                  placeholder="OPENAI_API_KEY"
+                  onChange={(e) => setAddForm((f) => ({ ...f, key_env: e.target.value, key_env_touched: true }))}
+                  placeholder={defaultKeyEnv(addForm.name || "provider", addForm.type)}
                 />
+                <span className="settings-field-hint">
+                  Auto-filled from the provider name. Export this variable in your shell so Nexus can read the key.
+                </span>
               </div>
               <div className="settings-field">
-                <label className="settings-field-label">API key</label>
+                <label className="settings-field-label">API key <span style={{opacity:0.7,fontWeight:400}}>(override)</span></label>
                 <input
                   className="settings-input"
                   type="password"
                   value={addForm.api_key}
                   onChange={(e) => setAddForm((f) => ({ ...f, api_key: e.target.value }))}
-                  placeholder="sk-..."
+                  placeholder="sk-…  (leave blank to use env var)"
                   autoComplete="off"
                 />
                 <span className="settings-field-hint">
-                  Stored locally at ~/.nexus/secrets.toml (0600). Leave blank to use the env var above.
+                  Optional — overrides the env var above. Stored at ~/.nexus/secrets.toml (0600).
                 </span>
               </div>
             </>
