@@ -20,7 +20,9 @@ from ..skills.manager import SkillManager
 from ..skills.registry import SkillRegistry
 from ..tools.acp_call import ACP_CALL_TOOL, acp_call
 from ..tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
+from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
 from ..tools.state_tool import STATE_TOOLS, StateToolHandler
+from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
 
 MAX_TOOL_ITERATIONS = 16
 
@@ -84,7 +86,7 @@ class Agent:
             self._trace(event, data)
 
     def _tools(self) -> list[ToolSpec]:
-        return [*STATE_TOOLS, SKILL_MANAGE_TOOL, HTTP_CALL_TOOL, ACP_CALL_TOOL]
+        return [*STATE_TOOLS, SKILL_MANAGE_TOOL, HTTP_CALL_TOOL, ACP_CALL_TOOL, *VAULT_TOOLS, KANBAN_MANAGE_TOOL]
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
         """Return (provider, upstream_model_name). Falls back to self._provider."""
@@ -199,6 +201,12 @@ class Agent:
             agent_id = tc.arguments.get("agent_id", "")
             message = tc.arguments.get("message", "")
             return await acp_call(agent_id, message)
+
+        if tc.name in {"vault_list", "vault_read", "vault_write"}:
+            return handle_vault_tool(tc.name, tc.arguments)
+
+        if tc.name == "kanban_manage":
+            return handle_kanban_tool(tc.arguments)
 
         return f"error: unknown tool {tc.name!r}"
 

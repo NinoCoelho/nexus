@@ -14,7 +14,7 @@ from ..agent.llm import LLMTransportError, MalformedOutputError
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
 from .schemas import ChatReply, ChatRequest, Health, SkillDetail, SkillInfo
-from .session import SessionStore
+from .session_store import SessionStore
 
 log = logging.getLogger(__name__)
 
@@ -98,12 +98,190 @@ def create_app(
             iterations=turn.iterations,
         )
 
+    @app.get("/sessions")
+    async def list_sessions(
+        limit: int = 50,
+        store: SessionStore = Depends(get_sessions),
+    ) -> list[dict]:
+        summaries = store.list(limit=limit)
+        return [
+            {
+                "id": s.id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "message_count": s.message_count,
+            }
+            for s in summaries
+        ]
+
+    @app.get("/sessions/{session_id}")
+    async def get_session(
+        session_id: str,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict:
+        session = store.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"session {session_id!r} not found")
+        return {
+            "id": session.id,
+            "title": session.title,
+            "context": session.context,
+            "messages": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
+                    "tool_call_id": m.tool_call_id,
+                }
+                for m in session.history
+            ],
+        }
+
+    @app.patch("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def rename_session(
+        session_id: str,
+        body: dict,
+        store: SessionStore = Depends(get_sessions),
+    ) -> None:
+        title = body.get("title")
+        if title is not None:
+            store.rename(session_id, title)
+
     @app.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def reset_session(
+    async def delete_session(
         session_id: str,
         store: SessionStore = Depends(get_sessions),
     ) -> None:
-        store.reset(session_id)
+        store.delete(session_id)
+
+    # ── vault routes ───────────────────────────────────────────────────────────
+
+    @app.get("/vault/tree")
+    async def vault_tree() -> list[dict]:
+        from ..vault import list_tree
+        entries = list_tree()
+        return [{"path": e.path, "type": e.type, "size": e.size, "mtime": e.mtime} for e in entries]
+
+    @app.get("/vault/file")
+    async def vault_read_file(path: str) -> dict:
+        from ..vault import read_file
+        try:
+            return read_file(path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.put("/vault/file", status_code=status.HTTP_204_NO_CONTENT)
+    async def vault_write_file(body: dict) -> None:
+        from ..vault import write_file
+        path = body.get("path", "")
+        content = body.get("content", "")
+        if not path:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
+        try:
+            write_file(path, content)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.delete("/vault/file", status_code=status.HTTP_204_NO_CONTENT)
+    async def vault_delete_file(path: str) -> None:
+        from ..vault import delete
+        try:
+            delete(path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    @app.post("/vault/folder", status_code=status.HTTP_201_CREATED)
+    async def vault_create_folder(body: dict) -> dict:
+        from ..vault import create_folder
+        path = body.get("path", "")
+        if not path:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
+        try:
+            create_folder(path)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        return {"path": path}
+
+    @app.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)
+    async def vault_move(body: dict) -> None:
+        from ..vault import move
+        from_path = body.get("from", "")
+        to_path = body.get("to", "")
+        if not from_path or not to_path:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`from` and `to` required")
+        try:
+            move(from_path, to_path)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    # ── kanban routes ──────────────────────────────────────────────────────────
+
+    @app.get("/kanban")
+    async def kanban_board() -> dict:
+        from ..kanban import list_cards, list_columns
+        return {
+            "columns": list_columns(),
+            "cards": [c.to_dict() for c in list_cards()],
+        }
+
+    @app.post("/kanban/cards", status_code=status.HTTP_201_CREATED)
+    async def kanban_create_card(body: dict) -> dict:
+        from ..kanban import create_card
+        title = body.get("title", "")
+        if not title:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`title` required")
+        card = create_card(
+            title=title,
+            column=body.get("column", "todo"),
+            notes=body.get("notes", ""),
+            tags=body.get("tags") or [],
+        )
+        return card.to_dict()
+
+    @app.patch("/kanban/cards/{card_id}")
+    async def kanban_update_card(card_id: str, body: dict) -> dict:
+        from ..kanban import update_card
+        updates: dict[str, Any] = {}
+        for key in ("title", "notes", "tags", "column"):
+            if key in body:
+                updates[key] = body[key]
+        try:
+            card = update_card(card_id, updates)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return card.to_dict()
+
+    @app.delete("/kanban/cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def kanban_delete_card(card_id: str) -> None:
+        from ..kanban import delete_card
+        try:
+            delete_card(card_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    @app.post("/kanban/columns", status_code=status.HTTP_201_CREATED)
+    async def kanban_create_column(body: dict) -> dict:
+        from ..kanban import create_column
+        name = body.get("name", "")
+        if not name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`name` required")
+        create_column(name)
+        return {"name": name}
+
+    @app.delete("/kanban/columns/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    async def kanban_delete_column(name: str) -> None:
+        from ..kanban import delete_column
+        try:
+            delete_column(name)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     # ── config routes ──────────────────────────────────────────────────────────
 

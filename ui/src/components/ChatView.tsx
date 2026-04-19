@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getRouting, postChat, type TraceEvent } from "../api";
+import { getRouting, postChat, type SessionMessage, type TraceEvent } from "../api";
 import AssistantMessage from "./AssistantMessage";
 import InputBar from "./InputBar";
 import "./ChatView.css";
@@ -18,6 +18,10 @@ interface Props {
   onOpenSettings: () => void;
   /** Bumps when the Settings drawer saves a change; triggers a routing refetch. */
   settingsRevision: number;
+  /** Pre-loaded history from an existing session. */
+  initialHistory?: SessionMessage[];
+  /** Called after a message is sent so the sidebar can refetch sessions. */
+  onSessionsChanged?: () => void;
 }
 
 function fmt(d: Date) {
@@ -30,8 +34,19 @@ export default function ChatView({
   onSkillsTouched,
   onOpenSettings,
   settingsRevision,
+  initialHistory,
+  onSessionsChanged,
 }: Props) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (!initialHistory?.length) return [];
+    return initialHistory
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        timestamp: new Date(m.created_at),
+      }));
+  });
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [hasModel, setHasModel] = useState<boolean | null>(null);
@@ -77,6 +92,7 @@ export default function ChatView({
       if (!sessionId) {
         onSessionCreated(res.session_id, text.slice(0, 40));
       }
+      onSessionsChanged?.();
       if (res.skills_touched?.length) {
         onSkillsTouched(res.skills_touched);
       }

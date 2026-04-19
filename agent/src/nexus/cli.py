@@ -13,12 +13,18 @@ providers_app = typer.Typer(help="Provider commands", no_args_is_help=True)
 models_app = typer.Typer(help="Model commands", no_args_is_help=True)
 routing_app = typer.Typer(help="Routing commands", no_args_is_help=True)
 skills_app = typer.Typer(help="Skills commands", no_args_is_help=True)
+sessions_app = typer.Typer(help="Session commands", no_args_is_help=True)
+vault_app = typer.Typer(help="Vault commands", no_args_is_help=True)
+kanban_app = typer.Typer(help="Kanban commands", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
 app.add_typer(providers_app, name="providers")
 app.add_typer(models_app, name="models")
 app.add_typer(routing_app, name="routing")
 app.add_typer(skills_app, name="skills")
+app.add_typer(sessions_app, name="sessions")
+app.add_typer(vault_app, name="vault")
+app.add_typer(kanban_app, name="kanban")
 
 
 # ── serve ──────────────────────────────────────────────────────────────────────
@@ -481,6 +487,91 @@ def skills_remove(name: str = typer.Argument(...)) -> None:
     skill_dir = SKILLS_DIR / name
     shutil.rmtree(skill_dir)
     typer.echo(f"Skill '{name}' removed.")
+
+
+# ── sessions ───────────────────────────────────────────────────────────────────
+
+@sessions_app.command("list")
+def sessions_list() -> None:
+    """List all sessions."""
+    from .server.session_store import SessionStore
+    from rich.table import Table
+    from rich.console import Console
+    import datetime
+    store = SessionStore()
+    summaries = store.list(limit=50)
+    table = Table(title="Sessions")
+    table.add_column("ID", style="dim")
+    table.add_column("Title")
+    table.add_column("Messages", justify="right")
+    table.add_column("Updated")
+    for s in summaries:
+        updated = datetime.datetime.fromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
+        table.add_row(s.id[:12], s.title, str(s.message_count), updated)
+    Console().print(table)
+
+
+@sessions_app.command("show")
+def sessions_show(session_id: str = typer.Argument(...)) -> None:
+    """Show messages in a session."""
+    from .server.session_store import SessionStore
+    from rich.table import Table
+    from rich.console import Console
+    store = SessionStore()
+    session = store.get(session_id)
+    if session is None:
+        typer.echo(f"Session '{session_id}' not found.")
+        raise typer.Exit(1)
+    typer.echo(f"Session: {session.id}  Title: {session.title}")
+    table = Table(title=f"Messages ({len(session.history)})")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Role")
+    table.add_column("Content")
+    for i, m in enumerate(session.history):
+        content = (m.content or "")[:80]
+        table.add_row(str(i), m.role, content)
+    Console().print(table)
+
+
+# ── vault ───────────────────────────────────────────────────────────────────────
+
+@vault_app.command("ls")
+def vault_ls(path: Optional[str] = typer.Argument(None)) -> None:
+    """List vault files."""
+    from .vault import list_tree
+    from rich.table import Table
+    from rich.console import Console
+    entries = list_tree()
+    if path:
+        entries = [e for e in entries if e.path.startswith(path.rstrip("/") + "/") or e.path == path]
+    table = Table(title="Vault")
+    table.add_column("Type")
+    table.add_column("Path")
+    table.add_column("Size", justify="right")
+    for e in entries:
+        size_str = str(e.size) if e.size is not None else ""
+        table.add_row(e.type, e.path, size_str)
+    Console().print(table)
+
+
+# ── kanban ──────────────────────────────────────────────────────────────────────
+
+@kanban_app.command("list")
+def kanban_list() -> None:
+    """List kanban cards."""
+    from .kanban import list_cards, list_columns
+    from rich.table import Table
+    from rich.console import Console
+    cards = list_cards()
+    columns = list_columns()
+    table = Table(title="Kanban")
+    table.add_column("ID", style="dim")
+    table.add_column("Column")
+    table.add_column("Title")
+    table.add_column("Tags")
+    for card in cards:
+        table.add_row(card.id[:8], card.column, card.title, ",".join(card.tags))
+    Console().print(table)
 
 
 if __name__ == "__main__":

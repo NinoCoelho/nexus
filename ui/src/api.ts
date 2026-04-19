@@ -1,5 +1,185 @@
 const BASE = import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989";
 
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface SessionMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: unknown;
+  tool_call_id?: string;
+  created_at: string;
+}
+
+export interface SessionDetail {
+  id: string;
+  title: string;
+  context?: string;
+  messages: SessionMessage[];
+}
+
+export async function getSessions(limit = 50): Promise<SessionSummary[]> {
+  const res = await fetch(`${BASE}/sessions?limit=${limit}`);
+  if (!res.ok) throw new Error(`Sessions error: ${res.status}`);
+  return res.json();
+}
+
+export async function getSession(id: string): Promise<SessionDetail> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`Session error: ${res.status}`);
+  return res.json();
+}
+
+export async function patchSession(id: string, patch: { title?: string }): Promise<SessionDetail> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Session patch error: ${res.status}`);
+  return res.json();
+}
+
+// ── Vault ─────────────────────────────────────────────────────────────────────
+
+export interface VaultNode {
+  path: string;
+  type: "file" | "dir";
+  size?: number;
+  mtime?: string;
+}
+
+export interface VaultFile {
+  path: string;
+  content: string;
+  frontmatter?: Record<string, unknown>;
+  body?: string;
+}
+
+export async function getVaultTree(): Promise<VaultNode[]> {
+  const res = await fetch(`${BASE}/vault/tree`);
+  if (!res.ok) throw new Error(`Vault tree error: ${res.status}`);
+  return res.json();
+}
+
+export async function getVaultFile(path: string): Promise<VaultFile> {
+  const res = await fetch(`${BASE}/vault/file?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`Vault file error: ${res.status}`);
+  return res.json();
+}
+
+export async function putVaultFile(path: string, content: string): Promise<void> {
+  const res = await fetch(`${BASE}/vault/file`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+  if (!res.ok) throw new Error(`Vault put error: ${res.status}`);
+}
+
+export async function deleteVaultFile(path: string): Promise<void> {
+  const res = await fetch(`${BASE}/vault/file?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Vault delete error: ${res.status}`);
+}
+
+export async function postVaultFolder(path: string): Promise<void> {
+  const res = await fetch(`${BASE}/vault/folder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error(`Vault folder error: ${res.status}`);
+}
+
+export async function postVaultMove(from: string, to: string): Promise<void> {
+  const res = await fetch(`${BASE}/vault/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to }),
+  });
+  if (!res.ok) throw new Error(`Vault move error: ${res.status}`);
+}
+
+// ── Kanban ────────────────────────────────────────────────────────────────────
+
+export interface KanbanCard {
+  id: string;
+  title: string;
+  column: string;
+  notes?: string;
+  tags?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KanbanBoard {
+  columns: string[];
+  cards: KanbanCard[];
+}
+
+export async function getKanban(): Promise<KanbanBoard> {
+  const res = await fetch(`${BASE}/kanban`);
+  if (!res.ok) throw new Error(`Kanban error: ${res.status}`);
+  return res.json();
+}
+
+export async function postKanbanCard(
+  card: { title: string; column: string; notes?: string; tags?: string[] }
+): Promise<KanbanCard> {
+  const res = await fetch(`${BASE}/kanban/cards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(card),
+  });
+  if (!res.ok) throw new Error(`Kanban card create error: ${res.status}`);
+  return res.json();
+}
+
+export async function patchKanbanCard(
+  id: string,
+  patch: { title?: string; notes?: string; tags?: string[]; column?: string }
+): Promise<KanbanCard> {
+  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Kanban card patch error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteKanbanCard(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Kanban card delete error: ${res.status}`);
+}
+
+export async function postKanbanColumn(name: string): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/columns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Kanban column create error: ${res.status}`);
+}
+
+export async function deleteKanbanColumn(name: string): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/columns/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Kanban column delete error: ${res.status}`);
+}
+
 export interface TraceEvent {
   iter: number;
   tool?: string;
