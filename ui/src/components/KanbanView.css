@@ -2,10 +2,106 @@
 
 .kanban-view {
   display: flex;
+  flex-direction: column;
   flex: 1;
   overflow: hidden;
   position: relative;
 }
+
+/* ── Board tab bar ────────────────────────────────────────────────────────── */
+
+.kanban-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.kanban-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  transition: color 150ms, background 150ms;
+  position: relative;
+  user-select: none;
+  white-space: nowrap;
+}
+.kanban-tab:hover { color: var(--fg); background: var(--bg-hover); }
+.kanban-tab--active {
+  color: var(--fg);
+  background: var(--bg-panel);
+  border-color: var(--border-soft);
+  font-weight: 500;
+}
+/* copper inset bar on active tab */
+.kanban-tab--active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+.kanban-tab-name {
+  font-size: 12px;
+}
+
+.kanban-tab-count {
+  font-size: 10px;
+  background: var(--bg-hover);
+  color: var(--fg-faint);
+  padding: 1px 5px;
+  border-radius: 999px;
+}
+
+.kanban-tab-delete {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-faint);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  transition: color 150ms, background 150ms;
+}
+.kanban-tab-delete:hover { color: var(--bad); background: rgba(200, 90, 90, 0.12); }
+.kanban-tab-delete--confirm { color: var(--bad); background: rgba(200, 90, 90, 0.18); }
+
+.kanban-tab-add {
+  padding: 5px 12px;
+  border: 1px dashed var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 150ms, color 150ms;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.kanban-tab-add:hover { border-color: var(--accent); color: var(--accent); }
 
 .kanban-error {
   position: absolute;
@@ -28,6 +124,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   flex: 1;
+  min-height: 0;
   align-items: flex-start;
 }
 

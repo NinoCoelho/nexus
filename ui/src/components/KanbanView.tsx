@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  deleteKanbanBoard,
   deleteKanbanCard,
   getKanban,
+  getKanbanBoards,
   patchKanbanCard,
+  postKanbanBoard,
   postKanbanCard,
   postKanbanColumn,
+  type Board,
   type KanbanCard,
 } from "../api";
 import "./KanbanView.css";
@@ -13,6 +17,8 @@ function fmtDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
+const BOARD_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 // ── Card Inspector ────────────────────────────────────────────────────────────
 
@@ -78,17 +84,27 @@ function CardInspector({ card, onClose, onSave, onDelete }: InspectorProps) {
 // ── KanbanView ────────────────────────────────────────────────────────────────
 
 export default function KanbanView() {
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [activeBoard, setActiveBoard] = useState("default");
   const [columns, setColumns] = useState<string[]>([]);
   const [cards, setCards] = useState<KanbanCard[]>([]);
   const [error, setError] = useState(false);
   const [inspecting, setInspecting] = useState<KanbanCard | null>(null);
   const [dragCardId, setDragCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // Per-tab delete confirm: stores the board name pending second click
+  const [deletePending, setDeletePending] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
-  const load = () => {
+  const loadBoards = () => {
+    getKanbanBoards()
+      .then((bs) => setBoards(bs))
+      .catch(() => { /* non-fatal */ });
+  };
+
+  const loadBoard = (board: string) => {
     setError(false);
-    getKanban()
+    getKanban(board)
       .then((b) => {
         setColumns(b.columns.length ? b.columns : ["Backlog", "In Progress", "Done"]);
         setCards(b.cards);
@@ -100,8 +116,55 @@ export default function KanbanView() {
   };
 
   useEffect(() => {
-    if (!loadedRef.current) { loadedRef.current = true; load(); }
+    if (!loadedRef.current) {
+      loadedRef.current = true;
+      loadBoards();
+      loadBoard(activeBoard);
+    }
   }, []);
+
+  const switchBoard = (name: string) => {
+    setDeletePending(null);
+    setActiveBoard(name);
+    loadBoard(name);
+  };
+
+  const addBoard = async () => {
+    const name = prompt("New board name (lowercase, letters/digits/hyphens):");
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!BOARD_NAME_RE.test(trimmed)) {
+      alert("Invalid board name. Use lowercase letters, digits and hyphens (e.g. my-board).");
+      return;
+    }
+    try {
+      await postKanbanBoard(trimmed);
+      loadBoards();
+      switchBoard(trimmed);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleDeleteBoard = async (name: string, cardCount: number) => {
+    if (cardCount > 0) return; // button is disabled; guard anyway
+    if (deletePending !== name) {
+      setDeletePending(name);
+      return;
+    }
+    // Second click — confirmed
+    setDeletePending(null);
+    try {
+      await deleteKanbanBoard(name);
+      const remaining = boards.filter((b) => b.name !== name);
+      setBoards(remaining);
+      if (activeBoard === name && remaining.length > 0) {
+        switchBoard(remaining[0].name);
+      }
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   // Drag handlers
   const onDragStart = (cardId: string) => setDragCardId(cardId);
@@ -115,10 +178,9 @@ export default function KanbanView() {
     if (!dragCardId) return;
     const card = cards.find((c) => c.id === dragCardId);
     if (!card || card.column === col) return;
-    // Optimistic update
     setCards((prev) => prev.map((c) => c.id === dragCardId ? { ...c, column: col } : c));
     try {
-      await patchKanbanCard(dragCardId, { column: col });
+      await patchKanbanCard(dragCardId, { column: col }, activeBoard);
     } catch {
       setCards((prev) => prev.map((c) => c.id === dragCardId ? { ...c, column: card.column } : c));
     }
@@ -129,8 +191,9 @@ export default function KanbanView() {
     const title = prompt("Card title:");
     if (!title) return;
     try {
-      const card = await postKanbanCard({ title: title.trim(), column: col });
+      const card = await postKanbanCard({ title: title.trim(), column: col }, activeBoard);
       setCards((prev) => [...prev, card]);
+      setBoards((prev) => prev.map((b) => b.name === activeBoard ? { ...b, card_count: b.card_count + 1 } : b));
     } catch { /* ignore */ }
   };
 
@@ -138,7 +201,7 @@ export default function KanbanView() {
     const name = prompt("Column name:");
     if (!name) return;
     try {
-      await postKanbanColumn(name.trim());
+      await postKanbanColumn(name.trim(), activeBoard);
       setColumns((prev) => [...prev, name.trim()]);
     } catch { /* ignore */ }
   };
@@ -146,7 +209,7 @@ export default function KanbanView() {
   const handleSave = async (patch: Partial<KanbanCard>) => {
     if (!inspecting) return;
     try {
-      const updated = await patchKanbanCard(inspecting.id, patch);
+      const updated = await patchKanbanCard(inspecting.id, patch, activeBoard);
       setCards((prev) => prev.map((c) => c.id === updated.id ? updated : c));
       setInspecting(updated);
     } catch { /* ignore */ }
@@ -156,14 +219,47 @@ export default function KanbanView() {
   const handleDelete = async () => {
     if (!inspecting) return;
     try {
-      await deleteKanbanCard(inspecting.id);
+      await deleteKanbanCard(inspecting.id, activeBoard);
       setCards((prev) => prev.filter((c) => c.id !== inspecting.id));
+      setBoards((prev) => prev.map((b) => b.name === activeBoard ? { ...b, card_count: Math.max(0, b.card_count - 1) } : b));
     } catch { /* ignore */ }
     setInspecting(null);
   };
 
   return (
     <div className="kanban-view">
+      {/* Board tab bar */}
+      <div className="kanban-tabs">
+        {boards.map((b) => {
+          const isActive = b.name === activeBoard;
+          const isDeletable = b.card_count === 0 && boards.length > 1;
+          const isPending = deletePending === b.name;
+          return (
+            <div
+              key={b.name}
+              className={`kanban-tab${isActive ? " kanban-tab--active" : ""}`}
+              onClick={() => switchBoard(b.name)}
+            >
+              <span className="kanban-tab-name">{b.name}</span>
+              <span className="kanban-tab-count">{b.card_count}</span>
+              {isDeletable && (
+                <button
+                  className={`kanban-tab-delete${isPending ? " kanban-tab-delete--confirm" : ""}`}
+                  title={isPending ? "Click again to confirm" : "Delete board"}
+                  onClick={(e) => { e.stopPropagation(); void handleDeleteBoard(b.name, b.card_count); }}
+                  aria-label={`Delete board ${b.name}`}
+                >
+                  {isPending ? "!" : "×"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <button className="kanban-tab-add" onClick={() => void addBoard()}>
+          + New board
+        </button>
+      </div>
+
       {error && (
         <div className="kanban-error">Couldn&apos;t load board — is the server running?</div>
       )}
