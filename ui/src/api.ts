@@ -5,8 +5,10 @@ const BASE = import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989";
 export interface SessionSummary {
   id: string;
   title: string;
-  created_at: string;
-  updated_at: string;
+  // Backend sends unix seconds as integers. Declared as number|string to keep
+  // callers defensive against an older backend that emitted ISO strings.
+  created_at: number | string;
+  updated_at: number | string;
   message_count: number;
 }
 

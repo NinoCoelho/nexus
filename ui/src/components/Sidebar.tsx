@@ -14,14 +14,29 @@ interface Props {
   sessionsRevision: number;
 }
 
-function fmtRelative(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+function fmtRelative(raw: string | number | undefined): string {
+  if (raw == null) return "";
+  let ts: number;
+  if (typeof raw === "number") {
+    // Backend sends unix seconds; Date expects ms.
+    ts = raw < 1e12 ? raw * 1000 : raw;
+  } else {
+    const parsed = new Date(raw).getTime();
+    if (isNaN(parsed)) return "";
+    ts = parsed;
+  }
+  const diff = Date.now() - ts;
+  if (diff < 0) return "just now";
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
 }
 
 // ── icons ─────────────────────────────────────────────────────────────────────
@@ -132,9 +147,13 @@ export default function Sidebar({
   useEffect(() => {
     setSessionsError(false);
     getSessions(20)
-      .then((s) => setSessions(s.sort((a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      )))
+      .then((s) => setSessions(s.sort((a, b) => {
+        // updated_at is unix seconds (int) from the backend. Backend already
+        // orders by updated_at DESC but we sort again defensively.
+        const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
+        const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
+        return bv - av;
+      })))
       .catch(() => setSessionsError(true));
   }, [sessionsRevision]);
 
