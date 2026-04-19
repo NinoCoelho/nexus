@@ -156,7 +156,7 @@ export default function App() {
 
     const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
     // Append user message + placeholder assistant message, set thinking.
-    const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timestamp: new Date() };
+    const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timestamp: new Date(), streaming: true };
     patchState(key, {
       input: "",
       thinking: true,
@@ -182,7 +182,8 @@ export default function App() {
               return next;
             });
           } else if (event.type === "tool") {
-            // Append tool trace entry to last assistant message.
+            // Consolidate: if result_preview is present, patch the most recent
+            // matching trace entry that has no result; else append a new entry.
             setChatStates((prev) => {
               const next = new Map(prev);
               const cur = next.get(key) ?? emptyState();
@@ -190,10 +191,24 @@ export default function App() {
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
                 const prevTrace = msgs[lastIdx].trace ?? [];
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  trace: [...prevTrace, { iter: 0, tool: event.name, args: event.args, result: event.result_preview } as TraceEvent],
-                };
+                let newTrace: TraceEvent[];
+                if (event.result_preview != null) {
+                  // Find last entry with matching name and no result → patch it.
+                  const matchIdx = [...prevTrace].reverse().findIndex(
+                    (e) => e.tool === event.name && e.result == null
+                  );
+                  if (matchIdx !== -1) {
+                    const realIdx = prevTrace.length - 1 - matchIdx;
+                    newTrace = prevTrace.map((e, i) =>
+                      i === realIdx ? { ...e, result: event.result_preview } : e
+                    );
+                  } else {
+                    newTrace = [...prevTrace, { iter: 0, tool: event.name, args: event.args, result: event.result_preview } as TraceEvent];
+                  }
+                } else {
+                  newTrace = [...prevTrace, { iter: 0, tool: event.name, args: event.args } as TraceEvent];
+                }
+                msgs[lastIdx] = { ...msgs[lastIdx], trace: newTrace };
               }
               next.set(key, { ...cur, messages: msgs });
               return next;
@@ -204,6 +219,7 @@ export default function App() {
               content: event.reply,
               trace: event.trace?.length ? event.trace : undefined,
               timestamp: new Date(),
+              streaming: false,
             };
 
             if (!activeSession) {

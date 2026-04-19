@@ -9,6 +9,7 @@ export interface Message {
   content: string;
   trace?: TraceEvent[];
   timestamp: Date;
+  streaming?: boolean;
 }
 
 /**
@@ -78,6 +79,7 @@ export default function ChatView({
               content={msg.content}
               trace={msg.trace}
               timestamp={msg.timestamp}
+              streaming={msg.streaming}
             />
           ) : (
             <div key={idx} className="user-msg">

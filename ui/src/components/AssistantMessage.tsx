@@ -3,12 +3,14 @@ import ReactMarkdown from "react-markdown";
 import type { TraceEvent } from "../api";
 import VaultFilePreview from "./VaultFilePreview";
 import WorkflowViz from "./WorkflowViz";
+import LiveActivityStrip from "./LiveActivityStrip";
 import "./AssistantMessage.css";
 
 interface Props {
   content: string;
   trace?: TraceEvent[];
   timestamp: Date;
+  streaming?: boolean;
   onOpenInVault?: (path: string) => void;
 }
 
@@ -58,7 +60,7 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, trace, timestamp, onOpenInVault }: Props) {
+export default function AssistantMessage({ content, trace, timestamp, streaming, onOpenInVault }: Props) {
   const [traceOpen, setTraceOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -88,6 +90,9 @@ export default function AssistantMessage({ content, trace, timestamp, onOpenInVa
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
       <div className="asst-card">
+        {streaming && trace && trace.length > 0 && (
+          <LiveActivityStrip events={trace} streaming={true} />
+        )}
         <div className="asst-body">
           <ReactMarkdown
             components={{
