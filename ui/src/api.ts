@@ -39,6 +39,30 @@ export async function getSession(id: string): Promise<SessionDetail> {
   return res.json();
 }
 
+export interface SessionToVaultResult {
+  mode: "raw" | "summary";
+  path: string;
+  bytes?: number;
+  length?: number;
+}
+
+export async function sessionToVault(
+  id: string,
+  mode: "raw" | "summary",
+  path?: string,
+): Promise<SessionToVaultResult> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}/to-vault`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, ...(path ? { path } : {}) }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `to-vault error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function patchSession(id: string, patch: { title?: string }): Promise<SessionDetail> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",

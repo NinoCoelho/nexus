@@ -229,10 +229,38 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
+  padding-right: 22px; /* reserve space for the menu button */
 }
 .sidebar-session-time {
   font-size: 10px;
   color: var(--fg-faint);
+}
+
+.sidebar-session-menu-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: var(--radius);
+  cursor: pointer;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.sidebar-session:hover .sidebar-session-menu-btn,
+.sidebar-session--active .sidebar-session-menu-btn {
+  opacity: 1;
+}
+.sidebar-session-menu-btn:hover {
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--fg);
 }
 
 .sidebar-session-rename {
@@ -286,12 +314,27 @@
   text-align: left;
   cursor: pointer;
   transition: background 100ms ease;
+  white-space: nowrap;
 }
-.sidebar-ctx-item:hover {
+.sidebar-ctx-item:hover:not(:disabled) {
   background: var(--bg-hover);
 }
+.sidebar-ctx-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .sidebar-ctx-item--danger { color: var(--bad); }
-.sidebar-ctx-item--danger:hover { background: rgba(200, 90, 90, 0.12); }
+.sidebar-ctx-item--danger:hover:not(:disabled) { background: rgba(200, 90, 90, 0.12); }
+
+.sidebar-ctx-divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 2px 0;
+}
+
+.sidebar-context-menu {
+  min-width: 180px;
+}
 
 /* Spacer + bottom */
 .sidebar-spacer { flex: 1; }

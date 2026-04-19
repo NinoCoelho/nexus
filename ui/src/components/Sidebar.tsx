@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { deleteSession, exportSession, getSessions, importSession, patchSession, type SessionSummary } from "../api";
+import { deleteSession, exportSession, getSessions, importSession, patchSession, sessionToVault, type SessionSummary } from "../api";
+import { useToast } from "../toast/ToastProvider";
 import "./Sidebar.css";
 
 type View = "chat" | "vault" | "kanban" | "graph";
@@ -127,6 +128,7 @@ export default function Sidebar({
   sessionsRevision,
   onSessionsRevisionBump,
 }: Props) {
+  const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; }
     catch { return false; }
@@ -141,6 +143,8 @@ export default function Sidebar({
 
   // Context menu
   const [menuId, setMenuId] = useState<string | null>(null);
+  /** ids currently sending to the vault ("summary" mode can take seconds) */
+  const [toVaultBusy, setToVaultBusy] = useState<Set<string>>(new Set());
 
   // Import file input ref
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -200,7 +204,36 @@ export default function Sidebar({
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-    } catch { /* ignore */ }
+      toast.success(`Downloaded ${filename}`);
+    } catch (e) {
+      toast.error("Download failed", { detail: e instanceof Error ? e.message : undefined });
+    }
+  };
+
+  const handleToVault = async (id: string, mode: "raw" | "summary") => {
+    setMenuId(null);
+    setToVaultBusy((prev) => new Set(prev).add(id));
+    if (mode === "summary") {
+      toast.info("Summarizing session…", { duration: 2500 });
+    }
+    try {
+      const result = await sessionToVault(id, mode);
+      toast.success(
+        mode === "raw" ? "Saved raw to vault" : "Summary saved to vault",
+        { detail: result.path, duration: 5000 },
+      );
+    } catch (e) {
+      toast.error(
+        mode === "raw" ? "Couldn't save raw to vault" : "Summarize failed",
+        { detail: e instanceof Error ? e.message : undefined },
+      );
+    } finally {
+      setToVaultBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
   };
 
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -318,8 +351,34 @@ export default function Sidebar({
                   />
                 ) : (
                   <>
-                    <span className="sidebar-session-title">{s.title || "Untitled"}</span>
+                    <span
+                      className="sidebar-session-title"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setRenamingId(s.id);
+                        setRenameValue(s.title || "");
+                      }}
+                      title="Double-click to rename"
+                    >
+                      {s.title || "Untitled"}
+                      {toVaultBusy.has(s.id) && " ⋯"}
+                    </span>
                     <span className="sidebar-session-time">{fmtRelative(s.updated_at)}</span>
+                    <button
+                      className="sidebar-session-menu-btn"
+                      aria-label="Session actions"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuId(menuId === s.id ? null : s.id);
+                      }}
+                      title="More actions"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <circle cx="3" cy="8" r="1.3" />
+                        <circle cx="8" cy="8" r="1.3" />
+                        <circle cx="13" cy="8" r="1.3" />
+                      </svg>
+                    </button>
                   </>
                 )}
 
@@ -342,8 +401,26 @@ export default function Sidebar({
                       className="sidebar-ctx-item"
                       onClick={() => void handleExport(s.id)}
                     >
-                      Export...
+                      Download .md
                     </button>
+                    <div className="sidebar-ctx-divider" />
+                    <button
+                      className="sidebar-ctx-item"
+                      disabled={toVaultBusy.has(s.id)}
+                      onClick={() => void handleToVault(s.id, "raw")}
+                      title="Save the full transcript to the vault"
+                    >
+                      Send to vault (raw)
+                    </button>
+                    <button
+                      className="sidebar-ctx-item"
+                      disabled={toVaultBusy.has(s.id)}
+                      onClick={() => void handleToVault(s.id, "summary")}
+                      title="Have Nexus summarize this session and save the note"
+                    >
+                      Send to vault (summary)
+                    </button>
+                    <div className="sidebar-ctx-divider" />
                     <button
                       className="sidebar-ctx-item sidebar-ctx-item--danger"
                       onClick={() => void handleDelete(s.id)}
