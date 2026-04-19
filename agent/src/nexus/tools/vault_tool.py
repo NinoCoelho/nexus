@@ -46,7 +46,20 @@ VAULT_WRITE_TOOL = ToolSpec(
     },
 )
 
-VAULT_TOOLS = [VAULT_LIST_TOOL, VAULT_READ_TOOL, VAULT_WRITE_TOOL]
+VAULT_SEARCH_TOOL = ToolSpec(
+    name="vault_search",
+    description="Full-text search across all vault notes. Returns matching file paths and snippets.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query."},
+            "limit": {"type": "integer", "description": "Max results to return (default 10)."},
+        },
+        "required": ["query"],
+    },
+)
+
+VAULT_TOOLS = [VAULT_LIST_TOOL, VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_SEARCH_TOOL]
 
 
 def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
@@ -74,6 +87,17 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
                 return json.dumps({"ok": False, "error": "`path` is required"})
             vault.write_file(path, content)
             return json.dumps({"ok": True})
+
+        if name == "vault_search":
+            from .. import vault_search
+            query = args.get("query", "")
+            limit = int(args.get("limit", 10))
+            if not query:
+                return json.dumps({"ok": False, "error": "`query` is required"})
+            if vault_search.is_empty():
+                vault_search.rebuild_from_disk()
+            results = vault_search.search(query, limit=limit)
+            return json.dumps({"ok": True, "results": results})
 
         return json.dumps({"ok": False, "error": f"unknown vault tool: {name!r}"})
 

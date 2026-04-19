@@ -45,6 +45,11 @@ export default function ChatView({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, thinking]);
 
+  // During streaming, the last message may be an in-progress assistant message
+  // with partial content. Show it inline; only show the dots indicator when
+  // the assistant hasn't emitted any text yet.
+  const lastMsg = messages[messages.length - 1];
+  const streamingInProgress = thinking && lastMsg?.role === "assistant" && (lastMsg.content ?? "").length > 0;
   const visible = messages.filter((m) => (m.content ?? "").trim().length > 0);
 
   return (
@@ -84,7 +89,7 @@ export default function ChatView({
             </div>
           )
         )}
-        {thinking && (
+        {thinking && !streamingInProgress && (
           <div className="asst-msg">
             <div className="asst-header">
               <div className="asst-avatar" aria-hidden="true" />

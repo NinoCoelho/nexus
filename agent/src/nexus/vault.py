@@ -113,6 +113,12 @@ def write_file(rel_path: str, content: str) -> None:
         except OSError:
             pass
         raise
+    try:
+        from . import vault_search
+        vault_search.index_path(rel_path, content)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_search: index_path failed", exc_info=True)
 
 
 def delete(rel_path: str) -> None:
@@ -124,6 +130,12 @@ def delete(rel_path: str) -> None:
         full.rmdir()  # raises if non-empty
     else:
         raise FileNotFoundError(f"no such file or directory: {rel_path!r}")
+    try:
+        from . import vault_search
+        vault_search.remove_path(rel_path)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_search: remove_path failed", exc_info=True)
 
 
 def move(from_path: str, to_path: str) -> None:
@@ -132,6 +144,12 @@ def move(from_path: str, to_path: str) -> None:
     dst = _safe_resolve(to_path, root)
     dst.parent.mkdir(parents=True, exist_ok=True)
     src.rename(dst)
+    try:
+        from . import vault_search
+        vault_search.rename_path(from_path, to_path)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_search: rename_path failed", exc_info=True)
 
 
 def create_folder(rel_path: str) -> None:

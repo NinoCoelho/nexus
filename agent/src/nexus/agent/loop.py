@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +12,7 @@ from .llm import (
     MalformedOutputError,
     Role,
     StopReason,
+    StreamEvent,
     ToolCall,
     ToolSpec,
 )
@@ -187,6 +188,133 @@ class Agent:
             trace=trace,
             messages=messages,
         )
+
+    async def run_turn_stream(
+        self,
+        user_message: str,
+        *,
+        history: list[ChatMessage] | None = None,
+        context: str | None = None,
+        session_id: str | None = None,
+        model_id: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        from .router import choose_model, ROUTE_TRACE
+
+        trace: list[dict[str, Any]] = []
+        skills_touched: list[str] = []
+
+        chosen_model = model_id
+        route_reason = "explicit"
+        if self._nexus_cfg and not model_id:
+            chosen_model = choose_model(user_message, self._nexus_cfg)
+            route_reason = ROUTE_TRACE[-1] if ROUTE_TRACE else "auto"
+
+        if not history:
+            messages: list[ChatMessage] = [
+                ChatMessage(
+                    role=Role.SYSTEM,
+                    content=build_system_prompt(self._registry, context=context),
+                )
+            ]
+        else:
+            messages = list(history)
+
+        messages.append(ChatMessage(role=Role.USER, content=user_message))
+        tools = self._tools()
+
+        provider, upstream_model = self._resolve_provider(chosen_model)
+
+        self._emit(
+            "tool_call",
+            {"name": "_meta", "args": {"model": chosen_model or "default", "reason": route_reason}},
+            trace,
+        )
+
+        max_iter = (
+            getattr(self._nexus_cfg.agent, "max_iterations", None)
+            if self._nexus_cfg else None
+        ) or DEFAULT_MAX_TOOL_ITERATIONS
+
+        full_text = ""
+
+        for iteration in range(1, max_iter + 1):
+            self._emit("iter", {"n": iteration}, trace)
+
+            # Collect tool calls from this provider pass
+            current_tool_calls: list[dict[str, Any]] = []
+            current_content = ""
+            finish_reason = "stop"
+
+            async for event in provider.chat_stream(messages, tools=tools, model=upstream_model):
+                etype = event.get("type")
+
+                if etype == "delta":
+                    full_text += event["text"]
+                    current_content += event["text"]
+                    yield event
+
+                elif etype in ("tool_call_start", "tool_call_delta", "tool_call_end"):
+                    yield event
+                    if etype == "tool_call_end":
+                        pass  # accumulation done in finish event
+
+                elif etype == "finish":
+                    finish_reason = event.get("finish_reason", "stop")
+                    current_content = event.get("content", current_content)
+                    current_tool_calls = event.get("tool_calls", [])
+
+            if finish_reason != "tool_calls" or not current_tool_calls:
+                # Terminal: no more tool calls
+                messages.append(ChatMessage(role=Role.ASSISTANT, content=current_content or full_text))
+                self._emit("reply", {"text": (current_content or full_text)[:200]}, trace)
+                yield {
+                    "type": "done",
+                    "session_id": session_id,
+                    "reply": current_content or full_text,
+                    "trace": trace,
+                    "skills_touched": skills_touched,
+                    "iterations": iteration,
+                    "messages": messages,
+                }
+                return
+
+            # Tool calls to execute
+            messages.append(
+                ChatMessage(
+                    role=Role.ASSISTANT,
+                    content=current_content or None,
+                    tool_calls=[
+                        ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
+                        for tc in current_tool_calls
+                    ],
+                )
+            )
+
+            for tc_dict in current_tool_calls:
+                tc = ToolCall(id=tc_dict["id"], name=tc_dict["name"], arguments=tc_dict["arguments"])
+                self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
+                yield {"type": "tool_exec_start", "name": tc.name, "args": tc.arguments}
+                result = await self._handle(tc, skills_touched)
+                self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
+                yield {"type": "tool_exec_result", "name": tc.name, "result_preview": result[:200]}
+                messages.append(ChatMessage(role=Role.TOOL, content=result, tool_call_id=tc.id))
+
+        # Hit iteration cap
+        limit_text = (
+            f"I hit the per-turn tool-call limit ({max_iter}) before finishing. "
+            "Ask me to continue, or narrow the task — I'll pick up where I left off."
+        )
+        messages.append(ChatMessage(role=Role.ASSISTANT, content=limit_text))
+        yield {"type": "limit_reached", "iterations": max_iter}
+        yield {
+            "type": "done",
+            "session_id": session_id,
+            "reply": limit_text,
+            "trace": trace,
+            "skills_touched": skills_touched,
+            "iterations": max_iter,
+            "messages": messages,
+        }
 
     async def _handle(self, tc: ToolCall, skills_touched: list[str]) -> str:
         if tc.name in {"skills_list", "skill_view"}:

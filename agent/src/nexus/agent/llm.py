@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+
+# StreamEvent is a plain TypedDict-style dict union; we use plain dicts for
+# zero-overhead yielding.  The "type" key is the discriminator.
+StreamEvent = dict[str, Any]
 
 
 class Role(StrEnum):
@@ -78,6 +83,25 @@ class LLMProvider(ABC):
         model: str | None = None,
     ) -> ChatResponse: ...
 
+    async def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        # Default fallback: call non-streaming chat and synthesize events.
+        resp = await self.chat(messages, tools=tools, model=model)
+        if resp.content:
+            yield {"type": "delta", "text": resp.content}
+        finish_reason = resp.stop_reason.value
+        yield {
+            "type": "finish",
+            "finish_reason": finish_reason,
+            "content": resp.content or "",
+            "tool_calls": [tc.model_dump() for tc in resp.tool_calls],
+        }
+
     async def aclose(self) -> None:
         return
 
@@ -126,6 +150,99 @@ class OpenAIProvider(LLMProvider):
         except (KeyError, ValueError, TypeError) as exc:
             raise MalformedOutputError(str(exc)) from exc
 
+    async def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        payload: dict[str, Any] = {
+            "model": model or self._model,
+            "messages": [_encode_msg(m) for m in messages],
+            "temperature": 0.0,
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = [_encode_tool(t) for t in tools]
+            payload["tool_choice"] = "auto"
+
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=self._headers,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise LLMTransportError(f"HTTP {resp.status_code}: {body[:400]!r}")
+
+                # Aggregated state for the finish event
+                full_text = ""
+                # id -> {name, args_buf}
+                tool_bufs: dict[str, dict[str, Any]] = {}
+
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+
+                    choices = chunk.get("choices")
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    finish_reason = choices[0].get("finish_reason")
+
+                    # Text delta
+                    text_piece = delta.get("content")
+                    if text_piece:
+                        full_text += text_piece
+                        yield {"type": "delta", "text": text_piece}
+
+                    # Tool call deltas
+                    for tc_delta in delta.get("tool_calls") or []:
+                        idx = tc_delta.get("index", 0)
+                        tc_id = tc_delta.get("id", f"tc_{idx}")
+                        fn = tc_delta.get("function", {})
+                        tc_name = fn.get("name", "")
+                        args_delta = fn.get("arguments", "")
+
+                        if tc_id not in tool_bufs and tc_name:
+                            tool_bufs[tc_id] = {"name": tc_name, "args_buf": ""}
+                            yield {"type": "tool_call_start", "id": tc_id, "name": tc_name}
+
+                        if args_delta and tc_id in tool_bufs:
+                            tool_bufs[tc_id]["args_buf"] += args_delta
+                            yield {"type": "tool_call_delta", "id": tc_id, "args_delta": args_delta}
+
+                    if finish_reason is not None:
+                        # Emit tool_call_end for each accumulated tool call
+                        tool_calls: list[dict[str, Any]] = []
+                        for tc_id, buf in tool_bufs.items():
+                            yield {"type": "tool_call_end", "id": tc_id}
+                            try:
+                                args = json.loads(buf["args_buf"] or "{}")
+                            except json.JSONDecodeError:
+                                args = {}
+                            tool_calls.append({"id": tc_id, "name": buf["name"], "arguments": args})
+
+                        mapped = _FINISH_MAP.get(finish_reason or "stop", StopReason.UNKNOWN).value
+                        yield {
+                            "type": "finish",
+                            "finish_reason": mapped,
+                            "content": full_text,
+                            "tool_calls": tool_calls,
+                        }
+        except httpx.HTTPError as exc:
+            raise LLMTransportError(str(exc)) from exc
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -166,6 +283,98 @@ class AnthropicProvider(LLMProvider):
 
         resp = await self._client.messages.create(**kwargs)
         return _decode_anthropic(resp)
+
+    async def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        system = ""
+        filtered: list[dict[str, Any]] = []
+        for m in messages:
+            if m.role == Role.SYSTEM:
+                system = m.content or ""
+            else:
+                filtered.append(_encode_msg_anthropic(m))
+
+        kwargs: dict[str, Any] = {
+            "model": model or self._model,
+            "max_tokens": 4096,
+            "messages": filtered,
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = [_encode_tool_anthropic(t) for t in tools]
+
+        full_text = ""
+        tool_bufs: dict[str, dict[str, Any]] = {}  # id -> {name, args_buf}
+
+        async with self._client.messages.stream(**kwargs) as stream:
+            async for event in stream:
+                etype = event.type
+
+                if etype == "content_block_start":
+                    block = event.content_block
+                    if block.type == "tool_use":
+                        tool_bufs[block.id] = {"name": block.name, "args_buf": ""}
+                        yield {"type": "tool_call_start", "id": block.id, "name": block.name}
+
+                elif etype == "content_block_delta":
+                    delta = event.delta
+                    if delta.type == "text_delta":
+                        full_text += delta.text
+                        yield {"type": "delta", "text": delta.text}
+                    elif delta.type == "input_json_delta":
+                        # Find the block being built — Anthropic gives us index
+                        block_id = None
+                        # event.index tells us position; map to id via order
+                        for tid, buf in tool_bufs.items():
+                            if buf.get("_index") == event.index:
+                                block_id = tid
+                                break
+                        if block_id is None:
+                            # store index on first delta for this block
+                            for tid, buf in tool_bufs.items():
+                                if "_index" not in buf:
+                                    buf["_index"] = event.index
+                                    block_id = tid
+                                    break
+                        if block_id and block_id in tool_bufs:
+                            tool_bufs[block_id]["args_buf"] += delta.partial_json
+                            yield {"type": "tool_call_delta", "id": block_id, "args_delta": delta.partial_json}
+
+                elif etype == "content_block_stop":
+                    # Identify which tool call ended by index
+                    block_id = None
+                    for tid, buf in tool_bufs.items():
+                        if buf.get("_index") == event.index:
+                            block_id = tid
+                            break
+                    if block_id:
+                        yield {"type": "tool_call_end", "id": block_id}
+
+                elif etype == "message_stop":
+                    tool_calls: list[dict[str, Any]] = []
+                    for tc_id, buf in tool_bufs.items():
+                        try:
+                            args = json.loads(buf["args_buf"] or "{}")
+                        except json.JSONDecodeError:
+                            args = {}
+                        tool_calls.append({"id": tc_id, "name": buf["name"], "arguments": args})
+
+                    msg = await stream.get_final_message()
+                    finish_reason = "tool_calls" if tool_calls else "stop"
+                    if msg.stop_reason == "max_tokens":
+                        finish_reason = "length"
+                    yield {
+                        "type": "finish",
+                        "finish_reason": finish_reason,
+                        "content": full_text,
+                        "tool_calls": tool_calls,
+                    }
 
     async def aclose(self) -> None:
         await self._client.close()

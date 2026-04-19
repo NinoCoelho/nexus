@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from ..agent.llm import LLMTransportError, MalformedOutputError
 from ..agent.loop import Agent
@@ -96,6 +98,59 @@ def create_app(
             trace=turn.trace,
             skills_touched=turn.skills_touched,
             iterations=turn.iterations,
+        )
+
+    @app.post("/chat/stream")
+    async def chat_stream_route(
+        req: ChatRequest,
+        a: Agent = Depends(get_agent),
+        store: SessionStore = Depends(get_sessions),
+    ) -> StreamingResponse:
+        session = store.get_or_create(req.session_id, context=req.context)
+
+        async def event_generator() -> AsyncIterator[str]:
+            final_messages = None
+            try:
+                async for event in a.run_turn_stream(
+                    req.message,
+                    history=session.history,
+                    context=session.context,
+                    session_id=session.id,
+                ):
+                    etype = event.get("type")
+
+                    if etype == "delta":
+                        yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
+
+                    elif etype in ("tool_exec_start", "tool_exec_result"):
+                        payload: dict[str, Any] = {"name": event.get("name", "")}
+                        if "args" in event:
+                            payload["args"] = event["args"]
+                        if "result_preview" in event:
+                            payload["result_preview"] = event["result_preview"]
+                        yield f"event: tool\ndata: {json.dumps(payload)}\n\n"
+
+                    elif etype == "done":
+                        final_messages = event.get("messages")
+                        done_payload = {
+                            "session_id": event.get("session_id") or session.id,
+                            "reply": event.get("reply", ""),
+                            "trace": event.get("trace", []),
+                            "skills_touched": event.get("skills_touched", []),
+                            "iterations": event.get("iterations", 0),
+                        }
+                        yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+
+            except (LLMTransportError, MalformedOutputError) as exc:
+                yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            finally:
+                if final_messages is not None:
+                    store.replace_history(session.id, final_messages)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @app.get("/sessions")
@@ -213,6 +268,33 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         return {"path": path}
+
+    @app.get("/vault/search")
+    async def vault_search_endpoint(q: str = "", limit: int = 50) -> dict:
+        from .. import vault_search
+        q = q.strip()
+        if not q:
+            return {"results": [], "q": q, "count": 0}
+        if vault_search.is_empty():
+            vault_search.rebuild_from_disk()
+        results = vault_search.search(q, limit=limit)
+        return {"results": results, "q": q, "count": len(results)}
+
+    @app.post("/vault/reindex")
+    async def vault_reindex() -> dict:
+        from .. import vault_search
+        n = vault_search.rebuild_from_disk()
+        return {"indexed": n}
+
+    @app.get("/vault/graph")
+    async def vault_graph() -> dict:
+        from ..vault_graph import build_graph
+        data = build_graph()
+        return {
+            "nodes": data["nodes"],
+            "edges": [{"from": e["from_"], "to": e["to"]} for e in data["edges"]],
+            "orphans": data["orphans"],
+        }
 
     @app.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)
     async def vault_move(body: dict) -> None:

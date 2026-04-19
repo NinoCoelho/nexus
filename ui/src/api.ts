@@ -100,6 +100,21 @@ export async function postVaultFolder(path: string): Promise<void> {
   if (!res.ok) throw new Error(`Vault folder error: ${res.status}`);
 }
 
+export interface VaultSearchResult { path: string; snippet: string; score: number }
+
+export async function searchVault(q: string, limit = 50): Promise<VaultSearchResult[]> {
+  const res = await fetch(`${BASE}/vault/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`Vault search error: ${res.status}`);
+  const data = await res.json() as { results: VaultSearchResult[] };
+  return data.results;
+}
+
+export async function reindexVault(): Promise<{ indexed: number }> {
+  const res = await fetch(`${BASE}/vault/reindex`, { method: "POST" });
+  if (!res.ok) throw new Error(`Vault reindex error: ${res.status}`);
+  return res.json() as Promise<{ indexed: number }>;
+}
+
 export async function postVaultMove(from: string, to: string): Promise<void> {
   const res = await fetch(`${BASE}/vault/move`, {
     method: "POST",
@@ -107,6 +122,16 @@ export async function postVaultMove(from: string, to: string): Promise<void> {
     body: JSON.stringify({ from, to }),
   });
   if (!res.ok) throw new Error(`Vault move error: ${res.status}`);
+}
+
+export interface GraphNode { path: string; size: number; folder: string }
+export interface GraphEdge { from: string; to: string }
+export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; orphans: string[] }
+
+export async function getVaultGraph(): Promise<GraphData> {
+  const res = await fetch(`${BASE}/vault/graph`);
+  if (!res.ok) throw new Error(`Vault graph error: ${res.status}`);
+  return res.json() as Promise<GraphData>;
 }
 
 // ── Kanban ────────────────────────────────────────────────────────────────────
@@ -237,6 +262,88 @@ export interface SkillDetail {
   name: string;
   body: string;
   frontmatter: Record<string, unknown>;
+}
+
+export type StreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "tool"; name: string; args?: unknown; result_preview?: string }
+  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[] }
+  | { type: "error"; detail: string };
+
+export async function chatStream(
+  message: string,
+  session_id: string | undefined,
+  onEvent: (e: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_id }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body && typeof body === "object" && "detail" in body) {
+        detail = String((body as { detail: unknown }).detail);
+      }
+    } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by \n\n
+    const frames = buf.split("\n\n");
+    buf = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      if (!frame.trim()) continue;
+      let eventName = "message";
+      let dataLine = "";
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataLine = line.slice(5).trim();
+        }
+      }
+      if (!dataLine) continue;
+      try {
+        const parsed = JSON.parse(dataLine) as Record<string, unknown>;
+        if (eventName === "delta") {
+          onEvent({ type: "delta", text: parsed.text as string });
+        } else if (eventName === "tool") {
+          onEvent({
+            type: "tool",
+            name: parsed.name as string,
+            args: parsed.args,
+            result_preview: parsed.result_preview as string | undefined,
+          });
+        } else if (eventName === "done") {
+          onEvent({
+            type: "done",
+            session_id: parsed.session_id as string,
+            reply: parsed.reply as string,
+            trace: (parsed.trace ?? []) as TraceEvent[],
+            skills_touched: (parsed.skills_touched ?? []) as string[],
+          });
+        } else if (eventName === "error") {
+          onEvent({ type: "error", detail: parsed.detail as string });
+        }
+      } catch { /* malformed frame — skip */ }
+    }
+  }
 }
 
 export async function postChat(

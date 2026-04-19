@@ -7,11 +7,12 @@ import Sidebar from "./components/Sidebar";
 import ChatView, { type Message } from "./components/ChatView";
 import VaultView from "./components/VaultView";
 import KanbanView from "./components/KanbanView";
+import GraphView from "./components/GraphView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
-import { getRouting, getSession, postChat } from "./api";
+import { chatStream, getRouting, getSession, type TraceEvent } from "./api";
 
-type View = "chat" | "vault" | "kanban";
+type View = "chat" | "vault" | "kanban" | "graph";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -154,58 +155,120 @@ export default function App() {
     if (!text || state.thinking) return;
 
     const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
+    // Append user message + placeholder assistant message, set thinking.
+    const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timestamp: new Date() };
     patchState(key, {
       input: "",
       thinking: true,
-      messages: [...state.messages, userMsg],
+      messages: [...state.messages, userMsg, placeholderAsst],
     });
 
     try {
-      const res = await postChat(text, activeSession ?? undefined);
-      const assistantMsg: Message = {
-        role: "assistant",
-        content: res.reply,
-        trace: res.trace?.length ? res.trace : undefined,
-        timestamp: new Date(),
-      };
+      await chatStream(
+        text,
+        activeSession ?? undefined,
+        (event) => {
+          if (event.type === "delta") {
+            // Append delta text to the last assistant message.
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(key) ?? emptyState();
+              const msgs = [...cur.messages];
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+                msgs[lastIdx] = { ...msgs[lastIdx], content: msgs[lastIdx].content + event.text };
+              }
+              next.set(key, { ...cur, messages: msgs });
+              return next;
+            });
+          } else if (event.type === "tool") {
+            // Append tool trace entry to last assistant message.
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(key) ?? emptyState();
+              const msgs = [...cur.messages];
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+                const prevTrace = msgs[lastIdx].trace ?? [];
+                msgs[lastIdx] = {
+                  ...msgs[lastIdx],
+                  trace: [...prevTrace, { iter: 0, tool: event.name, args: event.args, result: event.result_preview } as TraceEvent],
+                };
+              }
+              next.set(key, { ...cur, messages: msgs });
+              return next;
+            });
+          } else if (event.type === "done") {
+            const finalAsst: Message = {
+              role: "assistant",
+              content: event.reply,
+              trace: event.trace?.length ? event.trace : undefined,
+              timestamp: new Date(),
+            };
 
-      if (!activeSession) {
-        // First send of a new chat: the server assigned a session id.
-        // Move "__new__" state under the real id and reset "__new__".
-        setChatStates((prev) => {
-          const next = new Map(prev);
-          const fresh = next.get(NEW_KEY) ?? emptyState();
-          next.set(res.session_id, {
-            messages: [...fresh.messages, assistantMsg],
-            thinking: false,
-            input: "",
-            historyLoaded: true,
-          });
-          next.set(NEW_KEY, emptyState());
-          return next;
-        });
-        setActiveSession(res.session_id);
-      } else {
-        patchState(activeSession, {
-          thinking: false,
-          messages: [...(chatStates.get(activeSession)?.messages ?? state.messages), userMsg, assistantMsg].filter(
-            // de-dup userMsg in case it was already appended above
-            (m, i, arr) => arr.findIndex((x) => x === m) === i,
-          ),
-        });
-        // Simpler/safer: just append the assistant message and flip thinking.
-        appendMessage(activeSession, assistantMsg);
-        patchState(activeSession, { thinking: false });
-      }
-      setSessionsRevision((r) => r + 1);
+            if (!activeSession) {
+              // First message — migrate __new__ to the real session id.
+              setChatStates((prev) => {
+                const next = new Map(prev);
+                const fresh = next.get(NEW_KEY) ?? emptyState();
+                // Replace placeholder with final content.
+                const msgs = fresh.messages.slice(0, -1).concat(finalAsst);
+                next.set(event.session_id, {
+                  messages: msgs,
+                  thinking: false,
+                  input: "",
+                  historyLoaded: true,
+                });
+                next.set(NEW_KEY, emptyState());
+                return next;
+              });
+              setActiveSession(event.session_id);
+            } else {
+              // Replace last assistant message with authoritative reply.
+              setChatStates((prev) => {
+                const next = new Map(prev);
+                const cur = next.get(key) ?? emptyState();
+                const msgs = [...cur.messages];
+                const lastIdx = msgs.length - 1;
+                if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+                  msgs[lastIdx] = finalAsst;
+                }
+                next.set(key, { ...cur, messages: msgs, thinking: false });
+                return next;
+              });
+            }
+            setSessionsRevision((r) => r + 1);
+          } else if (event.type === "error") {
+            const errMsg: Message = {
+              role: "assistant",
+              content: `Error: ${event.detail}`,
+              timestamp: new Date(),
+            };
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(key) ?? emptyState();
+              // Replace placeholder with error message.
+              const msgs = cur.messages.slice(0, -1).concat(errMsg);
+              next.set(key, { ...cur, messages: msgs, thinking: false });
+              return next;
+            });
+          }
+        },
+      );
     } catch (err) {
+      // Network/fetch error — replace placeholder with error message.
       const errMsg: Message = {
         role: "assistant",
         content: `Error: ${err instanceof Error ? err.message : "request failed"}`,
         timestamp: new Date(),
       };
-      appendMessage(activeSession ?? NEW_KEY, errMsg);
-      patchState(activeSession ?? NEW_KEY, { thinking: false });
+      setChatStates((prev) => {
+        const next = new Map(prev);
+        const cur = next.get(key) ?? emptyState();
+        const msgs = cur.messages.slice(0, -1).concat(errMsg);
+        next.set(key, { ...cur, messages: msgs, thinking: false });
+        return next;
+      });
     }
   }, [activeKey, activeSession, chatStates, patchState, appendMessage]);
 
@@ -241,6 +304,9 @@ export default function App() {
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
             <KanbanView />
+          </div>
+          <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
+            <GraphView />
           </div>
         </main>
       </div>

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { deleteSession, getSessions, patchSession, type SessionSummary } from "../api";
 import "./Sidebar.css";
 
-type View = "chat" | "vault" | "kanban";
+type View = "chat" | "vault" | "kanban" | "graph";
 
 interface Props {
   view: View;
@@ -54,6 +54,19 @@ function IconKanban() {
   );
 }
 
+function IconGraph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10" cy="4" r="2" />
+      <circle cx="3" cy="16" r="2" />
+      <circle cx="17" cy="16" r="2" />
+      <line x1="10" y1="6" x2="3" y2="14" />
+      <line x1="10" y1="6" x2="17" y2="14" />
+      <line x1="5" y1="16" x2="15" y2="16" />
+    </svg>
+  );
+}
+
 function IconGear() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -85,6 +98,7 @@ const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
   { id: "chat",   label: "Chat",   Icon: IconChat },
   { id: "vault",  label: "Vault",  Icon: IconVault },
   { id: "kanban", label: "Kanban", Icon: IconKanban },
+  { id: "graph",  label: "Graph",  Icon: IconGraph },
 ];
 
 export default function Sidebar({

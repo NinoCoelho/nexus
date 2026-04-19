@@ -6,7 +6,10 @@ import {
   getVaultTree,
   postVaultFolder,
   putVaultFile,
+  reindexVault,
+  searchVault,
   type VaultNode,
+  type VaultSearchResult,
 } from "../api";
 import "./VaultView.css";
 
@@ -112,6 +115,37 @@ function TreeItem({ node, depth, selectedPath, onSelect, onContextMenu }: TreeIt
   );
 }
 
+// ── Snippet renderer (no dangerouslySetInnerHTML) ─────────────────────────────
+
+type SnippetSegment = { text: string; highlight: boolean };
+
+function parseSnippet(snippet: string): SnippetSegment[] {
+  const segments: SnippetSegment[] = [];
+  const re = /<mark>(.*?)<\/mark>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(snippet)) !== null) {
+    if (m.index > last) segments.push({ text: snippet.slice(last, m.index), highlight: false });
+    segments.push({ text: m[1], highlight: true });
+    last = m.index + m[0].length;
+  }
+  if (last < snippet.length) segments.push({ text: snippet.slice(last), highlight: false });
+  return segments;
+}
+
+function SnippetText({ snippet }: { snippet: string }) {
+  const segs = parseSnippet(snippet);
+  return (
+    <span>
+      {segs.map((s, i) =>
+        s.highlight
+          ? <mark key={i}>{s.text}</mark>
+          : <span key={i}>{s.text}</span>
+      )}
+    </span>
+  );
+}
+
 // ── VaultView ─────────────────────────────────────────────────────────────────
 
 export default function VaultView() {
@@ -122,6 +156,13 @@ export default function VaultView() {
   const [editMode, setEditMode] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [fileError, setFileError] = useState<string | null>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<VaultSearchResult[]>([]);
+  const [reindexMsg, setReindexMsg] = useState<string | null>(null);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
@@ -169,6 +210,46 @@ export default function VaultView() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [editMode, save]);
+
+  // Debounced search
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      searchVault(searchQuery)
+        .then(setSearchResults)
+        .catch(() => setSearchResults([]));
+    }, 250);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [searchQuery]);
+
+  // Escape key clears search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && searchQuery) {
+        setSearchQuery("");
+        setSearchResults([]);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [searchQuery]);
+
+  const handleReindex = async () => {
+    try {
+      const { indexed } = await reindexVault();
+      setReindexMsg(`Indexed ${indexed} files`);
+      setTimeout(() => setReindexMsg(null), 2000);
+    } catch {
+      setReindexMsg("Reindex failed");
+      setTimeout(() => setReindexMsg(null), 2000);
+    }
+  };
 
   // Close context menu
   useEffect(() => {
@@ -240,22 +321,79 @@ export default function VaultView() {
             </svg>
           </button>
         </div>
-        {treeError && <div className="vault-tree-error">Couldn&apos;t load — is the server running?</div>}
-        <div className="vault-tree-body">
-          {tree.length === 0 && !treeError && (
-            <div className="vault-tree-empty">No files yet</div>
+
+        {/* Search bar */}
+        <div className="vault-search-bar">
+          <span className="vault-search-icon">
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8.5" cy="8.5" r="5.5" />
+              <line x1="13" y1="13" x2="18" y2="18" />
+            </svg>
+          </span>
+          <input
+            ref={searchInputRef}
+            className="vault-search-input"
+            type="text"
+            placeholder="Search vault…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            spellCheck={false}
+          />
+          {searchQuery && (
+            <button
+              className="vault-search-clear"
+              onClick={() => { setSearchQuery(""); setSearchResults([]); }}
+              title="Clear"
+            >×</button>
           )}
-          {tree.map((node) => (
-            <TreeItem
-              key={node.path}
-              node={node}
-              depth={0}
-              selectedPath={selectedPath}
-              onSelect={setSelectedPath}
-              onContextMenu={handleCtx}
-            />
-          ))}
+          <button
+            className="vault-search-reindex"
+            onClick={() => void handleReindex()}
+            title="Reindex vault"
+          >
+            <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="1 4 1 10 7 10" />
+              <path d="M3.51 15a9 9 0 1 0 .49-3.31" />
+            </svg>
+          </button>
         </div>
+        {reindexMsg && <div className="vault-reindex-toast">{reindexMsg}</div>}
+
+        {treeError && <div className="vault-tree-error">Couldn&apos;t load — is the server running?</div>}
+
+        {searchQuery ? (
+          <div className="vault-search-results">
+            {searchResults.length === 0 && (
+              <div className="vault-tree-empty">No results</div>
+            )}
+            {searchResults.map((r) => (
+              <button
+                key={r.path}
+                className={`vault-search-result${r.path === selectedPath ? " vault-tree-row--active" : ""}`}
+                onClick={() => { setSelectedPath(r.path); }}
+              >
+                <span className="vault-search-result-path">{r.path}</span>
+                <span className="vault-search-snippet"><SnippetText snippet={r.snippet} /></span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="vault-tree-body">
+            {tree.length === 0 && !treeError && (
+              <div className="vault-tree-empty">No files yet</div>
+            )}
+            {tree.map((node) => (
+              <TreeItem
+                key={node.path}
+                node={node}
+                depth={0}
+                selectedPath={selectedPath}
+                onSelect={setSelectedPath}
+                onContextMenu={handleCtx}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Editor panel */}

@@ -554,6 +554,44 @@ def vault_ls(path: Optional[str] = typer.Argument(None)) -> None:
     Console().print(table)
 
 
+@vault_app.command("search")
+def vault_search(
+    query: str = typer.Argument(...),
+    limit: int = typer.Option(20, "--limit", "-n"),
+) -> None:
+    """Full-text search across vault notes."""
+    from .vault_search import search, is_empty, rebuild_from_disk
+    from rich.table import Table
+    from rich.console import Console
+    from rich.text import Text
+
+    if is_empty():
+        typer.echo("Index empty — rebuilding…")
+        n = rebuild_from_disk()
+        typer.echo(f"Indexed {n} files.")
+
+    results = search(query, limit=limit)
+    if not results:
+        typer.echo("No results.")
+        return
+
+    table = Table(title=f'Search: "{query}"')
+    table.add_column("Path", style="cyan", no_wrap=True)
+    table.add_column("Snippet")
+    for r in results:
+        snippet = r["snippet"].replace("<mark>", "[bold yellow]").replace("</mark>", "[/bold yellow]")
+        table.add_row(r["path"], Text.from_markup(snippet))
+    Console().print(table)
+
+
+@vault_app.command("reindex")
+def vault_reindex() -> None:
+    """Rebuild the full-text search index from disk."""
+    from .vault_search import rebuild_from_disk
+    n = rebuild_from_disk()
+    typer.echo(f"Indexed {n} files.")
+
+
 # ── kanban ──────────────────────────────────────────────────────────────────────
 
 @kanban_app.command("boards")
