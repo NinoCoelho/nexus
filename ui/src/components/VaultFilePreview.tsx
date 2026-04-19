@@ -15,6 +15,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!path) return;
@@ -38,7 +39,31 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
 
   if (!path) return null;
 
-  const body = file?.body ?? file?.content ?? "";
+  const rawContent = file?.content ?? "";
+  const body = file?.body ?? rawContent;
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(rawContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // clipboard may be blocked
+    }
+  }
+
+  function handleDownload() {
+    const blob = new Blob([rawContent], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const basename = (path ?? "file").split("/").pop() || "file.md";
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = basename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <>
@@ -53,13 +78,51 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
             <span>{path}</span>
           </div>
           <div className="vault-preview-actions">
+            <button
+              className="vault-preview-btn vault-preview-btn--icon"
+              onClick={handleCopy}
+              disabled={!rawContent}
+              title={copied ? "Copied" : "Copy markdown"}
+              aria-label="Copy markdown"
+            >
+              {copied ? (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 8 7 12 13 4" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="5" y="5" width="8" height="9" rx="1.5" />
+                  <path d="M3 10V3a1 1 0 0 1 1-1h7" />
+                </svg>
+              )}
+              <span>{copied ? "Copied" : "Copy"}</span>
+            </button>
+            <button
+              className="vault-preview-btn vault-preview-btn--icon"
+              onClick={handleDownload}
+              disabled={!rawContent}
+              title="Download as .md"
+              aria-label="Download"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 2v9" />
+                <polyline points="4 7 8 11 12 7" />
+                <path d="M3 13h10" />
+              </svg>
+              <span>Download</span>
+            </button>
             {onOpenInVault && (
               <button
-                className="vault-preview-btn"
+                className="vault-preview-btn vault-preview-btn--icon vault-preview-btn--primary"
                 onClick={() => { onOpenInVault(path); onClose(); }}
                 title="Open in Vault view"
               >
-                Open in Vault
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 3H3v10h10V8" />
+                  <polyline points="9 2 14 2 14 7" />
+                  <line x1="14" y1="2" x2="8" y2="8" />
+                </svg>
+                <span>Open in Vault</span>
               </button>
             )}
             <button className="vault-preview-close" onClick={onClose} aria-label="Close">

@@ -25,6 +25,7 @@ interface Props {
   onSend: () => void;
   hasModel: boolean | null;
   onOpenSettings: () => void;
+  onOpenInVault?: (path: string) => void;
 }
 
 function fmt(d: Date) {
@@ -39,6 +40,7 @@ export default function ChatView({
   onSend,
   hasModel,
   onOpenSettings,
+  onOpenInVault,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -80,6 +82,7 @@ export default function ChatView({
               trace={msg.trace}
               timestamp={msg.timestamp}
               streaming={msg.streaming}
+              onOpenInVault={onOpenInVault}
             />
           ) : (
             <div key={idx} className="user-msg">

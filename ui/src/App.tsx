@@ -51,6 +51,13 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRevision, setSettingsRevision] = useState(0);
   const [hasModel, setHasModel] = useState<boolean | null>(null);
+  /** Bumps a vault path into VaultView when user clicks "Open in Vault" from a preview modal. */
+  const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(null);
+
+  const handleOpenInVault = useCallback((path: string) => {
+    setVaultOpenPath(path);
+    setView("vault");
+  }, []);
 
   const [chatStates, setChatStates] = useState<Map<string, ChatState>>(() => {
     const m = new Map<string, ChatState>();
@@ -314,10 +321,14 @@ export default function App() {
               onSend={send}
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
+              onOpenInVault={handleOpenInVault}
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
-            <VaultView />
+            <VaultView
+              openPath={vaultOpenPath}
+              onOpenPathHandled={() => setVaultOpenPath(null)}
+            />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
             <KanbanView />

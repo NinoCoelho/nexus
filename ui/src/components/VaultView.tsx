@@ -152,7 +152,14 @@ function SnippetText({ snippet }: { snippet: string }) {
 
 // ── VaultView ─────────────────────────────────────────────────────────────────
 
-export default function VaultView() {
+interface VaultViewProps {
+  /** When set, VaultView selects this file and clears any active search/tag filter.
+   *  Parent should reset to null once the signal has been processed. */
+  openPath?: string | null;
+  onOpenPathHandled?: () => void;
+}
+
+export default function VaultView({ openPath, onOpenPathHandled }: VaultViewProps = {}) {
   const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
   const [treeError, setTreeError] = useState(false);
@@ -187,6 +194,18 @@ export default function VaultView() {
   }, []);
 
   useEffect(() => { refreshTree(); }, [refreshTree]);
+
+  // React to an external open request (e.g. "Open in Vault" from a preview modal).
+  useEffect(() => {
+    if (!openPath) return;
+    setSearchQuery("");
+    setSearchResults([]);
+    setActiveTag(null);
+    setTagFiles([]);
+    setEditMode(false);
+    setSelectedPath(openPath);
+    onOpenPathHandled?.();
+  }, [openPath, onOpenPathHandled]);
 
   // Load tag cloud
   const refreshTags = useCallback(() => {
