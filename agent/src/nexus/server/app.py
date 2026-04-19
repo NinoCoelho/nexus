@@ -152,10 +152,17 @@ def create_app(
         from ..config_file import load as load_cfg, save as save_cfg, NexusConfig
         cfg = _state["cfg"] or load_cfg()
         raw = cfg.model_dump()
-        # Deep merge top-level keys
-        for key in ("agent", "providers"):
-            if key in body:
-                raw[key].update(body[key])
+        # Shallow merge for "agent"; NESTED merge for "providers" so a partial
+        # edit (e.g. base_url only) doesn't wipe fields like `type` that the
+        # client didn't send. "has_key" is a read-only synthesized flag and is
+        # never persisted.
+        if "agent" in body:
+            raw["agent"].update(body["agent"])
+        if "providers" in body:
+            for pname, patch in body["providers"].items():
+                existing = raw["providers"].get(pname, {})
+                merged = {**existing, **{k: v for k, v in patch.items() if k != "has_key"}}
+                raw["providers"][pname] = merged
         if "models" in body:
             raw["models"] = body["models"]
         new_cfg = NexusConfig(**raw)

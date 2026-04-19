@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { postChat, type TraceEvent } from "../api";
+import { getRouting, postChat, type TraceEvent } from "../api";
 import AssistantMessage from "./AssistantMessage";
 import SkillChipRow from "./SkillChipRow";
 import InputBar from "./InputBar";
@@ -18,6 +18,9 @@ interface Props {
   onSessionCreated: (id: string, title: string) => void;
   onSkillsTouched: (names: string[]) => void;
   pulsingSkills: Set<string>;
+  onOpenSettings: () => void;
+  /** Bumps when the Settings drawer saves a change; triggers a routing refetch. */
+  settingsRevision: number;
 }
 
 function fmt(d: Date) {
@@ -29,14 +32,31 @@ export default function ChatView({
   onSessionCreated,
   onSkillsTouched,
   pulsingSkills,
+  onOpenSettings,
+  settingsRevision,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [context, setContext] = useState("");
   const [contextDismissed, setContextDismissed] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [hasModel, setHasModel] = useState<boolean | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionSentRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getRouting()
+      .then((r) => {
+        if (!cancelled) setHasModel((r.available_models?.length ?? 0) > 0);
+      })
+      .catch(() => {
+        if (!cancelled) setHasModel(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsRevision]);
 
   useEffect(() => {
     setMessages([]);
@@ -100,7 +120,18 @@ export default function ChatView({
   return (
     <div className="chat-view">
       <div className="message-list">
-        {messages.length === 0 && !thinking && (
+        {messages.length === 0 && !thinking && hasModel === false && (
+          <div className="chat-empty chat-empty--setup">
+            <p className="chat-empty-title">No model configured</p>
+            <p className="chat-empty-sub">
+              Add a model from one of your configured providers to start chatting.
+            </p>
+            <button className="settings-btn settings-btn--primary" onClick={onOpenSettings} type="button">
+              Open settings
+            </button>
+          </div>
+        )}
+        {messages.length === 0 && !thinking && hasModel === true && (
           <div className="chat-empty">
             <p>Start a conversation with Nexus.</p>
           </div>

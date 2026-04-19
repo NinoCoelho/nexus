@@ -18,6 +18,7 @@ export default function App() {
   const [pulsingSkills, setPulsingSkills] = useState<Set<string>>(new Set());
   const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsRevision, setSettingsRevision] = useState(0);
 
   const handleReset = () => {
     setActiveSession(null);
@@ -57,13 +58,21 @@ export default function App() {
           onSessionCreated={handleSessionCreated}
           onSkillsTouched={handleSkillsTouched}
           pulsingSkills={pulsingSkills}
+          onOpenSettings={() => setSettingsOpen(true)}
+          settingsRevision={settingsRevision}
         />
       </main>
       <SkillDrawer
         skillName={openSkill === "__list__" ? null : openSkill}
         onClose={() => setOpenSkill(null)}
       />
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsRevision((r) => r + 1);
+        }}
+      />
     </div>
   );
 }

@@ -53,9 +53,11 @@ class NexusConfig(BaseModel):
     models: list[ModelEntry] = Field(default_factory=list)
 
 
+# Fresh install starts with providers configured but NO models.
+# Users discover and add models through the UI (or CLI).
 _DEFAULT_CONFIG = NexusConfig(
     agent=AgentConfig(
-        default_model="openai/gpt-4o-mini",
+        default_model="",
         routing_mode="fixed",
         max_iterations=16,
     ),
@@ -75,29 +77,7 @@ _DEFAULT_CONFIG = NexusConfig(
             type="ollama",
         ),
     },
-    models=[
-        ModelEntry(
-            id="openai/gpt-4o-mini",
-            provider="openai",
-            model_name="gpt-4o-mini",
-            tags=["fast", "cheap"],
-            strengths=ModelStrengths(speed=9, cost=9, reasoning=5, coding=6),
-        ),
-        ModelEntry(
-            id="anthropic/claude-sonnet-4-6",
-            provider="anthropic",
-            model_name="claude-sonnet-4-6",
-            tags=["balanced"],
-            strengths=ModelStrengths(speed=7, cost=6, reasoning=9, coding=9),
-        ),
-        ModelEntry(
-            id="anthropic/claude-opus-4-7",
-            provider="anthropic",
-            model_name="claude-opus-4-7",
-            tags=["deep"],
-            strengths=ModelStrengths(speed=5, cost=4, reasoning=10, coding=9),
-        ),
-    ],
+    models=[],
 )
 
 

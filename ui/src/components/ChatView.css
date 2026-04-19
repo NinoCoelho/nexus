@@ -35,6 +35,26 @@
   min-height: 120px;
 }
 
+.chat-empty--setup {
+  flex-direction: column;
+  gap: 10px;
+  font-style: normal;
+  padding: 48px 24px;
+  text-align: center;
+}
+.chat-empty-title {
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0;
+}
+.chat-empty-sub {
+  color: var(--fg-dim);
+  font-size: 13px;
+  margin: 0 0 8px;
+  max-width: 360px;
+}
+
 /* User message */
 .user-msg {
   display: flex;
