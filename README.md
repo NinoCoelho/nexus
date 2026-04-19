@@ -43,7 +43,7 @@ Alternatively, keep the old env-var quick path (`NEXUS_LLM_BASE_URL` + `NEXUS_LL
 
 ```bash
 # backend
-uv run nexus serve --port 8787
+uv run nexus serve --port 18989
 
 # frontend (separate terminal)
 cd ../ui
@@ -62,7 +62,7 @@ On first run, bundled skills from `./skills/` are copied into `~/.nexus/skills/`
 ## CLI reference
 
 ```
-nexus serve [--port 8787] [--host 127.0.0.1]
+nexus serve [--port 18989] [--host 127.0.0.1]
 nexus chat  [--session <id>] [--model <id>] [--context <str>]
 
 nexus config init | show | path

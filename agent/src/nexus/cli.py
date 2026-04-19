@@ -25,7 +25,7 @@ app.add_typer(skills_app, name="skills")
 
 @app.command()
 def serve(
-    port: int = typer.Option(8787, "--port", "-p"),
+    port: int = typer.Option(18989, "--port", "-p"),
     host: str = typer.Option("127.0.0.1", "--host"),
 ) -> None:
     """Start the Nexus server."""
@@ -40,7 +40,7 @@ def chat(
     session: Optional[str] = typer.Option(None, "--session"),
     model: Optional[str] = typer.Option(None, "--model"),
     context: Optional[str] = typer.Option(None, "--context"),
-    port: int = typer.Option(8787, "--port"),
+    port: int = typer.Option(18989, "--port"),
 ) -> None:
     """Interactive chat loop (requires nexus serve running)."""
     import httpx

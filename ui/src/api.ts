@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_NEXUS_API ?? "http://localhost:8787";
+const BASE = import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989";
 
 export interface TraceEvent {
   iter: number;
