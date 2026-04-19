@@ -80,15 +80,17 @@
 }
 
 .user-msg-bubble {
-  background: var(--bg-hover);
+  background: var(--bubble-user-bg);
+  border: 1px solid var(--bubble-user-border);
   border-radius: 18px 18px 4px 18px;
   padding: 10px 16px;
   max-width: 70%;
   font-size: 14px;
   line-height: 1.5;
-  color: var(--fg);
+  color: var(--bubble-fg);
   white-space: pre-wrap;
   word-break: break-word;
+  box-shadow: var(--shadow);
 }
 
 /* Thinking dots */
@@ -102,7 +104,7 @@
 .dot {
   width: 7px;
   height: 7px;
-  background: var(--accent);
+  background: var(--bubble-fg-dim);
   border-radius: 50%;
   animation: dot-bounce 1.2s ease-in-out infinite;
 }

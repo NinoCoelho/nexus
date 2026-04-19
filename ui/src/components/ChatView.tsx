@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { getRouting, postChat, type SessionMessage, type TraceEvent } from "../api";
+import { useEffect, useRef } from "react";
+import type { TraceEvent } from "../api";
 import AssistantMessage from "./AssistantMessage";
 import InputBar from "./InputBar";
 import "./ChatView.css";
@@ -11,17 +11,19 @@ export interface Message {
   timestamp: Date;
 }
 
+/**
+ * Stateless ChatView. All chat state (messages, input, thinking) is owned by
+ * App and keyed by session id — this way, switching sessions or views never
+ * drops an in-flight "thinking" indicator or partially-entered input.
+ */
 interface Props {
-  sessionId: string | null;
-  onSessionCreated: (id: string, title: string) => void;
-  onSkillsTouched: (names: string[]) => void;
+  messages: Message[];
+  thinking: boolean;
+  input: string;
+  onInputChange: (v: string) => void;
+  onSend: () => void;
+  hasModel: boolean | null;
   onOpenSettings: () => void;
-  /** Bumps when the Settings drawer saves a change; triggers a routing refetch. */
-  settingsRevision: number;
-  /** Pre-loaded history from an existing session. */
-  initialHistory?: SessionMessage[];
-  /** Called after a message is sent so the sidebar can refetch sessions. */
-  onSessionsChanged?: () => void;
 }
 
 function fmt(d: Date) {
@@ -29,110 +31,26 @@ function fmt(d: Date) {
 }
 
 export default function ChatView({
-  sessionId,
-  onSessionCreated,
-  onSkillsTouched,
+  messages,
+  thinking,
+  input,
+  onInputChange,
+  onSend,
+  hasModel,
   onOpenSettings,
-  settingsRevision,
-  initialHistory,
-  onSessionsChanged,
 }: Props) {
-  const [messages, setMessages] = useState<Message[]>(() => {
-    if (!initialHistory?.length) return [];
-    return initialHistory
-      .filter((m) => (m.role === "user" || m.role === "assistant") && (m.content ?? "").trim().length > 0)
-      .map((m) => {
-        // created_at may be ISO string, unix-seconds number, or undefined.
-        // Default to now on failure instead of rendering "Invalid Date".
-        let ts: Date;
-        if (m.created_at == null) {
-          ts = new Date();
-        } else if (typeof m.created_at === "number") {
-          ts = new Date(m.created_at * 1000);
-        } else {
-          const parsed = new Date(m.created_at);
-          ts = isNaN(parsed.getTime()) ? new Date() : parsed;
-        }
-        return {
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          timestamp: ts,
-        };
-      });
-  });
-  const [input, setInput] = useState("");
-  const [thinking, setThinking] = useState(false);
-  const [hasModel, setHasModel] = useState<boolean | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const sessionSentRef = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    getRouting()
-      .then((r) => {
-        if (!cancelled) setHasModel((r.available_models?.length ?? 0) > 0);
-      })
-      .catch(() => {
-        if (!cancelled) setHasModel(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [settingsRevision]);
-
-  // NOTE: do NOT reset messages when sessionId changes. It transitions from
-  // null to the assigned session id on the first successful send — resetting
-  // here would wipe the conversation the user just started. A real "new chat"
-  // is driven from App via a key change, which remounts this component.
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, thinking]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || thinking) return;
-
-    const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    setThinking(true);
-
-    try {
-      const res = await postChat(text, sessionId ?? undefined);
-      sessionSentRef.current = true;
-
-      if (!sessionId) {
-        onSessionCreated(res.session_id, text.slice(0, 40));
-      }
-      onSessionsChanged?.();
-      if (res.skills_touched?.length) {
-        onSkillsTouched(res.skills_touched);
-      }
-
-      const assistantMsg: Message = {
-        role: "assistant",
-        content: res.reply,
-        trace: res.trace?.length ? res.trace : undefined,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (err) {
-      const errMsg: Message = {
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : "request failed"}`,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errMsg]);
-    } finally {
-      setThinking(false);
-    }
-  }, [input, thinking, sessionId, onSessionCreated, onSkillsTouched]);
+  const visible = messages.filter((m) => (m.content ?? "").trim().length > 0);
 
   return (
     <div className="chat-view">
       <div className="message-list">
-        {messages.length === 0 && !thinking && hasModel === false && (
+        {visible.length === 0 && !thinking && hasModel === false && (
           <div className="chat-empty chat-empty--setup">
             <p className="chat-empty-title">No model configured</p>
             <p className="chat-empty-sub">
@@ -143,12 +61,12 @@ export default function ChatView({
             </button>
           </div>
         )}
-        {messages.length === 0 && !thinking && hasModel === true && (
+        {visible.length === 0 && !thinking && hasModel === true && (
           <div className="chat-empty">
             <p>Start a conversation with Nexus.</p>
           </div>
         )}
-        {messages.filter((m) => (m.content ?? "").trim().length > 0).map((msg, idx) =>
+        {visible.map((msg, idx) =>
           msg.role === "assistant" ? (
             <AssistantMessage
               key={idx}
@@ -187,8 +105,8 @@ export default function ChatView({
           <div className="input-stack">
             <InputBar
               value={input}
-              onChange={setInput}
-              onSend={send}
+              onChange={onInputChange}
+              onSend={onSend}
               disabled={thinking}
             />
           </div>

@@ -22,6 +22,16 @@
   --warn:        #e0b364;
   --bad:         #c85a5a;
 
+  /* Chat bubbles — light beige on dark surface, brown text. */
+  --bubble-asst-bg:     #ede4ce;   /* light warm beige (assistant) */
+  --bubble-asst-border: #d9cfb5;
+  --bubble-user-bg:     #c9ab7c;   /* darker beige (user) */
+  --bubble-user-border: #b59465;
+  --bubble-fg:          #2c1f12;   /* deep brown text */
+  --bubble-fg-dim:      #5d4b36;
+  --bubble-link:        #9a5432;   /* copper-brown for links inside bubbles */
+  --bubble-code-bg:     #dfd3ba;
+
   --radius:      6px;
   --radius-lg:   10px;
   --shadow:      0 2px 8px rgba(0,0,0,0.35);
