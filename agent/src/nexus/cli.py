@@ -556,15 +556,32 @@ def vault_ls(path: Optional[str] = typer.Argument(None)) -> None:
 
 # ── kanban ──────────────────────────────────────────────────────────────────────
 
+@kanban_app.command("boards")
+def kanban_boards() -> None:
+    """List all kanban boards."""
+    from .kanban import list_boards
+    from rich.table import Table
+    from rich.console import Console
+    boards = list_boards()
+    table = Table(title="Kanban Boards")
+    table.add_column("Name")
+    table.add_column("Cards", justify="right")
+    for b in boards:
+        table.add_row(b["name"], str(b["card_count"]))
+    Console().print(table)
+
+
 @kanban_app.command("list")
-def kanban_list() -> None:
+def kanban_list(
+    board: str = typer.Option("default", "--board", help="Board name"),
+) -> None:
     """List kanban cards."""
     from .kanban import list_cards, list_columns
     from rich.table import Table
     from rich.console import Console
-    cards = list_cards()
-    columns = list_columns()
-    table = Table(title="Kanban")
+    cards = list_cards(board)
+    columns = list_columns(board)  # noqa: F841 — kept for future use
+    table = Table(title=f"Kanban ({board})")
     table.add_column("ID", style="dim")
     table.add_column("Column")
     table.add_column("Title")

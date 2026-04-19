@@ -143,6 +143,29 @@
   margin: 0.8em 0;
 }
 
+/* Inline vault-file link: rendered as an inline button with file icon */
+.vault-inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--bubble-code-bg);
+  border: 1px solid var(--bubble-asst-border);
+  color: var(--bubble-link);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 6px 1px 5px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 120ms ease;
+  vertical-align: baseline;
+}
+.vault-inline-link:hover {
+  background: rgba(212, 133, 92, 0.15);
+  border-color: var(--accent-lo);
+  color: var(--accent-lo);
+}
+
 /* Footer row with copy + trace toggle */
 .asst-footer {
   display: flex;

@@ -1,0 +1,181 @@
+.vault-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 150;
+  animation: vp-fade 120ms ease-out;
+}
+
+.vault-preview-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(800px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bubble-asst-bg);
+  color: var(--bubble-fg);
+  border: 1px solid var(--bubble-asst-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  z-index: 160;
+  animation: vp-pop 150ms ease-out;
+  overflow: hidden;
+}
+
+@keyframes vp-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes vp-pop {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.98); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.vault-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--bubble-asst-border);
+  background: var(--bubble-code-bg);
+}
+
+.vault-preview-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--bubble-fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.vault-preview-path svg { flex-shrink: 0; color: var(--bubble-fg-dim); }
+
+.vault-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.vault-preview-btn {
+  background: transparent;
+  border: 1px solid var(--bubble-asst-border);
+  color: var(--bubble-fg);
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: all 150ms ease;
+}
+.vault-preview-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: var(--accent-lo);
+}
+
+.vault-preview-close {
+  background: transparent;
+  border: none;
+  color: var(--bubble-fg-dim);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--radius);
+  transition: all 120ms ease;
+}
+.vault-preview-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--bubble-fg);
+}
+
+.vault-preview-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 22px;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.vault-preview-dim {
+  color: var(--bubble-fg-dim);
+  font-style: italic;
+}
+.vault-preview-error {
+  color: var(--bad);
+}
+
+.vault-preview-frontmatter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  background: var(--bubble-code-bg);
+  border: 1px solid var(--bubble-asst-border);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.vault-preview-fm-row {
+  display: flex;
+  gap: 8px;
+}
+.vault-preview-fm-key {
+  color: var(--bubble-fg-dim);
+  font-family: var(--font-mono);
+  min-width: 80px;
+}
+.vault-preview-fm-val {
+  color: var(--bubble-fg);
+  word-break: break-word;
+}
+
+/* Reuse bubble markdown styles for the body */
+.vault-preview-markdown p { margin: 0.4em 0; color: var(--bubble-fg); }
+.vault-preview-markdown p:first-child { margin-top: 0; }
+.vault-preview-markdown h1, .vault-preview-markdown h2, .vault-preview-markdown h3 {
+  color: var(--bubble-fg);
+  margin: 0.8em 0 0.4em;
+}
+.vault-preview-markdown h1:first-child, .vault-preview-markdown h2:first-child { margin-top: 0; }
+.vault-preview-markdown a {
+  color: var(--bubble-link);
+  text-decoration: underline;
+  text-decoration-color: rgba(154, 84, 50, 0.4);
+}
+.vault-preview-markdown code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bubble-code-bg);
+  border: 1px solid var(--bubble-asst-border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--bubble-fg);
+}
+.vault-preview-markdown pre {
+  background: var(--bubble-code-bg);
+  border: 1px solid var(--bubble-asst-border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-x: auto;
+}
+.vault-preview-markdown blockquote {
+  margin: 0.5em 0;
+  padding: 4px 12px;
+  border-left: 2px solid var(--accent-lo);
+  background: rgba(154, 84, 50, 0.06);
+}
+.vault-preview-markdown ul, .vault-preview-markdown ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}

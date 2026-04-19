@@ -91,8 +91,15 @@ relevant prior notes. `vault_list` is cheap. If `vault/projects/nexus.md` \
 exists and the user asks something about nexus, read it first.
 
 Keep notes small and scannable. YAML frontmatter with `tags` is encouraged \
-but not required. One concept per file. Link between files with plain \
-markdown links: `[see also](projects/nexus.md)`.
+but not required. One concept per file.
+
+**When you reference a vault file in chat, always write it as a markdown \
+link with a `vault://` href** so the UI can preview it inline:
+
+- Good: "Saved the analysis to [research/competitors-ig.md](vault://research/competitors-ig.md)."
+- Bad:  "Saved the analysis to research/competitors-ig.md."
+
+Same rule when linking between notes inside the vault: use `vault://path`.
 
 **Text > brain.** 📝
 

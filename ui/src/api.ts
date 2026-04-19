@@ -126,16 +126,48 @@ export interface KanbanBoard {
   cards: KanbanCard[];
 }
 
-export async function getKanban(): Promise<KanbanBoard> {
-  const res = await fetch(`${BASE}/kanban`);
+export interface Board {
+  name: string;
+  card_count: number;
+}
+
+export async function getKanbanBoards(): Promise<Board[]> {
+  const res = await fetch(`${BASE}/kanban/boards`);
+  if (!res.ok) throw new Error(`Kanban boards error: ${res.status}`);
+  return res.json();
+}
+
+export async function postKanbanBoard(name: string): Promise<Board> {
+  const res = await fetch(`${BASE}/kanban/boards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Kanban board create error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteKanbanBoard(name: string): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/boards/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Kanban board delete error: ${res.status}`);
+  }
+}
+
+export async function getKanban(board = "default"): Promise<KanbanBoard> {
+  const res = await fetch(`${BASE}/kanban?board=${encodeURIComponent(board)}`);
   if (!res.ok) throw new Error(`Kanban error: ${res.status}`);
   return res.json();
 }
 
 export async function postKanbanCard(
-  card: { title: string; column: string; notes?: string; tags?: string[] }
+  card: { title: string; column: string; notes?: string; tags?: string[] },
+  board = "default",
 ): Promise<KanbanCard> {
-  const res = await fetch(`${BASE}/kanban/cards`, {
+  const res = await fetch(`${BASE}/kanban/cards?board=${encodeURIComponent(board)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(card),
@@ -146,9 +178,10 @@ export async function postKanbanCard(
 
 export async function patchKanbanCard(
   id: string,
-  patch: { title?: string; notes?: string; tags?: string[]; column?: string }
+  patch: { title?: string; notes?: string; tags?: string[]; column?: string },
+  board = "default",
 ): Promise<KanbanCard> {
-  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}`, {
+  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -157,15 +190,15 @@ export async function patchKanbanCard(
   return res.json();
 }
 
-export async function deleteKanbanCard(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}`, {
+export async function deleteKanbanCard(id: string, board = "default"): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}`, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`Kanban card delete error: ${res.status}`);
 }
 
-export async function postKanbanColumn(name: string): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/columns`, {
+export async function postKanbanColumn(name: string, board = "default"): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/columns?board=${encodeURIComponent(board)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
@@ -173,8 +206,8 @@ export async function postKanbanColumn(name: string): Promise<void> {
   if (!res.ok) throw new Error(`Kanban column create error: ${res.status}`);
 }
 
-export async function deleteKanbanColumn(name: string): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/columns/${encodeURIComponent(name)}`, {
+export async function deleteKanbanColumn(name: string, board = "default"): Promise<void> {
+  const res = await fetch(`${BASE}/kanban/columns/${encodeURIComponent(name)}?board=${encodeURIComponent(board)}`, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`Kanban column delete error: ${res.status}`);

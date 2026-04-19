@@ -228,16 +228,43 @@ def create_app(
 
     # ── kanban routes ──────────────────────────────────────────────────────────
 
+    @app.get("/kanban/boards")
+    async def kanban_list_boards() -> list:
+        from ..kanban import list_boards
+        return list_boards()
+
+    @app.post("/kanban/boards", status_code=status.HTTP_201_CREATED)
+    async def kanban_create_board(body: dict) -> dict:
+        from ..kanban import create_board
+        name = body.get("name", "")
+        if not name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`name` required")
+        try:
+            create_board(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        return {"name": name, "card_count": 0}
+
+    @app.delete("/kanban/boards/{board_name}", status_code=status.HTTP_204_NO_CONTENT)
+    async def kanban_delete_board(board_name: str) -> None:
+        from ..kanban import delete_board
+        try:
+            delete_board(board_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
     @app.get("/kanban")
-    async def kanban_board() -> dict:
+    async def kanban_board(board: str = "default") -> dict:
         from ..kanban import list_cards, list_columns
         return {
-            "columns": list_columns(),
-            "cards": [c.to_dict() for c in list_cards()],
+            "columns": list_columns(board),
+            "cards": [c.to_dict() for c in list_cards(board)],
         }
 
     @app.post("/kanban/cards", status_code=status.HTTP_201_CREATED)
-    async def kanban_create_card(body: dict) -> dict:
+    async def kanban_create_card(body: dict, board: str = "default") -> dict:
         from ..kanban import create_card
         title = body.get("title", "")
         if not title:
@@ -247,44 +274,45 @@ def create_app(
             column=body.get("column", "todo"),
             notes=body.get("notes", ""),
             tags=body.get("tags") or [],
+            board=board,
         )
         return card.to_dict()
 
     @app.patch("/kanban/cards/{card_id}")
-    async def kanban_update_card(card_id: str, body: dict) -> dict:
+    async def kanban_update_card(card_id: str, body: dict, board: str = "default") -> dict:
         from ..kanban import update_card
         updates: dict[str, Any] = {}
         for key in ("title", "notes", "tags", "column"):
             if key in body:
                 updates[key] = body[key]
         try:
-            card = update_card(card_id, updates)
+            card = update_card(card_id, updates, board)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         return card.to_dict()
 
     @app.delete("/kanban/cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def kanban_delete_card(card_id: str) -> None:
+    async def kanban_delete_card(card_id: str, board: str = "default") -> None:
         from ..kanban import delete_card
         try:
-            delete_card(card_id)
+            delete_card(card_id, board)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
     @app.post("/kanban/columns", status_code=status.HTTP_201_CREATED)
-    async def kanban_create_column(body: dict) -> dict:
+    async def kanban_create_column(body: dict, board: str = "default") -> dict:
         from ..kanban import create_column
         name = body.get("name", "")
         if not name:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`name` required")
-        create_column(name)
+        create_column(name, board)
         return {"name": name}
 
     @app.delete("/kanban/columns/{name}", status_code=status.HTTP_204_NO_CONTENT)
-    async def kanban_delete_column(name: str) -> None:
+    async def kanban_delete_column(name: str, board: str = "default") -> None:
         from ..kanban import delete_column
         try:
-            delete_column(name)
+            delete_column(name, board)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         except ValueError as exc:
