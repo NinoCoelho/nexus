@@ -3,6 +3,8 @@ import ReactMarkdown from "react-markdown";
 import {
   deleteVaultFile,
   getVaultFile,
+  getVaultTag,
+  getVaultTags,
   getVaultTree,
   postVaultFolder,
   putVaultFile,
@@ -10,7 +12,9 @@ import {
   searchVault,
   type VaultNode,
   type VaultSearchResult,
+  type VaultTagCount,
 } from "../api";
+import { useToast } from "../toast/ToastProvider";
 import "./VaultView.css";
 
 // ── Tree helpers ──────────────────────────────────────────────────────────────
@@ -149,6 +153,7 @@ function SnippetText({ snippet }: { snippet: string }) {
 // ── VaultView ─────────────────────────────────────────────────────────────────
 
 export default function VaultView() {
+  const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
   const [treeError, setTreeError] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -164,6 +169,11 @@ export default function VaultView() {
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Tag cloud state
+  const [tags, setTags] = useState<VaultTagCount[]>([]);
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [tagFiles, setTagFiles] = useState<string[]>([]);
+
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
 
@@ -177,6 +187,28 @@ export default function VaultView() {
   }, []);
 
   useEffect(() => { refreshTree(); }, [refreshTree]);
+
+  // Load tag cloud
+  const refreshTags = useCallback(() => {
+    getVaultTags()
+      .then((t) => setTags(t.slice(0, 15)))
+      .catch(() => { /* silent — tags are non-critical */ });
+  }, []);
+
+  useEffect(() => { refreshTags(); }, [refreshTags]);
+
+  // Tag click: toggle filter
+  const handleTagClick = useCallback((tag: string) => {
+    if (activeTag === tag) {
+      setActiveTag(null);
+      setTagFiles([]);
+    } else {
+      setActiveTag(tag);
+      getVaultTag(tag)
+        .then((r) => setTagFiles(r.files))
+        .catch(() => setTagFiles([]));
+    }
+  }, [activeTag]);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -243,13 +275,12 @@ export default function VaultView() {
   const handleReindex = async () => {
     try {
       const { indexed } = await reindexVault();
-      setReindexMsg(`Indexed ${indexed} files`);
-      setTimeout(() => setReindexMsg(null), 2000);
-    } catch {
-      setReindexMsg("Reindex failed");
-      setTimeout(() => setReindexMsg(null), 2000);
+      toast.success(`Indexed ${indexed} file${indexed === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast.error("Reindex failed", { detail: e instanceof Error ? e.message : undefined });
     }
   };
+  void setReindexMsg; // reserved for any legacy inline UI
 
   // Close context menu
   useEffect(() => {
@@ -359,6 +390,26 @@ export default function VaultView() {
         </div>
         {reindexMsg && <div className="vault-reindex-toast">{reindexMsg}</div>}
 
+        {tags.length > 0 && !searchQuery && (
+          <div className="vault-tag-cloud">
+            {tags.map((t) => {
+              const maxCount = tags[0].count || 1;
+              const scale = 0.75 + 0.5 * (t.count / maxCount);
+              return (
+                <button
+                  key={t.tag}
+                  className={`vault-tag-pill${activeTag === t.tag ? " vault-tag-pill--active" : ""}`}
+                  style={{ fontSize: `${Math.round(scale * 11)}px` }}
+                  onClick={() => handleTagClick(t.tag)}
+                  title={`${t.count} file${t.count !== 1 ? "s" : ""}`}
+                >
+                  #{t.tag}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {treeError && <div className="vault-tree-error">Couldn&apos;t load — is the server running?</div>}
 
         {searchQuery ? (
@@ -374,6 +425,21 @@ export default function VaultView() {
               >
                 <span className="vault-search-result-path">{r.path}</span>
                 <span className="vault-search-snippet"><SnippetText snippet={r.snippet} /></span>
+              </button>
+            ))}
+          </div>
+        ) : activeTag ? (
+          <div className="vault-search-results">
+            {tagFiles.length === 0 && (
+              <div className="vault-tree-empty">No files with tag #{activeTag}</div>
+            )}
+            {tagFiles.map((p) => (
+              <button
+                key={p}
+                className={`vault-search-result${p === selectedPath ? " vault-tree-row--active" : ""}`}
+                onClick={() => { setSelectedPath(p); }}
+              >
+                <span className="vault-search-result-path">{p}</span>
               </button>
             ))}
           </div>

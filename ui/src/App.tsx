@@ -282,6 +282,7 @@ export default function App() {
         onNewChat={handleNewChat}
         onOpenSettings={() => setSettingsOpen(true)}
         sessionsRevision={sessionsRevision}
+        onSessionsRevisionBump={() => setSessionsRevision((r) => r + 1)}
       />
 
       <div className="app-main">

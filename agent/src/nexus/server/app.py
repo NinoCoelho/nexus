@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -217,6 +217,174 @@ def create_app(
     ) -> None:
         store.delete(session_id)
 
+    @app.get("/sessions/{session_id}/export")
+    async def export_session(
+        session_id: str,
+        store: SessionStore = Depends(get_sessions),
+    ) -> StreamingResponse:
+        from datetime import datetime, timezone
+        import re
+
+        session = store.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"session {session_id!r} not found")
+
+        # Gather session-level timestamps from the DB.
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT created_at, updated_at FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        created_at_ts = row["created_at"] if row else 0
+        updated_at_ts = row["updated_at"] if row else 0
+
+        def _iso(ts: int) -> str:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+        # Build frontmatter (hand-rolled, no nested objects).
+        context_val = session.context
+        if context_val is None:
+            context_yaml = "null"
+        else:
+            context_yaml = json.dumps(context_val)
+
+        title_yaml = json.dumps(session.title)
+        lines: list[str] = [
+            "---",
+            f"nexus_session_id: {session.id}",
+            f"title: {title_yaml}",
+            f"created_at: {_iso(created_at_ts)}",
+            f"updated_at: {_iso(updated_at_ts)}",
+            f"context: {context_yaml}",
+            "---",
+            "",
+        ]
+
+        ts_list: list[int] = getattr(session, "_message_timestamps", []) or []
+
+        for i, msg in enumerate(session.history):
+            role = str(msg.role.value if hasattr(msg.role, "value") else msg.role)
+            # Skip tool/system messages and empty content.
+            if role not in ("user", "assistant"):
+                continue
+            content = (msg.content or "").strip()
+            if not content:
+                continue
+            msg_ts = ts_list[i] if i < len(ts_list) else created_at_ts
+            label = "You" if role == "user" else "Nexus"
+            lines.append(f"## {label} · {_iso(msg_ts)}")
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+
+        markdown = "\n".join(lines)
+
+        # Build a safe filename slug from the title.
+        slug = re.sub(r"[^a-z0-9]+", "-", session.title.lower()).strip("-")[:40]
+        id8 = session.id[:8]
+        filename = f"session-{slug}-{id8}.md"
+
+        return StreamingResponse(
+            iter([markdown]),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.post("/sessions/import")
+    async def import_session(
+        request: "Request",
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict:
+        from datetime import datetime, timezone
+        import re
+        import uuid as _uuid
+        from ..agent.llm import ChatMessage, Role
+
+        content_type = request.headers.get("content-type", "")
+
+        if "multipart/form-data" in content_type:
+            from fastapi import UploadFile, Form
+            form = await request.form()
+            file_field = form.get("file")
+            if file_field is None:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`file` field required")
+            markdown = (await file_field.read()).decode("utf-8")  # type: ignore[union-attr]
+        else:
+            body = await request.json()
+            markdown = body.get("markdown", "")
+            if not markdown:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`markdown` required")
+
+        # Parse optional YAML frontmatter.
+        fm: dict[str, str] = {}
+        body_text = markdown
+        fm_match = re.match(r"^---\n(.*?)\n---\n?", markdown, re.DOTALL)
+        if fm_match:
+            for line in fm_match.group(1).splitlines():
+                if ": " in line:
+                    k, _, v = line.partition(": ")
+                    fm[k.strip()] = v.strip()
+            body_text = markdown[fm_match.end():]
+
+        # Determine title.
+        title = "Imported session"
+        if "title" in fm:
+            try:
+                title = json.loads(fm["title"])
+            except Exception:
+                title = fm["title"].strip('"\'')
+        else:
+            h1 = re.search(r"^#\s+(.+)$", body_text, re.MULTILINE)
+            if h1:
+                title = h1.group(1).strip()
+
+        context: str | None = None
+        if "context" in fm:
+            raw_ctx = fm["context"].strip()
+            if raw_ctx and raw_ctx.lower() != "null":
+                try:
+                    context = json.loads(raw_ctx)
+                except Exception:
+                    context = raw_ctx
+
+        # Assign id — avoid clobbering existing sessions.
+        new_id = _uuid.uuid4().hex
+        if "nexus_session_id" in fm:
+            candidate = fm["nexus_session_id"].strip()
+            if candidate and store.get(candidate) is None:
+                new_id = candidate
+
+        # Reconstruct messages from level-2 headings.
+        messages: list[ChatMessage] = []
+        now = int(datetime.now(tz=timezone.utc).timestamp())
+        sections = re.split(r"\n## (You|Nexus) · [^\n]*\n", body_text)
+        # sections[0] is text before first heading (ignored); then alternating label/content pairs.
+        i = 1
+        while i + 1 < len(sections):
+            speaker = sections[i].strip()
+            content = sections[i + 1].strip()
+            i += 2
+            if not content:
+                continue
+            role = Role.USER if speaker == "You" else Role.ASSISTANT
+            messages.append(ChatMessage(role=role, content=content))
+
+        # Insert into store directly.
+        with store._lock, store._connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions (id, title, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (new_id, title, context, now, now),
+            )
+            rows = [
+                (new_id, seq, msg.role, msg.content or "", None, None, now)
+                for seq, msg in enumerate(messages)
+            ]
+            conn.executemany(
+                "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
+        return {"id": new_id, "title": title, "imported_message_count": len(messages)}
+
     # ── vault routes ───────────────────────────────────────────────────────────
 
     @app.get("/vault/tree")
@@ -225,15 +393,45 @@ def create_app(
         entries = list_tree()
         return [{"path": e.path, "type": e.type, "size": e.size, "mtime": e.mtime} for e in entries]
 
+    @app.get("/vault/tags")
+    async def vault_list_tags() -> list[dict]:
+        from .. import vault_index
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return vault_index.list_tags()
+
+    @app.get("/vault/tags/{tag}")
+    async def vault_files_for_tag(tag: str) -> dict:
+        from .. import vault_index
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return {"tag": tag, "files": vault_index.files_with_tag(tag)}
+
+    @app.get("/vault/backlinks")
+    async def vault_backlinks_endpoint(path: str) -> dict:
+        from .. import vault_index
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return {"path": path, "backlinks": vault_index.backlinks(path)}
+
     @app.get("/vault/file")
     async def vault_read_file(path: str) -> dict:
         from ..vault import read_file
+        from .. import vault_index
         try:
-            return read_file(path)
+            result = read_file(path)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        try:
+            if vault_index.is_empty():
+                vault_index.rebuild_from_disk()
+            result["tags"] = vault_index.tags_for_file(path)
+            result["backlinks"] = vault_index.backlinks(path)
+        except Exception:
+            log.warning("vault_index: failed to attach tags/backlinks", exc_info=True)
+        return result
 
     @app.put("/vault/file", status_code=status.HTTP_204_NO_CONTENT)
     async def vault_write_file(body: dict) -> None:

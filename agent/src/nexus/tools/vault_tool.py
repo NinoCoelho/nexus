@@ -59,7 +59,36 @@ VAULT_SEARCH_TOOL = ToolSpec(
     },
 )
 
-VAULT_TOOLS = [VAULT_LIST_TOOL, VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_SEARCH_TOOL]
+VAULT_TAGS_TOOL = ToolSpec(
+    name="vault_tags",
+    description=(
+        "List all tags in the vault (with file counts), or list files for a specific tag. "
+        "Omit `tag` to get the full tag index; provide `tag` to get files with that tag."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "tag": {
+                "type": "string",
+                "description": "Tag name to look up. Omit to list all tags.",
+            },
+        },
+    },
+)
+
+VAULT_BACKLINKS_TOOL = ToolSpec(
+    name="vault_backlinks",
+    description="List all vault files that link to the given file path.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Relative path within the vault."},
+        },
+        "required": ["path"],
+    },
+)
+
+VAULT_TOOLS = [VAULT_LIST_TOOL, VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_SEARCH_TOOL, VAULT_TAGS_TOOL, VAULT_BACKLINKS_TOOL]
 
 
 def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
@@ -98,6 +127,27 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
                 vault_search.rebuild_from_disk()
             results = vault_search.search(query, limit=limit)
             return json.dumps({"ok": True, "results": results})
+
+        if name == "vault_tags":
+            from .. import vault_index
+            tag = args.get("tag", "")
+            if vault_index.is_empty():
+                vault_index.rebuild_from_disk()
+            if tag:
+                files = vault_index.files_with_tag(tag)
+                return json.dumps({"ok": True, "tag": tag, "files": files})
+            tags = vault_index.list_tags()
+            return json.dumps({"ok": True, "tags": tags})
+
+        if name == "vault_backlinks":
+            from .. import vault_index
+            path = args.get("path", "")
+            if not path:
+                return json.dumps({"ok": False, "error": "`path` is required"})
+            if vault_index.is_empty():
+                vault_index.rebuild_from_disk()
+            links = vault_index.backlinks(path)
+            return json.dumps({"ok": True, "path": path, "backlinks": links})
 
         return json.dumps({"ok": False, "error": f"unknown vault tool: {name!r}"})
 

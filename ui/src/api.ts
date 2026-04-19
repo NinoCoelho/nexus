@@ -58,11 +58,15 @@ export interface VaultNode {
   mtime?: string;
 }
 
+export interface VaultTagCount { tag: string; count: number }
+
 export interface VaultFile {
   path: string;
   content: string;
   frontmatter?: Record<string, unknown>;
   body?: string;
+  tags?: string[];
+  backlinks?: string[];
 }
 
 export async function getVaultTree(): Promise<VaultNode[]> {
@@ -134,6 +138,24 @@ export async function getVaultGraph(): Promise<GraphData> {
   const res = await fetch(`${BASE}/vault/graph`);
   if (!res.ok) throw new Error(`Vault graph error: ${res.status}`);
   return res.json() as Promise<GraphData>;
+}
+
+export async function getVaultTags(): Promise<VaultTagCount[]> {
+  const res = await fetch(`${BASE}/vault/tags`);
+  if (!res.ok) throw new Error(`Vault tags error: ${res.status}`);
+  return res.json() as Promise<VaultTagCount[]>;
+}
+
+export async function getVaultTag(tag: string): Promise<{ tag: string; files: string[] }> {
+  const res = await fetch(`${BASE}/vault/tags/${encodeURIComponent(tag)}`);
+  if (!res.ok) throw new Error(`Vault tag error: ${res.status}`);
+  return res.json() as Promise<{ tag: string; files: string[] }>;
+}
+
+export async function getVaultBacklinks(path: string): Promise<{ path: string; backlinks: string[] }> {
+  const res = await fetch(`${BASE}/vault/backlinks?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`Vault backlinks error: ${res.status}`);
+  return res.json() as Promise<{ path: string; backlinks: string[] }>;
 }
 
 // ── Kanban ────────────────────────────────────────────────────────────────────
@@ -245,6 +267,7 @@ export interface TraceEvent {
   tool?: string;
   args?: unknown;
   result?: unknown;
+  status?: "pending" | "done" | "error";
 }
 
 export interface ChatResponse {
@@ -389,6 +412,26 @@ export async function deleteSession(id: string): Promise<void> {
   await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export async function exportSession(id: string): Promise<{ markdown: string; filename: string }> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}/export`);
+  if (!res.ok) throw new Error(`Export error: ${res.status}`);
+  const markdown = await res.text();
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : `session-${id.slice(0, 8)}.md`;
+  return { markdown, filename };
+}
+
+export async function importSession(markdown: string): Promise<{ id: string; title: string; imported_message_count: number }> {
+  const res = await fetch(`${BASE}/sessions/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ markdown }),
+  });
+  if (!res.ok) throw new Error(`Import error: ${res.status}`);
+  return res.json();
 }
 
 export async function getHealth(): Promise<{ ok: boolean }> {

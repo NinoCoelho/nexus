@@ -106,6 +106,36 @@
   border-color: var(--accent);
 }
 
+/* New chat row (new chat + import side-by-side) */
+.sidebar-new-chat-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.sidebar-new-chat-row .sidebar-new-chat {
+  flex: 1;
+}
+
+/* Import button */
+.sidebar-import-btn {
+  padding: 8px 8px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+  flex-shrink: 0;
+}
+.sidebar-import-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--fg-faint);
+  color: var(--fg);
+}
+
 /* Nav items */
 .sidebar-nav {
   display: flex;

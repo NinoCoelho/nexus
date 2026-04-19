@@ -358,6 +358,42 @@
   padding: 0 1px;
 }
 
+/* ── Tag cloud ────────────────────────────────────────────────────────────── */
+
+.vault-tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.vault-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--fg-dim);
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 120ms;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.vault-tag-pill:hover {
+  border-color: var(--accent-lo);
+  color: var(--accent);
+  background: rgba(212, 133, 92, 0.08);
+}
+.vault-tag-pill--active {
+  background: rgba(212, 133, 92, 0.18);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ── Context menu ─────────────────────────────────────────────────────────── */
 
 .vault-context-menu {

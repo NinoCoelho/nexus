@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { deleteSession, getSessions, patchSession, type SessionSummary } from "../api";
+import React, { useEffect, useRef, useState } from "react";
+import { deleteSession, exportSession, getSessions, importSession, patchSession, type SessionSummary } from "../api";
 import "./Sidebar.css";
 
 type View = "chat" | "vault" | "kanban" | "graph";
@@ -12,6 +12,7 @@ interface Props {
   onNewChat: () => void;
   onOpenSettings: () => void;
   sessionsRevision: number;
+  onSessionsRevisionBump: () => void;
 }
 
 function fmtRelative(raw: string | number | undefined): string {
@@ -124,6 +125,7 @@ export default function Sidebar({
   onNewChat,
   onOpenSettings,
   sessionsRevision,
+  onSessionsRevisionBump,
 }: Props) {
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; }
@@ -139,6 +141,9 @@ export default function Sidebar({
 
   // Context menu
   const [menuId, setMenuId] = useState<string | null>(null);
+
+  // Import file input ref
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     localStorage.setItem("sidebar-collapsed", String(collapsed));
@@ -184,6 +189,33 @@ export default function Sidebar({
     setMenuId(null);
   };
 
+  const handleExport = async (id: string) => {
+    setMenuId(null);
+    try {
+      const { markdown, filename } = await exportSession(id);
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset so the same file can be picked again.
+    e.target.value = "";
+    try {
+      const text = await file.text();
+      const result = await importSession(text);
+      onSessionsRevisionBump();
+      onSessionSelect(result.id);
+    } catch { /* ignore */ }
+  };
+
   return (
     <aside className={`sidebar${collapsed ? " sidebar--collapsed" : ""}`}>
       {/* Top bar */}
@@ -204,15 +236,35 @@ export default function Sidebar({
         </button>
       </div>
 
-      {/* New chat */}
+      {/* New chat + Import */}
       <div className="sidebar-section">
-        <button className="sidebar-new-chat" onClick={onNewChat}>
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="10" y1="4" x2="10" y2="16" />
-            <line x1="4" y1="10" x2="16" y2="10" />
-          </svg>
-          {!collapsed && <span>New chat</span>}
-        </button>
+        <div className={collapsed ? undefined : "sidebar-new-chat-row"}>
+          <button className="sidebar-new-chat" onClick={onNewChat}>
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="10" y1="4" x2="10" y2="16" />
+              <line x1="4" y1="10" x2="16" y2="10" />
+            </svg>
+            {!collapsed && <span>New chat</span>}
+          </button>
+          {!collapsed && (
+            <>
+              <button
+                className="sidebar-import-btn"
+                title="Import session from .md file"
+                onClick={() => importInputRef.current?.click()}
+              >
+                ↑ Import
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".md,text/markdown"
+                style={{ display: "none" }}
+                onChange={(e) => void handleImportFile(e)}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {/* View switcher */}
@@ -285,6 +337,12 @@ export default function Sidebar({
                       }}
                     >
                       Rename
+                    </button>
+                    <button
+                      className="sidebar-ctx-item"
+                      onClick={() => void handleExport(s.id)}
+                    >
+                      Export...
                     </button>
                     <button
                       className="sidebar-ctx-item sidebar-ctx-item--danger"

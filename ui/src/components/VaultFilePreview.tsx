@@ -14,6 +14,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
   const [file, setFile] = useState<VaultFile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
 
   useEffect(() => {
     if (!path) return;
@@ -86,10 +87,43 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
               <div className="vault-preview-markdown">
                 <ReactMarkdown>{body}</ReactMarkdown>
               </div>
+              {(file.tags && file.tags.length > 0) && (
+                <div className="vault-preview-footer-section">
+                  <div className="vault-preview-footer-label">Tags</div>
+                  <div className="vault-preview-tags">
+                    {file.tags.map((tag) => (
+                      <span key={tag} className="vault-preview-tag-pill">#{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(file.backlinks && file.backlinks.length > 0) && (
+                <div className="vault-preview-footer-section">
+                  <div className="vault-preview-footer-label">Backlinks</div>
+                  <div className="vault-preview-backlinks">
+                    {file.backlinks.map((bl) => (
+                      <button
+                        key={bl}
+                        className="vault-preview-backlink-btn"
+                        onClick={() => setPreviewPath(bl)}
+                      >
+                        {bl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
+      {previewPath && (
+        <VaultFilePreview
+          path={previewPath}
+          onClose={() => setPreviewPath(null)}
+          onOpenInVault={onOpenInVault}
+        />
+      )}
     </>
   );
 }

@@ -511,6 +511,50 @@ def sessions_list() -> None:
     Console().print(table)
 
 
+@sessions_app.command("export")
+def sessions_export(
+    session_id: str = typer.Argument(...),
+    out: Optional[str] = typer.Option(None, "--out", "-o", help="Output file path (default: stdout)"),
+    port: int = typer.Option(18989, "--port"),
+) -> None:
+    """Export a session as markdown."""
+    import httpx
+    base = f"http://127.0.0.1:{port}"
+    try:
+        r = httpx.get(f"{base}/sessions/{session_id}/export", timeout=10)
+        r.raise_for_status()
+    except Exception as exc:
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+    markdown = r.text
+    if out:
+        from pathlib import Path
+        Path(out).write_text(markdown, encoding="utf-8")
+        typer.echo(f"Exported to {out}")
+    else:
+        typer.echo(markdown)
+
+
+@sessions_app.command("import")
+def sessions_import(
+    path: str = typer.Argument(..., help="Path to .md file"),
+    port: int = typer.Option(18989, "--port"),
+) -> None:
+    """Import a session from a markdown file."""
+    import httpx
+    from pathlib import Path
+    md = Path(path).read_text(encoding="utf-8")
+    base = f"http://127.0.0.1:{port}"
+    try:
+        r = httpx.post(f"{base}/sessions/import", json={"markdown": md}, timeout=10)
+        r.raise_for_status()
+    except Exception as exc:
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+    data = r.json()
+    typer.echo(f"Imported session '{data['title']}' (id={data['id']}, messages={data['imported_message_count']})")
+
+
 @sessions_app.command("show")
 def sessions_show(session_id: str = typer.Argument(...)) -> None:
     """Show messages in a session."""
@@ -590,6 +634,52 @@ def vault_reindex() -> None:
     from .vault_search import rebuild_from_disk
     n = rebuild_from_disk()
     typer.echo(f"Indexed {n} files.")
+
+
+@vault_app.command("tags")
+def vault_tags() -> None:
+    """List all tags in the vault with file counts."""
+    from .vault_index import list_tags, is_empty, rebuild_from_disk as rebuild_meta
+    from rich.table import Table
+    from rich.console import Console
+
+    if is_empty():
+        typer.echo("Tag index empty — rebuilding…")
+        n = rebuild_meta()
+        typer.echo(f"Indexed {n} files.")
+
+    tags = list_tags()
+    if not tags:
+        typer.echo("No tags found.")
+        return
+
+    table = Table(title="Vault Tags")
+    table.add_column("Tag", style="cyan")
+    table.add_column("Files", justify="right")
+    for t in tags:
+        table.add_row(t["tag"], str(t["count"]))
+    Console().print(table)
+
+
+@vault_app.command("backlinks")
+def vault_backlinks_cmd(path: str = typer.Argument(..., help="Relative vault file path")) -> None:
+    """List files that link to a given vault file."""
+    from .vault_index import backlinks, is_empty, rebuild_from_disk as rebuild_meta
+    from rich.console import Console
+
+    if is_empty():
+        typer.echo("Tag index empty — rebuilding…")
+        rebuild_meta()
+
+    links = backlinks(path)
+    if not links:
+        typer.echo(f"No backlinks to '{path}'.")
+        return
+
+    console = Console()
+    console.print(f"[bold]Backlinks to[/bold] [cyan]{path}[/cyan]:")
+    for link in links:
+        console.print(f"  [dim]-[/dim] {link}")
 
 
 # ── kanban ──────────────────────────────────────────────────────────────────────

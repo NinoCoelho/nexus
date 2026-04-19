@@ -179,3 +179,62 @@
   margin: 0.4em 0;
   padding-left: 1.4em;
 }
+
+/* ── Tags and backlinks footer ────────────────────────────────────────────── */
+
+.vault-preview-footer-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bubble-asst-border);
+}
+
+.vault-preview-footer-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--bubble-fg-dim);
+  margin-bottom: 6px;
+}
+
+.vault-preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.vault-preview-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(212, 133, 92, 0.15);
+  border: 1px solid rgba(212, 133, 92, 0.35);
+  color: var(--accent);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.vault-preview-backlinks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vault-preview-backlink-btn {
+  display: block;
+  background: none;
+  border: none;
+  color: var(--bubble-link, var(--accent));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  padding: 2px 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(154, 84, 50, 0.35);
+  transition: color 120ms;
+}
+.vault-preview-backlink-btn:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}

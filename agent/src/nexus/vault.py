@@ -119,6 +119,13 @@ def write_file(rel_path: str, content: str) -> None:
     except Exception:
         import logging
         logging.getLogger(__name__).warning("vault_search: index_path failed", exc_info=True)
+    try:
+        from . import vault_index
+        fm, body = _parse_frontmatter(content)
+        vault_index.reindex_file(rel_path, body if body is not None else content, fm)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_index: reindex_file failed", exc_info=True)
 
 
 def delete(rel_path: str) -> None:
@@ -136,6 +143,12 @@ def delete(rel_path: str) -> None:
     except Exception:
         import logging
         logging.getLogger(__name__).warning("vault_search: remove_path failed", exc_info=True)
+    try:
+        from . import vault_index
+        vault_index.remove_file(rel_path)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_index: remove_file failed", exc_info=True)
 
 
 def move(from_path: str, to_path: str) -> None:
@@ -150,6 +163,12 @@ def move(from_path: str, to_path: str) -> None:
     except Exception:
         import logging
         logging.getLogger(__name__).warning("vault_search: rename_path failed", exc_info=True)
+    try:
+        from . import vault_index
+        vault_index.rename_file(from_path, to_path)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_index: rename_file failed", exc_info=True)
 
 
 def create_folder(rel_path: str) -> None:
