@@ -36,7 +36,18 @@ export async function postChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, session_id, context }),
   });
-  if (!res.ok) throw new Error(`Chat error: ${res.status}`);
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body && typeof body === "object" && "detail" in body) {
+        detail = String((body as { detail: unknown }).detail);
+      }
+    } catch {
+      // body was not JSON; keep the status
+    }
+    throw new Error(detail);
+  }
   return res.json();
 }
 

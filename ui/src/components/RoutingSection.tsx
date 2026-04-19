@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { putRouting, type Model, type RoutingConfig } from "../api";
 
 interface Props {
@@ -13,15 +13,17 @@ export default function RoutingSection({ routing, models, onRefresh }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const dirty =
-    mode !== routing.mode ||
-    (mode === "fixed" && defaultModel !== routing.default_model);
+  // Sync local state with server-side routing whenever the prop changes.
+  useEffect(() => {
+    setMode(routing.mode);
+    setDefaultModel(routing.default_model);
+  }, [routing.mode, routing.default_model]);
 
-  async function handleSave() {
+  async function persist(patch: { mode?: "fixed" | "auto"; default_model?: string }) {
     setSaving(true);
     setError(null);
     try {
-      await putRouting({ mode, default_model: mode === "fixed" ? defaultModel : undefined });
+      await putRouting(patch);
       onRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
@@ -30,22 +32,38 @@ export default function RoutingSection({ routing, models, onRefresh }: Props) {
     }
   }
 
+  function handleModeChange(next: "fixed" | "auto") {
+    if (next === mode) return;
+    setMode(next);
+    persist({ mode: next, default_model: next === "fixed" ? defaultModel : undefined });
+  }
+
+  function handleDefaultModelChange(next: string) {
+    if (next === defaultModel) return;
+    setDefaultModel(next);
+    if (next) persist({ default_model: next });
+  }
+
   return (
     <div className="settings-section">
-      <div className="settings-section-label">Routing</div>
+      <div className="settings-section-label">
+        Routing {saving && <span style={{ color: "var(--fg-faint)", fontWeight: 400 }}>· saving…</span>}
+      </div>
 
       <div className="settings-row">
         <span className="settings-row-name">Routing mode</span>
         <div className="seg-control">
           <button
             className={`seg-btn${mode === "fixed" ? " seg-btn--active" : ""}`}
-            onClick={() => setMode("fixed")}
+            onClick={() => handleModeChange("fixed")}
+            type="button"
           >
             Fixed
           </button>
           <button
             className={`seg-btn${mode === "auto" ? " seg-btn--active" : ""}`}
-            onClick={() => setMode("auto")}
+            onClick={() => handleModeChange("auto")}
+            type="button"
           >
             Auto
           </button>
@@ -61,8 +79,12 @@ export default function RoutingSection({ routing, models, onRefresh }: Props) {
             id="default-model-select"
             className="settings-select"
             value={defaultModel}
-            onChange={(e) => setDefaultModel(e.target.value)}
+            onChange={(e) => handleDefaultModelChange(e.target.value)}
+            disabled={models.length === 0}
           >
+            <option value="" disabled>
+              {models.length === 0 ? "No models configured" : "Select a model…"}
+            </option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id}
@@ -70,6 +92,11 @@ export default function RoutingSection({ routing, models, onRefresh }: Props) {
               </option>
             ))}
           </select>
+          {models.length === 0 && (
+            <span className="settings-field-hint">
+              Add a model in the section below, then it will appear here.
+            </span>
+          )}
         </div>
       )}
 
@@ -81,16 +108,6 @@ export default function RoutingSection({ routing, models, onRefresh }: Props) {
       )}
 
       {error && <p className="settings-error">{error}</p>}
-
-      <div className="settings-row settings-row--end">
-        <button
-          className="settings-btn settings-btn--primary"
-          disabled={!dirty || saving}
-          onClick={handleSave}
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
-      </div>
     </div>
   );
 }

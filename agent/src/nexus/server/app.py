@@ -320,6 +320,10 @@ def create_app(
         strengths = ModelStrengths(**strengths_data)
         m = ModelEntry(**body, strengths=strengths)
         cfg.models.append(m)
+        # Auto-set as default if nothing is set yet — the DWIM path: a user
+        # who just configured their first model expects it to be usable.
+        if not cfg.agent.default_model:
+            cfg.agent.default_model = m.id
         save_cfg(cfg)
         _rebuild_registry(cfg)
         return m.model_dump()
