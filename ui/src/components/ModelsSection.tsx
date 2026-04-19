@@ -16,52 +16,79 @@ interface Props {
 
 interface AddForm {
   id: string;
+  id_touched: boolean;
   provider: string;
   model_name: string;
   tags: string;
   strengths: ModelStrengths;
 }
 
-interface ModelCache {
+interface DiscoveryState {
   models: string[];
   fetchedAt: number;
+  error: string | null;
 }
 
 const CACHE_TTL_MS = 30_000;
 const emptyStrengths: ModelStrengths = { speed: 5, cost: 5, reasoning: 5, coding: 5 };
-const emptyForm: AddForm = { id: "", provider: "", model_name: "", tags: "", strengths: emptyStrengths };
+const emptyForm: AddForm = {
+  id: "",
+  id_touched: false,
+  provider: "",
+  model_name: "",
+  tags: "",
+  strengths: emptyStrengths,
+};
 
 export default function ModelsSection({ models, providers, onRefresh }: Props) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState<AddForm>(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const [modelCache, setModelCache] = useState<Record<string, ModelCache>>({});
-  const [fetchingModels, setFetchingModels] = useState(false);
+  const [discovery, setDiscovery] = useState<Record<string, DiscoveryState>>({});
+  const [fetching, setFetching] = useState(false);
+  const [filter, setFilter] = useState("");
 
-  const cachedModels = form.provider
-    ? (modelCache[form.provider]?.models ?? [])
-    : [];
+  const currentDiscovery = form.provider ? discovery[form.provider] : undefined;
+  const fetchedModels = currentDiscovery?.models ?? [];
+  const discoveryError = currentDiscovery?.error ?? null;
 
   const doFetchModels = useCallback(async (provider: string, force = false) => {
     if (!provider) return;
-    const cached = modelCache[provider];
+    const cached = discovery[provider];
     if (!force && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return;
-    setFetchingModels(true);
+    setFetching(true);
     try {
       const result = await fetchProviderModels(provider);
-      if (result.ok) {
-        setModelCache((c) => ({
-          ...c,
-          [provider]: { models: result.models, fetchedAt: Date.now() },
-        }));
-      }
-    } catch {
-      // silently ignore — user can still type freely
+      setDiscovery((c) => ({
+        ...c,
+        [provider]: {
+          models: result.ok ? result.models : [],
+          fetchedAt: Date.now(),
+          error: result.ok ? null : (result.error || "Failed to fetch models"),
+        },
+      }));
+    } catch (e) {
+      setDiscovery((c) => ({
+        ...c,
+        [provider]: {
+          models: [],
+          fetchedAt: Date.now(),
+          error: e instanceof Error ? e.message : "Fetch failed",
+        },
+      }));
     } finally {
-      setFetchingModels(false);
+      setFetching(false);
     }
-  }, [modelCache]);
+  }, [discovery]);
+
+  function pickModel(upstreamName: string) {
+    setForm((f) => ({
+      ...f,
+      model_name: upstreamName,
+      id: f.id_touched ? f.id : `${f.provider}/${upstreamName}`,
+    }));
+  }
 
   async function addModel() {
     if (!form.id.trim() || !form.provider || !form.model_name.trim()) return;
@@ -76,6 +103,7 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
       });
       setAdding(false);
       setForm(emptyForm);
+      setFilter("");
       onRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Add failed");
@@ -93,7 +121,9 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
     }
   }
 
-  const datalistId = form.provider ? `model-list-${form.provider}` : undefined;
+  const visibleFetched = filter.trim()
+    ? fetchedModels.filter((m) => m.toLowerCase().includes(filter.trim().toLowerCase()))
+    : fetchedModels;
 
   return (
     <div className="settings-section">
@@ -148,18 +178,9 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
 
       {adding ? (
         <div className="settings-card settings-inline-form">
+          {/* Step 1: Provider */}
           <div className="settings-field">
-            <label className="settings-field-label">Model id</label>
-            <input
-              className="settings-input"
-              value={form.id}
-              onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-              placeholder="openai/gpt-4o-mini"
-              autoFocus
-            />
-          </div>
-          <div className="settings-field">
-            <label className="settings-field-label">Provider</label>
+            <label className="settings-field-label">1. Provider</label>
             <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
               <select
                 className="settings-select"
@@ -168,7 +189,7 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
                 onChange={(e) => {
                   const p = e.target.value;
                   setForm((f) => ({ ...f, provider: p }));
-                  if (p) doFetchModels(p);
+                  setFilter("");
                 }}
               >
                 <option value="">Select provider…</option>
@@ -178,73 +199,135 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
                   </option>
                 ))}
               </select>
-              <button
-                className="settings-icon-btn"
-                title="Refresh model list"
-                disabled={!form.provider || fetchingModels}
-                onClick={() => form.provider && doFetchModels(form.provider, true)}
-                type="button"
-              >
-                {fetchingModels ? "…" : "↻"}
-              </button>
             </div>
           </div>
-          <div className="settings-field">
-            <label className="settings-field-label">Upstream model name</label>
-            {datalistId && (
-              <datalist id={datalistId}>
-                {cachedModels.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            )}
-            <input
-              className="settings-input"
-              list={datalistId}
-              value={form.model_name}
-              onChange={(e) => setForm((f) => ({ ...f, model_name: e.target.value }))}
-              placeholder="gpt-4o-mini"
-            />
-            {cachedModels.length > 0 && form.provider && (
-              <span className="settings-field-hint">
-                {cachedModels.length} model(s) available from {form.provider}. Type to filter or enter a custom name.
-              </span>
-            )}
-          </div>
-          <div className="settings-field">
-            <label className="settings-field-label">Tags (comma separated)</label>
-            <input
-              className="settings-input"
-              value={form.tags}
-              onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
-              placeholder="fast, cheap"
-            />
-          </div>
-          <div className="settings-field">
-            <label className="settings-field-label">Strengths (0–10)</label>
-            <div className="settings-strength-inputs">
-              {(["speed", "cost", "reasoning", "coding"] as const).map((k) => (
-                <label key={k} className="settings-strength-input">
-                  <span>{k}</span>
+
+          {/* Step 2: Discover + pick */}
+          {form.provider && (
+            <div className="settings-field">
+              <label className="settings-field-label">2. Pick a model</label>
+              <div className="model-discover-toolbar">
+                <button
+                  className="settings-btn"
+                  type="button"
+                  disabled={fetching}
+                  onClick={() => doFetchModels(form.provider, true)}
+                >
+                  {fetching
+                    ? "Fetching…"
+                    : fetchedModels.length > 0
+                      ? `↻ Refresh (${fetchedModels.length})`
+                      : "🔍 List available models"}
+                </button>
+                {fetchedModels.length > 0 && (
                   <input
-                    type="number"
-                    min={0}
-                    max={10}
-                    className="settings-input settings-input--num"
-                    value={form.strengths[k]}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        strengths: { ...f.strengths, [k]: Number(e.target.value) },
-                      }))
-                    }
+                    className="settings-input model-filter-input"
+                    placeholder="Filter…"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
                   />
-                </label>
-              ))}
+                )}
+              </div>
+
+              {discoveryError && (
+                <p className="settings-error">Could not list models: {discoveryError}</p>
+              )}
+
+              {fetchedModels.length > 0 && (
+                <div className="model-list">
+                  {visibleFetched.length === 0 ? (
+                    <div className="model-list-empty">No models match "{filter}"</div>
+                  ) : (
+                    visibleFetched.map((m) => {
+                      const picked = form.model_name === m;
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          className={`model-list-row${picked ? " model-list-row--picked" : ""}`}
+                          onClick={() => pickModel(m)}
+                        >
+                          <span className="model-list-row-name">{m}</span>
+                          {picked && <span className="model-list-row-picked">✓ selected</span>}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              <details className="model-custom-details">
+                <summary>Or enter a custom model name</summary>
+                <input
+                  className="settings-input"
+                  style={{ marginTop: 6 }}
+                  value={form.model_name}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    model_name: e.target.value,
+                    id: f.id_touched ? f.id : (f.provider ? `${f.provider}/${e.target.value}` : f.id),
+                  }))}
+                  placeholder="e.g. gpt-4o-2024-08-06"
+                />
+              </details>
             </div>
-          </div>
+          )}
+
+          {/* Step 3: Metadata */}
+          {form.provider && form.model_name && (
+            <>
+              <div className="settings-field">
+                <label className="settings-field-label">3. Model id (internal)</label>
+                <input
+                  className="settings-input"
+                  value={form.id}
+                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value, id_touched: true }))}
+                  placeholder={`${form.provider}/${form.model_name}`}
+                />
+                <span className="settings-field-hint">
+                  Auto-generated from provider/name. Used internally as the default-model key.
+                </span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label">Tags (comma separated)</label>
+                <input
+                  className="settings-input"
+                  value={form.tags}
+                  onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
+                  placeholder="fast, cheap"
+                />
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label">Strengths (0–10)</label>
+                <div className="settings-strength-inputs">
+                  {(["speed", "cost", "reasoning", "coding"] as const).map((k) => (
+                    <label key={k} className="settings-strength-input">
+                      <span>{k}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        className="settings-input settings-input--num"
+                        value={form.strengths[k]}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            strengths: { ...f.strengths, [k]: Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="settings-row settings-row--end">
-            <button className="settings-btn settings-btn--ghost" onClick={() => { setAdding(false); setForm(emptyForm); }}>
+            <button
+              className="settings-btn settings-btn--ghost"
+              onClick={() => { setAdding(false); setForm(emptyForm); setFilter(""); }}
+            >
               Cancel
             </button>
             <button
@@ -252,7 +335,7 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
               onClick={addModel}
               disabled={!form.id.trim() || !form.provider || !form.model_name.trim()}
             >
-              Add
+              Add model
             </button>
           </div>
         </div>

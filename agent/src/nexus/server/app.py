@@ -317,7 +317,7 @@ def create_app(
         _rebuild_registry(cfg)
         return m.model_dump()
 
-    @app.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @app.delete("/models/{model_id:path}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_model(model_id: str) -> None:
         from ..config_file import load as load_cfg, save as save_cfg
         cfg = _state["cfg"] or load_cfg()

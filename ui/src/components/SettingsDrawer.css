@@ -321,3 +321,88 @@
   text-underline-offset: 2px;
 }
 .settings-clear-key-btn:hover { opacity: 0.75; }
+
+/* ── Model discovery UI ─────────────────────────────────────────────────── */
+
+.model-discover-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.model-filter-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+}
+
+.model-list-empty {
+  padding: 12px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  text-align: center;
+}
+
+.model-list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  transition: all 120ms ease;
+}
+.model-list-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-soft);
+}
+.model-list-row--picked {
+  background: rgba(212, 133, 92, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.model-list-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.model-list-row-picked {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-ui);
+  color: var(--accent);
+}
+
+.model-custom-details {
+  margin-top: 4px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.model-custom-details summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+.model-custom-details summary:hover {
+  color: var(--fg);
+}
