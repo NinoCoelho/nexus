@@ -1,0 +1,323 @@
+import { useState } from "react";
+import { patchConfig, setProviderKey, clearProviderKey, type Provider } from "../api";
+
+interface Props {
+  providers: Provider[];
+  onRefresh: () => void;
+}
+
+interface EditState {
+  name: string;
+  base_url: string;
+  key_env: string;
+  api_key: string;
+}
+
+interface AddState {
+  name: string;
+  base_url: string;
+  key_env: string;
+  api_key: string;
+  type: "openai_compat" | "anthropic" | "ollama";
+}
+
+export default function ProvidersSection({ providers, onRefresh }: Props) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<EditState>({ name: "", base_url: "", key_env: "", api_key: "" });
+  const [adding, setAdding] = useState(false);
+  const [addForm, setAddForm] = useState<AddState>({ name: "", base_url: "", key_env: "", api_key: "", type: "openai_compat" });
+  const [error, setError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [confirmClearKey, setConfirmClearKey] = useState<string | null>(null);
+
+  function startEdit(p: Provider) {
+    setEditing(p.name);
+    setEditForm({ name: p.name, base_url: p.base_url ?? "", key_env: p.key_env ?? "", api_key: "" });
+    setConfirmClearKey(null);
+    setError(null);
+  }
+
+  async function saveEdit() {
+    setError(null);
+    try {
+      await patchConfig({
+        providers: {
+          [editForm.name]: {
+            base_url: editForm.base_url || undefined,
+            key_env: editForm.key_env || undefined,
+            has_key: false,
+          },
+        },
+      });
+      if (editForm.api_key.trim()) {
+        await setProviderKey(editForm.name, editForm.api_key.trim());
+      }
+      setEditing(null);
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    }
+  }
+
+  async function removeProvider(name: string) {
+    setError(null);
+    try {
+      await patchConfig({ providers: { [name]: { has_key: false } } });
+      setConfirmRemove(null);
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Remove failed");
+    }
+  }
+
+  async function doClearKey(name: string) {
+    setError(null);
+    try {
+      await clearProviderKey(name);
+      setConfirmClearKey(null);
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Clear key failed");
+    }
+  }
+
+  async function addProvider() {
+    if (!addForm.name.trim()) return;
+    setError(null);
+    try {
+      await patchConfig({
+        providers: {
+          [addForm.name.trim()]: {
+            base_url: addForm.base_url || undefined,
+            key_env: addForm.key_env || undefined,
+            has_key: false,
+            // @ts-expect-error extra field accepted by backend
+            type: addForm.type,
+          },
+        },
+      });
+      if (addForm.api_key.trim()) {
+        await setProviderKey(addForm.name.trim(), addForm.api_key.trim());
+      }
+      setAdding(false);
+      setAddForm({ name: "", base_url: "", key_env: "", api_key: "", type: "openai_compat" });
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Add failed");
+    }
+  }
+
+  function badgeClass(p: Provider) {
+    if (p.key_source === "anonymous") return "settings-badge settings-badge--warn";
+    return `settings-badge${p.has_key ? " settings-badge--ok" : " settings-badge--bad"}`;
+  }
+
+  function badgeText(p: Provider) {
+    if (p.key_source === "anonymous") return "anonymous";
+    if (p.has_key && p.key_source === "inline") return "configured (inline)";
+    if (p.has_key && p.key_source === "env") return "configured (env)";
+    return "not configured";
+  }
+
+  const isOllama = addForm.type === "ollama";
+
+  return (
+    <div className="settings-section">
+      <div className="settings-section-label">Providers</div>
+
+      {providers.map((p) => (
+        <div key={p.name} className="settings-card">
+          {editing === p.name ? (
+            <div className="settings-inline-form">
+              <div className="settings-field">
+                <label className="settings-field-label">Base URL</label>
+                <input
+                  className="settings-input"
+                  value={editForm.base_url}
+                  onChange={(e) => setEditForm((f) => ({ ...f, base_url: e.target.value }))}
+                  placeholder="https://api.example.com"
+                />
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label">Key env var</label>
+                <input
+                  className="settings-input"
+                  value={editForm.key_env}
+                  onChange={(e) => setEditForm((f) => ({ ...f, key_env: e.target.value }))}
+                  placeholder="MY_PROVIDER_API_KEY"
+                />
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label">API key</label>
+                <input
+                  className="settings-input"
+                  type="password"
+                  value={editForm.api_key}
+                  onChange={(e) => setEditForm((f) => ({ ...f, api_key: e.target.value }))}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                />
+                <span className="settings-field-hint">
+                  Stored locally at ~/.nexus/secrets.toml (0600). Leave blank to use the env var above.
+                </span>
+              </div>
+              {p.key_source === "inline" && (
+                <div className="settings-row">
+                  {confirmClearKey === p.name ? (
+                    <>
+                      <button className="settings-icon-btn settings-icon-btn--bad" onClick={() => doClearKey(p.name)}>
+                        Confirm clear
+                      </button>
+                      <button className="settings-icon-btn" onClick={() => setConfirmClearKey(null)}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button className="settings-clear-key-btn" onClick={() => setConfirmClearKey(p.name)}>
+                      Clear key
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="settings-row settings-row--end">
+                <button className="settings-btn settings-btn--ghost" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+                <button className="settings-btn settings-btn--primary" onClick={saveEdit}>
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="settings-card-row">
+              <div className="settings-card-info">
+                <span className="settings-provider-name">{p.name}</span>
+                {p.base_url && (
+                  <span className="settings-provider-url">{p.base_url}</span>
+                )}
+              </div>
+              <div className="settings-card-actions">
+                <span className={badgeClass(p)}>{badgeText(p)}</span>
+                <button className="settings-icon-btn" title="Edit" onClick={() => startEdit(p)}>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5z" />
+                  </svg>
+                </button>
+                {confirmRemove === p.name ? (
+                  <>
+                    <button className="settings-icon-btn settings-icon-btn--bad" onClick={() => removeProvider(p.name)}>
+                      Confirm
+                    </button>
+                    <button className="settings-icon-btn" onClick={() => setConfirmRemove(null)}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button className="settings-icon-btn settings-icon-btn--bad" title="Remove" onClick={() => setConfirmRemove(p.name)}>
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {error && <p className="settings-error">{error}</p>}
+
+      {adding ? (
+        <div className="settings-card settings-inline-form">
+          <div className="settings-field">
+            <label className="settings-field-label">Name</label>
+            <input
+              className="settings-input"
+              value={addForm.name}
+              onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="my-provider"
+              autoFocus
+            />
+          </div>
+          <div className="settings-field">
+            <label className="settings-field-label">Type</label>
+            <div className="seg-control">
+              <button
+                className={`seg-btn${addForm.type === "openai_compat" ? " seg-btn--active" : ""}`}
+                onClick={() => setAddForm((f) => ({ ...f, type: "openai_compat", base_url: "" }))}
+                type="button"
+              >
+                OpenAI-compatible
+              </button>
+              <button
+                className={`seg-btn${addForm.type === "anthropic" ? " seg-btn--active" : ""}`}
+                onClick={() => setAddForm((f) => ({ ...f, type: "anthropic", base_url: "" }))}
+                type="button"
+              >
+                Anthropic
+              </button>
+              <button
+                className={`seg-btn${addForm.type === "ollama" ? " seg-btn--active" : ""}`}
+                onClick={() => setAddForm((f) => ({ ...f, type: "ollama", base_url: "http://localhost:11434", key_env: "", api_key: "" }))}
+                type="button"
+              >
+                Ollama
+              </button>
+            </div>
+          </div>
+          <div className="settings-field">
+            <label className="settings-field-label">Base URL{isOllama ? "" : " (optional)"}</label>
+            <input
+              className="settings-input"
+              value={addForm.base_url}
+              onChange={(e) => setAddForm((f) => ({ ...f, base_url: e.target.value }))}
+              placeholder={isOllama ? "http://localhost:11434" : "https://api.openai.com/v1"}
+            />
+          </div>
+          {!isOllama && (
+            <>
+              <div className="settings-field">
+                <label className="settings-field-label">Key env var</label>
+                <input
+                  className="settings-input"
+                  value={addForm.key_env}
+                  onChange={(e) => setAddForm((f) => ({ ...f, key_env: e.target.value }))}
+                  placeholder="OPENAI_API_KEY"
+                />
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label">API key</label>
+                <input
+                  className="settings-input"
+                  type="password"
+                  value={addForm.api_key}
+                  onChange={(e) => setAddForm((f) => ({ ...f, api_key: e.target.value }))}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                />
+                <span className="settings-field-hint">
+                  Stored locally at ~/.nexus/secrets.toml (0600). Leave blank to use the env var above.
+                </span>
+              </div>
+            </>
+          )}
+          {isOllama && (
+            <span className="settings-field-hint">
+              Ollama runs locally and requires no API key.
+            </span>
+          )}
+          <div className="settings-row settings-row--end">
+            <button className="settings-btn settings-btn--ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+            <button className="settings-btn settings-btn--primary" onClick={addProvider} disabled={!addForm.name.trim()}>
+              Add
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="settings-add-btn" onClick={() => { setAdding(true); setError(null); }}>
+          + Add provider
+        </button>
+      )}
+    </div>
+  );
+}

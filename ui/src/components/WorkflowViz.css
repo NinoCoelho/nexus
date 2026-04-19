@@ -1,0 +1,107 @@
+.workflow-viz {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Ribbon */
+.wf-ribbon {
+  position: relative;
+  height: 32px;
+  margin: 0 8px;
+}
+
+.wf-line {
+  position: absolute;
+  top: 7px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.wf-stage {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.wf-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.wf-stage--done .wf-dot {
+  background: var(--accent);
+}
+
+.wf-stage--current .wf-dot {
+  background: var(--accent-hi);
+  animation: wf-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes wf-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 154, 117, 0.5); }
+  50%       { box-shadow: 0 0 0 5px rgba(224, 154, 117, 0); }
+}
+
+.wf-stage-label {
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+/* Icon row */
+.wf-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.wf-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-icon {
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.wf-icon-group > .wf-icon-label {
+  font-size: 10px;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+}
+
+.wf-icon-label {
+  font-size: 10px;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+}
+
+.wf-arrow {
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+
+/* Caption */
+.wf-caption {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-faint);
+  font-style: italic;
+}

@@ -1,0 +1,86 @@
+.input-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 99px;
+  padding: 6px 8px 6px 12px;
+  transition: border-color 150ms ease;
+}
+
+.input-bar:focus-within {
+  border-color: var(--accent);
+}
+
+.input-bar-stubs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-bottom: 1px;
+}
+
+.input-stub-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  cursor: default;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.input-textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  padding: 4px 0;
+  min-height: 32px;
+  max-height: 144px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.input-textarea::placeholder {
+  color: var(--fg-faint);
+}
+
+.input-textarea:disabled {
+  opacity: 0.5;
+}
+
+.input-send-btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  color: var(--bg);
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.input-send-btn:hover:not(:disabled) {
+  background: var(--accent-hi);
+}
+
+.input-send-btn:disabled {
+  background: var(--fg-faint);
+  cursor: not-allowed;
+  opacity: 0.5;
+}

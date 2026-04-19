@@ -1,0 +1,99 @@
+.chip-row-wrap {
+  position: relative;
+  overflow: hidden;
+}
+
+.chip-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 24px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.chip-row-fade {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 48px;
+  background: linear-gradient(to right, transparent, var(--bg));
+  pointer-events: none;
+}
+
+.skill-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 99px;
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.skill-chip:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  box-shadow: 0 0 0 3px rgba(212, 133, 92, 0.12);
+}
+
+.chip-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chip-icon--agent {
+  color: var(--accent);
+}
+
+.chip-icon--user {
+  color: var(--fg-dim);
+}
+
+.chip-icon--builtin {
+  color: var(--fg-faint);
+}
+
+.chip-name {
+  line-height: 1;
+}
+
+.chip-new-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--sage);
+  background: rgba(139, 168, 136, 0.15);
+  border: 1px solid rgba(139, 168, 136, 0.35);
+  border-radius: 3px;
+  padding: 1px 4px;
+  line-height: 1;
+}
+
+.skill-chip--pulse {
+  border-color: var(--accent-hi);
+  animation: chip-pulse 2s ease-in-out;
+}
+
+@keyframes chip-pulse {
+  0%, 100% { box-shadow: none; }
+  50%       { box-shadow: 0 0 0 4px rgba(224, 154, 117, 0.3); }
+}
+
+.skill-chip--new {
+  border-color: rgba(139, 168, 136, 0.5);
+}

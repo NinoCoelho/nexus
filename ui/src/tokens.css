@@ -1,0 +1,46 @@
+:root {
+  --bg:          #15181c;
+  --bg-panel:    #1d2025;
+  --bg-hover:    #262a31;
+  --bg-inset:    #0f1114;
+  --border:      #2c3037;
+  --border-soft: #23272e;
+
+  --fg:          #ece8e1;
+  --fg-dim:      #a39d92;
+  --fg-faint:    #6b6660;
+
+  --accent:      #d4855c;   /* copper */
+  --accent-hi:   #e09a75;
+  --accent-lo:   #b06e4a;
+
+  --sage:        #8ba888;
+  --amber:       #e0b364;
+  --rust:        #c85a5a;
+
+  --ok:          #8ba888;
+  --warn:        #e0b364;
+  --bad:         #c85a5a;
+
+  --radius:      6px;
+  --radius-lg:   10px;
+  --shadow:      0 2px 8px rgba(0,0,0,0.35);
+
+  --font-ui:     "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}

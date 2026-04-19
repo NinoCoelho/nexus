@@ -1,0 +1,123 @@
+.asst-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 90%;
+  gap: 6px;
+}
+
+.asst-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 2px;
+}
+
+.asst-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--accent-hi), var(--accent-lo));
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.15), 0 0 0 1px rgba(212, 133, 92, 0.25);
+  flex-shrink: 0;
+}
+
+.asst-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.asst-time {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.asst-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 18px 18px 18px 4px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+.asst-body p {
+  margin: 0.4em 0;
+  color: var(--fg);
+}
+
+.asst-body p:first-child { margin-top: 0; }
+.asst-body p:last-child  { margin-bottom: 0; }
+
+.asst-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.asst-body pre {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+
+.asst-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.asst-body ul, .asst-body ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+
+/* Trace debug section */
+.asst-trace-section {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.asst-trace-toggle {
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-align: right;
+  align-self: flex-end;
+  transition: color 150ms ease;
+}
+
+.asst-trace-toggle:hover {
+  color: var(--fg-dim);
+}
+
+.asst-trace-json {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin: 0;
+  overflow-x: auto;
+  color: var(--fg-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
