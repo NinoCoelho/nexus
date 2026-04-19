@@ -138,11 +138,18 @@ class SessionStore:
             if row is None:
                 return None
             rows = conn.execute(
-                "SELECT seq, role, content, tool_calls, tool_call_id FROM messages WHERE session_id = ? ORDER BY seq",
+                "SELECT seq, role, content, tool_calls, tool_call_id, created_at FROM messages WHERE session_id = ? ORDER BY seq",
                 (session_id,),
             ).fetchall()
-            history = [_row_to_message(tuple(r)) for r in rows]
-        return Session(id=row["id"], title=row["title"], history=history, context=row["context"])
+            history = []
+            message_timestamps = []
+            for r in rows:
+                history.append(_row_to_message((r["seq"], r["role"], r["content"], r["tool_calls"], r["tool_call_id"])))
+                message_timestamps.append(r["created_at"])
+        sess = Session(id=row["id"], title=row["title"], history=history, context=row["context"])
+        # Attach timestamps alongside so the route can emit them without a schema change.
+        sess._message_timestamps = message_timestamps  # type: ignore[attr-defined]
+        return sess
 
     def list(self, limit: int = 50) -> list[SessionSummary]:
         with self._connect() as conn:

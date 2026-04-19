@@ -24,7 +24,7 @@ from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
 from ..tools.state_tool import STATE_TOOLS, StateToolHandler
 from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
 
-MAX_TOOL_ITERATIONS = 16
+DEFAULT_MAX_TOOL_ITERATIONS = 32  # was 16; doubled so research tasks finish
 
 SKILL_MANAGE_TOOL = ToolSpec(
     name="skill_manage",
@@ -140,7 +140,11 @@ class Agent:
             trace,
         )
 
-        for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
+        max_iter = (
+            getattr(self._nexus_cfg.agent, "max_iterations", None)
+            if self._nexus_cfg else None
+        ) or DEFAULT_MAX_TOOL_ITERATIONS
+        for iteration in range(1, max_iter + 1):
             self._emit("iter", {"n": iteration}, trace)
             response = await provider.chat(messages, tools=tools, model=upstream_model)
 
@@ -171,12 +175,15 @@ class Agent:
                     ChatMessage(role=Role.TOOL, content=result, tool_call_id=tc.id)
                 )
 
-        reply_text = "[iteration limit reached]"
+        reply_text = (
+            f"I hit the per-turn tool-call limit ({max_iter}) before finishing. "
+            "Ask me to continue, or narrow the task — I'll pick up where I left off."
+        )
         messages.append(ChatMessage(role=Role.ASSISTANT, content=reply_text))
         return AgentTurn(
             reply=reply_text,
             skills_touched=skills_touched,
-            iterations=MAX_TOOL_ITERATIONS,
+            iterations=max_iter,
             trace=trace,
             messages=messages,
         )

@@ -123,6 +123,12 @@ def create_app(
         session = store.get(session_id)
         if session is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"session {session_id!r} not found")
+        ts_list = getattr(session, "_message_timestamps", []) or []
+        from datetime import datetime, timezone
+        def _iso(ts: int | None) -> str | None:
+            if ts is None:
+                return None
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
         return {
             "id": session.id,
             "title": session.title,
@@ -133,8 +139,9 @@ def create_app(
                     "content": m.content,
                     "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
                     "tool_call_id": m.tool_call_id,
+                    "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
                 }
-                for m in session.history
+                for i, m in enumerate(session.history)
             ],
         }
 

@@ -82,7 +82,12 @@ export default function App() {
         <Header onReset={handleReset} />
 
         <main className="app-content">
-          {view === "chat" && (
+          {/* All three views are always mounted and toggled via visibility so
+              in-flight chat state (thinking indicator, pending requests) is
+              preserved when the user switches to Vault/Kanban and back.
+              Previously we rendered conditionally — that unmounted ChatView
+              and dropped the thinking state on every navigation. */}
+          <div className="view-pane" style={{ display: view === "chat" ? "flex" : "none" }}>
             <ChatView
               key={chatRevision}
               sessionId={activeSession}
@@ -93,9 +98,13 @@ export default function App() {
               initialHistory={sessionHistory}
               onSessionsChanged={handleSessionsChanged}
             />
-          )}
-          {view === "vault" && <VaultView />}
-          {view === "kanban" && <KanbanView />}
+          </div>
+          <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
+            <VaultView />
+          </div>
+          <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
+            <KanbanView />
+          </div>
         </main>
       </div>
 

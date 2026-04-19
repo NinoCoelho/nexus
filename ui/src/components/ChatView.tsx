@@ -40,12 +40,25 @@ export default function ChatView({
   const [messages, setMessages] = useState<Message[]>(() => {
     if (!initialHistory?.length) return [];
     return initialHistory
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-        timestamp: new Date(m.created_at),
-      }));
+      .filter((m) => (m.role === "user" || m.role === "assistant") && (m.content ?? "").trim().length > 0)
+      .map((m) => {
+        // created_at may be ISO string, unix-seconds number, or undefined.
+        // Default to now on failure instead of rendering "Invalid Date".
+        let ts: Date;
+        if (m.created_at == null) {
+          ts = new Date();
+        } else if (typeof m.created_at === "number") {
+          ts = new Date(m.created_at * 1000);
+        } else {
+          const parsed = new Date(m.created_at);
+          ts = isNaN(parsed.getTime()) ? new Date() : parsed;
+        }
+        return {
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          timestamp: ts,
+        };
+      });
   });
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -135,7 +148,7 @@ export default function ChatView({
             <p>Start a conversation with Nexus.</p>
           </div>
         )}
-        {messages.map((msg, idx) =>
+        {messages.filter((m) => (m.content ?? "").trim().length > 0).map((msg, idx) =>
           msg.role === "assistant" ? (
             <AssistantMessage
               key={idx}
