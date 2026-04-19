@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getRouting, postChat, type TraceEvent } from "../api";
 import AssistantMessage from "./AssistantMessage";
 import InputBar from "./InputBar";
-import ContextBar from "./ContextBar";
 import "./ChatView.css";
 
 export interface Message {
@@ -34,8 +33,6 @@ export default function ChatView({
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [context, setContext] = useState("");
-  const [contextDismissed, setContextDismissed] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [hasModel, setHasModel] = useState<boolean | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -57,8 +54,6 @@ export default function ChatView({
 
   useEffect(() => {
     setMessages([]);
-    setContext("");
-    setContextDismissed(false);
     setInput("");
     sessionSentRef.current = false;
   }, [sessionId]);
@@ -77,8 +72,7 @@ export default function ChatView({
     setThinking(true);
 
     try {
-      const ctx = sessionSentRef.current ? undefined : context || undefined;
-      const res = await postChat(text, sessionId ?? undefined, ctx);
+      const res = await postChat(text, sessionId ?? undefined);
       sessionSentRef.current = true;
 
       if (!sessionId) {
@@ -105,10 +99,7 @@ export default function ChatView({
     } finally {
       setThinking(false);
     }
-  }, [input, thinking, context, sessionId, onSessionCreated, onSkillsTouched]);
-
-  const showContextBar =
-    messages.length === 0 && !sessionSentRef.current && !contextDismissed;
+  }, [input, thinking, sessionId, onSessionCreated, onSkillsTouched]);
 
   return (
     <div className="chat-view">
@@ -166,14 +157,6 @@ export default function ChatView({
       <div className="bottom-region">
         <div className="bottom-inner">
           <div className="input-stack">
-            {showContextBar && (
-              <ContextBar
-                value={context}
-                onChange={setContext}
-                onDismiss={() => setContextDismissed(true)}
-                disabled={thinking}
-              />
-            )}
             <InputBar
               value={input}
               onChange={setInput}
