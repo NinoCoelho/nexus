@@ -48,7 +48,7 @@ uv run nexus serve --port 18989
 # frontend (separate terminal)
 cd ../ui
 npm install
-npm run dev     # http://localhost:5174
+npm run dev     # http://localhost:1890
 ```
 
 ### 3. Or skip the web UI
