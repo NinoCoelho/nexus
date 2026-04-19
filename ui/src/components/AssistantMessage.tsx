@@ -95,6 +95,16 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
         )}
         <div className="asst-body">
           <ReactMarkdown
+            // react-markdown sanitizes URLs by default and strips unknown
+            // schemes like `vault://` — the resulting empty href made our
+            // fallback <a> navigate to the current page (full reload).
+            // Preserve vault:// (we handle it ourselves below) and still
+            // block genuinely dangerous schemes.
+            urlTransform={(url) => {
+              if (/^vault:/i.test(url)) return url;
+              if (/^(?:javascript|data|vbscript):/i.test(url)) return "";
+              return url;
+            }}
             components={{
               a: ({ href, children, ...rest }) => {
                 const vaultPath = asVaultPath(href ?? "");
@@ -105,6 +115,7 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
                       className="vault-inline-link"
                       onClick={(e) => {
                         e.preventDefault();
+                        e.stopPropagation();
                         setPreviewPath(vaultPath);
                       }}
                       title={`Preview ${vaultPath}`}
@@ -117,7 +128,12 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
                     </button>
                   );
                 }
-                // external link: render as anchor, open in new tab
+                // Empty/missing href: render inert — avoid the navigate-to-
+                // current-page reload if react-markdown ever hands us one.
+                if (!href) {
+                  return <span {...rest}>{children}</span>;
+                }
+                // External link: new tab.
                 return (
                   <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
                     {children}
