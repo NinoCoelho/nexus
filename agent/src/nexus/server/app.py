@@ -143,6 +143,14 @@ def create_app(
 
             except (LLMTransportError, MalformedOutputError) as exc:
                 yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            except Exception as exc:
+                # Catch-all so an unexpected error never leaves the client
+                # with ERR_INCOMPLETE_CHUNKED_ENCODING. Emit a proper
+                # error frame then a terminator done so the client can
+                # unwind its UI (flip thinking off, show the error).
+                log.exception("chat_stream crashed")
+                yield f"event: error\ndata: {json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
             finally:
                 if final_messages is not None:
                     store.replace_history(session.id, final_messages)

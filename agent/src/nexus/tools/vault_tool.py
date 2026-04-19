@@ -94,39 +94,47 @@ VAULT_TOOLS = [VAULT_LIST_TOOL, VAULT_READ_TOOL, VAULT_WRITE_TOOL, VAULT_SEARCH_
 def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
     from .. import vault
 
+    # json.dumps can't handle datetime.date / datetime.datetime (YAML
+    # frontmatter auto-coerces ISO-like values). default=str stringifies
+    # them instead of raising — crashes here previously killed the SSE
+    # stream mid-flight and surfaced as ERR_INCOMPLETE_CHUNKED_ENCODING
+    # on the client.
+    def _dumps(obj: dict) -> str:
+        return json.dumps(obj, default=str)
+
     try:
         if name == "vault_list":
             path = args.get("path", "")
             entries = vault.list_tree()
             if path:
                 entries = [e for e in entries if e.path.startswith(path.rstrip("/") + "/") or e.path == path]
-            return json.dumps({"ok": True, "entries": [{"path": e.path, "type": e.type, "size": e.size} for e in entries]})
+            return _dumps({"ok": True, "entries": [{"path": e.path, "type": e.type, "size": e.size} for e in entries]})
 
         if name == "vault_read":
             path = args.get("path", "")
             if not path:
-                return json.dumps({"ok": False, "error": "`path` is required"})
+                return _dumps({"ok": False, "error": "`path` is required"})
             result = vault.read_file(path)
-            return json.dumps({"ok": True, **result})
+            return _dumps({"ok": True, **result})
 
         if name == "vault_write":
             path = args.get("path", "")
             content = args.get("content", "")
             if not path:
-                return json.dumps({"ok": False, "error": "`path` is required"})
+                return _dumps({"ok": False, "error": "`path` is required"})
             vault.write_file(path, content)
-            return json.dumps({"ok": True})
+            return _dumps({"ok": True})
 
         if name == "vault_search":
             from .. import vault_search
             query = args.get("query", "")
             limit = int(args.get("limit", 10))
             if not query:
-                return json.dumps({"ok": False, "error": "`query` is required"})
+                return _dumps({"ok": False, "error": "`query` is required"})
             if vault_search.is_empty():
                 vault_search.rebuild_from_disk()
             results = vault_search.search(query, limit=limit)
-            return json.dumps({"ok": True, "results": results})
+            return _dumps({"ok": True, "results": results})
 
         if name == "vault_tags":
             from .. import vault_index
@@ -135,21 +143,21 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
                 vault_index.rebuild_from_disk()
             if tag:
                 files = vault_index.files_with_tag(tag)
-                return json.dumps({"ok": True, "tag": tag, "files": files})
+                return _dumps({"ok": True, "tag": tag, "files": files})
             tags = vault_index.list_tags()
-            return json.dumps({"ok": True, "tags": tags})
+            return _dumps({"ok": True, "tags": tags})
 
         if name == "vault_backlinks":
             from .. import vault_index
             path = args.get("path", "")
             if not path:
-                return json.dumps({"ok": False, "error": "`path` is required"})
+                return _dumps({"ok": False, "error": "`path` is required"})
             if vault_index.is_empty():
                 vault_index.rebuild_from_disk()
             links = vault_index.backlinks(path)
-            return json.dumps({"ok": True, "path": path, "backlinks": links})
+            return _dumps({"ok": True, "path": path, "backlinks": links})
 
-        return json.dumps({"ok": False, "error": f"unknown vault tool: {name!r}"})
+        return _dumps({"ok": False, "error": f"unknown vault tool: {name!r}"})
 
     except (ValueError, FileNotFoundError, OSError) as exc:
-        return json.dumps({"ok": False, "error": str(exc)})
+        return _dumps({"ok": False, "error": str(exc)})
