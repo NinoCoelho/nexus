@@ -15,7 +15,6 @@ export interface SessionMeta {
 export default function App() {
   const [sessions, setSessions] = useState<Map<string, SessionMeta>>(new Map());
   const [activeSession, setActiveSession] = useState<string | null>(null);
-  const [pulsingSkills, setPulsingSkills] = useState<Set<string>>(new Set());
   const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRevision, setSettingsRevision] = useState(0);
@@ -36,10 +35,9 @@ export default function App() {
     [],
   );
 
-  const handleSkillsTouched = useCallback((names: string[]) => {
-    if (!names.length) return;
-    setPulsingSkills(new Set(names));
-    setTimeout(() => setPulsingSkills(new Set()), 2000);
+  const handleSkillsTouched = useCallback((_names: string[]) => {
+    // no-op for now; the live skill-chip pulse UI was removed from ChatView.
+    // A future visualization (e.g. activity indicator in the header) can hook here.
   }, []);
 
   void sessions;
@@ -57,7 +55,6 @@ export default function App() {
           sessionId={activeSession}
           onSessionCreated={handleSessionCreated}
           onSkillsTouched={handleSkillsTouched}
-          pulsingSkills={pulsingSkills}
           onOpenSettings={() => setSettingsOpen(true)}
           settingsRevision={settingsRevision}
         />

@@ -1,6 +1,6 @@
 ---
 name: hello-world
-description: Greet the user by name and briefly explain what Nexus can do. Use when the user opens a new chat or asks what this platform is.
+description: Briefly greet the user and ask what they want to work on. Use when the user opens a new chat with no specific ask.
 type: procedure
 role: onboarding
 platform: nexus
@@ -11,12 +11,12 @@ nexus_authored_by: builtin
 
 # hello-world
 
-When asked what Nexus is or when starting a fresh session, say:
+When the user opens a new chat with no specific task, say exactly:
 
-> I'm Nexus. I have a small library of skills and I can write new ones when I hit a task I don't already know how to do. Ask me to try something.
+> Hi — what can I help you with?
 
-Then list your currently available skills (call `skills_list`) so the user sees what's on hand.
+Do **not** list your tools, skills, or capabilities. Do **not** mention being "Nexus". Do **not** offer a menu. Just the greeting. Wait for the user's actual request.
 
-## When to create a new skill instead
+## When to create a new skill
 
-If the user asks you to do something and no existing skill covers it, attempt the task directly. If you complete it in more than ~5 tool calls or you recovered from a non-trivial error, persist the procedure via `skill_manage` with action `create`.
+If the user asks you to do something and no existing skill covers it, attempt the task directly. If the task takes more than ~5 tool calls or you recovered from a non-trivial error, persist the procedure via `skill_manage` with action `create`.

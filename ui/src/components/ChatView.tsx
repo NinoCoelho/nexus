@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getRouting, postChat, type TraceEvent } from "../api";
 import AssistantMessage from "./AssistantMessage";
-import SkillChipRow from "./SkillChipRow";
 import InputBar from "./InputBar";
 import ContextBar from "./ContextBar";
 import "./ChatView.css";
@@ -17,7 +16,6 @@ interface Props {
   sessionId: string | null;
   onSessionCreated: (id: string, title: string) => void;
   onSkillsTouched: (names: string[]) => void;
-  pulsingSkills: Set<string>;
   onOpenSettings: () => void;
   /** Bumps when the Settings drawer saves a change; triggers a routing refetch. */
   settingsRevision: number;
@@ -31,7 +29,6 @@ export default function ChatView({
   sessionId,
   onSessionCreated,
   onSkillsTouched,
-  pulsingSkills,
   onOpenSettings,
   settingsRevision,
 }: Props) {
@@ -110,10 +107,6 @@ export default function ChatView({
     }
   }, [input, thinking, context, sessionId, onSessionCreated, onSkillsTouched]);
 
-  const handleChipClick = useCallback((skillName: string) => {
-    setInput(`Use the ${skillName} skill: `);
-  }, []);
-
   const showContextBar =
     messages.length === 0 && !sessionSentRef.current && !contextDismissed;
 
@@ -172,7 +165,6 @@ export default function ChatView({
 
       <div className="bottom-region">
         <div className="bottom-inner">
-          <SkillChipRow pulsing={pulsingSkills} onChipClick={handleChipClick} />
           <div className="input-stack">
             {showContextBar && (
               <ContextBar
