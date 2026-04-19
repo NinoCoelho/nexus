@@ -15,12 +15,18 @@ export interface SessionMeta {
 export default function App() {
   const [sessions, setSessions] = useState<Map<string, SessionMeta>>(new Map());
   const [activeSession, setActiveSession] = useState<string | null>(null);
+  const [chatRevision, setChatRevision] = useState(0);
   const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRevision, setSettingsRevision] = useState(0);
 
   const handleReset = () => {
     setActiveSession(null);
+    // Bumping the revision remounts ChatView (clearing messages/input).
+    // activeSession alone is NOT safe as a key — it changes mid-send when the
+    // backend assigns the session id, which would throw away the in-flight
+    // conversation.
+    setChatRevision((r) => r + 1);
   };
 
   const handleSessionCreated = useCallback(
@@ -51,7 +57,7 @@ export default function App() {
       />
       <main className="chat-shell">
         <ChatView
-          key={activeSession ?? "__new__"}
+          key={chatRevision}
           sessionId={activeSession}
           onSessionCreated={handleSessionCreated}
           onSkillsTouched={handleSkillsTouched}

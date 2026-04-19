@@ -52,11 +52,10 @@ export default function ChatView({
     };
   }, [settingsRevision]);
 
-  useEffect(() => {
-    setMessages([]);
-    setInput("");
-    sessionSentRef.current = false;
-  }, [sessionId]);
+  // NOTE: do NOT reset messages when sessionId changes. It transitions from
+  // null to the assigned session id on the first successful send — resetting
+  // here would wipe the conversation the user just started. A real "new chat"
+  // is driven from App via a key change, which remounts this component.
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
