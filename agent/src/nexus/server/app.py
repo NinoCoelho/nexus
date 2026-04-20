@@ -141,18 +141,77 @@ def create_app(
         a: Agent = Depends(get_agent),
         store: SessionStore = Depends(get_sessions),
     ) -> ChatReply:
+        from ..agent.planner import PlannerAgent
+
         session = store.get_or_create(req.session_id, context=req.context)
         # Bind the session to this request context. Tools that need to
         # address the session (ask_user, trace publish) read it from
         # the ContextVar. Reset on exit so follow-up code — and
         # concurrent unrelated requests — don't inherit stale state.
         token = CURRENT_SESSION_ID.set(session.id)
+
+        cfg = _state.get("cfg")
+        routing_mode = cfg.agent.routing_mode if cfg and cfg.agent else "fixed"
+
+        plan_data: list[dict[str, Any]] | None = None
+
         try:
-            turn = await a.run_turn(
-                req.message,
-                history=session.history,
-                context=session.context,
-            )
+            if routing_mode == "planner":
+                trace_events: list[dict[str, Any]] = []
+
+                def _on_planner_trace(event: dict[str, Any]) -> None:
+                    trace_events.append(event)
+                    # Also forward into the SSE channel so subscribers see plan events
+                    _trace(event.get("type", "plan_event"), {k: v for k, v in event.items() if k != "type"})
+
+                default_model = cfg.agent.default_model if cfg and cfg.agent else None
+                provider, _ = a._resolve_provider(default_model)
+                planner = PlannerAgent(
+                    executor=a,
+                    llm=provider,
+                    planner_model=None,
+                    on_trace=_on_planner_trace,
+                )
+                result = await planner.run_turn(
+                    req.message,
+                    history=session.history,
+                    context=session.context,
+                )
+                reply_text = result.reply
+                plan_data = [
+                    {
+                        "id": st.id,
+                        "description": st.description,
+                        "status": st.status,
+                        "result_preview": (st.result or "")[:200],
+                    }
+                    for st in result.sub_tasks
+                ] or None
+                # Build a minimal AgentTurn-like object for history/usage purposes
+                from ..agent.loop import AgentTurn
+                from ..agent.llm import ChatMessage, Role
+                extra_msg = ChatMessage(role=Role.ASSISTANT, content=reply_text)
+                turn_messages = list(session.history) + [
+                    ChatMessage(role=Role.USER, content=req.message),
+                    extra_msg,
+                ]
+                turn = AgentTurn(
+                    reply=reply_text,
+                    skills_touched=[],
+                    iterations=1,
+                    trace=trace_events,
+                    messages=turn_messages,
+                    input_tokens=0,
+                    output_tokens=0,
+                    tool_calls=0,
+                    model=default_model,
+                )
+            else:
+                turn = await a.run_turn(
+                    req.message,
+                    history=session.history,
+                    context=session.context,
+                )
         except LLMTransportError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         except MalformedOutputError as exc:
@@ -202,6 +261,7 @@ def create_app(
             trace=turn.trace,
             skills_touched=turn.skills_touched,
             iterations=turn.iterations,
+            plan=plan_data,
         )
 
     @app.post("/chat/stream")
@@ -210,7 +270,99 @@ def create_app(
         a: Agent = Depends(get_agent),
         store: SessionStore = Depends(get_sessions),
     ) -> StreamingResponse:
+        from ..agent.planner import PlannerAgent
+
         session = store.get_or_create(req.session_id, context=req.context)
+
+        cfg = _state.get("cfg")
+        routing_mode = cfg.agent.routing_mode if cfg and cfg.agent else "fixed"
+
+        if routing_mode == "planner":
+            async def planner_event_generator() -> AsyncIterator[str]:
+                token = CURRENT_SESSION_ID.set(session.id)
+                try:
+                    default_model = cfg.agent.default_model if cfg and cfg.agent else None
+                    provider, _ = a._resolve_provider(default_model)
+
+                    import asyncio
+                    import queue as _queue
+
+                    # Collect trace events via callback and emit as SSE
+                    async def run_planner() -> "PlanResult":  # type: ignore[name-defined]
+                        nonlocal _collected_plan_result
+                        planner = PlannerAgent(
+                            executor=a,
+                            llm=provider,
+                            planner_model=None,
+                            on_trace=_sync_trace_cb,
+                        )
+                        result = await planner.run_turn(
+                            req.message,
+                            history=session.history,
+                            context=session.context,
+                        )
+                        _collected_plan_result = result
+                        return result
+
+                    _collected_plan_result: Any = None
+                    _trace_q: list[dict[str, Any]] = []
+
+                    def _sync_trace_cb(event: dict[str, Any]) -> None:
+                        _trace_q.append(event)
+
+                    # Run planner (non-streaming — planner is always non-streaming)
+                    try:
+                        result = await run_planner()
+                    except (LLMTransportError, MalformedOutputError) as exc:
+                        yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+                        yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
+                        return
+                    except Exception as exc:
+                        log.exception("planner chat_stream crashed")
+                        yield f"event: error\ndata: {json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
+                        yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
+                        return
+
+                    # Emit all buffered trace events as SSE
+                    for ev in _trace_q:
+                        yield f"event: plan_trace\ndata: {json.dumps(ev)}\n\n"
+
+                    plan_data = [
+                        {
+                            "id": st.id,
+                            "description": st.description,
+                            "status": st.status,
+                            "result_preview": (st.result or "")[:200],
+                        }
+                        for st in result.sub_tasks
+                    ] or None
+
+                    # Persist history
+                    from ..agent.llm import ChatMessage as _ChatMessage, Role as _Role
+                    turn_messages = list(session.history) + [
+                        _ChatMessage(role=_Role.USER, content=req.message),
+                        _ChatMessage(role=_Role.ASSISTANT, content=result.reply),
+                    ]
+                    store.replace_history(session.id, turn_messages)
+
+                    done_payload = {
+                        "session_id": session.id,
+                        "reply": result.reply,
+                        "trace": result.trace,
+                        "skills_touched": [],
+                        "iterations": 1,
+                        "usage": {},
+                        "plan": plan_data,
+                    }
+                    yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+                finally:
+                    CURRENT_SESSION_ID.reset(token)
+
+            return StreamingResponse(
+                planner_event_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         async def event_generator() -> AsyncIterator[str]:
             final_messages = None

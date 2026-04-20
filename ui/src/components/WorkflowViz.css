@@ -105,3 +105,76 @@
   color: var(--fg-faint);
   font-style: italic;
 }
+
+/* ── Plan visualization (planner-executor mode) ─────────────────────────── */
+
+.plan-viz {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface-inset, rgba(0, 0, 0, 0.04));
+}
+
+.plan-viz__header {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.plan-viz__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-viz__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.plan-viz__status-icon {
+  display: flex;
+  align-items: center;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.plan-viz__item--pending .plan-viz__status-icon {
+  color: var(--fg-faint);
+}
+
+.plan-viz__item--running .plan-viz__status-icon {
+  color: var(--accent-hi);
+}
+
+.plan-viz__item--done .plan-viz__status-icon {
+  color: var(--accent);
+}
+
+.plan-viz__item--failed .plan-viz__status-icon {
+  color: var(--error, #c0392b);
+}
+
+.plan-viz__item--failed .plan-viz__description {
+  color: var(--fg-dim);
+  text-decoration: line-through;
+}
+
+.plan-viz__description {
+  line-height: 1.4;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
