@@ -261,6 +261,20 @@ def create_app(
     ) -> None:
         store.delete(session_id)
 
+    @app.get("/insights")
+    async def get_insights(
+        days: int = 30,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict[str, Any]:
+        """Return a usage analytics report for the last ``days`` days.
+
+        Clamps ``days`` into ``[1, 365]`` to keep aggregation cheap.
+        """
+        from ..insights import InsightsEngine
+        days = max(1, min(int(days), 365))
+        engine = InsightsEngine(store._db_path)
+        return engine.generate(days=days)
+
     @app.get("/sessions/{session_id}/export")
     async def export_session(
         session_id: str,
