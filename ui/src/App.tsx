@@ -43,6 +43,41 @@ function parseHistoryTimestamp(raw: unknown): Date {
   return isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+/**
+ * Turn a raw upstream transport error into a human-friendly message.
+ *
+ * Input shape (after backend hardening, see llm.py):
+ *   HTTP 500: {"error":{"code":"1234","message":"Network error, error id: ..., please try again later"}}
+ *
+ * We try to extract the nested provider message; if that fails we fall back
+ * to the raw detail. Kept intentionally forgiving — any unexpected shape
+ * still produces a readable line.
+ */
+function prettifyStreamError(detail: string): string {
+  if (!detail) return "Something went wrong.";
+  // Strip stray `b'...'` repr wrappers from older backends.
+  const stripped = detail.replace(/b'([\s\S]*?)'$/, "$1");
+  const httpMatch = stripped.match(/^HTTP\s+(\d+):\s*(.+)$/s);
+  if (httpMatch) {
+    const status = httpMatch[1];
+    const body = httpMatch[2].trim();
+    try {
+      const parsed = JSON.parse(body);
+      const msg =
+        parsed?.error?.message ??
+        parsed?.message ??
+        parsed?.detail;
+      if (typeof msg === "string" && msg.length > 0) {
+        return `Upstream provider error (HTTP ${status}): ${msg}`;
+      }
+    } catch {
+      // body wasn't JSON — fall through
+    }
+    return `Upstream provider error (HTTP ${status}). ${body.slice(0, 180)}`;
+  }
+  return detail;
+}
+
 export default function App() {
   const [view, setView] = useState<View>("chat");
   const [activeSession, setActiveSession] = useState<string | null>(null);
@@ -264,7 +299,7 @@ export default function App() {
           } else if (event.type === "error") {
             const errMsg: Message = {
               role: "assistant",
-              content: `Error: ${event.detail}`,
+              content: prettifyStreamError(event.detail),
               timestamp: new Date(),
             };
             setChatStates((prev) => {

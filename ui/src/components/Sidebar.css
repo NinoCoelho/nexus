@@ -213,6 +213,11 @@
   cursor: pointer;
   transition: background 150ms ease;
   overflow: hidden;
+  /* Keep natural height when the list overflows — let the scroll container
+     handle overflow instead of squashing rows (which would collapse the title
+     to 0 because .sidebar-session-time is flex-shrink:1 too but has a fixed
+     line-height). */
+  flex-shrink: 0;
 }
 .sidebar-session:hover {
   background: var(--bg-hover);

@@ -119,29 +119,77 @@ interface Props {
   streaming: boolean;
 }
 
+interface Chip {
+  tool: string;
+  sub: string;
+  count: number;
+  /** true if this group includes the latest (still-running) event */
+  latest: boolean;
+  /** true if every event in this group produced a result */
+  allDone: boolean;
+  /** full sub-titles for each event in the group — shown in the tooltip */
+  details: string[];
+}
+
+/**
+ * Fold consecutive events that share the same (tool, sub) into a single chip
+ * with a × N count. This keeps the strip legible when the agent loops on one
+ * host (e.g. 8× http_call to the same docs domain).
+ */
+function coalesce(events: TraceEvent[]): Chip[] {
+  const chips: Chip[] = [];
+  events.forEach((ev, idx) => {
+    const tool = ev.tool!;
+    const sub = subtitleFor(tool, ev.args);
+    const last = chips[chips.length - 1];
+    const isLatest = idx === events.length - 1;
+    const done = !!ev.result;
+    if (last && last.tool === tool && last.sub === sub) {
+      last.count += 1;
+      last.latest = last.latest || isLatest;
+      last.allDone = last.allDone && done;
+      last.details.push(sub);
+    } else {
+      chips.push({
+        tool,
+        sub,
+        count: 1,
+        latest: isLatest,
+        allDone: done,
+        details: [sub],
+      });
+    }
+  });
+  return chips;
+}
+
 export default function LiveActivityStrip({ events, streaming }: Props) {
   const visible = events.filter((e) => e.tool && !SKIP_TOOLS.has(e.tool));
   if (visible.length === 0) return null;
 
+  const chips = coalesce(visible);
+
   return (
     <div className="live-strip">
-      {visible.map((ev, idx) => {
-        const { label, icon } = metaFor(ev.tool!);
-        const sub = subtitleFor(ev.tool!, ev.args);
-        const isLatest = idx === visible.length - 1;
-        const dotClass = isLatest && streaming
+      {chips.map((chip, idx) => {
+        const { label, icon } = metaFor(chip.tool);
+        const dotClass = chip.latest && streaming
           ? "live-strip-dot live-strip-dot--pulse"
-          : ev.result
+          : chip.allDone
           ? "live-strip-dot live-strip-dot--done"
           : "live-strip-dot live-strip-dot--idle";
+        const title = chip.count > 1 ? chip.details.join("\n") : undefined;
 
         return (
-          <div key={idx} className="live-strip-card">
+          <div key={idx} className="live-strip-card" title={title}>
             <span className="live-strip-icon">{icon}</span>
             <span className="live-strip-text">
               <span className="live-strip-label">{label}</span>
-              {sub && <span className="live-strip-sub">{sub}</span>}
+              {chip.sub && <span className="live-strip-sub">{chip.sub}</span>}
             </span>
+            {chip.count > 1 && (
+              <span className="live-strip-count">×{chip.count}</span>
+            )}
             <span className={dotClass} />
           </div>
         );

@@ -176,7 +176,10 @@ class OpenAIProvider(LLMProvider):
             ) as resp:
                 if resp.status_code >= 400:
                     body = await resp.aread()
-                    raise LLMTransportError(f"HTTP {resp.status_code}: {body[:400]!r}")
+                    # Decode upstream error body so the error surfaces as
+                    # real JSON text instead of a Python b'...' repr.
+                    text = body.decode("utf-8", errors="replace")
+                    raise LLMTransportError(f"HTTP {resp.status_code}: {text[:400]}")
 
                 # Aggregated state for the finish event
                 full_text = ""
