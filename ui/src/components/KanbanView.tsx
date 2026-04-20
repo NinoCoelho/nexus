@@ -11,6 +11,7 @@ import {
   type Board,
   type KanbanCard,
 } from "../api";
+import { useToast } from "../toast/ToastProvider";
 import "./KanbanView.css";
 
 function fmtDate(iso: string): string {
@@ -84,6 +85,7 @@ function CardInspector({ card, onClose, onSave, onDelete }: InspectorProps) {
 // ── KanbanView ────────────────────────────────────────────────────────────────
 
 export default function KanbanView() {
+  const toast = useToast();
   const [boards, setBoards] = useState<Board[]>([]);
   const [activeBoard, setActiveBoard] = useState("default");
   const [columns, setColumns] = useState<string[]>([]);
@@ -134,15 +136,20 @@ export default function KanbanView() {
     if (!name) return;
     const trimmed = name.trim();
     if (!BOARD_NAME_RE.test(trimmed)) {
-      alert("Invalid board name. Use lowercase letters, digits and hyphens (e.g. my-board).");
+      toast.warning("Invalid board name", {
+        detail: "Use lowercase letters, digits and hyphens (e.g. my-board).",
+      });
       return;
     }
     try {
       await postKanbanBoard(trimmed);
       loadBoards();
       switchBoard(trimmed);
+      toast.success(`Board "${trimmed}" created`);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : String(e));
+      toast.error("Couldn't create board", {
+        detail: e instanceof Error ? e.message : String(e),
+      });
     }
   };
 
@@ -161,8 +168,11 @@ export default function KanbanView() {
       if (activeBoard === name && remaining.length > 0) {
         switchBoard(remaining[0].name);
       }
+      toast.success(`Deleted board "${name}"`);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : String(e));
+      toast.error("Couldn't delete board", {
+        detail: e instanceof Error ? e.message : String(e),
+      });
     }
   };
 
@@ -181,8 +191,13 @@ export default function KanbanView() {
     setCards((prev) => prev.map((c) => c.id === dragCardId ? { ...c, column: col } : c));
     try {
       await patchKanbanCard(dragCardId, { column: col }, activeBoard);
-    } catch {
+    } catch (e) {
+      // Optimistic update rollback + surface the failure so the user
+      // knows their drag didn't stick.
       setCards((prev) => prev.map((c) => c.id === dragCardId ? { ...c, column: card.column } : c));
+      toast.error("Couldn't move card", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
     setDragCardId(null);
   };
@@ -194,7 +209,11 @@ export default function KanbanView() {
       const card = await postKanbanCard({ title: title.trim(), column: col }, activeBoard);
       setCards((prev) => [...prev, card]);
       setBoards((prev) => prev.map((b) => b.name === activeBoard ? { ...b, card_count: b.card_count + 1 } : b));
-    } catch { /* ignore */ }
+    } catch (e) {
+      toast.error("Couldn't create card", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
+    }
   };
 
   const addColumn = async () => {
@@ -203,7 +222,11 @@ export default function KanbanView() {
     try {
       await postKanbanColumn(name.trim(), activeBoard);
       setColumns((prev) => [...prev, name.trim()]);
-    } catch { /* ignore */ }
+    } catch (e) {
+      toast.error("Couldn't add column", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
+    }
   };
 
   const handleSave = async (patch: Partial<KanbanCard>) => {
@@ -212,7 +235,11 @@ export default function KanbanView() {
       const updated = await patchKanbanCard(inspecting.id, patch, activeBoard);
       setCards((prev) => prev.map((c) => c.id === updated.id ? updated : c));
       setInspecting(updated);
-    } catch { /* ignore */ }
+    } catch (e) {
+      toast.error("Couldn't save card", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
+    }
     setInspecting(null);
   };
 
@@ -222,7 +249,11 @@ export default function KanbanView() {
       await deleteKanbanCard(inspecting.id, activeBoard);
       setCards((prev) => prev.filter((c) => c.id !== inspecting.id));
       setBoards((prev) => prev.map((b) => b.name === activeBoard ? { ...b, card_count: Math.max(0, b.card_count - 1) } : b));
-    } catch { /* ignore */ }
+    } catch (e) {
+      toast.error("Couldn't delete card", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
+    }
     setInspecting(null);
   };
 

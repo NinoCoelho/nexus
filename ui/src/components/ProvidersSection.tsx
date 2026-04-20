@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { patchConfig, setProviderKey, clearProviderKey, type Provider } from "../api";
+import { useToast } from "../toast/ToastProvider";
 
 interface Props {
   providers: Provider[];
@@ -30,11 +31,11 @@ function defaultKeyEnv(providerName: string, type: AddState["type"]): string {
 }
 
 export default function ProvidersSection({ providers, onRefresh }: Props) {
+  const toast = useToast();
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditState>({ name: "", base_url: "", key_env: "", api_key: "" });
   const [adding, setAdding] = useState(false);
   const [addForm, setAddForm] = useState<AddState>({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", type: "openai_compat" });
-  const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [confirmClearKey, setConfirmClearKey] = useState<string | null>(null);
 
@@ -42,11 +43,9 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
     setEditing(p.name);
     setEditForm({ name: p.name, base_url: p.base_url ?? "", key_env: p.key_env ?? "", api_key: "" });
     setConfirmClearKey(null);
-    setError(null);
   }
 
   async function saveEdit() {
-    setError(null);
     try {
       await patchConfig({
         providers: {
@@ -61,37 +60,43 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
         await setProviderKey(editForm.name, editForm.api_key.trim());
       }
       setEditing(null);
+      toast.success(`Saved ${editForm.name}`);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      toast.error("Save failed", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
   async function removeProvider(name: string) {
-    setError(null);
     try {
       await patchConfig({ providers: { [name]: { has_key: false } } });
       setConfirmRemove(null);
+      toast.success(`Removed ${name}`);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Remove failed");
+      toast.error("Remove failed", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
   async function doClearKey(name: string) {
-    setError(null);
     try {
       await clearProviderKey(name);
       setConfirmClearKey(null);
+      toast.success(`Cleared key for ${name}`);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Clear key failed");
+      toast.error("Clear key failed", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
   async function addProvider() {
     if (!addForm.name.trim()) return;
-    setError(null);
     try {
       await patchConfig({
         providers: {
@@ -107,11 +112,15 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
       if (addForm.api_key.trim()) {
         await setProviderKey(addForm.name.trim(), addForm.api_key.trim());
       }
+      const name = addForm.name.trim();
       setAdding(false);
       setAddForm({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", type: "openai_compat" });
+      toast.success(`Added ${name}`);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Add failed");
+      toast.error("Add failed", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
@@ -231,8 +240,6 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
         </div>
       ))}
 
-      {error && <p className="settings-error">{error}</p>}
-
       {adding ? (
         <div className="settings-card settings-inline-form">
           <div className="settings-field">
@@ -348,7 +355,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
           </div>
         </div>
       ) : (
-        <button className="settings-add-btn" onClick={() => { setAdding(true); setError(null); }}>
+        <button className="settings-add-btn" onClick={() => setAdding(true)}>
           + Add provider
         </button>
       )}

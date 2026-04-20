@@ -7,6 +7,7 @@ import {
   type ModelStrengths,
   type Provider,
 } from "../api";
+import { useToast } from "../toast/ToastProvider";
 
 interface Props {
   models: Model[];
@@ -41,9 +42,9 @@ const emptyForm: AddForm = {
 };
 
 export default function ModelsSection({ models, providers, onRefresh }: Props) {
+  const toast = useToast();
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState<AddForm>(emptyForm);
-  const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [discovery, setDiscovery] = useState<Record<string, DiscoveryState>>({});
   const [fetching, setFetching] = useState(false);
@@ -92,7 +93,6 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
 
   async function addModel() {
     if (!form.id.trim() || !form.provider || !form.model_name.trim()) return;
-    setError(null);
     try {
       await postModel({
         id: form.id.trim(),
@@ -101,23 +101,29 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
         tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
         strengths: form.strengths,
       });
+      const id = form.id.trim();
       setAdding(false);
       setForm(emptyForm);
       setFilter("");
+      toast.success(`Added model ${id}`);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Add failed");
+      toast.error("Add failed", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
   async function removeModel(id: string) {
-    setError(null);
     try {
       await deleteModel(id);
       setConfirmRemove(null);
+      toast.success(`Removed ${id}`);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Remove failed");
+      toast.error("Remove failed", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
@@ -173,8 +179,6 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
           </div>
         </div>
       ))}
-
-      {error && <p className="settings-error">{error}</p>}
 
       {adding ? (
         <div className="settings-card settings-inline-form">
@@ -340,7 +344,7 @@ export default function ModelsSection({ models, providers, onRefresh }: Props) {
           </div>
         </div>
       ) : (
-        <button className="settings-add-btn" onClick={() => { setAdding(true); setError(null); }}>
+        <button className="settings-add-btn" onClick={() => setAdding(true)}>
           + Add model
         </button>
       )}
