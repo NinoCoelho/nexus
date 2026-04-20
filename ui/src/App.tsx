@@ -6,7 +6,6 @@ import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type Message } from "./components/ChatView";
 import VaultView from "./components/VaultView";
-import KanbanView from "./components/KanbanView";
 import GraphView from "./components/GraphView";
 import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
@@ -26,7 +25,7 @@ import {
   type UserRequestPayload,
 } from "./api";
 
-type View = "chat" | "vault" | "kanban" | "graph" | "insights" | "agentgraph";
+type View = "chat" | "vault" | "graph" | "insights" | "agentgraph";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -127,6 +126,23 @@ export default function App() {
     setVaultOpenPath(path);
     setVaultSelectedPath(path);
     setView("vault");
+  }, []);
+
+  const handleDispatchToChat = useCallback((sessionId: string, seedMessage: string) => {
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(sessionId);
+      next.set(sessionId, {
+        messages: cur?.messages ?? [],
+        thinking: false,
+        input: seedMessage,
+        historyLoaded: cur?.historyLoaded ?? false,
+      });
+      return next;
+    });
+    setActiveSession(sessionId);
+    setView("chat");
+    setSessionsRevision((r) => r + 1);
   }, []);
 
   const [chatStates, setChatStates] = useState<Map<string, ChatState>>(() => {
@@ -458,6 +474,7 @@ export default function App() {
         onVaultSelectPath={setVaultSelectedPath}
         vaultOpenPath={vaultOpenPath}
         onVaultOpenPathHandled={() => setVaultOpenPath(null)}
+        onDispatchToChat={handleDispatchToChat}
       />
 
       <div className="app-main">
@@ -477,10 +494,7 @@ export default function App() {
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
-            <VaultView selectedPath={vaultSelectedPath} />
-          </div>
-          <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
-            <KanbanView />
+            <VaultView selectedPath={vaultSelectedPath} onDispatchToChat={handleDispatchToChat} />
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
             <GraphView />

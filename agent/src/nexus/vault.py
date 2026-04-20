@@ -128,27 +128,38 @@ def write_file(rel_path: str, content: str) -> None:
         logging.getLogger(__name__).warning("vault_index: reindex_file failed", exc_info=True)
 
 
-def delete(rel_path: str) -> None:
+def delete(rel_path: str, recursive: bool = False) -> None:
+    import shutil
     root = _vault_root()
     full = _safe_resolve(rel_path, root)
+    removed_rel: list[str] = []
     if full.is_file():
         full.unlink()
+        removed_rel.append(rel_path)
     elif full.is_dir():
-        full.rmdir()  # raises if non-empty
+        if recursive:
+            root_real = Path(os.path.realpath(root))
+            for sub in full.rglob("*"):
+                if sub.is_file():
+                    removed_rel.append(str(sub.relative_to(root_real)))
+            shutil.rmtree(full)
+        else:
+            full.rmdir()  # raises if non-empty
     else:
         raise FileNotFoundError(f"no such file or directory: {rel_path!r}")
-    try:
-        from . import vault_search
-        vault_search.remove_path(rel_path)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("vault_search: remove_path failed", exc_info=True)
-    try:
-        from . import vault_index
-        vault_index.remove_file(rel_path)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("vault_index: remove_file failed", exc_info=True)
+    for rel in removed_rel or [rel_path]:
+        try:
+            from . import vault_search
+            vault_search.remove_path(rel)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("vault_search: remove_path failed", exc_info=True)
+        try:
+            from . import vault_index
+            vault_index.remove_file(rel)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("vault_index: remove_file failed", exc_info=True)
 
 
 def move(from_path: str, to_path: str) -> None:

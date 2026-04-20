@@ -4,7 +4,7 @@ import { useToast } from "../toast/ToastProvider";
 import VaultTreePanel from "./VaultTreePanel";
 import "./Sidebar.css";
 
-type View = "chat" | "vault" | "kanban" | "graph" | "insights" | "agentgraph";
+type View = "chat" | "vault" | "graph" | "insights" | "agentgraph";
 
 interface Props {
   view: View;
@@ -19,6 +19,7 @@ interface Props {
   onVaultSelectPath: (path: string | null) => void;
   vaultOpenPath?: string | null;
   onVaultOpenPathHandled?: () => void;
+  onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
 }
 
 function fmtRelative(raw: string | number | undefined): string {
@@ -62,16 +63,6 @@ function IconVault() {
       <rect x="3" y="3" width="14" height="14" rx="2" />
       <line x1="3" y1="8" x2="17" y2="8" />
       <line x1="8" y1="8" x2="8" y2="17" />
-    </svg>
-  );
-}
-
-function IconKanban() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="4" width="4" height="12" rx="1" />
-      <rect x="8" y="4" width="4" height="8" rx="1" />
-      <rect x="14" y="4" width="4" height="10" rx="1" />
     </svg>
   );
 }
@@ -144,7 +135,6 @@ function IconCollapse({ collapsed }: { collapsed: boolean }) {
 const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
   { id: "chat",       label: "Chat",        Icon: IconChat },
   { id: "vault",      label: "Vault",       Icon: IconVault },
-  { id: "kanban",     label: "Kanban",      Icon: IconKanban },
   { id: "graph",      label: "Graph",       Icon: IconGraph },
   { id: "agentgraph", label: "Agent Graph", Icon: IconAgentGraph },
   { id: "insights",   label: "Insights",    Icon: IconInsights },
@@ -163,6 +153,7 @@ export default function Sidebar({
   onVaultSelectPath,
   vaultOpenPath,
   onVaultOpenPathHandled,
+  onDispatchToChat,
 }: Props) {
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -512,12 +503,15 @@ export default function Sidebar({
             onSelectPath={onVaultSelectPath}
             openPath={vaultOpenPath}
             onOpenPathHandled={onVaultOpenPathHandled}
+            onDispatchToChat={onDispatchToChat}
           />
         </div>
       )}
 
-      {/* Spacer */}
-      <div className="sidebar-spacer" />
+      {/* Spacer — only when no expandable section is active */}
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && (
+        <div className="sidebar-spacer" />
+      )}
 
       {/* Settings */}
       <div className="sidebar-bottom">

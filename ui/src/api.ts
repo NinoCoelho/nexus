@@ -132,10 +132,9 @@ export async function putVaultFile(path: string, content: string): Promise<void>
   if (!res.ok) throw new Error(`Vault put error: ${res.status}`);
 }
 
-export async function deleteVaultFile(path: string): Promise<void> {
-  const res = await fetch(`${BASE}/vault/file?path=${encodeURIComponent(path)}`, {
-    method: "DELETE",
-  });
+export async function deleteVaultFile(path: string, recursive = false): Promise<void> {
+  const url = `${BASE}/vault/file?path=${encodeURIComponent(path)}${recursive ? "&recursive=true" : ""}`;
+  const res = await fetch(url, { method: "DELETE" });
   if (!res.ok) throw new Error(`Vault delete error: ${res.status}`);
 }
 
@@ -200,65 +199,54 @@ export async function getVaultBacklinks(path: string): Promise<{ path: string; b
   return res.json() as Promise<{ path: string; backlinks: string[] }>;
 }
 
-// ── Kanban ────────────────────────────────────────────────────────────────────
+// ── Vault-native Kanban ──────────────────────────────────────────────────────
 
 export interface KanbanCard {
   id: string;
   title: string;
-  column: string;
-  notes?: string;
-  tags?: string[];
-  created_at: string;
-  updated_at: string;
+  body?: string;
+  session_id?: string;
 }
 
-export interface KanbanBoard {
-  columns: string[];
+export interface KanbanLane {
+  id: string;
+  title: string;
   cards: KanbanCard[];
 }
 
-export interface Board {
-  name: string;
-  card_count: number;
+export interface KanbanBoard {
+  path: string;
+  title: string;
+  lanes: KanbanLane[];
 }
 
-export async function getKanbanBoards(): Promise<Board[]> {
-  const res = await fetch(`${BASE}/kanban/boards`);
-  if (!res.ok) throw new Error(`Kanban boards error: ${res.status}`);
+export async function getVaultKanban(path: string): Promise<KanbanBoard> {
+  const res = await fetch(`${BASE}/vault/kanban?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`Kanban load error: ${res.status}`);
   return res.json();
 }
 
-export async function postKanbanBoard(name: string): Promise<Board> {
-  const res = await fetch(`${BASE}/kanban/boards`, {
+export async function createVaultKanban(
+  path: string,
+  opts: { title?: string; columns?: string[] } = {},
+): Promise<KanbanBoard> {
+  const res = await fetch(`${BASE}/vault/kanban`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) throw new Error(`Kanban board create error: ${res.status}`);
-  return res.json();
-}
-
-export async function deleteKanbanBoard(name: string): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/boards/${encodeURIComponent(name)}`, {
-    method: "DELETE",
+    body: JSON.stringify({ path, ...opts }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? `Kanban board delete error: ${res.status}`);
+    throw new Error((body as { detail?: string }).detail ?? `Kanban create error: ${res.status}`);
   }
-}
-
-export async function getKanban(board = "default"): Promise<KanbanBoard> {
-  const res = await fetch(`${BASE}/kanban?board=${encodeURIComponent(board)}`);
-  if (!res.ok) throw new Error(`Kanban error: ${res.status}`);
   return res.json();
 }
 
-export async function postKanbanCard(
-  card: { title: string; column: string; notes?: string; tags?: string[] },
-  board = "default",
+export async function addVaultKanbanCard(
+  path: string,
+  card: { lane: string; title: string; body?: string },
 ): Promise<KanbanCard> {
-  const res = await fetch(`${BASE}/kanban/cards?board=${encodeURIComponent(board)}`, {
+  const res = await fetch(`${BASE}/vault/kanban/cards?path=${encodeURIComponent(path)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(card),
@@ -267,12 +255,12 @@ export async function postKanbanCard(
   return res.json();
 }
 
-export async function patchKanbanCard(
-  id: string,
-  patch: { title?: string; notes?: string; tags?: string[]; column?: string },
-  board = "default",
+export async function patchVaultKanbanCard(
+  path: string,
+  cardId: string,
+  patch: { title?: string; body?: string; lane?: string; position?: number; session_id?: string | null },
 ): Promise<KanbanCard> {
-  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}`, {
+  const res = await fetch(`${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}?path=${encodeURIComponent(path)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -281,27 +269,49 @@ export async function patchKanbanCard(
   return res.json();
 }
 
-export async function deleteKanbanCard(id: string, board = "default"): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/cards/${encodeURIComponent(id)}?board=${encodeURIComponent(board)}`, {
+export async function deleteVaultKanbanCard(path: string, cardId: string): Promise<void> {
+  const res = await fetch(`${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`Kanban card delete error: ${res.status}`);
 }
 
-export async function postKanbanColumn(name: string, board = "default"): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/columns?board=${encodeURIComponent(board)}`, {
+export async function addVaultKanbanLane(path: string, title: string): Promise<KanbanLane> {
+  const res = await fetch(`${BASE}/vault/kanban/lanes?path=${encodeURIComponent(path)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ title }),
   });
-  if (!res.ok) throw new Error(`Kanban column create error: ${res.status}`);
+  if (!res.ok) throw new Error(`Kanban lane create error: ${res.status}`);
+  return res.json();
 }
 
-export async function deleteKanbanColumn(name: string, board = "default"): Promise<void> {
-  const res = await fetch(`${BASE}/kanban/columns/${encodeURIComponent(name)}?board=${encodeURIComponent(board)}`, {
+export async function deleteVaultKanbanLane(path: string, laneId: string): Promise<void> {
+  const res = await fetch(`${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`Kanban column delete error: ${res.status}`);
+  if (!res.ok) throw new Error(`Kanban lane delete error: ${res.status}`);
+}
+
+// ── Dispatch (start chat seeded from a vault file or kanban card) ────────────
+
+export interface DispatchResult {
+  session_id: string;
+  seed_message: string;
+  path: string;
+  card_id?: string | null;
+}
+
+export async function dispatchFromVault(
+  body: { path: string; card_id?: string },
+): Promise<DispatchResult> {
+  const res = await fetch(`${BASE}/vault/dispatch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Dispatch error: ${res.status}`);
+  return res.json();
 }
 
 export interface TraceEvent {

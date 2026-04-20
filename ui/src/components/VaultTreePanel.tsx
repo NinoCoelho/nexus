@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Modal, { type ModalProps } from "./Modal";
 import "./VaultView.css";
 import {
+  createVaultKanban,
   deleteVaultFile,
+  dispatchFromVault,
   getVaultTag,
   getVaultTags,
   getVaultTree,
@@ -156,6 +159,7 @@ interface VaultTreePanelProps {
   openPath?: string | null;
   onOpenPathHandled?: () => void;
   onTreeChange?: () => void;
+  onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
 }
 
 export default function VaultTreePanel({
@@ -164,6 +168,7 @@ export default function VaultTreePanel({
   openPath,
   onOpenPathHandled,
   onTreeChange,
+  onDispatchToChat,
 }: VaultTreePanelProps) {
   const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
@@ -183,6 +188,9 @@ export default function VaultTreePanel({
 
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
+
+  // In-app modal (replaces browser prompt/confirm)
+  const [modal, setModal] = useState<ModalProps | null>(null);
 
   const refreshTree = useCallback(() => {
     setTreeError(false);
@@ -278,38 +286,174 @@ export default function VaultTreePanel({
     setCtxMenu({ x: e.clientX, y: e.clientY, node });
   };
 
-  const handleNewFile = async (dirPath?: string) => {
-    const name = prompt("File name:", "untitled.md");
-    if (!name) return;
-    const path = dirPath ? `${dirPath}/${name}` : name;
+  const handleNewFile = (dirPath?: string) => {
+    setCtxMenu(null);
+    setModal({
+      kind: "prompt",
+      title: "New file",
+      message: dirPath ? `Creating in ${dirPath}/` : undefined,
+      defaultValue: "untitled.md",
+      confirmLabel: "Create",
+      onCancel: () => setModal(null),
+      onSubmit: async (name) => {
+        setModal(null);
+        const path = dirPath ? `${dirPath}/${name}` : name;
+        try {
+          await putVaultFile(path, "");
+          refreshTree();
+          onSelectPath(path);
+        } catch (e) {
+          toast.error("Couldn't create file", { detail: e instanceof Error ? e.message : undefined });
+        }
+      },
+    });
+  };
+
+  const handleNewFolder = (parentPath?: string) => {
+    setCtxMenu(null);
+    setModal({
+      kind: "prompt",
+      title: "New folder",
+      message: parentPath ? `Creating in ${parentPath}/` : undefined,
+      placeholder: "folder-name",
+      confirmLabel: "Create",
+      onCancel: () => setModal(null),
+      onSubmit: async (name) => {
+        setModal(null);
+        const path = parentPath ? `${parentPath}/${name}` : name;
+        try {
+          await postVaultFolder(path);
+          refreshTree();
+        } catch (e) {
+          toast.error("Couldn't create folder", { detail: e instanceof Error ? e.message : undefined });
+        }
+      },
+    });
+  };
+
+  const handleNewKanban = (dirPath?: string) => {
+    setCtxMenu(null);
+    setModal({
+      kind: "prompt",
+      title: "New kanban",
+      message: dirPath ? `Creating in ${dirPath}/` : undefined,
+      defaultValue: "board.md",
+      confirmLabel: "Create",
+      onCancel: () => setModal(null),
+      onSubmit: async (name) => {
+        setModal(null);
+        const filename = name.endsWith(".md") ? name : `${name}.md`;
+        const path = dirPath ? `${dirPath}/${filename}` : filename;
+        try {
+          await createVaultKanban(path, { title: filename.replace(/\.md$/, "") });
+          refreshTree();
+          onSelectPath(path);
+        } catch (e) {
+          toast.error("Couldn't create kanban", { detail: e instanceof Error ? e.message : undefined });
+        }
+      },
+    });
+  };
+
+  const handleDispatchFile = async (filePath: string) => {
     try {
-      await putVaultFile(path, "");
-      refreshTree();
-      onSelectPath(path);
-    } catch { /* ignore */ }
+      const res = await dispatchFromVault({ path: filePath });
+      onDispatchToChat?.(res.session_id, res.seed_message);
+    } catch (e) {
+      toast.error("Couldn't start chat", { detail: e instanceof Error ? e.message : undefined });
+    }
     setCtxMenu(null);
   };
 
-  const handleNewFolder = async (parentPath?: string) => {
-    const name = prompt("Folder name:");
-    if (!name) return;
-    const path = parentPath ? `${parentPath}/${name}` : name;
-    try {
-      await postVaultFolder(path);
-      refreshTree();
-    } catch { /* ignore */ }
-    setCtxMenu(null);
-  };
+  const descendantCounts = useMemo(() => {
+    const counts = new Map<string, { files: number; dirs: number }>();
+    for (const n of rawNodes) {
+      for (const anc of rawNodes) {
+        if (anc.type !== "dir" || anc.path === n.path) continue;
+        if (n.path.startsWith(anc.path + "/")) {
+          const c = counts.get(anc.path) ?? { files: 0, dirs: 0 };
+          if (n.type === "file") c.files += 1;
+          else c.dirs += 1;
+          counts.set(anc.path, c);
+        }
+      }
+    }
+    return counts;
+  }, [rawNodes]);
 
-  const handleDelete = async (node: TreeNode) => {
-    if (!confirm(`Delete "${node.name}"?`)) return;
+  const doDelete = async (path: string, recursive: boolean) => {
     try {
-      await deleteVaultFile(node.path);
+      await deleteVaultFile(path, recursive);
       refreshTree();
-      if (selectedPath === node.path) onSelectPath(null);
+      if (selectedPath === path || (recursive && selectedPath?.startsWith(path + "/"))) {
+        onSelectPath(null);
+      }
       onTreeChange?.();
-    } catch { /* ignore */ }
+    } catch (e) {
+      toast.error("Delete failed", { detail: e instanceof Error ? e.message : undefined });
+    }
+  };
+
+  const handleDelete = (node: TreeNode) => {
     setCtxMenu(null);
+    if (node.type === "file") {
+      setModal({
+        kind: "confirm",
+        title: "Delete file",
+        message: `Delete "${node.name}"? This cannot be undone.`,
+        confirmLabel: "Delete",
+        danger: true,
+        onCancel: () => setModal(null),
+        onSubmit: () => { setModal(null); void doDelete(node.path, false); },
+      });
+      return;
+    }
+    const counts = descendantCounts.get(node.path);
+    const isEmpty = !counts || (counts.files === 0 && counts.dirs === 0);
+    if (isEmpty) {
+      setModal({
+        kind: "confirm",
+        title: "Delete folder",
+        message: `Delete empty folder "${node.name}"?`,
+        confirmLabel: "Delete",
+        danger: true,
+        onCancel: () => setModal(null),
+        onSubmit: () => { setModal(null); void doDelete(node.path, false); },
+      });
+      return;
+    }
+    // Non-empty: first confirm, then second confirmation.
+    const summary = [
+      counts.files > 0 && `${counts.files} file${counts.files === 1 ? "" : "s"}`,
+      counts.dirs > 0 && `${counts.dirs} subfolder${counts.dirs === 1 ? "" : "s"}`,
+    ].filter(Boolean).join(", ");
+    setModal({
+      kind: "confirm",
+      title: "Delete folder and its contents?",
+      message: `"${node.name}" contains ${summary}. All of it will be permanently removed.`,
+      confirmLabel: "Continue",
+      danger: true,
+      onCancel: () => setModal(null),
+      onSubmit: () => {
+        setModal({
+          kind: "prompt",
+          title: "Type the folder name to confirm",
+          message: `To permanently delete "${node.name}" and its ${summary}, type its name below.`,
+          placeholder: node.name,
+          confirmLabel: "Delete forever",
+          onCancel: () => setModal(null),
+          onSubmit: (typed) => {
+            if (typed.trim() !== node.name) {
+              toast.error("Name didn't match — delete cancelled");
+              setModal(null);
+              return;
+            }
+            setModal(null);
+            void doDelete(node.path, true);
+          },
+        });
+      },
+    });
   };
 
   const tree = buildTree(rawNodes);
@@ -362,30 +506,35 @@ export default function VaultTreePanel({
       </div>
       {reindexMsg && <div className="vault-reindex-toast">{reindexMsg}</div>}
 
-      {tags.length > 0 && !searchQuery && (
-        <div className="vault-tag-cloud">
-          {tags.map((t) => {
-            const maxCount = tags[0].count || 1;
-            const scale = 0.75 + 0.5 * (t.count / maxCount);
-            return (
-              <button
-                key={t.tag}
-                className={`vault-tag-pill${activeTag === t.tag ? " vault-tag-pill--active" : ""}`}
-                style={{ fontSize: `${Math.round(scale * 11)}px` }}
-                onClick={() => handleTagClick(t.tag)}
-                title={`${t.count} file${t.count !== 1 ? "s" : ""}`}
-              >
-                #{t.tag}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       {treeError && <div className="vault-tree-error">Couldn&apos;t load — is the server running?</div>}
 
       {searchQuery ? (
         <div className="vault-search-results">
+          {(() => {
+            const q = searchQuery.trim().toLowerCase().replace(/^#/, "");
+            const suggestions = q
+              ? tags.filter((t) => t.tag.toLowerCase().includes(q)).slice(0, 8)
+              : [];
+            if (!suggestions.length) return null;
+            return (
+              <div className="vault-tag-suggestions">
+                {suggestions.map((t) => (
+                  <button
+                    key={t.tag}
+                    className={`vault-tag-pill${activeTag === t.tag ? " vault-tag-pill--active" : ""}`}
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSearchResults([]);
+                      handleTagClick(t.tag);
+                    }}
+                    title={`${t.count} file${t.count !== 1 ? "s" : ""}`}
+                  >
+                    #{t.tag}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
           {searchResults.length === 0 && (
             <div className="vault-tree-empty">No results</div>
           )}
@@ -444,11 +593,19 @@ export default function VaultTreePanel({
             <>
               <button className="vault-ctx-item" onClick={() => void handleNewFile(ctxMenu.node.path)}>New file</button>
               <button className="vault-ctx-item" onClick={() => void handleNewFolder(ctxMenu.node.path)}>New folder</button>
+              <button className="vault-ctx-item" onClick={() => void handleNewKanban(ctxMenu.node.path)}>New kanban</button>
             </>
           )}
-          <button className="vault-ctx-item vault-ctx-item--danger" onClick={() => void handleDelete(ctxMenu.node)}>Delete</button>
+          {ctxMenu.node.type === "file" && ctxMenu.node.path.endsWith(".md") && (
+            <button className="vault-ctx-item" onClick={() => void handleDispatchFile(ctxMenu.node.path)}>
+              Start chat with this file
+            </button>
+          )}
+          <button className="vault-ctx-item vault-ctx-item--danger" onClick={() => handleDelete(ctxMenu.node)}>Delete</button>
         </div>
       )}
+
+      {modal && <Modal {...modal} />}
     </div>
   );
 }

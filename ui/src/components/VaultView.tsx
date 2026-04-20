@@ -3,12 +3,13 @@ import "./VaultView.css";
 
 interface VaultViewProps {
   selectedPath: string | null;
+  onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
 }
 
-export default function VaultView({ selectedPath }: VaultViewProps) {
+export default function VaultView({ selectedPath, onDispatchToChat }: VaultViewProps) {
   return (
     <div className="vault-view vault-view--editor-only">
-      <VaultEditorPanel selectedPath={selectedPath} />
+      <VaultEditorPanel selectedPath={selectedPath} onDispatchToChat={onDispatchToChat} />
     </div>
   );
 }

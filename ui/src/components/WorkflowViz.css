@@ -54,7 +54,7 @@
 
 .wf-stage-label {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--bubble-fg-dim);
   white-space: nowrap;
 }
 
@@ -83,18 +83,18 @@
 
 .wf-icon-group > .wf-icon-label {
   font-size: 10px;
-  color: var(--fg-dim);
+  color: var(--bubble-fg-dim);
   letter-spacing: 0.04em;
 }
 
 .wf-icon-label {
   font-size: 10px;
-  color: var(--fg-dim);
+  color: var(--bubble-fg-dim);
   letter-spacing: 0.04em;
 }
 
 .wf-arrow {
-  color: var(--fg-faint);
+  color: var(--bubble-fg-dim);
   font-size: 13px;
 }
 
@@ -102,7 +102,7 @@
 .wf-caption {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--bubble-fg-dim);
   font-style: italic;
 }
 
@@ -120,7 +120,7 @@
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.07em;
-  color: var(--fg-dim);
+  color: var(--bubble-fg-dim);
   text-transform: uppercase;
   margin-bottom: 8px;
 }
@@ -139,7 +139,7 @@
   align-items: flex-start;
   gap: 8px;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--bubble-fg);
 }
 
 .plan-viz__status-icon {
@@ -150,7 +150,7 @@
 }
 
 .plan-viz__item--pending .plan-viz__status-icon {
-  color: var(--fg-faint);
+  color: var(--bubble-fg-dim);
 }
 
 .plan-viz__item--running .plan-viz__status-icon {
@@ -166,7 +166,7 @@
 }
 
 .plan-viz__item--failed .plan-viz__description {
-  color: var(--fg-dim);
+  color: var(--bubble-fg-dim);
   text-decoration: line-through;
 }
 

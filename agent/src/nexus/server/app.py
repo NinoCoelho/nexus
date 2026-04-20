@@ -512,10 +512,12 @@ def create_app(
         ``tool_result``, ``user_request``, and ``reply`` until the
         client disconnects.
 
-        Materializes the session on first subscribe if it doesn't
-        exist — that lets the UI open the event stream *before*
-        sending the first ``/chat`` message without a chicken-and-egg
-        problem.
+        The subscribe queue is an in-memory pub-sub keyed by session
+        id, so the UI can open this stream *before* sending the first
+        ``/chat`` message without a chicken-and-egg problem — no DB
+        row is required to subscribe. The session is materialized
+        lazily by ``POST /chat/stream``. This keeps page-reloads from
+        littering the store with empty sessions.
 
         Note: ``sessions`` is captured from the enclosing ``create_app``
         closure rather than injected via ``Depends``. FastAPI's
@@ -524,7 +526,6 @@ def create_app(
         an ``httpx.ASGITransport`` hang) — direct closure capture is
         the same object at runtime and avoids the pitfall.
         """
-        sessions.get_or_create(session_id)
 
         async def stream() -> AsyncIterator[bytes]:
             # Opening comment keeps intermediate proxies from buffering
@@ -1057,10 +1058,10 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     @app.delete("/vault/file", status_code=status.HTTP_204_NO_CONTENT)
-    async def vault_delete_file(path: str) -> None:
+    async def vault_delete_file(path: str, recursive: bool = False) -> None:
         from ..vault import delete
         try:
-            delete(path)
+            delete(path, recursive=recursive)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         except (ValueError, OSError) as exc:
@@ -1117,97 +1118,150 @@ def create_app(
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    # ── kanban routes ──────────────────────────────────────────────────────────
+    # ── vault kanban routes ────────────────────────────────────────────────────
+    # Kanban lives inside the vault as a plain .md file with
+    # `kanban-plugin: basic` frontmatter (Obsidian-compatible).
 
-    @app.get("/kanban/boards")
-    async def kanban_list_boards() -> list:
-        from ..kanban import list_boards
-        return list_boards()
-
-    @app.post("/kanban/boards", status_code=status.HTTP_201_CREATED)
-    async def kanban_create_board(body: dict) -> dict:
-        from ..kanban import create_board
-        name = body.get("name", "")
-        if not name:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`name` required")
+    @app.get("/vault/kanban")
+    async def vault_kanban_get(path: str) -> dict:
+        from .. import vault_kanban
         try:
-            create_board(name)
+            board = vault_kanban.read_board(path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-        return {"name": name, "card_count": 0}
+        return {"path": path, **board.to_dict()}
 
-    @app.delete("/kanban/boards/{board_name}", status_code=status.HTTP_204_NO_CONTENT)
-    async def kanban_delete_board(board_name: str) -> None:
-        from ..kanban import delete_board
+    @app.post("/vault/kanban", status_code=status.HTTP_201_CREATED)
+    async def vault_kanban_create(body: dict) -> dict:
+        """Scaffold a new kanban .md file. Body: {path, title?, columns?}."""
+        from .. import vault_kanban
+        path = body.get("path", "")
+        if not path:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
         try:
-            delete_board(board_name)
+            board = vault_kanban.create_empty(
+                path,
+                title=body.get("title"),
+                columns=body.get("columns"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        return {"path": path, **board.to_dict()}
+
+    @app.patch("/vault/kanban/cards/{card_id}")
+    async def vault_kanban_patch_card(card_id: str, body: dict, path: str) -> dict:
+        """Update title/body or move between lanes. Body: {title?, body?, lane?, position?}."""
+        from .. import vault_kanban
+        try:
+            if "lane" in body:
+                card = vault_kanban.move_card(
+                    path, card_id, body["lane"], body.get("position"),
+                )
+                # Also apply any content edits in the same call.
+                updates = {k: body[k] for k in ("title", "body", "session_id") if k in body}
+                if updates:
+                    card = vault_kanban.update_card(path, card_id, updates)
+            else:
+                updates = {k: body[k] for k in ("title", "body", "session_id") if k in body}
+                card = vault_kanban.update_card(path, card_id, updates)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        return card.to_dict()
 
-    @app.get("/kanban")
-    async def kanban_board(board: str = "default") -> dict:
-        from ..kanban import list_cards, list_columns
-        return {
-            "columns": list_columns(board),
-            "cards": [c.to_dict() for c in list_cards(board)],
-        }
+    @app.post("/vault/kanban/cards", status_code=status.HTTP_201_CREATED)
+    async def vault_kanban_add_card(body: dict, path: str) -> dict:
+        from .. import vault_kanban
+        lane = body.get("lane", "")
+        title = body.get("title", "")
+        if not lane or not title:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`lane` and `title` required")
+        try:
+            card = vault_kanban.add_card(path, lane, title, body.get("body", ""))
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return card.to_dict()
 
-    @app.post("/kanban/cards", status_code=status.HTTP_201_CREATED)
-    async def kanban_create_card(body: dict, board: str = "default") -> dict:
-        from ..kanban import create_card
+    @app.delete("/vault/kanban/cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def vault_kanban_delete_card(card_id: str, path: str) -> None:
+        from .. import vault_kanban
+        try:
+            vault_kanban.delete_card(path, card_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    @app.post("/vault/kanban/lanes", status_code=status.HTTP_201_CREATED)
+    async def vault_kanban_add_lane(body: dict, path: str) -> dict:
+        from .. import vault_kanban
         title = body.get("title", "")
         if not title:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`title` required")
-        card = create_card(
-            title=title,
-            column=body.get("column", "todo"),
-            notes=body.get("notes", ""),
-            tags=body.get("tags") or [],
-            board=board,
-        )
-        return card.to_dict()
+        lane = vault_kanban.add_lane(path, title)
+        return lane.to_dict()
 
-    @app.patch("/kanban/cards/{card_id}")
-    async def kanban_update_card(card_id: str, body: dict, board: str = "default") -> dict:
-        from ..kanban import update_card
-        updates: dict[str, Any] = {}
-        for key in ("title", "notes", "tags", "column"):
-            if key in body:
-                updates[key] = body[key]
+    @app.delete("/vault/kanban/lanes/{lane_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def vault_kanban_delete_lane(lane_id: str, path: str) -> None:
+        from .. import vault_kanban
+        vault_kanban.delete_lane(path, lane_id)
+
+    # ── vault dispatch ─────────────────────────────────────────────────────────
+    # Start a new chat session seeded with the content of a vault file
+    # (or a single kanban card). Returns the new session_id + a seed message
+    # the client can pre-fill in the input.
+
+    @app.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)
+    async def vault_dispatch(
+        body: dict,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict:
+        from .. import vault, vault_kanban
+        path = body.get("path", "")
+        card_id = body.get("card_id")
+        if not path:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
         try:
-            card = update_card(card_id, updates, board)
-        except KeyError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-        return card.to_dict()
+            file = vault.read_file(path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
 
-    @app.delete("/kanban/cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
-    async def kanban_delete_card(card_id: str, board: str = "default") -> None:
-        from ..kanban import delete_card
-        try:
-            delete_card(card_id, board)
-        except KeyError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        title = path.rsplit("/", 1)[-1]
+        seed_body = file.get("body") or file["content"]
+        seed_title = title
 
-    @app.post("/kanban/columns", status_code=status.HTTP_201_CREATED)
-    async def kanban_create_column(body: dict, board: str = "default") -> dict:
-        from ..kanban import create_column
-        name = body.get("name", "")
-        if not name:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`name` required")
-        create_column(name, board)
-        return {"name": name}
+        if card_id:
+            try:
+                board = vault_kanban.parse(file["content"])
+            except Exception as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            found = vault_kanban._find_card(board, card_id)
+            if found is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="card not found")
+            _, card, _ = found
+            seed_title = card.title
+            seed_body = card.body
 
-    @app.delete("/kanban/columns/{name}", status_code=status.HTTP_204_NO_CONTENT)
-    async def kanban_delete_column(name: str, board: str = "default") -> None:
-        from ..kanban import delete_column
-        try:
-            delete_column(name, board)
-        except KeyError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        seed_message = f"# {seed_title}\n\n{seed_body}".strip() if seed_body else f"# {seed_title}"
+        context_str = f"Dispatched from vault file: {path}"
+        if card_id:
+            context_str += f" (card {card_id})"
+        session = store.create(context=context_str)
+
+        if card_id:
+            try:
+                vault_kanban.update_card(path, card_id, {"session_id": session.id})
+            except Exception:
+                # Non-fatal — session is created; we just couldn't link it
+                # back. Log and continue.
+                import logging
+                logging.getLogger(__name__).warning("dispatch: could not link session to card", exc_info=True)
+
+        return {
+            "session_id": session.id,
+            "seed_message": seed_message,
+            "path": path,
+            "card_id": card_id,
+        }
 
     # ── config routes ──────────────────────────────────────────────────────────
 

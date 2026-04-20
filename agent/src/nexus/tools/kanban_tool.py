@@ -1,4 +1,10 @@
-"""Kanban agent tool: kanban_manage."""
+"""Kanban agent tool: kanban_manage.
+
+Operates on kanban boards stored as Obsidian-compatible markdown files in the
+vault. The agent addresses boards by their vault-relative path
+(e.g. "boards/projects.md"). If the file doesn't exist yet, use
+action="create_board" to scaffold one.
+"""
 
 from __future__ import annotations
 
@@ -10,103 +16,116 @@ from ..agent.llm import ToolSpec
 KANBAN_MANAGE_TOOL = ToolSpec(
     name="kanban_manage",
     description=(
-        "Manage kanban boards. Actions: list_boards, create_board, list, create, move, update, delete. "
-        "Use this to track tasks with the user across named boards."
+        "Manage kanban boards stored as markdown in the vault. "
+        "Each board is a single .md file with `kanban-plugin: basic` frontmatter. "
+        "Actions: create_board, view, add_card, move_card, update_card, delete_card, "
+        "add_lane, delete_lane."
     ),
     parameters={
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list_boards", "create_board", "list", "create", "move", "update", "delete"],
+                "enum": [
+                    "create_board", "view",
+                    "add_card", "move_card", "update_card", "delete_card",
+                    "add_lane", "delete_lane",
+                ],
                 "description": "Action to perform.",
             },
-            "board": {
+            "path": {
                 "type": "string",
-                "description": "Board name (default: 'default'). Must match ^[a-z0-9][a-z0-9-]{0,31}$.",
+                "description": "Vault-relative path to the kanban .md file (e.g. 'boards/work.md').",
             },
-            "id": {"type": "string", "description": "Card ID (required for move/update/delete)."},
-            "title": {"type": "string", "description": "Card title (required for create)."},
-            "column": {"type": "string", "description": "Column name (todo/doing/done or custom)."},
-            "notes": {"type": "string", "description": "Freeform markdown notes body."},
-            "tags": {
+            "title": {
+                "type": "string",
+                "description": "Board title (create_board), card title (add_card/update_card), or lane title (add_lane).",
+            },
+            "columns": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Tag list.",
+                "description": "Initial lane titles for create_board (default: ['Todo','Doing','Done']).",
             },
+            "lane": {"type": "string", "description": "Lane id (move_card, add_card, delete_lane)."},
+            "card_id": {"type": "string", "description": "Card id (move/update/delete)."},
+            "body": {"type": "string", "description": "Card body / notes markdown."},
+            "position": {"type": "integer", "description": "Insert position within the lane (move_card)."},
         },
-        "required": ["action"],
+        "required": ["action", "path"],
     },
 )
 
 
 def handle_kanban_tool(args: dict[str, Any]) -> str:
-    from .. import kanban
+    from .. import vault_kanban
 
     action = args.get("action", "")
-    board = args.get("board", "default")
+    path = args.get("path", "")
+    if not path:
+        return json.dumps({"ok": False, "error": "`path` is required"})
+
     try:
-        if action == "list_boards":
-            boards = kanban.list_boards()
-            return json.dumps({"ok": True, "boards": boards})
-
         if action == "create_board":
-            name = args.get("title") or args.get("board", "")
-            if not name:
-                return json.dumps({"ok": False, "error": "`title` (board name) is required"})
-            kanban.create_board(name)
-            return json.dumps({"ok": True, "name": name})
+            board = vault_kanban.create_empty(
+                path,
+                title=args.get("title"),
+                columns=args.get("columns"),
+            )
+            return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
 
-        if action == "list":
-            cards = kanban.list_cards(board)
-            columns = kanban.list_columns(board)
-            return json.dumps({
-                "ok": True,
-                "board": board,
-                "columns": columns,
-                "cards": [c.to_dict() for c in cards],
-            })
+        if action == "view":
+            board = vault_kanban.read_board(path)
+            return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
 
-        if action == "create":
+        if action == "add_card":
+            lane = args.get("lane", "")
+            title = args.get("title", "")
+            if not lane or not title:
+                return json.dumps({"ok": False, "error": "`lane` and `title` are required"})
+            card = vault_kanban.add_card(path, lane, title, args.get("body", ""))
+            return json.dumps({"ok": True, "card": card.to_dict()})
+
+        if action == "move_card":
+            card_id = args.get("card_id", "")
+            lane = args.get("lane", "")
+            if not card_id or not lane:
+                return json.dumps({"ok": False, "error": "`card_id` and `lane` are required"})
+            card = vault_kanban.move_card(path, card_id, lane, args.get("position"))
+            return json.dumps({"ok": True, "card": card.to_dict()})
+
+        if action == "update_card":
+            card_id = args.get("card_id", "")
+            if not card_id:
+                return json.dumps({"ok": False, "error": "`card_id` is required"})
+            updates: dict[str, Any] = {}
+            for key in ("title", "body"):
+                if key in args:
+                    updates[key] = args[key]
+            card = vault_kanban.update_card(path, card_id, updates)
+            return json.dumps({"ok": True, "card": card.to_dict()})
+
+        if action == "delete_card":
+            card_id = args.get("card_id", "")
+            if not card_id:
+                return json.dumps({"ok": False, "error": "`card_id` is required"})
+            vault_kanban.delete_card(path, card_id)
+            return json.dumps({"ok": True})
+
+        if action == "add_lane":
             title = args.get("title", "")
             if not title:
                 return json.dumps({"ok": False, "error": "`title` is required"})
-            card = kanban.create_card(
-                title=title,
-                column=args.get("column", "todo"),
-                notes=args.get("notes", ""),
-                tags=args.get("tags") or [],
-                board=board,
-            )
-            return json.dumps({"ok": True, "card": card.to_dict()})
+            lane = vault_kanban.add_lane(path, title)
+            return json.dumps({"ok": True, "lane": lane.to_dict()})
 
-        if action == "move":
-            card_id = args.get("id", "")
-            column = args.get("column", "")
-            if not card_id or not column:
-                return json.dumps({"ok": False, "error": "`id` and `column` are required"})
-            card = kanban.move_card(card_id, column, board)
-            return json.dumps({"ok": True, "card": card.to_dict()})
-
-        if action == "update":
-            card_id = args.get("id", "")
-            if not card_id:
-                return json.dumps({"ok": False, "error": "`id` is required"})
-            updates: dict[str, Any] = {}
-            for key in ("title", "notes", "tags", "column"):
-                if key in args:
-                    updates[key] = args[key]
-            card = kanban.update_card(card_id, updates, board)
-            return json.dumps({"ok": True, "card": card.to_dict()})
-
-        if action == "delete":
-            card_id = args.get("id", "")
-            if not card_id:
-                return json.dumps({"ok": False, "error": "`id` is required"})
-            kanban.delete_card(card_id, board)
+        if action == "delete_lane":
+            lane_id = args.get("lane", "")
+            if not lane_id:
+                return json.dumps({"ok": False, "error": "`lane` is required"})
+            vault_kanban.delete_lane(path, lane_id)
             return json.dumps({"ok": True})
 
         return json.dumps({"ok": False, "error": f"unknown action: {action!r}"})
 
-    except (KeyError, ValueError, OSError) as exc:
+    except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return json.dumps({"ok": False, "error": str(exc)})

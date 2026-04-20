@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import MarkdownView from "./MarkdownView";
 import { getSkill, type SkillDetail } from "../api";
 import "./SkillDrawer.css";
 
@@ -45,7 +45,7 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
         <div className="drawer-body">
           {loading && <p className="drawer-loading">Loading…</p>}
           {!loading && detail && (
-            <ReactMarkdown>{detail.body}</ReactMarkdown>
+            <MarkdownView>{detail.body}</MarkdownView>
           )}
           {!loading && !detail && (
             <p className="drawer-error">Could not load skill.</p>

@@ -15,7 +15,6 @@ routing_app = typer.Typer(help="Routing commands", no_args_is_help=True)
 skills_app = typer.Typer(help="Skills commands", no_args_is_help=True)
 sessions_app = typer.Typer(help="Session commands", no_args_is_help=True)
 vault_app = typer.Typer(help="Vault commands", no_args_is_help=True)
-kanban_app = typer.Typer(help="Kanban commands", no_args_is_help=True)
 daemon_app = typer.Typer(help="Daemon management commands", no_args_is_help=True)
 trajectories_app = typer.Typer(help="Trajectory commands", no_args_is_help=True)
 
@@ -26,7 +25,6 @@ app.add_typer(routing_app, name="routing")
 app.add_typer(skills_app, name="skills")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(vault_app, name="vault")
-app.add_typer(kanban_app, name="kanban")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(trajectories_app, name="trajectories")
 
@@ -721,43 +719,6 @@ def vault_backlinks_cmd(path: str = typer.Argument(..., help="Relative vault fil
     console.print(f"[bold]Backlinks to[/bold] [cyan]{path}[/cyan]:")
     for link in links:
         console.print(f"  [dim]-[/dim] {link}")
-
-
-# ── kanban ──────────────────────────────────────────────────────────────────────
-
-@kanban_app.command("boards")
-def kanban_boards() -> None:
-    """List all kanban boards."""
-    from .kanban import list_boards
-    from rich.table import Table
-    from rich.console import Console
-    boards = list_boards()
-    table = Table(title="Kanban Boards")
-    table.add_column("Name")
-    table.add_column("Cards", justify="right")
-    for b in boards:
-        table.add_row(b["name"], str(b["card_count"]))
-    Console().print(table)
-
-
-@kanban_app.command("list")
-def kanban_list(
-    board: str = typer.Option("default", "--board", help="Board name"),
-) -> None:
-    """List kanban cards."""
-    from .kanban import list_cards, list_columns
-    from rich.table import Table
-    from rich.console import Console
-    cards = list_cards(board)
-    columns = list_columns(board)  # noqa: F841 — kept for future use
-    table = Table(title=f"Kanban ({board})")
-    table.add_column("ID", style="dim")
-    table.add_column("Column")
-    table.add_column("Title")
-    table.add_column("Tags")
-    for card in cards:
-        table.add_row(card.id[:8], card.column, card.title, ",".join(card.tags))
-    Console().print(table)
 
 
 # ── daemon ───────────────────────────────────────────────────────────────────────

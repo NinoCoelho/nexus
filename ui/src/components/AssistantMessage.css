@@ -44,6 +44,10 @@
   color: var(--bubble-fg);
 }
 
+.asst-body {
+  color: var(--bubble-fg);
+}
+
 .asst-body p {
   margin: 0.4em 0;
   color: var(--bubble-fg);

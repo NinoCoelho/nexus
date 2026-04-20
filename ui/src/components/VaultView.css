@@ -381,7 +381,8 @@
 
 /* ── Tag cloud ────────────────────────────────────────────────────────────── */
 
-.vault-tag-cloud {
+.vault-tag-cloud,
+.vault-tag-suggestions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -389,6 +390,7 @@
   border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
 }
+.vault-tag-suggestions { font-size: 11px; }
 
 .vault-tag-pill {
   display: inline-flex;

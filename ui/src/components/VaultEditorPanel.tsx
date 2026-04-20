@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import MarkdownView from "./MarkdownView";
+import KanbanBoard from "./KanbanBoard";
 import { getVaultFile, putVaultFile } from "../api";
 import "./VaultView.css";
 
-interface VaultEditorPanelProps {
-  selectedPath: string | null;
+function isKanbanContent(content: string): boolean {
+  if (!content.startsWith("---")) return false;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return false;
+  const fm = content.slice(3, end);
+  return /^\s*kanban-plugin\s*:/m.test(fm);
 }
 
-export default function VaultEditorPanel({ selectedPath }: VaultEditorPanelProps) {
+interface VaultEditorPanelProps {
+  selectedPath: string | null;
+  onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+}
+
+export default function VaultEditorPanel({ selectedPath, onDispatchToChat }: VaultEditorPanelProps) {
   const [content, setContent] = useState("");
   const [editMode, setEditMode] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
@@ -49,6 +59,8 @@ export default function VaultEditorPanel({ selectedPath }: VaultEditorPanelProps
     return () => window.removeEventListener("keydown", handler);
   }, [editMode, save]);
 
+  const isKanban = !!selectedPath && selectedPath.endsWith(".md") && isKanbanContent(content);
+
   const breadcrumb = selectedPath
     ? selectedPath.split("/").map((part, i, arr) => (
         <span key={i} className="vault-breadcrumb-part">
@@ -89,6 +101,8 @@ export default function VaultEditorPanel({ selectedPath }: VaultEditorPanelProps
           </div>
           {fileError ? (
             <div className="vault-file-error">{fileError}</div>
+          ) : isKanban && !editMode ? (
+            <KanbanBoard path={selectedPath!} onDispatchToChat={onDispatchToChat} />
           ) : editMode ? (
             <textarea
               className="vault-textarea"
@@ -98,7 +112,7 @@ export default function VaultEditorPanel({ selectedPath }: VaultEditorPanelProps
             />
           ) : (
             <div className="vault-preview">
-              <ReactMarkdown>{content}</ReactMarkdown>
+              <MarkdownView>{content}</MarkdownView>
             </div>
           )}
         </>

@@ -10,3 +10,4 @@ build/
 .vite/
 uv.lock
 *.egg-info/
+.claude/

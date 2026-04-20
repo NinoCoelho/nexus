@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import MarkdownView from "./MarkdownView";
 import { getVaultFile, type VaultFile } from "../api";
 import "./VaultFilePreview.css";
 
@@ -148,7 +148,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
                 </div>
               )}
               <div className="vault-preview-markdown">
-                <ReactMarkdown>{body}</ReactMarkdown>
+                <MarkdownView>{body}</MarkdownView>
               </div>
               {(file.tags && file.tags.length > 0) && (
                 <div className="vault-preview-footer-section">
