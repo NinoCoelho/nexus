@@ -1,17 +1,32 @@
-"""SQLite-backed session store for Nexus."""
+"""SQLite-backed session store for Nexus.
+
+Beyond the persisted history, the store carries two in-memory
+side-channels used by the HITL (human-in-the-loop) pattern:
+
+* ``_subscribers``: per-session list of ``asyncio.Queue`` objects that
+  back SSE subscribers. ``publish`` fans out to all of them with
+  ``put_nowait`` so tracing the agent never blocks.
+* ``_pending``: per-session map of ``request_id`` → ``asyncio.Future``
+  used by ``ask_user`` to park until the UI POSTs a response. Stays in
+  memory — a process crash cancels every in-flight dialog, which is
+  the right behavior anyway.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from ..agent.llm import ChatMessage, Role, ToolCall
+from .events import SessionEvent
 
 
 _DB_PATH = Path("~/.nexus/sessions.sqlite").expanduser()
@@ -95,6 +110,12 @@ class SessionStore:
     def __init__(self, db_path: Path = _DB_PATH) -> None:
         self._db_path = db_path
         self._lock = Lock()
+        # In-memory side channels — not persisted. Each session that has
+        # at least one live SSE subscriber gets a list of queues; each
+        # session with at least one pending ``ask_user`` gets a dict of
+        # request_id → Future. Both cleaned up lazily.
+        self._subscribers: dict[str, list[asyncio.Queue[SessionEvent | None]]] = {}
+        self._pending: dict[str, dict[str, asyncio.Future[str]]] = {}
         self._init_db()
 
     def _init_db(self) -> None:
@@ -223,10 +244,16 @@ class SessionStore:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (int(time.time()), session_id))
+        # Cancel any pending HITL futures for this session — they're
+        # stale state once the conversation has been reset.
+        self._cancel_all_pending(session_id)
 
     def delete(self, session_id: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        # Same story as reset: an in-flight ask_user against a deleted
+        # session can never resolve; cancel so the tool returns cleanly.
+        self._cancel_all_pending(session_id)
 
     def rename(self, session_id: str, title: str) -> None:
         with self._lock, self._connect() as conn:
@@ -267,3 +294,104 @@ class SessionStore:
                     "WHERE id = ?",
                     (input_tokens, output_tokens, tool_calls, session_id),
                 )
+
+    # ── pub/sub for SSE ──────────────────────────────────────────────
+
+    def publish(self, session_id: str, event: SessionEvent) -> None:
+        """Fan an event out to every live SSE subscriber on this
+        session. Silently drops when there are no subscribers — early
+        traces routinely fire before the UI's EventSource attaches,
+        and a reply after the user has navigated away is harmless."""
+        with self._lock:
+            subscribers = list(self._subscribers.get(session_id, ()))
+        for q in subscribers:
+            # Queues are unbounded by default; put_nowait is effectively
+            # non-blocking. If a subscriber is stuck, events accumulate
+            # rather than blocking the publisher. OK for MVP.
+            q.put_nowait(event)
+
+    async def subscribe(self, session_id: str) -> AsyncIterator[SessionEvent]:
+        """Async iterator of events for one SSE subscriber.
+
+        Yields until either the client disconnects (the generator is
+        closed) or a ``None`` sentinel is pushed (session reset /
+        delete wake the queue so the caller can unwind).
+        """
+        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
+        with self._lock:
+            self._subscribers.setdefault(session_id, []).append(queue)
+
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    return
+                yield event
+        finally:
+            with self._lock:
+                subs = self._subscribers.get(session_id)
+                if subs is not None and queue in subs:
+                    subs.remove(queue)
+                    if not subs:
+                        self._subscribers.pop(session_id, None)
+
+    # ── HITL pending futures ─────────────────────────────────────────
+
+    def register_pending(
+        self, session_id: str, request_id: str
+    ) -> asyncio.Future[str]:
+        """Create + register a Future for a HITL request. ``ask_user``
+        awaits it; ``resolve_pending`` / ``cancel_pending`` complete it."""
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+        with self._lock:
+            session_pending = self._pending.setdefault(session_id, {})
+            if request_id in session_pending:
+                raise ValueError(f"request_id already pending: {request_id!r}")
+            session_pending[request_id] = fut
+        return fut
+
+    def resolve_pending(
+        self, session_id: str, request_id: str, answer: str
+    ) -> bool:
+        """Resolve a waiting ``ask_user``. Returns True iff the request
+        was pending and still live; False otherwise (stale / never
+        existed / already resolved). The ``/respond`` endpoint uses
+        this to 404 stale clicks."""
+        with self._lock:
+            session_pending = self._pending.get(session_id)
+            if session_pending is None:
+                return False
+            fut = session_pending.pop(request_id, None)
+            if not session_pending:
+                self._pending.pop(session_id, None)
+        if fut is None or fut.done():
+            return False
+        fut.set_result(answer)
+        return True
+
+    def cancel_pending(self, session_id: str, request_id: str) -> bool:
+        """Cancel a pending Future (e.g. on timeout). Returns True iff
+        it was present and still live."""
+        with self._lock:
+            session_pending = self._pending.get(session_id)
+            if session_pending is None:
+                return False
+            fut = session_pending.pop(request_id, None)
+            if not session_pending:
+                self._pending.pop(session_id, None)
+        if fut is None or fut.done():
+            return False
+        fut.cancel()
+        return True
+
+    def _cancel_all_pending(self, session_id: str) -> None:
+        """Called on reset/delete to drop every in-flight ask_user for
+        this session. Best-effort: already-done futures are skipped."""
+        with self._lock:
+            session_pending = self._pending.pop(session_id, None)
+        if not session_pending:
+            return
+        for fut in session_pending.values():
+            if not fut.done():
+                fut.cancel()

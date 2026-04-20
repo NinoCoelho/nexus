@@ -12,11 +12,23 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from ..agent.ask_user_tool import AskUserHandler
+from ..agent.context import CURRENT_SESSION_ID
 from ..agent.llm import LLMTransportError, MalformedOutputError
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
-from .schemas import ChatReply, ChatRequest, Health, SkillDetail, SkillInfo
+from .events import SessionEvent
+from .schemas import (
+    ChatReply,
+    ChatRequest,
+    Health,
+    RespondPayload,
+    SettingsPayload,
+    SkillDetail,
+    SkillInfo,
+)
 from .session_store import SessionStore
+from .settings import SettingsStore
 
 log = logging.getLogger(__name__)
 
@@ -28,9 +40,50 @@ def create_app(
     sessions: SessionStore | None = None,
     nexus_cfg: Any | None = None,
     provider_registry: Any | None = None,
+    settings_store: SettingsStore | None = None,
 ) -> FastAPI:
     sessions = sessions or SessionStore()
+    settings_store = settings_store or SettingsStore()
     _state = {"cfg": nexus_cfg, "prov_reg": provider_registry}
+
+    # Wire the HITL primitive. The ``AskUserHandler`` reads ``yolo_mode``
+    # on every call via this getter — a callable (not a snapshot) so
+    # toggling the setting takes effect on the next ``ask_user`` without
+    # restarting the server. Attached to the agent so its loop's
+    # ``_tools()`` / ``_handle()`` branches pick it up.
+    ask_user_handler = AskUserHandler(
+        session_store=sessions,
+        yolo_mode_getter=lambda: settings_store.get().yolo_mode,
+    )
+    # Late-bind the handler onto the agent. Constructed-outside-the-app
+    # callers (``main.py``) don't know about HITL; constructing the
+    # handler here keeps all the server-side wiring in one place.
+    from ..agent.terminal_tool import TerminalHandler
+
+    agent._ask_user_handler = ask_user_handler
+    agent._terminal_handler = TerminalHandler(ask_user_handler=ask_user_handler)
+
+    # Trace callback routes every agent event (iter, tool_call,
+    # tool_result, reply) into the SSE subscriber fanout for whichever
+    # session is currently running the turn. Reads the session_id from
+    # a contextvar set in the /chat handler — the Agent stays
+    # session-agnostic.
+    def _trace(kind: str, data: dict[str, Any]) -> None:
+        session_id = CURRENT_SESSION_ID.get()
+        if session_id is None:
+            return
+        sessions.publish(session_id, SessionEvent(kind=kind, data=data))
+
+    # Install the trace hook without clobbering one the caller may
+    # already have wired (main.py doesn't today, but a test might).
+    if agent._trace is None:
+        agent._trace = _trace
+    else:
+        existing = agent._trace
+        def _compose(k: str, d: dict[str, Any]) -> None:
+            existing(k, d)
+            _trace(k, d)
+        agent._trace = _compose
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -81,6 +134,11 @@ def create_app(
         store: SessionStore = Depends(get_sessions),
     ) -> ChatReply:
         session = store.get_or_create(req.session_id, context=req.context)
+        # Bind the session to this request context. Tools that need to
+        # address the session (ask_user, trace publish) read it from
+        # the ContextVar. Reset on exit so follow-up code — and
+        # concurrent unrelated requests — don't inherit stale state.
+        token = CURRENT_SESSION_ID.set(session.id)
         try:
             turn = await a.run_turn(
                 req.message,
@@ -91,6 +149,8 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         except MalformedOutputError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        finally:
+            CURRENT_SESSION_ID.reset(token)
         store.replace_history(session.id, turn.messages)
         # Fold the turn's usage into the session — see session_store.bump_usage.
         store.bump_usage(
@@ -118,6 +178,12 @@ def create_app(
 
         async def event_generator() -> AsyncIterator[str]:
             final_messages = None
+            # Bind session context for the duration of the stream so
+            # any ask_user call inside the turn knows which session to
+            # publish on. The contextvar is local to this coroutine
+            # (generators carry their own context) so concurrent
+            # streams don't stomp on each other.
+            token = CURRENT_SESSION_ID.set(session.id)
             try:
                 async for event in a.run_turn_stream(
                     req.message,
@@ -214,12 +280,96 @@ def create_app(
             finally:
                 if final_messages is not None:
                     store.replace_history(session.id, final_messages)
+                CURRENT_SESSION_ID.reset(token)
 
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/chat/{session_id}/events")
+    async def chat_events(session_id: str) -> StreamingResponse:
+        """SSE stream of in-turn events for one session. The UI opens
+        this once and receives every ``iter``, ``tool_call``,
+        ``tool_result``, ``user_request``, and ``reply`` until the
+        client disconnects.
+
+        Materializes the session on first subscribe if it doesn't
+        exist — that lets the UI open the event stream *before*
+        sending the first ``/chat`` message without a chicken-and-egg
+        problem.
+
+        Note: ``sessions`` is captured from the enclosing ``create_app``
+        closure rather than injected via ``Depends``. FastAPI's
+        dependency resolution on streaming endpoints interacts badly
+        with some ASGI transports (the helyx port documented this as
+        an ``httpx.ASGITransport`` hang) — direct closure capture is
+        the same object at runtime and avoids the pitfall.
+        """
+        sessions.get_or_create(session_id)
+
+        async def stream() -> AsyncIterator[bytes]:
+            # Opening comment keeps intermediate proxies from buffering
+            # the connection while we wait for the first real event.
+            yield b": subscribed\n\n"
+            async for event in sessions.subscribe(session_id):
+                yield event.to_sse()
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # nginx: don't buffer SSE
+            },
+        )
+
+    @app.post(
+        "/chat/{session_id}/respond", status_code=status.HTTP_204_NO_CONTENT
+    )
+    async def chat_respond(
+        session_id: str,
+        body: RespondPayload,
+        store: SessionStore = Depends(get_sessions),
+    ) -> None:
+        """Resolve a pending ``ask_user`` request. 404 when the request
+        is unknown — most commonly because it timed out or the session
+        was reset before the user clicked through."""
+        resolved = store.resolve_pending(
+            session_id, body.request_id, body.answer
+        )
+        if not resolved:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"no pending request {body.request_id!r} on session "
+                    f"{session_id!r} (timed out or already resolved)"
+                ),
+            )
+
+    @app.get("/settings", response_model=SettingsPayload)
+    async def get_settings() -> SettingsPayload:
+        s = settings_store.get()
+        return SettingsPayload(yolo_mode=s.yolo_mode)
+
+    @app.post("/settings", response_model=SettingsPayload)
+    async def update_settings(body: SettingsPayload) -> SettingsPayload:
+        """Partial update: fields omitted in the body keep their
+        current value. Returns the full post-update snapshot so the UI
+        can reconcile with whatever the server actually accepted."""
+        changes = {
+            key: value
+            for key, value in body.model_dump(exclude_unset=True).items()
+            if value is not None
+        }
+        try:
+            updated = settings_store.update(**changes)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        return SettingsPayload(yolo_mode=updated.yolo_mode)
 
     @app.get("/sessions")
     async def list_sessions(

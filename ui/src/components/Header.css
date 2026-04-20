@@ -79,3 +79,24 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* YOLO ON: visible audit cue while auto-approve is enabled. Pulses
+   gently so it never blends into the header chrome. */
+.yolo-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #fff;
+  background: var(--bad);
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  box-shadow: 0 0 0 2px rgba(200, 90, 90, 0.25);
+  animation: yolo-pulse 2s ease-in-out infinite;
+  margin-right: 8px;
+}
+
+@keyframes yolo-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(200, 90, 90, 0.25); }
+  50% { box-shadow: 0 0 0 4px rgba(200, 90, 90, 0.15); }
+}

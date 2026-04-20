@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .ask_user_tool import ASK_USER_TOOL, AskUserHandler
 from .llm import (
     ChatMessage,
     ChatResponse,
@@ -22,6 +23,7 @@ from .llm import (
     Usage,
 )
 from .prompt_builder import build_system_prompt
+from .terminal_tool import TERMINAL_TOOL, TerminalHandler
 from ..error_classifier import ClassifiedError, FailoverReason, classify_api_error
 from ..retry import jittered_backoff
 from ..skills.manager import SkillManager
@@ -92,6 +94,7 @@ class Agent:
         trace: TraceCallback | None = None,
         provider_registry: Any | None = None,
         nexus_cfg: Any | None = None,
+        ask_user_handler: AskUserHandler | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -101,6 +104,18 @@ class Agent:
         self._http = HttpCallHandler()
         self._provider_registry = provider_registry
         self._nexus_cfg = nexus_cfg
+        # ask_user only makes sense in a live /chat session — without a
+        # SessionStore wired in, the tool has nowhere to publish the
+        # event or park the Future. The server supplies this; CLI-only
+        # paths can leave it None and the tool simply isn't advertised.
+        self._ask_user_handler = ask_user_handler
+        # terminal composes on top of ask_user — no point offering it
+        # when HITL isn't wired, because every call would fail.
+        self._terminal_handler = (
+            TerminalHandler(ask_user_handler=ask_user_handler)
+            if ask_user_handler is not None
+            else None
+        )
 
     def _emit(self, event: str, data: dict[str, Any], trace: list[dict[str, Any]]) -> None:
         entry = {"event": event, **data}
@@ -180,7 +195,22 @@ class Agent:
         raise last_exc
 
     def _tools(self) -> list[ToolSpec]:
-        return [*STATE_TOOLS, SKILL_MANAGE_TOOL, HTTP_CALL_TOOL, ACP_CALL_TOOL, *VAULT_TOOLS, KANBAN_MANAGE_TOOL]
+        tools: list[ToolSpec] = [
+            *STATE_TOOLS,
+            SKILL_MANAGE_TOOL,
+            HTTP_CALL_TOOL,
+            ACP_CALL_TOOL,
+            *VAULT_TOOLS,
+            KANBAN_MANAGE_TOOL,
+        ]
+        # HITL tools only surface when the handler is wired — a CLI run
+        # without a SessionStore has no way to prompt, so advertising
+        # ``ask_user`` there would just produce "unavailable" errors.
+        if self._ask_user_handler is not None:
+            tools.append(ASK_USER_TOOL)
+        if self._terminal_handler is not None:
+            tools.append(TERMINAL_TOOL)
+        return tools
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
         """Return (provider, upstream_model_name). Falls back to self._provider."""
@@ -547,6 +577,14 @@ class Agent:
 
         if tc.name == "kanban_manage":
             return handle_kanban_tool(tc.arguments)
+
+        if tc.name == "ask_user" and self._ask_user_handler is not None:
+            ask_result = await self._ask_user_handler.invoke(tc.arguments)
+            return ask_result.to_text()
+
+        if tc.name == "terminal" and self._terminal_handler is not None:
+            term_result = await self._terminal_handler.invoke(tc.arguments)
+            return term_result.to_text()
 
         return f"error: unknown tool {tc.name!r}"
 

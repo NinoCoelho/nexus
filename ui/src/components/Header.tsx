@@ -1,8 +1,11 @@
 interface Props {
   onReset: () => void;
+  /** When true, the header shows a pulsing "YOLO ON" badge — an
+   *  always-visible audit cue that prompts are being auto-approved. */
+  yoloMode?: boolean;
 }
 
-export default function Header({ onReset }: Props) {
+export default function Header({ onReset, yoloMode = false }: Props) {
   return (
     <header className="header">
       <div className="header-inner">
@@ -13,6 +16,11 @@ export default function Header({ onReset }: Props) {
           </div>
         </div>
         <div className="header-actions">
+          {yoloMode && (
+            <span className="yolo-badge" title="YOLO mode: confirm prompts auto-approved">
+              YOLO ON
+            </span>
+          )}
           <button
             className="header-btn"
             onClick={onReset}

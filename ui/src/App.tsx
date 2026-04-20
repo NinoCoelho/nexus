@@ -11,7 +11,18 @@ import GraphView from "./components/GraphView";
 import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
-import { chatStream, getRouting, getSession, type TraceEvent } from "./api";
+import ApprovalDialog from "./components/ApprovalDialog";
+import {
+  chatStream,
+  getHitlSettings,
+  getRouting,
+  getSession,
+  respondToUserRequest,
+  subscribeSessionEvents,
+  type HitlSettings,
+  type TraceEvent,
+  type UserRequestPayload,
+} from "./api";
 
 type View = "chat" | "vault" | "kanban" | "graph" | "insights";
 
@@ -79,6 +90,14 @@ function prettifyStreamError(detail: string): string {
   return detail;
 }
 
+function freshSessionId(): string {
+  const raw =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return raw.replace(/-/g, "");
+}
+
 export default function App() {
   const [view, setView] = useState<View>("chat");
   const [activeSession, setActiveSession] = useState<string | null>(null);
@@ -89,6 +108,16 @@ export default function App() {
   const [hasModel, setHasModel] = useState<boolean | null>(null);
   /** Bumps a vault path into VaultView when user clicks "Open in Vault" from a preview modal. */
   const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(null);
+  // Client-provisioned session id for the "new chat" slot — lets the
+  // HITL EventSource open before the first POST. Regenerated on
+  // handleNewChat so a reset gives a clean stream.
+  const [pendingSessionId, setPendingSessionId] = useState<string>(() => freshSessionId());
+  // Active HITL request (if any). Rendered as the ApprovalDialog.
+  const [pendingRequest, setPendingRequest] = useState<UserRequestPayload | null>(null);
+  const [pendingRequestSession, setPendingRequestSession] = useState<string | null>(null);
+  // YOLO flag, surfaced as a header badge. Fetched from the server;
+  // refreshed whenever settings are edited.
+  const [yoloMode, setYoloMode] = useState<boolean>(false);
 
   const handleOpenInVault = useCallback((path: string) => {
     setVaultOpenPath(path);
@@ -118,6 +147,74 @@ export default function App() {
       cancelled = true;
     };
   }, [settingsRevision]);
+
+  // Pull YOLO flag from the server. Refreshed on every settings
+  // revision so toggling it inside the drawer updates the badge.
+  useEffect(() => {
+    let cancelled = false;
+    getHitlSettings()
+      .then((s: HitlSettings) => {
+        if (!cancelled) setYoloMode(s.yolo_mode);
+      })
+      .catch(() => {
+        // Backend doesn't speak /settings (older binary, or offline)
+        // — hide the badge rather than crashing the layout.
+        if (!cancelled) setYoloMode(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsRevision]);
+
+  // Subscribe to the session's HITL event stream. The UI owns a
+  // ``pendingSessionId`` for the not-yet-created "new chat" so the
+  // EventSource can open before the first POST — no chicken-and-egg.
+  // Once a real ``activeSession`` exists we prefer that.
+  const hitlSessionId = activeSession ?? pendingSessionId;
+  useEffect(() => {
+    if (!hitlSessionId) return;
+    const es = subscribeSessionEvents(hitlSessionId, (event) => {
+      if (event.kind === "user_request") {
+        setPendingRequest(event.data);
+        setPendingRequestSession(hitlSessionId);
+        return;
+      }
+      if (
+        event.kind === "user_request_cancelled" ||
+        event.kind === "user_request_auto"
+      ) {
+        setPendingRequest(null);
+        setPendingRequestSession(null);
+        return;
+      }
+      // iter / reply / tool_call / tool_result are already handled by
+      // the /chat/stream POST response — ignore here to avoid
+      // double-counting the activity strip.
+    });
+    return () => es.close();
+  }, [hitlSessionId]);
+
+  const handleApprovalSubmit = useCallback(
+    async (answer: string) => {
+      const req = pendingRequest;
+      const sid = pendingRequestSession;
+      setPendingRequest(null);
+      setPendingRequestSession(null);
+      if (!req || !sid) return;
+      try {
+        await respondToUserRequest(sid, req.request_id, answer);
+      } catch {
+        // Stale responses (404) are fine — the dialog is already
+        // closed. Any other error is rare enough to log and ignore.
+      }
+    },
+    [pendingRequest, pendingRequestSession],
+  );
+
+  const handleApprovalTimeout = useCallback(() => {
+    setPendingRequest(null);
+    setPendingRequestSession(null);
+  }, []);
 
   const patchState = useCallback((key: string, patch: Partial<ChatState>) => {
     setChatStates((prev) => {
@@ -185,6 +282,11 @@ export default function App() {
       next.set(NEW_KEY, emptyState());
       return next;
     });
+    // Fresh HITL stream for the new chat — the old pending id's
+    // EventSource is torn down by the effect when this changes.
+    setPendingSessionId(freshSessionId());
+    setPendingRequest(null);
+    setPendingRequestSession(null);
   }, []);
 
   const handleInputChange = useCallback((v: string) => {
@@ -206,10 +308,15 @@ export default function App() {
       messages: [...state.messages, userMsg, placeholderAsst],
     });
 
+    // For a new chat, send our client-side session id so the HITL
+    // EventSource (opened on that id) and the backend's session
+    // agree. For an existing chat, keep the activeSession id.
+    const sidForPost = activeSession ?? pendingSessionId;
+
     try {
       await chatStream(
         text,
-        activeSession ?? undefined,
+        sidForPost,
         (event) => {
           if (event.type === "delta") {
             // Append delta text to the last assistant message.
@@ -329,7 +436,7 @@ export default function App() {
         return next;
       });
     }
-  }, [activeKey, activeSession, chatStates, patchState, appendMessage]);
+  }, [activeKey, activeSession, chatStates, patchState, appendMessage, pendingSessionId]);
 
   return (
     <div className="app app--layout">
@@ -345,7 +452,7 @@ export default function App() {
       />
 
       <div className="app-main">
-        <Header onReset={handleNewChat} />
+        <Header onReset={handleNewChat} yoloMode={yoloMode} />
 
         <main className="app-content">
           <div className="view-pane" style={{ display: view === "chat" ? "flex" : "none" }}>
@@ -389,6 +496,13 @@ export default function App() {
           setSettingsRevision((r) => r + 1);
         }}
       />
+      {pendingRequest && (
+        <ApprovalDialog
+          request={pendingRequest}
+          onSubmit={handleApprovalSubmit}
+          onTimeout={handleApprovalTimeout}
+        />
+      )}
     </div>
   );
 }

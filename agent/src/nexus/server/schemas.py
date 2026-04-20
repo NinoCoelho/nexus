@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
@@ -36,3 +36,20 @@ class SkillDetail(BaseModel):
 
 class Health(BaseModel):
     ok: bool = True
+
+
+class RespondPayload(BaseModel):
+    """Body for the ``/chat/{session_id}/respond`` endpoint — the UI's
+    answer to a pending ``ask_user`` request."""
+
+    request_id: str = Field(min_length=1)
+    answer: str
+
+
+class SettingsPayload(BaseModel):
+    """Full settings snapshot, both directions. Returned by
+    ``GET /settings`` and accepted by ``POST /settings``. A partial
+    update POST omits fields it doesn't want to change — the server
+    merges against the current state."""
+
+    yolo_mode: bool | None = None

@@ -36,3 +36,8 @@ packages = ["src/nexus"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+# Treat async def tests as asyncio by default so we don't have to
+# sprinkle ``@pytest.mark.asyncio`` on every HITL test.
+asyncio_mode = "auto"

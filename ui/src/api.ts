@@ -661,3 +661,111 @@ export async function getInsights(days = 30): Promise<InsightsReport> {
   if (!res.ok) throw new Error(`Insights error: ${res.status}`);
   return res.json();
 }
+
+// ── HITL (human-in-the-loop) ──────────────────────────────────────────────
+
+export interface UserRequestPayload {
+  request_id: string;
+  prompt: string;
+  kind: "confirm" | "choice" | "text";
+  choices: string[] | null;
+  default: string | null;
+  timeout_seconds: number;
+}
+
+/**
+ * One event from the session-scoped SSE channel. Separate from the
+ * existing `/chat/stream` events, which are per-turn content deltas.
+ * Opened once per session on mount; carries every trace + HITL event
+ * until the EventSource is closed.
+ */
+export type SessionEvent =
+  | { kind: "iter"; data: { n: number } }
+  | { kind: "tool_call"; data: { name: string; args: unknown } }
+  | { kind: "tool_result"; data: { name: string; preview: string } }
+  | { kind: "reply"; data: { text: string } }
+  | { kind: "user_request"; data: UserRequestPayload }
+  | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
+  | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } };
+
+/**
+ * Open an EventSource on the session's event stream.
+ *
+ * Typed callback fires for every known event kind; unknown kinds are
+ * silently dropped so a server adding new events doesn't break old
+ * UIs. Returns the underlying EventSource so the caller can close it
+ * on unmount — closing is the *only* cleanup required.
+ */
+export function subscribeSessionEvents(
+  session_id: string,
+  onEvent: (event: SessionEvent) => void,
+): EventSource {
+  const url = `${BASE}/chat/${encodeURIComponent(session_id)}/events`;
+  const es = new EventSource(url);
+
+  const kinds: SessionEvent["kind"][] = [
+    "iter",
+    "tool_call",
+    "tool_result",
+    "reply",
+    "user_request",
+    "user_request_auto",
+    "user_request_cancelled",
+  ];
+  for (const kind of kinds) {
+    es.addEventListener(kind, (evt) => {
+      try {
+        const data = JSON.parse((evt as MessageEvent).data);
+        onEvent({ kind, data } as SessionEvent);
+      } catch {
+        // Malformed server event — skip rather than crashing the UI.
+      }
+    });
+  }
+
+  return es;
+}
+
+export async function respondToUserRequest(
+  session_id: string,
+  request_id: string,
+  answer: string,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/respond`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id, answer }),
+    },
+  );
+  if (!res.ok && res.status !== 404) {
+    // 404 is expected on a stale request (timed out, session reset) —
+    // the UI treats it as a no-op and the dialog is already closed.
+    throw new Error(`Respond error: ${res.status}`);
+  }
+}
+
+// ── HITL settings (YOLO mode) ─────────────────────────────────────────────
+
+export interface HitlSettings {
+  yolo_mode: boolean;
+}
+
+export async function getHitlSettings(): Promise<HitlSettings> {
+  const res = await fetch(`${BASE}/settings`);
+  if (!res.ok) throw new Error(`Settings error: ${res.status}`);
+  return res.json();
+}
+
+export async function setHitlSettings(
+  patch: Partial<HitlSettings>,
+): Promise<HitlSettings> {
+  const res = await fetch(`${BASE}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Settings patch error: ${res.status}`);
+  return res.json();
+}
