@@ -516,6 +516,13 @@ def create_app(
     ) -> None:
         store.delete(session_id)
 
+    @app.get("/graph")
+    async def get_agent_graph() -> dict:
+        """Return the agent/skill/session graph for the UI graph view.
+        Result is cached for 60 seconds to avoid rebuilding on every navigation."""
+        from .graph import build_agent_graph
+        return build_agent_graph(registry, sessions)
+
     @app.get("/insights")
     async def get_insights(
         days: int = 30,

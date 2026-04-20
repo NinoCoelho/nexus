@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -12,6 +12,8 @@ import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import ApprovalDialog from "./components/ApprovalDialog";
+
+const AgentGraphView = React.lazy(() => import("./components/AgentGraphView"));
 import {
   chatStream,
   getHitlSettings,
@@ -24,7 +26,7 @@ import {
   type UserRequestPayload,
 } from "./api";
 
-type View = "chat" | "vault" | "kanban" | "graph" | "insights";
+type View = "chat" | "vault" | "kanban" | "graph" | "insights" | "agentgraph";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -102,7 +104,7 @@ export default function App() {
   const [view, setView] = useState<View>("chat");
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [sessionsRevision, setSessionsRevision] = useState(0);
-  const [openSkill] = useState<string | null>(null);
+  const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRevision, setSettingsRevision] = useState(0);
   const [hasModel, setHasModel] = useState<boolean | null>(null);
@@ -482,12 +484,22 @@ export default function App() {
           <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>
             {view === "insights" && <InsightsView />}
           </div>
+          {view === "agentgraph" && (
+            <div className="view-pane" style={{ display: "flex" }}>
+              <React.Suspense fallback={<div style={{ padding: 24 }}>Loading graph…</div>}>
+                <AgentGraphView
+                  onOpenSkill={(name) => setOpenSkill(name)}
+                  onSelectSession={handleSessionSelect}
+                />
+              </React.Suspense>
+            </div>
+          )}
         </main>
       </div>
 
       <SkillDrawer
         skillName={openSkill === "__list__" ? null : openSkill}
-        onClose={() => {}}
+        onClose={() => setOpenSkill(null)}
       />
       <SettingsDrawer
         open={settingsOpen}

@@ -3,7 +3,7 @@ import { deleteSession, exportSession, getSessions, importSession, patchSession,
 import { useToast } from "../toast/ToastProvider";
 import "./Sidebar.css";
 
-type View = "chat" | "vault" | "kanban" | "graph" | "insights";
+type View = "chat" | "vault" | "kanban" | "graph" | "insights" | "agentgraph";
 
 interface Props {
   view: View;
@@ -84,6 +84,22 @@ function IconGraph() {
   );
 }
 
+function IconAgentGraph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10" cy="10" r="2" />
+      <circle cx="3" cy="5" r="1.5" />
+      <circle cx="17" cy="5" r="1.5" />
+      <circle cx="3" cy="15" r="1.5" />
+      <circle cx="17" cy="15" r="1.5" />
+      <line x1="8.3" y1="8.8" x2="4.2" y2="6.2" />
+      <line x1="11.7" y1="8.8" x2="15.8" y2="6.2" />
+      <line x1="8.3" y1="11.2" x2="4.2" y2="13.8" />
+      <line x1="11.7" y1="11.2" x2="15.8" y2="13.8" />
+    </svg>
+  );
+}
+
 function IconInsights() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -121,11 +137,12 @@ function IconCollapse({ collapsed }: { collapsed: boolean }) {
 }
 
 const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
-  { id: "chat",     label: "Chat",     Icon: IconChat },
-  { id: "vault",    label: "Vault",    Icon: IconVault },
-  { id: "kanban",   label: "Kanban",   Icon: IconKanban },
-  { id: "graph",    label: "Graph",    Icon: IconGraph },
-  { id: "insights", label: "Insights", Icon: IconInsights },
+  { id: "chat",       label: "Chat",        Icon: IconChat },
+  { id: "vault",      label: "Vault",       Icon: IconVault },
+  { id: "kanban",     label: "Kanban",      Icon: IconKanban },
+  { id: "graph",      label: "Graph",       Icon: IconGraph },
+  { id: "agentgraph", label: "Agent Graph", Icon: IconAgentGraph },
+  { id: "insights",   label: "Insights",    Icon: IconInsights },
 ];
 
 export default function Sidebar({
