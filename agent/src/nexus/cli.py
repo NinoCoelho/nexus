@@ -27,6 +27,18 @@ app.add_typer(vault_app, name="vault")
 app.add_typer(kanban_app, name="kanban")
 
 
+@app.callback()
+def _global_setup() -> None:
+    """Runs before every CLI subcommand.
+
+    Installs the redacting log formatter so subcommands that print provider
+    errors, config dumps, etc. mask secrets automatically. Idempotent and
+    respects NEXUS_REDACT_SECRETS=false.
+    """
+    from .redact import install_redaction
+    install_redaction(extra_loggers=("httpx",))
+
+
 # ── serve ──────────────────────────────────────────────────────────────────────
 
 @app.command()
@@ -36,6 +48,9 @@ def serve(
 ) -> None:
     """Start the Nexus server."""
     import uvicorn
+    # build_app() inside nexus.main installs the redacting log formatter at
+    # import time. serve() goes through uvicorn.run("nexus.main:app", ...) so
+    # that path is covered; no extra setup needed here.
     uvicorn.run("nexus.main:app", host=host, port=port, reload=False)
 
 

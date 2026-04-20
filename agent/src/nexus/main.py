@@ -11,6 +11,7 @@ from .config_file import load as load_config, apply_env_overlay
 from .agent.llm import OpenAIProvider
 from .agent.loop import Agent
 from .agent.registry import build_registry
+from .redact import install_redaction
 from .server.app import create_app
 from .skills.registry import SkillRegistry
 
@@ -18,6 +19,11 @@ log = logging.getLogger(__name__)
 
 
 def build_app():
+    # Plant the redacting log formatter before anything else runs — secrets in
+    # config, URLs, or provider errors must be masked before they hit stderr.
+    # Covers root + uvicorn loggers; idempotent on subsequent build_app calls.
+    install_redaction(extra_loggers=("httpx", "fastapi"))
+
     cfg = apply_env_overlay(load_config())
 
     registry = SkillRegistry(SKILLS_DIR)
