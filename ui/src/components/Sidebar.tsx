@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { deleteSession, exportSession, getSessions, importSession, patchSession, sessionToVault, type SessionSummary } from "../api";
+import { deleteSession, exportSession, getSessions, importSession, patchSession, searchSessions, sessionToVault, type SessionSearchResult, type SessionSummary } from "../api";
 import { useToast } from "../toast/ToastProvider";
 import "./Sidebar.css";
 
@@ -147,6 +147,11 @@ export default function Sidebar({
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SessionSearchResult[]>([]);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Rename inline state
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -180,6 +185,23 @@ export default function Sidebar({
       })))
       .catch(() => setSessionsError(true));
   }, [sessionsRevision]);
+
+  // Debounced search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    searchTimerRef.current = setTimeout(() => {
+      searchSessions(searchQuery)
+        .then(setSearchResults)
+        .catch(() => setSearchResults([]));
+    }, 300);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchQuery]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -337,6 +359,52 @@ export default function Sidebar({
       {view === "chat" && !collapsed && (
         <div className="sidebar-section sidebar-sessions-section">
           <div className="sidebar-section-label">Sessions</div>
+
+          {/* Search input */}
+          <div className="sidebar-search-wrap">
+            <input
+              className="sidebar-search-input"
+              type="search"
+              placeholder="Search messages…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search session messages"
+            />
+          </div>
+
+          {/* Search results dropdown */}
+          {searchQuery.trim() && (
+            <div className="sidebar-search-results">
+              {searchResults.length === 0 ? (
+                <div className="sidebar-search-empty">No results</div>
+              ) : (
+                searchResults.map((r) => (
+                  <button
+                    key={`${r.session_id}-${r.snippet}`}
+                    className="sidebar-search-result"
+                    onClick={() => {
+                      onSessionSelect(r.session_id);
+                      setSearchQuery("");
+                      setSearchResults([]);
+                    }}
+                  >
+                    <span className="sidebar-search-result-title">{r.title}</span>
+                    <span
+                      className="sidebar-search-result-snippet"
+                      // snippet may contain **bold** markers from FTS5 — render as-is
+                      dangerouslySetInnerHTML={{
+                        __html: r.snippet.replace(
+                          /\*\*(.*?)\*\*/g,
+                          "<strong>$1</strong>",
+                        ),
+                      }}
+                    />
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+
           {sessionsError && (
             <div className="sidebar-error">Couldn&apos;t load — is the server running?</div>
           )}

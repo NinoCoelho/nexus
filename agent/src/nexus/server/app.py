@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -31,6 +32,13 @@ from .session_store import SessionStore
 from .settings import SettingsStore
 
 log = logging.getLogger(__name__)
+
+
+from ..trajectory import TrajectoryLogger
+
+_trajectory_logger: TrajectoryLogger | None = (
+    TrajectoryLogger() if os.environ.get("NEXUS_TRAJECTORIES") == "1" else None
+)
 
 
 def create_app(
@@ -160,6 +168,34 @@ def create_app(
             output_tokens=turn.output_tokens,
             tool_calls=turn.tool_calls,
         )
+        if _trajectory_logger:
+            try:
+                _trajectory_logger.log(
+                    session_id=session.id,
+                    turn_index=len(session.history) // 2,
+                    state={
+                        "user_message": req.message,
+                        "history_length": len(session.history),
+                        "context": (req.context or "")[:200],
+                    },
+                    action={
+                        "reply": turn.reply[:2000] if turn.reply else "",
+                        "model": turn.model if turn.model else "",
+                        "iterations": turn.iterations,
+                        "tool_calls": [],
+                        "input_tokens": turn.input_tokens,
+                        "output_tokens": turn.output_tokens,
+                    },
+                    reward={
+                        "explicit": None,
+                        "implicit": {
+                            "turn_completed": True,
+                            "tool_call_count": turn.tool_calls,
+                        },
+                    },
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                log.exception("trajectory logging failed")
         return ChatReply(
             session_id=session.id,
             reply=turn.reply,
@@ -221,6 +257,35 @@ def create_app(
                             )
                         except Exception:  # noqa: BLE001 — best-effort
                             log.exception("bump_usage failed")
+                        if _trajectory_logger:
+                            try:
+                                reply_text = event.get("reply", "")
+                                _trajectory_logger.log(
+                                    session_id=session.id,
+                                    turn_index=len(session.history) // 2,
+                                    state={
+                                        "user_message": req.message,
+                                        "history_length": len(session.history),
+                                        "context": (req.context or "")[:200],
+                                    },
+                                    action={
+                                        "reply": reply_text[:2000] if reply_text else "",
+                                        "model": usage.get("model") or "",
+                                        "iterations": event.get("iterations", 0),
+                                        "tool_calls": [],
+                                        "input_tokens": int(usage.get("input_tokens") or 0),
+                                        "output_tokens": int(usage.get("output_tokens") or 0),
+                                    },
+                                    reward={
+                                        "explicit": None,
+                                        "implicit": {
+                                            "turn_completed": True,
+                                            "tool_call_count": int(usage.get("tool_calls") or 0),
+                                        },
+                                    },
+                                )
+                            except Exception:  # noqa: BLE001 — best-effort
+                                log.exception("trajectory logging failed (stream)")
                         done_payload = {
                             "session_id": event.get("session_id") or session.id,
                             "reply": event.get("reply", ""),
@@ -387,6 +452,22 @@ def create_app(
             }
             for s in summaries
         ]
+
+    @app.get("/sessions/search")
+    async def search_sessions(
+        q: str = "",
+        limit: int = 20,
+        store: SessionStore = Depends(get_sessions),
+    ) -> list[dict]:
+        """Full-text search over session message content.
+
+        Returns ``[]`` for a blank ``q``. Results are ordered by BM25
+        relevance and include ``session_id``, ``title``, and a ``snippet``
+        with matching terms wrapped in ``**``.
+        """
+        if not q.strip():
+            return []
+        return store.search(q.strip(), limit=max(1, min(limit, 100)))
 
     @app.get("/sessions/{session_id}")
     async def get_session(

@@ -55,6 +55,23 @@ CREATE TABLE IF NOT EXISTS messages (
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    content,
+    content='messages',
+    content_rowid='rowid'
+);
+CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
 """
 
 # Columns added after the initial schema shipped. SQLite's CREATE TABLE
@@ -121,6 +138,13 @@ class SessionStore:
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            # Check whether the FTS virtual table already exists *before*
+            # running the schema script, so we know if a rebuild is needed.
+            fts_existed = bool(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+                ).fetchone()
+            )
             conn.executescript(_SCHEMA)
             # Forward-migrate older DBs that predate the usage columns.
             existing = {
@@ -130,6 +154,16 @@ class SessionStore:
             for col, defn in _MIGRATIONS:
                 if col not in existing:
                     conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
+            # Populate FTS for existing databases that had data before the
+            # virtual table was created. The triggers only fire for future
+            # writes, so we need a one-time rebuild to backfill historical
+            # content. Run it only when the table was just created (i.e. it
+            # did not exist before this _init_db call).
+            if not fts_existed:
+                msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+                if msg_count > 0:
+                    conn.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
+                    conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
@@ -294,6 +328,35 @@ class SessionStore:
                     "WHERE id = ?",
                     (input_tokens, output_tokens, tool_calls, session_id),
                 )
+
+    def search(self, q: str, *, limit: int = 20) -> list[dict]:
+        """Full-text search over message content using BM25 ranking.
+
+        Returns a list of ``{"session_id": str, "title": str, "snippet": str}``
+        dicts ordered by relevance (best first). Returns ``[]`` for a blank
+        query so callers never need to guard separately.
+        """
+        if not q.strip():
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.id, s.title,
+                       snippet(messages_fts, 0, '**', '**', '…', 20) AS snippet,
+                       bm25(messages_fts) AS score
+                FROM messages_fts
+                JOIN messages m ON m.rowid = messages_fts.rowid
+                JOIN sessions s ON s.id = m.session_id
+                WHERE messages_fts MATCH ?
+                ORDER BY score
+                LIMIT ?
+                """,
+                (q, limit),
+            ).fetchall()
+        return [
+            {"session_id": r["id"], "title": r["title"], "snippet": r["snippet"]}
+            for r in rows
+        ]
 
     # ── pub/sub for SSE ──────────────────────────────────────────────
 

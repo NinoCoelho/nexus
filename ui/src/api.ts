@@ -33,6 +33,24 @@ export async function getSessions(limit = 50): Promise<SessionSummary[]> {
   return res.json();
 }
 
+export interface SessionSearchResult {
+  session_id: string;
+  title: string;
+  snippet: string;
+}
+
+export async function searchSessions(
+  q: string,
+  limit = 20,
+): Promise<SessionSearchResult[]> {
+  if (!q.trim()) return [];
+  const res = await fetch(
+    `${BASE}/sessions/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`Search error: ${res.status}`);
+  return res.json();
+}
+
 export async function getSession(id: string): Promise<SessionDetail> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`Session error: ${res.status}`);
