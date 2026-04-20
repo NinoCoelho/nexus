@@ -8,11 +8,12 @@ import ChatView, { type Message } from "./components/ChatView";
 import VaultView from "./components/VaultView";
 import KanbanView from "./components/KanbanView";
 import GraphView from "./components/GraphView";
+import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { chatStream, getRouting, getSession, type TraceEvent } from "./api";
 
-type View = "chat" | "vault" | "kanban" | "graph";
+type View = "chat" | "vault" | "kanban" | "graph" | "insights";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -370,6 +371,9 @@ export default function App() {
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
             <GraphView />
+          </div>
+          <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>
+            {view === "insights" && <InsightsView />}
           </div>
         </main>
       </div>

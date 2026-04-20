@@ -3,7 +3,7 @@ import { deleteSession, exportSession, getSessions, importSession, patchSession,
 import { useToast } from "../toast/ToastProvider";
 import "./Sidebar.css";
 
-type View = "chat" | "vault" | "kanban" | "graph";
+type View = "chat" | "vault" | "kanban" | "graph" | "insights";
 
 interface Props {
   view: View;
@@ -84,6 +84,15 @@ function IconGraph() {
   );
 }
 
+function IconInsights() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 14 7 10 11 13 17 5" />
+      <polyline points="13 5 17 5 17 9" />
+    </svg>
+  );
+}
+
 function IconGear() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -112,10 +121,11 @@ function IconCollapse({ collapsed }: { collapsed: boolean }) {
 }
 
 const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
-  { id: "chat",   label: "Chat",   Icon: IconChat },
-  { id: "vault",  label: "Vault",  Icon: IconVault },
-  { id: "kanban", label: "Kanban", Icon: IconKanban },
-  { id: "graph",  label: "Graph",  Icon: IconGraph },
+  { id: "chat",     label: "Chat",     Icon: IconChat },
+  { id: "vault",    label: "Vault",    Icon: IconVault },
+  { id: "kanban",   label: "Kanban",   Icon: IconKanban },
+  { id: "graph",    label: "Graph",    Icon: IconGraph },
+  { id: "insights", label: "Insights", Icon: IconInsights },
 ];
 
 export default function Sidebar({
