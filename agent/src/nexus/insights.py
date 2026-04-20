@@ -124,11 +124,13 @@ class InsightsEngine:
         tools = self._compute_tool_breakdown(tool_usage)
         activity = self._compute_activity_patterns(sessions)
         top_sessions = self._compute_top_sessions(sessions, per_session_msg_count, tool_usage)
+        models = self._compute_model_breakdown(sessions)
 
         return {
             "days": days,
             "empty": False,
             "overview": overview,
+            "models": models,
             "tools": tools,
             "activity": activity,
             "top_sessions": top_sessions,
@@ -140,11 +142,21 @@ class InsightsEngine:
     def _get_sessions(
         self, conn: sqlite3.Connection, cutoff: int
     ) -> list[dict[str, Any]]:
-        rows = conn.execute(
-            "SELECT id, title, created_at, updated_at "
-            "FROM sessions WHERE created_at >= ? ORDER BY created_at DESC",
-            (cutoff,),
-        ).fetchall()
+        # Guard against rows from pre-migration DBs where the usage
+        # columns don't exist — SELECT them defensively and coerce to 0.
+        try:
+            rows = conn.execute(
+                "SELECT id, title, created_at, updated_at, model, "
+                "input_tokens, output_tokens, tool_call_count "
+                "FROM sessions WHERE created_at >= ? ORDER BY created_at DESC",
+                (cutoff,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute(
+                "SELECT id, title, created_at, updated_at "
+                "FROM sessions WHERE created_at >= ? ORDER BY created_at DESC",
+                (cutoff,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def _get_message_stats(
@@ -226,6 +238,8 @@ class InsightsEngine:
         message_stats: dict[str, int],
         per_session_msg_count: dict[str, int],
     ) -> dict[str, Any]:
+        from .usage_pricing import estimate_cost
+
         total = len(sessions)
         msg_total = sum(per_session_msg_count.values())
 
@@ -236,6 +250,25 @@ class InsightsEngine:
                 durations.append(end - start)
         total_seconds = sum(durations)
         avg_duration = (total_seconds / len(durations)) if durations else 0
+
+        total_input = sum(int(s.get("input_tokens") or 0) for s in sessions)
+        total_output = sum(int(s.get("output_tokens") or 0) for s in sessions)
+
+        # Cost per-session (preserves unknown status for partial coverage).
+        total_cost = 0.0
+        sessions_priced = 0
+        sessions_unpriced = 0
+        for s in sessions:
+            cost, status = estimate_cost(
+                s.get("model") or "",
+                input_tokens=int(s.get("input_tokens") or 0),
+                output_tokens=int(s.get("output_tokens") or 0),
+            )
+            if status in ("ok", "zero"):
+                total_cost += cost or 0.0
+                sessions_priced += 1
+            else:
+                sessions_unpriced += 1
 
         started_ts = [s["created_at"] for s in sessions if s.get("created_at")]
         date_start = min(started_ts) if started_ts else None
@@ -252,7 +285,49 @@ class InsightsEngine:
             "avg_session_duration": avg_duration,
             "date_range_start": date_start,
             "date_range_end": date_end,
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "total_tokens": total_input + total_output,
+            "estimated_cost_usd": total_cost,
+            "sessions_priced": sessions_priced,
+            "sessions_unpriced": sessions_unpriced,
         }
+
+    def _compute_model_breakdown(
+        self, sessions: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Aggregate usage per model slug for the report."""
+        from .usage_pricing import estimate_cost, has_known_pricing
+
+        buckets: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "sessions": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "has_pricing": False,
+            }
+        )
+        for s in sessions:
+            model = s.get("model") or "unknown"
+            b = buckets[model]
+            b["sessions"] += 1
+            b["input_tokens"] += int(s.get("input_tokens") or 0)
+            b["output_tokens"] += int(s.get("output_tokens") or 0)
+            b["total_tokens"] = b["input_tokens"] + b["output_tokens"]
+            cost, status = estimate_cost(
+                model,
+                input_tokens=int(s.get("input_tokens") or 0),
+                output_tokens=int(s.get("output_tokens") or 0),
+            )
+            if status in ("ok", "zero") and cost is not None:
+                b["cost_usd"] += cost
+            b["has_pricing"] = has_known_pricing(model)
+
+        result = [{"model": k, **v} for k, v in buckets.items()]
+        result.sort(key=lambda x: (x["total_tokens"], x["sessions"]), reverse=True)
+        return result
 
     def _compute_tool_breakdown(
         self, tool_usage: dict[str, int]
@@ -430,7 +505,47 @@ def format_terminal(report: dict[str, Any]) -> str:
             f"  Active time:    ~{_format_duration(o['total_active_seconds']):<7}  "
             f"Avg session:    ~{_format_duration(o['avg_session_duration'])}"
         )
+    # Token + cost line. Only show when we actually captured some
+    # usage — sessions created before the schema migration land with
+    # zero tokens and we don't want to pretend we measured nothing.
+    if o.get("total_tokens", 0) > 0:
+        cost_str = f"${o['estimated_cost_usd']:.4f}"
+        if o.get("sessions_unpriced", 0):
+            cost_str += "*"
+        lines.append(
+            f"  Input tokens:   {o['total_input_tokens']:>10,}  "
+            f"Output tokens:  {o['total_output_tokens']:,}"
+        )
+        lines.append(
+            f"  Total tokens:   {o['total_tokens']:>10,}  "
+            f"Est. cost:      {cost_str}"
+        )
+        if o.get("sessions_unpriced", 0):
+            lines.append(
+                f"  * {o['sessions_unpriced']} session(s) use models without known pricing"
+            )
     lines.append("")
+
+    # Model breakdown
+    if report.get("models"):
+        lines.append("  Models")
+        lines.append("  " + "-" * 56)
+        lines.append(f"  {'Model':<30} {'Sess':>5} {'Tokens':>10} {'Cost':>10}")
+        for m in report["models"]:
+            name = (m["model"] or "unknown")
+            # Strip the provider prefix for display (openai/gpt-4o → gpt-4o).
+            if "/" in name:
+                name = name.split("/")[-1]
+            name = name[:30]
+            if m.get("has_pricing"):
+                cost_cell = f"${m['cost_usd']:.4f}"
+            else:
+                cost_cell = "N/A"
+            lines.append(
+                f"  {name:<30} {m['sessions']:>5} "
+                f"{m['total_tokens']:>10,} {cost_cell:>10}"
+            )
+        lines.append("")
 
     # Tools
     if report["tools"]:

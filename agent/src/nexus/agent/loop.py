@@ -19,6 +19,7 @@ from .llm import (
     StreamEvent,
     ToolCall,
     ToolSpec,
+    Usage,
 )
 from .prompt_builder import build_system_prompt
 from ..error_classifier import ClassifiedError, FailoverReason, classify_api_error
@@ -73,6 +74,13 @@ class AgentTurn:
     iterations: int = 0
     trace: list[dict[str, Any]] = field(default_factory=list)
     messages: list[ChatMessage] = field(default_factory=list)
+    # Aggregated usage across every provider round-trip in this turn.
+    # Zeroes when the provider doesn't surface usage — callers should
+    # treat that as "unknown" rather than "free".
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    model: str | None = None
 
 
 class Agent:
@@ -230,6 +238,14 @@ class Agent:
             getattr(self._nexus_cfg.agent, "max_iterations", None)
             if self._nexus_cfg else None
         ) or DEFAULT_MAX_TOOL_ITERATIONS
+
+        # Per-turn usage accumulation. ``model`` is the canonical slug
+        # the user / router chose (what they'd see in their config),
+        # not the possibly-different upstream name.
+        acc_in = 0
+        acc_out = 0
+        acc_tool_calls = 0
+
         for iteration in range(1, max_iter + 1):
             self._emit("iter", {"n": iteration}, trace)
             response = await self._chat_with_retry(
@@ -239,6 +255,8 @@ class Agent:
                 model=upstream_model,
                 trace=trace,
             )
+            acc_in += response.usage.input_tokens
+            acc_out += response.usage.output_tokens
 
             if response.stop_reason != StopReason.TOOL_CALLS or not response.tool_calls:
                 reply_text = response.content or ""
@@ -250,6 +268,10 @@ class Agent:
                     iterations=iteration,
                     trace=trace,
                     messages=messages,
+                    input_tokens=acc_in,
+                    output_tokens=acc_out,
+                    tool_calls=acc_tool_calls,
+                    model=chosen_model,
                 )
 
             messages.append(
@@ -260,6 +282,7 @@ class Agent:
                 )
             )
             for tc in response.tool_calls:
+                acc_tool_calls += 1
                 self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
                 result = await self._handle(tc, skills_touched)
                 self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
@@ -278,6 +301,10 @@ class Agent:
             iterations=max_iter,
             trace=trace,
             messages=messages,
+            input_tokens=acc_in,
+            output_tokens=acc_out,
+            tool_calls=acc_tool_calls,
+            model=chosen_model,
         )
 
     async def run_turn_stream(
@@ -330,6 +357,13 @@ class Agent:
 
         provider_name = type(provider).__name__
 
+        # Per-turn usage accumulation (see run_turn for the non-stream
+        # equivalent). Streaming adds: some providers emit `usage` only
+        # on the last frame, which we pick up in the finish event below.
+        acc_in = 0
+        acc_out = 0
+        acc_tool_calls = 0
+
         for iteration in range(1, max_iter + 1):
             self._emit("iter", {"n": iteration}, trace)
 
@@ -337,6 +371,7 @@ class Agent:
             current_tool_calls: list[dict[str, Any]] = []
             current_content = ""
             finish_reason = "stop"
+            current_usage: dict[str, int] = {}
 
             # Streaming retry: we can only retry BEFORE the first event has
             # been forwarded to the caller — once bytes are on the wire the
@@ -364,6 +399,7 @@ class Agent:
                             finish_reason = event.get("finish_reason", "stop")
                             current_content = event.get("content", current_content)
                             current_tool_calls = event.get("tool_calls", [])
+                            current_usage = event.get("usage") or {}
                     break  # stream ended cleanly — exit retry loop
                 except LLMTransportError as exc:
                     classified = self._classify(
@@ -412,6 +448,13 @@ class Agent:
                     )
                     await asyncio.sleep(delay)
 
+            # Fold the provider-reported usage into the per-turn accumulator
+            # as soon as we have it. We do this regardless of whether this
+            # iteration was terminal or produced more tool calls — every
+            # round-trip counts toward cost.
+            acc_in += int(current_usage.get("input_tokens") or 0)
+            acc_out += int(current_usage.get("output_tokens") or 0)
+
             if finish_reason != "tool_calls" or not current_tool_calls:
                 # Terminal: no more tool calls
                 messages.append(ChatMessage(role=Role.ASSISTANT, content=current_content or full_text))
@@ -424,6 +467,12 @@ class Agent:
                     "skills_touched": skills_touched,
                     "iterations": iteration,
                     "messages": messages,
+                    "usage": {
+                        "input_tokens": acc_in,
+                        "output_tokens": acc_out,
+                        "tool_calls": acc_tool_calls,
+                        "model": chosen_model,
+                    },
                 }
                 return
 
@@ -440,6 +489,7 @@ class Agent:
             )
 
             for tc_dict in current_tool_calls:
+                acc_tool_calls += 1
                 tc = ToolCall(id=tc_dict["id"], name=tc_dict["name"], arguments=tc_dict["arguments"])
                 self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
                 yield {"type": "tool_exec_start", "name": tc.name, "args": tc.arguments}
@@ -463,6 +513,12 @@ class Agent:
             "skills_touched": skills_touched,
             "iterations": max_iter,
             "messages": messages,
+            "usage": {
+                "input_tokens": acc_in,
+                "output_tokens": acc_out,
+                "tool_calls": acc_tool_calls,
+                "model": chosen_model,
+            },
         }
 
     async def _handle(self, tc: ToolCall, skills_touched: list[str]) -> str:

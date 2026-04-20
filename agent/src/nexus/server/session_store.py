@@ -22,7 +22,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT NOT NULL,
     context TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    tool_call_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages (
     session_id TEXT NOT NULL,
@@ -37,6 +41,16 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 """
+
+# Columns added after the initial schema shipped. SQLite's CREATE TABLE
+# IF NOT EXISTS won't add them to a pre-existing table, so we run best-
+# effort ALTER TABLEs at init. Each entry is (column_name, column_def).
+_MIGRATIONS: list[tuple[str, str]] = [
+    ("model", "TEXT"),
+    ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("tool_call_count", "INTEGER NOT NULL DEFAULT 0"),
+]
 
 
 @dataclass
@@ -87,6 +101,14 @@ class SessionStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # Forward-migrate older DBs that predate the usage columns.
+            existing = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            for col, defn in _MIGRATIONS:
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
@@ -209,3 +231,39 @@ class SessionStore:
     def rename(self, session_id: str, title: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", (title, int(time.time()), session_id))
+
+    def bump_usage(
+        self,
+        session_id: str,
+        *,
+        model: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        tool_calls: int = 0,
+    ) -> None:
+        """Accumulate usage stats for a session after each LLM turn.
+
+        ``model`` is written only when non-empty so we don't overwrite a
+        previously-known model with ``NULL`` on a follow-up turn that
+        couldn't resolve the slug. Token + tool counts are additive.
+        """
+        with self._lock, self._connect() as conn:
+            if model:
+                conn.execute(
+                    "UPDATE sessions SET "
+                    "  input_tokens = input_tokens + ?, "
+                    "  output_tokens = output_tokens + ?, "
+                    "  tool_call_count = tool_call_count + ?, "
+                    "  model = ? "
+                    "WHERE id = ?",
+                    (input_tokens, output_tokens, tool_calls, model, session_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE sessions SET "
+                    "  input_tokens = input_tokens + ?, "
+                    "  output_tokens = output_tokens + ?, "
+                    "  tool_call_count = tool_call_count + ? "
+                    "WHERE id = ?",
+                    (input_tokens, output_tokens, tool_calls, session_id),
+                )

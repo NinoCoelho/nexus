@@ -92,6 +92,14 @@ def create_app(
         except MalformedOutputError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
         store.replace_history(session.id, turn.messages)
+        # Fold the turn's usage into the session — see session_store.bump_usage.
+        store.bump_usage(
+            session.id,
+            model=turn.model,
+            input_tokens=turn.input_tokens,
+            output_tokens=turn.output_tokens,
+            tool_calls=turn.tool_calls,
+        )
         return ChatReply(
             session_id=session.id,
             reply=turn.reply,
@@ -132,12 +140,28 @@ def create_app(
 
                     elif etype == "done":
                         final_messages = event.get("messages")
+                        usage = event.get("usage") or {}
+                        # Persist the turn's usage onto the session so
+                        # /insights can roll it up later. Done here (not
+                        # in `finally`) because the done event is only
+                        # emitted on successful completion of the turn.
+                        try:
+                            store.bump_usage(
+                                session.id,
+                                model=usage.get("model"),
+                                input_tokens=int(usage.get("input_tokens") or 0),
+                                output_tokens=int(usage.get("output_tokens") or 0),
+                                tool_calls=int(usage.get("tool_calls") or 0),
+                            )
+                        except Exception:  # noqa: BLE001 — best-effort
+                            log.exception("bump_usage failed")
                         done_payload = {
                             "session_id": event.get("session_id") or session.id,
                             "reply": event.get("reply", ""),
                             "trace": event.get("trace", []),
                             "skills_touched": event.get("skills_touched", []),
                             "iterations": event.get("iterations", 0),
+                            "usage": usage,
                         }
                         yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 

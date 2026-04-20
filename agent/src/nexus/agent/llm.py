@@ -54,11 +54,30 @@ class StopReason(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Usage(BaseModel):
+    """Token usage for one provider round-trip.
+
+    All fields default to 0 so callers can always read them without
+    ``None`` guards. Providers that don't report usage (older local
+    models, some proxies) just yield zeros — that's fine, it just
+    means the session's cost stays at $0 for that turn.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    # Reserved for Anthropic cache-aware accounting — we capture but
+    # don't bill against it yet.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+
+
 class ChatResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
     content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     stop_reason: StopReason = StopReason.STOP
+    usage: Usage = Field(default_factory=Usage)
 
 
 class LLMError(Exception):
@@ -232,6 +251,11 @@ class OpenAIProvider(LLMProvider):
                 # id -> {name, args_buf}
                 tool_bufs: dict[str, dict[str, Any]] = {}
 
+                # Many OpenAI-compat providers emit the `usage` object only
+                # on the final SSE frame after all choice deltas — we stash
+                # it here and attach it to our synthesized `finish` event.
+                stream_usage = Usage()
+
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -242,6 +266,10 @@ class OpenAIProvider(LLMProvider):
                         chunk = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
+
+                    raw_usage = chunk.get("usage")
+                    if raw_usage:
+                        stream_usage = _usage_from_openai(raw_usage)
 
                     choices = chunk.get("choices")
                     if not choices:
@@ -288,6 +316,7 @@ class OpenAIProvider(LLMProvider):
                             "finish_reason": mapped,
                             "content": full_text,
                             "tool_calls": tool_calls,
+                            "usage": stream_usage.model_dump(),
                         }
         except httpx.HTTPError as exc:
             raise LLMTransportError(str(exc)) from exc
@@ -423,6 +452,7 @@ class AnthropicProvider(LLMProvider):
                         "finish_reason": finish_reason,
                         "content": full_text,
                         "tool_calls": tool_calls,
+                        "usage": _usage_from_anthropic(getattr(msg, "usage", None)).model_dump(),
                     }
 
     async def aclose(self) -> None:
@@ -481,7 +511,38 @@ def _decode_openai(data: dict[str, Any]) -> ChatResponse:
             raise ValueError(f"tool args not an object: {args_raw!r}")
         tool_calls.append(ToolCall(id=tc.get("id", fn.get("name", "")), name=fn["name"], arguments=args))
     stop_reason = _FINISH_MAP.get(choice.get("finish_reason") or "stop", StopReason.UNKNOWN)
-    return ChatResponse(content=msg.get("content"), tool_calls=tool_calls, stop_reason=stop_reason)
+    return ChatResponse(
+        content=msg.get("content"),
+        tool_calls=tool_calls,
+        stop_reason=stop_reason,
+        usage=_usage_from_openai(data.get("usage") or {}),
+    )
+
+
+def _usage_from_openai(raw: dict[str, Any]) -> Usage:
+    """Map an OpenAI-compat ``usage`` object to our :class:`Usage`.
+
+    Accepts the fields OpenAI documents (``prompt_tokens``,
+    ``completion_tokens``) plus a few vendor extensions we've seen in
+    the wild (``prompt_tokens_details.cached_tokens`` from OpenAI's
+    own caching rollout; ``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens`` from Anthropic proxies).
+    """
+    if not isinstance(raw, dict):
+        return Usage()
+    input_tokens = int(raw.get("prompt_tokens") or 0)
+    output_tokens = int(raw.get("completion_tokens") or 0)
+    cache_read = int(raw.get("cache_read_input_tokens") or 0)
+    cache_write = int(raw.get("cache_creation_input_tokens") or 0)
+    details = raw.get("prompt_tokens_details") or {}
+    if isinstance(details, dict):
+        cache_read = cache_read or int(details.get("cached_tokens") or 0)
+    return Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
+    )
 
 
 def _encode_msg_anthropic(m: ChatMessage) -> dict[str, Any]:
@@ -527,4 +588,22 @@ def _decode_anthropic(resp: Any) -> ChatResponse:
         content="\n".join(text_parts) or None,
         tool_calls=tool_calls,
         stop_reason=stop_reason,
+        usage=_usage_from_anthropic(getattr(resp, "usage", None)),
+    )
+
+
+def _usage_from_anthropic(raw: Any) -> Usage:
+    """Map Anthropic's ``MessageUsage`` to our :class:`Usage`.
+
+    Anthropic reports ``input_tokens``, ``output_tokens``, plus
+    ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` when
+    prompt caching is engaged.
+    """
+    if raw is None:
+        return Usage()
+    return Usage(
+        input_tokens=int(getattr(raw, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(raw, "output_tokens", 0) or 0),
+        cache_read_tokens=int(getattr(raw, "cache_read_input_tokens", 0) or 0),
+        cache_write_tokens=int(getattr(raw, "cache_creation_input_tokens", 0) or 0),
     )
