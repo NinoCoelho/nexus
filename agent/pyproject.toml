@@ -19,6 +19,9 @@ dependencies = [
     "rich>=13",
     "tomli_w",
     "prompt_toolkit",
+    "psutil>=5.9",
+    "websockets>=12.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
