@@ -32,6 +32,7 @@ from ..tools.acp_call import ACP_CALL_TOOL, acp_call
 from ..tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
 from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
 from ..tools.state_tool import STATE_TOOLS, StateToolHandler
+from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
 from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
 
 log = logging.getLogger(__name__)
@@ -202,6 +203,8 @@ class Agent:
             ACP_CALL_TOOL,
             *VAULT_TOOLS,
             KANBAN_MANAGE_TOOL,
+            MEMORY_READ_TOOL,
+            MEMORY_WRITE_TOOL,
         ]
         # HITL tools only surface when the handler is wired — a CLI run
         # without a SessionStore has no way to prompt, so advertising
@@ -585,6 +588,15 @@ class Agent:
         if tc.name == "terminal" and self._terminal_handler is not None:
             term_result = await self._terminal_handler.invoke(tc.arguments)
             return term_result.to_text()
+
+        if tc.name == "memory_read":
+            return await MemoryHandler().read(tc.arguments.get("key", ""))
+
+        if tc.name == "memory_write":
+            return await MemoryHandler().write(
+                tc.arguments.get("key", ""),
+                tc.arguments.get("content", ""),
+            )
 
         return f"error: unknown tool {tc.name!r}"
 

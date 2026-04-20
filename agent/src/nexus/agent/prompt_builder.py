@@ -8,7 +8,39 @@ internal actions, careful on external ones, and to skip performative filler.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..skills.registry import SkillRegistry
+
+_MEMORY_DIR = Path("~/.nexus/memory").expanduser()
+_MEMORY_MAX_TOTAL = 1500
+_MEMORY_PREVIEW_BYTES = 500
+_MEMORY_TOP_N = 5
+
+
+def _memory_summary() -> str:
+    """Return a ## Memory block with previews of the most recently modified notes."""
+    if not _MEMORY_DIR.exists():
+        return ""
+    files = sorted(_MEMORY_DIR.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = files[:_MEMORY_TOP_N]
+    if not files:
+        return ""
+    lines = ["## Memory", ""]
+    total = 0
+    for f in files:
+        # Derive the key relative to MEMORY_DIR, strip .md suffix
+        key = f.relative_to(_MEMORY_DIR).with_suffix("").as_posix()
+        preview = f.read_bytes()[:_MEMORY_PREVIEW_BYTES].decode("utf-8", errors="replace")
+        block = f"### {key}\n{preview}"
+        if total + len(block) > _MEMORY_MAX_TOTAL:
+            break
+        lines.append(block)
+        lines.append("")
+        total += len(block)
+    if len(lines) <= 2:
+        return ""
+    return "\n".join(lines)
 
 IDENTITY = """\
 You are Nexus. You're not a chatbot — you're a capable agent with tools, memory, \
@@ -146,5 +178,10 @@ def build_system_prompt(
         parts.append("## Available skills")
         parts.append("")
         parts.append("_No skills are currently loaded. Author one with `skill_manage` after you complete something non-trivial._")
+
+    mem = _memory_summary()
+    if mem:
+        parts.append("")
+        parts.append(mem)
 
     return "\n".join(parts)
