@@ -7,6 +7,16 @@
   position: relative;
 }
 
+/* Editor-only mode: no tree column, editor takes full width */
+.vault-view--editor-only {
+  flex-direction: column;
+}
+
+.vault-view--editor-only .vault-editor-panel {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ── Tree panel ───────────────────────────────────────────────────────────── */
 
 .vault-tree {
@@ -19,6 +29,17 @@
   flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
+}
+
+/* When the tree panel is inside the sidebar, it fills the section */
+.vault-tree--sidebar {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  background: none;
+  border-right: none;
+  flex: 1;
+  overflow: hidden;
 }
 
 .vault-tree-header {

@@ -1,10 +1,68 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
 import VaultFilePreview from "./VaultFilePreview";
 import WorkflowViz from "./WorkflowViz";
 import LiveActivityStrip from "./LiveActivityStrip";
 import "./AssistantMessage.css";
+
+// Mermaid is ~280 kB gzipped — lazy-loaded on first diagram so users who
+// never see one don't pay the cost. `startOnLoad: false` so we render
+// explicitly per block; streaming deltas don't trigger a doc re-scan.
+let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
+function loadMermaid() {
+  if (!_mermaidPromise) {
+    _mermaidPromise = import("mermaid").then((m) => {
+      const mermaid = m.default;
+      const bg = getComputedStyle(document.documentElement)
+        .getPropertyValue("--bg").trim().toLowerCase();
+      const isDark = /^#[01][0-9a-f]/i.test(bg)
+        || bg.startsWith("#0") || bg.startsWith("#1") || bg.startsWith("#2");
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: isDark ? "dark" : "default",
+        securityLevel: "strict",
+        fontFamily: "inherit",
+      });
+      return mermaid;
+    });
+  }
+  return _mermaidPromise;
+}
+
+function MermaidBlock({ code }: { code: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const idRef = useRef(`m${Math.random().toString(36).slice(2, 10)}`);
+
+  useEffect(() => {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+    let cancelled = false;
+    loadMermaid()
+      .then((mermaid) => mermaid.render(idRef.current, trimmed))
+      .then(({ svg }) => {
+        if (cancelled || !ref.current) return;
+        ref.current.innerHTML = svg;
+        setErr(null);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => { cancelled = true; };
+  }, [code]);
+
+  if (err) {
+    return (
+      <pre className="mermaid-error">
+        <code>{`mermaid error: ${err}\n\n${code}`}</code>
+      </pre>
+    );
+  }
+  return <div ref={ref} className="mermaid-block" />;
+}
 
 interface Props {
   content: string;
@@ -95,6 +153,7 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
         )}
         <div className="asst-body">
           <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
             // react-markdown sanitizes URLs by default and strips unknown
             // schemes like `vault://` — the resulting empty href made our
             // fallback <a> navigate to the current page (full reload).
@@ -106,6 +165,17 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
               return url;
             }}
             components={{
+              code: ({ className, children, ...rest }) => {
+                const match = /language-(\w+)/.exec(className || "");
+                const lang = match?.[1];
+                const raw = String(children ?? "");
+                // Mermaid: render as SVG. Only for actual fenced blocks —
+                // inline `mermaid` code spans (no newline) stay as code.
+                if (lang === "mermaid" && raw.includes("\n")) {
+                  return <MermaidBlock code={raw.replace(/\n$/, "")} />;
+                }
+                return <code className={className} {...rest}>{children}</code>;
+              },
               a: ({ href, children, ...rest }) => {
                 const vaultPath = asVaultPath(href ?? "");
                 if (vaultPath) {

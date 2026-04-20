@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { deleteSession, exportSession, getSessions, importSession, patchSession, searchSessions, sessionToVault, type SessionSearchResult, type SessionSummary } from "../api";
 import { useToast } from "../toast/ToastProvider";
+import VaultTreePanel from "./VaultTreePanel";
 import "./Sidebar.css";
 
 type View = "chat" | "vault" | "kanban" | "graph" | "insights" | "agentgraph";
@@ -14,6 +15,10 @@ interface Props {
   onOpenSettings: () => void;
   sessionsRevision: number;
   onSessionsRevisionBump: () => void;
+  vaultSelectedPath: string | null;
+  onVaultSelectPath: (path: string | null) => void;
+  vaultOpenPath?: string | null;
+  onVaultOpenPathHandled?: () => void;
 }
 
 function fmtRelative(raw: string | number | undefined): string {
@@ -154,6 +159,10 @@ export default function Sidebar({
   onOpenSettings,
   sessionsRevision,
   onSessionsRevisionBump,
+  vaultSelectedPath,
+  onVaultSelectPath,
+  vaultOpenPath,
+  onVaultOpenPathHandled,
 }: Props) {
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -492,6 +501,18 @@ export default function Sidebar({
               <div className="sidebar-sessions-empty">No sessions yet</div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Vault tree — only in Vault view */}
+      {view === "vault" && !collapsed && (
+        <div className="sidebar-section sidebar-vault-section">
+          <VaultTreePanel
+            selectedPath={vaultSelectedPath}
+            onSelectPath={onVaultSelectPath}
+            openPath={vaultOpenPath}
+            onOpenPathHandled={onVaultOpenPathHandled}
+          />
         </div>
       )}
 

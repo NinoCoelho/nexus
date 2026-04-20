@@ -110,6 +110,8 @@ export default function App() {
   const [hasModel, setHasModel] = useState<boolean | null>(null);
   /** Bumps a vault path into VaultView when user clicks "Open in Vault" from a preview modal. */
   const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(null);
+  /** The currently selected file path in the vault tree (lifted so Sidebar tree + editor share it). */
+  const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(null);
   // Client-provisioned session id for the "new chat" slot — lets the
   // HITL EventSource open before the first POST. Regenerated on
   // handleNewChat so a reset gives a clean stream.
@@ -123,6 +125,7 @@ export default function App() {
 
   const handleOpenInVault = useCallback((path: string) => {
     setVaultOpenPath(path);
+    setVaultSelectedPath(path);
     setView("vault");
   }, []);
 
@@ -451,6 +454,10 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         sessionsRevision={sessionsRevision}
         onSessionsRevisionBump={() => setSessionsRevision((r) => r + 1)}
+        vaultSelectedPath={vaultSelectedPath}
+        onVaultSelectPath={setVaultSelectedPath}
+        vaultOpenPath={vaultOpenPath}
+        onVaultOpenPathHandled={() => setVaultOpenPath(null)}
       />
 
       <div className="app-main">
@@ -470,10 +477,7 @@ export default function App() {
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
-            <VaultView
-              openPath={vaultOpenPath}
-              onOpenPathHandled={() => setVaultOpenPath(null)}
-            />
+            <VaultView selectedPath={vaultSelectedPath} />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
             <KanbanView />

@@ -456,6 +456,17 @@
   font-weight: 600;
 }
 
+/* ── Vault tree section (mirrors sessions section) ────────────────────────── */
+
+.sidebar-vault-section {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+
 .sidebar-spacer { flex: 1; }
 
 .sidebar-bottom {

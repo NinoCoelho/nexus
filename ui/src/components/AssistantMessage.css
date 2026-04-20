@@ -225,3 +225,52 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ── GFM tables ─────────────────────────────────────────────────────── */
+.asst-body table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.asst-body th,
+.asst-body td {
+  border: 1px solid var(--bubble-asst-border, var(--border));
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.asst-body th {
+  background: var(--bubble-code-bg, var(--bg-inset));
+  font-weight: 600;
+}
+.asst-body tr:nth-child(even) td {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+/* GFM task lists */
+.asst-body input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+/* ── Mermaid diagrams ───────────────────────────────────────────────── */
+.mermaid-block {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--bubble-code-bg, var(--bg-inset));
+  border: 1px solid var(--bubble-asst-border, var(--border));
+  border-radius: var(--radius);
+  overflow-x: auto;
+  text-align: center;
+}
+.mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-error {
+  color: var(--bad, #c85a5a);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
