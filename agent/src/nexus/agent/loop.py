@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from .llm import (
     ChatMessage,
+    ChatResponse,
     LLMProvider,
+    LLMTransportError,
     MalformedOutputError,
     Role,
     StopReason,
@@ -17,6 +21,8 @@ from .llm import (
     ToolSpec,
 )
 from .prompt_builder import build_system_prompt
+from ..error_classifier import ClassifiedError, FailoverReason, classify_api_error
+from ..retry import jittered_backoff
 from ..skills.manager import SkillManager
 from ..skills.registry import SkillRegistry
 from ..tools.acp_call import ACP_CALL_TOOL, acp_call
@@ -25,7 +31,15 @@ from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
 from ..tools.state_tool import STATE_TOOLS, StateToolHandler
 from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
 
+log = logging.getLogger(__name__)
+
 DEFAULT_MAX_TOOL_ITERATIONS = 32  # was 16; doubled so research tasks finish
+
+# Max provider call attempts per LLM round-trip. First attempt + up to
+# (MAX_PROVIDER_ATTEMPTS - 1) retries. Kept small — the agent loop itself
+# will retry on a subsequent iteration if a genuine upstream outage
+# persists, so we don't need many retries here.
+MAX_PROVIDER_ATTEMPTS = 3
 
 SKILL_MANAGE_TOOL = ToolSpec(
     name="skill_manage",
@@ -85,6 +99,77 @@ class Agent:
         trace.append(entry)
         if self._trace:
             self._trace(event, data)
+
+    @staticmethod
+    def _classify(
+        exc: Exception, *, provider_name: str, model: str, num_messages: int
+    ) -> ClassifiedError:
+        """Thin wrapper that applies our in-loop parameters to the classifier."""
+        return classify_api_error(
+            exc,
+            provider=provider_name,
+            model=model,
+            num_messages=num_messages,
+        )
+
+    async def _chat_with_retry(
+        self,
+        provider: LLMProvider,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec],
+        model: str | None,
+        trace: list[dict[str, Any]],
+    ) -> ChatResponse:
+        """Call ``provider.chat`` with classifier-driven retry.
+
+        Non-streaming path — safe to retry freely because no partial output
+        has been emitted. Honours ``ClassifiedError.retryable`` and backs off
+        with jittered exponential delay. Non-retryable errors propagate as
+        the original :class:`LLMTransportError` so callers can display the
+        upstream message.
+        """
+        provider_name = type(provider).__name__
+        model_str = model or ""
+        last_exc: Exception | None = None
+
+        for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
+            try:
+                return await provider.chat(messages, tools=tools, model=model)
+            except LLMTransportError as exc:
+                last_exc = exc
+                classified = self._classify(
+                    exc,
+                    provider_name=provider_name,
+                    model=model_str,
+                    num_messages=len(messages),
+                )
+                self._emit(
+                    "provider_error",
+                    {
+                        "attempt": attempt,
+                        "reason": classified.reason.value,
+                        "retryable": classified.retryable,
+                        "status_code": classified.status_code,
+                        "message": classified.user_facing_summary,
+                    },
+                    trace,
+                )
+                if not classified.retryable or attempt >= MAX_PROVIDER_ATTEMPTS:
+                    raise
+                delay = jittered_backoff(attempt)
+                log.warning(
+                    "chat attempt %d/%d failed (%s); backoff %.1fs",
+                    attempt, MAX_PROVIDER_ATTEMPTS, classified.reason.value, delay,
+                )
+                await asyncio.sleep(delay)
+            except MalformedOutputError:
+                # Malformed output isn't a transport problem — do NOT retry,
+                # the same bad response would come back.
+                raise
+        # Defensive: should be unreachable because we raise inside the loop.
+        assert last_exc is not None
+        raise last_exc
 
     def _tools(self) -> list[ToolSpec]:
         return [*STATE_TOOLS, SKILL_MANAGE_TOOL, HTTP_CALL_TOOL, ACP_CALL_TOOL, *VAULT_TOOLS, KANBAN_MANAGE_TOOL]
@@ -147,7 +232,13 @@ class Agent:
         ) or DEFAULT_MAX_TOOL_ITERATIONS
         for iteration in range(1, max_iter + 1):
             self._emit("iter", {"n": iteration}, trace)
-            response = await provider.chat(messages, tools=tools, model=upstream_model)
+            response = await self._chat_with_retry(
+                provider,
+                messages,
+                tools=tools,
+                model=upstream_model,
+                trace=trace,
+            )
 
             if response.stop_reason != StopReason.TOOL_CALLS or not response.tool_calls:
                 reply_text = response.content or ""
@@ -237,6 +328,8 @@ class Agent:
 
         full_text = ""
 
+        provider_name = type(provider).__name__
+
         for iteration in range(1, max_iter + 1):
             self._emit("iter", {"n": iteration}, trace)
 
@@ -245,23 +338,79 @@ class Agent:
             current_content = ""
             finish_reason = "stop"
 
-            async for event in provider.chat_stream(messages, tools=tools, model=upstream_model):
-                etype = event.get("type")
+            # Streaming retry: we can only retry BEFORE the first event has
+            # been forwarded to the caller — once bytes are on the wire the
+            # client has partial content and re-running the stream would
+            # duplicate deltas. `streamed_any` flips True at the first event
+            # we receive and disables retry thereafter.
+            streamed_any = False
+            for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
+                try:
+                    async for event in provider.chat_stream(
+                        messages, tools=tools, model=upstream_model
+                    ):
+                        streamed_any = True
+                        etype = event.get("type")
 
-                if etype == "delta":
-                    full_text += event["text"]
-                    current_content += event["text"]
-                    yield event
+                        if etype == "delta":
+                            full_text += event["text"]
+                            current_content += event["text"]
+                            yield event
 
-                elif etype in ("tool_call_start", "tool_call_delta", "tool_call_end"):
-                    yield event
-                    if etype == "tool_call_end":
-                        pass  # accumulation done in finish event
+                        elif etype in ("tool_call_start", "tool_call_delta", "tool_call_end"):
+                            yield event
 
-                elif etype == "finish":
-                    finish_reason = event.get("finish_reason", "stop")
-                    current_content = event.get("content", current_content)
-                    current_tool_calls = event.get("tool_calls", [])
+                        elif etype == "finish":
+                            finish_reason = event.get("finish_reason", "stop")
+                            current_content = event.get("content", current_content)
+                            current_tool_calls = event.get("tool_calls", [])
+                    break  # stream ended cleanly — exit retry loop
+                except LLMTransportError as exc:
+                    classified = self._classify(
+                        exc,
+                        provider_name=provider_name,
+                        model=upstream_model or "",
+                        num_messages=len(messages),
+                    )
+                    self._emit(
+                        "provider_error",
+                        {
+                            "attempt": attempt,
+                            "reason": classified.reason.value,
+                            "retryable": classified.retryable,
+                            "status_code": classified.status_code,
+                            "message": classified.user_facing_summary,
+                        },
+                        trace,
+                    )
+                    if streamed_any:
+                        # Mid-stream failure — bytes sent already, cannot retry.
+                        # Terminate the turn cleanly with a structured error.
+                        yield {
+                            "type": "error",
+                            "detail": classified.user_facing_summary,
+                            "reason": classified.reason.value,
+                            "retryable": False,
+                            "status_code": classified.status_code,
+                        }
+                        yield {
+                            "type": "done",
+                            "session_id": session_id,
+                            "reply": current_content or full_text,
+                            "trace": trace,
+                            "skills_touched": skills_touched,
+                            "iterations": iteration,
+                            "messages": messages,
+                        }
+                        return
+                    if not classified.retryable or attempt >= MAX_PROVIDER_ATTEMPTS:
+                        raise
+                    delay = jittered_backoff(attempt)
+                    log.warning(
+                        "chat_stream attempt %d/%d failed (%s); backoff %.1fs",
+                        attempt, MAX_PROVIDER_ATTEMPTS, classified.reason.value, delay,
+                    )
+                    await asyncio.sleep(delay)
 
             if finish_reason != "tool_calls" or not current_tool_calls:
                 # Terminal: no more tool calls

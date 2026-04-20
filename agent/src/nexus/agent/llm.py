@@ -66,7 +66,25 @@ class LLMError(Exception):
 
 
 class LLMTransportError(LLMError):
-    pass
+    """Raised on any upstream transport failure.
+
+    Carries the HTTP status code and parsed response body (if JSON) so
+    :mod:`nexus.error_classifier` can walk the exception and build a rich
+    :class:`ClassifiedError`. Fields default to ``None`` / ``{}`` for
+    lower-layer failures (e.g. pure network errors) where there is no
+    response to parse.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body or {}
 
 
 class MalformedOutputError(LLMError):
@@ -140,10 +158,25 @@ class OpenAIProvider(LLMProvider):
                 headers=self._headers,
             )
         except httpx.HTTPError as exc:
+            # Transport-layer failure — no status code / body to attach.
             raise LLMTransportError(str(exc)) from exc
 
         if resp.status_code >= 400:
-            raise LLMTransportError(f"HTTP {resp.status_code}: {resp.text[:400]}")
+            # Attach the parsed body when possible so the error_classifier
+            # can reach nested provider messages (OpenRouter wraps upstream
+            # errors under error.metadata.raw, for instance).
+            body: dict[str, Any] = {}
+            try:
+                body = resp.json()
+                if not isinstance(body, dict):
+                    body = {}
+            except Exception:
+                body = {}
+            raise LLMTransportError(
+                f"HTTP {resp.status_code}: {resp.text[:400]}",
+                status_code=resp.status_code,
+                body=body,
+            )
 
         try:
             return _decode_openai(resp.json())
@@ -175,11 +208,24 @@ class OpenAIProvider(LLMProvider):
                 headers=self._headers,
             ) as resp:
                 if resp.status_code >= 400:
-                    body = await resp.aread()
+                    raw = await resp.aread()
                     # Decode upstream error body so the error surfaces as
-                    # real JSON text instead of a Python b'...' repr.
-                    text = body.decode("utf-8", errors="replace")
-                    raise LLMTransportError(f"HTTP {resp.status_code}: {text[:400]}")
+                    # real JSON text instead of a Python b'...' repr, and
+                    # parse it into the structured body carried by the
+                    # exception for the error_classifier to walk.
+                    text = raw.decode("utf-8", errors="replace")
+                    parsed: dict[str, Any] = {}
+                    try:
+                        parsed = json.loads(text)
+                        if not isinstance(parsed, dict):
+                            parsed = {}
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    raise LLMTransportError(
+                        f"HTTP {resp.status_code}: {text[:400]}",
+                        status_code=resp.status_code,
+                        body=parsed,
+                    )
 
                 # Aggregated state for the finish event
                 full_text = ""

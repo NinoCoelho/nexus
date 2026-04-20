@@ -141,8 +141,44 @@ def create_app(
                         }
                         yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
+                    elif etype == "error":
+                        # Mid-stream structured error from the agent loop
+                        # (e.g. an upstream failure after content was already
+                        # streamed, so retry was impossible). Forward the
+                        # classifier's fields so the UI can show a richer
+                        # message without re-parsing the detail string.
+                        err_payload = {
+                            "detail": event.get("detail", ""),
+                            "reason": event.get("reason"),
+                            "retryable": event.get("retryable"),
+                            "status_code": event.get("status_code"),
+                        }
+                        yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+
             except (LLMTransportError, MalformedOutputError) as exc:
-                yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+                # Classify so the client gets a readable summary on top of
+                # the raw detail (e.g. "Provider rate limit — retrying with
+                # backoff." vs. the raw "HTTP 429: ..." body).
+                detail = str(exc)
+                reason = None
+                retryable = None
+                status_code = getattr(exc, "status_code", None)
+                try:
+                    from ..error_classifier import classify_api_error
+                    classified = classify_api_error(exc)
+                    reason = classified.reason.value
+                    retryable = classified.retryable
+                    if classified.user_facing_summary:
+                        detail = f"{classified.user_facing_summary} ({detail})"
+                except Exception:
+                    pass
+                err_payload = {
+                    "detail": detail,
+                    "reason": reason,
+                    "retryable": retryable,
+                    "status_code": status_code,
+                }
+                yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
             except Exception as exc:
                 # Catch-all so an unexpected error never leaves the client
                 # with ERR_INCOMPLETE_CHUNKED_ENCODING. Emit a proper
