@@ -15,11 +15,25 @@ A self-evolving agentic platform. Proprietary agent core with runtime skill auth
 
 ## Quick start
 
-### Prereqs
-- Python 3.11+ with [uv](https://docs.astral.sh/uv/) (`brew install uv`)
-- Node 20+
+### One-line install (recommended)
 
-### 1. Install + configure
+```bash
+curl -fsSL https://raw.githubusercontent.com/NinoCoelho/nexus/main/install.sh | bash
+```
+
+Clones into `~/nexus` (override with `NEXUS_DIR=…`), installs [uv](https://docs.astral.sh/uv/) if missing, runs `uv sync` + `npm install`, writes a default `~/.nexus/config.toml`, and drops a `nexus` launcher into `~/.local/bin/`. Env overrides: `NEXUS_DIR`, `NEXUS_REF`, `NEXUS_NO_UI=1`, `NEXUS_NO_INIT=1`.
+
+After install:
+
+```bash
+export OPENAI_API_KEY=sk-...        # and/or ANTHROPIC_API_KEY etc.
+nexus daemon start                  # http://localhost:18989
+cd ~/nexus/ui && npm run dev        # http://localhost:1890
+```
+
+### Manual install
+
+Prereqs: Python 3.11+ with [uv](https://docs.astral.sh/uv/) (`brew install uv`), Node 20+.
 
 ```bash
 git clone git@github.com:NinoCoelho/nexus.git
