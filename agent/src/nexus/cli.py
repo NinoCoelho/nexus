@@ -16,6 +16,8 @@ skills_app = typer.Typer(help="Skills commands", no_args_is_help=True)
 sessions_app = typer.Typer(help="Session commands", no_args_is_help=True)
 vault_app = typer.Typer(help="Vault commands", no_args_is_help=True)
 kanban_app = typer.Typer(help="Kanban commands", no_args_is_help=True)
+daemon_app = typer.Typer(help="Daemon management commands", no_args_is_help=True)
+trajectories_app = typer.Typer(help="Trajectory commands", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
 app.add_typer(providers_app, name="providers")
@@ -25,6 +27,8 @@ app.add_typer(skills_app, name="skills")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(vault_app, name="vault")
 app.add_typer(kanban_app, name="kanban")
+app.add_typer(daemon_app, name="daemon")
+app.add_typer(trajectories_app, name="trajectories")
 
 
 @app.callback()
@@ -754,6 +758,96 @@ def kanban_list(
     for card in cards:
         table.add_row(card.id[:8], card.column, card.title, ",".join(card.tags))
     Console().print(table)
+
+
+# ── daemon ───────────────────────────────────────────────────────────────────────
+
+@daemon_app.command("start")
+def daemon_start(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    port: int = typer.Option(18989, "--port", "-p", help="Port to bind to"),
+    detach: bool = typer.Option(True, "--detach/--no-detach", help="Run as daemon or in foreground"),
+) -> None:
+    """Start the Nexus daemon."""
+    from .daemon import daemon_manager
+    daemon_manager.start(host=host, port=port, detach=detach)
+
+
+@daemon_app.command("stop")
+def daemon_stop() -> None:
+    """Stop the Nexus daemon."""
+    from .daemon import daemon_manager
+    daemon_manager.stop()
+
+
+@daemon_app.command("restart")
+def daemon_restart(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    port: int = typer.Option(18989, "--port", "-p", help="Port to bind to"),
+) -> None:
+    """Restart the Nexus daemon."""
+    from .daemon import daemon_manager
+    daemon_manager.restart(host=host, port=port)
+
+
+@daemon_app.command("status")
+def daemon_status() -> None:
+    """Show daemon status."""
+    from .daemon import daemon_manager
+    daemon_manager.show_status()
+
+
+@daemon_app.command("install")
+def daemon_install(
+    user: bool = typer.Option(True, "--user/--system", help="Install as user or system service"),
+) -> None:
+    """Install Nexus as a system service."""
+    from .daemon import service_installer
+    service_installer.install_service(user=user)
+
+
+@daemon_app.command("uninstall")
+def daemon_uninstall(
+    user: bool = typer.Option(True, "--user/--system", help="Uninstall user or system service"),
+) -> None:
+    """Uninstall Nexus system service."""
+    from .daemon import service_installer
+    service_installer.uninstall_service(user=user)
+
+
+@daemon_app.command("logs")
+def daemon_logs(
+    lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output (press 'q' to quit)"),
+) -> None:
+    """Show daemon logs."""
+    from .daemon import daemon_manager
+    daemon_manager.show_logs(lines=lines, follow=follow)
+
+
+# ── trajectories ──────────────────────────────────────────────────────────────────
+
+@trajectories_app.command("export")
+def trajectories_export(
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o", help="Output file path (default: trajectories-export.jsonl in cwd)"
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since", help="Include only records from this date onwards (YYYY-MM-DD)"
+    ),
+) -> None:
+    """Export trajectory records to a JSONL file."""
+    from pathlib import Path
+    from .trajectory import TrajectoryLogger
+
+    out_path = Path(output) if output else Path("trajectories-export.jsonl")
+    logger = TrajectoryLogger()
+    try:
+        count = logger.export(out_path, since_date=since)
+    except Exception as exc:
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Exported {count} records to {out_path}")
 
 
 if __name__ == "__main__":
