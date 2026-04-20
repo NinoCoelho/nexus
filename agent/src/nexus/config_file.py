@@ -43,7 +43,7 @@ class ProviderConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     default_model: str = "openai/gpt-4o-mini"
-    routing_mode: str = "fixed"
+    routing_mode: str = "fixed"  # "fixed" | "auto" | "planner"
     max_iterations: int = 16
 
 

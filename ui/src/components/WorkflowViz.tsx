@@ -1,6 +1,73 @@
 import type { TraceEvent } from "../api";
 import "./WorkflowViz.css";
 
+// ── Planner plan types ────────────────────────────────────────────────────────
+
+export interface PlanSubTask {
+  id: string;
+  description: string;
+  status: "pending" | "running" | "done" | "failed";
+  result_preview?: string;
+}
+
+interface PlanVizProps {
+  subTasks: PlanSubTask[];
+}
+
+function SubTaskStatusIcon({ status }: { status: PlanSubTask["status"] }) {
+  if (status === "done") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="4 10 8 14 16 6" />
+      </svg>
+    );
+  }
+  if (status === "failed") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="5" y1="5" x2="15" y2="15" />
+        <line x1="15" y1="5" x2="5" y2="15" />
+      </svg>
+    );
+  }
+  if (status === "running") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
+        <circle cx="10" cy="10" r="7" strokeDasharray="22 10" />
+      </svg>
+    );
+  }
+  // pending
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="10" cy="10" r="7" />
+    </svg>
+  );
+}
+
+export function PlanViz({ subTasks }: PlanVizProps) {
+  if (!subTasks || subTasks.length === 0) return null;
+
+  return (
+    <div className="plan-viz">
+      <div className="plan-viz__header">Plan</div>
+      <ol className="plan-viz__list">
+        {subTasks.map((st) => (
+          <li
+            key={st.id}
+            className={`plan-viz__item plan-viz__item--${st.status}`}
+          >
+            <span className="plan-viz__status-icon">
+              <SubTaskStatusIcon status={st.status} />
+            </span>
+            <span className="plan-viz__description">{st.description}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 interface Props {
   trace: TraceEvent[];
 }

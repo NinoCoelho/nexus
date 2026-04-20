@@ -19,6 +19,7 @@ class ChatReply(BaseModel):
     trace: list[dict[str, Any]]
     skills_touched: list[str]
     iterations: int
+    plan: list[dict[str, Any]] | None = None
 
 
 class SkillInfo(BaseModel):
