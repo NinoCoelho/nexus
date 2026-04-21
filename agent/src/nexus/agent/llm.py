@@ -1,4 +1,11 @@
-"""LLM provider port — OpenAI-compatible + Anthropic native adapters."""
+"""LLM provider port — OpenAI-compatible + Anthropic native adapters.
+
+Types here are structurally aligned with :mod:`loom.types` so Nexus can
+eventually plug into :class:`loom.Agent` without translation. ``Role``,
+``ToolSpec``, and ``Usage`` are imported directly from Loom; the others
+shadow Loom's shape locally because Nexus's provider encoding depends on
+them being Pydantic (and on small defaults tweaks).
+"""
 
 from __future__ import annotations
 
@@ -11,23 +18,34 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-# StreamEvent is a plain TypedDict-style dict union; we use plain dicts for
-# zero-overhead yielding.  The "type" key is the discriminator.
+# Types shared verbatim with Loom.
+from loom.types import Role, ToolSpec, Usage  # re-exported for Nexus imports
+
+# StreamEvent is a plain dict union with ``type`` as the discriminator —
+# kept as dict (not Loom's Pydantic union) so Nexus's provider adapters
+# can yield cheaply without model construction on every token. Converting
+# this to Pydantic is a separate, much larger refactor.
 StreamEvent = dict[str, Any]
 
 
-class Role(StrEnum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
 class ToolCall(BaseModel):
+    """Tool-call request from the model.
+
+    ``arguments`` is a **parsed dict** (intentional divergence from
+    :class:`loom.types.ToolCall`, which uses a JSON string). Nexus's
+    tool dispatchers consume dicts directly; we parse once at decode
+    time instead of at every dispatch site. Use :meth:`arguments_json`
+    to get the loom-style string form when interoperating.
+    """
+
     model_config = ConfigDict(frozen=True)
     id: str
     name: str
     arguments: dict[str, Any]
+
+    @property
+    def arguments_json(self) -> str:
+        return json.dumps(self.arguments)
 
 
 class ChatMessage(BaseModel):
@@ -39,45 +57,35 @@ class ChatMessage(BaseModel):
     name: str | None = None
 
 
-class ToolSpec(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    name: str
-    description: str
-    parameters: dict[str, Any]
-
-
 class StopReason(StrEnum):
     STOP = "stop"
-    TOOL_CALLS = "tool_calls"
+    TOOL_USE = "tool_use"
     LENGTH = "length"
-    ERROR = "error"
+    CONTENT_FILTER = "content_filter"
     UNKNOWN = "unknown"
 
 
-class Usage(BaseModel):
-    """Token usage for one provider round-trip.
+class ChatResponse(BaseModel):
+    """One provider round-trip.
 
-    All fields default to 0 so callers can always read them without
-    ``None`` guards. Providers that don't report usage (older local
-    models, some proxies) just yield zeros — that's fine, it just
-    means the session's cost stays at $0 for that turn.
+    Flat shape (``content`` + ``tool_calls`` at top level) rather than
+    Loom's wrapped ``message: ChatMessage`` — Nexus's consumers rely on
+    direct access at many sites and this is the main remaining surface
+    divergence. A ``.message`` property bridges the gap for loom.Agent
+    adoption down the line.
     """
 
-    model_config = ConfigDict(frozen=True)
-    input_tokens: int = 0
-    output_tokens: int = 0
-    # Reserved for Anthropic cache-aware accounting — we capture but
-    # don't bill against it yet.
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-
-
-class ChatResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
     content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     stop_reason: StopReason = StopReason.STOP
     usage: Usage = Field(default_factory=Usage)
+
+    @property
+    def message(self) -> ChatMessage:
+        return ChatMessage(
+            role=Role.ASSISTANT, content=self.content, tool_calls=list(self.tool_calls)
+        )
 
 
 class LLMError(Exception):
@@ -444,7 +452,7 @@ class AnthropicProvider(LLMProvider):
                         tool_calls.append({"id": tc_id, "name": buf["name"], "arguments": args})
 
                     msg = await stream.get_final_message()
-                    finish_reason = "tool_calls" if tool_calls else "stop"
+                    finish_reason = "tool_use" if tool_calls else "stop"
                     if msg.stop_reason == "max_tokens":
                         finish_reason = "length"
                     yield {
@@ -490,8 +498,8 @@ def _encode_tool(t: ToolSpec) -> dict[str, Any]:
 
 _FINISH_MAP = {
     "stop": StopReason.STOP,
-    "tool_calls": StopReason.TOOL_CALLS,
-    "function_call": StopReason.TOOL_CALLS,
+    "tool_calls": StopReason.TOOL_USE,
+    "function_call": StopReason.TOOL_USE,
     "length": StopReason.LENGTH,
 }
 
@@ -581,7 +589,7 @@ def _decode_anthropic(resp: Any) -> ChatResponse:
             text_parts.append(block.text)
         elif block.type == "tool_use":
             tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
-    stop_reason = StopReason.TOOL_CALLS if tool_calls else StopReason.STOP
+    stop_reason = StopReason.TOOL_USE if tool_calls else StopReason.STOP
     if resp.stop_reason == "max_tokens":
         stop_reason = StopReason.LENGTH
     return ChatResponse(
