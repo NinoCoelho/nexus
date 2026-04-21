@@ -368,13 +368,18 @@ class Agent:
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
+        user_msg_content = annotated or user_message
         loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=annotated or user_message)
+            lt.ChatMessage(role=lt.Role.USER, content=user_msg_content)
         )
 
         # loom yields serialized dicts (via serialize_event=model_dump) but the
         # event structure differs from what app.py expects.  We translate here.
         full_text = ""
+        # Snapshot inbound history so we can rebuild the persisted message list
+        # for app.py's `store.replace_history`. loom's streaming DoneEvent does
+        # not carry the assembled message list.
+        _history_snapshot = list(history or [])
 
         async for raw in self._loom.run_turn_stream(loom_messages, model_id=model_id):
             # raw is a dict because serialize_event=model_dump
@@ -437,7 +442,10 @@ class Agent:
                     "trace": list(self._turn_trace),
                     "skills_touched": list(self._skills_touched),
                     "iterations": ctx.get("iterations", 0),
-                    "messages": [],  # app.py uses store.replace_history via final_messages
+                    "messages": _history_snapshot + [
+                        ChatMessage(role=Role.USER, content=user_msg_content),
+                        ChatMessage(role=Role.ASSISTANT, content=reply_text),
+                    ],
                     "usage": {
                         "input_tokens": ctx.get("input_tokens", 0),
                         "output_tokens": ctx.get("output_tokens", 0),
