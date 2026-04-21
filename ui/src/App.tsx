@@ -19,6 +19,7 @@ import {
   getRouting,
   getSession,
   respondToUserRequest,
+  fetchPendingRequest,
   subscribeSessionEvents,
   type HitlSettings,
   type TraceEvent,
@@ -198,6 +199,19 @@ export default function App() {
   const hitlSessionId = activeSession ?? pendingSessionId;
   useEffect(() => {
     if (!hitlSessionId) return;
+
+    // Recover any request that was published before the EventSource
+    // (re)opened — the publish bus is fire-and-forget, so reload /
+    // late subscribe / tab restore would otherwise miss the modal.
+    let cancelled = false;
+    fetchPendingRequest(hitlSessionId)
+      .then((req) => {
+        if (cancelled || !req) return;
+        setPendingRequest(req);
+        setPendingRequestSession(hitlSessionId);
+      })
+      .catch(() => {});
+
     const es = subscribeSessionEvents(hitlSessionId, (event) => {
       if (event.kind === "user_request") {
         setPendingRequest(event.data);
@@ -216,7 +230,10 @@ export default function App() {
       // the /chat/stream POST response — ignore here to avoid
       // double-counting the activity strip.
     });
-    return () => es.close();
+    return () => {
+      cancelled = true;
+      es.close();
+    };
   }, [hitlSessionId]);
 
   const handleApprovalSubmit = useCallback(

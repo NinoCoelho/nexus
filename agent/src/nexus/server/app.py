@@ -524,6 +524,34 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @app.get("/chat/{session_id}/pending")
+    async def chat_pending(
+        session_id: str,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict[str, Any]:
+        """Return the current pending ``ask_user`` request, if any.
+
+        Lets the UI recover a modal that would otherwise be missed if
+        the ``/chat/{sid}/events`` EventSource wasn't open at publish
+        time (page reload, late subscribe, tab restore). The publish
+        bus is fire-and-forget; this endpoint is the authoritative
+        snapshot.
+        """
+        requests = store.broker.pending(session_id)
+        if not requests:
+            return {"pending": None}
+        r = requests[0]
+        return {
+            "pending": {
+                "request_id": r.request_id,
+                "prompt": r.prompt,
+                "kind": r.kind,
+                "choices": r.choices,
+                "default": r.default,
+                "timeout_seconds": r.timeout_seconds,
+            }
+        }
+
     @app.post("/chat/{session_id}/cancel")
     async def chat_cancel(
         session_id: str,

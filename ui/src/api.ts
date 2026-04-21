@@ -783,6 +783,17 @@ export function subscribeSessionEvents(
   return es;
 }
 
+export async function fetchPendingRequest(
+  session_id: string,
+): Promise<UserRequestPayload | null> {
+  const res = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/pending`,
+  );
+  if (!res.ok) return null;
+  const body = (await res.json()) as { pending: UserRequestPayload | null };
+  return body.pending ?? null;
+}
+
 export async function respondToUserRequest(
   session_id: string,
   request_id: string,
