@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "nexus"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
+    "loom @ git+ssh://git@github.com/NinoCoelho/loom.git@feat/loom-enhancements-for-nexus",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
     "pydantic>=2",
@@ -36,6 +37,9 @@ nexus = "nexus.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nexus"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.ruff]
 line-length = 100
