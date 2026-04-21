@@ -107,41 +107,45 @@ def test_search_deduplicates_by_session(tmp_path: Path) -> None:
 
 
 def test_fts_rebuild_on_existing_data(tmp_path: Path) -> None:
-    """Simulate an older DB that already has messages but no FTS rows.
-    Creating a new SessionStore against that DB should trigger a rebuild
+    """Simulate a DB that already has loom-schema messages but no FTS rows.
+    Creating a new SessionStore against that DB should trigger an FTS rebuild
     so search works on pre-existing data."""
     import sqlite3
 
     db_path = tmp_path / "sessions.sqlite"
 
-    # Write messages directly (bypassing the store) to simulate pre-FTS data.
+    # Populate the DB using loom's schema (ISO timestamps, WAL mode) to
+    # simulate data inserted before the FTS table was created.
     conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS sessions "
-        "(id TEXT PRIMARY KEY, title TEXT NOT NULL, context TEXT, "
-        "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+        "(id TEXT PRIMARY KEY, title TEXT, context TEXT, pending_question TEXT, "
+        "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+        "model TEXT, input_tokens INTEGER DEFAULT 0, "
+        "output_tokens INTEGER DEFAULT 0, tool_call_count INTEGER DEFAULT 0)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages "
         "(session_id TEXT NOT NULL, seq INTEGER NOT NULL, role TEXT NOT NULL, "
-        "content TEXT NOT NULL, tool_calls TEXT, tool_call_id TEXT, "
-        "created_at INTEGER NOT NULL, PRIMARY KEY (session_id, seq), "
-        "FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE)"
+        "content TEXT, tool_calls TEXT, tool_call_id TEXT, name TEXT, "
+        "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+        "PRIMARY KEY (session_id, seq), "
+        "FOREIGN KEY (session_id) REFERENCES sessions(id))"
     )
     conn.execute(
-        "INSERT INTO sessions (id, title, context, created_at, updated_at) "
-        "VALUES ('abc123', 'Pre-existing session', NULL, 1000, 1000)"
+        "INSERT INTO sessions (id, title) VALUES ('abc123', 'Pre-existing session')"
     )
     conn.execute(
-        "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id, created_at) "
-        "VALUES ('abc123', 0, 'user', 'legacy migration test keyword', NULL, NULL, 1000)"
+        "INSERT INTO messages (session_id, seq, role, content) "
+        "VALUES ('abc123', 0, 'user', 'loom schema fts rebuild keyword')"
     )
     conn.commit()
     conn.close()
 
     # Opening the store against this DB should auto-create FTS and rebuild.
     store = SessionStore(db_path=db_path)
-    results = store.search("legacy")
+    results = store.search("loom")
     assert len(results) == 1
     assert results[0]["session_id"] == "abc123"
