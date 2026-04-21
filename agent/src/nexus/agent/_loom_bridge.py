@@ -89,8 +89,23 @@ class LoomProviderAdapter(LoomLLMProvider):
       We translate the Nexus dict stream into loom Pydantic events.
     """
 
-    def __init__(self, provider: NexusLLMProvider) -> None:
+    def __init__(
+        self,
+        provider: NexusLLMProvider,
+        *,
+        provider_registry: Any | None = None,
+    ) -> None:
         self._nexus = provider
+        self._registry = provider_registry
+
+    def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
+        """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name)."""
+        if self._registry and model_id:
+            try:
+                return self._registry.get_for_model(model_id)
+            except KeyError:
+                pass
+        return self._nexus, model_id
 
     async def chat(
         self,
@@ -100,8 +115,8 @@ class LoomProviderAdapter(LoomLLMProvider):
         model: str | None = None,
     ) -> lt.ChatResponse:
         nexus_messages = [_loom_to_nexus_message(m) for m in messages]
-        # Nexus ToolSpec == loom ToolSpec (both from loom.types via re-export)
-        nexus_resp = await self._nexus.chat(nexus_messages, tools=tools, model=model)
+        provider, upstream = self._resolve(model)
+        nexus_resp = await provider.chat(nexus_messages, tools=tools, model=upstream)
 
         # Build a loom ChatMessage from the flat Nexus response
         loom_tcs: list[lt.ToolCall] | None = None
@@ -135,7 +150,8 @@ class LoomProviderAdapter(LoomLLMProvider):
         finish_reason: str = "stop"
         tool_parts: dict[str, dict[str, Any]] = {}
 
-        async for ev in self._nexus.chat_stream(nexus_messages, tools=tools, model=model):
+        provider, upstream = self._resolve(model)
+        async for ev in provider.chat_stream(nexus_messages, tools=tools, model=upstream):
             etype = ev.get("type")
 
             if etype == "delta":

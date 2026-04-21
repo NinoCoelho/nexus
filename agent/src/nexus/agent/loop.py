@@ -223,7 +223,10 @@ class Agent:
     def _build_loom_agent(self) -> LoomAgent:
         from ._loom_bridge import LoomProviderAdapter, build_tool_registry
 
-        adapter = LoomProviderAdapter(self._nexus_provider)
+        adapter = LoomProviderAdapter(
+            self._nexus_provider,
+            provider_registry=self._provider_registry,
+        )
         tool_reg = build_tool_registry(
             skill_registry=self._registry,
             handlers=self._handlers,
