@@ -203,46 +203,75 @@
 .vault-preview {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 32px;
-  max-width: 760px;
-  /* reuse assistant message prose styles */
+  padding: 28px 40px;
+  width: 100%;
   font-size: 14px;
   line-height: 1.65;
-  color: var(--fg);
+  background: var(--bubble-asst-bg);
+  color: var(--bubble-fg);
 }
 
 .vault-preview h1,
 .vault-preview h2,
 .vault-preview h3 {
-  color: var(--fg);
+  color: var(--bubble-fg);
   margin: 1.2em 0 0.4em;
   font-weight: 600;
 }
+.vault-preview h1 { border-bottom: 1px solid var(--bubble-asst-border); padding-bottom: 0.3em; }
 .vault-preview p { margin: 0.6em 0; }
+.vault-preview strong, .vault-preview b { color: var(--bubble-fg); }
+.vault-preview em, .vault-preview i { color: var(--bubble-fg-dim); }
 .vault-preview code {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-soft);
+  background: var(--bubble-code-bg);
+  border: 1px solid var(--bubble-asst-border);
   border-radius: 4px;
   padding: 1px 5px;
   font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--bubble-fg);
 }
 .vault-preview pre {
-  background: var(--bg-panel);
+  background: var(--bg-inset);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 14px 16px;
   overflow-x: auto;
 }
-.vault-preview pre code { background: none; border: none; padding: 0; }
-.vault-preview a { color: var(--accent); }
+.vault-preview pre code { background: none; border: none; padding: 0; color: var(--fg); }
+.vault-preview a { color: var(--bubble-link); }
+.vault-preview a:hover { color: var(--accent-lo); }
 .vault-preview blockquote {
-  border-left: 3px solid var(--accent-lo);
+  border-left: 3px solid var(--bubble-asst-border);
   margin: 0;
   padding: 0 0 0 16px;
-  color: var(--fg-dim);
+  color: var(--bubble-fg-dim);
 }
 .vault-preview ul, .vault-preview ol { padding-left: 1.5em; }
+.vault-preview li { margin: 0.2em 0; }
+.vault-preview hr {
+  border: none;
+  border-top: 1px solid var(--bubble-asst-border);
+  margin: 1.5em 0;
+}
+.vault-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.8em 0;
+}
+.vault-preview th, .vault-preview td {
+  border: 1px solid var(--bubble-asst-border);
+  padding: 6px 12px;
+  text-align: left;
+}
+.vault-preview th {
+  background: var(--bubble-code-bg);
+  color: var(--bubble-fg);
+  font-weight: 600;
+}
+.vault-preview td { color: var(--bubble-fg); }
+.vault-preview .mermaid-block { border-color: var(--bubble-asst-border); }
+.vault-preview .mermaid-error { color: var(--rust); }
 
 .vault-empty {
   flex: 1;

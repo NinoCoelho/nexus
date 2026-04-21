@@ -8,13 +8,9 @@ function loadMermaid() {
   if (!_mermaidPromise) {
     _mermaidPromise = import("mermaid").then((m) => {
       const mermaid = m.default;
-      const bg = getComputedStyle(document.documentElement)
-        .getPropertyValue("--bg").trim().toLowerCase();
-      const isDark = /^#[01][0-9a-f]/i.test(bg)
-        || bg.startsWith("#0") || bg.startsWith("#1") || bg.startsWith("#2");
       mermaid.initialize({
         startOnLoad: false,
-        theme: isDark ? "dark" : "default",
+        theme: "neutral",
         securityLevel: "strict",
         fontFamily: "inherit",
       });
