@@ -186,9 +186,15 @@ class LoomProviderAdapter(LoomLLMProvider):
                 # Emit any tool calls from the finish event as delta events so
                 # loom.Agent can assemble them (some providers only emit tool
                 # calls in the finish frame, not as deltas).
+                # Only synthesize tool-call deltas for providers that DIDN'T
+                # already stream them. If we've seen any `tool_call_delta`
+                # event for a tc_id, its args are already assembled in loom's
+                # buffer — re-emitting the full payload here would duplicate.
                 finish_tool_calls = ev.get("tool_calls") or []
                 for idx, tc_dict in enumerate(finish_tool_calls):
                     tc_id = tc_dict.get("id", f"tc_{idx}")
+                    if tc_id in tool_parts and tool_parts[tc_id]["args"]:
+                        continue  # already streamed — skip
                     tc_name = tc_dict.get("name", "")
                     tc_args = tc_dict.get("arguments", {})
                     if isinstance(tc_args, dict):
@@ -196,12 +202,10 @@ class LoomProviderAdapter(LoomLLMProvider):
                     else:
                         tc_args_str = str(tc_args)
                     if tc_id not in tool_parts:
-                        # Emit start delta with name
                         yield lt.ToolCallDeltaEvent(
                             index=idx, id=tc_id, name=tc_name, arguments_delta=None
                         )
                         tool_parts[tc_id] = {"name": tc_name, "args": tc_args_str}
-                    # Emit args as a single delta
                     yield lt.ToolCallDeltaEvent(
                         index=idx, id=tc_id, name=None, arguments_delta=tc_args_str
                     )
