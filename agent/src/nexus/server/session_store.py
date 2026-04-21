@@ -25,6 +25,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from loom.hitl import HitlBroker, HitlEvent
+
 from ..agent.llm import ChatMessage, Role, ToolCall
 from .events import SessionEvent
 
@@ -132,8 +134,24 @@ class SessionStore:
         # session with at least one pending ``ask_user`` gets a dict of
         # request_id → Future. Both cleaned up lazily.
         self._subscribers: dict[str, list[asyncio.Queue[SessionEvent | None]]] = {}
-        self._pending: dict[str, dict[str, asyncio.Future[str]]] = {}
+        # HITL pending-futures + event publish delegate to a Loom
+        # ``HitlBroker``; the publish_hook forwards every broker event as
+        # a ``SessionEvent`` to the SSE fan-out so the UI sees the same
+        # ``user_request`` / ``user_request_auto`` / ``user_request_cancelled``
+        # kinds it always has.
+        self._broker = HitlBroker(
+            publish_hook=lambda sid, ev: self.publish(
+                sid, SessionEvent(kind=ev.kind, data=dict(ev.data))
+            )
+        )
         self._init_db()
+
+    # Public accessor for the underlying broker so ``AskUserHandler``
+    # can drive it directly (``ask()``) instead of duplicating the
+    # park-and-publish logic here.
+    @property
+    def broker(self) -> HitlBroker:
+        return self._broker
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,51 +416,37 @@ class SessionStore:
                     if not subs:
                         self._subscribers.pop(session_id, None)
 
-    # ── HITL pending futures ─────────────────────────────────────────
+    # ── HITL pending futures (delegates to loom HitlBroker) ──────────
 
     def register_pending(
         self, session_id: str, request_id: str
     ) -> asyncio.Future[str]:
-        """Create + register a Future for a HITL request. ``ask_user``
-        awaits it; ``resolve_pending`` / ``cancel_pending`` complete it."""
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-        with self._lock:
-            session_pending = self._pending.setdefault(session_id, {})
-            if request_id in session_pending:
-                raise ValueError(f"request_id already pending: {request_id!r}")
-            session_pending[request_id] = fut
-        return fut
+        """Register a ``request_id`` on this session's broker and return
+        the Future to await. Raises ``ValueError`` on duplicate ids so
+        the tool surfaces a clean error instead of shadowing a live
+        request."""
+        try:
+            return self._broker._register(session_id, request_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"request_id already pending: {request_id!r}"
+            ) from exc
 
     def resolve_pending(
         self, session_id: str, request_id: str, answer: str
     ) -> bool:
         """Resolve a waiting ``ask_user``. Returns True iff the request
         was pending and still live; False otherwise (stale / never
-        existed / already resolved). The ``/respond`` endpoint uses
-        this to 404 stale clicks."""
-        with self._lock:
-            session_pending = self._pending.get(session_id)
-            if session_pending is None:
-                return False
-            fut = session_pending.pop(request_id, None)
-            if not session_pending:
-                self._pending.pop(session_id, None)
-        if fut is None or fut.done():
-            return False
-        fut.set_result(answer)
-        return True
+        existed / already resolved)."""
+        return self._broker.resolve(session_id, request_id, answer)
 
     def cancel_pending(self, session_id: str, request_id: str) -> bool:
-        """Cancel a pending Future (e.g. on timeout). Returns True iff
-        it was present and still live."""
-        with self._lock:
-            session_pending = self._pending.get(session_id)
-            if session_pending is None:
-                return False
-            fut = session_pending.pop(request_id, None)
-            if not session_pending:
-                self._pending.pop(session_id, None)
+        """Cancel a pending Future. Returns True iff it was present and
+        still live. Does not publish a ``user_request_cancelled`` event
+        — the caller owns that wire message (matches the pre-broker
+        contract)."""
+        fut = self._broker._pending.pop((session_id, request_id), None)
+        self._broker._requests.pop((session_id, request_id), None)
         if fut is None or fut.done():
             return False
         fut.cancel()
@@ -451,10 +455,4 @@ class SessionStore:
     def _cancel_all_pending(self, session_id: str) -> None:
         """Called on reset/delete to drop every in-flight ask_user for
         this session. Best-effort: already-done futures are skipped."""
-        with self._lock:
-            session_pending = self._pending.pop(session_id, None)
-        if not session_pending:
-            return
-        for fut in session_pending.values():
-            if not fut.done():
-                fut.cancel()
+        self._broker.cancel_session(session_id, reason="session_reset")
