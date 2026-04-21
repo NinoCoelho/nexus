@@ -12,18 +12,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 # Import shared types from loom — Nexus and loom must agree on wire shapes.
-from loom.types import Role, ToolSpec, Usage
+from loom.types import Role, ToolSpec, Usage, ToolCall
 
 # StreamEvent is a plain TypedDict-style dict union; we use plain dicts for
 # zero-overhead yielding.  The "type" key is the discriminator.
 StreamEvent = dict[str, Any]
-
-
-class ToolCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    id: str
-    name: str
-    arguments: dict[str, Any]
 
 
 class ChatMessage(BaseModel):
@@ -103,11 +96,19 @@ class LLMProvider(ABC):
         if resp.content:
             yield {"type": "delta", "text": resp.content}
         finish_reason = resp.stop_reason.value
+        tool_calls_dicts: list[dict[str, Any]] = []
+        for tc in resp.tool_calls:
+            # arguments is now a JSON str — parse back to dict for the finish event
+            try:
+                args_dict = json.loads(tc.arguments)
+            except (json.JSONDecodeError, TypeError):
+                args_dict = {}
+            tool_calls_dicts.append({"id": tc.id, "name": tc.name, "arguments": args_dict})
         yield {
             "type": "finish",
             "finish_reason": finish_reason,
             "content": resp.content or "",
-            "tool_calls": [tc.model_dump() for tc in resp.tool_calls],
+            "tool_calls": tool_calls_dicts,
         }
 
     async def aclose(self) -> None:
@@ -275,6 +276,7 @@ class OpenAIProvider(LLMProvider):
                         tool_calls: list[dict[str, Any]] = []
                         for tc_id, buf in tool_bufs.items():
                             yield {"type": "tool_call_end", "id": tc_id}
+                            # Keep arguments as dict in the finish event (loop.py consumes it)
                             try:
                                 args = json.loads(buf["args_buf"] or "{}")
                             except json.JSONDecodeError:
@@ -406,23 +408,24 @@ class AnthropicProvider(LLMProvider):
                         yield {"type": "tool_call_end", "id": block_id}
 
                 elif etype == "message_stop":
-                    tool_calls: list[dict[str, Any]] = []
+                    tool_calls_dicts: list[dict[str, Any]] = []
                     for tc_id, buf in tool_bufs.items():
+                        # Keep arguments as dict in the finish event (loop.py consumes it)
                         try:
                             args = json.loads(buf["args_buf"] or "{}")
                         except json.JSONDecodeError:
                             args = {}
-                        tool_calls.append({"id": tc_id, "name": buf["name"], "arguments": args})
+                        tool_calls_dicts.append({"id": tc_id, "name": buf["name"], "arguments": args})
 
                     msg = await stream.get_final_message()
-                    finish_reason = "tool_calls" if tool_calls else "stop"
+                    finish_reason = "tool_calls" if tool_calls_dicts else "stop"
                     if msg.stop_reason == "max_tokens":
                         finish_reason = "length"
                     yield {
                         "type": "finish",
                         "finish_reason": finish_reason,
                         "content": full_text,
-                        "tool_calls": tool_calls,
+                        "tool_calls": tool_calls_dicts,
                         "usage": _usage_from_anthropic(getattr(msg, "usage", None)).model_dump(),
                     }
 
@@ -441,7 +444,8 @@ def _encode_msg(m: ChatMessage) -> dict[str, Any]:
             {
                 "id": tc.id,
                 "type": "function",
-                "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                # arguments is now a JSON str — pass through directly
+                "function": {"name": tc.name, "arguments": tc.arguments},
             }
             for tc in m.tool_calls
         ]
@@ -477,10 +481,13 @@ def _decode_openai(data: dict[str, Any]) -> ChatResponse:
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function", {})
         args_raw = fn.get("arguments", "{}")
-        args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-        if not isinstance(args, dict):
-            raise ValueError(f"tool args not an object: {args_raw!r}")
-        tool_calls.append(ToolCall(id=tc.get("id", fn.get("name", "")), name=fn["name"], arguments=args))
+        # Normalise: loom ToolCall.arguments is a JSON str.
+        # If the provider already sent a string, use as-is; otherwise encode.
+        if isinstance(args_raw, str):
+            args_str = args_raw
+        else:
+            args_str = json.dumps(args_raw)
+        tool_calls.append(ToolCall(id=tc.get("id", fn.get("name", "")), name=fn["name"], arguments=args_str))
     stop_reason = _FINISH_MAP.get(choice.get("finish_reason") or "stop", StopReason.UNKNOWN)
     return ChatResponse(
         content=msg.get("content"),
@@ -533,8 +540,13 @@ def _encode_msg_anthropic(m: ChatMessage) -> dict[str, Any]:
         if m.content:
             content.append({"type": "text", "text": m.content})
         for tc in m.tool_calls:
+            # Anthropic expects input as a dict object, not a JSON string
+            try:
+                input_dict = json.loads(tc.arguments)
+            except (json.JSONDecodeError, TypeError):
+                input_dict = {}
             content.append(
-                {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments}
+                {"type": "tool_use", "id": tc.id, "name": tc.name, "input": input_dict}
             )
         return {"role": "assistant", "content": content}
     return {"role": m.role.value, "content": m.content or ""}
@@ -551,7 +563,8 @@ def _decode_anthropic(resp: Any) -> ChatResponse:
         if block.type == "text":
             text_parts.append(block.text)
         elif block.type == "tool_use":
-            tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
+            # block.input is a dict — encode to JSON str for loom ToolCall
+            tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=json.dumps(block.input)))
     stop_reason = StopReason.TOOL_CALLS if tool_calls else StopReason.STOP
     if resp.stop_reason == "max_tokens":
         stop_reason = StopReason.LENGTH

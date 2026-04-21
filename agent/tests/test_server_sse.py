@@ -115,6 +115,7 @@ async def _serve(
 
 def _ask_user_response(prompt: str = "Proceed?") -> ChatResponse:
     """Scripted LLM response: ask_user tool call."""
+    import json as _json
     return ChatResponse(
         content=None,
         stop_reason=StopReason.TOOL_CALLS,
@@ -122,11 +123,11 @@ def _ask_user_response(prompt: str = "Proceed?") -> ChatResponse:
             ToolCall(
                 id="call_1",
                 name="ask_user",
-                arguments={
+                arguments=_json.dumps({
                     "prompt": prompt,
                     "kind": "confirm",
                     "timeout_seconds": 5,
-                },
+                }),
             )
         ],
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -316,7 +317,11 @@ class Agent:
             )
             for tc in response.tool_calls:
                 acc_tool_calls += 1
-                self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
+                try:
+                    _tc_args_dict: dict[str, Any] = json.loads(tc.arguments) if tc.arguments else {}
+                except (json.JSONDecodeError, TypeError):
+                    _tc_args_dict = {}
+                self._emit("tool_call", {"name": tc.name, "args": _tc_args_dict}, trace)
                 result = await self._handle(tc, skills_touched)
                 self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
                 messages.append(
@@ -509,13 +514,20 @@ class Agent:
                 }
                 return
 
-            # Tool calls to execute
+            # Tool calls to execute.
+            # current_tool_calls dicts carry arguments as a plain dict (from streaming buffers);
+            # loom ToolCall.arguments is a JSON string — encode here.
             messages.append(
                 ChatMessage(
                     role=Role.ASSISTANT,
                     content=current_content or None,
                     tool_calls=[
-                        ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
+                        ToolCall(
+                            id=tc["id"],
+                            name=tc["name"],
+                            arguments=tc["arguments"] if isinstance(tc["arguments"], str)
+                            else json.dumps(tc["arguments"]),
+                        )
                         for tc in current_tool_calls
                     ],
                 )
@@ -523,9 +535,13 @@ class Agent:
 
             for tc_dict in current_tool_calls:
                 acc_tool_calls += 1
-                tc = ToolCall(id=tc_dict["id"], name=tc_dict["name"], arguments=tc_dict["arguments"])
-                self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
-                yield {"type": "tool_exec_start", "name": tc.name, "args": tc.arguments}
+                args_str = (
+                    tc_dict["arguments"] if isinstance(tc_dict["arguments"], str)
+                    else json.dumps(tc_dict["arguments"])
+                )
+                tc = ToolCall(id=tc_dict["id"], name=tc_dict["name"], arguments=args_str)
+                self._emit("tool_call", {"name": tc.name, "args": tc_dict["arguments"]}, trace)
+                yield {"type": "tool_exec_start", "name": tc.name, "args": tc_dict["arguments"]}
                 result = await self._handle(tc, skills_touched)
                 self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
                 yield {"type": "tool_exec_result", "name": tc.name, "result_preview": result[:200]}
@@ -555,47 +571,53 @@ class Agent:
         }
 
     async def _handle(self, tc: ToolCall, skills_touched: list[str]) -> str:
+        # tc.arguments is a JSON string (loom convention); parse to dict for all handlers.
+        try:
+            args: dict[str, Any] = json.loads(tc.arguments) if tc.arguments else {}
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+
         if tc.name in {"skills_list", "skill_view"}:
-            return self._state.invoke(tc.name, tc.arguments).to_text()
+            return self._state.invoke(tc.name, args).to_text()
 
         if tc.name == "skill_manage":
-            action = tc.arguments.get("action", "")
-            name = tc.arguments.get("name", "")
-            result = self._manager.invoke(action, tc.arguments)
+            action = args.get("action", "")
+            name = args.get("name", "")
+            result = self._manager.invoke(action, args)
             if name:
                 skills_touched.append(name)
             return f'{{"ok": {str(result.ok).lower()}, "message": {result.message!r}, "rolled_back": {str(result.rolled_back).lower()}}}'
 
         if tc.name == "http_call":
-            res = await self._http.invoke(tc.arguments)
+            res = await self._http.invoke(args)
             return res.to_text()
 
         if tc.name == "acp_call":
-            agent_id = tc.arguments.get("agent_id", "")
-            message = tc.arguments.get("message", "")
+            agent_id = args.get("agent_id", "")
+            message = args.get("message", "")
             return await acp_call(agent_id, message)
 
         if tc.name in {"vault_list", "vault_read", "vault_write"}:
-            return handle_vault_tool(tc.name, tc.arguments)
+            return handle_vault_tool(tc.name, args)
 
         if tc.name == "kanban_manage":
-            return handle_kanban_tool(tc.arguments)
+            return handle_kanban_tool(args)
 
         if tc.name == "ask_user" and self._ask_user_handler is not None:
-            ask_result = await self._ask_user_handler.invoke(tc.arguments)
+            ask_result = await self._ask_user_handler.invoke(args)
             return ask_result.to_text()
 
         if tc.name == "terminal" and self._terminal_handler is not None:
-            term_result = await self._terminal_handler.invoke(tc.arguments)
+            term_result = await self._terminal_handler.invoke(args)
             return term_result.to_text()
 
         if tc.name == "memory_read":
-            return await MemoryHandler().read(tc.arguments.get("key", ""))
+            return await MemoryHandler().read(args.get("key", ""))
 
         if tc.name == "memory_write":
             return await MemoryHandler().write(
-                tc.arguments.get("key", ""),
-                tc.arguments.get("content", ""),
+                args.get("key", ""),
+                args.get("content", ""),
             )
 
         return f"error: unknown tool {tc.name!r}"

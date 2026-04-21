@@ -107,7 +107,14 @@ def _row_to_message(row: tuple) -> ChatMessage:
     tool_calls: list[ToolCall] | None = None
     if tool_calls_json:
         raw = json.loads(tool_calls_json)
-        tool_calls = [ToolCall(**tc) for tc in raw]
+        normalised: list[ToolCall] = []
+        for tc in raw:
+            # Legacy rows stored arguments as a dict; loom ToolCall expects a JSON string.
+            args = tc.get("arguments", {})
+            if not isinstance(args, str):
+                args = json.dumps(args)
+            normalised.append(ToolCall(id=tc["id"], name=tc["name"], arguments=args))
+        tool_calls = normalised
     return ChatMessage(
         role=Role(role),
         content=content or None,

@@ -85,7 +85,7 @@ def test_build_agent_graph_with_sessions():
 
     # Simulate a session that touched the "search" skill
     from nexus.agent.llm import ChatMessage, Role, ToolCall
-    tool_call = ToolCall(id="tc1", name="search__run", arguments={})
+    tool_call = ToolCall(id="tc1", name="search__run", arguments="{}")
     msg_with_tool = ChatMessage(role=Role.ASSISTANT, content=None, tool_calls=[tool_call])
 
     mock_session = MagicMock()
