@@ -17,7 +17,6 @@ from nexus.agent.llm import (
     Role,
     StopReason,
     Usage,
-    ToolCall,
 )
 
 

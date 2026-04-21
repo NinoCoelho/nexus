@@ -18,11 +18,12 @@ from loom.types import (
     ChatMessage,
     ChatResponse,
     StopReason,
+    ContentDeltaEvent,
+    ToolCallDeltaEvent,
+    UsageEvent,
+    StopEvent,
+    StreamEvent,
 )
-
-# StreamEvent is a plain TypedDict-style dict union; we use plain dicts for
-# zero-overhead yielding.  The "type" key is the discriminator.
-StreamEvent = dict[str, Any]
 
 
 class LLMError(Exception):
@@ -72,26 +73,20 @@ class LLMProvider(ABC):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        # Default fallback: call non-streaming chat and synthesize events.
+        # Default fallback: call non-streaming chat and synthesize loom Pydantic events.
         resp = await self.chat(messages, tools=tools, model=model)
         content = resp.message.content
         if content:
-            yield {"type": "delta", "text": content}
-        finish_reason = resp.stop_reason.value
-        tool_calls_dicts: list[dict[str, Any]] = []
-        for tc in resp.message.tool_calls or []:
-            # arguments is now a JSON str — parse back to dict for the finish event
-            try:
-                args_dict = json.loads(tc.arguments)
-            except (json.JSONDecodeError, TypeError):
-                args_dict = {}
-            tool_calls_dicts.append({"id": tc.id, "name": tc.name, "arguments": args_dict})
-        yield {
-            "type": "finish",
-            "finish_reason": finish_reason,
-            "content": content or "",
-            "tool_calls": tool_calls_dicts,
-        }
+            yield ContentDeltaEvent(delta=content)
+        for idx, tc in enumerate(resp.message.tool_calls or []):
+            yield ToolCallDeltaEvent(
+                index=idx,
+                id=tc.id,
+                name=tc.name,
+                arguments_delta=tc.arguments,
+            )
+        yield UsageEvent(usage=resp.usage)
+        yield StopEvent(stop_reason=resp.stop_reason)
 
     async def aclose(self) -> None:
         return
@@ -200,15 +195,15 @@ class OpenAIProvider(LLMProvider):
                         body=parsed,
                     )
 
-                # Aggregated state for the finish event
-                full_text = ""
-                # id -> {name, args_buf}
-                tool_bufs: dict[str, dict[str, Any]] = {}
+                # Tracking state for accumulating streaming tool calls.
+                # index -> {id, name}  — tracks which indices have been announced
+                seen_indices: dict[int, dict[str, str]] = {}
 
                 # Many OpenAI-compat providers emit the `usage` object only
                 # on the final SSE frame after all choice deltas — we stash
-                # it here and attach it to our synthesized `finish` event.
+                # it here and emit as a UsageEvent before StopEvent.
                 stream_usage = Usage()
+                stop_reason: StopReason = StopReason.STOP
 
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
@@ -229,50 +224,41 @@ class OpenAIProvider(LLMProvider):
                     if not choices:
                         continue
                     delta = choices[0].get("delta", {})
-                    finish_reason = choices[0].get("finish_reason")
+                    finish_reason_str = choices[0].get("finish_reason")
 
                     # Text delta
                     text_piece = delta.get("content")
                     if text_piece:
-                        full_text += text_piece
-                        yield {"type": "delta", "text": text_piece}
+                        yield ContentDeltaEvent(delta=text_piece)
 
                     # Tool call deltas
                     for tc_delta in delta.get("tool_calls") or []:
                         idx = tc_delta.get("index", 0)
-                        tc_id = tc_delta.get("id", f"tc_{idx}")
+                        tc_id = tc_delta.get("id")
                         fn = tc_delta.get("function", {})
-                        tc_name = fn.get("name", "")
-                        args_delta = fn.get("arguments", "")
+                        tc_name = fn.get("name")
+                        args_delta = fn.get("arguments") or ""
 
-                        if tc_id not in tool_bufs and tc_name:
-                            tool_bufs[tc_id] = {"name": tc_name, "args_buf": ""}
-                            yield {"type": "tool_call_start", "id": tc_id, "name": tc_name}
+                        if idx not in seen_indices:
+                            # First time seeing this index — announce id + name
+                            seen_indices[idx] = {
+                                "id": tc_id or f"tc_{idx}",
+                                "name": tc_name or "",
+                            }
+                            yield ToolCallDeltaEvent(
+                                index=idx,
+                                id=tc_id or f"tc_{idx}",
+                                name=tc_name or "",
+                                arguments_delta=args_delta or None,
+                            )
+                        elif args_delta:
+                            yield ToolCallDeltaEvent(index=idx, arguments_delta=args_delta)
 
-                        if args_delta and tc_id in tool_bufs:
-                            tool_bufs[tc_id]["args_buf"] += args_delta
-                            yield {"type": "tool_call_delta", "id": tc_id, "args_delta": args_delta}
+                    if finish_reason_str is not None:
+                        stop_reason = _FINISH_MAP.get(finish_reason_str or "stop", StopReason.UNKNOWN)
 
-                    if finish_reason is not None:
-                        # Emit tool_call_end for each accumulated tool call
-                        tool_calls: list[dict[str, Any]] = []
-                        for tc_id, buf in tool_bufs.items():
-                            yield {"type": "tool_call_end", "id": tc_id}
-                            # Keep arguments as dict in the finish event (loop.py consumes it)
-                            try:
-                                args = json.loads(buf["args_buf"] or "{}")
-                            except json.JSONDecodeError:
-                                args = {}
-                            tool_calls.append({"id": tc_id, "name": buf["name"], "arguments": args})
-
-                        mapped = _FINISH_MAP.get(finish_reason or "stop", StopReason.UNKNOWN).value
-                        yield {
-                            "type": "finish",
-                            "finish_reason": mapped,
-                            "content": full_text,
-                            "tool_calls": tool_calls,
-                            "usage": stream_usage.model_dump(),
-                        }
+                yield UsageEvent(usage=stream_usage)
+                yield StopEvent(stop_reason=stop_reason)
         except httpx.HTTPError as exc:
             raise LLMTransportError(str(exc)) from exc
 
@@ -342,8 +328,10 @@ class AnthropicProvider(LLMProvider):
         if tools:
             kwargs["tools"] = [_encode_tool_anthropic(t) for t in tools]
 
-        full_text = ""
-        tool_bufs: dict[str, dict[str, Any]] = {}  # id -> {name, args_buf}
+        # index -> {id, name} — Anthropic uses block index (position) as the index
+        # for ToolCallDeltaEvent; the block.id is Anthropic's own identifier.
+        # We map: content_block_start index → ToolCallDeltaEvent.index
+        block_index_map: dict[int, str] = {}  # block position index -> block id
 
         async with self._client.messages.stream(**kwargs) as stream:
             async for event in stream:
@@ -352,64 +340,39 @@ class AnthropicProvider(LLMProvider):
                 if etype == "content_block_start":
                     block = event.content_block
                     if block.type == "tool_use":
-                        tool_bufs[block.id] = {"name": block.name, "args_buf": ""}
-                        yield {"type": "tool_call_start", "id": block.id, "name": block.name}
+                        loom_idx = len(block_index_map)
+                        block_index_map[event.index] = block.id
+                        yield ToolCallDeltaEvent(
+                            index=loom_idx,
+                            id=block.id,
+                            name=block.name,
+                        )
 
                 elif etype == "content_block_delta":
                     delta = event.delta
                     if delta.type == "text_delta":
-                        full_text += delta.text
-                        yield {"type": "delta", "text": delta.text}
+                        yield ContentDeltaEvent(delta=delta.text)
                     elif delta.type == "input_json_delta":
-                        # Find the block being built — Anthropic gives us index
-                        block_id = None
-                        # event.index tells us position; map to id via order
-                        for tid, buf in tool_bufs.items():
-                            if buf.get("_index") == event.index:
-                                block_id = tid
-                                break
-                        if block_id is None:
-                            # store index on first delta for this block
-                            for tid, buf in tool_bufs.items():
-                                if "_index" not in buf:
-                                    buf["_index"] = event.index
-                                    block_id = tid
-                                    break
-                        if block_id and block_id in tool_bufs:
-                            tool_bufs[block_id]["args_buf"] += delta.partial_json
-                            yield {"type": "tool_call_delta", "id": block_id, "args_delta": delta.partial_json}
-
-                elif etype == "content_block_stop":
-                    # Identify which tool call ended by index
-                    block_id = None
-                    for tid, buf in tool_bufs.items():
-                        if buf.get("_index") == event.index:
-                            block_id = tid
-                            break
-                    if block_id:
-                        yield {"type": "tool_call_end", "id": block_id}
+                        # Map Anthropic block index to our loom sequential index
+                        block_id = block_index_map.get(event.index)
+                        if block_id is not None:
+                            loom_idx = list(block_index_map.values()).index(block_id)
+                            yield ToolCallDeltaEvent(
+                                index=loom_idx,
+                                arguments_delta=delta.partial_json,
+                            )
 
                 elif etype == "message_stop":
-                    tool_calls_dicts: list[dict[str, Any]] = []
-                    for tc_id, buf in tool_bufs.items():
-                        # Keep arguments as dict in the finish event (loop.py consumes it)
-                        try:
-                            args = json.loads(buf["args_buf"] or "{}")
-                        except json.JSONDecodeError:
-                            args = {}
-                        tool_calls_dicts.append({"id": tc_id, "name": buf["name"], "arguments": args})
-
                     msg = await stream.get_final_message()
-                    finish_reason = "tool_use" if tool_calls_dicts else "stop"
-                    if msg.stop_reason == "max_tokens":
-                        finish_reason = "length"
-                    yield {
-                        "type": "finish",
-                        "finish_reason": finish_reason,
-                        "content": full_text,
-                        "tool_calls": tool_calls_dicts,
-                        "usage": _usage_from_anthropic(getattr(msg, "usage", None)).model_dump(),
-                    }
+                    stop_reason: StopReason
+                    if msg.stop_reason == "tool_use":
+                        stop_reason = StopReason.TOOL_USE
+                    elif msg.stop_reason == "max_tokens":
+                        stop_reason = StopReason.LENGTH
+                    else:
+                        stop_reason = StopReason.STOP
+                    yield UsageEvent(usage=_usage_from_anthropic(getattr(msg, "usage", None)))
+                    yield StopEvent(stop_reason=stop_reason)
 
     async def aclose(self) -> None:
         await self._client.close()

@@ -23,6 +23,7 @@ from .llm import (
     ToolSpec,
     Usage,
 )
+from loom.types import ContentDeltaEvent, ToolCallDeltaEvent, UsageEvent, StopEvent
 from .prompt_builder import build_system_prompt
 from .terminal_tool import TERMINAL_TOOL, TerminalHandler
 from ..error_classifier import ClassifiedError, FailoverReason, classify_api_error
@@ -406,11 +407,12 @@ class Agent:
         for iteration in range(1, max_iter + 1):
             self._emit("iter", {"n": iteration}, trace)
 
-            # Collect tool calls from this provider pass
-            current_tool_calls: list[dict[str, Any]] = []
+            # Collect tool calls from this provider pass.
+            # index -> {id, name, args_buf} for accumulating streaming tool calls.
+            _tc_by_index: dict[int, dict[str, Any]] = {}
             current_content = ""
-            finish_reason = "stop"
-            current_usage: dict[str, int] = {}
+            current_stop_reason: StopReason = StopReason.STOP
+            current_usage_obj: Usage = Usage()
 
             # Streaming retry: we can only retry BEFORE the first event has
             # been forwarded to the caller — once bytes are on the wire the
@@ -419,26 +421,40 @@ class Agent:
             # we receive and disables retry thereafter.
             streamed_any = False
             for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
+                # Reset accumulators on each attempt so a retry starts clean.
+                _tc_by_index = {}
+                current_content = ""
+                current_stop_reason = StopReason.STOP
+                current_usage_obj = Usage()
                 try:
                     async for event in provider.chat_stream(
                         messages, tools=tools, model=upstream_model
                     ):
                         streamed_any = True
-                        etype = event.get("type")
 
-                        if etype == "delta":
-                            full_text += event["text"]
-                            current_content += event["text"]
-                            yield event
+                        if isinstance(event, ContentDeltaEvent):
+                            full_text += event.delta
+                            current_content += event.delta
+                            # Re-yield as dict for app.py (which still uses dict events)
+                            yield {"type": "delta", "text": event.delta}
 
-                        elif etype in ("tool_call_start", "tool_call_delta", "tool_call_end"):
-                            yield event
+                        elif isinstance(event, ToolCallDeltaEvent):
+                            idx = event.index
+                            if idx not in _tc_by_index:
+                                _tc_by_index[idx] = {
+                                    "id": event.id or f"tc_{idx}",
+                                    "name": event.name or "",
+                                    "args_buf": event.arguments_delta or "",
+                                }
+                            else:
+                                _tc_by_index[idx]["args_buf"] += event.arguments_delta or ""
 
-                        elif etype == "finish":
-                            finish_reason = event.get("finish_reason", "stop")
-                            current_content = event.get("content", current_content)
-                            current_tool_calls = event.get("tool_calls", [])
-                            current_usage = event.get("usage") or {}
+                        elif isinstance(event, UsageEvent):
+                            current_usage_obj = event.usage
+
+                        elif isinstance(event, StopEvent):
+                            current_stop_reason = event.stop_reason
+
                     break  # stream ended cleanly — exit retry loop
                 except LLMTransportError as exc:
                     classified = self._classify(
@@ -487,14 +503,22 @@ class Agent:
                     )
                     await asyncio.sleep(delay)
 
-            # Fold the provider-reported usage into the per-turn accumulator
-            # as soon as we have it. We do this regardless of whether this
-            # iteration was terminal or produced more tool calls — every
-            # round-trip counts toward cost.
-            acc_in += int(current_usage.get("input_tokens") or 0)
-            acc_out += int(current_usage.get("output_tokens") or 0)
+            # Fold the provider-reported usage into the per-turn accumulator.
+            acc_in += current_usage_obj.input_tokens
+            acc_out += current_usage_obj.output_tokens
 
-            if finish_reason != "tool_use" or not current_tool_calls:
+            # Materialise the accumulated streaming tool calls into ToolCall objects.
+            # args_buf is a JSON string accumulated from arguments_delta pieces.
+            current_tool_calls: list[ToolCall] = []
+            for idx in sorted(_tc_by_index):
+                buf = _tc_by_index[idx]
+                current_tool_calls.append(ToolCall(
+                    id=buf["id"],
+                    name=buf["name"],
+                    arguments=buf["args_buf"] if buf["args_buf"] else "{}",
+                ))
+
+            if current_stop_reason != StopReason.TOOL_USE or not current_tool_calls:
                 # Terminal: no more tool calls
                 messages.append(ChatMessage(role=Role.ASSISTANT, content=current_content or full_text))
                 self._emit("reply", {"text": (current_content or full_text)[:200]}, trace)
@@ -516,33 +540,22 @@ class Agent:
                 return
 
             # Tool calls to execute.
-            # current_tool_calls dicts carry arguments as a plain dict (from streaming buffers);
-            # loom ToolCall.arguments is a JSON string — encode here.
             messages.append(
                 ChatMessage(
                     role=Role.ASSISTANT,
                     content=current_content or None,
-                    tool_calls=[
-                        ToolCall(
-                            id=tc["id"],
-                            name=tc["name"],
-                            arguments=tc["arguments"] if isinstance(tc["arguments"], str)
-                            else json.dumps(tc["arguments"]),
-                        )
-                        for tc in current_tool_calls
-                    ],
+                    tool_calls=current_tool_calls,
                 )
             )
 
-            for tc_dict in current_tool_calls:
+            for tc in current_tool_calls:
                 acc_tool_calls += 1
-                args_str = (
-                    tc_dict["arguments"] if isinstance(tc_dict["arguments"], str)
-                    else json.dumps(tc_dict["arguments"])
-                )
-                tc = ToolCall(id=tc_dict["id"], name=tc_dict["name"], arguments=args_str)
-                self._emit("tool_call", {"name": tc.name, "args": tc_dict["arguments"]}, trace)
-                yield {"type": "tool_exec_start", "name": tc.name, "args": tc_dict["arguments"]}
+                try:
+                    _tc_args_dict_stream: dict[str, Any] = json.loads(tc.arguments) if tc.arguments else {}
+                except (json.JSONDecodeError, TypeError):
+                    _tc_args_dict_stream = {}
+                self._emit("tool_call", {"name": tc.name, "args": _tc_args_dict_stream}, trace)
+                yield {"type": "tool_exec_start", "name": tc.name, "args": _tc_args_dict_stream}
                 result = await self._handle(tc, skills_touched)
                 self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
                 yield {"type": "tool_exec_result", "name": tc.name, "result_preview": result[:200]}
