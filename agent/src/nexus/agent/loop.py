@@ -86,6 +86,54 @@ class AgentTurn:
     model: str | None = None
 
 
+_AFFIRMATIVES = frozenset({
+    "yes", "y", "ok", "okay", "sure", "correct", "right", "yeah", "yep",
+    "go ahead", "proceed", "continue", "please", "do it",
+})
+_NEGATIVES = frozenset({
+    "no", "n", "nope", "cancel", "stop", "don't", "dont", "negative",
+})
+
+
+def _extract_pending_question(reply: str) -> str | None:
+    """Return the last question the agent asked, if the reply ends with one.
+
+    Looks at the last ``?`` in the reply and walks back up to the
+    previous newline (or 200 chars, whichever comes first). If the user
+    answers with a terse affirmative/negative on the next turn,
+    ``_annotate_short_reply`` uses this string to disambiguate which
+    question they're answering — because the LLM frequently loses track
+    when we pass bare "yes" into a multi-turn conversation.
+    """
+    last_q = reply.rfind("?")
+    if last_q == -1:
+        return None
+    start = max(0, last_q - 200)
+    segment = reply[start:last_q + 1]
+    first_nl = segment.find("\n")
+    if first_nl >= 0:
+        segment = segment[first_nl + 1:]
+    if len(segment) > 500:
+        segment = segment[-500:]
+    stripped = segment.strip()
+    return stripped or None
+
+
+def _annotate_short_reply(user_text: str, pending_question: str | None) -> str | None:
+    """If the user's message is a bare yes/no and we have a pending
+    question on record, expand the message with the question context so
+    the LLM doesn't have to guess what's being answered. Returns the
+    annotated message, or None if no annotation applies."""
+    if not pending_question:
+        return None
+    stripped = user_text.strip().lower()
+    if stripped in _AFFIRMATIVES:
+        return f'{user_text} (affirmative answer to: "{pending_question}")'
+    if stripped in _NEGATIVES:
+        return f'{user_text} (negative answer to: "{pending_question}")'
+    return None
+
+
 class Agent:
     def __init__(
         self,
@@ -105,6 +153,10 @@ class Agent:
         self._http = HttpCallHandler()
         self._provider_registry = provider_registry
         self._nexus_cfg = nexus_cfg
+        # The last question the agent asked, tracked across turns so a
+        # terse "yes"/"no" on the next turn can be expanded with the
+        # original question for the LLM. Reset on every new reply.
+        self._pending_question: str | None = None
         # ask_user only makes sense in a live /chat session — without a
         # SessionStore wired in, the tool has nowhere to publish the
         # event or park the Future. The server supplies this; CLI-only
@@ -255,7 +307,10 @@ class Agent:
         else:
             messages = list(history)
 
-        messages.append(ChatMessage(role=Role.USER, content=user_message))
+        annotated = _annotate_short_reply(user_message, self._pending_question)
+        messages.append(
+            ChatMessage(role=Role.USER, content=annotated or user_message)
+        )
         tools = self._tools()
 
         provider, upstream_model = self._resolve_provider(chosen_model)
@@ -294,6 +349,7 @@ class Agent:
             if response.stop_reason != StopReason.TOOL_CALLS or not response.tool_calls:
                 reply_text = response.content or ""
                 messages.append(ChatMessage(role=Role.ASSISTANT, content=reply_text))
+                self._pending_question = _extract_pending_question(reply_text)
                 self._emit("reply", {"text": reply_text[:200]}, trace)
                 return AgentTurn(
                     reply=reply_text,
@@ -370,7 +426,10 @@ class Agent:
         else:
             messages = list(history)
 
-        messages.append(ChatMessage(role=Role.USER, content=user_message))
+        annotated = _annotate_short_reply(user_message, self._pending_question)
+        messages.append(
+            ChatMessage(role=Role.USER, content=annotated or user_message)
+        )
         tools = self._tools()
 
         provider, upstream_model = self._resolve_provider(chosen_model)
@@ -490,8 +549,10 @@ class Agent:
 
             if finish_reason != "tool_calls" or not current_tool_calls:
                 # Terminal: no more tool calls
-                messages.append(ChatMessage(role=Role.ASSISTANT, content=current_content or full_text))
-                self._emit("reply", {"text": (current_content or full_text)[:200]}, trace)
+                final_reply = current_content or full_text
+                messages.append(ChatMessage(role=Role.ASSISTANT, content=final_reply))
+                self._pending_question = _extract_pending_question(final_reply)
+                self._emit("reply", {"text": final_reply[:200]}, trace)
                 yield {
                     "type": "done",
                     "session_id": session_id,
