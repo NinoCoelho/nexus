@@ -51,7 +51,23 @@ DEFAULT_MAX_TOOL_ITERATIONS = 32
 SKILL_MANAGE_TOOL = ToolSpec(
     name="skill_manage",
     description=(
-        "Create, edit, patch, delete, write_file, or remove_file for a skill in the registry."
+        "Create, edit, patch, delete, write_file, or remove_file for a skill in the registry. "
+        "A skill is a prescriptive procedure you wrote for future-you, NOT a copy of library docs. "
+        "Every SKILL.md MUST have this shape:\n\n"
+        "  ---\n"
+        "  name: <kebab-case>\n"
+        "  description: <imperative one-liner — 'Use this whenever X; prefer over Y.' "
+        "Not 'A library that does X'.>\n"
+        "  ---\n\n"
+        "  ## When to use\n"
+        "  - Trigger conditions (concrete, e.g. 'fetching any web page, especially bot-protected or JS-rendered').\n"
+        "  - What to reach for this INSTEAD of (e.g. 'prefer over curl/terminal for web fetches').\n\n"
+        "  ## Steps\n"
+        "  1. Numbered, runnable. Paste the exact commands/snippets that worked.\n\n"
+        "  ## Gotchas\n"
+        "  - Known failure modes and how to recover (auth walls, rate limits, missing deps).\n\n"
+        "Write in the imperative voice of a teammate handing off a recipe. Skip background theory and "
+        "library-feature tours — those belong in upstream docs. If the skill won't save a future-you turn, don't create it."
     ),
     parameters={
         "type": "object",
@@ -60,8 +76,16 @@ SKILL_MANAGE_TOOL = ToolSpec(
                 "type": "string",
                 "enum": ["create", "edit", "patch", "delete", "write_file", "remove_file"],
             },
-            "name": {"type": "string", "description": "Skill name (directory name)."},
-            "content": {"type": "string", "description": "Full SKILL.md content (create/edit)."},
+            "name": {"type": "string", "description": "Skill name (directory name, kebab-case)."},
+            "content": {
+                "type": "string",
+                "description": (
+                    "Full SKILL.md content (create/edit). Must follow the template in the tool "
+                    "description: frontmatter with `name` + imperative `description`, then "
+                    "`## When to use`, `## Steps`, `## Gotchas`. Description is an order "
+                    "('Use this whenever...'), not a summary ('A library that...')."
+                ),
+            },
             "old": {"type": "string", "description": "Text to find (patch)."},
             "new": {"type": "string", "description": "Replacement text (patch)."},
             "path": {"type": "string", "description": "Relative file path (write_file/remove_file)."},
