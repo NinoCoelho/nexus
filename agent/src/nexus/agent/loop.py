@@ -435,6 +435,22 @@ class Agent:
                 model_used = ctx.get("model") or self._chosen_model
                 # Grab the most recent full_text as reply
                 reply_text = full_text
+                # Prefer the assembled message list from loom (includes
+                # tool_calls + TOOL role messages). Strip system messages
+                # (re-built each turn by before_llm_call). Fall back to a
+                # plain user+assistant synthesis if loom didn't provide one.
+                loom_msgs = ctx.get("messages")
+                if loom_msgs:
+                    persisted_messages = [
+                        _from_loom_message(lt.ChatMessage(**m))
+                        for m in loom_msgs
+                        if m.get("role") != "system"
+                    ]
+                else:
+                    persisted_messages = _history_snapshot + [
+                        ChatMessage(role=Role.USER, content=user_msg_content),
+                        ChatMessage(role=Role.ASSISTANT, content=reply_text),
+                    ]
                 yield {
                     "type": "done",
                     "session_id": session_id,
@@ -442,10 +458,7 @@ class Agent:
                     "trace": list(self._turn_trace),
                     "skills_touched": list(self._skills_touched),
                     "iterations": ctx.get("iterations", 0),
-                    "messages": _history_snapshot + [
-                        ChatMessage(role=Role.USER, content=user_msg_content),
-                        ChatMessage(role=Role.ASSISTANT, content=reply_text),
-                    ],
+                    "messages": persisted_messages,
                     "usage": {
                         "input_tokens": ctx.get("input_tokens", 0),
                         "output_tokens": ctx.get("output_tokens", 0),
