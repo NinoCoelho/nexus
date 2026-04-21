@@ -286,7 +286,7 @@ def build_tool_registry(
     from ..tools.acp_call import ACP_CALL_TOOL, acp_call
     from ..tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
     from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
-    from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
+    from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_RECALL_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from ..tools.state_tool import STATE_TOOLS, StateToolHandler
     from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
     from ..agent.ask_user_tool import ASK_USER_TOOL
@@ -346,15 +346,19 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
 
-    # memory_read / memory_write
+    # memory_read / memory_write / memory_recall
     async def _mem_read(args: dict) -> str:
         return await MemoryHandler().read(args.get("key", ""))
 
     async def _mem_write(args: dict) -> str:
         return await MemoryHandler().write(args.get("key", ""), args.get("content", ""))
 
+    async def _mem_recall(args: dict) -> str:
+        return await MemoryHandler().recall(args.get("query", ""), int(args.get("limit", 5)))
+
     registry.register(_SimpleToolHandler(MEMORY_READ_TOOL, _mem_read))
     registry.register(_SimpleToolHandler(MEMORY_WRITE_TOOL, _mem_write))
+    registry.register(_SimpleToolHandler(MEMORY_RECALL_TOOL, _mem_recall))
 
     # HITL tools — always registered; handlers resolved at dispatch time.
     # This lets app.py late-bind handlers without rebuilding the registry.

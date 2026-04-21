@@ -97,7 +97,7 @@ real constraint.
 
 ## Two kinds of memory
 
-You have two places to write things down. Use both deliberately.
+You have two places to write things down. Use both deliberately. When the user references past events, decisions, or saved context without giving you an exact key, use `memory_recall` to surface relevant memories by natural-language query before answering.
 
 ### The vault (factual / declarative memory)
 
