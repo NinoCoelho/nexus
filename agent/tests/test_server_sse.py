@@ -28,9 +28,11 @@ from nexus.agent.llm import (
     ChatMessage,
     ChatResponse,
     LLMProvider,
+    Role,
     StopReason,
     ToolCall,
     ToolSpec,
+    Usage,
 )
 from nexus.agent.loop import Agent
 from nexus.server.app import create_app
@@ -59,7 +61,12 @@ class FakeProvider(LLMProvider):
         if self._i >= len(self._responses):
             # Unscripted call — return a benign stop so the loop exits
             # cleanly rather than hanging on an IndexError.
-            return ChatResponse(content="", stop_reason=StopReason.STOP)
+            return ChatResponse(
+                message=ChatMessage(role=Role.ASSISTANT, content=""),
+                stop_reason=StopReason.STOP,
+                usage=Usage(),
+                model="",
+            )
         r = self._responses[self._i]
         self._i += 1
         return r
@@ -116,25 +123,30 @@ async def _serve(
 def _ask_user_response(prompt: str = "Proceed?") -> ChatResponse:
     """Scripted LLM response: ask_user tool call."""
     import json as _json
+    tc = ToolCall(
+        id="call_1",
+        name="ask_user",
+        arguments=_json.dumps({
+            "prompt": prompt,
+            "kind": "confirm",
+            "timeout_seconds": 5,
+        }),
+    )
     return ChatResponse(
-        content=None,
-        stop_reason=StopReason.TOOL_CALLS,
-        tool_calls=[
-            ToolCall(
-                id="call_1",
-                name="ask_user",
-                arguments=_json.dumps({
-                    "prompt": prompt,
-                    "kind": "confirm",
-                    "timeout_seconds": 5,
-                }),
-            )
-        ],
+        message=ChatMessage(role=Role.ASSISTANT, content=None, tool_calls=[tc]),
+        stop_reason=StopReason.TOOL_USE,
+        usage=Usage(),
+        model="",
     )
 
 
 def _final_response(text: str) -> ChatResponse:
-    return ChatResponse(content=text, stop_reason=StopReason.STOP)
+    return ChatResponse(
+        message=ChatMessage(role=Role.ASSISTANT, content=text),
+        stop_reason=StopReason.STOP,
+        usage=Usage(),
+        model="",
+    )
 
 
 async def _iter_sse_events(

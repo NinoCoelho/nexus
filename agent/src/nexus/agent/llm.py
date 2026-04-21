@@ -5,43 +5,24 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from enum import StrEnum
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
 
 # Import shared types from loom — Nexus and loom must agree on wire shapes.
-from loom.types import Role, ToolSpec, Usage, ToolCall
+from loom.types import (
+    Role,
+    ToolSpec,
+    Usage,
+    ToolCall,
+    ChatMessage,
+    ChatResponse,
+    StopReason,
+)
 
 # StreamEvent is a plain TypedDict-style dict union; we use plain dicts for
 # zero-overhead yielding.  The "type" key is the discriminator.
 StreamEvent = dict[str, Any]
-
-
-class ChatMessage(BaseModel):
-    role: Role
-    content: str | None = None
-    # Aligned to loom convention: None instead of empty list when no tool calls.
-    tool_calls: list[ToolCall] | None = None
-    tool_call_id: str | None = None
-    name: str | None = None
-
-
-class StopReason(StrEnum):
-    STOP = "stop"
-    TOOL_CALLS = "tool_calls"
-    LENGTH = "length"
-    ERROR = "error"
-    UNKNOWN = "unknown"
-
-
-class ChatResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    content: str | None = None
-    tool_calls: list[ToolCall] = Field(default_factory=list)
-    stop_reason: StopReason = StopReason.STOP
-    usage: Usage = Field(default_factory=Usage)
 
 
 class LLMError(Exception):
@@ -93,11 +74,12 @@ class LLMProvider(ABC):
     ) -> AsyncIterator[StreamEvent]:
         # Default fallback: call non-streaming chat and synthesize events.
         resp = await self.chat(messages, tools=tools, model=model)
-        if resp.content:
-            yield {"type": "delta", "text": resp.content}
+        content = resp.message.content
+        if content:
+            yield {"type": "delta", "text": content}
         finish_reason = resp.stop_reason.value
         tool_calls_dicts: list[dict[str, Any]] = []
-        for tc in resp.tool_calls:
+        for tc in resp.message.tool_calls or []:
             # arguments is now a JSON str — parse back to dict for the finish event
             try:
                 args_dict = json.loads(tc.arguments)
@@ -107,7 +89,7 @@ class LLMProvider(ABC):
         yield {
             "type": "finish",
             "finish_reason": finish_reason,
-            "content": resp.content or "",
+            "content": content or "",
             "tool_calls": tool_calls_dicts,
         }
 
@@ -418,7 +400,7 @@ class AnthropicProvider(LLMProvider):
                         tool_calls_dicts.append({"id": tc_id, "name": buf["name"], "arguments": args})
 
                     msg = await stream.get_final_message()
-                    finish_reason = "tool_calls" if tool_calls_dicts else "stop"
+                    finish_reason = "tool_use" if tool_calls_dicts else "stop"
                     if msg.stop_reason == "max_tokens":
                         finish_reason = "length"
                     yield {
@@ -465,8 +447,9 @@ def _encode_tool(t: ToolSpec) -> dict[str, Any]:
 
 _FINISH_MAP = {
     "stop": StopReason.STOP,
-    "tool_calls": StopReason.TOOL_CALLS,
-    "function_call": StopReason.TOOL_CALLS,
+    # OpenAI wire value is "tool_calls"; maps to loom's TOOL_USE
+    "tool_calls": StopReason.TOOL_USE,
+    "function_call": StopReason.TOOL_USE,
     "length": StopReason.LENGTH,
 }
 
@@ -489,11 +472,16 @@ def _decode_openai(data: dict[str, Any]) -> ChatResponse:
             args_str = json.dumps(args_raw)
         tool_calls.append(ToolCall(id=tc.get("id", fn.get("name", "")), name=fn["name"], arguments=args_str))
     stop_reason = _FINISH_MAP.get(choice.get("finish_reason") or "stop", StopReason.UNKNOWN)
+    model_str = data.get("model") or ""
     return ChatResponse(
-        content=msg.get("content"),
-        tool_calls=tool_calls,
+        message=ChatMessage(
+            role=Role.ASSISTANT,
+            content=msg.get("content"),
+            tool_calls=tool_calls or None,
+        ),
         stop_reason=stop_reason,
         usage=_usage_from_openai(data.get("usage") or {}),
+        model=model_str,
     )
 
 
@@ -565,14 +553,19 @@ def _decode_anthropic(resp: Any) -> ChatResponse:
         elif block.type == "tool_use":
             # block.input is a dict — encode to JSON str for loom ToolCall
             tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=json.dumps(block.input)))
-    stop_reason = StopReason.TOOL_CALLS if tool_calls else StopReason.STOP
+    stop_reason = StopReason.TOOL_USE if tool_calls else StopReason.STOP
     if resp.stop_reason == "max_tokens":
         stop_reason = StopReason.LENGTH
+    content_str = "\n".join(text_parts) or None
     return ChatResponse(
-        content="\n".join(text_parts) or None,
-        tool_calls=tool_calls,
+        message=ChatMessage(
+            role=Role.ASSISTANT,
+            content=content_str,
+            tool_calls=tool_calls or None,
+        ),
         stop_reason=stop_reason,
         usage=_usage_from_anthropic(getattr(resp, "usage", None)),
+        model=getattr(resp, "model", "") or "",
     )
 
 

@@ -17,6 +17,7 @@ from nexus.agent.llm import (
     Role,
     StopReason,
     Usage,
+    ToolCall,
 )
 
 
@@ -34,7 +35,12 @@ def _make_llm_provider(plan_json: str, synthesis_text: str = "Final synthesized 
             content = plan_json
         else:
             content = synthesis_text
-        return ChatResponse(content=content, stop_reason=StopReason.STOP, usage=Usage())
+        return ChatResponse(
+            message=ChatMessage(role=Role.ASSISTANT, content=content),
+            stop_reason=StopReason.STOP,
+            usage=Usage(),
+            model="",
+        )
 
     provider = MagicMock(spec=LLMProvider)
     provider.chat = AsyncMock(side_effect=_chat)
@@ -129,8 +135,18 @@ async def test_failed_subtask_does_not_halt_plan() -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return ChatResponse(content=plan_json, stop_reason=StopReason.STOP, usage=Usage())
-        return ChatResponse(content="Synthesized despite failure.", stop_reason=StopReason.STOP, usage=Usage())
+            return ChatResponse(
+                message=ChatMessage(role=Role.ASSISTANT, content=plan_json),
+                stop_reason=StopReason.STOP,
+                usage=Usage(),
+                model="",
+            )
+        return ChatResponse(
+            message=ChatMessage(role=Role.ASSISTANT, content="Synthesized despite failure."),
+            stop_reason=StopReason.STOP,
+            usage=Usage(),
+            model="",
+        )
 
     llm = MagicMock(spec=LLMProvider)
     llm.chat = AsyncMock(side_effect=_chat)

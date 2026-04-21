@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
-from .llm import ChatMessage, LLMProvider, Role, StopReason
+from .llm import ChatMessage, LLMProvider, Role
 from .loop import Agent, AgentTurn
 from .planner_prompt import PLANNER_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT
 
@@ -135,7 +135,7 @@ class PlannerAgent:
         ]
         try:
             response = await self._llm.chat(messages, tools=[], model=self._model)
-            raw = (response.content or "").strip()
+            raw = (response.message.content or "").strip()
             data = json.loads(raw)
             raw_tasks: list[dict[str, Any]] = data.get("sub_tasks", [])
             if not isinstance(raw_tasks, list) or len(raw_tasks) == 0:
@@ -166,7 +166,7 @@ class PlannerAgent:
         ]
         try:
             response = await self._llm.chat(messages, tools=[], model=self._model)
-            return (response.content or "").strip()
+            return (response.message.content or "").strip()
         except Exception:
             log.warning("planner: synthesis failed; concatenating results", exc_info=True)
             return combined

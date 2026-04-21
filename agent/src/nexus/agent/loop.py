@@ -292,8 +292,9 @@ class Agent:
             acc_in += response.usage.input_tokens
             acc_out += response.usage.output_tokens
 
-            if response.stop_reason != StopReason.TOOL_CALLS or not response.tool_calls:
-                reply_text = response.content or ""
+            _resp_tool_calls = response.message.tool_calls or []
+            if response.stop_reason != StopReason.TOOL_USE or not _resp_tool_calls:
+                reply_text = response.message.content or ""
                 messages.append(ChatMessage(role=Role.ASSISTANT, content=reply_text))
                 self._emit("reply", {"text": reply_text[:200]}, trace)
                 return AgentTurn(
@@ -311,11 +312,11 @@ class Agent:
             messages.append(
                 ChatMessage(
                     role=Role.ASSISTANT,
-                    content=response.content,
-                    tool_calls=response.tool_calls,
+                    content=response.message.content,
+                    tool_calls=_resp_tool_calls,
                 )
             )
-            for tc in response.tool_calls:
+            for tc in _resp_tool_calls:
                 acc_tool_calls += 1
                 try:
                     _tc_args_dict: dict[str, Any] = json.loads(tc.arguments) if tc.arguments else {}
@@ -493,7 +494,7 @@ class Agent:
             acc_in += int(current_usage.get("input_tokens") or 0)
             acc_out += int(current_usage.get("output_tokens") or 0)
 
-            if finish_reason != "tool_calls" or not current_tool_calls:
+            if finish_reason != "tool_use" or not current_tool_calls:
                 # Terminal: no more tool calls
                 messages.append(ChatMessage(role=Role.ASSISTANT, content=current_content or full_text))
                 self._emit("reply", {"text": (current_content or full_text)[:200]}, trace)
