@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -39,6 +40,11 @@ from ..trajectory import TrajectoryLogger
 _trajectory_logger: TrajectoryLogger | None = (
     TrajectoryLogger() if os.environ.get("NEXUS_TRAJECTORIES") == "1" else None
 )
+
+# Tracks the in-flight turn's asyncio.Task per session so /chat/{sid}/cancel
+# can interrupt a long-running turn. Populated by the chat_stream generator
+# on entry; removed in its finally block.
+_inflight_turns: dict[str, asyncio.Task[Any]] = {}
 
 
 def create_app(
@@ -372,6 +378,10 @@ def create_app(
             # (generators carry their own context) so concurrent
             # streams don't stomp on each other.
             token = CURRENT_SESSION_ID.set(session.id)
+            current = asyncio.current_task()
+            if current is not None:
+                _inflight_turns[session.id] = current
+            cancelled_by_user = False
             try:
                 async for event in a.run_turn_stream(
                     req.message,
@@ -489,6 +499,10 @@ def create_app(
                     "status_code": status_code,
                 }
                 yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+            except asyncio.CancelledError:
+                cancelled_by_user = True
+                yield f"event: error\ndata: {json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
             except Exception as exc:
                 # Catch-all so an unexpected error never leaves the client
                 # with ERR_INCOMPLETE_CHUNKED_ENCODING. Emit a proper
@@ -501,12 +515,38 @@ def create_app(
                 if final_messages is not None:
                     store.replace_history(session.id, final_messages)
                 CURRENT_SESSION_ID.reset(token)
+                if _inflight_turns.get(session.id) is current:
+                    _inflight_turns.pop(session.id, None)
 
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/chat/{session_id}/cancel")
+    async def chat_cancel(
+        session_id: str,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict[str, bool]:
+        """Interrupt the currently-streaming turn for this session.
+
+        Cancels any pending HITL wait (so ``ask_user`` returns fast) and
+        cancels the asyncio Task driving the SSE generator. The client
+        will see an ``error`` (reason=cancelled) + ``done`` before the
+        stream closes.
+        """
+        # Unblock any HITL future first so the tool dispatch stops waiting.
+        try:
+            store.broker.cancel_session(session_id, reason="user_cancelled")
+        except Exception:  # noqa: BLE001 — best-effort
+            log.exception("broker.cancel_session failed")
+        task = _inflight_turns.get(session_id)
+        cancelled = False
+        if task is not None and not task.done():
+            task.cancel()
+            cancelled = True
+        return {"ok": True, "cancelled": cancelled}
 
     @app.get("/chat/{session_id}/events")
     async def chat_events(session_id: str) -> StreamingResponse:

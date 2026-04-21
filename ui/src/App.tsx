@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -115,6 +115,10 @@ export default function App() {
   // HITL EventSource open before the first POST. Regenerated on
   // handleNewChat so a reset gives a clean stream.
   const [pendingSessionId, setPendingSessionId] = useState<string>(() => freshSessionId());
+  // AbortController for the in-flight /chat/stream fetch, per session key.
+  // Used by the Stop button to tear down the request client-side; the
+  // backend-side cancel is a separate POST to /chat/{sid}/cancel.
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   // Active HITL request (if any). Rendered as the ApprovalDialog.
   const [pendingRequest, setPendingRequest] = useState<UserRequestPayload | null>(null);
   const [pendingRequestSession, setPendingRequestSession] = useState<string | null>(null);
@@ -334,6 +338,9 @@ export default function App() {
     // agree. For an existing chat, keep the activeSession id.
     const sidForPost = activeSession ?? pendingSessionId;
 
+    const abortController = new AbortController();
+    abortControllersRef.current.set(key, abortController);
+
     try {
       await chatStream(
         text,
@@ -460,23 +467,64 @@ export default function App() {
             });
           }
         },
+        abortController.signal,
       );
     } catch (err) {
-      // Network/fetch error — replace placeholder with error message.
-      const errMsg: Message = {
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : "request failed"}`,
-        timestamp: new Date(),
-      };
-      setChatStates((prev) => {
-        const next = new Map(prev);
-        const cur = next.get(key) ?? emptyState();
-        const msgs = cur.messages.slice(0, -1).concat(errMsg);
-        next.set(key, { ...cur, messages: msgs, thinking: false });
-        return next;
-      });
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // User clicked Stop; the UI was already updated by handleStop.
+      } else {
+        // Network/fetch error — replace placeholder with error message.
+        const errMsg: Message = {
+          role: "assistant",
+          content: `Error: ${err instanceof Error ? err.message : "request failed"}`,
+          timestamp: new Date(),
+        };
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(key) ?? emptyState();
+          const msgs = cur.messages.slice(0, -1).concat(errMsg);
+          next.set(key, { ...cur, messages: msgs, thinking: false });
+          return next;
+        });
+      }
+    } finally {
+      if (abortControllersRef.current.get(key) === abortController) {
+        abortControllersRef.current.delete(key);
+      }
     }
   }, [activeKey, activeSession, chatStates, patchState, appendMessage, pendingSessionId]);
+
+  const handleStop = useCallback(() => {
+    const key = activeKey;
+    const abort = abortControllersRef.current.get(key);
+    const sidForCancel = activeSession ?? pendingSessionId;
+
+    // Best-effort server cancel (unblocks HITL waits + cancels the turn task).
+    fetch(`${import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989"}/chat/${encodeURIComponent(sidForCancel)}/cancel`, {
+      method: "POST",
+    }).catch(() => {});
+
+    abort?.abort();
+
+    // Flip thinking off and mark the placeholder as stopped.
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(key);
+      if (!cur) return prev;
+      const msgs = cur.messages.slice();
+      const lastIdx = msgs.length - 1;
+      if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+        const existing = msgs[lastIdx].content;
+        msgs[lastIdx] = {
+          ...msgs[lastIdx],
+          content: existing ? `${existing}\n\n_[stopped by user]_` : "_[stopped by user]_",
+          streaming: false,
+        };
+      }
+      next.set(key, { ...cur, messages: msgs, thinking: false });
+      return next;
+    });
+  }, [activeKey, activeSession, pendingSessionId]);
 
   return (
     <div className="app app--layout">
@@ -507,6 +555,7 @@ export default function App() {
               input={activeState.input}
               onInputChange={handleInputChange}
               onSend={send}
+              onStop={handleStop}
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenInVault={handleOpenInVault}

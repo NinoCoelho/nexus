@@ -23,6 +23,7 @@ interface Props {
   input: string;
   onInputChange: (v: string) => void;
   onSend: () => void;
+  onStop?: () => void;
   hasModel: boolean | null;
   onOpenSettings: () => void;
   onOpenInVault?: (path: string) => void;
@@ -38,6 +39,7 @@ export default function ChatView({
   input,
   onInputChange,
   onSend,
+  onStop,
   hasModel,
   onOpenSettings,
   onOpenInVault,
@@ -118,6 +120,8 @@ export default function ChatView({
               onChange={onInputChange}
               onSend={onSend}
               disabled={thinking}
+              busy={thinking}
+              onStop={onStop}
             />
           </div>
         </div>
