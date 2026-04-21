@@ -345,6 +345,7 @@ export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "tool"; name: string; args?: unknown; result_preview?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[] }
+  | { type: "limit_reached"; iterations: number }
   | { type: "error"; detail: string };
 
 export async function chatStream(
@@ -415,6 +416,8 @@ export async function chatStream(
             trace: (parsed.trace ?? []) as TraceEvent[],
             skills_touched: (parsed.skills_touched ?? []) as string[],
           });
+        } else if (eventName === "limit_reached") {
+          onEvent({ type: "limit_reached", iterations: (parsed.iterations as number) ?? 0 });
         } else if (eventName === "error") {
           onEvent({ type: "error", detail: parsed.detail as string });
         }

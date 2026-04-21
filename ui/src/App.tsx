@@ -425,6 +425,25 @@ export default function App() {
               });
             }
             setSessionsRevision((r) => r + 1);
+          } else if (event.type === "limit_reached") {
+            const noticeMsg: Message = {
+              role: "assistant",
+              content: `⚠️ Hit the per-turn tool-call limit (${event.iterations}). Say "continue" to pick up where I left off, or narrow the task.`,
+              timestamp: new Date(),
+            };
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(key) ?? emptyState();
+              const msgs = cur.messages.slice();
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+                msgs[lastIdx] = noticeMsg;
+              } else {
+                msgs.push(noticeMsg);
+              }
+              next.set(key, { ...cur, messages: msgs, thinking: false });
+              return next;
+            });
           } else if (event.type === "error") {
             const errMsg: Message = {
               role: "assistant",

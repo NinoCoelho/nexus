@@ -384,6 +384,9 @@ def create_app(
                     if etype == "delta":
                         yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
 
+                    elif etype == "limit_reached":
+                        yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
+
                     elif etype in ("tool_exec_start", "tool_exec_result"):
                         payload: dict[str, Any] = {"name": event.get("name", "")}
                         if "args" in event:
