@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nexus"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
@@ -22,7 +22,16 @@ dependencies = [
     "psutil>=5.9",
     "websockets>=12.0",
     "cryptography>=42.0",
+    "loom",
 ]
+
+[tool.uv.sources]
+# Expects the loom repo to sit next to the nexus repo:
+#   /some/path/loom
+#   /some/path/nexus
+# Clone both side-by-side and `uv sync` will pick loom up as an editable
+# local install. Adjust if your layout differs.
+loom = { path = "../../loom", editable = true }
 
 [project.optional-dependencies]
 dev = [

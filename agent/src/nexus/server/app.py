@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -39,6 +40,11 @@ from ..trajectory import TrajectoryLogger
 _trajectory_logger: TrajectoryLogger | None = (
     TrajectoryLogger() if os.environ.get("NEXUS_TRAJECTORIES") == "1" else None
 )
+
+# Tracks the in-flight turn's asyncio.Task per session so /chat/{sid}/cancel
+# can interrupt a long-running turn. Populated by the chat_stream generator
+# on entry; removed in its finally block.
+_inflight_turns: dict[str, asyncio.Task[Any]] = {}
 
 
 def create_app(
@@ -372,6 +378,10 @@ def create_app(
             # (generators carry their own context) so concurrent
             # streams don't stomp on each other.
             token = CURRENT_SESSION_ID.set(session.id)
+            current = asyncio.current_task()
+            if current is not None:
+                _inflight_turns[session.id] = current
+            cancelled_by_user = False
             try:
                 async for event in a.run_turn_stream(
                     req.message,
@@ -383,6 +393,9 @@ def create_app(
 
                     if etype == "delta":
                         yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
+
+                    elif etype == "limit_reached":
+                        yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
 
                     elif etype in ("tool_exec_start", "tool_exec_result"):
                         payload: dict[str, Any] = {"name": event.get("name", "")}
@@ -486,6 +499,10 @@ def create_app(
                     "status_code": status_code,
                 }
                 yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+            except asyncio.CancelledError:
+                cancelled_by_user = True
+                yield f"event: error\ndata: {json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
             except Exception as exc:
                 # Catch-all so an unexpected error never leaves the client
                 # with ERR_INCOMPLETE_CHUNKED_ENCODING. Emit a proper
@@ -498,12 +515,66 @@ def create_app(
                 if final_messages is not None:
                     store.replace_history(session.id, final_messages)
                 CURRENT_SESSION_ID.reset(token)
+                if _inflight_turns.get(session.id) is current:
+                    _inflight_turns.pop(session.id, None)
 
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/chat/{session_id}/pending")
+    async def chat_pending(
+        session_id: str,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict[str, Any]:
+        """Return the current pending ``ask_user`` request, if any.
+
+        Lets the UI recover a modal that would otherwise be missed if
+        the ``/chat/{sid}/events`` EventSource wasn't open at publish
+        time (page reload, late subscribe, tab restore). The publish
+        bus is fire-and-forget; this endpoint is the authoritative
+        snapshot.
+        """
+        requests = store.broker.pending(session_id)
+        if not requests:
+            return {"pending": None}
+        r = requests[0]
+        return {
+            "pending": {
+                "request_id": r.request_id,
+                "prompt": r.prompt,
+                "kind": r.kind,
+                "choices": r.choices,
+                "default": r.default,
+                "timeout_seconds": r.timeout_seconds,
+            }
+        }
+
+    @app.post("/chat/{session_id}/cancel")
+    async def chat_cancel(
+        session_id: str,
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict[str, bool]:
+        """Interrupt the currently-streaming turn for this session.
+
+        Cancels any pending HITL wait (so ``ask_user`` returns fast) and
+        cancels the asyncio Task driving the SSE generator. The client
+        will see an ``error`` (reason=cancelled) + ``done`` before the
+        stream closes.
+        """
+        # Unblock any HITL future first so the tool dispatch stops waiting.
+        try:
+            store.broker.cancel_session(session_id, reason="user_cancelled")
+        except Exception:  # noqa: BLE001 — best-effort
+            log.exception("broker.cancel_session failed")
+        task = _inflight_turns.get(session_id)
+        cancelled = False
+        if task is not None and not task.done():
+            task.cancel()
+            cancelled = True
+        return {"ok": True, "cancelled": cancelled}
 
     @app.get("/chat/{session_id}/events")
     async def chat_events(session_id: str) -> StreamingResponse:
@@ -687,7 +758,7 @@ def create_app(
         """
         from ..insights import InsightsEngine
         days = max(1, min(int(days), 365))
-        engine = InsightsEngine(store._db_path)
+        engine = InsightsEngine(store._db_path)  # InsightsEngine reads loom's schema directly
         return engine.generate(days=days)
 
     @app.get("/sessions/{session_id}/export")
@@ -702,13 +773,8 @@ def create_app(
         if session is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"session {session_id!r} not found")
 
-        # Gather session-level timestamps from the DB.
-        with store._connect() as conn:
-            row = conn.execute(
-                "SELECT created_at, updated_at FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-        created_at_ts = row["created_at"] if row else 0
-        updated_at_ts = row["updated_at"] if row else 0
+        # Gather session-level timestamps from the store.
+        created_at_ts, updated_at_ts = store.get_session_timestamps(session_id)
 
         def _iso(ts: int) -> str:
             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
@@ -766,12 +832,7 @@ def create_app(
         """Render a session as markdown. Shared between export and to-vault.
         Uses the `sessions` closure (not a per-request `store` name)."""
         from datetime import datetime, timezone
-        with sessions._connect() as conn:
-            row = conn.execute(
-                "SELECT created_at, updated_at FROM sessions WHERE id = ?", (session.id,)
-            ).fetchone()
-        created_at_ts = row["created_at"] if row else 0
-        updated_at_ts = row["updated_at"] if row else 0
+        created_at_ts, updated_at_ts = sessions.get_session_timestamps(session.id)
 
         def _iso(ts: int) -> str:
             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
@@ -980,20 +1041,8 @@ def create_app(
             role = Role.USER if speaker == "You" else Role.ASSISTANT
             messages.append(ChatMessage(role=role, content=content))
 
-        # Insert into store directly.
-        with store._lock, store._connect() as conn:
-            conn.execute(
-                "INSERT INTO sessions (id, title, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (new_id, title, context, now, now),
-            )
-            rows = [
-                (new_id, seq, msg.role, msg.content or "", None, None, now)
-                for seq, msg in enumerate(messages)
-            ]
-            conn.executemany(
-                "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+        # Insert into store via the public import_session method.
+        store.import_session(new_id, title, context, messages, now)
 
         return {"id": new_id, "title": title, "imported_message_count": len(messages)}
 

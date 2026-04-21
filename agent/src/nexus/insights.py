@@ -72,6 +72,26 @@ def _extract_tool_name(tc: Any) -> str | None:
     return None
 
 
+def _to_epoch(ts: Any) -> int:
+    """Convert a timestamp to a Unix epoch integer.
+
+    Accepts integers (legacy schema) and ISO strings (loom schema).
+    Returns 0 on failure.
+    """
+    if ts is None:
+        return 0
+    if isinstance(ts, (int, float)):
+        return int(ts)
+    try:
+        from datetime import datetime as _dt
+        s = str(ts).replace("T", " ")
+        dt = _dt.strptime(s[:19], "%Y-%m-%d %H:%M:%S")
+        import calendar
+        return calendar.timegm(dt.timetuple())
+    except Exception:
+        return 0
+
+
 def _bar(width: int, count: int, peak: int) -> str:
     """ASCII bar for day-of-week / hour histograms."""
     if peak <= 0 or count <= 0:
@@ -102,12 +122,16 @@ class InsightsEngine:
     def generate(self, days: int = 30) -> dict[str, Any]:
         """Generate a complete insights report for the last ``days`` days."""
         cutoff = int(time.time()) - days * 86400
+        # Loom stores created_at as an ISO timestamp string ("YYYY-MM-DD HH:MM:SS").
+        # Convert the integer cutoff to the same format so SQLite string comparison works.
+        from datetime import datetime as _dt
+        cutoff_iso = _dt.utcfromtimestamp(cutoff).strftime("%Y-%m-%d %H:%M:%S")
 
         with self._connect() as conn:
-            sessions = self._get_sessions(conn, cutoff)
-            message_stats = self._get_message_stats(conn, cutoff)
-            tool_usage = self._get_tool_usage(conn, cutoff)
-            per_session_msg_count = self._get_per_session_counts(conn, cutoff)
+            sessions = self._get_sessions(conn, cutoff_iso)
+            message_stats = self._get_message_stats(conn, cutoff_iso)
+            tool_usage = self._get_tool_usage(conn, cutoff_iso)
+            per_session_msg_count = self._get_per_session_counts(conn, cutoff_iso)
 
         if not sessions:
             return {
@@ -140,7 +164,7 @@ class InsightsEngine:
     # ── SQL ─────────────────────────────────────────────────────────
 
     def _get_sessions(
-        self, conn: sqlite3.Connection, cutoff: int
+        self, conn: sqlite3.Connection, cutoff: str
     ) -> list[dict[str, Any]]:
         # Guard against rows from pre-migration DBs where the usage
         # columns don't exist — SELECT them defensively and coerce to 0.
@@ -160,7 +184,7 @@ class InsightsEngine:
         return [dict(r) for r in rows]
 
     def _get_message_stats(
-        self, conn: sqlite3.Connection, cutoff: int
+        self, conn: sqlite3.Connection, cutoff: str
     ) -> dict[str, int]:
         row = conn.execute(
             """SELECT
@@ -183,7 +207,7 @@ class InsightsEngine:
         }
 
     def _get_tool_usage(
-        self, conn: sqlite3.Connection, cutoff: int
+        self, conn: sqlite3.Connection, cutoff: str
     ) -> dict[str, int]:
         """Return a mapping ``tool_name -> call_count`` by walking
         the ``tool_calls`` JSON on assistant messages."""
@@ -218,7 +242,7 @@ class InsightsEngine:
         return result
 
     def _get_per_session_counts(
-        self, conn: sqlite3.Connection, cutoff: int
+        self, conn: sqlite3.Connection, cutoff: str
     ) -> dict[str, int]:
         rows = conn.execute(
             """SELECT s.id, COUNT(m.seq) AS n
@@ -246,8 +270,12 @@ class InsightsEngine:
         durations = []
         for s in sessions:
             start, end = s.get("created_at"), s.get("updated_at")
-            if start and end and end > start:
-                durations.append(end - start)
+            if start and end:
+                # Timestamps may be Unix integers (legacy) or ISO strings (loom schema).
+                start_ts = _to_epoch(start)
+                end_ts = _to_epoch(end)
+                if end_ts > start_ts:
+                    durations.append(end_ts - start_ts)
         total_seconds = sum(durations)
         avg_duration = (total_seconds / len(durations)) if durations else 0
 
@@ -270,7 +298,7 @@ class InsightsEngine:
             else:
                 sessions_unpriced += 1
 
-        started_ts = [s["created_at"] for s in sessions if s.get("created_at")]
+        started_ts = [_to_epoch(s["created_at"]) for s in sessions if s.get("created_at")]
         date_start = min(started_ts) if started_ts else None
         date_end = max(started_ts) if started_ts else None
 
@@ -357,7 +385,10 @@ class InsightsEngine:
             ts = s.get("created_at")
             if not ts:
                 continue
-            dt = datetime.fromtimestamp(ts)
+            epoch = _to_epoch(ts)
+            if epoch == 0:
+                continue
+            dt = datetime.fromtimestamp(epoch)
             day_counts[dt.weekday()] += 1
             hour_counts[dt.hour] += 1
             daily[dt.strftime("%Y-%m-%d")] += 1
@@ -422,14 +453,13 @@ class InsightsEngine:
                     "session_id": mm["id"][:16],
                     "title": (mm.get("title") or "Untitled")[:40],
                     "value": f"{mm_count} msgs",
-                    "date": datetime.fromtimestamp(mm["created_at"]).strftime("%b %d")
+                    "date": datetime.fromtimestamp(_to_epoch(mm["created_at"])).strftime("%b %d")
                     if mm.get("created_at") else "?",
                 })
 
             # Longest duration (created_at → updated_at)
             def _dur(s: dict[str, Any]) -> int:
-                start, end = s.get("created_at") or 0, s.get("updated_at") or 0
-                return max(0, end - start)
+                return max(0, _to_epoch(s.get("updated_at")) - _to_epoch(s.get("created_at")))
 
             longest = max(sessions, key=_dur)
             if _dur(longest) > 0:
@@ -438,7 +468,7 @@ class InsightsEngine:
                     "session_id": longest["id"][:16],
                     "title": (longest.get("title") or "Untitled")[:40],
                     "value": _format_duration(_dur(longest)),
-                    "date": datetime.fromtimestamp(longest["created_at"]).strftime("%b %d")
+                    "date": datetime.fromtimestamp(_to_epoch(longest["created_at"])).strftime("%b %d")
                     if longest.get("created_at") else "?",
                 })
 
@@ -453,7 +483,7 @@ class InsightsEngine:
                         "session_id": mt["id"][:16],
                         "title": (mt.get("title") or "Untitled")[:40],
                         "value": f"{mt_count} calls",
-                        "date": datetime.fromtimestamp(mt["created_at"]).strftime("%b %d")
+                        "date": datetime.fromtimestamp(_to_epoch(mt["created_at"])).strftime("%b %d")
                         if mt.get("created_at") else "?",
                     })
 

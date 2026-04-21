@@ -1,54 +1,73 @@
-"""Agent tool-calling loop for Nexus."""
+"""Agent tool-calling loop for Nexus — loom.Agent façade.
+
+The iteration logic (tool-call loop, retry, streaming) now lives in
+``loom.loop.Agent``.  This module provides a compatibility layer that:
+
+* Keeps the external signature callers (server/app.py, chat.py TUI,
+  tests) depend on: ``run_turn(user_message, *, history, context,
+  model_id)`` and ``run_turn_stream(...)``.
+* Translates between Nexus's types (flat ChatResponse, dict tool args)
+  and loom's types (wrapped ChatResponse, string tool args) via
+  :mod:`nexus.agent._loom_bridge`.
+* Preserves progressive skill disclosure via loom's ``before_llm_call``
+  hook, which re-injects a fresh system prompt on every iteration.
+* Preserves router tracing via loom's ``choose_model`` hook.
+* Exposes ``_trace``, ``_ask_user_handler``, ``_terminal_handler``, and
+  ``_resolve_provider`` as attributes so server/app.py can late-bind
+  them without changes.
+
+The old loop's module-level helpers ``_extract_pending_question`` and
+``_annotate_short_reply`` are kept because tests import them directly.
+"""
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .ask_user_tool import ASK_USER_TOOL, AskUserHandler
+import loom.types as lt
+from loom.loop import Agent as LoomAgent, AgentConfig
+
+from .ask_user_tool import AskUserHandler
 from .llm import (
     ChatMessage,
-    ChatResponse,
     LLMProvider,
-    LLMTransportError,
-    MalformedOutputError,
     Role,
-    StopReason,
     StreamEvent,
     ToolCall,
     ToolSpec,
-    Usage,
 )
 from .prompt_builder import build_system_prompt
-from .terminal_tool import TERMINAL_TOOL, TerminalHandler
-from ..error_classifier import ClassifiedError, FailoverReason, classify_api_error
-from ..retry import jittered_backoff
-from ..skills.manager import SkillManager
+from .terminal_tool import TerminalHandler
 from ..skills.registry import SkillRegistry
-from ..tools.acp_call import ACP_CALL_TOOL, acp_call
-from ..tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
-from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
-from ..tools.state_tool import STATE_TOOLS, StateToolHandler
-from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
-from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MAX_TOOL_ITERATIONS = 32  # was 16; doubled so research tasks finish
-
-# Max provider call attempts per LLM round-trip. First attempt + up to
-# (MAX_PROVIDER_ATTEMPTS - 1) retries. Kept small — the agent loop itself
-# will retry on a subsequent iteration if a genuine upstream outage
-# persists, so we don't need many retries here.
-MAX_PROVIDER_ATTEMPTS = 3
+DEFAULT_MAX_TOOL_ITERATIONS = 32
 
 SKILL_MANAGE_TOOL = ToolSpec(
     name="skill_manage",
     description=(
-        "Create, edit, patch, delete, write_file, or remove_file for a skill in the registry."
+        "Create, edit, patch, delete, write_file, or remove_file for a skill in the registry. "
+        "A skill is a prescriptive procedure you wrote for future-you, NOT a copy of library docs. "
+        "Every SKILL.md MUST have this shape:\n\n"
+        "  ---\n"
+        "  name: <kebab-case>\n"
+        "  description: <imperative one-liner — 'Use this whenever X; prefer over Y.' "
+        "Not 'A library that does X'.>\n"
+        "  ---\n\n"
+        "  ## When to use\n"
+        "  - Trigger conditions (concrete, e.g. 'fetching any web page, especially bot-protected or JS-rendered').\n"
+        "  - What to reach for this INSTEAD of (e.g. 'prefer over curl/terminal for web fetches').\n\n"
+        "  ## Steps\n"
+        "  1. Numbered, runnable. Paste the exact commands/snippets that worked.\n\n"
+        "  ## Gotchas\n"
+        "  - Known failure modes and how to recover (auth walls, rate limits, missing deps).\n\n"
+        "Write in the imperative voice of a teammate handing off a recipe. Skip background theory and "
+        "library-feature tours — those belong in upstream docs. If the skill won't save a future-you turn, don't create it."
     ),
     parameters={
         "type": "object",
@@ -57,8 +76,16 @@ SKILL_MANAGE_TOOL = ToolSpec(
                 "type": "string",
                 "enum": ["create", "edit", "patch", "delete", "write_file", "remove_file"],
             },
-            "name": {"type": "string", "description": "Skill name (directory name)."},
-            "content": {"type": "string", "description": "Full SKILL.md content (create/edit)."},
+            "name": {"type": "string", "description": "Skill name (directory name, kebab-case)."},
+            "content": {
+                "type": "string",
+                "description": (
+                    "Full SKILL.md content (create/edit). Must follow the template in the tool "
+                    "description: frontmatter with `name` + imperative `description`, then "
+                    "`## When to use`, `## Steps`, `## Gotchas`. Description is an order "
+                    "('Use this whenever...'), not a summary ('A library that...')."
+                ),
+            },
             "old": {"type": "string", "description": "Text to find (patch)."},
             "new": {"type": "string", "description": "Replacement text (patch)."},
             "path": {"type": "string", "description": "Relative file path (write_file/remove_file)."},
@@ -77,14 +104,94 @@ class AgentTurn:
     iterations: int = 0
     trace: list[dict[str, Any]] = field(default_factory=list)
     messages: list[ChatMessage] = field(default_factory=list)
-    # Aggregated usage across every provider round-trip in this turn.
-    # Zeroes when the provider doesn't surface usage — callers should
-    # treat that as "unknown" rather than "free".
     input_tokens: int = 0
     output_tokens: int = 0
     tool_calls: int = 0
     model: str | None = None
 
+
+# ---------------------------------------------------------------------------
+# Pure helpers (kept for test imports)
+# ---------------------------------------------------------------------------
+
+_AFFIRMATIVES = frozenset({
+    "yes", "y", "ok", "okay", "sure", "correct", "right", "yeah", "yep",
+    "go ahead", "proceed", "continue", "please", "do it",
+})
+_NEGATIVES = frozenset({
+    "no", "n", "nope", "cancel", "stop", "don't", "dont", "negative",
+})
+
+
+def _extract_pending_question(reply: str) -> str | None:
+    """Return the last question the agent asked, if the reply ends with one."""
+    last_q = reply.rfind("?")
+    if last_q == -1:
+        return None
+    start = max(0, last_q - 200)
+    segment = reply[start:last_q + 1]
+    first_nl = segment.find("\n")
+    if first_nl >= 0:
+        segment = segment[first_nl + 1:]
+    if len(segment) > 500:
+        segment = segment[-500:]
+    stripped = segment.strip()
+    return stripped or None
+
+
+def _annotate_short_reply(user_text: str, pending_question: str | None) -> str | None:
+    """Expand a terse yes/no reply with the question context."""
+    if not pending_question:
+        return None
+    stripped = user_text.strip().lower()
+    if stripped in _AFFIRMATIVES:
+        return f'{user_text} (affirmative answer to: "{pending_question}")'
+    if stripped in _NEGATIVES:
+        return f'{user_text} (negative answer to: "{pending_question}")'
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Nexus ↔ loom message conversion helpers
+# ---------------------------------------------------------------------------
+
+def _to_loom_message(msg: ChatMessage) -> lt.ChatMessage:
+    loom_tcs: list[lt.ToolCall] | None = None
+    if msg.tool_calls:
+        loom_tcs = [
+            lt.ToolCall(id=tc.id, name=tc.name, arguments=json.dumps(tc.arguments))
+            for tc in msg.tool_calls
+        ]
+    return lt.ChatMessage(
+        role=lt.Role(msg.role.value),
+        content=msg.content,
+        tool_calls=loom_tcs,
+        tool_call_id=msg.tool_call_id,
+        name=msg.name,
+    )
+
+
+def _from_loom_message(msg: lt.ChatMessage) -> ChatMessage:
+    nexus_tcs: list[ToolCall] = []
+    if msg.tool_calls:
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.arguments) if tc.arguments else {}
+            except json.JSONDecodeError:
+                args = {}
+            nexus_tcs.append(ToolCall(id=tc.id, name=tc.name, arguments=args))
+    return ChatMessage(
+        role=Role(msg.role.value),
+        content=msg.content,
+        tool_calls=nexus_tcs,
+        tool_call_id=msg.tool_call_id,
+        name=msg.name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent façade
+# ---------------------------------------------------------------------------
 
 class Agent:
     def __init__(
@@ -97,133 +204,134 @@ class Agent:
         nexus_cfg: Any | None = None,
         ask_user_handler: AskUserHandler | None = None,
     ) -> None:
-        self._provider = provider
+        from ._loom_bridge import AgentHandlers
+
+        self._nexus_provider = provider
         self._registry = registry
         self._trace = trace
-        self._state = StateToolHandler(registry)
-        self._manager = SkillManager(registry)
-        self._http = HttpCallHandler()
         self._provider_registry = provider_registry
         self._nexus_cfg = nexus_cfg
-        # ask_user only makes sense in a live /chat session — without a
-        # SessionStore wired in, the tool has nowhere to publish the
-        # event or park the Future. The server supplies this; CLI-only
-        # paths can leave it None and the tool simply isn't advertised.
-        self._ask_user_handler = ask_user_handler
-        # terminal composes on top of ask_user — no point offering it
-        # when HITL isn't wired, because every call would fail.
-        self._terminal_handler = (
-            TerminalHandler(ask_user_handler=ask_user_handler)
-            if ask_user_handler is not None
-            else None
+        # _handlers is a mutable container shared with the tool registry
+        # so late-binding by app.py is reflected at dispatch time.
+        self._handlers = AgentHandlers(ask_user=ask_user_handler)
+        # Accumulated trace for the current turn (rebuilt per turn)
+        self._turn_trace: list[dict[str, Any]] = []
+        # Skills touched in the current turn
+        self._skills_touched: list[str] = []
+        # Chosen model for the current turn
+        self._chosen_model: str | None = None
+
+        self._loom = self._build_loom_agent()
+
+    # app.py sets these attributes directly after construction; we intercept
+    # via properties so the mutable handler container stays in sync.
+    @property
+    def _ask_user_handler(self) -> AskUserHandler | None:
+        return self._handlers.ask_user
+
+    @_ask_user_handler.setter
+    def _ask_user_handler(self, value: AskUserHandler | None) -> None:
+        self._handlers.ask_user = value
+        # Also update terminal handler when ask_user changes
+        if value is not None and self._handlers.terminal is None:
+            self._handlers.terminal = TerminalHandler(ask_user_handler=value)
+
+    @property
+    def _terminal_handler(self) -> Any:
+        return self._handlers.terminal
+
+    @_terminal_handler.setter
+    def _terminal_handler(self, value: Any) -> None:
+        self._handlers.terminal = value
+
+    def _build_loom_agent(self) -> LoomAgent:
+        from ._loom_bridge import LoomProviderAdapter, build_tool_registry
+
+        adapter = LoomProviderAdapter(
+            self._nexus_provider,
+            provider_registry=self._provider_registry,
+        )
+        tool_reg = build_tool_registry(
+            skill_registry=self._registry,
+            handlers=self._handlers,
         )
 
-    def _emit(self, event: str, data: dict[str, Any], trace: list[dict[str, Any]]) -> None:
-        entry = {"event": event, **data}
-        trace.append(entry)
-        if self._trace:
-            self._trace(event, data)
+        max_iter = (
+            getattr(self._nexus_cfg.agent, "max_iterations", None)
+            if self._nexus_cfg else None
+        ) or DEFAULT_MAX_TOOL_ITERATIONS
 
-    @staticmethod
-    def _classify(
-        exc: Exception, *, provider_name: str, model: str, num_messages: int
-    ) -> ClassifiedError:
-        """Thin wrapper that applies our in-loop parameters to the classifier."""
-        return classify_api_error(
-            exc,
-            provider=provider_name,
-            model=model,
-            num_messages=num_messages,
+        def _choose_model(messages: list[lt.ChatMessage]) -> str | None:
+            if not self._nexus_cfg:
+                return None
+            from .router import choose_model
+            # Extract the last user message for routing
+            user_text = ""
+            for m in reversed(messages):
+                if m.role == lt.Role.USER and m.content:
+                    user_text = m.content
+                    break
+            result = choose_model(user_text, self._nexus_cfg)
+            self._chosen_model = result
+            return result
+
+        _iter_counter: list[int] = [0]
+
+        def _before_llm_call(messages: list[lt.ChatMessage]) -> list[lt.ChatMessage]:
+            _iter_counter[0] += 1
+            _on_event("iter", {"n": _iter_counter[0]})
+            sys_prompt = build_system_prompt(self._registry)
+            return [
+                lt.ChatMessage(role=lt.Role.SYSTEM, content=sys_prompt),
+                *[m for m in messages if m.role != lt.Role.SYSTEM],
+            ]
+
+        def _on_event(kind: str, payload: dict[str, Any]) -> None:
+            entry = {"event": kind, **payload}
+            self._turn_trace.append(entry)
+            if self._trace:
+                self._trace(kind, payload)
+
+        def _limit_msg(n: int) -> str:
+            # Keep this empty: the UI replaces the last assistant message
+            # with an interactive Continue/Stop banner on `limit_reached`.
+            # A non-empty string would briefly flash before the banner
+            # swap.
+            return ""
+
+        def _on_after_turn(turn: Any) -> None:
+            _on_event("reply", {"text": (turn.reply or "")[:200]})
+            # Reset iter counter for next turn
+            _iter_counter[0] = 0
+
+        loom_cfg = AgentConfig(
+            max_iterations=max_iter,
+            model=getattr(getattr(self._nexus_cfg, "agent", None), "default_model", None)
+            if self._nexus_cfg else None,
+            choose_model=_choose_model if self._nexus_cfg else None,
+            before_llm_call=_before_llm_call,
+            on_event=_on_event,
+            on_after_turn=_on_after_turn,
+            serialize_event=lambda ev: ev.model_dump(),
+            limit_message_builder=_limit_msg,
+            affirmatives=_AFFIRMATIVES,
+            negatives=_NEGATIVES,
         )
-
-    async def _chat_with_retry(
-        self,
-        provider: LLMProvider,
-        messages: list[ChatMessage],
-        *,
-        tools: list[ToolSpec],
-        model: str | None,
-        trace: list[dict[str, Any]],
-    ) -> ChatResponse:
-        """Call ``provider.chat`` with classifier-driven retry.
-
-        Non-streaming path — safe to retry freely because no partial output
-        has been emitted. Honours ``ClassifiedError.retryable`` and backs off
-        with jittered exponential delay. Non-retryable errors propagate as
-        the original :class:`LLMTransportError` so callers can display the
-        upstream message.
-        """
-        provider_name = type(provider).__name__
-        model_str = model or ""
-        last_exc: Exception | None = None
-
-        for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
-            try:
-                return await provider.chat(messages, tools=tools, model=model)
-            except LLMTransportError as exc:
-                last_exc = exc
-                classified = self._classify(
-                    exc,
-                    provider_name=provider_name,
-                    model=model_str,
-                    num_messages=len(messages),
-                )
-                self._emit(
-                    "provider_error",
-                    {
-                        "attempt": attempt,
-                        "reason": classified.reason.value,
-                        "retryable": classified.retryable,
-                        "status_code": classified.status_code,
-                        "message": classified.user_facing_summary,
-                    },
-                    trace,
-                )
-                if not classified.retryable or attempt >= MAX_PROVIDER_ATTEMPTS:
-                    raise
-                delay = jittered_backoff(attempt)
-                log.warning(
-                    "chat attempt %d/%d failed (%s); backoff %.1fs",
-                    attempt, MAX_PROVIDER_ATTEMPTS, classified.reason.value, delay,
-                )
-                await asyncio.sleep(delay)
-            except MalformedOutputError:
-                # Malformed output isn't a transport problem — do NOT retry,
-                # the same bad response would come back.
-                raise
-        # Defensive: should be unreachable because we raise inside the loop.
-        assert last_exc is not None
-        raise last_exc
-
-    def _tools(self) -> list[ToolSpec]:
-        tools: list[ToolSpec] = [
-            *STATE_TOOLS,
-            SKILL_MANAGE_TOOL,
-            HTTP_CALL_TOOL,
-            ACP_CALL_TOOL,
-            *VAULT_TOOLS,
-            KANBAN_MANAGE_TOOL,
-            MEMORY_READ_TOOL,
-            MEMORY_WRITE_TOOL,
-        ]
-        # HITL tools only surface when the handler is wired — a CLI run
-        # without a SessionStore has no way to prompt, so advertising
-        # ``ask_user`` there would just produce "unavailable" errors.
-        if self._ask_user_handler is not None:
-            tools.append(ASK_USER_TOOL)
-        if self._terminal_handler is not None:
-            tools.append(TERMINAL_TOOL)
-        return tools
+        return LoomAgent(
+            provider=adapter,
+            tool_registry=tool_reg,
+            config=loom_cfg,
+        )
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
-        """Return (provider, upstream_model_name). Falls back to self._provider."""
+        """Return (nexus_provider, upstream_model_name). Kept for app.py compat."""
         if self._provider_registry and model_id:
             try:
                 provider, upstream = self._provider_registry.get_for_model(model_id)
                 return provider, upstream
             except KeyError:
                 pass
-        return self._provider, None
+        return self._nexus_provider, None
 
     async def run_turn(
         self,
@@ -233,111 +341,37 @@ class Agent:
         context: str | None = None,
         model_id: str | None = None,
     ) -> AgentTurn:
-        from .router import choose_model, ROUTE_TRACE
+        self._turn_trace = []
+        self._skills_touched = []
+        self._chosen_model = model_id
 
-        trace: list[dict[str, Any]] = []
-        skills_touched: list[str] = []
+        # Build loom message list
+        loom_messages: list[lt.ChatMessage] = []
+        if history:
+            loom_messages = [_to_loom_message(m) for m in history]
 
-        # Determine model via router if configured
-        chosen_model = model_id
-        route_reason = "explicit"
-        if self._nexus_cfg and not model_id:
-            chosen_model = choose_model(user_message, self._nexus_cfg)
-            route_reason = ROUTE_TRACE[-1] if ROUTE_TRACE else "auto"
-
-        if not history:
-            messages: list[ChatMessage] = [
-                ChatMessage(
-                    role=Role.SYSTEM,
-                    content=build_system_prompt(self._registry, context=context),
-                )
-            ]
-        else:
-            messages = list(history)
-
-        messages.append(ChatMessage(role=Role.USER, content=user_message))
-        tools = self._tools()
-
-        provider, upstream_model = self._resolve_provider(chosen_model)
-
-        # Emit model meta on first iter
-        self._emit(
-            "tool_call",
-            {"name": "_meta", "args": {"model": chosen_model or "default", "reason": route_reason}},
-            trace,
+        # Annotate terse yes/no using loom agent's pending question
+        pending = self._loom._pending_question
+        annotated = _annotate_short_reply(user_message, pending)
+        loom_messages.append(
+            lt.ChatMessage(role=lt.Role.USER, content=annotated or user_message)
         )
 
-        max_iter = (
-            getattr(self._nexus_cfg.agent, "max_iterations", None)
-            if self._nexus_cfg else None
-        ) or DEFAULT_MAX_TOOL_ITERATIONS
+        loom_turn = await self._loom.run_turn(loom_messages, model_id=model_id)
 
-        # Per-turn usage accumulation. ``model`` is the canonical slug
-        # the user / router chose (what they'd see in their config),
-        # not the possibly-different upstream name.
-        acc_in = 0
-        acc_out = 0
-        acc_tool_calls = 0
+        # Convert loom messages back to Nexus messages
+        nexus_messages = [_from_loom_message(m) for m in loom_turn.messages]
 
-        for iteration in range(1, max_iter + 1):
-            self._emit("iter", {"n": iteration}, trace)
-            response = await self._chat_with_retry(
-                provider,
-                messages,
-                tools=tools,
-                model=upstream_model,
-                trace=trace,
-            )
-            acc_in += response.usage.input_tokens
-            acc_out += response.usage.output_tokens
-
-            if response.stop_reason != StopReason.TOOL_CALLS or not response.tool_calls:
-                reply_text = response.content or ""
-                messages.append(ChatMessage(role=Role.ASSISTANT, content=reply_text))
-                self._emit("reply", {"text": reply_text[:200]}, trace)
-                return AgentTurn(
-                    reply=reply_text,
-                    skills_touched=skills_touched,
-                    iterations=iteration,
-                    trace=trace,
-                    messages=messages,
-                    input_tokens=acc_in,
-                    output_tokens=acc_out,
-                    tool_calls=acc_tool_calls,
-                    model=chosen_model,
-                )
-
-            messages.append(
-                ChatMessage(
-                    role=Role.ASSISTANT,
-                    content=response.content,
-                    tool_calls=response.tool_calls,
-                )
-            )
-            for tc in response.tool_calls:
-                acc_tool_calls += 1
-                self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
-                result = await self._handle(tc, skills_touched)
-                self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
-                messages.append(
-                    ChatMessage(role=Role.TOOL, content=result, tool_call_id=tc.id)
-                )
-
-        reply_text = (
-            f"I hit the per-turn tool-call limit ({max_iter}) before finishing. "
-            "Ask me to continue, or narrow the task — I'll pick up where I left off."
-        )
-        messages.append(ChatMessage(role=Role.ASSISTANT, content=reply_text))
         return AgentTurn(
-            reply=reply_text,
-            skills_touched=skills_touched,
-            iterations=max_iter,
-            trace=trace,
-            messages=messages,
-            input_tokens=acc_in,
-            output_tokens=acc_out,
-            tool_calls=acc_tool_calls,
-            model=chosen_model,
+            reply=loom_turn.reply,
+            skills_touched=loom_turn.skills_touched,
+            iterations=loom_turn.iterations,
+            trace=list(self._turn_trace),
+            messages=nexus_messages,
+            input_tokens=loom_turn.input_tokens,
+            output_tokens=loom_turn.output_tokens,
+            tool_calls=loom_turn.tool_calls,
+            model=loom_turn.model or self._chosen_model,
         )
 
     async def run_turn_stream(
@@ -349,258 +383,116 @@ class Agent:
         session_id: str | None = None,
         model_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        from .router import choose_model, ROUTE_TRACE
+        self._turn_trace = []
+        self._skills_touched = []
+        self._chosen_model = model_id
 
-        trace: list[dict[str, Any]] = []
-        skills_touched: list[str] = []
+        loom_messages: list[lt.ChatMessage] = []
+        if history:
+            loom_messages = [_to_loom_message(m) for m in history]
 
-        chosen_model = model_id
-        route_reason = "explicit"
-        if self._nexus_cfg and not model_id:
-            chosen_model = choose_model(user_message, self._nexus_cfg)
-            route_reason = ROUTE_TRACE[-1] if ROUTE_TRACE else "auto"
-
-        if not history:
-            messages: list[ChatMessage] = [
-                ChatMessage(
-                    role=Role.SYSTEM,
-                    content=build_system_prompt(self._registry, context=context),
-                )
-            ]
-        else:
-            messages = list(history)
-
-        messages.append(ChatMessage(role=Role.USER, content=user_message))
-        tools = self._tools()
-
-        provider, upstream_model = self._resolve_provider(chosen_model)
-
-        self._emit(
-            "tool_call",
-            {"name": "_meta", "args": {"model": chosen_model or "default", "reason": route_reason}},
-            trace,
+        pending = self._loom._pending_question
+        annotated = _annotate_short_reply(user_message, pending)
+        user_msg_content = annotated or user_message
+        loom_messages.append(
+            lt.ChatMessage(role=lt.Role.USER, content=user_msg_content)
         )
 
-        max_iter = (
-            getattr(self._nexus_cfg.agent, "max_iterations", None)
-            if self._nexus_cfg else None
-        ) or DEFAULT_MAX_TOOL_ITERATIONS
-
+        # loom yields serialized dicts (via serialize_event=model_dump) but the
+        # event structure differs from what app.py expects.  We translate here.
         full_text = ""
+        # Snapshot inbound history so we can rebuild the persisted message list
+        # for app.py's `store.replace_history`. loom's streaming DoneEvent does
+        # not carry the assembled message list.
+        _history_snapshot = list(history or [])
 
-        provider_name = type(provider).__name__
+        async for raw in self._loom.run_turn_stream(loom_messages, model_id=model_id):
+            # raw is a dict because serialize_event=model_dump
+            etype = raw.get("type") if isinstance(raw, dict) else getattr(raw, "type", None)
+            if isinstance(raw, dict):
+                ev = raw
+            else:
+                ev = raw.model_dump()
 
-        # Per-turn usage accumulation (see run_turn for the non-stream
-        # equivalent). Streaming adds: some providers emit `usage` only
-        # on the last frame, which we pick up in the finish event below.
-        acc_in = 0
-        acc_out = 0
-        acc_tool_calls = 0
+            if etype == "content_delta":
+                delta = ev.get("delta", "")
+                full_text += delta
+                yield {"type": "delta", "text": delta}
 
-        for iteration in range(1, max_iter + 1):
-            self._emit("iter", {"n": iteration}, trace)
+            elif etype == "tool_call_delta":
+                # Forward tool streaming deltas (UI progress)
+                yield {
+                    "type": "tool_call_delta",
+                    "index": ev.get("index"),
+                    "id": ev.get("id"),
+                    "name": ev.get("name"),
+                    "args_delta": ev.get("arguments_delta"),
+                }
 
-            # Collect tool calls from this provider pass
-            current_tool_calls: list[dict[str, Any]] = []
-            current_content = ""
-            finish_reason = "stop"
-            current_usage: dict[str, int] = {}
+            elif etype == "tool_exec_start":
+                yield {
+                    "type": "tool_exec_start",
+                    "name": ev.get("name", ""),
+                    "args": ev.get("arguments", ""),
+                }
 
-            # Streaming retry: we can only retry BEFORE the first event has
-            # been forwarded to the caller — once bytes are on the wire the
-            # client has partial content and re-running the stream would
-            # duplicate deltas. `streamed_any` flips True at the first event
-            # we receive and disables retry thereafter.
-            streamed_any = False
-            for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
-                try:
-                    async for event in provider.chat_stream(
-                        messages, tools=tools, model=upstream_model
-                    ):
-                        streamed_any = True
-                        etype = event.get("type")
+            elif etype == "tool_exec_result":
+                yield {
+                    "type": "tool_exec_result",
+                    "name": ev.get("name", ""),
+                    "result_preview": (ev.get("text") or "")[:200],
+                }
 
-                        if etype == "delta":
-                            full_text += event["text"]
-                            current_content += event["text"]
-                            yield event
+            elif etype == "limit_reached":
+                yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
 
-                        elif etype in ("tool_call_start", "tool_call_delta", "tool_call_end"):
-                            yield event
+            elif etype == "error":
+                yield {
+                    "type": "error",
+                    "detail": ev.get("message", ""),
+                    "reason": ev.get("reason"),
+                    "retryable": ev.get("retryable", False),
+                    "status_code": ev.get("status_code"),
+                }
 
-                        elif etype == "finish":
-                            finish_reason = event.get("finish_reason", "stop")
-                            current_content = event.get("content", current_content)
-                            current_tool_calls = event.get("tool_calls", [])
-                            current_usage = event.get("usage") or {}
-                    break  # stream ended cleanly — exit retry loop
-                except LLMTransportError as exc:
-                    classified = self._classify(
-                        exc,
-                        provider_name=provider_name,
-                        model=upstream_model or "",
-                        num_messages=len(messages),
-                    )
-                    self._emit(
-                        "provider_error",
-                        {
-                            "attempt": attempt,
-                            "reason": classified.reason.value,
-                            "retryable": classified.retryable,
-                            "status_code": classified.status_code,
-                            "message": classified.user_facing_summary,
-                        },
-                        trace,
-                    )
-                    if streamed_any:
-                        # Mid-stream failure — bytes sent already, cannot retry.
-                        # Terminate the turn cleanly with a structured error.
-                        yield {
-                            "type": "error",
-                            "detail": classified.user_facing_summary,
-                            "reason": classified.reason.value,
-                            "retryable": False,
-                            "status_code": classified.status_code,
-                        }
-                        yield {
-                            "type": "done",
-                            "session_id": session_id,
-                            "reply": current_content or full_text,
-                            "trace": trace,
-                            "skills_touched": skills_touched,
-                            "iterations": iteration,
-                            "messages": messages,
-                        }
-                        return
-                    if not classified.retryable or attempt >= MAX_PROVIDER_ATTEMPTS:
-                        raise
-                    delay = jittered_backoff(attempt)
-                    log.warning(
-                        "chat_stream attempt %d/%d failed (%s); backoff %.1fs",
-                        attempt, MAX_PROVIDER_ATTEMPTS, classified.reason.value, delay,
-                    )
-                    await asyncio.sleep(delay)
-
-            # Fold the provider-reported usage into the per-turn accumulator
-            # as soon as we have it. We do this regardless of whether this
-            # iteration was terminal or produced more tool calls — every
-            # round-trip counts toward cost.
-            acc_in += int(current_usage.get("input_tokens") or 0)
-            acc_out += int(current_usage.get("output_tokens") or 0)
-
-            if finish_reason != "tool_calls" or not current_tool_calls:
-                # Terminal: no more tool calls
-                messages.append(ChatMessage(role=Role.ASSISTANT, content=current_content or full_text))
-                self._emit("reply", {"text": (current_content or full_text)[:200]}, trace)
+            elif etype == "done":
+                ctx = ev.get("context") or {}
+                model_used = ctx.get("model") or self._chosen_model
+                # Grab the most recent full_text as reply
+                reply_text = full_text
+                # Prefer the assembled message list from loom (includes
+                # tool_calls + TOOL role messages). Strip system messages
+                # (re-built each turn by before_llm_call). Fall back to a
+                # plain user+assistant synthesis if loom didn't provide one.
+                loom_msgs = ctx.get("messages")
+                if loom_msgs:
+                    persisted_messages = [
+                        _from_loom_message(lt.ChatMessage(**m))
+                        for m in loom_msgs
+                        if m.get("role") != "system"
+                    ]
+                else:
+                    persisted_messages = _history_snapshot + [
+                        ChatMessage(role=Role.USER, content=user_msg_content),
+                        ChatMessage(role=Role.ASSISTANT, content=reply_text),
+                    ]
                 yield {
                     "type": "done",
                     "session_id": session_id,
-                    "reply": current_content or full_text,
-                    "trace": trace,
-                    "skills_touched": skills_touched,
-                    "iterations": iteration,
-                    "messages": messages,
+                    "reply": reply_text,
+                    "trace": list(self._turn_trace),
+                    "skills_touched": list(self._skills_touched),
+                    "iterations": ctx.get("iterations", 0),
+                    "messages": persisted_messages,
                     "usage": {
-                        "input_tokens": acc_in,
-                        "output_tokens": acc_out,
-                        "tool_calls": acc_tool_calls,
-                        "model": chosen_model,
+                        "input_tokens": ctx.get("input_tokens", 0),
+                        "output_tokens": ctx.get("output_tokens", 0),
+                        "tool_calls": ctx.get("tool_calls", 0),
+                        "model": model_used,
                     },
                 }
-                return
-
-            # Tool calls to execute
-            messages.append(
-                ChatMessage(
-                    role=Role.ASSISTANT,
-                    content=current_content or None,
-                    tool_calls=[
-                        ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                        for tc in current_tool_calls
-                    ],
-                )
-            )
-
-            for tc_dict in current_tool_calls:
-                acc_tool_calls += 1
-                tc = ToolCall(id=tc_dict["id"], name=tc_dict["name"], arguments=tc_dict["arguments"])
-                self._emit("tool_call", {"name": tc.name, "args": tc.arguments}, trace)
-                yield {"type": "tool_exec_start", "name": tc.name, "args": tc.arguments}
-                result = await self._handle(tc, skills_touched)
-                self._emit("tool_result", {"name": tc.name, "preview": result[:200]}, trace)
-                yield {"type": "tool_exec_result", "name": tc.name, "result_preview": result[:200]}
-                messages.append(ChatMessage(role=Role.TOOL, content=result, tool_call_id=tc.id))
-
-        # Hit iteration cap
-        limit_text = (
-            f"I hit the per-turn tool-call limit ({max_iter}) before finishing. "
-            "Ask me to continue, or narrow the task — I'll pick up where I left off."
-        )
-        messages.append(ChatMessage(role=Role.ASSISTANT, content=limit_text))
-        yield {"type": "limit_reached", "iterations": max_iter}
-        yield {
-            "type": "done",
-            "session_id": session_id,
-            "reply": limit_text,
-            "trace": trace,
-            "skills_touched": skills_touched,
-            "iterations": max_iter,
-            "messages": messages,
-            "usage": {
-                "input_tokens": acc_in,
-                "output_tokens": acc_out,
-                "tool_calls": acc_tool_calls,
-                "model": chosen_model,
-            },
-        }
-
-    async def _handle(self, tc: ToolCall, skills_touched: list[str]) -> str:
-        if tc.name in {"skills_list", "skill_view"}:
-            return self._state.invoke(tc.name, tc.arguments).to_text()
-
-        if tc.name == "skill_manage":
-            action = tc.arguments.get("action", "")
-            name = tc.arguments.get("name", "")
-            result = self._manager.invoke(action, tc.arguments)
-            if name:
-                skills_touched.append(name)
-            return f'{{"ok": {str(result.ok).lower()}, "message": {result.message!r}, "rolled_back": {str(result.rolled_back).lower()}}}'
-
-        if tc.name == "http_call":
-            res = await self._http.invoke(tc.arguments)
-            return res.to_text()
-
-        if tc.name == "acp_call":
-            agent_id = tc.arguments.get("agent_id", "")
-            message = tc.arguments.get("message", "")
-            return await acp_call(agent_id, message)
-
-        if tc.name in {"vault_list", "vault_read", "vault_write"}:
-            return handle_vault_tool(tc.name, tc.arguments)
-
-        if tc.name == "kanban_manage":
-            return handle_kanban_tool(tc.arguments)
-
-        if tc.name == "ask_user" and self._ask_user_handler is not None:
-            ask_result = await self._ask_user_handler.invoke(tc.arguments)
-            return ask_result.to_text()
-
-        if tc.name == "terminal" and self._terminal_handler is not None:
-            term_result = await self._terminal_handler.invoke(tc.arguments)
-            return term_result.to_text()
-
-        if tc.name == "memory_read":
-            return await MemoryHandler().read(tc.arguments.get("key", ""))
-
-        if tc.name == "memory_write":
-            return await MemoryHandler().write(
-                tc.arguments.get("key", ""),
-                tc.arguments.get("content", ""),
-            )
-
-        return f"error: unknown tool {tc.name!r}"
 
     async def aclose(self) -> None:
-        await self._http.aclose()
+        await self._nexus_provider.aclose()
         if self._provider_registry:
             await self._provider_registry.aclose()

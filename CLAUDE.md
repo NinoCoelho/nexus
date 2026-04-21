@@ -4,12 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Repository: `git@github.com:NinoCoelho/nexus.git` (branch: `main`).
 
+## Repo layout
+
+Nexus depends on **Loom** (the agentic-core framework) as a local editable
+path — `../../loom` from `nexus/agent/`. Clone both repos side-by-side:
+
+```
+<parent>/
+  loom/    # git@github.com:NinoCoelho/loom.git
+  nexus/   # this repo
+```
+
+`uv sync` resolves `loom` via `[tool.uv.sources]` in `agent/pyproject.toml`.
+
 ## Commands
 
 Backend (from `agent/`, managed by `uv`):
 
 ```bash
-uv sync                                  # install deps
+uv sync                                  # install deps (needs ../../loom sibling)
 uv run nexus serve --port 18989          # run FastAPI server in foreground
 uv run nexus daemon start | status | stop | logs  # background daemon (PID + log in ~/.nexus/)
 uv run nexus chat                        # interactive TUI chat

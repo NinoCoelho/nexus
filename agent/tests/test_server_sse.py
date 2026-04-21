@@ -117,7 +117,7 @@ def _ask_user_response(prompt: str = "Proceed?") -> ChatResponse:
     """Scripted LLM response: ask_user tool call."""
     return ChatResponse(
         content=None,
-        stop_reason=StopReason.TOOL_CALLS,
+        stop_reason=StopReason.TOOL_USE,
         tool_calls=[
             ToolCall(
                 id="call_1",

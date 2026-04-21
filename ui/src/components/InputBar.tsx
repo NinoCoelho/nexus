@@ -6,9 +6,11 @@ interface Props {
   onChange: (v: string) => void;
   onSend: () => void;
   disabled: boolean;
+  busy?: boolean;
+  onStop?: () => void;
 }
 
-export default function InputBar({ value, onChange, onSend, disabled }: Props) {
+export default function InputBar({ value, onChange, onSend, disabled, busy, onStop }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const adjust = () => {
@@ -55,17 +57,30 @@ export default function InputBar({ value, onChange, onSend, disabled }: Props) {
         onKeyDown={handleKeyDown}
         disabled={disabled}
       />
-      <button
-        className="input-send-btn"
-        onClick={onSend}
-        disabled={disabled || !value.trim()}
-        aria-label="Send"
-      >
-        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="10" y1="17" x2="10" y2="4" />
-          <polyline points="4,10 10,4 16,10" />
-        </svg>
-      </button>
+      {busy && onStop ? (
+        <button
+          className="input-send-btn input-stop-btn"
+          onClick={onStop}
+          aria-label="Stop"
+          title="Stop the agent"
+        >
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" stroke="none">
+            <rect x="5" y="5" width="10" height="10" rx="1.5" />
+          </svg>
+        </button>
+      ) : (
+        <button
+          className="input-send-btn"
+          onClick={onSend}
+          disabled={disabled || !value.trim()}
+          aria-label="Send"
+        >
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="10" y1="17" x2="10" y2="4" />
+            <polyline points="4,10 10,4 16,10" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

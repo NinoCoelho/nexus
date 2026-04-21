@@ -1,60 +1,53 @@
-"""SQLite-backed session store for Nexus.
+"""Session store — Nexus-side composition layer over ``loom.store.session.SessionStore``.
 
-Beyond the persisted history, the store carries two in-memory
-side-channels used by the HITL (human-in-the-loop) pattern:
+Loom owns all persistence (sessions + messages tables). Nexus adds:
 
-* ``_subscribers``: per-session list of ``asyncio.Queue`` objects that
-  back SSE subscribers. ``publish`` fans out to all of them with
-  ``put_nowait`` so tracing the agent never blocks.
-* ``_pending``: per-session map of ``request_id`` → ``asyncio.Future``
-  used by ``ask_user`` to park until the UI POSTs a response. Stays in
-  memory — a process crash cancels every in-flight dialog, which is
-  the right behavior anyway.
+* FTS5 full-text search with BM25 ranking and snippet highlighting
+  (loom's built-in search uses LIKE — insufficient for the UI's search UX).
+* The HITL event pub/sub bus (``publish`` / ``subscribe``) for the out-of-band
+  SSE channel at ``GET /chat/{sid}/events``.
+* Pending-future registry (``register_pending`` / ``resolve_pending`` /
+  ``cancel_pending``) used by ``ask_user`` to park until the UI responds.
+* A one-shot migration from the pre-loom Nexus schema (integer timestamps,
+  no WAL, no ``pending_question`` column) run at first init. The old file is
+  backed up as ``sessions.sqlite.pre-loom-migration.bak`` before any write.
+
+Type boundary — Nexus uses ``nexus.agent.llm.ChatMessage`` / ``ToolCall``
+which have ``arguments: dict``.  Loom uses ``loom.types.ChatMessage`` /
+``ToolCall`` which have ``arguments: str`` (JSON).  The ``_to_loom_msg``
+and ``_from_loom_msg`` helpers convert at the boundary so the rest of the
+code stays unaware.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import shutil
 import sqlite3
 import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from loom.hitl import HitlBroker, HitlEvent
+from loom.store.session import SessionStore as LoomSessionStore
+
 from ..agent.llm import ChatMessage, Role, ToolCall
 from .events import SessionEvent
 
+log = logging.getLogger(__name__)
 
 _DB_PATH = Path("~/.nexus/sessions.sqlite").expanduser()
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    context TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    model TEXT,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    tool_call_count INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS messages (
-    session_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tool_calls TEXT,
-    tool_call_id TEXT,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (session_id, seq),
-    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+# ── Nexus FTS5 schema (appended to loom's tables) ────────────────────────────
+
+_FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
     content='messages',
@@ -74,15 +67,8 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 """
 
-# Columns added after the initial schema shipped. SQLite's CREATE TABLE
-# IF NOT EXISTS won't add them to a pre-existing table, so we run best-
-# effort ALTER TABLEs at init. Each entry is (column_name, column_def).
-_MIGRATIONS: list[tuple[str, str]] = [
-    ("model", "TEXT"),
-    ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
-    ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
-    ("tool_call_count", "INTEGER NOT NULL DEFAULT 0"),
-]
+
+# ── Dataclasses consumed by server handlers ───────────────────────────────────
 
 
 @dataclass
@@ -102,196 +88,400 @@ class SessionSummary:
     message_count: int
 
 
-def _row_to_message(row: tuple) -> ChatMessage:
-    _seq, role, content, tool_calls_json, tool_call_id = row
-    tool_calls: list[ToolCall] = []
-    if tool_calls_json:
-        raw = json.loads(tool_calls_json)
-        tool_calls = [ToolCall(**tc) for tc in raw]
-    return ChatMessage(
-        role=Role(role),
-        content=content or None,
-        tool_calls=tool_calls,
-        tool_call_id=tool_call_id,
+# ── Type conversion helpers ───────────────────────────────────────────────────
+
+
+def _to_loom_msg(msg: ChatMessage) -> "loom.types.ChatMessage":  # type: ignore[name-defined]
+    """Convert a Nexus ChatMessage to loom's format.
+
+    Nexus ``ToolCall.arguments`` is a ``dict``; loom expects a JSON string.
+    """
+    import loom.types as lt
+
+    loom_tcs: list[lt.ToolCall] | None = None
+    if msg.tool_calls:
+        loom_tcs = [
+            lt.ToolCall(
+                id=tc.id,
+                name=tc.name,
+                arguments=json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
+            )
+            for tc in msg.tool_calls
+        ]
+    return lt.ChatMessage(
+        role=lt.Role(msg.role.value),
+        content=msg.content,
+        tool_calls=loom_tcs,
+        tool_call_id=msg.tool_call_id,
+        name=msg.name,
     )
 
 
-def _message_to_row(seq: int, session_id: str, msg: ChatMessage, ts: int) -> tuple:
-    tool_calls_json = None
+def _from_loom_msg(msg: "loom.types.ChatMessage") -> ChatMessage:  # type: ignore[name-defined]
+    """Convert loom's ChatMessage to Nexus's format.
+
+    Loom ``ToolCall.arguments`` is a JSON string; Nexus expects a ``dict``.
+    """
+    nexus_tcs: list[ToolCall] = []
     if msg.tool_calls:
-        tool_calls_json = json.dumps([tc.model_dump() for tc in msg.tool_calls])
-    return (session_id, seq, msg.role, msg.content or "", tool_calls_json, msg.tool_call_id, ts)
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments
+            except (TypeError, json.JSONDecodeError):
+                args = {}
+            nexus_tcs.append(ToolCall(id=tc.id, name=tc.name, arguments=args))
+    return ChatMessage(
+        role=Role(msg.role.value),
+        content=msg.content,
+        tool_calls=nexus_tcs,
+        tool_call_id=msg.tool_call_id,
+        name=msg.name,
+    )
+
+
+def _ts_to_int(ts: Any) -> int:
+    """Convert a timestamp value (ISO string or integer) to a Unix epoch int."""
+    if ts is None:
+        return 0
+    if isinstance(ts, (int, float)):
+        return int(ts)
+    # ISO string from SQLite CURRENT_TIMESTAMP: "2024-01-15 10:30:00"
+    try:
+        dt = datetime.fromisoformat(str(ts).replace(" ", "T"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except (ValueError, AttributeError):
+        return 0
+
+
+# ── Migration from pre-loom schema ───────────────────────────────────────────
+
+
+def _migrate_legacy_schema(db_path: Path) -> None:
+    """One-shot migration from Nexus's pre-loom schema to loom's schema.
+
+    Detects the old schema by the presence of an integer ``created_at``
+    on the ``sessions`` table (the legacy schema stored epoch seconds as
+    NOT NULL INTEGER, while loom stores ISO timestamps via CURRENT_TIMESTAMP).
+
+    Strategy:
+    1. Backup the file (idempotent — won't overwrite an existing backup).
+    2. Read all session and message rows from the old tables.
+    3. DROP the old tables (so loom can re-create them with the correct schema).
+    4. Let the caller's ``LoomSessionStore(db_path)`` create fresh tables.
+    5. Insert migrated rows into the fresh tables (done in ``__init__`` after
+       loom is initialised).
+
+    To avoid a two-step init, the migrated data is written to a temporary
+    pickle-style in-memory structure and returned; the caller inserts it.
+    Actually — simpler: we do the full migration here by opening loom ourselves
+    after dropping the old tables.
+    """
+    bak = db_path.with_suffix(".sqlite.pre-loom-migration.bak")
+    try:
+        # --- detect legacy format ---
+        conn = sqlite3.connect(str(db_path))
+        try:
+            cols = {
+                row[1]: row[2]  # name -> type
+                for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+        finally:
+            conn.close()
+
+        if "created_at" not in cols:
+            return  # no sessions table — fresh DB
+
+        # Legacy schema used "INTEGER NOT NULL" for created_at.
+        # Loom uses "TIMESTAMP" (DEFAULT CURRENT_TIMESTAMP, i.e. an ISO string).
+        if "INTEGER" not in cols["created_at"].upper():
+            return  # already loom format
+
+        # --- backup (idempotent) ---
+        if not bak.exists():
+            shutil.copy2(str(db_path), str(bak))
+            log.info("session migration: backed up %s → %s", db_path, bak)
+
+        # --- read legacy data ---
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            # Read sessions — handle old DBs that may lack some columns.
+            try:
+                sess_rows = conn.execute(
+                    "SELECT id, title, context, created_at, updated_at, model, "
+                    "input_tokens, output_tokens, tool_call_count FROM sessions"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                sess_rows = conn.execute(
+                    "SELECT id, title, context, created_at, updated_at FROM sessions"
+                ).fetchall()
+            msg_rows = conn.execute(
+                "SELECT session_id, seq, role, content, tool_calls, tool_call_id, created_at "
+                "FROM messages ORDER BY session_id, seq"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        def _int_to_iso(ts: Any) -> str:
+            return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        def _col(row: sqlite3.Row, name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+
+        # --- drop old tables so loom can re-create them with correct schema ---
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DROP TABLE IF EXISTS messages")
+            conn.execute("DROP TABLE IF EXISTS sessions")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # --- let loom create fresh tables ---
+        loom = LoomSessionStore(db_path)
+
+        # --- insert migrated data ---
+        for s in sess_rows:
+            created_iso = _int_to_iso(s["created_at"])
+            updated_iso = _int_to_iso(s["updated_at"])
+            loom._db.execute(
+                "INSERT OR IGNORE INTO sessions "
+                "(id, title, context, created_at, updated_at, model, "
+                " input_tokens, output_tokens, tool_call_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    s["id"],
+                    s["title"] or "New session",
+                    _col(s, "context"),
+                    created_iso,
+                    updated_iso,
+                    _col(s, "model"),
+                    _col(s, "input_tokens", 0),
+                    _col(s, "output_tokens", 0),
+                    _col(s, "tool_call_count", 0),
+                ),
+            )
+        loom._db.commit()
+
+        for m in msg_rows:
+            created_iso = _int_to_iso(m["created_at"])
+            loom._db.execute(
+                "INSERT OR IGNORE INTO messages "
+                "(session_id, seq, role, content, tool_calls, tool_call_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    m["session_id"],
+                    m["seq"],
+                    m["role"],
+                    m["content"],
+                    m["tool_calls"],
+                    m["tool_call_id"],
+                    created_iso,
+                ),
+            )
+        loom._db.commit()
+        loom._db.close()
+
+        log.info(
+            "session migration: migrated %d sessions, %d messages from legacy schema",
+            len(sess_rows),
+            len(msg_rows),
+        )
+
+    except Exception:
+        log.exception(
+            "session migration FAILED — legacy data preserved at %s; "
+            "new data will go into loom's schema going forward",
+            bak,
+        )
+
+
+# ── Nexus SessionStore ────────────────────────────────────────────────────────
 
 
 class SessionStore:
+    """Nexus's session store — persists via loom, adds HITL + FTS5 search.
+
+    All storage-level operations delegate to ``self._loom``
+    (a ``loom.store.session.SessionStore``). Nexus owns only:
+
+    - FTS5 virtual table + triggers for snippet-rich full-text search.
+    - HITL pub/sub bus (``publish`` / ``subscribe`` / ``register_pending``
+      / ``resolve_pending`` / ``cancel_pending``).
+    - The ``Session`` + ``SessionSummary`` dataclasses used by FastAPI handlers.
+    - A one-shot migration from the pre-loom integer-timestamp schema.
+    """
+
     def __init__(self, db_path: Path = _DB_PATH) -> None:
         self._db_path = db_path
-        self._lock = Lock()
-        # In-memory side channels — not persisted. Each session that has
-        # at least one live SSE subscriber gets a list of queues; each
-        # session with at least one pending ``ask_user`` gets a dict of
-        # request_id → Future. Both cleaned up lazily.
-        self._subscribers: dict[str, list[asyncio.Queue[SessionEvent | None]]] = {}
-        self._pending: dict[str, dict[str, asyncio.Future[str]]] = {}
-        self._init_db()
-
-    def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            # Check whether the FTS virtual table already exists *before*
-            # running the schema script, so we know if a rebuild is needed.
-            fts_existed = bool(
-                conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
-                ).fetchone()
+
+        # One-shot migration from the pre-loom schema — runs before loom
+        # touches the file so the backup is pristine.
+        if self._db_path.exists():
+            _migrate_legacy_schema(self._db_path)
+
+        # Loom handles all schema creation and persistence.
+        self._loom = LoomSessionStore(self._db_path)
+
+        # Add FTS5 on top of loom's messages table so search has snippets.
+        self._init_fts()
+
+        self._lock = Lock()
+        self._subscribers: dict[str, list[asyncio.Queue[SessionEvent | None]]] = {}
+        self._broker = HitlBroker(
+            publish_hook=lambda sid, ev: self.publish(
+                sid, SessionEvent(kind=ev.kind, data=dict(ev.data))
             )
-            conn.executescript(_SCHEMA)
-            # Forward-migrate older DBs that predate the usage columns.
-            existing = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
-            }
-            for col, defn in _MIGRATIONS:
-                if col not in existing:
-                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
-            # Populate FTS for existing databases that had data before the
-            # virtual table was created. The triggers only fire for future
-            # writes, so we need a one-time rebuild to backfill historical
-            # content. Run it only when the table was just created (i.e. it
-            # did not exist before this _init_db call).
-            if not fts_existed:
-                msg_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-                if msg_count > 0:
-                    conn.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
-                    conn.commit()
+        )
+
+    @property
+    def broker(self) -> HitlBroker:
+        return self._broker
 
     def _connect(self) -> sqlite3.Connection:
+        """Open a read-only-ish connection for ad-hoc queries (e.g. InsightsEngine)."""
         conn = sqlite3.connect(str(self._db_path))
-        conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _init_fts(self) -> None:
+        """Create the FTS5 virtual table + sync triggers if missing."""
+        db = self._loom._db
+        fts_existed = bool(
+            db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+            ).fetchone()
+        )
+        db.executescript(_FTS_SCHEMA)
+        # Backfill FTS for existing messages when the table was just created.
+        if not fts_existed:
+            msg_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            if msg_count > 0:
+                db.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
+                db.commit()
+
+    # ── persistence — delegate to loom ───────────────────────────────────────
+
     def create(self, context: str | None = None) -> Session:
         sid = uuid.uuid4().hex
-        now = int(time.time())
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                "INSERT INTO sessions (id, title, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (sid, "New session", context, now, now),
-            )
-        return Session(id=sid, title="New session", context=context)
+        d = self._loom.get_or_create(sid, title="New session", context=context)
+        return Session(id=d["id"], title=d["title"] or "New session", context=context)
 
     def get_or_create(self, session_id: str | None, context: str | None = None) -> Session:
         if session_id is None:
             return self.create(context=context)
-        with self._lock, self._connect() as conn:
-            row = conn.execute(
-                "SELECT id, title, context FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-            if row is None:
-                now = int(time.time())
-                conn.execute(
-                    "INSERT INTO sessions (id, title, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    (session_id, "New session", context, now, now),
-                )
-                history: list[ChatMessage] = []
-                ctx = context
-            else:
-                ctx = row["context"] or context
-                if row["context"] is None and context is not None:
-                    conn.execute("UPDATE sessions SET context = ? WHERE id = ?", (context, session_id))
-                rows = conn.execute(
-                    "SELECT seq, role, content, tool_calls, tool_call_id FROM messages WHERE session_id = ? ORDER BY seq",
-                    (session_id,),
-                ).fetchall()
-                history = [_row_to_message(tuple(r)) for r in rows]
-        return Session(id=session_id, title=row["title"] if row else "New session", history=history, context=ctx)
+        d = self._loom.get_or_create(session_id, title="New session", context=context)
+        # If context wasn't set but we have one now, propagate it.
+        if d.get("context") is None and context is not None:
+            self._loom.set_context(session_id, context)
+            d["context"] = context
+        history = [_from_loom_msg(m) for m in self._loom.get_history(session_id)]
+        return Session(
+            id=d["id"],
+            title=d["title"] or "New session",
+            history=history,
+            context=d.get("context") or context,
+        )
 
     def get(self, session_id: str) -> Session | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT id, title, context FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-            if row is None:
-                return None
-            rows = conn.execute(
-                "SELECT seq, role, content, tool_calls, tool_call_id, created_at FROM messages WHERE session_id = ? ORDER BY seq",
-                (session_id,),
-            ).fetchall()
-            history = []
-            message_timestamps = []
-            for r in rows:
-                history.append(_row_to_message((r["seq"], r["role"], r["content"], r["tool_calls"], r["tool_call_id"])))
-                message_timestamps.append(r["created_at"])
-        sess = Session(id=row["id"], title=row["title"], history=history, context=row["context"])
-        # Attach timestamps alongside so the route can emit them without a schema change.
-        sess._message_timestamps = message_timestamps  # type: ignore[attr-defined]
+        d = self._loom.get_or_create.__func__  # type: ignore[attr-defined]
+        # Use raw DB to avoid creating the session if it doesn't exist.
+        row = self._loom._db.execute(
+            "SELECT id, title, context FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        msg_rows = self._loom._db.execute(
+            "SELECT role, content, tool_calls, tool_call_id, name, created_at "
+            "FROM messages WHERE session_id = ? ORDER BY seq",
+            (session_id,),
+        ).fetchall()
+        history: list[ChatMessage] = []
+        timestamps: list[int] = []
+        for r in msg_rows:
+            import loom.types as lt
+            loom_tcs: list[lt.ToolCall] | None = None
+            if r[2]:
+                try:
+                    raw = json.loads(r[2])
+                    loom_tcs = [lt.ToolCall(**tc) for tc in raw]
+                except Exception:
+                    pass
+            loom_msg = lt.ChatMessage(
+                role=lt.Role(r[0]),
+                content=r[1],
+                tool_calls=loom_tcs,
+                tool_call_id=r[3],
+                name=r[4],
+            )
+            history.append(_from_loom_msg(loom_msg))
+            timestamps.append(_ts_to_int(r[5]))
+        sess = Session(id=row[0], title=row[1] or "New session", history=history, context=row[2])
+        sess._message_timestamps = timestamps  # type: ignore[attr-defined]
         return sess
 
     def list(self, limit: int = 50) -> list[SessionSummary]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT s.id, s.title, s.created_at, s.updated_at,
-                       COUNT(m.seq) AS message_count
-                FROM sessions s
-                LEFT JOIN messages m ON m.session_id = s.id
-                GROUP BY s.id
-                ORDER BY s.updated_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+        rows = self._loom._db.execute(
+            """
+            SELECT s.id, s.title, s.created_at, s.updated_at,
+                   COUNT(m.seq) AS message_count
+            FROM sessions s
+            LEFT JOIN messages m ON m.session_id = s.id
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
         return [
             SessionSummary(
-                id=r["id"],
-                title=r["title"],
-                created_at=r["created_at"],
-                updated_at=r["updated_at"],
-                message_count=r["message_count"],
+                id=r[0],
+                title=r[1] or "New session",
+                created_at=_ts_to_int(r[2]),
+                updated_at=_ts_to_int(r[3]),
+                message_count=r[4] or 0,
             )
             for r in rows
         ]
 
     def replace_history(self, session_id: str, history: list[ChatMessage]) -> None:
-        now = int(time.time())
-        with self._lock, self._connect() as conn:
-            row = conn.execute("SELECT title FROM sessions WHERE id = ?", (session_id,)).fetchone()
-            if row is None:
-                return
-            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            rows = [_message_to_row(i, session_id, msg, now) for i, msg in enumerate(history)]
-            conn.executemany(
-                "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
-            conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
-            # Auto-title on first user message
-            if row["title"] == "New session":
-                for msg in history:
-                    if msg.role == Role.USER and msg.content:
-                        title = msg.content.strip()[:40]
-                        conn.execute("UPDATE sessions SET title = ? WHERE id = ?", (title, session_id))
-                        break
+        loom_msgs = [_to_loom_msg(m) for m in history]
+        self._loom.replace_history(session_id, loom_msgs)
+
+        # Auto-title: if the session is still "New session", set title from
+        # the first user message (loom's replace_history doesn't do this).
+        row = self._loom._db.execute(
+            "SELECT title FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row and (row[0] is None or row[0] == "New session"):
+            for msg in history:
+                if msg.role == Role.USER and msg.content:
+                    title = msg.content.strip()[:40]
+                    self._loom.set_title(session_id, title)
+                    break
 
     def reset(self, session_id: str) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (int(time.time()), session_id))
-        # Cancel any pending HITL futures for this session — they're
-        # stale state once the conversation has been reset.
+        self._loom.reset(session_id)
         self._cancel_all_pending(session_id)
 
     def delete(self, session_id: str) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        # Same story as reset: an in-flight ask_user against a deleted
-        # session can never resolve; cancel so the tool returns cleanly.
+        self._loom.delete_session(session_id)
         self._cancel_all_pending(session_id)
 
     def rename(self, session_id: str, title: str) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?", (title, int(time.time()), session_id))
+        self._loom.set_title(session_id, title)
+        # Also bump updated_at.
+        self._loom._db.execute(
+            "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (session_id,),
+        )
+        self._loom._db.commit()
 
     def bump_usage(
         self,
@@ -302,44 +492,24 @@ class SessionStore:
         output_tokens: int = 0,
         tool_calls: int = 0,
     ) -> None:
-        """Accumulate usage stats for a session after each LLM turn.
-
-        ``model`` is written only when non-empty so we don't overwrite a
-        previously-known model with ``NULL`` on a follow-up turn that
-        couldn't resolve the slug. Token + tool counts are additive.
-        """
-        with self._lock, self._connect() as conn:
-            if model:
-                conn.execute(
-                    "UPDATE sessions SET "
-                    "  input_tokens = input_tokens + ?, "
-                    "  output_tokens = output_tokens + ?, "
-                    "  tool_call_count = tool_call_count + ?, "
-                    "  model = ? "
-                    "WHERE id = ?",
-                    (input_tokens, output_tokens, tool_calls, model, session_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE sessions SET "
-                    "  input_tokens = input_tokens + ?, "
-                    "  output_tokens = output_tokens + ?, "
-                    "  tool_call_count = tool_call_count + ? "
-                    "WHERE id = ?",
-                    (input_tokens, output_tokens, tool_calls, session_id),
-                )
+        self._loom.bump_usage(session_id, input_tokens, output_tokens, tool_calls)
+        if model:
+            self._loom._db.execute(
+                "UPDATE sessions SET model = ? WHERE id = ? AND (model IS NULL OR model = '')",
+                (model, session_id),
+            )
+            self._loom._db.commit()
 
     def search(self, q: str, *, limit: int = 20) -> list[dict]:
-        """Full-text search over message content using BM25 ranking.
+        """Full-text search with BM25 ranking and snippet highlighting.
 
-        Returns a list of ``{"session_id": str, "title": str, "snippet": str}``
-        dicts ordered by relevance (best first). Returns ``[]`` for a blank
-        query so callers never need to guard separately.
+        Returns ``[{"session_id": str, "title": str, "snippet": str}]``.
+        Falls back to an empty list on blank queries.
         """
         if not q.strip():
             return []
-        with self._connect() as conn:
-            rows = conn.execute(
+        try:
+            rows = self._loom._db.execute(
                 """
                 SELECT s.id, s.title,
                        snippet(messages_fts, 0, '**', '**', '…', 20) AS snippet,
@@ -353,37 +523,71 @@ class SessionStore:
                 """,
                 (q, limit),
             ).fetchall()
-        return [
-            {"session_id": r["id"], "title": r["title"], "snippet": r["snippet"]}
-            for r in rows
-        ]
+        except sqlite3.OperationalError:
+            # FTS5 table missing or query malformed — fall back to empty.
+            return []
+        seen: dict[str, dict] = {}
+        for r in rows:
+            sid = r[0]
+            if sid not in seen:
+                seen[sid] = {
+                    "session_id": sid,
+                    "title": r[1] or "New session",
+                    "snippet": r[2] or "",
+                }
+        return list(seen.values())
 
-    # ── pub/sub for SSE ──────────────────────────────────────────────
+    def get_session_timestamps(self, session_id: str) -> tuple[int, int]:
+        """Return (created_at, updated_at) as Unix epoch integers for a session."""
+        row = self._loom._db.execute(
+            "SELECT created_at, updated_at FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return 0, 0
+        return _ts_to_int(row[0]), _ts_to_int(row[1])
+
+    def import_session(
+        self,
+        session_id: str,
+        title: str,
+        context: str | None,
+        messages: list[ChatMessage],
+        created_at: int,
+    ) -> None:
+        """Insert a new session with pre-built history (used by the import endpoint)."""
+        created_iso = datetime.fromtimestamp(created_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            self._loom._db.execute(
+                "INSERT INTO sessions (id, title, context, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (session_id, title, context, created_iso, created_iso),
+            )
+            for seq, msg in enumerate(messages):
+                tc_json: str | None = None
+                if msg.tool_calls:
+                    tc_json = json.dumps([
+                        {"id": tc.id, "name": tc.name, "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments}
+                        for tc in msg.tool_calls
+                    ])
+                self._loom._db.execute(
+                    "INSERT INTO messages (session_id, seq, role, content, tool_calls, tool_call_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (session_id, seq, msg.role.value, msg.content or "", tc_json, msg.tool_call_id, created_iso),
+                )
+            self._loom._db.commit()
+
+    # ── pub/sub for SSE ──────────────────────────────────────────────────────
 
     def publish(self, session_id: str, event: SessionEvent) -> None:
-        """Fan an event out to every live SSE subscriber on this
-        session. Silently drops when there are no subscribers — early
-        traces routinely fire before the UI's EventSource attaches,
-        and a reply after the user has navigated away is harmless."""
         with self._lock:
             subscribers = list(self._subscribers.get(session_id, ()))
         for q in subscribers:
-            # Queues are unbounded by default; put_nowait is effectively
-            # non-blocking. If a subscriber is stuck, events accumulate
-            # rather than blocking the publisher. OK for MVP.
             q.put_nowait(event)
 
     async def subscribe(self, session_id: str) -> AsyncIterator[SessionEvent]:
-        """Async iterator of events for one SSE subscriber.
-
-        Yields until either the client disconnects (the generator is
-        closed) or a ``None`` sentinel is pushed (session reset /
-        delete wake the queue so the caller can unwind).
-        """
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         with self._lock:
             self._subscribers.setdefault(session_id, []).append(queue)
-
         try:
             while True:
                 event = await queue.get()
@@ -398,63 +602,24 @@ class SessionStore:
                     if not subs:
                         self._subscribers.pop(session_id, None)
 
-    # ── HITL pending futures ─────────────────────────────────────────
+    # ── HITL pending futures ─────────────────────────────────────────────────
 
-    def register_pending(
-        self, session_id: str, request_id: str
-    ) -> asyncio.Future[str]:
-        """Create + register a Future for a HITL request. ``ask_user``
-        awaits it; ``resolve_pending`` / ``cancel_pending`` complete it."""
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-        with self._lock:
-            session_pending = self._pending.setdefault(session_id, {})
-            if request_id in session_pending:
-                raise ValueError(f"request_id already pending: {request_id!r}")
-            session_pending[request_id] = fut
-        return fut
+    def register_pending(self, session_id: str, request_id: str) -> asyncio.Future[str]:
+        try:
+            return self._broker._register(session_id, request_id)
+        except ValueError as exc:
+            raise ValueError(f"request_id already pending: {request_id!r}") from exc
 
-    def resolve_pending(
-        self, session_id: str, request_id: str, answer: str
-    ) -> bool:
-        """Resolve a waiting ``ask_user``. Returns True iff the request
-        was pending and still live; False otherwise (stale / never
-        existed / already resolved). The ``/respond`` endpoint uses
-        this to 404 stale clicks."""
-        with self._lock:
-            session_pending = self._pending.get(session_id)
-            if session_pending is None:
-                return False
-            fut = session_pending.pop(request_id, None)
-            if not session_pending:
-                self._pending.pop(session_id, None)
-        if fut is None or fut.done():
-            return False
-        fut.set_result(answer)
-        return True
+    def resolve_pending(self, session_id: str, request_id: str, answer: str) -> bool:
+        return self._broker.resolve(session_id, request_id, answer)
 
     def cancel_pending(self, session_id: str, request_id: str) -> bool:
-        """Cancel a pending Future (e.g. on timeout). Returns True iff
-        it was present and still live."""
-        with self._lock:
-            session_pending = self._pending.get(session_id)
-            if session_pending is None:
-                return False
-            fut = session_pending.pop(request_id, None)
-            if not session_pending:
-                self._pending.pop(session_id, None)
+        fut = self._broker._pending.pop((session_id, request_id), None)
+        self._broker._requests.pop((session_id, request_id), None)
         if fut is None or fut.done():
             return False
         fut.cancel()
         return True
 
     def _cancel_all_pending(self, session_id: str) -> None:
-        """Called on reset/delete to drop every in-flight ask_user for
-        this session. Best-effort: already-done futures are skipped."""
-        with self._lock:
-            session_pending = self._pending.pop(session_id, None)
-        if not session_pending:
-            return
-        for fut in session_pending.values():
-            if not fut.done():
-                fut.cancel()
+        self._broker.cancel_session(session_id, reason="session_reset")

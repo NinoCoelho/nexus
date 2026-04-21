@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -19,6 +19,7 @@ import {
   getRouting,
   getSession,
   respondToUserRequest,
+  fetchPendingRequest,
   subscribeSessionEvents,
   type HitlSettings,
   type TraceEvent,
@@ -115,6 +116,10 @@ export default function App() {
   // HITL EventSource open before the first POST. Regenerated on
   // handleNewChat so a reset gives a clean stream.
   const [pendingSessionId, setPendingSessionId] = useState<string>(() => freshSessionId());
+  // AbortController for the in-flight /chat/stream fetch, per session key.
+  // Used by the Stop button to tear down the request client-side; the
+  // backend-side cancel is a separate POST to /chat/{sid}/cancel.
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   // Active HITL request (if any). Rendered as the ApprovalDialog.
   const [pendingRequest, setPendingRequest] = useState<UserRequestPayload | null>(null);
   const [pendingRequestSession, setPendingRequestSession] = useState<string | null>(null);
@@ -194,6 +199,19 @@ export default function App() {
   const hitlSessionId = activeSession ?? pendingSessionId;
   useEffect(() => {
     if (!hitlSessionId) return;
+
+    // Recover any request that was published before the EventSource
+    // (re)opened — the publish bus is fire-and-forget, so reload /
+    // late subscribe / tab restore would otherwise miss the modal.
+    let cancelled = false;
+    fetchPendingRequest(hitlSessionId)
+      .then((req) => {
+        if (cancelled || !req) return;
+        setPendingRequest(req);
+        setPendingRequestSession(hitlSessionId);
+      })
+      .catch(() => {});
+
     const es = subscribeSessionEvents(hitlSessionId, (event) => {
       if (event.kind === "user_request") {
         setPendingRequest(event.data);
@@ -212,7 +230,10 @@ export default function App() {
       // the /chat/stream POST response — ignore here to avoid
       // double-counting the activity strip.
     });
-    return () => es.close();
+    return () => {
+      cancelled = true;
+      es.close();
+    };
   }, [hitlSessionId]);
 
   const handleApprovalSubmit = useCallback(
@@ -314,10 +335,11 @@ export default function App() {
     patchState(activeKey, { input: v });
   }, [activeKey, patchState]);
 
-  const send = useCallback(async () => {
+  const send = useCallback(async (override?: unknown) => {
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
-    const text = state.input.trim();
+    const overrideText = typeof override === "string" ? override : undefined;
+    const text = (overrideText ?? state.input).trim();
     if (!text || state.thinking) return;
 
     const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
@@ -333,6 +355,9 @@ export default function App() {
     // EventSource (opened on that id) and the backend's session
     // agree. For an existing chat, keep the activeSession id.
     const sidForPost = activeSession ?? pendingSessionId;
+
+    const abortController = new AbortController();
+    abortControllersRef.current.set(key, abortController);
 
     try {
       await chatStream(
@@ -425,6 +450,27 @@ export default function App() {
               });
             }
             setSessionsRevision((r) => r + 1);
+          } else if (event.type === "limit_reached") {
+            const banner: Message = {
+              role: "assistant",
+              content: "",
+              kind: "limit",
+              limitIterations: event.iterations,
+              timestamp: new Date(),
+            };
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(key) ?? emptyState();
+              const msgs = cur.messages.slice();
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+                msgs[lastIdx] = banner;
+              } else {
+                msgs.push(banner);
+              }
+              next.set(key, { ...cur, messages: msgs, thinking: false });
+              return next;
+            });
           } else if (event.type === "error") {
             const errMsg: Message = {
               role: "assistant",
@@ -441,23 +487,81 @@ export default function App() {
             });
           }
         },
+        abortController.signal,
       );
     } catch (err) {
-      // Network/fetch error — replace placeholder with error message.
-      const errMsg: Message = {
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : "request failed"}`,
-        timestamp: new Date(),
-      };
-      setChatStates((prev) => {
-        const next = new Map(prev);
-        const cur = next.get(key) ?? emptyState();
-        const msgs = cur.messages.slice(0, -1).concat(errMsg);
-        next.set(key, { ...cur, messages: msgs, thinking: false });
-        return next;
-      });
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // User clicked Stop; the UI was already updated by handleStop.
+      } else {
+        // Network/fetch error — replace placeholder with error message.
+        const errMsg: Message = {
+          role: "assistant",
+          content: `Error: ${err instanceof Error ? err.message : "request failed"}`,
+          timestamp: new Date(),
+        };
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(key) ?? emptyState();
+          const msgs = cur.messages.slice(0, -1).concat(errMsg);
+          next.set(key, { ...cur, messages: msgs, thinking: false });
+          return next;
+        });
+      }
+    } finally {
+      if (abortControllersRef.current.get(key) === abortController) {
+        abortControllersRef.current.delete(key);
+      }
     }
   }, [activeKey, activeSession, chatStates, patchState, appendMessage, pendingSessionId]);
+
+  const handleStop = useCallback(() => {
+    const key = activeKey;
+    const abort = abortControllersRef.current.get(key);
+    const sidForCancel = activeSession ?? pendingSessionId;
+
+    // Best-effort server cancel (unblocks HITL waits + cancels the turn task).
+    fetch(`${import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989"}/chat/${encodeURIComponent(sidForCancel)}/cancel`, {
+      method: "POST",
+    }).catch(() => {});
+
+    abort?.abort();
+
+    // Flip thinking off and mark the placeholder as stopped.
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(key);
+      if (!cur) return prev;
+      const msgs = cur.messages.slice();
+      const lastIdx = msgs.length - 1;
+      if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+        const existing = msgs[lastIdx].content;
+        msgs[lastIdx] = {
+          ...msgs[lastIdx],
+          content: existing ? `${existing}\n\n_[stopped by user]_` : "_[stopped by user]_",
+          streaming: false,
+        };
+      }
+      next.set(key, { ...cur, messages: msgs, thinking: false });
+      return next;
+    });
+  }, [activeKey, activeSession, pendingSessionId]);
+
+  const dismissLimitBanner = useCallback(() => {
+    const key = activeKey;
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(key);
+      if (!cur) return prev;
+      const msgs = cur.messages.filter((m) => m.kind !== "limit");
+      next.set(key, { ...cur, messages: msgs });
+      return next;
+    });
+  }, [activeKey]);
+
+  const handleContinue = useCallback(() => {
+    dismissLimitBanner();
+    send("continue");
+  }, [dismissLimitBanner, send]);
 
   return (
     <div className="app app--layout">
@@ -488,6 +592,9 @@ export default function App() {
               input={activeState.input}
               onInputChange={handleInputChange}
               onSend={send}
+              onStop={handleStop}
+              onContinue={handleContinue}
+              onDismissLimit={dismissLimitBanner}
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenInVault={handleOpenInVault}

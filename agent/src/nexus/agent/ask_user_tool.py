@@ -1,31 +1,28 @@
-"""The ``ask_user`` tool — the one HITL primitive every approval flow
-composes on top of.
+"""The ``ask_user`` tool — thin adapter over :class:`loom.hitl.HitlBroker`.
 
-Emits a ``user_request`` SSE event carrying the prompt + options, then
-parks on a Future until the UI POSTs the answer via ``/respond``. On
-timeout the Future is cancelled and the tool returns a sentinel so the
-agent can gracefully decline the action rather than hang.
+The heavy lifting (park-on-Future, publish/resolve, YOLO, timeout
+sentinel) lives in Loom so every Loom adopter shares one HITL shape.
+This module keeps Nexus's public surface:
 
-Three interaction kinds are supported:
+* :data:`ASK_USER_TOOL` — the ``ToolSpec`` the agent sees.
+* :class:`AskUserHandler` — validates args, delegates to the broker
+  owned by ``session_store``, and maps the raw answer into an
+  :class:`AskUserResult` so :class:`TerminalHandler` can keep
+  destructuring ``ok`` / ``answer`` / ``kind`` / ``timed_out`` / ``error``.
 
-* ``confirm`` — yes/no. UI renders two buttons.
-* ``choice`` — pick one of several. UI renders option buttons.
-* ``text`` — free-form input. UI renders a text field.
-
-Skills use this by calling the tool directly. The tool is what makes
-HITL uniform across the system: ``terminal`` composes on top (approval
-before shell exec), and any skill author can compose on top by writing
-"call ``ask_user`` before doing X" in their markdown.
+Three interaction kinds are supported (``confirm``, ``choice``,
+``text``). Kinds and the timeout sentinel come from
+``loom.hitl`` so Loom's side can never drift from Nexus's.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from loom.hitl import TIMEOUT_SENTINEL
 
 from .context import CURRENT_SESSION_ID
 from .llm import ToolSpec
@@ -90,7 +87,7 @@ ASK_USER_TOOL = ToolSpec(
 )
 
 _DEFAULT_TIMEOUT_SECONDS = 300
-_TIMEOUT_SENTINEL = "__timeout__"
+_VALID_KINDS = {"confirm", "choice", "text"}
 
 
 @dataclass(frozen=True)
@@ -119,12 +116,12 @@ class AskUserHandler:
 
     Depends on two collaborators injected by the server at wire time:
 
-    * ``session_store`` — owns pending-futures and SSE publish.
+    * ``session_store`` — owns the underlying ``HitlBroker`` via its
+      ``.broker`` property. All publish / register / resolve / cancel
+      work flows through that broker.
     * ``yolo_mode_getter`` — a callable returning the current YOLO
       setting. Plumbed here (not a snapshot) so Settings hot-toggle
       takes effect on the next ``ask_user`` without reconstruction.
-
-    Tests inject fakes / None and drive timeouts explicitly.
     """
 
     def __init__(
@@ -146,7 +143,7 @@ class AskUserHandler:
                 message="`prompt` is required and must be a non-empty string",
             )
         kind = args.get("kind", "confirm")
-        if kind not in {"confirm", "choice", "text"}:
+        if kind not in _VALID_KINDS:
             return _error(kind=kind, message=f"unsupported kind {kind!r}")
         choices = args.get("choices")
         if kind == "choice":
@@ -188,88 +185,26 @@ class AskUserHandler:
                 ),
             )
 
-        # YOLO escape hatch: auto-confirm without prompting the UI, but
-        # still publish an event so the transcript records the decision.
-        # Only applies to kind=confirm — choice/text need real input and
-        # auto-answering them would be silently guessing.
-        if kind == "confirm" and self._yolo():
-            self._sessions.publish(
-                session_id,
-                _event(
-                    "user_request_auto",
-                    {
-                        "prompt": prompt,
-                        "kind": kind,
-                        "answer": "yes",
-                        "reason": "YOLO mode enabled",
-                    },
-                ),
-            )
-            return AskUserResult(
-                ok=True, answer="yes", kind=kind, timed_out=False
-            )
-
-        request_id = uuid.uuid4().hex
-        try:
-            future = self._sessions.register_pending(session_id, request_id)
-        except (KeyError, ValueError) as exc:
-            return _error(kind=kind, message=str(exc))
-
-        payload = {
-            "request_id": request_id,
-            "prompt": prompt,
-            "kind": kind,
-            "choices": choices if kind == "choice" else None,
-            "default": default,
-            "timeout_seconds": int(timeout),
-        }
-        self._sessions.publish(session_id, _event("user_request", payload))
-
-        try:
-            answer = await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            # Clean up the registry entry so a late /respond doesn't
-            # find a zombie request.
-            self._sessions.cancel_pending(session_id, request_id)
-            self._sessions.publish(
-                session_id,
-                _event(
-                    "user_request_cancelled",
-                    {"request_id": request_id, "reason": "timeout"},
-                ),
-            )
-            return AskUserResult(
-                ok=True,
-                answer=_TIMEOUT_SENTINEL,
-                kind=kind,
-                timed_out=True,
-            )
-        except asyncio.CancelledError:
-            # Session was reset / deleted mid-wait. Surface as a timeout
-            # so the agent doesn't act on stale state.
-            self._sessions.publish(
-                session_id,
-                _event(
-                    "user_request_cancelled",
-                    {"request_id": request_id, "reason": "session_reset"},
-                ),
-            )
-            return AskUserResult(
-                ok=True,
-                answer=_TIMEOUT_SENTINEL,
-                kind=kind,
-                timed_out=True,
-            )
-
-        return AskUserResult(ok=True, answer=answer, kind=kind, timed_out=False)
-
-
-def _event(kind: str, data: dict[str, Any]):
-    """Tiny local helper — imported lazily to avoid circular server
-    imports from the agent package."""
-    from ..server.events import SessionEvent
-
-    return SessionEvent(kind=kind, data=data)
+        # Delegate to loom.hitl.HitlBroker — it handles YOLO short-circuit
+        # (publishing ``user_request_auto``), park-on-Future, timeout +
+        # ``user_request_cancelled`` emission, and publish-hook fan-out
+        # to our SessionEvent SSE stream.
+        answer = await self._sessions.broker.ask(
+            session_id,
+            prompt,
+            kind=kind,
+            choices=choices if kind == "choice" else None,
+            default=default,
+            timeout_seconds=int(timeout),
+            yolo=(kind == "confirm" and self._yolo()),
+        )
+        timed_out = answer == TIMEOUT_SENTINEL
+        return AskUserResult(
+            ok=True,
+            answer=answer,
+            kind=kind,
+            timed_out=timed_out,
+        )
 
 
 def _error(*, kind: str, message: str) -> AskUserResult:
