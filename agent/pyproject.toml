@@ -22,7 +22,7 @@ dependencies = [
     "psutil>=5.9",
     "websockets>=12.0",
     "cryptography>=42.0",
-    "loom",
+    "loom-framework",
 ]
 
 [tool.uv.sources]
@@ -31,7 +31,7 @@ dependencies = [
 #   /some/path/nexus
 # Clone both side-by-side and `uv sync` will pick loom up as an editable
 # local install. Adjust if your layout differs.
-loom = { path = "../../loom", editable = true }
+loom-framework = { path = "../../loom", editable = true }
 
 [project.optional-dependencies]
 dev = [
