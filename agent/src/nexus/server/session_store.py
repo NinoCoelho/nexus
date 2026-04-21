@@ -104,7 +104,7 @@ class SessionSummary:
 
 def _row_to_message(row: tuple) -> ChatMessage:
     _seq, role, content, tool_calls_json, tool_call_id = row
-    tool_calls: list[ToolCall] = []
+    tool_calls: list[ToolCall] | None = None
     if tool_calls_json:
         raw = json.loads(tool_calls_json)
         tool_calls = [ToolCall(**tc) for tc in raw]

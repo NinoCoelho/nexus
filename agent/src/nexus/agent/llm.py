@@ -11,16 +11,12 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+# Import shared types from loom — Nexus and loom must agree on wire shapes.
+from loom.types import Role, ToolSpec, Usage
+
 # StreamEvent is a plain TypedDict-style dict union; we use plain dicts for
 # zero-overhead yielding.  The "type" key is the discriminator.
 StreamEvent = dict[str, Any]
-
-
-class Role(StrEnum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
 
 
 class ToolCall(BaseModel):
@@ -31,19 +27,12 @@ class ToolCall(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    model_config = ConfigDict(frozen=True)
     role: Role
     content: str | None = None
-    tool_calls: list[ToolCall] = Field(default_factory=list)
+    # Aligned to loom convention: None instead of empty list when no tool calls.
+    tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
-
-
-class ToolSpec(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    name: str
-    description: str
-    parameters: dict[str, Any]
 
 
 class StopReason(StrEnum):
@@ -52,24 +41,6 @@ class StopReason(StrEnum):
     LENGTH = "length"
     ERROR = "error"
     UNKNOWN = "unknown"
-
-
-class Usage(BaseModel):
-    """Token usage for one provider round-trip.
-
-    All fields default to 0 so callers can always read them without
-    ``None`` guards. Providers that don't report usage (older local
-    models, some proxies) just yield zeros — that's fine, it just
-    means the session's cost stays at $0 for that turn.
-    """
-
-    model_config = ConfigDict(frozen=True)
-    input_tokens: int = 0
-    output_tokens: int = 0
-    # Reserved for Anthropic cache-aware accounting — we capture but
-    # don't bill against it yet.
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
 
 
 class ChatResponse(BaseModel):
