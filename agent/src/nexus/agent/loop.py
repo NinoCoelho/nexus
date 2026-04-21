@@ -293,10 +293,11 @@ class Agent:
                 self._trace(kind, payload)
 
         def _limit_msg(n: int) -> str:
-            return (
-                f"I hit the per-turn tool-call limit ({n}) before finishing. "
-                "Ask me to continue, or narrow the task — I'll pick up where I left off."
-            )
+            # Keep this empty: the UI replaces the last assistant message
+            # with an interactive Continue/Stop banner on `limit_reached`.
+            # A non-empty string would briefly flash before the banner
+            # swap.
+            return ""
 
         def _on_after_turn(turn: Any) -> None:
             _on_event("reply", {"text": (turn.reply or "")[:200]})

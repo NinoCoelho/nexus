@@ -10,6 +10,8 @@ export interface Message {
   trace?: TraceEvent[];
   timestamp: Date;
   streaming?: boolean;
+  kind?: "limit";
+  limitIterations?: number;
 }
 
 /**
@@ -24,6 +26,8 @@ interface Props {
   onInputChange: (v: string) => void;
   onSend: () => void;
   onStop?: () => void;
+  onContinue?: () => void;
+  onDismissLimit?: () => void;
   hasModel: boolean | null;
   onOpenSettings: () => void;
   onOpenInVault?: (path: string) => void;
@@ -40,6 +44,8 @@ export default function ChatView({
   onInputChange,
   onSend,
   onStop,
+  onContinue,
+  onDismissLimit,
   hasModel,
   onOpenSettings,
   onOpenInVault,
@@ -55,7 +61,9 @@ export default function ChatView({
   // the assistant hasn't emitted any text yet.
   const lastMsg = messages[messages.length - 1];
   const streamingInProgress = thinking && lastMsg?.role === "assistant" && (lastMsg.content ?? "").length > 0;
-  const visible = messages.filter((m) => (m.content ?? "").trim().length > 0);
+  const visible = messages.filter(
+    (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit",
+  );
 
   return (
     <div className="chat-view">
@@ -78,14 +86,38 @@ export default function ChatView({
         )}
         {visible.map((msg, idx) =>
           msg.role === "assistant" ? (
-            <AssistantMessage
-              key={idx}
-              content={msg.content}
-              trace={msg.trace}
-              timestamp={msg.timestamp}
-              streaming={msg.streaming}
-              onOpenInVault={onOpenInVault}
-            />
+            msg.kind === "limit" ? (
+              <div key={idx} className="limit-banner">
+                <div className="limit-banner-text">
+                  Hit the per-turn tool-call limit ({msg.limitIterations ?? 16}). How do you want to proceed?
+                </div>
+                <div className="limit-banner-actions">
+                  <button
+                    className="limit-banner-btn limit-banner-btn-primary"
+                    onClick={onContinue}
+                    type="button"
+                  >
+                    Continue
+                  </button>
+                  <button
+                    className="limit-banner-btn"
+                    onClick={onDismissLimit}
+                    type="button"
+                  >
+                    Stop
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <AssistantMessage
+                key={idx}
+                content={msg.content}
+                trace={msg.trace}
+                timestamp={msg.timestamp}
+                streaming={msg.streaming}
+                onOpenInVault={onOpenInVault}
+              />
+            )
           ) : (
             <div key={idx} className="user-msg">
               <div className="user-msg-meta">

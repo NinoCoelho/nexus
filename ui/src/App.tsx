@@ -335,10 +335,11 @@ export default function App() {
     patchState(activeKey, { input: v });
   }, [activeKey, patchState]);
 
-  const send = useCallback(async () => {
+  const send = useCallback(async (override?: unknown) => {
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
-    const text = state.input.trim();
+    const overrideText = typeof override === "string" ? override : undefined;
+    const text = (overrideText ?? state.input).trim();
     if (!text || state.thinking) return;
 
     const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
@@ -450,9 +451,11 @@ export default function App() {
             }
             setSessionsRevision((r) => r + 1);
           } else if (event.type === "limit_reached") {
-            const noticeMsg: Message = {
+            const banner: Message = {
               role: "assistant",
-              content: `⚠️ Hit the per-turn tool-call limit (${event.iterations}). Say "continue" to pick up where I left off, or narrow the task.`,
+              content: "",
+              kind: "limit",
+              limitIterations: event.iterations,
               timestamp: new Date(),
             };
             setChatStates((prev) => {
@@ -461,9 +464,9 @@ export default function App() {
               const msgs = cur.messages.slice();
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-                msgs[lastIdx] = noticeMsg;
+                msgs[lastIdx] = banner;
               } else {
-                msgs.push(noticeMsg);
+                msgs.push(banner);
               }
               next.set(key, { ...cur, messages: msgs, thinking: false });
               return next;
@@ -543,6 +546,23 @@ export default function App() {
     });
   }, [activeKey, activeSession, pendingSessionId]);
 
+  const dismissLimitBanner = useCallback(() => {
+    const key = activeKey;
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(key);
+      if (!cur) return prev;
+      const msgs = cur.messages.filter((m) => m.kind !== "limit");
+      next.set(key, { ...cur, messages: msgs });
+      return next;
+    });
+  }, [activeKey]);
+
+  const handleContinue = useCallback(() => {
+    dismissLimitBanner();
+    send("continue");
+  }, [dismissLimitBanner, send]);
+
   return (
     <div className="app app--layout">
       <Sidebar
@@ -573,6 +593,8 @@ export default function App() {
               onInputChange={handleInputChange}
               onSend={send}
               onStop={handleStop}
+              onContinue={handleContinue}
+              onDismissLimit={dismissLimitBanner}
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenInVault={handleOpenInVault}
