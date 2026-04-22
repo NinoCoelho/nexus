@@ -1,13 +1,17 @@
-"""Tests for MemoryHandler — read/write/validation."""
+"""Tests for MemoryHandler — read/write via vault delegation."""
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
+import nexus.vault
 from nexus.tools.memory_tool import MemoryHandler, _validate_key
 
 
-# ── key validation ─────────────────────────────────────────────────────────────
+# ── key validation ─────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("key", [
     "simple",
@@ -35,94 +39,88 @@ def test_invalid_keys(key: str, fragment: str) -> None:
     assert fragment in err
 
 
-# ── read ───────────────────────────────────────────────────────────────────────
+# ── read ──────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
-async def test_read_missing_key(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
-    handler = MemoryHandler()
-    result = await handler.read("missing/key")
+async def test_read_missing_key() -> None:
+    mock_vault = MagicMock()
+    mock_vault.read_file.side_effect = FileNotFoundError("nope")
+    with patch.object(nexus.vault, "read_file", mock_vault.read_file):
+        handler = MemoryHandler()
+        result = await handler.read("missing/key")
     assert "not found" in result
 
 
 @pytest.mark.asyncio
-async def test_read_invalid_key(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
+async def test_read_invalid_key() -> None:
     handler = MemoryHandler()
     result = await handler.read("INVALID_KEY")
     assert result.startswith("error:")
 
 
 @pytest.mark.asyncio
-async def test_read_existing_key(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
-    # Pre-create the file
-    (tmp_path / "mykey.md").write_text("hello world", encoding="utf-8")
-    handler = MemoryHandler()
-    result = await handler.read("mykey")
-    assert result == "hello world"
+async def test_read_existing_key() -> None:
+    mock_read = MagicMock(return_value={
+        "content": "hello world",
+        "path": "memory/mykey.md",
+    })
+    with patch.object(nexus.vault, "read_file", mock_read):
+        handler = MemoryHandler()
+        result = await handler.read("mykey")
+    assert "hello world" in result
+
+
+# ── write ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_read_nested_key(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
-    nested = tmp_path / "projects"
-    nested.mkdir()
-    (nested / "nexus.md").write_text("project notes", encoding="utf-8")
-    handler = MemoryHandler()
-    result = await handler.read("projects/nexus")
-    assert result == "project notes"
-
-
-# ── write ──────────────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_write_creates_file(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
-    handler = MemoryHandler()
-    result = await handler.write("newkey", "# Note\nsome content")
+async def test_write_creates_file() -> None:
+    mock_write = MagicMock()
+    with patch.object(nexus.vault, "write_file", mock_write), \
+         patch("nexus.tools.vault_tool._trigger_graphrag_index"):
+        handler = MemoryHandler()
+        result = await handler.write("newkey", "# Note\nsome content")
     assert result == "ok"
-    assert (tmp_path / "newkey.md").read_text(encoding="utf-8") == "# Note\nsome content"
+    mock_write.assert_called_once()
+    call_args = mock_write.call_args
+    assert call_args[0][0] == "memory/newkey.md"
+    assert "# Note\nsome content" in call_args[0][1]
 
 
 @pytest.mark.asyncio
-async def test_write_creates_intermediate_dirs(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
-    handler = MemoryHandler()
-    result = await handler.write("deep/nested/key", "content")
+async def test_write_with_tags() -> None:
+    mock_write = MagicMock()
+    with patch.object(nexus.vault, "write_file", mock_write), \
+         patch("nexus.tools.vault_tool._trigger_graphrag_index"):
+        handler = MemoryHandler()
+        result = await handler.write("tagged", "content", tags=["go", "project"])
     assert result == "ok"
-    assert (tmp_path / "deep" / "nested" / "key.md").exists()
+    written = mock_write.call_args[0][1]
+    assert "tags:" in written
+    assert "- go" in written
 
 
 @pytest.mark.asyncio
-async def test_write_overwrites_existing(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
-    (tmp_path / "key.md").write_text("old content", encoding="utf-8")
-    handler = MemoryHandler()
-    await handler.write("key", "new content")
-    assert (tmp_path / "key.md").read_text(encoding="utf-8") == "new content"
+async def test_write_without_tags() -> None:
+    mock_write = MagicMock()
+    with patch.object(nexus.vault, "write_file", mock_write), \
+         patch("nexus.tools.vault_tool._trigger_graphrag_index"):
+        handler = MemoryHandler()
+        result = await handler.write("plain", "just content")
+    assert result == "ok"
+    assert mock_write.call_args[0][1] == "just content"
 
 
 @pytest.mark.asyncio
-async def test_write_invalid_key(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
+async def test_write_invalid_key() -> None:
     handler = MemoryHandler()
     result = await handler.write("INVALID", "content")
     assert result.startswith("error:")
 
 
 @pytest.mark.asyncio
-async def test_write_content_too_large(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
+async def test_write_content_too_large() -> None:
     handler = MemoryHandler()
     huge = "x" * 50_001
     result = await handler.write("key", huge)
@@ -130,10 +128,7 @@ async def test_write_content_too_large(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_path_traversal_rejected(tmp_path, monkeypatch) -> None:
-    import nexus.tools.memory_tool as mt
-    monkeypatch.setattr(mt, "MEMORY_DIR", tmp_path)
+async def test_write_path_traversal_rejected() -> None:
     handler = MemoryHandler()
     result = await handler.write("../escape", "bad content")
     assert result.startswith("error:")
-    assert not (tmp_path.parent / "escape.md").exists()

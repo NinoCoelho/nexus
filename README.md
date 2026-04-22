@@ -325,9 +325,8 @@ graph TB
     end
 
     subgraph "Memory Tools"
-        MR["memory_read"]
-        MW["memory_write"]
-        MC["memory_recall<br/>(BM25 + salience)"]
+        MR["memory_read<br/>(vault-backed)"]
+        MW["memory_write<br/>(vault + GraphRAG)"]
     end
 
     subgraph "External Tools"
@@ -343,7 +342,7 @@ graph TB
     REG --> VL & VR & VW & VS & VT & VB
     REG --> KM
     REG --> SL & SV & SM
-    REG --> MR & MW & MC
+    REG --> MR & MW
     REG --> HTTP & ACP
     REG --> ASK & TERM
 
@@ -751,7 +750,7 @@ nexus/
 │       │   ├── vault_tool.py       # vault_list/read/write/search/tags/backlinks
 │       │   ├── kanban_tool.py      # kanban_manage
 │       │   ├── state_tool.py       # skills_list + skill_view
-│       │   ├── memory_tool.py      # memory_read/write/recall
+│       │   ├── memory_tool.py      # memory_read/write (vault-backed)
 │       │   ├── http_call.py        # HTTP GET/POST
 │       │   └── acp_call.py         # Agent Communication Protocol
 │       ├── vault.py                # Vault file operations
@@ -1068,7 +1067,7 @@ export NEXUS_LLM_MODEL="gpt-4o"
 │   └── <name>/
 │       ├── SKILL.md
 │       └── .meta.json
-├── memory/              # Agent memory files
+├── memory/              # Legacy (migrated to vault/memory/)
 ├── nexus-daemon.pid     # Daemon PID file
 └── nexus-daemon.log     # Daemon log file
 ```

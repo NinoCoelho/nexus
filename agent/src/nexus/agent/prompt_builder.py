@@ -12,10 +12,45 @@ from pathlib import Path
 
 from ..skills.registry import SkillRegistry
 
-_MEMORY_DIR = Path("~/.nexus/memory").expanduser()
+_MEMORY_DIR = Path("~/.nexus/vault/memory").expanduser()
 _MEMORY_MAX_TOTAL = 1500
 _MEMORY_PREVIEW_BYTES = 500
 _MEMORY_TOP_N = 5
+
+_migrated = False
+
+
+def _migrate_legacy_memory() -> None:
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    import shutil
+
+    old_dir = Path("~/.nexus/memory").expanduser()
+    new_dir = Path("~/.nexus/vault/memory").expanduser()
+    if not old_dir.exists():
+        return
+    has_md_files = any(
+        f for f in new_dir.rglob("*.md") if not any(p.startswith(".") for p in f.parts)
+    )
+    if has_md_files:
+        return
+    new_dir.mkdir(parents=True, exist_ok=True)
+    for f in old_dir.rglob("*.md"):
+        rel_parts = f.relative_to(old_dir).parts
+        if any(p.startswith(".") for p in rel_parts):
+            continue
+        rel = f.relative_to(old_dir)
+        dst = new_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(f), str(dst))
+    try:
+        from ..vault_search import rebuild_from_disk
+
+        rebuild_from_disk()
+    except Exception:
+        pass
 
 
 def _memory_summary() -> str:
@@ -95,9 +130,21 @@ that's a valid task — help them do it right. Refuse only when a task would \
 actually harm someone else, exfiltrate secrets to a third party, or violate a \
 real constraint.
 
-## Two kinds of memory
+## Memory & Notes
 
-You have two places to write things down. Use both deliberately. When the user references past events, decisions, or saved context without giving you an exact key, use `memory_recall` to surface relevant memories by natural-language query before answering.
+You have one place to write things down: the **vault** at `~/.nexus/vault/`.
+
+### Quick saves
+
+Use `memory_write` to persist facts, user preferences, or project context.
+These land in `vault/memory/` as markdown files with optional tags.
+Use `memory_read` to retrieve a specific note by key.
+
+### Searching
+
+Use `vault_search` to search across **all** vault files — including memory
+notes, research, project docs, and everything else. When the user references
+past events, decisions, or saved context, search the vault before answering.
 
 ### The vault (factual / declarative memory)
 
@@ -163,6 +210,7 @@ def build_system_prompt(
     *,
     context: str | None = None,
 ) -> str:
+    _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
 
     if context:
