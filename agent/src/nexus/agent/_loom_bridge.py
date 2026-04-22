@@ -288,7 +288,7 @@ def build_tool_registry(
     from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_RECALL_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from ..tools.state_tool import STATE_TOOLS, StateToolHandler
-    from ..tools.vault_tool import VAULT_TOOLS, handle_vault_tool
+    from ..tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
     from ..agent.ask_user_tool import ASK_USER_TOOL
     from ..agent.terminal_tool import TERMINAL_TOOL
 
@@ -339,6 +339,12 @@ def build_tool_registry(
             return handle_vault_tool(_spec.name, args)
 
         registry.register(_SimpleToolHandler(_spec, _vault))
+
+    # vault_semantic_search (async handler)
+    async def _vault_semantic_search(args: dict) -> str:
+        return await handle_vault_tool("vault_semantic_search", args)
+
+    registry.register(_SimpleToolHandler(VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search))
 
     # kanban_manage
     async def _kanban(args: dict) -> str:

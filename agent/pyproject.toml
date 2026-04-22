@@ -23,6 +23,7 @@ dependencies = [
     "websockets>=12.0",
     "cryptography>=42.0",
     "loom-framework",
+    "numpy>=1.26",
 ]
 
 [tool.uv.sources]

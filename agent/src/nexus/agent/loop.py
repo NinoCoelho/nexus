@@ -317,10 +317,15 @@ class Agent:
             affirmatives=_AFFIRMATIVES,
             negatives=_NEGATIVES,
         )
+        graphrag_engine = None
+        if self._nexus_cfg:
+            from .graphrag_manager import build_graphrag_for_agent
+            graphrag_engine = build_graphrag_for_agent(self._nexus_cfg)
         return LoomAgent(
             provider=adapter,
             tool_registry=tool_reg,
             config=loom_cfg,
+            graphrag=graphrag_engine,
         )
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:

@@ -47,10 +47,51 @@ class AgentConfig(BaseModel):
     max_iterations: int = 16
 
 
+class GraphRAGEmbeddingConfig(BaseModel):
+    provider: str = "ollama"
+    model: str = "nomic-embed-text"
+    base_url: str = "http://localhost:11434"
+    key_env: str = ""
+    dimensions: int = 768
+
+
+class GraphRAGExtractionConfig(BaseModel):
+    model: str | None = None
+    provider: str = "ollama"
+    base_url: str = "http://localhost:11434/v1"
+    key_env: str = ""
+    max_gleanings: int = 1
+
+
+class GraphRAGOntologyConfig(BaseModel):
+    entity_types: list[str] = Field(default_factory=lambda: [
+        "person", "organization", "project", "note", "concept",
+        "technology", "decision", "event", "source", "task",
+    ])
+    core_relations: list[str] = Field(default_factory=lambda: [
+        "mentions", "about", "uses", "depends_on", "part_of",
+        "belongs_to", "authored_by", "cites", "derived_from",
+        "supports", "contradicts", "decided_in", "related_to",
+    ])
+    allow_custom_relations: bool = True
+
+
+class GraphRAGConfig(BaseModel):
+    enabled: bool = False
+    embeddings: GraphRAGEmbeddingConfig = Field(default_factory=GraphRAGEmbeddingConfig)
+    extraction: GraphRAGExtractionConfig = Field(default_factory=GraphRAGExtractionConfig)
+    ontology: GraphRAGOntologyConfig = Field(default_factory=GraphRAGOntologyConfig)
+    max_hops: int = 2
+    context_budget: int = 3000
+    top_k: int = 10
+    chunk_size: int = 1000
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     models: list[ModelEntry] = Field(default_factory=list)
+    graphrag: GraphRAGConfig = Field(default_factory=GraphRAGConfig)
 
 
 # Fresh install starts with providers configured but NO models.
@@ -98,6 +139,32 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             for k, v in cfg.providers.items()
         },
         "models": [],
+        "graphrag": {
+            "enabled": cfg.graphrag.enabled,
+            "max_hops": cfg.graphrag.max_hops,
+            "context_budget": cfg.graphrag.context_budget,
+            "top_k": cfg.graphrag.top_k,
+            "chunk_size": cfg.graphrag.chunk_size,
+            "embeddings": {
+                "provider": cfg.graphrag.embeddings.provider,
+                "model": cfg.graphrag.embeddings.model,
+                "base_url": cfg.graphrag.embeddings.base_url,
+                "key_env": cfg.graphrag.embeddings.key_env,
+                "dimensions": cfg.graphrag.embeddings.dimensions,
+            },
+            "extraction": {
+                "model": cfg.graphrag.extraction.model,
+                "provider": cfg.graphrag.extraction.provider,
+                "base_url": cfg.graphrag.extraction.base_url,
+                "key_env": cfg.graphrag.extraction.key_env,
+                "max_gleanings": cfg.graphrag.extraction.max_gleanings,
+            },
+            "ontology": {
+                "entity_types": cfg.graphrag.ontology.entity_types,
+                "core_relations": cfg.graphrag.ontology.core_relations,
+                "allow_custom_relations": cfg.graphrag.ontology.allow_custom_relations,
+            },
+        },
     }
     for m in cfg.models:
         md: dict[str, Any] = {
@@ -142,7 +209,8 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     for mdata in raw.get("models", []):
         strengths = ModelStrengths(**mdata.pop("strengths", {}))
         models.append(ModelEntry(**mdata, strengths=strengths))
-    return NexusConfig(agent=agent, providers=providers, models=models)
+    graphrag = GraphRAGConfig(**raw.get("graphrag", {}))
+    return NexusConfig(agent=agent, providers=providers, models=models, graphrag=graphrag)
 
 
 def apply_env_overlay(cfg: NexusConfig) -> NexusConfig:

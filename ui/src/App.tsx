@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -6,13 +6,11 @@ import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import ChatView, { type Message } from "./components/ChatView";
 import VaultView from "./components/VaultView";
-import GraphView from "./components/GraphView";
 import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import ApprovalDialog from "./components/ApprovalDialog";
-
-const AgentGraphView = React.lazy(() => import("./components/AgentGraphView"));
+import UnifiedGraphView from "./components/UnifiedGraphView";
 import {
   chatStream,
   getHitlSettings,
@@ -26,7 +24,7 @@ import {
   type UserRequestPayload,
 } from "./api";
 
-type View = "chat" | "vault" | "graph" | "insights" | "agentgraph";
+type View = "chat" | "vault" | "graph" | "insights";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -604,21 +602,14 @@ export default function App() {
             <VaultView selectedPath={vaultSelectedPath} onDispatchToChat={handleDispatchToChat} />
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
-            <GraphView />
+            <UnifiedGraphView
+              onOpenSkill={(name) => setOpenSkill(name)}
+              onSelectSession={handleSessionSelect}
+            />
           </div>
           <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>
             {view === "insights" && <InsightsView />}
           </div>
-          {view === "agentgraph" && (
-            <div className="view-pane" style={{ display: "flex" }}>
-              <React.Suspense fallback={<div style={{ padding: 24 }}>Loading graph…</div>}>
-                <AgentGraphView
-                  onOpenSkill={(name) => setOpenSkill(name)}
-                  onSelectSession={handleSessionSelect}
-                />
-              </React.Suspense>
-            </div>
-          )}
         </main>
       </div>
 

@@ -17,6 +17,7 @@ sessions_app = typer.Typer(help="Session commands", no_args_is_help=True)
 vault_app = typer.Typer(help="Vault commands", no_args_is_help=True)
 daemon_app = typer.Typer(help="Daemon management commands", no_args_is_help=True)
 trajectories_app = typer.Typer(help="Trajectory commands", no_args_is_help=True)
+graphrag_app = typer.Typer(help="GraphRAG commands", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
 app.add_typer(providers_app, name="providers")
@@ -27,6 +28,7 @@ app.add_typer(sessions_app, name="sessions")
 app.add_typer(vault_app, name="vault")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(trajectories_app, name="trajectories")
+app.add_typer(graphrag_app, name="graphrag")
 
 
 @app.callback()
@@ -809,6 +811,32 @@ def trajectories_export(
         typer.echo(f"[error] {exc}", err=True)
         raise typer.Exit(1)
     typer.echo(f"Exported {count} records to {out_path}")
+
+
+# ── graphrag ───────────────────────────────────────────────────────────────────
+
+@graphrag_app.command("reindex")
+def graphrag_reindex() -> None:
+    """Drop GraphRAG data and rebuild the index from vault files."""
+    import asyncio
+    from .agent.graphrag_manager import drop_data, initialize, index_full_vault
+    from .config_file import load as load_config
+
+    cfg = load_config()
+    if not cfg.graphrag.enabled:
+        typer.echo("GraphRAG is not enabled in config.", err=True)
+        raise typer.Exit(1)
+
+    dropped = drop_data()
+    typer.echo(f"Dropped {dropped} GraphRAG database file(s).")
+
+    async def _run() -> None:
+        await initialize(cfg)
+        typer.echo("Engine initialized. Indexing vault…")
+        await index_full_vault()
+
+    asyncio.run(_run())
+    typer.echo("GraphRAG reindex complete.")
 
 
 if __name__ == "__main__":

@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getHitlSettings,
+  getKnowledgeStats,
   getModels,
   getProviders,
   getRouting,
   setHitlSettings,
   type HitlSettings,
+  type KnowledgeStats,
   type Model,
   type Provider,
   type RoutingConfig,
 } from "../api";
 import ProvidersSection from "./ProvidersSection";
 import ModelsSection from "./ModelsSection";
+import ReindexModal from "./ReindexModal";
 import RoutingSection from "./RoutingSection";
 import "./SettingsDrawer.css";
 
@@ -26,6 +29,8 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [models, setModels] = useState<Model[]>([]);
   const [hitl, setHitl] = useState<HitlSettings | null>(null);
   const [hitlSaving, setHitlSaving] = useState(false);
+  const [graphStats, setGraphStats] = useState<KnowledgeStats | null>(null);
+  const [reindexOpen, setReindexOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,19 +38,18 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [r, p, m, h] = await Promise.all([
+      const [r, p, m, h, ks] = await Promise.all([
         getRouting(),
         getProviders(),
         getModels(),
-        // HITL settings may 404 on an older backend — guard so the
-        // rest of the drawer still loads. The catch returns a
-        // default-off snapshot so the toggle stays visible.
         getHitlSettings().catch(() => ({ yolo_mode: false })),
+        getKnowledgeStats().catch(() => null),
       ]);
       setRouting(r);
       setProviders(p);
       setModels(m);
       setHitl(h);
+      setGraphStats(ks);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load settings");
     } finally {
@@ -106,6 +110,31 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           )}
           <ProvidersSection providers={providers} onRefresh={refresh} />
           <ModelsSection models={models} providers={providers} onRefresh={refresh} />
+          {graphStats && (
+            <section className="graphrag-section">
+              <h3 className="graphrag-section-title">Knowledge Graph</h3>
+              <div className="graphrag-stats-row">
+                <div className="graphrag-stat">
+                  <span className="graphrag-stat-value">{graphStats.entities}</span>
+                  <span className="graphrag-stat-label">entities</span>
+                </div>
+                <div className="graphrag-stat">
+                  <span className="graphrag-stat-value">{graphStats.triples}</span>
+                  <span className="graphrag-stat-label">relations</span>
+                </div>
+                <div className="graphrag-stat">
+                  <span className="graphrag-stat-value">{graphStats.component_count ?? 0}</span>
+                  <span className="graphrag-stat-label">components</span>
+                </div>
+              </div>
+              <button
+                className="settings-btn settings-btn--primary"
+                onClick={() => setReindexOpen(true)}
+              >
+                Update Index
+              </button>
+            </section>
+          )}
           {hitl && (
             <section className="hitl-section">
               <h3 className="hitl-section-title">Human-in-the-loop</h3>
@@ -132,6 +161,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           )}
         </div>
       </div>
+      <ReindexModal open={reindexOpen} onClose={() => setReindexOpen(false)} />
     </>
   );
 }

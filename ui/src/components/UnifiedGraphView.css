@@ -1,0 +1,45 @@
+.unified-graph-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.unified-graph-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.unified-graph-tab {
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+}
+
+.unified-graph-tab:hover {
+  color: var(--fg);
+}
+
+.unified-graph-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.unified-graph-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}

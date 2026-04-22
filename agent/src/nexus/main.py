@@ -44,7 +44,16 @@ def build_app():
         provider_registry=provider_registry,
         nexus_cfg=cfg,
     )
-    return create_app(agent=agent, registry=registry, nexus_cfg=cfg, provider_registry=provider_registry)
+
+    graphrag_cfg = cfg.graphrag if cfg.graphrag.enabled else None
+
+    return create_app(
+        agent=agent,
+        registry=registry,
+        nexus_cfg=cfg,
+        provider_registry=provider_registry,
+        graphrag_cfg=graphrag_cfg,
+    )
 
 
 app = build_app()
