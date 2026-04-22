@@ -178,7 +178,7 @@
 }
 .vault-pill:hover { border-color: var(--accent); color: var(--fg); }
 .vault-pill--active {
-  background: rgba(212, 133, 92, 0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -402,7 +402,7 @@
 }
 
 .vault-search-snippet mark {
-  background: rgba(212, 133, 92, 0.22);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--accent);
   border-radius: 2px;
   padding: 0 1px;
@@ -438,10 +438,10 @@
 .vault-tag-pill:hover {
   border-color: var(--accent-lo);
   color: var(--accent);
-  background: rgba(212, 133, 92, 0.08);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .vault-tag-pill--active {
-  background: rgba(212, 133, 92, 0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -474,4 +474,4 @@
 }
 .vault-ctx-item:hover { background: var(--bg-hover); }
 .vault-ctx-item--danger { color: var(--bad); }
-.vault-ctx-item--danger:hover { background: rgba(200, 90, 90, 0.12); }
+.vault-ctx-item--danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }

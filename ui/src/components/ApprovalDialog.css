@@ -6,7 +6,7 @@
 .approval-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 17, 20, 0.6);
+  background: var(--backdrop);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   display: flex;
@@ -104,11 +104,11 @@
 .approval-btn-deny {
   background: transparent;
   color: var(--bad);
-  border-color: rgba(200, 90, 90, 0.4);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
 }
 
 .approval-btn-deny:hover:not(:disabled) {
-  background: rgba(200, 90, 90, 0.08);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
   border-color: var(--bad);
 }
 

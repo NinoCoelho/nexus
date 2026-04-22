@@ -128,10 +128,10 @@
   cursor: pointer;
 }
 .kanban-card-btn:hover { color: var(--fg); background: var(--panel); }
-.kanban-card-btn--danger:hover { color: #c0392b; }
+.kanban-card-btn--danger:hover { color: var(--bad); }
 
 .kanban-card-session {
-  color: #2ecc71;
+  color: var(--ok);
   font-size: 10px;
   margin-left: auto;
 }

@@ -356,12 +356,12 @@
 }
 
 .kv-evidence-badge--vector {
-  background: rgba(91, 122, 158, 0.2);
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
   color: var(--fg-dim);
 }
 
 .kv-evidence-badge--graph {
-  background: rgba(139, 168, 136, 0.2);
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
   color: var(--sage);
 }
 

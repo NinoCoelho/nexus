@@ -16,6 +16,7 @@ import ProvidersSection from "./ProvidersSection";
 import ModelsSection from "./ModelsSection";
 import ReindexModal from "./ReindexModal";
 import RoutingSection from "./RoutingSection";
+import AppearanceSection from "./AppearanceSection";
 import "./SettingsDrawer.css";
 
 interface Props {
@@ -105,6 +106,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             <p className="settings-loading">Loading…</p>
           )}
           {error && <p className="settings-error">{error}</p>}
+          <AppearanceSection />
           {routing && (
             <RoutingSection routing={routing} models={models} onRefresh={refresh} />
           )}

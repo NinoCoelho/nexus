@@ -1,44 +1,367 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nexus Adaptive Theme System — 4 themes × continuous brightness
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Architecture:
+     Each theme defines _dk (dark) and _lt (light) endpoint tokens.
+     A single --brightness <number> (0 = dark, 1 = light) drives color-mix()
+     interpolation across every token.  No JS colour math needed.
+
+     For alpha variants, components use:
+       color-mix(in srgb, var(--accent) 12%, transparent)
+     instead of rgb(var(--accent-rgb) / 0.12).
+
+   Themes:  mermaidcore | neutrals | neon | biophilic
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@property --brightness {
+  syntax: "<number>";
+  initial-value: 0;
+  inherits: true;
+}
+
 :root {
-  --bg:          #15181c;
-  --bg-panel:    #1d2025;
-  --bg-hover:    #262a31;
-  --bg-inset:    #0f1114;
-  --border:      #2c3037;
-  --border-soft: #23272e;
-
-  --fg:          #ece8e1;
-  --fg-dim:      #a39d92;
-  --fg-faint:    #6b6660;
-
-  --accent:      #d4855c;   /* copper */
-  --accent-hi:   #e09a75;
-  --accent-lo:   #b06e4a;
-
-  --sage:        #8ba888;
-  --amber:       #e0b364;
-  --rust:        #c85a5a;
-
-  --ok:          #8ba888;
-  --warn:        #e0b364;
-  --bad:         #c85a5a;
-
-  /* Chat bubbles — light beige on dark surface, brown text. */
-  --bubble-asst-bg:     #ede4ce;   /* light warm beige (assistant) */
-  --bubble-asst-border: #d9cfb5;
-  --bubble-user-bg:     #c9ab7c;   /* darker beige (user) */
-  --bubble-user-border: #b59465;
-  --bubble-fg:          #1a1209;   /* near-black brown text */
-  --bubble-fg-dim:      #4a3a28;
-  --bubble-link:        #9a5432;   /* copper-brown for links inside bubbles */
-  --bubble-code-bg:     #dfd3ba;
-
   --radius:      6px;
   --radius-lg:   10px;
-  --shadow:      0 2px 8px rgba(0,0,0,0.35);
-
   --font-ui:     "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
+
+:root.theme-transitioning body,
+:root.theme-transitioning .app,
+:root.theme-transitioning .sidebar,
+:root.theme-transitioning .header,
+:root.theme-transitioning .settings-drawer,
+:root.theme-transitioning .chat-view,
+:root.theme-transitioning .bottom-region,
+:root.theme-transitioning .user-msg-bubble,
+:root.theme-transitioning .hitl-switch,
+:root.theme-transitioning .seg-btn--active {
+  transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+
+/* shorthand — keeps each theme block readable */
+/* B(t, dk, lt) = color-mix(in srgb, lt brightness%, dk) */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1. MERMAIDCORE — Iridescent aquas & teals with soft purple gradients
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+[data-theme="mermaidcore"] {
+  --bg_dk: hsl(210, 28%, 8%);       --bg_lt: hsl(200, 22%, 96%);
+  --bg-panel_dk: hsl(210, 28%, 12%); --bg-panel_lt: hsl(200, 28%, 99%);
+  --bg-hover_dk: hsl(210, 24%, 17%); --bg-hover_lt: hsl(200, 18%, 91%);
+  --bg-inset_dk: hsl(210, 32%, 5%);  --bg-inset_lt: hsl(200, 18%, 93%);
+
+  --border_dk: hsl(210, 18%, 20%);   --border_lt: hsl(200, 14%, 80%);
+  --border-soft_dk: hsl(210, 18%, 15%); --border-soft_lt: hsl(200, 14%, 87%);
+
+  --fg_dk: hsl(195, 22%, 90%);       --fg_lt: hsl(210, 28%, 11%);
+  --fg-dim_dk: hsl(200, 14%, 60%);   --fg-dim_lt: hsl(200, 12%, 40%);
+  --fg-faint_dk: hsl(205, 12%, 42%); --fg-faint_lt: hsl(200, 10%, 58%);
+
+  --accent_dk: hsl(174, 90%, 80%);   --accent_lt: hsl(174, 62%, 40%);
+  --accent-hi_dk: hsl(174, 90%, 88%); --accent-hi_lt: hsl(174, 70%, 52%);
+  --accent-lo_dk: hsl(174, 65%, 58%); --accent-lo_lt: hsl(174, 50%, 30%);
+
+  --ok_dk: hsl(160, 32%, 52%);       --ok_lt: hsl(160, 28%, 42%);
+  --warn_dk: hsl(35, 52%, 56%);      --warn_lt: hsl(35, 48%, 45%);
+  --bad_dk: hsl(350, 48%, 56%);      --bad_lt: hsl(350, 45%, 48%);
+  --danger-hi_dk: hsl(350, 50%, 65%); --danger-hi_lt: hsl(350, 48%, 58%);
+
+  --bubble-asst-bg_dk: hsl(174, 28%, 92%);     --bubble-asst-bg_lt: hsl(200, 14%, 96%);
+  --bubble-asst-border_dk: hsl(174, 22%, 84%); --bubble-asst-border_lt: hsl(200, 10%, 88%);
+  --bubble-user-bg_dk: hsl(268, 18%, 78%);     --bubble-user-bg_lt: hsl(174, 32%, 86%);
+  --bubble-user-border_dk: hsl(268, 15%, 70%); --bubble-user-border_lt: hsl(174, 28%, 78%);
+  --bubble-fg_dk: hsl(210, 28%, 10%);          --bubble-fg_lt: hsl(210, 28%, 11%);
+  --bubble-fg-dim_dk: hsl(210, 18%, 28%);      --bubble-fg-dim_lt: hsl(200, 12%, 35%);
+  --bubble-link_dk: hsl(268, 32%, 46%);        --bubble-link_lt: hsl(174, 55%, 35%);
+  --bubble-code-bg_dk: hsl(174, 18%, 88%);     --bubble-code-bg_lt: hsl(200, 10%, 92%);
+
+  --shadow-color_dk: rgba(0,0,0,0.40); --shadow-color_lt: rgba(0,0,0,0.10);
+}
+
+[data-theme="mermaidcore"] {
+  --bg: color-mix(in srgb, var(--bg_lt) calc(var(--brightness) * 100%), var(--bg_dk));
+  --bg-panel: color-mix(in srgb, var(--bg-panel_lt) calc(var(--brightness) * 100%), var(--bg-panel_dk));
+  --bg-hover: color-mix(in srgb, var(--bg-hover_lt) calc(var(--brightness) * 100%), var(--bg-hover_dk));
+  --bg-inset: color-mix(in srgb, var(--bg-inset_lt) calc(var(--brightness) * 100%), var(--bg-inset_dk));
+
+  --border: color-mix(in srgb, var(--border_lt) calc(var(--brightness) * 100%), var(--border_dk));
+  --border-soft: color-mix(in srgb, var(--border-soft_lt) calc(var(--brightness) * 100%), var(--border-soft_dk));
+
+  --fg: color-mix(in srgb, var(--fg_lt) calc(var(--brightness) * 100%), var(--fg_dk));
+  --fg-dim: color-mix(in srgb, var(--fg-dim_lt) calc(var(--brightness) * 100%), var(--fg-dim_dk));
+  --fg-faint: color-mix(in srgb, var(--fg-faint_lt) calc(var(--brightness) * 100%), var(--fg-faint_dk));
+
+  --accent: color-mix(in srgb, var(--accent_lt) calc(var(--brightness) * 100%), var(--accent_dk));
+  --accent-hi: color-mix(in srgb, var(--accent-hi_lt) calc(var(--brightness) * 100%), var(--accent-hi_dk));
+  --accent-lo: color-mix(in srgb, var(--accent-lo_lt) calc(var(--brightness) * 100%), var(--accent-lo_dk));
+
+  --ok: color-mix(in srgb, var(--ok_lt) calc(var(--brightness) * 100%), var(--ok_dk));
+  --warn: color-mix(in srgb, var(--warn_lt) calc(var(--brightness) * 100%), var(--warn_dk));
+  --bad: color-mix(in srgb, var(--bad_lt) calc(var(--brightness) * 100%), var(--bad_dk));
+  --danger-hi: color-mix(in srgb, var(--danger-hi_lt) calc(var(--brightness) * 100%), var(--danger-hi_dk));
+
+  --bubble-asst-bg: color-mix(in srgb, var(--bubble-asst-bg_lt) calc(var(--brightness) * 100%), var(--bubble-asst-bg_dk));
+  --bubble-asst-border: color-mix(in srgb, var(--bubble-asst-border_lt) calc(var(--brightness) * 100%), var(--bubble-asst-border_dk));
+  --bubble-user-bg: color-mix(in srgb, var(--bubble-user-bg_lt) calc(var(--brightness) * 100%), var(--bubble-user-bg_dk));
+  --bubble-user-border: color-mix(in srgb, var(--bubble-user-border_lt) calc(var(--brightness) * 100%), var(--bubble-user-border_dk));
+  --bubble-fg: color-mix(in srgb, var(--bubble-fg_lt) calc(var(--brightness) * 100%), var(--bubble-fg_dk));
+  --bubble-fg-dim: color-mix(in srgb, var(--bubble-fg-dim_lt) calc(var(--brightness) * 100%), var(--bubble-fg-dim_dk));
+  --bubble-link: color-mix(in srgb, var(--bubble-link_lt) calc(var(--brightness) * 100%), var(--bubble-link_dk));
+  --bubble-code-bg: color-mix(in srgb, var(--bubble-code-bg_lt) calc(var(--brightness) * 100%), var(--bubble-code-bg_dk));
+
+  --shadow-color: color-mix(in srgb, var(--shadow-color_lt) calc(var(--brightness) * 100%), var(--shadow-color_dk));
+  --shadow: 0 2px 8px var(--shadow-color);
+  --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
+  --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+
+  --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
+  --danger: var(--bad); --warning: var(--warn);
+  --copper: var(--accent); --error: var(--bad);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2. ELEVATED NEUTRALS — Warm sands, oatmeal & stone finishes
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+[data-theme="neutrals"] {
+  --bg_dk: hsl(30, 8%, 11%);       --bg_lt: hsl(30, 28%, 95%);
+  --bg-panel_dk: hsl(30, 8%, 14%); --bg-panel_lt: hsl(30, 32%, 98%);
+  --bg-hover_dk: hsl(30, 8%, 19%); --bg-hover_lt: hsl(30, 22%, 90%);
+  --bg-inset_dk: hsl(30, 10%, 7%); --bg-inset_lt: hsl(30, 22%, 92%);
+
+  --border_dk: hsl(30, 6%, 22%);   --border_lt: hsl(30, 14%, 78%);
+  --border-soft_dk: hsl(30, 6%, 17%); --border-soft_lt: hsl(30, 14%, 85%);
+
+  --fg_dk: hsl(30, 18%, 89%);       --fg_lt: hsl(30, 15%, 14%);
+  --fg-dim_dk: hsl(30, 10%, 59%);   --fg-dim_lt: hsl(30, 8%, 40%);
+  --fg-faint_dk: hsl(30, 8%, 39%);  --fg-faint_lt: hsl(30, 6%, 58%);
+
+  --accent_dk: hsl(35, 42%, 62%);   --accent_lt: hsl(35, 38%, 50%);
+  --accent-hi_dk: hsl(35, 48%, 72%); --accent-hi_lt: hsl(35, 45%, 60%);
+  --accent-lo_dk: hsl(35, 35%, 48%); --accent-lo_lt: hsl(35, 30%, 38%);
+
+  --ok_dk: hsl(140, 22%, 50%);      --ok_lt: hsl(140, 22%, 42%);
+  --warn_dk: hsl(40, 48%, 55%);     --warn_lt: hsl(40, 48%, 46%);
+  --bad_dk: hsl(8, 48%, 55%);       --bad_lt: hsl(8, 48%, 46%);
+  --danger-hi_dk: hsl(8, 50%, 64%); --danger-hi_lt: hsl(8, 50%, 56%);
+
+  --bubble-asst-bg_dk: hsl(35, 22%, 90%);     --bubble-asst-bg_lt: hsl(30, 14%, 96%);
+  --bubble-asst-border_dk: hsl(35, 18%, 82%); --bubble-asst-border_lt: hsl(30, 10%, 88%);
+  --bubble-user-bg_dk: hsl(30, 28%, 72%);     --bubble-user-bg_lt: hsl(35, 28%, 84%);
+  --bubble-user-border_dk: hsl(30, 24%, 64%); --bubble-user-border_lt: hsl(35, 24%, 76%);
+  --bubble-fg_dk: hsl(30, 15%, 10%);          --bubble-fg_lt: hsl(30, 15%, 14%);
+  --bubble-fg-dim_dk: hsl(30, 12%, 30%);      --bubble-fg-dim_lt: hsl(30, 8%, 35%);
+  --bubble-link_dk: hsl(25, 38%, 40%);        --bubble-link_lt: hsl(25, 38%, 38%);
+  --bubble-code-bg_dk: hsl(35, 14%, 86%);     --bubble-code-bg_lt: hsl(30, 10%, 92%);
+
+  --shadow-color_dk: rgba(0,0,0,0.35); --shadow-color_lt: rgba(0,0,0,0.08);
+}
+
+[data-theme="neutrals"] {
+  --bg: color-mix(in srgb, var(--bg_lt) calc(var(--brightness) * 100%), var(--bg_dk));
+  --bg-panel: color-mix(in srgb, var(--bg-panel_lt) calc(var(--brightness) * 100%), var(--bg-panel_dk));
+  --bg-hover: color-mix(in srgb, var(--bg-hover_lt) calc(var(--brightness) * 100%), var(--bg-hover_dk));
+  --bg-inset: color-mix(in srgb, var(--bg-inset_lt) calc(var(--brightness) * 100%), var(--bg-inset_dk));
+
+  --border: color-mix(in srgb, var(--border_lt) calc(var(--brightness) * 100%), var(--border_dk));
+  --border-soft: color-mix(in srgb, var(--border-soft_lt) calc(var(--brightness) * 100%), var(--border-soft_dk));
+
+  --fg: color-mix(in srgb, var(--fg_lt) calc(var(--brightness) * 100%), var(--fg_dk));
+  --fg-dim: color-mix(in srgb, var(--fg-dim_lt) calc(var(--brightness) * 100%), var(--fg-dim_dk));
+  --fg-faint: color-mix(in srgb, var(--fg-faint_lt) calc(var(--brightness) * 100%), var(--fg-faint_dk));
+
+  --accent: color-mix(in srgb, var(--accent_lt) calc(var(--brightness) * 100%), var(--accent_dk));
+  --accent-hi: color-mix(in srgb, var(--accent-hi_lt) calc(var(--brightness) * 100%), var(--accent-hi_dk));
+  --accent-lo: color-mix(in srgb, var(--accent-lo_lt) calc(var(--brightness) * 100%), var(--accent-lo_dk));
+
+  --ok: color-mix(in srgb, var(--ok_lt) calc(var(--brightness) * 100%), var(--ok_dk));
+  --warn: color-mix(in srgb, var(--warn_lt) calc(var(--brightness) * 100%), var(--warn_dk));
+  --bad: color-mix(in srgb, var(--bad_lt) calc(var(--brightness) * 100%), var(--bad_dk));
+  --danger-hi: color-mix(in srgb, var(--danger-hi_lt) calc(var(--brightness) * 100%), var(--danger-hi_dk));
+
+  --bubble-asst-bg: color-mix(in srgb, var(--bubble-asst-bg_lt) calc(var(--brightness) * 100%), var(--bubble-asst-bg_dk));
+  --bubble-asst-border: color-mix(in srgb, var(--bubble-asst-border_lt) calc(var(--brightness) * 100%), var(--bubble-asst-border_dk));
+  --bubble-user-bg: color-mix(in srgb, var(--bubble-user-bg_lt) calc(var(--brightness) * 100%), var(--bubble-user-bg_dk));
+  --bubble-user-border: color-mix(in srgb, var(--bubble-user-border_lt) calc(var(--brightness) * 100%), var(--bubble-user-border_dk));
+  --bubble-fg: color-mix(in srgb, var(--bubble-fg_lt) calc(var(--brightness) * 100%), var(--bubble-fg_dk));
+  --bubble-fg-dim: color-mix(in srgb, var(--bubble-fg-dim_lt) calc(var(--brightness) * 100%), var(--bubble-fg-dim_dk));
+  --bubble-link: color-mix(in srgb, var(--bubble-link_lt) calc(var(--brightness) * 100%), var(--bubble-link_dk));
+  --bubble-code-bg: color-mix(in srgb, var(--bubble-code-bg_lt) calc(var(--brightness) * 100%), var(--bubble-code-bg_dk));
+
+  --shadow-color: color-mix(in srgb, var(--shadow-color_lt) calc(var(--brightness) * 100%), var(--shadow-color_dk));
+  --shadow: 0 2px 8px var(--shadow-color);
+  --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
+  --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+
+  --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
+  --danger: var(--bad); --warning: var(--warn);
+  --copper: var(--accent); --error: var(--bad);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3. NEON MINIMAL — OLED black + electric lime accent
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+[data-theme="neon"] {
+  --bg_dk: hsl(0, 0%, 0%);         --bg_lt: hsl(0, 0%, 98%);
+  --bg-panel_dk: hsl(0, 0%, 5%);   --bg-panel_lt: hsl(0, 0%, 100%);
+  --bg-hover_dk: hsl(0, 0%, 10%);  --bg-hover_lt: hsl(0, 0%, 94%);
+  --bg-inset_dk: hsl(0, 0%, 3%);   --bg-inset_lt: hsl(0, 0%, 96%);
+
+  --border_dk: hsl(0, 0%, 16%);    --border_lt: hsl(0, 0%, 84%);
+  --border-soft_dk: hsl(0, 0%, 11%); --border-soft_lt: hsl(0, 0%, 90%);
+
+  --fg_dk: hsl(0, 0%, 93%);        --fg_lt: hsl(0, 0%, 8%);
+  --fg-dim_dk: hsl(0, 0%, 60%);    --fg-dim_lt: hsl(0, 0%, 42%);
+  --fg-faint_dk: hsl(0, 0%, 38%);  --fg-faint_lt: hsl(0, 0%, 60%);
+
+  --accent_dk: hsl(81, 100%, 62%); --accent_lt: hsl(81, 90%, 40%);
+  --accent-hi_dk: hsl(81, 100%, 72%); --accent-hi_lt: hsl(81, 95%, 50%);
+  --accent-lo_dk: hsl(81, 90%, 48%); --accent-lo_lt: hsl(81, 80%, 30%);
+
+  --ok_dk: hsl(140, 35%, 52%);     --ok_lt: hsl(140, 28%, 42%);
+  --warn_dk: hsl(45, 60%, 55%);    --warn_lt: hsl(45, 55%, 45%);
+  --bad_dk: hsl(0, 55%, 55%);      --bad_lt: hsl(0, 50%, 45%);
+  --danger-hi_dk: hsl(0, 58%, 64%); --danger-hi_lt: hsl(0, 52%, 55%);
+
+  --bubble-asst-bg_dk: hsl(0, 0%, 14%);     --bubble-asst-bg_lt: hsl(0, 0%, 96%);
+  --bubble-asst-border_dk: hsl(0, 0%, 20%); --bubble-asst-border_lt: hsl(0, 0%, 90%);
+  --bubble-user-bg_dk: hsl(0, 0%, 22%);     --bubble-user-bg_lt: hsl(0, 0%, 90%);
+  --bubble-user-border_dk: hsl(0, 0%, 28%); --bubble-user-border_lt: hsl(0, 0%, 84%);
+  --bubble-fg_dk: hsl(0, 0%, 92%);          --bubble-fg_lt: hsl(0, 0%, 8%);
+  --bubble-fg-dim_dk: hsl(0, 0%, 60%);      --bubble-fg-dim_lt: hsl(0, 0%, 42%);
+  --bubble-link_dk: hsl(81, 80%, 50%);      --bubble-link_lt: hsl(81, 70%, 32%);
+  --bubble-code-bg_dk: hsl(0, 0%, 18%);     --bubble-code-bg_lt: hsl(0, 0%, 93%);
+
+  --shadow-color_dk: rgba(0,0,0,0.50); --shadow-color_lt: rgba(0,0,0,0.08);
+}
+
+[data-theme="neon"] {
+  --bg: color-mix(in srgb, var(--bg_lt) calc(var(--brightness) * 100%), var(--bg_dk));
+  --bg-panel: color-mix(in srgb, var(--bg-panel_lt) calc(var(--brightness) * 100%), var(--bg-panel_dk));
+  --bg-hover: color-mix(in srgb, var(--bg-hover_lt) calc(var(--brightness) * 100%), var(--bg-hover_dk));
+  --bg-inset: color-mix(in srgb, var(--bg-inset_lt) calc(var(--brightness) * 100%), var(--bg-inset_dk));
+
+  --border: color-mix(in srgb, var(--border_lt) calc(var(--brightness) * 100%), var(--border_dk));
+  --border-soft: color-mix(in srgb, var(--border-soft_lt) calc(var(--brightness) * 100%), var(--border-soft_dk));
+
+  --fg: color-mix(in srgb, var(--fg_lt) calc(var(--brightness) * 100%), var(--fg_dk));
+  --fg-dim: color-mix(in srgb, var(--fg-dim_lt) calc(var(--brightness) * 100%), var(--fg-dim_dk));
+  --fg-faint: color-mix(in srgb, var(--fg-faint_lt) calc(var(--brightness) * 100%), var(--fg-faint_dk));
+
+  --accent: color-mix(in srgb, var(--accent_lt) calc(var(--brightness) * 100%), var(--accent_dk));
+  --accent-hi: color-mix(in srgb, var(--accent-hi_lt) calc(var(--brightness) * 100%), var(--accent-hi_dk));
+  --accent-lo: color-mix(in srgb, var(--accent-lo_lt) calc(var(--brightness) * 100%), var(--accent-lo_dk));
+
+  --ok: color-mix(in srgb, var(--ok_lt) calc(var(--brightness) * 100%), var(--ok_dk));
+  --warn: color-mix(in srgb, var(--warn_lt) calc(var(--brightness) * 100%), var(--warn_dk));
+  --bad: color-mix(in srgb, var(--bad_lt) calc(var(--brightness) * 100%), var(--bad_dk));
+  --danger-hi: color-mix(in srgb, var(--danger-hi_lt) calc(var(--brightness) * 100%), var(--danger-hi_dk));
+
+  --bubble-asst-bg: color-mix(in srgb, var(--bubble-asst-bg_lt) calc(var(--brightness) * 100%), var(--bubble-asst-bg_dk));
+  --bubble-asst-border: color-mix(in srgb, var(--bubble-asst-border_lt) calc(var(--brightness) * 100%), var(--bubble-asst-border_dk));
+  --bubble-user-bg: color-mix(in srgb, var(--bubble-user-bg_lt) calc(var(--brightness) * 100%), var(--bubble-user-bg_dk));
+  --bubble-user-border: color-mix(in srgb, var(--bubble-user-border_lt) calc(var(--brightness) * 100%), var(--bubble-user-border_dk));
+  --bubble-fg: color-mix(in srgb, var(--bubble-fg_lt) calc(var(--brightness) * 100%), var(--bubble-fg_dk));
+  --bubble-fg-dim: color-mix(in srgb, var(--bubble-fg-dim_lt) calc(var(--brightness) * 100%), var(--bubble-fg-dim_dk));
+  --bubble-link: color-mix(in srgb, var(--bubble-link_lt) calc(var(--brightness) * 100%), var(--bubble-link_dk));
+  --bubble-code-bg: color-mix(in srgb, var(--bubble-code-bg_lt) calc(var(--brightness) * 100%), var(--bubble-code-bg_dk));
+
+  --shadow-color: color-mix(in srgb, var(--shadow-color_lt) calc(var(--brightness) * 100%), var(--shadow-color_dk));
+  --shadow: 0 2px 8px var(--shadow-color);
+  --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
+  --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+
+  --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
+  --danger: var(--bad); --warning: var(--warn);
+  --copper: var(--accent); --error: var(--bad);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4. BIOPHILIC — Earthy, unbleached naturals (forest green & clay)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+[data-theme="biophilic"] {
+  --bg_dk: hsl(140, 8%, 10%);      --bg_lt: hsl(40, 22%, 94%);
+  --bg-panel_dk: hsl(140, 8%, 13%); --bg-panel_lt: hsl(40, 28%, 97%);
+  --bg-hover_dk: hsl(140, 6%, 18%); --bg-hover_lt: hsl(40, 18%, 89%);
+  --bg-inset_dk: hsl(140, 10%, 7%); --bg-inset_lt: hsl(40, 18%, 91%);
+
+  --border_dk: hsl(140, 6%, 22%);  --border_lt: hsl(40, 12%, 78%);
+  --border-soft_dk: hsl(140, 6%, 16%); --border-soft_lt: hsl(40, 12%, 85%);
+
+  --fg_dk: hsl(40, 14%, 88%);       --fg_lt: hsl(140, 8%, 11%);
+  --fg-dim_dk: hsl(40, 8%, 58%);    --fg-dim_lt: hsl(40, 6%, 38%);
+  --fg-faint_dk: hsl(40, 6%, 38%);  --fg-faint_lt: hsl(40, 5%, 56%);
+
+  --accent_dk: hsl(30, 46%, 59%);   --accent_lt: hsl(30, 35%, 44%);
+  --accent-hi_dk: hsl(30, 52%, 68%); --accent-hi_lt: hsl(30, 42%, 54%);
+  --accent-lo_dk: hsl(30, 38%, 46%); --accent-lo_lt: hsl(30, 28%, 34%);
+
+  --ok_dk: hsl(153, 13%, 39%);      --ok_lt: hsl(153, 13%, 34%);
+  --warn_dk: hsl(40, 40%, 50%);     --warn_lt: hsl(40, 40%, 42%);
+  --bad_dk: hsl(15, 45%, 50%);      --bad_lt: hsl(15, 42%, 42%);
+  --danger-hi_dk: hsl(15, 48%, 60%); --danger-hi_lt: hsl(15, 45%, 52%);
+
+  --bubble-asst-bg_dk: hsl(140, 10%, 90%);     --bubble-asst-bg_lt: hsl(40, 12%, 95%);
+  --bubble-asst-border_dk: hsl(140, 8%, 82%);  --bubble-asst-border_lt: hsl(40, 8%, 88%);
+  --bubble-user-bg_dk: hsl(30, 24%, 72%);      --bubble-user-bg_lt: hsl(30, 22%, 84%);
+  --bubble-user-border_dk: hsl(30, 20%, 64%);  --bubble-user-border_lt: hsl(30, 18%, 76%);
+  --bubble-fg_dk: hsl(140, 8%, 10%);           --bubble-fg_lt: hsl(140, 8%, 11%);
+  --bubble-fg-dim_dk: hsl(40, 8%, 30%);        --bubble-fg-dim_lt: hsl(40, 6%, 32%);
+  --bubble-link_dk: hsl(30, 35%, 38%);         --bubble-link_lt: hsl(30, 32%, 34%);
+  --bubble-code-bg_dk: hsl(140, 6%, 86%);      --bubble-code-bg_lt: hsl(40, 8%, 91%);
+
+  --shadow-color_dk: rgba(0,0,0,0.35); --shadow-color_lt: rgba(0,0,0,0.08);
+}
+
+[data-theme="biophilic"] {
+  --bg: color-mix(in srgb, var(--bg_lt) calc(var(--brightness) * 100%), var(--bg_dk));
+  --bg-panel: color-mix(in srgb, var(--bg-panel_lt) calc(var(--brightness) * 100%), var(--bg-panel_dk));
+  --bg-hover: color-mix(in srgb, var(--bg-hover_lt) calc(var(--brightness) * 100%), var(--bg-hover_dk));
+  --bg-inset: color-mix(in srgb, var(--bg-inset_lt) calc(var(--brightness) * 100%), var(--bg-inset_dk));
+
+  --border: color-mix(in srgb, var(--border_lt) calc(var(--brightness) * 100%), var(--border_dk));
+  --border-soft: color-mix(in srgb, var(--border-soft_lt) calc(var(--brightness) * 100%), var(--border-soft_dk));
+
+  --fg: color-mix(in srgb, var(--fg_lt) calc(var(--brightness) * 100%), var(--fg_dk));
+  --fg-dim: color-mix(in srgb, var(--fg-dim_lt) calc(var(--brightness) * 100%), var(--fg-dim_dk));
+  --fg-faint: color-mix(in srgb, var(--fg-faint_lt) calc(var(--brightness) * 100%), var(--fg-faint_dk));
+
+  --accent: color-mix(in srgb, var(--accent_lt) calc(var(--brightness) * 100%), var(--accent_dk));
+  --accent-hi: color-mix(in srgb, var(--accent-hi_lt) calc(var(--brightness) * 100%), var(--accent-hi_dk));
+  --accent-lo: color-mix(in srgb, var(--accent-lo_lt) calc(var(--brightness) * 100%), var(--accent-lo_dk));
+
+  --ok: color-mix(in srgb, var(--ok_lt) calc(var(--brightness) * 100%), var(--ok_dk));
+  --warn: color-mix(in srgb, var(--warn_lt) calc(var(--brightness) * 100%), var(--warn_dk));
+  --bad: color-mix(in srgb, var(--bad_lt) calc(var(--brightness) * 100%), var(--bad_dk));
+  --danger-hi: color-mix(in srgb, var(--danger-hi_lt) calc(var(--brightness) * 100%), var(--danger-hi_dk));
+
+  --bubble-asst-bg: color-mix(in srgb, var(--bubble-asst-bg_lt) calc(var(--brightness) * 100%), var(--bubble-asst-bg_dk));
+  --bubble-asst-border: color-mix(in srgb, var(--bubble-asst-border_lt) calc(var(--brightness) * 100%), var(--bubble-asst-border_dk));
+  --bubble-user-bg: color-mix(in srgb, var(--bubble-user-bg_lt) calc(var(--brightness) * 100%), var(--bubble-user-bg_dk));
+  --bubble-user-border: color-mix(in srgb, var(--bubble-user-border_lt) calc(var(--brightness) * 100%), var(--bubble-user-border_dk));
+  --bubble-fg: color-mix(in srgb, var(--bubble-fg_lt) calc(var(--brightness) * 100%), var(--bubble-fg_dk));
+  --bubble-fg-dim: color-mix(in srgb, var(--bubble-fg-dim_lt) calc(var(--brightness) * 100%), var(--bubble-fg-dim_dk));
+  --bubble-link: color-mix(in srgb, var(--bubble-link_lt) calc(var(--brightness) * 100%), var(--bubble-link_dk));
+  --bubble-code-bg: color-mix(in srgb, var(--bubble-code-bg_lt) calc(var(--brightness) * 100%), var(--bubble-code-bg_dk));
+
+  --shadow-color: color-mix(in srgb, var(--shadow-color_lt) calc(var(--brightness) * 100%), var(--shadow-color_dk));
+  --shadow: 0 2px 8px var(--shadow-color);
+  --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
+  --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+
+  --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
+  --danger: var(--bad); --warning: var(--warn);
+  --copper: var(--accent); --error: var(--bad);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Base reset
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 html, body, #root { height: 100%; }
 body {

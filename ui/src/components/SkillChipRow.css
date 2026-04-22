@@ -46,7 +46,7 @@
 .skill-chip:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
-  box-shadow: 0 0 0 3px rgba(212, 133, 92, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .chip-icon {
@@ -77,8 +77,8 @@
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--sage);
-  background: rgba(139, 168, 136, 0.15);
-  border: 1px solid rgba(139, 168, 136, 0.35);
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
   border-radius: 3px;
   padding: 1px 4px;
   line-height: 1;
@@ -91,9 +91,9 @@
 
 @keyframes chip-pulse {
   0%, 100% { box-shadow: none; }
-  50%       { box-shadow: 0 0 0 4px rgba(224, 154, 117, 0.3); }
+  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-hi) 30%, transparent); }
 }
 
 .skill-chip--new {
-  border-color: rgba(139, 168, 136, 0.5);
+  border-color: color-mix(in srgb, var(--ok) 50%, transparent);
 }

@@ -48,8 +48,8 @@
 }
 
 @keyframes wf-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 154, 117, 0.5); }
-  50%       { box-shadow: 0 0 0 5px rgba(224, 154, 117, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-hi) 50%, transparent); }
+  50%       { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-hi) 0%, transparent); }
 }
 
 .wf-stage-label {

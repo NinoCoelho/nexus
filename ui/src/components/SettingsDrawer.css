@@ -192,9 +192,9 @@
   border-radius: 999px;
   font-weight: 500;
 }
-.settings-badge--ok   { background: rgba(139, 168, 136, 0.18); color: var(--ok); }
-.settings-badge--warn { background: rgba(224, 179, 100, 0.18); color: var(--warn); }
-.settings-badge--bad  { background: rgba(200, 90, 90, 0.18);  color: var(--bad); }
+.settings-badge--ok   { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.settings-badge--warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.settings-badge--bad  { background: color-mix(in srgb, var(--bad) 18%, transparent);  color: var(--bad); }
 
 .settings-icon-btn {
   background: transparent;
@@ -374,7 +374,7 @@
   border-color: var(--border-soft);
 }
 .model-list-row--picked {
-  background: rgba(212, 133, 92, 0.12);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-color: var(--accent);
   color: var(--accent);
 }

@@ -18,7 +18,7 @@
   height: 28px;
   border-radius: 50%;
   background: radial-gradient(circle at 35% 35%, var(--accent-hi), var(--accent-lo));
-  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.15), 0 0 0 1px rgba(212, 133, 92, 0.25);
+  box-shadow: inset 0 1px 2px rgb(255 255 255 / 0.15), 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
   flex-shrink: 0;
 }
 
@@ -89,7 +89,7 @@
 .asst-body a {
   color: var(--bubble-link);
   text-decoration: underline;
-  text-decoration-color: rgba(154, 84, 50, 0.4);
+  text-decoration-color: color-mix(in srgb, var(--bubble-link) 40%, transparent);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
   transition: all 150ms ease;
@@ -120,7 +120,7 @@
   padding: 4px 12px;
   border-left: 2px solid var(--accent-lo);
   color: var(--bubble-fg-dim);
-  background: rgba(154, 84, 50, 0.06);
+  background: color-mix(in srgb, var(--bubble-link) 6%, transparent);
   border-radius: 0 var(--radius) var(--radius) 0;
 }
 
@@ -165,7 +165,7 @@
   vertical-align: baseline;
 }
 .vault-inline-link:hover {
-  background: rgba(212, 133, 92, 0.15);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: var(--accent-lo);
   color: var(--accent-lo);
 }
