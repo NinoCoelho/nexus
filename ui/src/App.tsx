@@ -124,11 +124,17 @@ export default function App() {
   // YOLO flag, surfaced as a header badge. Fetched from the server;
   // refreshed whenever settings are edited.
   const [yoloMode, setYoloMode] = useState<boolean>(false);
+  const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
 
   const handleOpenInVault = useCallback((path: string) => {
     setVaultOpenPath(path);
     setVaultSelectedPath(path);
     setView("vault");
+  }, []);
+
+  const handleViewEntityGraph = useCallback((mode: "file" | "folder", path: string) => {
+    setGraphSourceFilter({ mode, path });
+    setView("graph");
   }, []);
 
   const handleDispatchToChat = useCallback((sessionId: string, seedMessage: string) => {
@@ -577,6 +583,7 @@ export default function App() {
         vaultOpenPath={vaultOpenPath}
         onVaultOpenPathHandled={() => setVaultOpenPath(null)}
         onDispatchToChat={handleDispatchToChat}
+        onViewEntityGraph={handleViewEntityGraph}
       />
 
       <div className="app-main">
@@ -599,12 +606,15 @@ export default function App() {
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
-            <VaultView selectedPath={vaultSelectedPath} onDispatchToChat={handleDispatchToChat} />
+            <VaultView selectedPath={vaultSelectedPath} onDispatchToChat={handleDispatchToChat} onViewEntityGraph={(p) => handleViewEntityGraph("file", p)} />
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
             <UnifiedGraphView
               onOpenSkill={(name) => setOpenSkill(name)}
               onSelectSession={handleSessionSelect}
+              graphSourceFilter={graphSourceFilter}
+              onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
+              onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
             />
           </div>
           <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>

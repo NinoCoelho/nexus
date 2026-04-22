@@ -15,9 +15,12 @@ const TABS: { id: GraphTab; label: string }[] = [
 interface Props {
   onOpenSkill: (name: string) => void;
   onSelectSession: (id: string) => void;
+  graphSourceFilter?: { mode: "file" | "folder"; path: string } | null;
+  onGraphSourceFilterHandled?: () => void;
+  onViewEntityGraph?: (path: string) => void;
 }
 
-export default function UnifiedGraphView({ onOpenSkill, onSelectSession }: Props) {
+export default function UnifiedGraphView({ onOpenSkill, onSelectSession, graphSourceFilter, onGraphSourceFilterHandled, onViewEntityGraph }: Props) {
   const [tab, setTab] = useState<GraphTab>("knowledge");
 
   return (
@@ -34,8 +37,8 @@ export default function UnifiedGraphView({ onOpenSkill, onSelectSession }: Props
         ))}
       </div>
       <div className="unified-graph-content">
-        {tab === "knowledge" && <KnowledgeView />}
-        {tab === "vault" && <GraphView />}
+        {tab === "knowledge" && <KnowledgeView initialSourceFilter={graphSourceFilter} onSourceFilterHandled={onGraphSourceFilterHandled} onViewEntityGraph={onViewEntityGraph} />}
+        {tab === "vault" && <GraphView onViewEntityGraph={onViewEntityGraph} />}
         {tab === "agent" && (
           <AgentGraphView onOpenSkill={onOpenSkill} onSelectSession={onSelectSession} />
         )}

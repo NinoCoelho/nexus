@@ -229,6 +229,33 @@ def backlinks(path: str) -> list[str]:
     return [r[0] for r in rows]
 
 
+def forward_links(path: str) -> list[str]:
+    """Return list of paths that this file links TO."""
+    norm = _norm_path(path)
+    with _lock:
+        con = _connect()
+        try:
+            rows = con.execute(
+                "SELECT to_path FROM file_links WHERE from_path = ? ORDER BY to_path", (norm,)
+            ).fetchall()
+        finally:
+            con.close()
+    return [r[0] for r in rows]
+
+
+def all_links() -> list[tuple[str, str]]:
+    """Return all (from_path, to_path) link pairs."""
+    with _lock:
+        con = _connect()
+        try:
+            rows = con.execute(
+                "SELECT from_path, to_path FROM file_links ORDER BY from_path, to_path"
+            ).fetchall()
+        finally:
+            con.close()
+    return [(r[0], r[1]) for r in rows]
+
+
 def tags_for_file(path: str) -> list[str]:
     """Return tags for a specific file."""
     norm = _norm_path(path)

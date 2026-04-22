@@ -4,12 +4,13 @@ import "./VaultView.css";
 interface VaultViewProps {
   selectedPath: string | null;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+  onViewEntityGraph?: (path: string) => void;
 }
 
-export default function VaultView({ selectedPath, onDispatchToChat }: VaultViewProps) {
+export default function VaultView({ selectedPath, onDispatchToChat, onViewEntityGraph }: VaultViewProps) {
   return (
     <div className="vault-view vault-view--editor-only">
-      <VaultEditorPanel selectedPath={selectedPath} onDispatchToChat={onDispatchToChat} />
+      <VaultEditorPanel selectedPath={selectedPath} onDispatchToChat={onDispatchToChat} onViewEntityGraph={onViewEntityGraph} />
     </div>
   );
 }

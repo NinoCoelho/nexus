@@ -160,6 +160,7 @@ interface VaultTreePanelProps {
   onOpenPathHandled?: () => void;
   onTreeChange?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+  onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
 }
 
 export default function VaultTreePanel({
@@ -169,6 +170,7 @@ export default function VaultTreePanel({
   onOpenPathHandled,
   onTreeChange,
   onDispatchToChat,
+  onViewEntityGraph,
 }: VaultTreePanelProps) {
   const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
@@ -594,12 +596,24 @@ export default function VaultTreePanel({
               <button className="vault-ctx-item" onClick={() => void handleNewFile(ctxMenu.node.path)}>New file</button>
               <button className="vault-ctx-item" onClick={() => void handleNewFolder(ctxMenu.node.path)}>New folder</button>
               <button className="vault-ctx-item" onClick={() => void handleNewKanban(ctxMenu.node.path)}>New kanban</button>
+              {onViewEntityGraph && (
+                <button className="vault-ctx-item" onClick={() => { onViewEntityGraph("folder", ctxMenu.node.path); setCtxMenu(null); }}>
+                  Entity graph for folder
+                </button>
+              )}
             </>
           )}
           {ctxMenu.node.type === "file" && ctxMenu.node.path.endsWith(".md") && (
-            <button className="vault-ctx-item" onClick={() => void handleDispatchFile(ctxMenu.node.path)}>
-              Start chat with this file
-            </button>
+            <>
+              <button className="vault-ctx-item" onClick={() => void handleDispatchFile(ctxMenu.node.path)}>
+                Start chat with this file
+              </button>
+              {onViewEntityGraph && (
+                <button className="vault-ctx-item" onClick={() => { onViewEntityGraph("file", ctxMenu.node.path); setCtxMenu(null); }}>
+                  Entity graph for file
+                </button>
+              )}
+            </>
           )}
           <button className="vault-ctx-item vault-ctx-item--danger" onClick={() => handleDelete(ctxMenu.node)}>Delete</button>
         </div>

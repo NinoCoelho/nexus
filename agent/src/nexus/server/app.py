@@ -910,6 +910,24 @@ def create_app(
             "component_count": len(components),
         }
 
+    @app.get("/graph/knowledge/file-subgraph")
+    async def knowledge_file_subgraph(path: str) -> dict:
+        """Return entity subgraph for all entities extracted from a vault file."""
+        from ..agent.graphrag_manager import source_subgraph
+        return source_subgraph([path])
+
+    @app.get("/graph/knowledge/folder-subgraph")
+    async def knowledge_folder_subgraph(folder: str) -> dict:
+        """Return entity subgraph for all entities from vault files in a folder."""
+        from ..agent.graphrag_manager import source_subgraph
+        from ..vault import list_tree
+        prefix = folder if folder.endswith("/") else folder + "/"
+        entries = list_tree()
+        paths = [e.path for e in entries if e.type == "file" and e.path.startswith(prefix)]
+        if not paths:
+            return {"nodes": [], "edges": []}
+        return source_subgraph(paths)
+
     @app.post("/graphrag/reindex")
     async def graphrag_reindex(full: bool = False) -> StreamingResponse:
         """Reindex vault into GraphRAG, streaming progress as SSE.
@@ -1257,6 +1275,13 @@ def create_app(
             vault_index.rebuild_from_disk()
         return {"path": path, "backlinks": vault_index.backlinks(path)}
 
+    @app.get("/vault/forward-links")
+    async def vault_forward_links_endpoint(path: str) -> dict:
+        from .. import vault_index
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return {"path": path, "forward_links": vault_index.forward_links(path)}
+
     @app.get("/vault/file")
     async def vault_read_file(path: str) -> dict:
         from ..vault import read_file
@@ -1328,14 +1353,38 @@ def create_app(
         return {"indexed": n}
 
     @app.get("/vault/graph")
-    async def vault_graph() -> dict:
-        from ..vault_graph import build_graph
-        data = build_graph()
+    async def vault_graph(
+        scope: str = "all",
+        seed: str = "",
+        hops: int = 1,
+        edge_types: str = "link",
+    ) -> dict:
+        from ..vault_graph import build_graph, build_scoped_graph
+        if scope == "all" and not seed:
+            data = build_graph()
+            return {
+                "nodes": data["nodes"],
+                "edges": [{"from": e["from_"], "to": e["to"]} for e in data["edges"]],
+                "orphans": data["orphans"],
+            }
+        hops = max(1, min(int(hops), 3))
+        data = build_scoped_graph(scope=scope, seed=seed, hops=hops, edge_types=edge_types)
         return {
             "nodes": data["nodes"],
-            "edges": [{"from": e["from_"], "to": e["to"]} for e in data["edges"]],
+            "edges": [{"from": e["from_"], "to": e["to_"], "type": e["type"]} for e in data["edges"]],
+            "entity_nodes": data["entity_nodes"],
             "orphans": data["orphans"],
         }
+
+    @app.get("/vault/graph/entity-sources")
+    async def vault_graph_entity_sources(path: str) -> dict:
+        from ..agent.graphrag_manager import entities_for_source
+        return {"path": path, "entities": entities_for_source(path)}
+
+    @app.get("/vault/graph/source-files")
+    async def vault_graph_source_files(entity_id: int) -> dict:
+        from ..agent.graphrag_manager import sources_for_entity
+        return {"entity_id": entity_id, "source_files": sources_for_entity(entity_id)}
 
     @app.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)
     async def vault_move(body: dict) -> None:

@@ -171,12 +171,27 @@ export async function postVaultMove(from: string, to: string): Promise<void> {
   if (!res.ok) throw new Error(`Vault move error: ${res.status}`);
 }
 
-export interface GraphNode { path: string; size: number; folder: string }
-export interface GraphEdge { from: string; to: string }
-export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; orphans: string[] }
+export interface GraphNode { path: string; size: number; folder: string; tags: string[]; title: string }
+export interface GraphEdge { from: string; to: string; type?: string }
+export interface EntityNode { id: number; name: string; type: string; source_paths: string[] }
+export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; orphans: string[]; entity_nodes?: EntityNode[] }
 
-export async function getVaultGraph(): Promise<GraphData> {
-  const res = await fetch(`${BASE}/vault/graph`);
+export interface GraphScopeParams {
+  scope?: string;
+  seed?: string;
+  hops?: number;
+  edge_types?: string;
+}
+
+export async function getVaultGraph(params?: GraphScopeParams): Promise<GraphData> {
+  const qs = new URLSearchParams();
+  if (params?.scope && params.scope !== "all") qs.set("scope", params.scope);
+  if (params?.seed) qs.set("seed", params.seed);
+  if (params?.hops) qs.set("hops", String(params.hops));
+  if (params?.edge_types) qs.set("edge_types", params.edge_types);
+  const query = qs.toString();
+  const url = query ? `${BASE}/vault/graph?${query}` : `${BASE}/vault/graph`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Vault graph error: ${res.status}`);
   return res.json() as Promise<GraphData>;
 }
@@ -197,6 +212,18 @@ export async function getVaultBacklinks(path: string): Promise<{ path: string; b
   const res = await fetch(`${BASE}/vault/backlinks?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`Vault backlinks error: ${res.status}`);
   return res.json() as Promise<{ path: string; backlinks: string[] }>;
+}
+
+export async function getVaultForwardLinks(path: string): Promise<{ path: string; forward_links: string[] }> {
+  const res = await fetch(`${BASE}/vault/forward-links?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`Vault forward links error: ${res.status}`);
+  return res.json() as Promise<{ path: string; forward_links: string[] }>;
+}
+
+export async function getVaultEntitySources(path: string): Promise<{ path: string; entities: { id: number; name: string; type: string }[] }> {
+  const res = await fetch(`${BASE}/vault/graph/entity-sources?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`Vault entity sources error: ${res.status}`);
+  return res.json();
 }
 
 // ── Vault-native Kanban ──────────────────────────────────────────────────────
@@ -834,6 +861,20 @@ export async function getKnowledgeSubgraph(seed: number, hops = 2): Promise<Subg
   const res = await fetch(`${BASE}/graph/knowledge/subgraph?seed=${seed}&hops=${hops}`);
   if (!res.ok) throw new Error(`Subgraph error: ${res.status}`);
   return res.json() as Promise<SubgraphData>;
+}
+
+export async function getKnowledgeFileSubgraph(path: string): Promise<SubgraphData> {
+  const res = await fetch(`${BASE}/graph/knowledge/file-subgraph?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`File subgraph error: ${res.status}`);
+  const data = await res.json();
+  return { enabled: true, nodes: data.nodes ?? [], edges: data.edges ?? [] };
+}
+
+export async function getKnowledgeFolderSubgraph(folder: string): Promise<SubgraphData> {
+  const res = await fetch(`${BASE}/graph/knowledge/folder-subgraph?folder=${encodeURIComponent(folder)}`);
+  if (!res.ok) throw new Error(`Folder subgraph error: ${res.status}`);
+  const data = await res.json();
+  return { enabled: true, nodes: data.nodes ?? [], edges: data.edges ?? [] };
 }
 
 export interface KnowledgeStats {

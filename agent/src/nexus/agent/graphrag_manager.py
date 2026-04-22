@@ -356,3 +356,105 @@ def build_graphrag_for_agent(cfg: Any) -> Any | None:
     if _engine is None:
         return None
     return _engine
+
+
+def entities_for_source(source_path: str) -> list[dict[str, Any]]:
+    """Return [{id, name, type}] for all entities extracted from a vault file."""
+    if _engine is None:
+        return []
+    try:
+        graph = _engine._entity_graph
+        rows = _engine._chunk_db.execute(
+            "SELECT id FROM chunks WHERE source_path = ?", (source_path,),
+        ).fetchall()
+        chunk_ids = [r[0] for r in rows]
+        seen: set[int] = set()
+        entities: list[dict[str, Any]] = []
+        for cid in chunk_ids:
+            for e in graph.entities_for_chunk(cid):
+                if e.id not in seen:
+                    seen.add(e.id)
+                    entities.append({"id": e.id, "name": e.name, "type": e.type or ""})
+        return entities
+    except Exception:
+        log.warning("[graphrag] entities_for_source failed for %s", source_path, exc_info=True)
+        return []
+
+
+def sources_for_entity(entity_id: int) -> list[str]:
+    """Return distinct source paths for all chunks mentioning this entity."""
+    if _engine is None:
+        return []
+    try:
+        graph = _engine._entity_graph
+        chunk_ids = graph.chunks_for_entity(entity_id)
+        paths: list[str] = []
+        seen: set[str] = set()
+        for cid in chunk_ids:
+            cd = _engine._get_chunk(cid)
+            if cd:
+                sp = cd.get("source_path", "")
+                if sp and sp not in seen:
+                    seen.add(sp)
+                    paths.append(sp)
+        return paths
+    except Exception:
+        log.warning("[graphrag] sources_for_entity failed for %d", entity_id, exc_info=True)
+        return []
+
+
+def source_subgraph(source_paths: list[str]) -> dict[str, Any]:
+    """Return entity nodes and edges for all entities extracted from given source paths.
+
+    Returns {"nodes": [{id, name, type, degree}], "edges": [{source, target, relation, strength}]}.
+    Only includes triples where BOTH endpoints are in the entity set (keeps graph cohesive).
+    """
+    if _engine is None:
+        return {"nodes": [], "edges": []}
+    try:
+        graph = _engine._entity_graph
+        entity_ids: set[int] = set()
+        for sp in source_paths:
+            rows = _engine._chunk_db.execute(
+                "SELECT id FROM chunks WHERE source_path = ?", (sp,),
+            ).fetchall()
+            for (cid,) in rows:
+                for e in graph.entities_for_chunk(cid):
+                    entity_ids.add(e.id)
+
+        if not entity_ids:
+            return {"nodes": [], "edges": []}
+
+        nodes: list[dict[str, Any]] = []
+        for eid in sorted(entity_ids):
+            e = graph.get_entity(eid)
+            if e is None:
+                continue
+            nodes.append({
+                "id": e.id,
+                "name": e.name,
+                "type": e.type or "",
+                "degree": graph.entity_degree(e.id),
+            })
+
+        edges: list[dict[str, Any]] = []
+        seen_edges: set[tuple[int, int, str]] = set()
+        for eid in entity_ids:
+            for t in graph.get_entity_triples(eid):
+                other_id = t.tail_id if t.head_id == eid else t.head_id
+                if other_id not in entity_ids:
+                    continue
+                key = (min(t.head_id, t.tail_id), max(t.head_id, t.tail_id), t.relation)
+                if key not in seen_edges:
+                    seen_edges.add(key)
+                    edges.append({
+                        "source": t.head_id,
+                        "target": t.tail_id,
+                        "relation": t.relation,
+                        "strength": t.strength,
+                    })
+
+        return {"nodes": nodes, "edges": edges}
+    except Exception:
+        log.warning("[graphrag] source_subgraph failed", exc_info=True)
+        return {"nodes": [], "edges": []}

@@ -6,11 +6,11 @@ import "./VaultFilePreview.css";
 interface Props {
   path: string | null;
   onClose: () => void;
-  /** Called when the user clicks "Open in Vault" — parent navigates to Vault view for this file. */
   onOpenInVault?: (path: string) => void;
+  onViewEntityGraph?: (path: string) => void;
 }
 
-export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props) {
+export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewEntityGraph }: Props) {
   const [file, setFile] = useState<VaultFile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +125,22 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
                 <span>Open in Vault</span>
               </button>
             )}
+            {onViewEntityGraph && (
+              <button
+                className="vault-preview-btn vault-preview-btn--icon"
+                onClick={() => { onViewEntityGraph(path); onClose(); }}
+                title="View entity graph for this file"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="8" cy="4" r="2" />
+                  <circle cx="4" cy="12" r="2" />
+                  <circle cx="12" cy="12" r="2" />
+                  <line x1="8" y1="6" x2="5" y2="10" />
+                  <line x1="8" y1="6" x2="11" y2="10" />
+                </svg>
+                <span>Entity Graph</span>
+              </button>
+            )}
             <button className="vault-preview-close" onClick={onClose} aria-label="Close">
               ✕
             </button>
@@ -185,6 +201,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault }: Props
           path={previewPath}
           onClose={() => setPreviewPath(null)}
           onOpenInVault={onOpenInVault}
+          onViewEntityGraph={onViewEntityGraph}
         />
       )}
     </>

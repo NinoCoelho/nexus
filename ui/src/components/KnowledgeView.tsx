@@ -5,6 +5,9 @@ import {
   getKnowledgeEntities,
   getKnowledgeEntity,
   getKnowledgeSubgraph,
+  getKnowledgeFileSubgraph,
+  getKnowledgeFolderSubgraph,
+  getVaultTree,
   type KnowledgeStats,
   type KnowledgeEntity,
   type KnowledgeQueryResult,
@@ -29,7 +32,7 @@ function typeColor(t: string) {
 }
 
 function nodeRadius(degree: number) {
-  return Math.max(4, Math.min(14, 4 + Math.log(degree + 1) * 2.5));
+  return Math.max(3, Math.min(10, 3 + Math.log(degree + 1) * 1.8));
 }
 
 function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
@@ -122,7 +125,15 @@ function EntityDetailCard({
   );
 }
 
-export default function KnowledgeView() {
+export default function KnowledgeView({
+  initialSourceFilter,
+  onSourceFilterHandled,
+  onViewEntityGraph,
+}: {
+  initialSourceFilter?: { mode: "file" | "folder"; path: string } | null;
+  onSourceFilterHandled?: () => void;
+  onViewEntityGraph?: (path: string) => void;
+}) {
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [queryResult, setQueryResult] = useState<KnowledgeQueryResult | null>(null);
   const [topEntities, setTopEntities] = useState<KnowledgeEntity[]>([]);
@@ -135,6 +146,10 @@ export default function KnowledgeView() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [entityFilter, setEntityFilter] = useState("");
   const [splitRatio, setSplitRatio] = useState(0.5);
+  const [sourceFilter, setSourceFilter] = useState<"none" | "file" | "folder">("none");
+  const [sourcePath, setSourcePath] = useState("");
+  const [sourceSuggestions, setSourceSuggestions] = useState<string[]>([]);
+  const [showSourceSuggestions, setShowSourceSuggestions] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simNodesRef = useRef<SimNode[]>([]);
@@ -158,6 +173,15 @@ export default function KnowledgeView() {
     getKnowledgeStats().then(setStats).catch(() => {});
     getKnowledgeEntities({ limit: 200 }).then((r) => setTopEntities(r.entities)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!initialSourceFilter) return;
+    const { mode, path } = initialSourceFilter;
+    setSourceFilter(mode);
+    setSourcePath(path);
+    void applySourceFilter(mode, path);
+    onSourceFilterHandled?.();
+  }, [initialSourceFilter]);
 
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) return;
@@ -192,6 +216,33 @@ export default function KnowledgeView() {
     selectedNodeRef.current = null;
     selectedEdgeRef.current = null;
     if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  const applySourceFilter = useCallback(async (mode: "file" | "folder", path: string) => {
+    if (!path.trim()) return;
+    setLoading(true);
+    setSelectedEntity(null);
+    setPinnedEntities([]);
+    selectedNodeRef.current = null;
+    selectedEdgeRef.current = null;
+    try {
+      const sg = mode === "file"
+        ? await getKnowledgeFileSubgraph(path)
+        : await getKnowledgeFolderSubgraph(path);
+      setSubgraphData(sg);
+      setQueryResult(null);
+    } catch {
+      setSubgraphData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const clearSourceFilter = useCallback(() => {
+    setSourceFilter("none");
+    setSourcePath("");
+    setSubgraphData(null);
+    setShowSourceSuggestions(false);
   }, []);
 
   const onSearchChange = useCallback((value: string) => {
@@ -297,7 +348,7 @@ export default function KnowledgeView() {
         const dx = nodes[j].x - nodes[i].x;
         const dy = nodes[j].y - nodes[i].y;
         const d2 = dx * dx + dy * dy + 1;
-        const f = 3000 / d2;
+        const f = 5000 / d2;
         const d = Math.sqrt(d2);
         fx[i] -= f * dx / d; fy[i] -= f * dy / d;
         fx[j] += f * dx / d; fy[j] += f * dy / d;
@@ -311,7 +362,7 @@ export default function KnowledgeView() {
       const dx = nodes[bi].x - nodes[ai].x;
       const dy = nodes[bi].y - nodes[ai].y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const f = (dist - 90) * 0.025;
+      const f = (dist - 140) * 0.02;
       fx[ai] += f * dx / dist; fy[ai] += f * dy / dist;
       fx[bi] -= f * dx / dist; fy[bi] -= f * dy / dist;
     }
@@ -386,13 +437,13 @@ export default function KnowledgeView() {
         const mx = (nodes[ai].x + nodes[bi].x) / 2;
         const my = (nodes[ai].y + nodes[bi].y) / 2;
         const label = e.relation.replace(/_/g, " ");
-        ctx.font = "9px system-ui, sans-serif";
+        ctx.font = "8px system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
         const m = ctx.measureText(label);
         ctx.fillStyle = bgPanel;
         ctx.globalAlpha = 0.8;
-        ctx.fillRect(mx - m.width / 2 - 3, my - 13, m.width + 6, 13);
+        ctx.fillRect(mx - m.width / 2 - 2, my - 12, m.width + 4, 12);
         ctx.globalAlpha = 1;
         ctx.fillStyle = fgDim;
         ctx.fillText(label, mx, my - 2);
@@ -417,22 +468,36 @@ export default function KnowledgeView() {
     }
 
     if (settledRef.current) {
-      ctx.font = "10px system-ui, sans-serif";
+      ctx.font = "9px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
+
+      const focusNode = selNode !== null ? selNode : hover;
+      const neighborSet = new Set<number>();
+      if (focusNode !== null) {
+        for (const e of sg.edges) {
+          const ai = idx.get(Number(e.source));
+          const bi = idx.get(Number(e.target));
+          if (ai === undefined || bi === undefined) continue;
+          if (ai === focusNode) neighborSet.add(bi);
+          if (bi === focusNode) neighborSet.add(ai);
+        }
+      }
+
       for (let i = 0; i < nodes.length; i++) {
         const n = nodes[i];
         const isHover = hover === i;
         const isSel = selNode === i;
-        if (n.degree < 3 && !isHover && !isSel) continue;
+        const isNeighbor = neighborSet.has(i);
+        if (n.degree < 3 && !isHover && !isSel && !isNeighbor) continue;
         const r = nodeRadius(n.degree);
-        const label = n.name.length > 20 ? n.name.slice(0, 19) + "\u2026" : n.name;
+        const label = n.name.length > 22 ? n.name.slice(0, 21) + "\u2026" : n.name;
         const metrics = ctx.measureText(label);
         ctx.fillStyle = bgPanel;
         ctx.globalAlpha = 0.85;
-        ctx.fillRect(n.x - metrics.width / 2 - 3, n.y + r + 3, metrics.width + 6, 13);
+        ctx.fillRect(n.x - metrics.width / 2 - 3, n.y + r + 3, metrics.width + 6, 12);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = (isHover || isSel) ? fg : fgDim;
+        ctx.fillStyle = (isHover || isSel) ? fg : isNeighbor ? fg : fgDim;
         ctx.fillText(label, n.x, n.y + r + 4);
       }
     }
@@ -650,6 +715,77 @@ export default function KnowledgeView() {
             {t} <span className="kv-pill-count">{stats?.types[t] ?? 0}</span>
           </button>
         ))}
+        <div className="kv-source-filter">
+          <select
+            className="kv-source-filter-select"
+            value={sourceFilter}
+            onChange={(e) => {
+              const v = e.target.value as "none" | "file" | "folder";
+              if (v === "none") clearSourceFilter();
+              else { setSourceFilter(v); setSourcePath(""); }
+            }}
+          >
+            <option value="none">No source filter</option>
+            <option value="file">Filter by file</option>
+            <option value="folder">Filter by folder</option>
+          </select>
+          {sourceFilter !== "none" && (
+            <div className="kv-source-input-wrap">
+              <input
+                className="kv-source-input"
+                type="text"
+                placeholder={sourceFilter === "file" ? "path/to/file.md" : "folder/"}
+                value={sourcePath}
+                onChange={(e) => {
+                  setSourcePath(e.target.value);
+                  setShowSourceSuggestions(true);
+                  const v = e.target.value.toLowerCase();
+                  if (v.length >= 1) {
+                    getVaultTree().then((entries) => {
+                      const paths = entries
+                        .filter(e => {
+                          if (sourceFilter === "file") return e.type === "file";
+                          return e.type === "dir";
+                        })
+                        .map(e => e.path)
+                        .filter(p => p.toLowerCase().includes(v))
+                        .slice(0, 12);
+                      setSourceSuggestions(paths);
+                    });
+                  } else {
+                    setSourceSuggestions([]);
+                  }
+                }}
+                onFocus={() => { if (sourcePath.length >= 1) setShowSourceSuggestions(true); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    setShowSourceSuggestions(false);
+                    void applySourceFilter(sourceFilter, sourcePath);
+                  }
+                }}
+              />
+              <button className="kv-source-go" onClick={() => void applySourceFilter(sourceFilter, sourcePath)}>Go</button>
+              <button className="kv-source-clear" onClick={clearSourceFilter}>&times;</button>
+              {showSourceSuggestions && sourceSuggestions.length > 0 && (
+                <div className="kv-source-suggestions">
+                  {sourceSuggestions.map(s => (
+                    <button
+                      key={s}
+                      className="kv-source-suggestion"
+                      onClick={() => {
+                        setSourcePath(s);
+                        setShowSourceSuggestions(false);
+                        void applySourceFilter(sourceFilter, s);
+                      }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {stats && stats.enabled && (
@@ -809,7 +945,7 @@ export default function KnowledgeView() {
       </div>
 
       {previewPath && (
-        <VaultFilePreview path={previewPath} onClose={() => setPreviewPath(null)} />
+        <VaultFilePreview path={previewPath} onClose={() => setPreviewPath(null)} onViewEntityGraph={onViewEntityGraph} />
       )}
     </div>
   );

@@ -20,6 +20,7 @@ interface Props {
   vaultOpenPath?: string | null;
   onVaultOpenPathHandled?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+  onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
 }
 
 function fmtRelative(raw: string | number | undefined): string {
@@ -137,6 +138,7 @@ export default function Sidebar({
   vaultOpenPath,
   onVaultOpenPathHandled,
   onDispatchToChat,
+  onViewEntityGraph,
 }: Props) {
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -487,6 +489,7 @@ export default function Sidebar({
             openPath={vaultOpenPath}
             onOpenPathHandled={onVaultOpenPathHandled}
             onDispatchToChat={onDispatchToChat}
+            onViewEntityGraph={onViewEntityGraph}
           />
         </div>
       )}

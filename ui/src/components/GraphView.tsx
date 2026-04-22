@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getVaultGraph, type GraphData, type GraphNode } from "../api";
+import { getVaultGraph, getVaultEntitySources, type GraphData, type GraphNode, type EntityNode } from "../api";
 import VaultFilePreview from "./VaultFilePreview";
 import "./GraphView.css";
 
-// ── colour palette ─────────────────────────────────────────────────────────────
 const PALETTE = [
-  "#b87333", // copper
-  "#7a9e7e", // sage
-  "#c9a84c", // amber
-  "#9e4a3a", // rust
-  "#5e7a9e", // steel blue
-  "#7a5e9e", // violet
-  "#9e7a5e", // tan
-  "#4a9e7a", // teal
+  "#b87333", "#7a9e7e", "#c9a84c", "#9e4a3a",
+  "#5e7a9e", "#7a5e9e", "#9e7a5e", "#4a9e7a",
 ];
+
+const TYPE_COLORS: Record<string, string> = {
+  person: "#c9a84c", project: "#b87333", concept: "#7a5e9e",
+  technology: "#5e7a9e", decision: "#9e4a3a", resource: "#4a9e7a",
+};
 
 function folderColor(folder: string): string {
   if (!folder) return PALETTE[0];
@@ -22,19 +20,39 @@ function folderColor(folder: string): string {
   return PALETTE[h % PALETTE.length];
 }
 
-// ── node radius ────────────────────────────────────────────────────────────────
+function entityColor(type: string): string {
+  return TYPE_COLORS[type] ?? "#7a9e7e";
+}
+
 function nodeRadius(size: number): number {
   const r = Math.log(Math.max(size, 1) + 1) * 1.8;
   return Math.max(4, Math.min(14, r));
 }
 
-// ── sim node ──────────────────────────────────────────────────────────────────
-interface SimNode extends GraphNode {
+type NodeType = "file" | "entity";
+
+interface SimNode {
+  id: string;
+  nodeType: NodeType;
   x: number; y: number; vx: number; vy: number;
   pinned: boolean;
+  data: GraphNode | null;
+  entity: EntityNode | null;
 }
 
-// ── constants ─────────────────────────────────────────────────────────────────
+interface EdgeTypeConfig {
+  dash: number[];
+  color: string;
+  alpha: number;
+}
+
+const EDGE_STYLES: Record<string, EdgeTypeConfig> = {
+  link: { dash: [], color: "", alpha: 0.5 },
+  "tag-cooccurrence": { dash: [4, 4], color: "#c9a84c", alpha: 0.35 },
+  "shared-entity": { dash: [6, 3], color: "#7a5e9e", alpha: 0.4 },
+  "folder-cross": { dash: [2, 4], color: "#5e7a9e", alpha: 0.25 },
+};
+
 const REPULSION_K = 3000;
 const SPRING_K    = 0.03;
 const REST_LEN    = 80;
@@ -42,75 +60,137 @@ const GRAVITY     = 0.01;
 const DAMPING     = 0.88;
 const ENERGY_STOP = 0.15;
 
-export default function GraphView() {
+type ScopeType = "all" | "file" | "folder" | "tag" | "search" | "entity";
+
+interface DetailInfo {
+  type: "file" | "entity";
+  path?: string;
+  entity?: EntityNode;
+}
+
+export default function GraphView({ onViewEntityGraph }: { onViewEntityGraph?: (path: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [graph, setGraph] = useState<GraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
-  // sim state stored in refs so the RAF loop sees latest values
+  const [scope, setScope] = useState<ScopeType>("all");
+  const [seed, setSeed] = useState("");
+  const [hops, setHops] = useState(1);
+  const [edgeTypes, setEdgeTypes] = useState("link");
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  const [showFilters, setShowFilters] = useState(false);
+  const [detail, setDetail] = useState<DetailInfo | null>(null);
+  const [detailEntities, setDetailEntities] = useState<{ id: number; name: string; type: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+
   const nodesRef   = useRef<SimNode[]>([]);
   const graphRef   = useRef<GraphData | null>(null);
   const rafRef     = useRef<number | null>(null);
   const runningRef = useRef(false);
-
-  // pan/zoom
-  const offsetRef = useRef({ x: 0, y: 0 });
-  const scaleRef  = useRef(1);
-
-  // drag state
-  const dragRef = useRef<{ nodeIdx: number | null; startX: number; startY: number; moved: boolean } | null>(null);
-  const panRef  = useRef<{ ox: number; oy: number; mx: number; my: number } | null>(null);
-
-  // hover
-  const hoverRef = useRef<number | null>(null);
-
-  // label visibility: hide while sim is running
+  const offsetRef  = useRef({ x: 0, y: 0 });
+  const scaleRef   = useRef(1);
+  const dragRef    = useRef<{ nodeIdx: number | null; startX: number; startY: number; moved: boolean } | null>(null);
+  const panRef     = useRef<{ ox: number; oy: number; mx: number; my: number } | null>(null);
+  const hoverRef   = useRef<number | null>(null);
   const settledRef = useRef(false);
+  const selectedRef = useRef<number | null>(null);
+  const [_renderTick, setRenderTick] = useState(0);
 
-  // ── fetch ─────────────────────────────────────────────────────────────────
   const fetchGraph = useCallback(() => {
     setError(null);
-    getVaultGraph()
+    setLoading(true);
+    const params = scope !== "all" && seed
+      ? { scope, seed, hops, edge_types: edgeTypes }
+      : { edge_types: edgeTypes };
+    getVaultGraph(params)
       .then((g) => {
         setGraph(g);
         graphRef.current = g;
+        setDetail(null);
         initSim(g, canvasRef.current);
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "Failed to load graph");
-      });
-  }, []);
+      })
+      .finally(() => setLoading(false));
+  }, [scope, seed, hops, edgeTypes]);
 
   useEffect(() => { fetchGraph(); }, [fetchGraph]);
 
-  // ── init sim ──────────────────────────────────────────────────────────────
   function initSim(g: GraphData, canvas: HTMLCanvasElement | null) {
     const w = canvas?.width ?? 800;
     const h = canvas?.height ?? 600;
-    nodesRef.current = g.nodes.map((n) => ({
-      ...n,
-      x: w * 0.2 + Math.random() * w * 0.6,
-      y: h * 0.2 + Math.random() * h * 0.6,
-      vx: 0, vy: 0,
-      pinned: false,
-    }));
+    const simNodes: SimNode[] = [];
+
+    for (const n of g.nodes) {
+      simNodes.push({
+        id: n.path,
+        nodeType: "file",
+        x: w * 0.2 + Math.random() * w * 0.6,
+        y: h * 0.2 + Math.random() * h * 0.6,
+        vx: 0, vy: 0, pinned: false,
+        data: n, entity: null,
+      });
+    }
+
+    const entityNodes = g.entity_nodes ?? [];
+    for (const en of entityNodes) {
+      simNodes.push({
+        id: `entity:${en.id}`,
+        nodeType: "entity",
+        x: w * 0.2 + Math.random() * w * 0.6,
+        y: h * 0.2 + Math.random() * h * 0.6,
+        vx: 0, vy: 0, pinned: false,
+        data: null, entity: en,
+      });
+    }
+
+    nodesRef.current = simNodes;
     settledRef.current = false;
     runningRef.current = true;
+    selectedRef.current = null;
     startRAF();
   }
 
-  // ── RAF loop ──────────────────────────────────────────────────────────────
   function startRAF() {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(tick);
+  }
+
+  const allTags = (() => {
+    const tags = new Set<string>();
+    graph?.nodes.forEach(n => n.tags?.forEach(t => tags.add(t)));
+    return Array.from(tags).sort();
+  })();
+
+  function filteredGraph(): GraphData | null {
+    const g = graphRef.current;
+    if (!g) return null;
+    if (tagFilter.size === 0) return g;
+
+    const visiblePaths = new Set(
+      g.nodes.filter(n => n.tags?.some(t => tagFilter.has(t))).map(n => n.path)
+    );
+    if (visiblePaths.size === 0) return g;
+
+    const filteredNodes = g.nodes.filter(n => visiblePaths.has(n.path));
+    const filteredEdges = g.edges.filter(e => visiblePaths.has(e.from) && visiblePaths.has(e.to));
+    const connected = new Set<string>();
+    for (const e of filteredEdges) { connected.add(e.from); connected.add(e.to); }
+    return {
+      ...g,
+      nodes: filteredNodes,
+      edges: filteredEdges,
+      orphans: filteredNodes.filter(n => !connected.has(n.path)).map(n => n.path),
+    };
   }
 
   function tick() {
     if (!runningRef.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const g = graphRef.current;
+    const g = filteredGraph();
     const nodes = nodesRef.current;
 
     if (!g || nodes.length === 0) {
@@ -120,16 +200,12 @@ export default function GraphView() {
 
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
-
-    // build index map for O(1) edge lookup
     const idx = new Map<string, number>();
-    nodes.forEach((n, i) => idx.set(n.path, i));
+    nodes.forEach((n, i) => idx.set(n.id, i));
 
-    // forces
     const fx = new Float64Array(nodes.length);
     const fy = new Float64Array(nodes.length);
 
-    // repulsion O(n²)
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const dx = nodes[j].x - nodes[i].x;
@@ -143,7 +219,6 @@ export default function GraphView() {
       }
     }
 
-    // spring attraction along edges
     for (const e of g.edges) {
       const ai = idx.get(e.from); const bi = idx.get(e.to);
       if (ai === undefined || bi === undefined) continue;
@@ -156,13 +231,11 @@ export default function GraphView() {
       fx[bi] -= f * nx; fy[bi] -= f * ny;
     }
 
-    // gravity toward center
     for (let i = 0; i < nodes.length; i++) {
       fx[i] += (cx - nodes[i].x) * GRAVITY;
       fy[i] += (cy - nodes[i].y) * GRAVITY;
     }
 
-    // integrate
     let totalKE = 0;
     for (let i = 0; i < nodes.length; i++) {
       if (nodes[i].pinned) continue;
@@ -183,11 +256,10 @@ export default function GraphView() {
     if (runningRef.current) {
       rafRef.current = requestAnimationFrame(tick);
     } else {
-      draw(canvas, g, nodes); // final draw with labels
+      draw(canvas, g, nodes);
     }
   }
 
-  // ── draw ──────────────────────────────────────────────────────────────────
   function draw(canvas: HTMLCanvasElement, g: GraphData, nodes: SimNode[]) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -195,6 +267,7 @@ export default function GraphView() {
     const { x: ox, y: oy } = offsetRef.current;
     const sc = scaleRef.current;
     const hover = hoverRef.current;
+    const selected = selectedRef.current;
     const orphanSet = new Set(g.orphans);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -208,67 +281,91 @@ export default function GraphView() {
     const accent = style.getPropertyValue("--accent").trim() || "#7c9ef8";
 
     const idx = new Map<string, number>();
-    nodes.forEach((n, i) => idx.set(n.path, i));
+    nodes.forEach((n, i) => idx.set(n.id, i));
 
-    // edges
     for (const e of g.edges) {
-      const ai = idx.get(e.from); const bi = idx.get(e.to);
+      const ai = idx.get(e.from);
+      const bi = idx.get(e.to);
       if (ai === undefined || bi === undefined) continue;
-      const highlighted = hover === ai || hover === bi;
+      const highlighted = hover === ai || hover === bi || selected === ai || selected === bi;
+      const edgeType = e.type ?? "link";
+      const eStyle = EDGE_STYLES[edgeType] ?? EDGE_STYLES.link;
+
       ctx.beginPath();
+      ctx.setLineDash(eStyle.dash);
       ctx.moveTo(nodes[ai].x, nodes[ai].y);
       ctx.lineTo(nodes[bi].x, nodes[bi].y);
-      ctx.strokeStyle = highlighted ? accent : borderColor;
+      ctx.strokeStyle = highlighted ? accent : (eStyle.color || borderColor);
       ctx.lineWidth = highlighted ? 1.5 : 0.8;
-      ctx.globalAlpha = highlighted ? 1 : 0.5;
+      ctx.globalAlpha = highlighted ? 1 : eStyle.alpha;
       ctx.stroke();
       ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
     }
 
-    // nodes
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      const r = nodeRadius(n.size);
-      const color = folderColor(n.folder);
-      const isOrphan = orphanSet.has(n.path);
       const isHover = hover === i;
+      const isSelected = selected === i;
 
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r + (isHover ? 2 : 0), 0, Math.PI * 2);
-
-      if (isOrphan) {
-        ctx.setLineDash([3, 2]);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.2;
-        ctx.fillStyle = color + "44";
-        ctx.fill();
-        ctx.stroke();
-        ctx.setLineDash([]);
-      } else {
+      if (n.nodeType === "entity" && n.entity) {
+        const color = entityColor(n.entity.type);
+        const sz = 11;
+        ctx.beginPath();
+        ctx.roundRect(n.x - sz / 2, n.y - sz / 2, sz, sz, 3);
         ctx.fillStyle = color;
         ctx.fill();
-        if (isHover) {
+        if (isHover || isSelected) {
           ctx.strokeStyle = "#fff";
           ctx.lineWidth = 1.5;
           ctx.stroke();
         }
-      }
+        if (settledRef.current) {
+          ctx.font = "9px system-ui, sans-serif";
+          ctx.fillStyle = fgDim;
+          ctx.textAlign = "center";
+          ctx.fillText(n.entity.name, n.x, n.y + sz / 2 + 11);
+        }
+      } else if (n.data) {
+        const r = nodeRadius(n.data.size);
+        const color = folderColor(n.data.folder);
+        const isOrphan = orphanSet.has(n.data.path);
 
-      // label — only when settled
-      if (settledRef.current) {
-        const basename = n.path.split("/").pop() ?? n.path;
-        const label = basename.replace(/\.mdx?$/, "");
-        ctx.font = "10px system-ui, sans-serif";
-        ctx.fillStyle = fgDim;
-        ctx.textAlign = "center";
-        ctx.fillText(label, n.x, n.y + r + 12);
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + (isHover || isSelected ? 2 : 0), 0, Math.PI * 2);
+
+        if (isOrphan) {
+          ctx.setLineDash([3, 2]);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.2;
+          ctx.fillStyle = color + "44";
+          ctx.fill();
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          ctx.fillStyle = color;
+          ctx.fill();
+          if (isHover || isSelected) {
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+        }
+
+        if (settledRef.current) {
+          const basename = n.data.path.split("/").pop() ?? n.data.path;
+          const label = n.data.title || basename.replace(/\.mdx?$/, "");
+          ctx.font = "10px system-ui, sans-serif";
+          ctx.fillStyle = fgDim;
+          ctx.textAlign = "center";
+          ctx.fillText(label, n.x, n.y + r + 12);
+        }
       }
     }
 
     ctx.restore();
   }
 
-  // ── canvas sizing ─────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -278,20 +375,16 @@ export default function GraphView() {
     const ro = new ResizeObserver(() => {
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
-      const g = graphRef.current;
+      const g = filteredGraph();
       const nodes = nodesRef.current;
       if (g && nodes.length > 0) draw(canvas, g, nodes);
     });
     ro.observe(parent);
-
-    // initial size
     canvas.width = parent.clientWidth;
     canvas.height = parent.clientHeight;
-
     return () => ro.disconnect();
   }, []);
 
-  // ── mouse helpers ─────────────────────────────────────────────────────────
   function canvasPoint(e: React.MouseEvent): { x: number; y: number } {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
@@ -306,14 +399,18 @@ export default function GraphView() {
     const nodes = nodesRef.current;
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i];
-      const r = nodeRadius(n.size) + 4;
+      let r: number;
+      if (n.nodeType === "entity") {
+        r = 8;
+      } else if (n.data) {
+        r = nodeRadius(n.data.size) + 4;
+      } else continue;
       const dx = cx - n.x; const dy = cy - n.y;
       if (dx * dx + dy * dy <= r * r) return i;
     }
     return null;
   }
 
-  // ── mouse events ──────────────────────────────────────────────────────────
   function onMouseDown(e: React.MouseEvent) {
     const { x, y } = canvasPoint(e);
     const hit = hitTest(x, y);
@@ -346,12 +443,11 @@ export default function GraphView() {
         x: panRef.current.ox + e.clientX - panRef.current.mx,
         y: panRef.current.oy + e.clientY - panRef.current.my,
       };
-      const g = graphRef.current;
+      const g = filteredGraph();
       const nodes = nodesRef.current;
       if (g && nodes.length > 0) draw(canvasRef.current!, g, nodes);
     } else {
-      // just hover redraw
-      const g = graphRef.current;
+      const g = filteredGraph();
       const nodes = nodesRef.current;
       if (g && nodes.length > 0) draw(canvasRef.current!, g, nodes);
     }
@@ -359,11 +455,20 @@ export default function GraphView() {
 
   function onMouseUp(e: React.MouseEvent) {
     if (dragRef.current && !dragRef.current.moved) {
-      // click — open preview
       const { x, y } = canvasPoint(e);
       const hit = hitTest(x, y);
       if (hit !== null) {
-        setPreviewPath(nodesRef.current[hit].path);
+        selectedRef.current = hit;
+        const n = nodesRef.current[hit];
+        if (n.nodeType === "file" && n.data) {
+          setDetail({ type: "file", path: n.data.path });
+          setPreviewPath(n.data.path);
+          getVaultEntitySources(n.data.path).then(r => setDetailEntities(r.entities ?? [])).catch(() => setDetailEntities([]));
+        } else if (n.nodeType === "entity" && n.entity) {
+          setDetail({ type: "entity", entity: n.entity });
+          setPreviewPath(null);
+          setDetailEntities([]);
+        }
       }
     }
     dragRef.current = null;
@@ -395,12 +500,11 @@ export default function GraphView() {
     };
     scaleRef.current = newSc;
 
-    const g = graphRef.current;
+    const g = filteredGraph();
     const nodes = nodesRef.current;
     if (g && nodes.length > 0) draw(canvas, g, nodes);
   }
 
-  // ── fit to view ───────────────────────────────────────────────────────────
   function fitToView() {
     const canvas = canvasRef.current;
     const nodes = nodesRef.current;
@@ -420,12 +524,22 @@ export default function GraphView() {
       x: (canvas.width - bw * sc) / 2 + (pad - minX) * sc,
       y: (canvas.height - bh * sc) / 2 + (pad - minY) * sc,
     };
-
-    const g = graphRef.current;
+    const g = filteredGraph();
     if (g) draw(canvas, g, nodes);
   }
 
-  // cleanup
+  function exploreFrom(path: string) {
+    setScope("file");
+    setSeed(path);
+    setHops(1);
+  }
+
+  function exploreEntity(entityId: number) {
+    setScope("entity");
+    setSeed(String(entityId));
+    setHops(1);
+  }
+
   useEffect(() => {
     return () => {
       runningRef.current = false;
@@ -435,15 +549,92 @@ export default function GraphView() {
 
   const nodeCount = graph?.nodes.length ?? 0;
   const edgeCount = graph?.edges.length ?? 0;
+  const entityCount = graph?.entity_nodes?.length ?? 0;
+
+  const scopeLabels: Record<ScopeType, string> = {
+    all: "All", file: "File", folder: "Folder", tag: "Tag", search: "Search", entity: "Entity",
+  };
+  const seedPlaceholders: Record<ScopeType, string> = {
+    all: "", file: "path/to/file.md", folder: "folder/", tag: "tag-name", search: "search query…", entity: "entity ID",
+  };
 
   return (
     <div className="graph-view">
       <div className="graph-toolbar">
-        <button className="graph-toolbar-btn" onClick={fitToView}>Fit to view</button>
-        <button className="graph-toolbar-btn" onClick={fetchGraph}>Refresh</button>
+        <select
+          className="graph-toolbar-select"
+          value={scope}
+          onChange={e => { setScope(e.target.value as ScopeType); setSeed(""); }}
+        >
+          {Object.entries(scopeLabels).map(([k, v]) => (
+            <option key={k} value={k}>{v}</option>
+          ))}
+        </select>
+
+        {scope !== "all" && (
+          <input
+            className="graph-toolbar-input"
+            type="text"
+            placeholder={seedPlaceholders[scope]}
+            value={seed}
+            onChange={e => setSeed(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") fetchGraph(); }}
+          />
+        )}
+
+        <select className="graph-toolbar-select graph-toolbar-select-sm" value={hops} onChange={e => setHops(Number(e.target.value))}>
+          <option value={1}>1 hop</option>
+          <option value={2}>2 hops</option>
+          <option value={3}>3 hops</option>
+        </select>
+
+        <select
+          className="graph-toolbar-select graph-toolbar-select-sm"
+          value={edgeTypes}
+          onChange={e => setEdgeTypes(e.target.value)}
+        >
+          <option value="link">Links</option>
+          <option value="link,tag">Links + Tags</option>
+          <option value="link,entity">Links + Entities</option>
+          <option value="link,tag,entity">All</option>
+        </select>
+
+        <button className="graph-toolbar-btn" onClick={() => setShowFilters(f => !f)}>
+          Tags
+        </button>
+
+        <button className="graph-toolbar-btn" onClick={fitToView}>Fit</button>
+        <button className="graph-toolbar-btn" onClick={fetchGraph} disabled={loading}>
+          {loading ? "…" : "Go"}
+        </button>
         <span className="graph-toolbar-stat">{nodeCount} nodes</span>
         <span className="graph-toolbar-stat">{edgeCount} edges</span>
+        {entityCount > 0 && <span className="graph-toolbar-stat">{entityCount} entities</span>}
       </div>
+
+      {showFilters && allTags.length > 0 && (
+        <div className="graph-filter-bar">
+          {allTags.map(tag => (
+            <button
+              key={tag}
+              className={`graph-tag-chip${tagFilter.has(tag) ? " active" : ""}`}
+              onClick={() => {
+                const next = new Set(tagFilter);
+                if (next.has(tag)) next.delete(tag); else next.add(tag);
+                setTagFilter(next);
+                setRenderTick(t => t + 1);
+              }}
+            >
+              {tag}
+            </button>
+          ))}
+          {tagFilter.size > 0 && (
+            <button className="graph-tag-chip" onClick={() => { setTagFilter(new Set()); setRenderTick(t => t + 1); }}>
+              clear
+            </button>
+          )}
+        </div>
+      )}
 
       {error && <div className="graph-error">{error}</div>}
 
@@ -457,10 +648,86 @@ export default function GraphView() {
         onWheel={onWheel}
       />
 
-      {previewPath && (
+      {detail && (
+        <div className="graph-detail-panel">
+          <div className="graph-detail-header">
+            <span className="graph-detail-title">
+              {detail.type === "file"
+                ? (graph?.nodes.find(n => n.path === detail.path)?.title || detail.path?.split("/").pop() || "")
+                : detail.entity?.name || ""}
+            </span>
+            <button className="graph-detail-close" onClick={() => { setDetail(null); setPreviewPath(null); selectedRef.current = null; }}>&times;</button>
+          </div>
+          <div className="graph-detail-body">
+            {detail.type === "file" && detail.path && (
+              <>
+                <div className="graph-detail-meta">
+                  <span className="graph-detail-label">Path</span>
+                  <span className="graph-detail-value">{detail.path}</span>
+                </div>
+                {(() => {
+                  const node = graph?.nodes.find(n => n.path === detail.path);
+                  return node?.tags?.length ? (
+                    <div className="graph-detail-meta">
+                      <span className="graph-detail-label">Tags</span>
+                      <div className="graph-detail-tags">
+                        {node.tags.map(t => (
+                          <span key={t} className="graph-detail-tag" onClick={() => { setScope("tag"); setSeed(t); }}>{t}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+                <button className="graph-detail-action" onClick={() => exploreFrom(detail.path!)}>
+                  Explore from here
+                </button>
+                {detailEntities.length > 0 && (
+                  <div className="graph-detail-section">
+                    <span className="graph-detail-label">Entities ({detailEntities.length})</span>
+                    <div className="graph-detail-entities">
+                      {detailEntities.map(en => (
+                        <span key={en.id} className="graph-detail-entity" onClick={() => exploreEntity(en.id)}>
+                          <span className="graph-detail-entity-dot" style={{ background: entityColor(en.type) }} />
+                          {en.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {detail.type === "entity" && detail.entity && (
+              <>
+                <div className="graph-detail-meta">
+                  <span className="graph-detail-label">Type</span>
+                  <span className="graph-detail-value">{detail.entity.type}</span>
+                </div>
+                <button className="graph-detail-action" onClick={() => exploreEntity(detail.entity!.id)}>
+                  Explore from here
+                </button>
+                {detail.entity.source_paths.length > 0 && (
+                  <div className="graph-detail-section">
+                    <span className="graph-detail-label">Source files ({detail.entity.source_paths.length})</span>
+                    <div className="graph-detail-sources">
+                      {detail.entity.source_paths.map(sp => (
+                        <span key={sp} className="graph-detail-source" onClick={() => { setPreviewPath(sp); }}>
+                          {sp}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {previewPath && !detail && (
         <VaultFilePreview
           path={previewPath}
           onClose={() => setPreviewPath(null)}
+          onViewEntityGraph={onViewEntityGraph}
         />
       )}
     </div>

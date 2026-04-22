@@ -15,9 +15,10 @@ function isKanbanContent(content: string): boolean {
 interface VaultEditorPanelProps {
   selectedPath: string | null;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+  onViewEntityGraph?: (path: string) => void;
 }
 
-export default function VaultEditorPanel({ selectedPath, onDispatchToChat }: VaultEditorPanelProps) {
+export default function VaultEditorPanel({ selectedPath, onDispatchToChat, onViewEntityGraph }: VaultEditorPanelProps) {
   const [content, setContent] = useState("");
   const [editMode, setEditMode] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
@@ -86,6 +87,15 @@ export default function VaultEditorPanel({ selectedPath, onDispatchToChat }: Vau
             <div className="vault-breadcrumb">{breadcrumb}</div>
             <div className="vault-editor-actions">
               {saveStatus === "saved" && <span className="vault-saved-indicator">saved ✓</span>}
+              {onViewEntityGraph && selectedPath && (
+                <button
+                  className="vault-pill"
+                  onClick={() => onViewEntityGraph(selectedPath!)}
+                  title="View entity graph for this file"
+                >
+                  Graph
+                </button>
+              )}
               {editMode && (
                 <button className="vault-pill" onClick={() => void save()} disabled={saveStatus === "saving"}>
                   Save

@@ -126,6 +126,11 @@ def write_file(rel_path: str, content: str) -> None:
     except Exception:
         import logging
         logging.getLogger(__name__).warning("vault_index: reindex_file failed", exc_info=True)
+    try:
+        from . import vault_graph
+        vault_graph.invalidate_cache()
+    except Exception:
+        pass
 
 
 def delete(rel_path: str, recursive: bool = False) -> None:
@@ -160,6 +165,11 @@ def delete(rel_path: str, recursive: bool = False) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).warning("vault_index: remove_file failed", exc_info=True)
+    try:
+        from . import vault_graph
+        vault_graph.invalidate_cache()
+    except Exception:
+        pass
 
 
 def move(from_path: str, to_path: str) -> None:
@@ -180,6 +190,11 @@ def move(from_path: str, to_path: str) -> None:
     except Exception:
         import logging
         logging.getLogger(__name__).warning("vault_index: rename_file failed", exc_info=True)
+    try:
+        from . import vault_graph
+        vault_graph.invalidate_cache()
+    except Exception:
+        pass
 
 
 def create_folder(rel_path: str) -> None:
