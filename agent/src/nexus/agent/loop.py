@@ -254,6 +254,7 @@ class Agent:
         tool_reg = build_tool_registry(
             skill_registry=self._registry,
             handlers=self._handlers,
+            search_cfg=self._nexus_cfg.search if self._nexus_cfg else None,
         )
 
         max_iter = (

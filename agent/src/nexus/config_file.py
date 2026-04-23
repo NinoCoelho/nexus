@@ -87,11 +87,26 @@ class GraphRAGConfig(BaseModel):
     chunk_size: int = 1000
 
 
+class SearchProviderEntry(BaseModel):
+    type: str = "ddgs"
+    key_env: str = ""
+    timeout: float = 10.0
+
+
+class SearchConfig(BaseModel):
+    enabled: bool = True
+    strategy: str = "concurrent"
+    providers: list[SearchProviderEntry] = Field(
+        default_factory=lambda: [SearchProviderEntry()]
+    )
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     models: list[ModelEntry] = Field(default_factory=list)
     graphrag: GraphRAGConfig = Field(default_factory=GraphRAGConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
 
 
 # Fresh install starts with providers configured but NO models.
@@ -165,6 +180,18 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "allow_custom_relations": cfg.graphrag.ontology.allow_custom_relations,
             },
         },
+        "search": {
+            "enabled": cfg.search.enabled,
+            "strategy": cfg.search.strategy,
+            "providers": [
+                {
+                    "type": p.type,
+                    "key_env": p.key_env,
+                    "timeout": p.timeout,
+                }
+                for p in cfg.search.providers
+            ],
+        },
     }
     for m in cfg.models:
         md: dict[str, Any] = {
@@ -210,7 +237,11 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         strengths = ModelStrengths(**mdata.pop("strengths", {}))
         models.append(ModelEntry(**mdata, strengths=strengths))
     graphrag = GraphRAGConfig(**raw.get("graphrag", {}))
-    return NexusConfig(agent=agent, providers=providers, models=models, graphrag=graphrag)
+    search = SearchConfig(**raw.get("search", {}))
+    return NexusConfig(
+        agent=agent, providers=providers, models=models,
+        graphrag=graphrag, search=search,
+    )
 
 
 def apply_env_overlay(cfg: NexusConfig) -> NexusConfig:

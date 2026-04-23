@@ -274,6 +274,7 @@ def build_tool_registry(
     *,
     skill_registry: Any,
     handlers: AgentHandlers,
+    search_cfg: Any | None = None,
 ) -> ToolRegistry:
     """Build a loom ToolRegistry populated with all Nexus tools.
 
@@ -352,12 +353,13 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
 
-    # memory_read / memory_write
+    _mem_handler = MemoryHandler()
+
     async def _mem_read(args: dict) -> str:
-        return await MemoryHandler().read(args.get("key", ""))
+        return await _mem_handler.read(args.get("key", ""))
 
     async def _mem_write(args: dict) -> str:
-        return await MemoryHandler().write(
+        return await _mem_handler.write(
             args.get("key", ""),
             args.get("content", ""),
             tags=args.get("tags"),
@@ -384,5 +386,40 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
     registry.register(_SimpleToolHandler(TERMINAL_TOOL, _terminal))
+
+    # Web search — enabled by default via search.enabled (default: True).
+    if search_cfg and getattr(search_cfg, "enabled", False):
+        import os
+
+        from loom.search import (
+            BraveSearchProvider,
+            DuckDuckGoSearchProvider,
+            SearchStrategy,
+            TavilySearchProvider,
+        )
+        from loom.tools.search import WebSearchTool
+
+        providers = []
+        for entry in getattr(search_cfg, "providers", []):
+            ptype = getattr(entry, "type", "ddgs")
+            timeout = getattr(entry, "timeout", 10.0)
+            key_env = getattr(entry, "key_env", "")
+            if ptype == "ddgs":
+                providers.append(DuckDuckGoSearchProvider(timeout=int(timeout)))
+            elif ptype == "brave":
+                api_key = os.environ.get(key_env, "")
+                if api_key:
+                    providers.append(BraveSearchProvider(api_key, timeout=timeout))
+            elif ptype == "tavily":
+                api_key = os.environ.get(key_env, "")
+                if api_key:
+                    providers.append(TavilySearchProvider(api_key, timeout=timeout))
+
+        if providers:
+            try:
+                strategy = SearchStrategy(getattr(search_cfg, "strategy", "concurrent"))
+            except ValueError:
+                strategy = SearchStrategy.CONCURRENT
+            registry.register(WebSearchTool.from_config(providers, strategy=strategy))
 
     return registry
