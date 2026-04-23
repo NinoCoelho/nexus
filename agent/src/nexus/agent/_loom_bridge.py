@@ -94,18 +94,23 @@ class LoomProviderAdapter(LoomLLMProvider):
         provider: NexusLLMProvider,
         *,
         provider_registry: Any | None = None,
+        default_model: str | None = None,
     ) -> None:
         self._nexus = provider
         self._registry = provider_registry
+        self._default_model = default_model
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
         """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name)."""
-        if self._registry and model_id:
+        resolved = model_id or self._default_model
+        if self._registry and resolved:
             try:
-                return self._registry.get_for_model(model_id)
+                return self._registry.get_for_model(resolved)
             except KeyError:
                 pass
-        return self._nexus, model_id
+        if not resolved:
+            resolved = getattr(self._nexus, "_model", None) or None
+        return self._nexus, resolved
 
     async def chat(
         self,
@@ -275,6 +280,7 @@ def build_tool_registry(
     skill_registry: Any,
     handlers: AgentHandlers,
     search_cfg: Any | None = None,
+    scrape_cfg: Any | None = None,
 ) -> ToolRegistry:
     """Build a loom ToolRegistry populated with all Nexus tools.
 
@@ -421,5 +427,25 @@ def build_tool_registry(
             except ValueError:
                 strategy = SearchStrategy.CONCURRENT
             registry.register(WebSearchTool.from_config(providers, strategy=strategy))
+
+    # Web scrape — enabled by default via scrape.enabled (default: True).
+    # Cookie store persists at ~/.nexus/cookies/ for cross-session auth.
+    if scrape_cfg and getattr(scrape_cfg, "enabled", False):
+        from pathlib import Path
+
+        from loom.store.cookies import FilesystemCookieStore
+        from loom.tools.scrape import WebScrapeTool
+
+        cookie_dir = Path.home() / ".nexus" / "cookies"
+        cookie_store = FilesystemCookieStore(cookie_dir)
+        registry.register(
+            WebScrapeTool.from_config(
+                mode=getattr(scrape_cfg, "mode", "auto"),
+                cookie_store=cookie_store,
+                headless=getattr(scrape_cfg, "headless", True),
+                timeout=getattr(scrape_cfg, "timeout", 30),
+                max_content_bytes=getattr(scrape_cfg, "max_content_bytes", 102400),
+            )
+        )
 
     return registry

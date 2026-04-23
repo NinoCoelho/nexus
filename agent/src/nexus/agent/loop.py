@@ -250,11 +250,15 @@ class Agent:
         adapter = LoomProviderAdapter(
             self._nexus_provider,
             provider_registry=self._provider_registry,
+            default_model=getattr(
+                getattr(self._nexus_cfg, "agent", None), "default_model", None
+            ) if self._nexus_cfg else None,
         )
         tool_reg = build_tool_registry(
             skill_registry=self._registry,
             handlers=self._handlers,
             search_cfg=self._nexus_cfg.search if self._nexus_cfg else None,
+            scrape_cfg=self._nexus_cfg.scrape if self._nexus_cfg else None,
         )
 
         max_iter = (
@@ -265,16 +269,14 @@ class Agent:
         def _choose_model(messages: list[lt.ChatMessage]) -> str | None:
             if not self._nexus_cfg:
                 return None
-            from .router import choose_model
-            # Extract the last user message for routing
-            user_text = ""
-            for m in reversed(messages):
-                if m.role == lt.Role.USER and m.content:
-                    user_text = m.content
-                    break
-            result = choose_model(user_text, self._nexus_cfg)
-            self._chosen_model = result
-            return result
+            # If model_id was already set (from app.py routing logic), pass it through.
+            # Otherwise fall back to default_model.
+            if self._chosen_model:
+                return self._chosen_model
+            default = getattr(self._nexus_cfg.agent, "default_model", None)
+            if default:
+                self._chosen_model = default
+            return default
 
         _iter_counter: list[int] = [0]
 

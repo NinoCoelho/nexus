@@ -1,16 +1,12 @@
-"""Tests for MemoryHandler — read/write via vault delegation."""
+"""Tests for MemoryHandler — read/write via MemoryStore delegation."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import nexus.vault
 from nexus.tools.memory_tool import MemoryHandler, _validate_key
-
-
-# ── key validation ─────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("key", [
@@ -39,16 +35,20 @@ def test_invalid_keys(key: str, fragment: str) -> None:
     assert fragment in err
 
 
-# ── read ──────────────────────────────────────────────────────────────
+def _mock_store():
+    store = AsyncMock()
+    store.read = AsyncMock(return_value=None)
+    store.write = AsyncMock(return_value=None)
+    return store
 
 
 @pytest.mark.asyncio
 async def test_read_missing_key() -> None:
-    mock_vault = MagicMock()
-    mock_vault.read_file.side_effect = FileNotFoundError("nope")
-    with patch.object(nexus.vault, "read_file", mock_vault.read_file):
-        handler = MemoryHandler()
-        result = await handler.read("missing/key")
+    store = _mock_store()
+    store.read.return_value = None
+    handler = MemoryHandler()
+    handler._store = store
+    result = await handler.read("missing/key")
     assert "not found" in result
 
 
@@ -61,55 +61,50 @@ async def test_read_invalid_key() -> None:
 
 @pytest.mark.asyncio
 async def test_read_existing_key() -> None:
-    mock_read = MagicMock(return_value={
-        "content": "hello world",
-        "path": "memory/mykey.md",
-    })
-    with patch.object(nexus.vault, "read_file", mock_read):
-        handler = MemoryHandler()
-        result = await handler.read("mykey")
+    entry = MagicMock()
+    entry.content = "hello world"
+    store = _mock_store()
+    store.read.return_value = entry
+    handler = MemoryHandler()
+    handler._store = store
+    result = await handler.read("mykey")
     assert "hello world" in result
-
-
-# ── write ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_write_creates_file() -> None:
-    mock_write = MagicMock()
-    with patch.object(nexus.vault, "write_file", mock_write), \
-         patch("nexus.tools.vault_tool._trigger_graphrag_index"):
-        handler = MemoryHandler()
-        result = await handler.write("newkey", "# Note\nsome content")
+    store = _mock_store()
+    handler = MemoryHandler()
+    handler._store = store
+    result = await handler.write("newkey", "# Note\nsome content")
     assert result == "ok"
-    mock_write.assert_called_once()
-    call_args = mock_write.call_args
-    assert call_args[0][0] == "memory/newkey.md"
-    assert "# Note\nsome content" in call_args[0][1]
+    store.write.assert_awaited_once_with(
+        "newkey", "# Note\nsome content", category="notes", tags=[],
+    )
 
 
 @pytest.mark.asyncio
 async def test_write_with_tags() -> None:
-    mock_write = MagicMock()
-    with patch.object(nexus.vault, "write_file", mock_write), \
-         patch("nexus.tools.vault_tool._trigger_graphrag_index"):
-        handler = MemoryHandler()
-        result = await handler.write("tagged", "content", tags=["go", "project"])
+    store = _mock_store()
+    handler = MemoryHandler()
+    handler._store = store
+    result = await handler.write("tagged", "content", tags=["go", "project"])
     assert result == "ok"
-    written = mock_write.call_args[0][1]
-    assert "tags:" in written
-    assert "- go" in written
+    store.write.assert_awaited_once_with(
+        "tagged", "content", category="notes", tags=["go", "project"],
+    )
 
 
 @pytest.mark.asyncio
 async def test_write_without_tags() -> None:
-    mock_write = MagicMock()
-    with patch.object(nexus.vault, "write_file", mock_write), \
-         patch("nexus.tools.vault_tool._trigger_graphrag_index"):
-        handler = MemoryHandler()
-        result = await handler.write("plain", "just content")
+    store = _mock_store()
+    handler = MemoryHandler()
+    handler._store = store
+    result = await handler.write("plain", "just content")
     assert result == "ok"
-    assert mock_write.call_args[0][1] == "just content"
+    store.write.assert_awaited_once_with(
+        "plain", "just content", category="notes", tags=[],
+    )
 
 
 @pytest.mark.asyncio

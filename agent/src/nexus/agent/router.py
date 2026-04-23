@@ -1,69 +1,66 @@
-"""Auto-routing: pick the best model for a given message."""
+"""Auto-routing: use the classification model to pick the best model for a given message."""
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..config_file import NexusConfig
 
+log = logging.getLogger(__name__)
+
 ROUTE_TRACE: list[str] = []
 
-_CODING_RE = re.compile(
-    r"\b(def |class |function |import |return |SELECT |FROM |UPDATE |DELETE |"
-    r"stack ?trace|traceback|null pointer|segfault|compile error|regex|=>|lambda|"
-    r"async def|await )"
-)
-_REASONING_RE = re.compile(
-    r"\b(why|explain|reason|think through|plan|strategy|design|compare|tradeoff|"
-    r"pros and cons|architecture|decide)\b",
-    re.IGNORECASE,
-)
+_CLASSIFICATION_SYSTEM = """\
+You are a model router. Given a user message and a list of available models with their \
+capability scores (0-10), select the single best model for this task. Balance capability \
+with cost-efficiency — don't pick an expensive model for a trivial task.
+
+Available models:
+{models_block}
+
+Respond with ONLY the model id, nothing else."""
 
 
-def _classify(message: str) -> str:
-    if _CODING_RE.search(message):
-        return "coding"
-    if _REASONING_RE.search(message) and len(message) > 40:
-        return "reasoning"
-    # 3+ lines with leading whitespace + non-space = code block
-    indented = sum(1 for line in message.splitlines() if line and line[0] in " \t" and line.strip())
-    if indented >= 3:
-        return "coding"
-    if len(message) < 80:
-        return "trivial"
-    return "balanced"
+async def classify_route(
+    message: str,
+    cfg: NexusConfig,
+    provider_registry: Any | None = None,
+) -> str:
+    if not cfg.agent.classification_model or not provider_registry:
+        return _fallback(message, cfg)
+
+    models_block = "\n".join(
+        f"- {m.id}: speed={m.strengths.speed}, cost={m.strengths.cost}, "
+        f"reasoning={m.strengths.reasoning}, coding={m.strengths.coding}"
+        for m in cfg.models
+    )
+    prompt = _CLASSIFICATION_SYSTEM.format(models_block=models_block)
+
+    try:
+        provider, upstream = provider_registry.get_for_model(cfg.agent.classification_model)
+        from .llm import ChatMessage as CM, Role
+        messages = [
+            CM(role=Role.SYSTEM, content=prompt),
+            CM(role=Role.USER, content=message[:500]),
+        ]
+        result = await provider.chat(messages, model=upstream)
+        picked = (result.content or "").strip().strip("`\"'")
+        valid = {m.id for m in cfg.models}
+        if picked in valid:
+            ROUTE_TRACE.append(f"[router] {picked} (llm-classified)")
+            return picked
+        log.warning("[router] classification model returned unknown model %r, falling back", picked)
+    except Exception:
+        log.warning("[router] classification call failed", exc_info=True)
+
+    return _fallback(message, cfg)
 
 
-def _score(model, category: str) -> tuple[int, int]:
-    s = model.strengths
-    if category == "coding":
-        primary = s.coding
-    elif category == "reasoning":
-        primary = s.reasoning
-    elif category == "trivial":
-        primary = s.speed
-    else:  # balanced
-        primary = (s.reasoning + s.coding) // 2
-    return (primary, s.cost)
-
-
-def choose_model(message: str, cfg: "NexusConfig") -> str:
-    if cfg.agent.routing_mode != "auto":
+def _fallback(message: str, cfg: NexusConfig) -> str:
+    if cfg.agent.default_model:
         return cfg.agent.default_model
-
-    category = _classify(message)
-    best_model = None
-    best_score = (-1, -1)
-
-    for model in cfg.models:
-        sc = _score(model, category)
-        if sc > best_score:
-            best_score = sc
-            best_model = model
-
-    result = best_model.id if best_model else cfg.agent.default_model
-    reason = f"category={category}, score={best_score}"
-    ROUTE_TRACE.append(f"[router] {result} ({reason})")
-    return result
+    if cfg.models:
+        return cfg.models[0].id
+    return ""

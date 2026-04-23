@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import json
-import os
 import platform
 import psutil
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
-import typer
 from rich.console import Console
 from rich.table import Table
 
@@ -27,7 +23,9 @@ class DaemonManager:
         self.console = Console()
         self.data_dir = Path.home() / ".nexus"
         self.pid_file = self.data_dir / "nexus-daemon.pid"
+        self.ui_pid_file = self.data_dir / "nexus-frontend.pid"
         self.log_file = self.data_dir / "nexus-daemon.log"
+        self.ui_log_file = self.data_dir / "nexus-frontend.log"
         self.data_dir.mkdir(exist_ok=True)
         
     def get_pid(self) -> Optional[int]:
@@ -39,12 +37,24 @@ class DaemonManager:
             with open(self.pid_file, 'r') as f:
                 pid = int(f.read().strip())
             
-            # Check if process is actually running
             if psutil.pid_exists(pid):
                 return pid
             else:
-                # Clean up stale PID file
-                self.pid_file.unlink()
+                self.pid_file.unlink(missing_ok=True)
+                return None
+        except (ValueError, FileNotFoundError, psutil.NoSuchProcess):
+            return None
+    
+    def get_ui_pid(self) -> Optional[int]:
+        if not self.ui_pid_file.exists():
+            return None
+        try:
+            with open(self.ui_pid_file, 'r') as f:
+                pid = int(f.read().strip())
+            if psutil.pid_exists(pid):
+                return pid
+            else:
+                self.ui_pid_file.unlink(missing_ok=True)
                 return None
         except (ValueError, FileNotFoundError, psutil.NoSuchProcess):
             return None
@@ -72,27 +82,22 @@ class DaemonManager:
             self.console.print("[red]Daemon is already running.[/red]")
             return False
         
-        # Prepare the command - use a simpler approach
         cmd = [sys.executable, "-c", f"""
 import sys
 import os
 import time
 from pathlib import Path
 
-# Set up logging
 log_file = Path("{self.log_file}")
 log_file.parent.mkdir(parents=True, exist_ok=True)
 
-# Write PID to file
 pid_file = Path("{self.pid_file}")
 with open(pid_file, 'w') as f:
     f.write(str(os.getpid()))
 
-# Redirect stdout and stderr to log file
 sys.stdout = open(log_file, 'a')
 sys.stderr = open(log_file, 'a')
 
-# Import and run the main function
 try:
     from nexus.main import main
     main()
@@ -100,112 +105,137 @@ except Exception as e:
     print(f"Daemon error: {{e}}", file=sys.stderr)
     raise
 finally:
-    # Clean up PID file on exit
     if pid_file.exists():
         pid_file.unlink()
 """]
         
         try:
             if detach:
-                # Start as background process
                 if platform.system() == "Windows":
-                    process = subprocess.Popen(
+                    subprocess.Popen(
                         cmd,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
                         close_fds=True
                     )
                 else:
-                    # Unix-like: start process in background
-                    process = subprocess.Popen(
+                    subprocess.Popen(
                         cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         close_fds=True
                     )
                 
-                # Wait a moment and check if it started
                 time.sleep(3)
                 
-                # Check if PID file was created
                 if self.pid_file.exists():
                     with open(self.pid_file, 'r') as f:
                         pid = int(f.read().strip())
                     
-                    # Verify the process is actually running
                     if psutil.pid_exists(pid):
-                        self.console.print(f"[green]Daemon started successfully (PID: {pid})[/green]")
+                        self.console.print(f"[green]Backend daemon started (PID: {pid})[/green]")
                         self.console.print(f"[dim]Logs: {self.log_file}[/dim]")
-                        return True
                     else:
-                        self.console.print("[red]Failed to start daemon - process exited[/red]")
-                        if self.pid_file.exists():
-                            self.pid_file.unlink()
+                        self.console.print("[red]Failed to start daemon — process exited[/red]")
+                        self.pid_file.unlink(missing_ok=True)
                         return False
                 else:
-                    self.console.print("[red]Failed to start daemon - PID file not created[/red]")
+                    self.console.print("[red]Failed to start daemon — PID file not created[/red]")
                     return False
             else:
-                # Start in foreground (for testing)
-                process = subprocess.Popen(
+                subprocess.Popen(
                     cmd,
                     stdout=open(self.log_file, 'a'),
                     stderr=subprocess.STDOUT
                 )
-                
-                # Wait a moment for PID file to be created
+
                 time.sleep(1)
                 
                 if self.pid_file.exists():
                     with open(self.pid_file, 'r') as f:
                         pid = int(f.read().strip())
-                    self.console.print(f"[green]Daemon started in foreground (PID: {pid})[/green]")
+                    self.console.print(f"[green]Backend daemon started in foreground (PID: {pid})[/green]")
                     self.console.print(f"[dim]Logs: {self.log_file}[/dim]")
-                    return True
                 else:
-                    self.console.print("[red]Failed to start daemon - PID file not created[/red]")
+                    self.console.print("[red]Failed to start daemon — PID file not created[/red]")
                     return False
+
+            self._start_frontend()
+            return True
                 
         except Exception as e:
             self.console.print(f"[red]Error starting daemon: {e}[/red]")
             return False
+
+    def _start_frontend(self) -> None:
+        from .config import get_frontend_dir
+        import shutil
+
+        frontend_dir = get_frontend_dir()
+        if frontend_dir is None:
+            return
+
+        npm = shutil.which("npm")
+        if npm is None:
+            self.console.print("[yellow]npm not found — skipping frontend.[/yellow]")
+            return
+
+        subprocess.run([npm, "install"], cwd=str(frontend_dir), check=True, capture_output=True)
+
+        log_fh = open(self.ui_log_file, 'a')
+        fp = subprocess.Popen(
+            [npm, "run", "dev"],
+            cwd=str(frontend_dir),
+            stdout=log_fh,
+            stderr=log_fh,
+        )
+
+        with open(self.ui_pid_file, 'w') as f:
+            f.write(str(fp.pid))
+
+        self.console.print(f"[green]Frontend dev server started (PID: {fp.pid})[/green]")
+        self.console.print(f"[dim]Logs: {self.ui_log_file}[/dim]")
     
     def stop(self) -> bool:
         """Stop the daemon process."""
-        if not self.is_running():
-            self.console.print("[yellow]Daemon is not running.[/yellow]")
+        self._stop_process(self.ui_pid_file, "Frontend")
+        result = self._stop_process(self.pid_file, "Backend")
+        return result
+
+    def _stop_process(self, pid_file: Path, label: str) -> bool:
+        if not pid_file.exists():
             return True
-        
-        pid = self.get_pid()
-        if pid is None:
-            self.console.print("[yellow]No PID found.[/yellow]")
+
+        try:
+            with open(pid_file, 'r') as f:
+                pid = int(f.read().strip())
+        except (ValueError, FileNotFoundError):
+            pid_file.unlink(missing_ok=True)
             return True
-        
+
+        if not psutil.pid_exists(pid):
+            pid_file.unlink(missing_ok=True)
+            self.console.print(f"[yellow]{label} is not running.[/yellow]")
+            return True
+
         try:
             process = psutil.Process(pid)
             process.terminate()
-            
-            # Wait for graceful shutdown
             try:
                 process.wait(timeout=5)
             except psutil.TimeoutExpired:
-                self.console.print("[yellow]Graceful shutdown failed, forcing...[/yellow]")
+                self.console.print(f"[yellow]{label} graceful shutdown failed, forcing…[/yellow]")
                 process.kill()
                 process.wait()
-            
-            # Clean up PID file
-            if self.pid_file.exists():
-                self.pid_file.unlink()
-            
-            self.console.print("[green]Daemon stopped successfully[/green]")
+
+            pid_file.unlink(missing_ok=True)
+            self.console.print(f"[green]{label} stopped successfully[/green]")
             return True
-            
+
         except psutil.NoSuchProcess:
-            self.console.print("[yellow]Process not found[/yellow]")
-            if self.pid_file.exists():
-                self.pid_file.unlink()
+            pid_file.unlink(missing_ok=True)
             return True
         except Exception as e:
-            self.console.print(f"[red]Error stopping daemon: {e}[/red]")
+            self.console.print(f"[red]Error stopping {label}: {e}[/red]")
             return False
     
     def restart(self, host: str = "127.0.0.1", port: int = PORT) -> bool:
@@ -217,27 +247,41 @@ finally:
     def show_status(self) -> None:
         """Show daemon status."""
         table = Table(title="Nexus Daemon Status")
-        table.add_column("Property", style="cyan")
-        table.add_column("Value")
+        table.add_column("Component", style="cyan")
+        table.add_column("Status")
+        table.add_column("Details")
         
-        status = self.get_status()
-        table.add_row("Status", status)
-        
-        if self.is_running():
-            pid = self.get_pid()
-            assert pid is not None
+        backend_pid = self.get_pid()
+        if backend_pid:
             try:
-                process = psutil.Process(pid)
-                table.add_row("PID", str(pid))
-                table.add_row("Memory Usage", f"{process.memory_info().rss / 1024 / 1024:.1f} MB")
-                table.add_row("CPU Usage", f"{process.cpu_percent():.1f}%")
-                table.add_row("Started", time.ctime(process.create_time()))
+                process = psutil.Process(backend_pid)
+                table.add_row(
+                    "Backend",
+                    "[green]Running[/green]",
+                    f"PID {backend_pid} | {process.memory_info().rss / 1024 / 1024:.1f} MB | started {time.ctime(process.create_time())}",
+                )
             except psutil.NoSuchProcess:
-                pass
+                table.add_row("Backend", "[yellow]Stale PID[/yellow]", "")
+        else:
+            table.add_row("Backend", "[dim]Stopped[/dim]", "")
         
-        table.add_row("Log File", str(self.log_file))
-        table.add_row("PID File", str(self.pid_file))
-        table.add_row("Data Directory", str(self.data_dir))
+        ui_pid = self.get_ui_pid()
+        if ui_pid:
+            try:
+                process = psutil.Process(ui_pid)
+                table.add_row(
+                    "Frontend",
+                    "[green]Running[/green]",
+                    f"PID {ui_pid} | started {time.ctime(process.create_time())}",
+                )
+            except psutil.NoSuchProcess:
+                table.add_row("Frontend", "[yellow]Stale PID[/yellow]", "")
+        else:
+            table.add_row("Frontend", "[dim]Stopped[/dim]", "")
+        
+        table.add_row("Log (backend)", "", str(self.log_file))
+        table.add_row("Log (frontend)", "", str(self.ui_log_file))
+        table.add_row("PID files", "", f"{self.pid_file}, {self.ui_pid_file}")
         
         self.console.print(table)
     
@@ -360,12 +404,12 @@ WantedBy=multi-user.target
             if user:
                 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
                 subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
-                self.console.print(f"[green]User service installed successfully[/green]")
+                self.console.print("[green]User service installed successfully[/green]")
                 self.console.print(f"[dim]Run: systemctl --user start {service_name}[/dim]")
             else:
                 subprocess.run(["systemctl", "daemon-reload"], check=True)
                 subprocess.run(["systemctl", "enable", service_name], check=True)
-                self.console.print(f"[green]System service installed successfully[/green]")
+                self.console.print("[green]System service installed successfully[/green]")
                 self.console.print(f"[dim]Run: systemctl start {service_name}[/dim]")
             
             return True
@@ -421,11 +465,11 @@ WantedBy=multi-user.target
             
             if user:
                 subprocess.run(["launchctl", "load", str(plist_file)], check=True)
-                self.console.print(f"[green]Launch agent installed successfully[/green]")
+                self.console.print("[green]Launch agent installed successfully[/green]")
                 self.console.print(f"[dim]Run: launchctl start com.nexus.{service_name}[/dim]")
             else:
                 subprocess.run(["launchctl", "load", str(plist_file)], check=True)
-                self.console.print(f"[green]Launch daemon installed successfully[/green]")
+                self.console.print("[green]Launch daemon installed successfully[/green]")
                 self.console.print(f"[dim]Run: launchctl start com.nexus.{service_name}[/dim]")
             
             return True
@@ -479,7 +523,7 @@ WantedBy=multi-user.target
             else:
                 subprocess.run(["systemctl", "daemon-reload"], check=True)
             
-            self.console.print(f"[green]Systemd service uninstalled successfully[/green]")
+            self.console.print("[green]Systemd service uninstalled successfully[/green]")
             return True
             
         except subprocess.CalledProcessError as e:
@@ -503,7 +547,7 @@ WantedBy=multi-user.target
                 subprocess.run(["launchctl", "unload", str(plist_file)], check=False)
                 plist_file.unlink()
             
-            self.console.print(f"[green]Launchd service uninstalled successfully[/green]")
+            self.console.print("[green]Launchd service uninstalled successfully[/green]")
             return True
             
         except subprocess.CalledProcessError as e:

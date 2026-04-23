@@ -197,6 +197,30 @@ def move(from_path: str, to_path: str) -> None:
         pass
 
 
+def write_file_bytes(rel_path: str, data: bytes) -> None:
+    if len(data) > _MAX_SIZE:
+        raise ValueError("content exceeds 1 MiB limit")
+    root = _vault_root()
+    full = _safe_resolve(rel_path, root)
+    full.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=full.parent, prefix=".nexus_tmp_")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, full)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        from . import vault_graph
+        vault_graph.invalidate_cache()
+    except Exception:
+        pass
+
+
 def create_folder(rel_path: str) -> None:
     root = _vault_root()
     full = _safe_resolve(rel_path, root)

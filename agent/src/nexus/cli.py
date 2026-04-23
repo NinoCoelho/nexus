@@ -49,13 +49,68 @@ def _global_setup() -> None:
 def serve(
     port: int = typer.Option(18989, "--port", "-p"),
     host: str = typer.Option("127.0.0.1", "--host"),
+    frontend_port: int = typer.Option(1890, "--frontend-port", "-fp"),
+    no_frontend: bool = typer.Option(False, "--no-frontend", help="Skip launching the frontend dev server"),
 ) -> None:
-    """Start the Nexus server."""
+    """Start the Nexus server (backend + frontend)."""
+    import shutil
+    import signal
+    import subprocess
+    import threading
     import uvicorn
-    # build_app() inside nexus.main installs the redacting log formatter at
-    # import time. serve() goes through uvicorn.run("nexus.main:app", ...) so
-    # that path is covered; no extra setup needed here.
-    uvicorn.run("nexus.main:app", host=host, port=port, reload=False)
+
+    from .config import get_frontend_dir
+
+    frontend_dir = None if no_frontend else get_frontend_dir()
+    frontend_proc: list[subprocess.Popen] = []
+    shutting_down = False
+
+    if frontend_dir is not None:
+        npm = shutil.which("npm")
+        if npm is None:
+            typer.echo("Warning: npm not found — skipping frontend.", err=True)
+        else:
+            typer.echo(f"Installing frontend deps in {frontend_dir} …")
+            subprocess.run([npm, "install"], cwd=str(frontend_dir), check=True, capture_output=True)
+            typer.echo(f"Starting frontend dev server on http://localhost:{frontend_port}")
+            fp = subprocess.Popen(
+                [npm, "run", "dev", "--", "--port", str(frontend_port)],
+                cwd=str(frontend_dir),
+            )
+            frontend_proc.append(fp)
+
+    backend_done = threading.Event()
+
+    def run_backend() -> None:
+        uvicorn.run("nexus.main:app", host=host, port=port, reload=False)
+        backend_done.set()
+
+    backend_thread = threading.Thread(target=run_backend, daemon=True)
+    backend_thread.start()
+
+    def _shutdown(*_args: object) -> None:
+        nonlocal shutting_down
+        if shutting_down:
+            return
+        shutting_down = True
+        if frontend_proc:
+            frontend_proc[0].terminate()
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    try:
+        backend_thread.join()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if frontend_proc:
+            frontend_proc[0].terminate()
+            try:
+                frontend_proc[0].wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                frontend_proc[0].kill()
+        typer.echo("Nexus stopped.")
 
 
 # ── insights ───────────────────────────────────────────────────────────────────
@@ -91,8 +146,6 @@ def chat(
 ) -> None:
     """Interactive chat loop (requires nexus serve running)."""
     import httpx
-    from .config import PORT as DEFAULT_PORT
-
     base = f"http://127.0.0.1:{port}"
 
     # Check server health
@@ -730,10 +783,20 @@ def daemon_start(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     port: int = typer.Option(18989, "--port", "-p", help="Port to bind to"),
     detach: bool = typer.Option(True, "--detach/--no-detach", help="Run as daemon or in foreground"),
+    no_frontend: bool = typer.Option(False, "--no-frontend", help="Skip launching the frontend dev server"),
 ) -> None:
     """Start the Nexus daemon."""
     from .daemon import daemon_manager
-    daemon_manager.start(host=host, port=port, detach=detach)
+    if no_frontend:
+        from .daemon import DaemonManager
+        original = DaemonManager._start_frontend
+        DaemonManager._start_frontend = lambda self: None
+        try:
+            daemon_manager.start(host=host, port=port, detach=detach)
+        finally:
+            DaemonManager._start_frontend = original
+    else:
+        daemon_manager.start(host=host, port=port, detach=detach)
 
 
 @daemon_app.command("stop")

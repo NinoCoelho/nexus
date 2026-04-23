@@ -15,7 +15,6 @@ import {
 import ProvidersSection from "./ProvidersSection";
 import ModelsSection from "./ModelsSection";
 import ReindexModal from "./ReindexModal";
-import RoutingSection from "./RoutingSection";
 import AppearanceSection from "./AppearanceSection";
 import "./SettingsDrawer.css";
 
@@ -62,8 +61,6 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     if (!hitl) return;
     setHitlSaving(true);
     const next = !hitl.yolo_mode;
-    // Optimistic update — revert on error so the user isn't left
-    // staring at a toggle that doesn't match the backend.
     setHitl({ ...hitl, yolo_mode: next });
     try {
       const updated = await setHitlSettings({ yolo_mode: next });
@@ -107,11 +104,13 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           )}
           {error && <p className="settings-error">{error}</p>}
           <AppearanceSection />
-          {routing && (
-            <RoutingSection routing={routing} models={models} onRefresh={refresh} />
-          )}
           <ProvidersSection providers={providers} onRefresh={refresh} />
-          <ModelsSection models={models} providers={providers} onRefresh={refresh} />
+          <ModelsSection
+            models={models}
+            providers={providers}
+            routing={routing}
+            onRefresh={refresh}
+          />
           {graphStats && (
             <section className="graphrag-section">
               <h3 className="graphrag-section-title">Knowledge Graph</h3>

@@ -13,16 +13,21 @@ import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import {
   chatStream,
+  getGraphragIndexStatus,
   getHitlSettings,
   getRouting,
   getSession,
+  graphragIndexFile,
+  putRouting,
   respondToUserRequest,
   fetchPendingRequest,
   subscribeSessionEvents,
+  truncateSession,
   type HitlSettings,
   type TraceEvent,
   type UserRequestPayload,
 } from "./api";
+import { useToast } from "./toast/ToastProvider";
 
 type View = "chat" | "vault" | "graph" | "insights";
 
@@ -38,6 +43,8 @@ interface ChatState {
   thinking: boolean;
   input: string;
   historyLoaded: boolean;
+  attachments: { name: string; vaultPath: string }[];
+  selectedModel?: string;
 }
 
 const NEW_KEY = "__new__";
@@ -46,6 +53,7 @@ const emptyState = (): ChatState => ({
   thinking: false,
   input: "",
   historyLoaded: true,
+  attachments: [],
 });
 
 function parseHistoryTimestamp(raw: unknown): Date {
@@ -99,6 +107,7 @@ function freshSessionId(): string {
 }
 
 export default function App() {
+  const toast = useToast();
   const [view, setView] = useState<View>("chat");
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [sessionsRevision, setSessionsRevision] = useState(0);
@@ -106,6 +115,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRevision, setSettingsRevision] = useState(0);
   const [hasModel, setHasModel] = useState<boolean | null>(null);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [lastUsedModel, setLastUsedModel] = useState<string>("");
   /** Bumps a vault path into VaultView when user clicks "Open in Vault" from a preview modal. */
   const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(null);
   /** The currently selected file path in the vault tree (lifted so Sidebar tree + editor share it). */
@@ -125,6 +136,7 @@ export default function App() {
   // refreshed whenever settings are edited.
   const [yoloMode, setYoloMode] = useState<boolean>(false);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
+  const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
 
   const handleOpenInVault = useCallback((path: string) => {
     setVaultOpenPath(path);
@@ -146,6 +158,7 @@ export default function App() {
         thinking: false,
         input: seedMessage,
         historyLoaded: cur?.historyLoaded ?? false,
+        attachments: [],
       });
       return next;
     });
@@ -168,7 +181,22 @@ export default function App() {
     let cancelled = false;
     getRouting()
       .then((r) => {
-        if (!cancelled) setHasModel((r.available_models?.length ?? 0) > 0);
+        if (!cancelled) {
+          setHasModel((r.available_models?.length ?? 0) > 0);
+          setAvailableModels(r.available_models ?? []);
+          const lum = r.last_used_model ?? "";
+          setLastUsedModel(lum);
+          // Seed the __new__ slot with last used model (or first available)
+          setChatStates((prev) => {
+            const next = new Map(prev);
+            const cur = next.get(NEW_KEY);
+            if (cur && !cur.selectedModel) {
+              const seed = lum || (r.available_models?.[0] ?? "");
+              next.set(NEW_KEY, { ...cur, selectedModel: seed });
+            }
+            return next;
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setHasModel(null);
@@ -195,6 +223,62 @@ export default function App() {
       cancelled = true;
     };
   }, [settingsRevision]);
+
+  // Poll for GraphRAG single-file indexing status. Fires when a file is
+  // submitted for indexing via KnowledgeView; survives navigation because
+  // the effect and state live here in App.
+  useEffect(() => {
+    if (!pendingGraphIndex) return;
+    let active = true;
+    const capturedPath = pendingGraphIndex;
+    const interval = setInterval(() => {
+      getGraphragIndexStatus(capturedPath)
+        .then((res) => {
+          if (!active) return;
+          if (res.status === "done") {
+            const n = res.node_count ?? res.nodes?.length ?? 0;
+            const name = capturedPath.split("/").pop() ?? capturedPath;
+            setPendingGraphIndex(null);
+            toast.success(`Indexing complete — ${n} entit${n === 1 ? "y" : "ies"} found for ${name}`, {
+              duration: 8000,
+              action: {
+                label: "View graph",
+                onClick: () => handleViewEntityGraph("file", capturedPath),
+              },
+            });
+          } else if (res.status === "error") {
+            setPendingGraphIndex(null);
+            toast.error("Indexing failed", { detail: res.detail });
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [pendingGraphIndex]);
+
+  const handleStartGraphIndex = useCallback(async (path: string) => {
+    try {
+      const res = await graphragIndexFile(path);
+      if (res.enabled === false) {
+        toast.error("GraphRAG not configured — add an API key in settings");
+        return;
+      }
+      if (res.reason) {
+        toast.info(res.reason === "empty file" ? "File is empty — nothing to index" : res.reason);
+        return;
+      }
+      if (res.queued) {
+        setPendingGraphIndex(path);
+        const name = path.split("/").pop() ?? path;
+        toast.info(`Indexing started for ${name}…`);
+      }
+    } catch (e) {
+      toast.error("Failed to start indexing", { detail: e instanceof Error ? e.message : undefined });
+    }
+  }, [toast]);
 
   // Subscribe to the session's HITL event stream. The UI owns a
   // ``pendingSessionId`` for the not-yet-created "new chat" so the
@@ -302,6 +386,7 @@ export default function App() {
           thinking: cur?.thinking ?? false,
           input: cur?.input ?? "",
           historyLoaded: true,
+          attachments: cur?.attachments ?? [],
         });
         return next;
       });
@@ -321,37 +406,83 @@ export default function App() {
   const handleNewChat = useCallback(() => {
     setActiveSession(null);
     setView("chat");
-    // Reset the "__new__" slot so a fresh chat starts clean. Any other
-    // session state (including a "thinking" one) is untouched.
     setChatStates((prev) => {
       const next = new Map(prev);
-      next.set(NEW_KEY, emptyState());
+      next.set(NEW_KEY, {
+        ...emptyState(),
+        selectedModel: lastUsedModel || availableModels[0] || "",
+      });
       return next;
     });
-    // Fresh HITL stream for the new chat — the old pending id's
-    // EventSource is torn down by the effect when this changes.
     setPendingSessionId(freshSessionId());
     setPendingRequest(null);
     setPendingRequestSession(null);
-  }, []);
+  }, [lastUsedModel, availableModels]);
 
   const handleInputChange = useCallback((v: string) => {
     patchState(activeKey, { input: v });
   }, [activeKey, patchState]);
 
+  const handleAttachmentsChange = useCallback(
+    (files: { name: string; vaultPath: string }[]) => {
+      patchState(activeKey, { attachments: files });
+    },
+    [activeKey, patchState],
+  );
+
+  const handleModelChange = useCallback((model: string) => {
+    patchState(activeKey, { selectedModel: model });
+  }, [activeKey, patchState]);
+
+  const handleRollback = useCallback(async (visibleIdx: number) => {
+    const key = activeKey;
+    const state = chatStates.get(key) ?? emptyState();
+    if (state.thinking) return;
+
+    const visible = state.messages.filter(
+      (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit",
+    );
+    const targetMsg = visible[visibleIdx];
+    if (!targetMsg || targetMsg.role !== "user") return;
+
+    const fullIdx = state.messages.indexOf(targetMsg);
+    if (fullIdx === -1) return;
+
+    const rollbackText = targetMsg.content;
+    const kept = state.messages.slice(0, fullIdx);
+
+    patchState(key, {
+      messages: kept,
+      input: rollbackText,
+    });
+
+    if (activeSession) {
+      try {
+        await truncateSession(activeSession, fullIdx);
+      } catch { /* best-effort */ }
+    }
+  }, [activeKey, activeSession, chatStates, patchState]);
+
   const send = useCallback(async (override?: unknown) => {
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
     const overrideText = typeof override === "string" ? override : undefined;
-    const text = (overrideText ?? state.input).trim();
-    if (!text || state.thinking) return;
+    const rawText = (overrideText ?? state.input).trim();
+    const hasAttachments = state.attachments.length > 0;
+    if ((!rawText && !hasAttachments) || state.thinking) return;
 
-    const userMsg: Message = { role: "user", content: text, timestamp: new Date() };
-    // Append user message + placeholder assistant message, set thinking.
+    let text = rawText;
+    if (hasAttachments) {
+      const refs = state.attachments.map((a) => `[${a.name}](vault://${a.vaultPath})`).join("\n");
+      text = text ? `${text}\n\n${refs}` : refs;
+    }
+
+    const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...state.attachments] : undefined };
     const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timestamp: new Date(), streaming: true };
     patchState(key, {
       input: "",
       thinking: true,
+      attachments: [],
       messages: [...state.messages, userMsg, placeholderAsst],
     });
 
@@ -362,6 +493,8 @@ export default function App() {
 
     const abortController = new AbortController();
     abortControllersRef.current.set(key, abortController);
+
+    const model = state.selectedModel || "auto";
 
     try {
       await chatStream(
@@ -414,13 +547,22 @@ export default function App() {
               return next;
             });
           } else if (event.type === "done") {
+            const routedModel = event.model;
             const finalAsst: Message = {
               role: "assistant",
               content: event.reply,
               trace: event.trace?.length ? event.trace : undefined,
               timestamp: new Date(),
               streaming: false,
+              model: routedModel,
             };
+
+            // Persist last_used_model
+            const usedModel = state.selectedModel || routedModel || "";
+            if (usedModel) {
+              putRouting({ last_used_model: usedModel }).catch(() => {});
+              setLastUsedModel(usedModel);
+            }
 
             if (!activeSession) {
               // First message — migrate __new__ to the real session id.
@@ -434,6 +576,8 @@ export default function App() {
                   thinking: false,
                   input: "",
                   historyLoaded: true,
+                  attachments: [],
+                  selectedModel: fresh.selectedModel,
                 });
                 next.set(NEW_KEY, emptyState());
                 return next;
@@ -492,6 +636,7 @@ export default function App() {
           }
         },
         abortController.signal,
+        model,
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -603,6 +748,12 @@ export default function App() {
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenInVault={handleOpenInVault}
+              attachments={activeState.attachments}
+              onAttachmentsChange={handleAttachmentsChange}
+              onRollback={handleRollback}
+              models={availableModels}
+              selectedModel={activeState.selectedModel}
+              onModelChange={handleModelChange}
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
@@ -615,6 +766,7 @@ export default function App() {
               graphSourceFilter={graphSourceFilter}
               onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
+              onStartGraphIndex={handleStartGraphIndex}
             />
           </div>
           <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>

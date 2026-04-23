@@ -539,3 +539,57 @@
   letter-spacing: 0.06em;
   color: var(--fg-faint);
 }
+
+.model-role-badges {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.model-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 10px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 120ms ease;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-role-badge:hover:not(:disabled):not(.model-role-badge--active) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.model-role-badge--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  cursor: default;
+  font-weight: 600;
+}
+
+.model-role-badge--disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.settings-model-header {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.settings-icon-btn--locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+  font-size: 12px;
+}

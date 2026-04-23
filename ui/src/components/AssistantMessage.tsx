@@ -70,6 +70,7 @@ interface Props {
   timestamp: Date;
   streaming?: boolean;
   onOpenInVault?: (path: string) => void;
+  model?: string;
 }
 
 function fmt(d: Date) {
@@ -118,7 +119,7 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, trace, timestamp, streaming, onOpenInVault }: Props) {
+export default function AssistantMessage({ content, trace, timestamp, streaming, onOpenInVault, model }: Props) {
   const [traceOpen, setTraceOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -145,6 +146,7 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
       <div className="asst-header">
         <div className="asst-avatar" aria-hidden="true" />
         <span className="asst-name">Nexus</span>
+        {model && <span className="asst-model-badge">via {model.split("/").pop()}</span>}
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
       <div className="asst-card">

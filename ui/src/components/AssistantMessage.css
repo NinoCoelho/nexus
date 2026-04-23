@@ -28,6 +28,18 @@
   color: var(--fg);
 }
 
+.asst-model-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  color: var(--fg-faint);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .asst-time {
   font-size: 11px;
   color: var(--fg-faint);

@@ -1,20 +1,15 @@
 """Memory agent tools: memory_read, memory_write.
 
-Convenience wrappers for the vault memory/ subfolder. Writes go to
-vault/memory/<key>.md with YAML frontmatter and trigger full vault
-indexing (FTS5, tags, links, GraphRAG). Search is via vault_search
-which covers the entire vault.
+Delegates to :class:`loom.store.memory.MemoryStore` which handles
+vault-backed storage with date-based directory hierarchy, FTS5 search,
+salience/recency ranking, and automatic GraphRAG indexing when enabled.
 """
 
 from __future__ import annotations
 
 import re
 
-import yaml
-
 from ..agent.llm import ToolSpec
-
-_MEMORY_PREFIX = "memory"
 
 _KEY_RE = re.compile(r"^[a-z0-9/_-]+$")
 _MAX_KEY_LEN = 128
@@ -80,26 +75,25 @@ def _validate_key(key: str) -> str | None:
     return None
 
 
-def _build_content(content: str, tags: list[str] | None) -> str:
-    if not tags:
-        return content
-    fm = {"tags": tags}
-    fm_str = yaml.dump(fm, default_flow_style=False).strip()
-    return f"---\n{fm_str}\n---\n{content}"
-
-
 class MemoryHandler:
+    def __init__(self) -> None:
+        self._store: object | None = None
+
+    def _get_store(self) -> object:
+        if self._store is None:
+            from ..agent.memory import get_memory_store
+            self._store = get_memory_store()
+        return self._store
+
     async def read(self, key: str) -> str:
         err = _validate_key(key)
         if err:
             return err
-        from .. import vault
-
-        try:
-            result = vault.read_file(f"{_MEMORY_PREFIX}/{key}.md")
-            return result["content"]
-        except FileNotFoundError:
+        store = self._get_store()
+        entry = await store.read(key)
+        if entry is None:
             return f"error: memory key {key!r} not found"
+        return entry.content
 
     async def write(
         self, key: str, content: str, tags: list[str] | None = None
@@ -109,12 +103,6 @@ class MemoryHandler:
             return err
         if len(content) > _MAX_CONTENT_LEN:
             return f"error: content too large (max {_MAX_CONTENT_LEN} chars)"
-        from .. import vault
-
-        full = _build_content(content, tags)
-        path = f"{_MEMORY_PREFIX}/{key}.md"
-        vault.write_file(path, full)
-        from .vault_tool import _trigger_graphrag_index
-
-        _trigger_graphrag_index(path, full)
+        store = self._get_store()
+        await store.write(key, content, category="notes", tags=tags or [])
         return "ok"

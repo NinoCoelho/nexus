@@ -8,6 +8,7 @@ internal actions, careful on external ones, and to skip performative filler.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ..skills.registry import SkillRegistry
@@ -53,6 +54,9 @@ def _migrate_legacy_memory() -> None:
         pass
 
 
+_DATE_DIR_RE = re.compile(r"/\d{4}/\d{2}/\d{2}/")
+
+
 def _memory_summary() -> str:
     """Return a ## Memory block with previews of the most recently modified notes."""
     if not _MEMORY_DIR.exists():
@@ -64,8 +68,8 @@ def _memory_summary() -> str:
     lines = ["## Memory", ""]
     total = 0
     for f in files:
-        # Derive the key relative to MEMORY_DIR, strip .md suffix
         key = f.relative_to(_MEMORY_DIR).with_suffix("").as_posix()
+        key = _DATE_DIR_RE.sub("/", key)
         preview = f.read_bytes()[:_MEMORY_PREVIEW_BYTES].decode("utf-8", errors="replace")
         block = f"### {key}\n{preview}"
         if total + len(block) > _MEMORY_MAX_TOTAL:

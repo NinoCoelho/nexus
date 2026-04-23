@@ -666,11 +666,40 @@
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   color: var(--fg-faint);
   font-size: 13px;
   pointer-events: none;
+}
+
+.kv-graph-empty p { margin: 0; }
+
+.kv-index-file-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.kv-index-file-btn:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.kv-graph-empty-hint {
+  font-size: 11px;
+  color: var(--fg-faint);
 }
 
 /* ── Loading ────────────────────────────────────────────────────────────── */

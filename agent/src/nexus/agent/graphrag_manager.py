@@ -90,7 +90,6 @@ async def initialize(cfg: Any) -> None:
         log.info("[graphrag] disabled in config")
         return
 
-    from loom.store.embeddings import OllamaEmbeddingProvider, OpenAIEmbeddingProvider
     from loom.store.graphrag import GraphRAGConfig, GraphRAGEngine
 
     _home = get_home()
@@ -100,19 +99,7 @@ async def initialize(cfg: Any) -> None:
     _get_manifest(db_dir)
 
     emb_cfg = graphrag_cfg.embeddings
-    if emb_cfg.provider == "openai":
-        embedder = OpenAIEmbeddingProvider(
-            model=emb_cfg.model,
-            base_url=emb_cfg.base_url,
-            key_env=emb_cfg.key_env,
-            dim=emb_cfg.dimensions,
-        )
-    else:
-        embedder = OllamaEmbeddingProvider(
-            model=emb_cfg.model,
-            base_url=emb_cfg.base_url,
-            dim=emb_cfg.dimensions,
-        )
+    embedder = _resolve_embedder(cfg, graphrag_cfg)
 
     from loom.store.graphrag import (
         EmbeddingConfig,
@@ -161,18 +148,74 @@ async def initialize(cfg: Any) -> None:
     )
 
 
+def _resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
+    """Resolve the embedding provider from the model list or fallback config."""
+    from loom.store.embeddings import OllamaEmbeddingProvider, OpenAIEmbeddingProvider
+
+    model_id = getattr(graphrag_cfg, "embedding_model_id", "")
+    emb_cfg = graphrag_cfg.embeddings
+
+    if model_id:
+        try:
+            from .registry import build_registry
+            registry = build_registry(cfg)
+            provider, upstream = registry.get_for_model(model_id)
+            p_cfg = _get_provider_config(cfg, model_id)
+            p_type = p_cfg.type if p_cfg else "openai_compat"
+            dim = emb_cfg.dimensions
+
+            if p_type == "ollama":
+                return OllamaEmbeddingProvider(
+                    model=upstream or model_id,
+                    base_url=p_cfg.base_url if p_cfg else "http://localhost:11434",
+                    dim=dim,
+                )
+            return OpenAIEmbeddingProvider(
+                model=upstream or model_id,
+                base_url=p_cfg.base_url if p_cfg else "",
+                key_env=p_cfg.api_key_env if p_cfg else "",
+                dim=dim,
+            )
+        except Exception:
+            log.warning("[graphrag] failed to resolve embedding model %s from registry", model_id, exc_info=True)
+
+    if emb_cfg.provider == "openai":
+        return OpenAIEmbeddingProvider(
+            model=emb_cfg.model,
+            base_url=emb_cfg.base_url,
+            key_env=emb_cfg.key_env,
+            dim=emb_cfg.dimensions,
+        )
+    return OllamaEmbeddingProvider(
+        model=emb_cfg.model,
+        base_url=emb_cfg.base_url,
+        dim=emb_cfg.dimensions,
+    )
+
+
+def _get_provider_config(cfg: Any, model_id: str) -> Any:
+    """Look up the ProviderConfig for a model's provider."""
+    for m in cfg.models:
+        if m.id == model_id:
+            return cfg.providers.get(m.provider)
+    return None
+
+
 def _resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
-    extraction_model = graphrag_cfg.extraction.model
-    if extraction_model is None:
+    extraction_model_id = getattr(graphrag_cfg, "extraction_model_id", "")
+    extraction_model = extraction_model_id or graphrag_cfg.extraction.model
+    if extraction_model is None or extraction_model == "":
         return None
 
-    # First try: match against configured models/providers (e.g. "zai/glm-4-air")
+    # First try: match against configured models/providers
     try:
         from .registry import build_registry
         registry = build_registry(cfg)
-        provider, _ = registry.get_for_model(extraction_model)
+        provider, upstream_name = registry.get_for_model(extraction_model)
         from ._loom_bridge import LoomProviderAdapter
-        return LoomProviderAdapter(provider)
+        return LoomProviderAdapter(
+            provider, provider_registry=registry, default_model=extraction_model
+        )
     except Exception:
         pass
 
@@ -187,7 +230,7 @@ def _resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
             api_key = os.environ.get(ext_cfg.key_env, "")
         provider = OpenAIProvider(base_url=base_url, api_key=api_key, model=extraction_model)
         from ._loom_bridge import LoomProviderAdapter
-        return LoomProviderAdapter(provider)
+        return LoomProviderAdapter(provider, default_model=extraction_model)
     except Exception:
         log.warning("[graphrag] failed to create extraction LLM provider", exc_info=True)
         return None

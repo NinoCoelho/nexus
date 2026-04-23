@@ -24,10 +24,12 @@ from .schemas import (
     ChatReply,
     ChatRequest,
     Health,
+    ModelRolePayload,
     RespondPayload,
     SettingsPayload,
     SkillDetail,
     SkillInfo,
+    TruncateRequest,
 )
 from .session_store import SessionStore
 from .settings import SettingsStore
@@ -45,6 +47,8 @@ _trajectory_logger: TrajectoryLogger | None = (
 # can interrupt a long-running turn. Populated by the chat_stream generator
 # on entry; removed in its finally block.
 _inflight_turns: dict[str, asyncio.Task[Any]] = {}
+
+_graphrag_index_tasks: dict[str, dict[str, Any]] = {}
 
 
 def create_app(
@@ -115,6 +119,8 @@ def create_app(
         try:
             yield
         finally:
+            from ..agent.memory import close_memory_store
+            close_memory_store()
             await agent.aclose()
 
     app = FastAPI(title="nexus", version="0.1.0", lifespan=lifespan)
@@ -287,98 +293,18 @@ def create_app(
         a: Agent = Depends(get_agent),
         store: SessionStore = Depends(get_sessions),
     ) -> StreamingResponse:
-        from ..agent.planner import PlannerAgent
 
         session = store.get_or_create(req.session_id, context=req.context)
 
         cfg = _state.get("cfg")
-        routing_mode = cfg.agent.routing_mode if cfg and cfg.agent else "fixed"
 
-        if routing_mode == "planner":
-            async def planner_event_generator() -> AsyncIterator[str]:
-                token = CURRENT_SESSION_ID.set(session.id)
-                try:
-                    default_model = cfg.agent.default_model if cfg and cfg.agent else None
-                    provider, _ = a._resolve_provider(default_model)
-
-                    import asyncio
-                    import queue as _queue
-
-                    # Collect trace events via callback and emit as SSE
-                    async def run_planner() -> "PlanResult":  # type: ignore[name-defined]
-                        nonlocal _collected_plan_result
-                        planner = PlannerAgent(
-                            executor=a,
-                            llm=provider,
-                            planner_model=None,
-                            on_trace=_sync_trace_cb,
-                        )
-                        result = await planner.run_turn(
-                            req.message,
-                            history=session.history,
-                            context=session.context,
-                        )
-                        _collected_plan_result = result
-                        return result
-
-                    _collected_plan_result: Any = None
-                    _trace_q: list[dict[str, Any]] = []
-
-                    def _sync_trace_cb(event: dict[str, Any]) -> None:
-                        _trace_q.append(event)
-
-                    # Run planner (non-streaming — planner is always non-streaming)
-                    try:
-                        result = await run_planner()
-                    except (LLMTransportError, MalformedOutputError) as exc:
-                        yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
-                        yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
-                        return
-                    except Exception as exc:
-                        log.exception("planner chat_stream crashed")
-                        yield f"event: error\ndata: {json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
-                        yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
-                        return
-
-                    # Emit all buffered trace events as SSE
-                    for ev in _trace_q:
-                        yield f"event: plan_trace\ndata: {json.dumps(ev)}\n\n"
-
-                    plan_data = [
-                        {
-                            "id": st.id,
-                            "description": st.description,
-                            "status": st.status,
-                            "result_preview": (st.result or "")[:200],
-                        }
-                        for st in result.sub_tasks
-                    ] or None
-
-                    # Persist history
-                    from ..agent.llm import ChatMessage as _ChatMessage, Role as _Role
-                    turn_messages = list(session.history) + [
-                        _ChatMessage(role=_Role.USER, content=req.message),
-                        _ChatMessage(role=_Role.ASSISTANT, content=result.reply),
-                    ]
-                    store.replace_history(session.id, turn_messages)
-
-                    done_payload = {
-                        "session_id": session.id,
-                        "reply": result.reply,
-                        "trace": result.trace,
-                        "skills_touched": [],
-                        "iterations": 1,
-                        "usage": {},
-                        "plan": plan_data,
-                    }
-                    yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
-                finally:
-                    CURRENT_SESSION_ID.reset(token)
-
-            return StreamingResponse(
-                planner_event_generator(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        # Resolve model_id: if user selected "auto", use LLM classifier;
+        # otherwise use the explicit model or fall back to default.
+        resolved_model_id = req.model
+        if resolved_model_id == "auto":
+            from ..agent.router import classify_route
+            resolved_model_id = await classify_route(
+                req.message, cfg, _state.get("prov_reg"),
             )
 
         async def event_generator() -> AsyncIterator[str]:
@@ -399,6 +325,7 @@ def create_app(
                     history=session.history,
                     context=session.context,
                     session_id=session.id,
+                    model_id=resolved_model_id,
                 ):
                     etype = event.get("type")
 
@@ -751,6 +678,19 @@ def create_app(
     ) -> None:
         store.delete(session_id)
 
+    @app.patch("/sessions/{session_id}/truncate", status_code=status.HTTP_204_NO_CONTENT)
+    async def truncate_session(
+        session_id: str,
+        body: TruncateRequest,
+        store: SessionStore = Depends(get_sessions),
+    ) -> None:
+        session = store.get(session_id)
+        if session is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Session not found")
+        truncated = session.history[: body.before_seq]
+        store.replace_history(session_id, truncated)
+
     @app.get("/graph")
     async def get_agent_graph() -> dict:
         """Return the agent/skill/session graph for the UI graph view.
@@ -927,6 +867,58 @@ def create_app(
         if not paths:
             return {"nodes": [], "edges": []}
         return source_subgraph(paths)
+
+    @app.post("/graph/knowledge/index-file")
+    async def graphrag_index_file(body: dict) -> dict:
+        from ..agent.graphrag_manager import get_engine, index_vault_file
+        from ..vault import read_file
+
+        path = body.get("path", "").strip()
+        if not path:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
+        if get_engine() is None:
+            return {"enabled": False}
+        try:
+            result = read_file(path)
+            content = result.get("content", "")
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+        if not content.strip():
+            return {"queued": False, "reason": "empty file"}
+
+        _graphrag_index_tasks[path] = {"status": "indexing"}
+
+        async def _run() -> None:
+            try:
+                await index_vault_file(path, content)
+                sg = source_subgraph([path])
+                _graphrag_index_tasks[path] = {
+                    "status": "done",
+                    "node_count": len(sg.get("nodes", [])),
+                    "edge_count": len(sg.get("edges", [])),
+                }
+            except Exception as exc:
+                log.exception("graphrag index-file failed for %s", path)
+                _graphrag_index_tasks[path] = {"status": "error", "detail": str(exc)}
+
+        asyncio.get_running_loop().create_task(_run())
+        return {"queued": True, "path": path}
+
+    @app.get("/graph/knowledge/index-file-status")
+    async def graphrag_index_file_status(path: str) -> dict:
+        info = _graphrag_index_tasks.get(path)
+        if info is None:
+            return {"status": "unknown"}
+        result = {**info}
+        if info.get("status") == "done":
+            from ..agent.graphrag_manager import source_subgraph
+            sg = source_subgraph([path])
+            result["nodes"] = sg.get("nodes", [])
+            result["edges"] = sg.get("edges", [])
+            _graphrag_index_tasks.pop(path, None)
+        elif info.get("status") == "error":
+            _graphrag_index_tasks.pop(path, None)
+        return result
 
     @app.post("/graphrag/reindex")
     async def graphrag_reindex(full: bool = False) -> StreamingResponse:
@@ -1334,6 +1326,52 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         return {"path": path}
+
+    @app.post("/vault/upload")
+    async def vault_upload(request: "Request") -> dict:
+        from ..vault import write_file, write_file_bytes
+
+        content_type = request.headers.get("content-type", "")
+        if "multipart/form-data" not in content_type:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="expected multipart/form-data",
+            )
+        form = await request.form()
+        files = form.getlist("files")
+        if not files:
+            file_field = form.get("file")
+            if file_field is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="`file` or `files` field required",
+                )
+            files = [file_field]
+        dest_dir = (form.get("path") or "").strip().strip("/")
+        uploaded: list[dict[str, Any]] = []
+        for upload in files:
+            if not hasattr(upload, "filename") or upload.filename is None:
+                continue
+            import re as _re
+
+            safe_name = _re.sub(r"[^\w.\-]+", "_", upload.filename)
+            rel = f"{dest_dir}/{safe_name}" if dest_dir else safe_name
+            raw = await upload.read()
+            text_exts = {
+                ".md", ".mdx", ".txt", ".markdown", ".csv", ".json",
+                ".yaml", ".yml", ".toml", ".xml", ".html", ".css",
+                ".js", ".ts", ".py", ".rs", ".go", ".sh", ".bash", ".zsh",
+            }
+            _, ext = os.path.splitext(safe_name.lower())
+            try:
+                if ext in text_exts:
+                    write_file(rel, raw.decode("utf-8", errors="replace"))
+                else:
+                    write_file_bytes(rel, raw)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            uploaded.append({"path": rel, "size": len(raw)})
+        return {"uploaded": uploaded}
 
     @app.get("/vault/search")
     async def vault_search_endpoint(q: str = "", limit: int = 50) -> dict:
@@ -1780,23 +1818,55 @@ def create_app(
         pr = _state["prov_reg"]
         available = pr.available_model_ids() if pr else []
         if not cfg:
-            return {"mode": "fixed", "default_model": None, "available_models": available}
+            return {"default_model": None, "last_used_model": None,
+                    "classification_model": None, "available_models": available}
         return {
-            "mode": cfg.agent.routing_mode,
             "default_model": cfg.agent.default_model,
+            "last_used_model": cfg.agent.last_used_model,
+            "classification_model": cfg.agent.classification_model,
             "available_models": available,
+            "embedding_model_id": cfg.graphrag.embedding_model_id,
+            "extraction_model_id": cfg.graphrag.extraction_model_id,
         }
 
     @app.put("/routing")
     async def set_routing(body: dict[str, Any]) -> dict[str, Any]:
         from ..config_file import load as load_cfg, save as save_cfg
         cfg = _state["cfg"] or load_cfg()
-        if "mode" in body:
-            cfg.agent.routing_mode = body["mode"]
         if "default_model" in body:
             cfg.agent.default_model = body["default_model"]
+        if "last_used_model" in body:
+            cfg.agent.last_used_model = body["last_used_model"]
+        if "classification_model" in body:
+            cfg.agent.classification_model = body["classification_model"]
+        if "embedding_model_id" in body:
+            cfg.graphrag.embedding_model_id = body["embedding_model_id"]
+        if "extraction_model_id" in body:
+            cfg.graphrag.extraction_model_id = body["extraction_model_id"]
         save_cfg(cfg)
         _rebuild_registry(cfg)
-        return {"mode": cfg.agent.routing_mode, "default_model": cfg.agent.default_model}
+        return {
+            "default_model": cfg.agent.default_model,
+            "last_used_model": cfg.agent.last_used_model,
+            "classification_model": cfg.agent.classification_model,
+            "embedding_model_id": cfg.graphrag.embedding_model_id,
+            "extraction_model_id": cfg.graphrag.extraction_model_id,
+        }
+
+    @app.put("/models/roles")
+    async def set_model_role(body: ModelRolePayload) -> dict[str, str]:
+        from ..config_file import load as load_cfg, save as save_cfg
+        cfg = _state["cfg"] or load_cfg()
+        if body.role == "embedding":
+            cfg.graphrag.embedding_model_id = body.model_id
+        elif body.role == "extraction":
+            cfg.graphrag.extraction_model_id = body.model_id
+        elif body.role == "classification":
+            cfg.agent.classification_model = body.model_id
+        else:
+            from fastapi import HTTPException
+            raise HTTPException(400, f"Unknown role: {body.role}")
+        save_cfg(cfg)
+        return {"role": body.role, "model_id": body.model_id}
 
     return app

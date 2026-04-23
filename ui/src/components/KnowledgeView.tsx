@@ -15,6 +15,16 @@ import {
   type SubgraphData,
 } from "../api";
 import VaultFilePreview from "./VaultFilePreview";
+import {
+  buildMultiEdgeIndex,
+  computeCurveOffset,
+  getControlPoint,
+  getCurveMidpoint,
+  getArrowAngle,
+  drawArrowhead,
+  shortenEdge,
+  drawEdgeCurve,
+} from "./graphEdgeUtils";
 import "./KnowledgeView.css";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -129,10 +139,12 @@ export default function KnowledgeView({
   initialSourceFilter,
   onSourceFilterHandled,
   onViewEntityGraph,
+  onStartGraphIndex,
 }: {
   initialSourceFilter?: { mode: "file" | "folder"; path: string } | null;
   onSourceFilterHandled?: () => void;
   onViewEntityGraph?: (path: string) => void;
+  onStartGraphIndex?: (path: string) => void;
 }) {
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [queryResult, setQueryResult] = useState<KnowledgeQueryResult | null>(null);
@@ -416,6 +428,12 @@ export default function KnowledgeView({
     const idx = new Map<number, number>();
     nodes.forEach((n, i) => idx.set(n.id, i));
 
+    const edgeInfo = buildMultiEdgeIndex(
+      sg.edges,
+      (e) => e.source,
+      (e) => e.target,
+    );
+
     for (let ei = 0; ei < sg.edges.length; ei++) {
       const e = sg.edges[ei];
       const ai = idx.get(Number(e.source));
@@ -424,18 +442,34 @@ export default function KnowledgeView({
       const hlHover = hover === ai || hover === bi;
       const hlSel = selNode === ai || selNode === bi || selEdge === ei;
       const hl = hlHover || hlSel;
-      ctx.beginPath();
-      ctx.moveTo(nodes[ai].x, nodes[ai].y);
-      ctx.lineTo(nodes[bi].x, nodes[bi].y);
+
+      const info = edgeInfo.get(ei)!;
+      const curveOff = computeCurveOffset(info.indexInGroup, info.count, 24);
+      const isCurved = curveOff !== 0;
+
+      const rA = nodeRadius(nodes[ai].degree);
+      const rB = nodeRadius(nodes[bi].degree);
+      const shortened = shortenEdge(nodes[ai].x, nodes[ai].y, nodes[bi].x, nodes[bi].y, rB + 4, rA);
+
+      const cp = getControlPoint(shortened.sx, shortened.sy, shortened.ex, shortened.ey, curveOff);
+
       ctx.strokeStyle = hl ? accent : border;
       ctx.lineWidth = hl ? 1.5 : 0.7;
       ctx.globalAlpha = hl ? 1 : 0.4;
-      ctx.stroke();
+      drawEdgeCurve(ctx, shortened.sx, shortened.sy, shortened.ex, shortened.ey, cp.cx, cp.cy, isCurved);
+
+      ctx.fillStyle = hl ? accent : border;
+      const arrowAngle = isCurved
+        ? getArrowAngle(cp.cx, cp.cy, shortened.ex, shortened.ey)
+        : getArrowAngle(shortened.sx, shortened.sy, shortened.ex, shortened.ey);
+      drawArrowhead(ctx, shortened.ex, shortened.ey, arrowAngle, hl ? 7 : 5);
+
       ctx.globalAlpha = 1;
 
       if (hl && settledRef.current && e.relation) {
-        const mx = (nodes[ai].x + nodes[bi].x) / 2;
-        const my = (nodes[ai].y + nodes[bi].y) / 2;
+        const { mx, my } = isCurved
+          ? getCurveMidpoint(shortened.sx, shortened.sy, cp.cx, cp.cy, shortened.ex, shortened.ey)
+          : { mx: (shortened.sx + shortened.ex) / 2, my: (shortened.sy + shortened.ey) / 2 };
         const label = e.relation.replace(/_/g, " ");
         ctx.font = "8px system-ui, sans-serif";
         ctx.textAlign = "center";
@@ -491,7 +525,7 @@ export default function KnowledgeView({
         const isNeighbor = neighborSet.has(i);
         if (n.degree < 3 && !isHover && !isSel && !isNeighbor) continue;
         const r = nodeRadius(n.degree);
-        const label = n.name.length > 22 ? n.name.slice(0, 21) + "\u2026" : n.name;
+        const label = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
         const metrics = ctx.measureText(label);
         ctx.fillStyle = bgPanel;
         ctx.globalAlpha = 0.85;
@@ -687,7 +721,7 @@ export default function KnowledgeView({
           <input
             className="kv-search-input"
             type="text"
-            placeholder="Search your knowledge\u2026"
+            placeholder="Search your knowledge…"
             value={queryText}
             onChange={(e) => onSearchChange(e.target.value)}
           />
@@ -695,7 +729,7 @@ export default function KnowledgeView({
             <button className="kv-search-clear" onClick={clearSearch}>&times;</button>
           )}
         </div>
-        {loading && <span className="kv-search-loading">Searching\u2026</span>}
+        {loading && <span className="kv-search-loading">Searching…</span>}
       </div>
 
       <div className="kv-filters">
@@ -808,7 +842,7 @@ export default function KnowledgeView({
                   <input
                     className="kv-entity-filter"
                     type="text"
-                    placeholder="Filter\u2026"
+                    placeholder="Filter…"
                     value={entityFilter}
                     onChange={(e) => setEntityFilter(e.target.value)}
                   />
@@ -938,7 +972,26 @@ export default function KnowledgeView({
           />
           {!hasSubgraph && (
             <div className="kv-graph-empty">
-              <p>Search or click an entity to explore its knowledge graph</p>
+              {sourceFilter === "file" && sourcePath && subgraphData !== null && !loading ? (
+                <>
+                  <p>No entities found for this file.</p>
+                  {onStartGraphIndex && (
+                    <button className="kv-index-file-btn" onClick={() => onStartGraphIndex(sourcePath)}>
+                      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 14v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
+                        <polyline points="7,8 10,4 13,8" />
+                        <line x1="10" y1="4" x2="10" y2="14" />
+                      </svg>
+                      Index this file
+                    </button>
+                  )}
+                  <span className="kv-graph-empty-hint">Extracts entities and relationships using the LLM</span>
+                </>
+              ) : loading ? (
+                <p>Loading…</p>
+              ) : (
+                <p>Search or click an entity to explore its knowledge graph</p>
+              )}
             </div>
           )}
         </div>

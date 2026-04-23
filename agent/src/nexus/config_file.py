@@ -42,8 +42,9 @@ class ProviderConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    default_model: str = "openai/gpt-4o-mini"
-    routing_mode: str = "fixed"  # "fixed" | "auto" | "planner"
+    default_model: str = ""
+    last_used_model: str = ""
+    classification_model: str = ""
     max_iterations: int = 16
 
 
@@ -78,6 +79,8 @@ class GraphRAGOntologyConfig(BaseModel):
 
 class GraphRAGConfig(BaseModel):
     enabled: bool = False
+    embedding_model_id: str = ""
+    extraction_model_id: str = ""
     embeddings: GraphRAGEmbeddingConfig = Field(default_factory=GraphRAGEmbeddingConfig)
     extraction: GraphRAGExtractionConfig = Field(default_factory=GraphRAGExtractionConfig)
     ontology: GraphRAGOntologyConfig = Field(default_factory=GraphRAGOntologyConfig)
@@ -101,12 +104,21 @@ class SearchConfig(BaseModel):
     )
 
 
+class ScrapeConfig(BaseModel):
+    enabled: bool = True
+    mode: str = "auto"
+    headless: bool = True
+    timeout: int = 30
+    max_content_bytes: int = 102400
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     models: list[ModelEntry] = Field(default_factory=list)
     graphrag: GraphRAGConfig = Field(default_factory=GraphRAGConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
 
 
 # Fresh install starts with providers configured but NO models.
@@ -114,7 +126,8 @@ class NexusConfig(BaseModel):
 _DEFAULT_CONFIG = NexusConfig(
     agent=AgentConfig(
         default_model="",
-        routing_mode="fixed",
+        last_used_model="",
+        classification_model="",
         max_iterations=16,
     ),
     providers={
@@ -156,6 +169,8 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         "models": [],
         "graphrag": {
             "enabled": cfg.graphrag.enabled,
+            "embedding_model_id": cfg.graphrag.embedding_model_id,
+            "extraction_model_id": cfg.graphrag.extraction_model_id,
             "max_hops": cfg.graphrag.max_hops,
             "context_budget": cfg.graphrag.context_budget,
             "top_k": cfg.graphrag.top_k,
@@ -191,6 +206,13 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 }
                 for p in cfg.search.providers
             ],
+        },
+        "scrape": {
+            "enabled": cfg.scrape.enabled,
+            "mode": cfg.scrape.mode,
+            "headless": cfg.scrape.headless,
+            "timeout": cfg.scrape.timeout,
+            "max_content_bytes": cfg.scrape.max_content_bytes,
         },
     }
     for m in cfg.models:
@@ -238,9 +260,10 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         models.append(ModelEntry(**mdata, strengths=strengths))
     graphrag = GraphRAGConfig(**raw.get("graphrag", {}))
     search = SearchConfig(**raw.get("search", {}))
+    scrape = ScrapeConfig(**raw.get("scrape", {}))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
-        graphrag=graphrag, search=search,
+        graphrag=graphrag, search=search, scrape=scrape,
     )
 
 

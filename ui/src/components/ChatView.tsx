@@ -12,6 +12,8 @@ export interface Message {
   streaming?: boolean;
   kind?: "limit";
   limitIterations?: number;
+  attachments?: { name: string; vaultPath: string }[];
+  model?: string;
 }
 
 /**
@@ -31,6 +33,12 @@ interface Props {
   hasModel: boolean | null;
   onOpenSettings: () => void;
   onOpenInVault?: (path: string) => void;
+  attachments?: { name: string; vaultPath: string }[];
+  onAttachmentsChange?: (files: { name: string; vaultPath: string }[]) => void;
+  onRollback?: (msgIndex: number) => void;
+  models?: string[];
+  selectedModel?: string;
+  onModelChange?: (model: string) => void;
 }
 
 function fmt(d: Date) {
@@ -49,6 +57,12 @@ export default function ChatView({
   hasModel,
   onOpenSettings,
   onOpenInVault,
+  attachments,
+  onAttachmentsChange,
+  onRollback,
+  models,
+  selectedModel,
+  onModelChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -116,6 +130,7 @@ export default function ChatView({
                 timestamp={msg.timestamp}
                 streaming={msg.streaming}
                 onOpenInVault={onOpenInVault}
+                model={msg.model}
               />
             )
           ) : (
@@ -123,6 +138,19 @@ export default function ChatView({
               <div className="user-msg-meta">
                 <span className="user-msg-label">You</span>
                 <span className="user-msg-time">{fmt(msg.timestamp)}</span>
+                {!thinking && idx < visible.length - 1 && onRollback && (
+                  <button
+                    className="user-msg-rollback"
+                    onClick={() => onRollback(idx)}
+                    type="button"
+                    title="Delete from here and retry"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="1,4 1,10 7,10" />
+                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                    </svg>
+                  </button>
+                )}
               </div>
               <div className="user-msg-bubble">{msg.content}</div>
             </div>
@@ -154,6 +182,11 @@ export default function ChatView({
               disabled={thinking}
               busy={thinking}
               onStop={onStop}
+              attachments={attachments}
+              onAttachmentsChange={onAttachmentsChange}
+              models={models}
+              selectedModel={selectedModel}
+              onModelChange={onModelChange}
             />
           </div>
         </div>

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAgentGraph, type AgentGraphData, type AgentGraphNode } from "../api";
+import {
+  buildMultiEdgeIndex,
+  computeCurveOffset,
+  getControlPoint,
+  getCurveMidpoint,
+  getArrowAngle,
+  drawArrowhead,
+  shortenEdge,
+  drawEdgeCurve,
+} from "./graphEdgeUtils";
 import "./AgentGraphView.css";
 
 interface Props {
@@ -198,18 +208,56 @@ export default function AgentGraphView({ onOpenSkill, onSelectSession }: Props) 
     nodes.forEach((n, i) => idx.set(n.id, i));
 
     // edges
-    for (const e of g.edges) {
+    const edgeInfo = buildMultiEdgeIndex(
+      g.edges,
+      (e) => e.source,
+      (e) => e.target,
+    );
+
+    for (let ei = 0; ei < g.edges.length; ei++) {
+      const e = g.edges[ei];
       const ai = idx.get(e.source); const bi = idx.get(e.target);
       if (ai === undefined || bi === undefined) continue;
       const highlighted = hover === ai || hover === bi;
-      ctx.beginPath();
-      ctx.moveTo(nodes[ai].x, nodes[ai].y);
-      ctx.lineTo(nodes[bi].x, nodes[bi].y);
+
+      const info = edgeInfo.get(ei)!;
+      const curveOff = computeCurveOffset(info.indexInGroup, info.count, 18);
+      const isCurved = curveOff !== 0;
+
+      const rA = nodeRadius(nodes[ai].type);
+      const rB = nodeRadius(nodes[bi].type);
+      const shortened = shortenEdge(nodes[ai].x, nodes[ai].y, nodes[bi].x, nodes[bi].y, rB + 3, rA);
+
+      const cp = getControlPoint(shortened.sx, shortened.sy, shortened.ex, shortened.ey, curveOff);
+
       ctx.strokeStyle = highlighted ? accent : border;
       ctx.lineWidth = highlighted ? 1.5 : 0.8;
       ctx.globalAlpha = highlighted ? 1 : 0.5;
-      ctx.stroke();
+      drawEdgeCurve(ctx, shortened.sx, shortened.sy, shortened.ex, shortened.ey, cp.cx, cp.cy, isCurved);
+
+      ctx.fillStyle = highlighted ? accent : border;
+      const arrowAngle = isCurved
+        ? getArrowAngle(cp.cx, cp.cy, shortened.ex, shortened.ey)
+        : getArrowAngle(shortened.sx, shortened.sy, shortened.ex, shortened.ey);
+      drawArrowhead(ctx, shortened.ex, shortened.ey, arrowAngle, highlighted ? 6 : 4);
+
       ctx.globalAlpha = 1;
+
+      if (highlighted && settledRef.current && e.label) {
+        const { mx, my } = isCurved
+          ? getCurveMidpoint(shortened.sx, shortened.sy, cp.cx, cp.cy, shortened.ex, shortened.ey)
+          : { mx: (shortened.sx + shortened.ex) / 2, my: (shortened.sy + shortened.ey) / 2 };
+        ctx.font = "8px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        const m = ctx.measureText(e.label);
+        ctx.fillStyle = bgPanel;
+        ctx.globalAlpha = 0.8;
+        ctx.fillRect(mx - m.width / 2 - 2, my - 12, m.width + 4, 12);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = fgDim;
+        ctx.fillText(e.label, mx, my - 2);
+      }
     }
 
     // nodes

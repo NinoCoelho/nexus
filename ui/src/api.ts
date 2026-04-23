@@ -91,6 +91,15 @@ export async function patchSession(id: string, patch: { title?: string }): Promi
   return res.json();
 }
 
+export async function truncateSession(sessionId: string, beforeSeq: number): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/truncate`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ before_seq: beforeSeq }),
+  });
+  if (!res.ok) throw new Error(`Truncate error: ${res.status}`);
+}
+
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
 export interface VaultNode {
@@ -114,6 +123,22 @@ export interface VaultFile {
 export async function getVaultTree(): Promise<VaultNode[]> {
   const res = await fetch(`${BASE}/vault/tree`);
   if (!res.ok) throw new Error(`Vault tree error: ${res.status}`);
+  return res.json();
+}
+
+export interface VaultUploadResult {
+  uploaded: { path: string; size: number }[];
+}
+
+export async function uploadVaultFiles(
+  files: File[],
+  destDir?: string,
+): Promise<VaultUploadResult> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  if (destDir) form.append("path", destDir);
+  const res = await fetch(`${BASE}/vault/upload`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`Vault upload error: ${res.status}`);
   return res.json();
 }
 
@@ -371,7 +396,7 @@ export interface SkillDetail {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "tool"; name: string; args?: unknown; result_preview?: string }
-  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[] }
+  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
   | { type: "error"; detail: string };
 
@@ -380,11 +405,12 @@ export async function chatStream(
   session_id: string | undefined,
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
+  model?: string,
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, session_id }),
+    body: JSON.stringify({ message, session_id, model }),
     signal,
   });
 
@@ -436,12 +462,14 @@ export async function chatStream(
             result_preview: parsed.result_preview as string | undefined,
           });
         } else if (eventName === "done") {
+          const usage = parsed.usage as Record<string, unknown> | undefined;
           onEvent({
             type: "done",
             session_id: parsed.session_id as string,
             reply: parsed.reply as string,
             trace: (parsed.trace ?? []) as TraceEvent[],
             skills_touched: (parsed.skills_touched ?? []) as string[],
+            model: (usage?.model ?? parsed.model) as string | undefined,
           });
         } else if (eventName === "limit_reached") {
           onEvent({ type: "limit_reached", iterations: (parsed.iterations as number) ?? 0 });
@@ -560,9 +588,12 @@ export interface Config {
 }
 
 export interface RoutingConfig {
-  mode: "fixed" | "auto";
   default_model: string;
+  last_used_model: string;
+  classification_model: string;
   available_models: string[];
+  embedding_model_id: string;
+  extraction_model_id: string;
 }
 
 // ── Settings API calls ────────────────────────────────────────────────────────
@@ -640,13 +671,29 @@ export async function getRouting(): Promise<RoutingConfig> {
   return res.json();
 }
 
-export async function putRouting(patch: { mode?: "fixed" | "auto"; default_model?: string }): Promise<RoutingConfig> {
+export async function putRouting(patch: {
+  default_model?: string;
+  last_used_model?: string;
+  classification_model?: string;
+  embedding_model_id?: string;
+  extraction_model_id?: string;
+}): Promise<RoutingConfig> {
   const res = await fetch(`${BASE}/routing`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Routing update error: ${res.status}`);
+  return res.json();
+}
+
+export async function setModelRole(role: string, model_id: string): Promise<{ role: string; model_id: string }> {
+  const res = await fetch(`${BASE}/models/roles`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role, model_id }),
+  });
+  if (!res.ok) throw new Error(`Model role error: ${res.status}`);
   return res.json();
 }
 
@@ -875,6 +922,38 @@ export async function getKnowledgeFolderSubgraph(folder: string): Promise<Subgra
   if (!res.ok) throw new Error(`Folder subgraph error: ${res.status}`);
   const data = await res.json();
   return { enabled: true, nodes: data.nodes ?? [], edges: data.edges ?? [] };
+}
+
+export interface GraphragIndexFileResult {
+  queued?: boolean;
+  enabled?: boolean;
+  reason?: string;
+  path?: string;
+}
+
+export async function graphragIndexFile(path: string): Promise<GraphragIndexFileResult> {
+  const res = await fetch(`${BASE}/graph/knowledge/index-file`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error(`Index file error: ${res.status}`);
+  return res.json();
+}
+
+export interface GraphragIndexStatus {
+  status: "unknown" | "indexing" | "done" | "error";
+  node_count?: number;
+  edge_count?: number;
+  detail?: string;
+  nodes?: { id: number; name: string; type: string; degree?: number }[];
+  edges?: { source: number; target: number; relation: string; strength: number }[];
+}
+
+export async function getGraphragIndexStatus(path: string): Promise<GraphragIndexStatus> {
+  const res = await fetch(`${BASE}/graph/knowledge/index-file-status?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`Index status error: ${res.status}`);
+  return res.json();
 }
 
 export interface KnowledgeStats {

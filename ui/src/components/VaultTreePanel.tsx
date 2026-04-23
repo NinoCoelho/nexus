@@ -9,9 +9,11 @@ import {
   getVaultTags,
   getVaultTree,
   postVaultFolder,
+  postVaultMove,
   putVaultFile,
   reindexVault,
   searchVault,
+  uploadVaultFiles,
   type VaultNode,
   type VaultSearchResult,
   type VaultTagCount,
@@ -84,29 +86,80 @@ interface TreeItemProps {
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
+  onMove: (from: string, toDir: string) => void;
+  expandedDirs: Set<string>;
+  onToggleDir: (path: string) => void;
 }
 
-function TreeItem({ node, depth, selectedPath, onSelect, onContextMenu }: TreeItemProps) {
-  const [open, setOpen] = useState(true);
+function TreeItem({
+  node,
+  depth,
+  selectedPath,
+  onSelect,
+  onContextMenu,
+  onMove,
+  expandedDirs,
+  onToggleDir,
+}: TreeItemProps) {
+  const [dropOver, setDropOver] = useState(false);
   const isActive = node.path === selectedPath;
+  const isOpen = expandedDirs.has(node.path);
+
+  const handleClick = () => {
+    if (node.type === "dir") {
+      if (isActive) {
+        onToggleDir(node.path);
+      } else {
+        onSelect(node.path);
+      }
+    } else {
+      onSelect(node.path);
+    }
+  };
+
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.setData("text/plain", node.path);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (node.type === "dir") {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropOver(true);
+    }
+  };
+
+  const handleDragLeave = () => setDropOver(false);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDropOver(false);
+    const src = e.dataTransfer.getData("text/plain");
+    if (src && src !== node.path && node.type === "dir") {
+      onMove(src, node.path);
+    }
+  };
 
   return (
     <div>
       <button
-        className={`vault-tree-row${isActive ? " vault-tree-row--active" : ""}`}
+        className={`vault-tree-row${isActive ? " vault-tree-row--active" : ""}${dropOver ? " vault-tree-row--drop" : ""}`}
         style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={() => {
-          if (node.type === "dir") setOpen((o) => !o);
-          else onSelect(node.path);
-        }}
+        onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, node)}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         <span className="vault-tree-icon">
-          {node.type === "dir" ? <FolderIcon open={open} /> : <FileIcon />}
+          {node.type === "dir" ? <FolderIcon open={isOpen} /> : <FileIcon />}
         </span>
         <span className="vault-tree-name">{node.name}</span>
       </button>
-      {node.type === "dir" && open && node.children?.map((child) => (
+      {node.type === "dir" && isOpen && node.children?.map((child) => (
         <TreeItem
           key={child.path}
           node={child}
@@ -114,6 +167,9 @@ function TreeItem({ node, depth, selectedPath, onSelect, onContextMenu }: TreeIt
           selectedPath={selectedPath}
           onSelect={onSelect}
           onContextMenu={onContextMenu}
+          onMove={onMove}
+          expandedDirs={expandedDirs}
+          onToggleDir={onToggleDir}
         />
       ))}
     </div>
@@ -175,6 +231,9 @@ export default function VaultTreePanel({
   const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
   const [treeError, setTreeError] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadCtxDirRef = useRef<HTMLInputElement | null>(null);
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set());
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -244,6 +303,61 @@ export default function VaultTreePanel({
     }
   };
   void setReindexMsg; // reserved for any legacy inline UI
+
+  const handleToggleDir = useCallback((path: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const handleMove = useCallback(async (fromPath: string, toDir: string) => {
+    const name = fromPath.split("/").pop() ?? fromPath;
+    const toPath = `${toDir}/${name}`;
+    if (fromPath === toPath) return;
+    try {
+      await postVaultMove(fromPath, toPath);
+      refreshTree();
+      if (selectedPath === fromPath) onSelectPath(toPath);
+      onTreeChange?.();
+    } catch (e) {
+      toast.error("Move failed", { detail: e instanceof Error ? e.message : undefined });
+    }
+  }, [selectedPath, onSelectPath, refreshTree, onTreeChange, toast]);
+
+  const handleRename = useCallback((node: TreeNode) => {
+    setCtxMenu(null);
+    setModal({
+      kind: "prompt",
+      title: "Rename",
+      defaultValue: node.name,
+      confirmLabel: "Rename",
+      onCancel: () => setModal(null),
+      onSubmit: async (newName) => {
+        setModal(null);
+        const parentParts = node.path.split("/");
+        parentParts[parentParts.length - 1] = newName;
+        const toPath = parentParts.join("/");
+        if (toPath === node.path) return;
+        try {
+          await postVaultMove(node.path, toPath);
+          refreshTree();
+          if (selectedPath === node.path) onSelectPath(toPath);
+          onTreeChange?.();
+        } catch (e) {
+          toast.error("Rename failed", { detail: e instanceof Error ? e.message : undefined });
+        }
+      },
+    });
+  }, [selectedPath, onSelectPath, refreshTree, onTreeChange, toast]);
+
+  const handleCtxUpload = useCallback((dirPath: string) => {
+    setCtxMenu(null);
+    uploadCtxDirRef.current?.setAttribute("data-dest-dir", dirPath);
+    uploadCtxDirRef.current?.click();
+  }, []);
 
   // Close context menu
   useEffect(() => {
@@ -460,15 +574,68 @@ export default function VaultTreePanel({
 
   const tree = buildTree(rawNodes);
 
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>, overrideDir?: string) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    try {
+      const destDir = overrideDir ?? (selectedPath
+        ? rawNodes.find((n) => n.path === selectedPath && n.type === "dir")
+          ? selectedPath
+          : selectedPath.includes("/")
+            ? selectedPath.substring(0, selectedPath.lastIndexOf("/"))
+            : undefined
+        : undefined);
+      const result = await uploadVaultFiles(Array.from(fileList), destDir);
+      toast.success(`Uploaded ${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"}`);
+      refreshTree();
+      if (result.uploaded.length === 1) onSelectPath(result.uploaded[0].path);
+    } catch (err) {
+      toast.error("Upload failed", { detail: err instanceof Error ? err.message : undefined });
+    }
+    e.target.value = "";
+  };
+
   return (
     <div className="vault-tree vault-tree--sidebar">
       <div className="vault-tree-header">
         <span className="vault-tree-title">Files</span>
-        <button className="vault-tree-add-btn" onClick={() => void handleNewFile()} title="New file">
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="10" y1="4" x2="10" y2="16" /><line x1="4" y1="10" x2="16" y2="10" />
-          </svg>
-        </button>
+        <div className="vault-tree-header-actions">
+          <button className="vault-tree-add-btn" onClick={() => uploadInputRef.current?.click()} title="Upload files">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 14v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
+              <polyline points="7,8 10,4 13,8" />
+              <line x1="10" y1="4" x2="10" y2="14" />
+            </svg>
+          </button>
+          <button className="vault-tree-add-btn" onClick={() => void handleNewFolder()} title="New folder">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z" />
+              <line x1="10" y1="9" x2="10" y2="14" /><line x1="7.5" y1="11.5" x2="12.5" y2="11.5" />
+            </svg>
+          </button>
+          <button className="vault-tree-add-btn" onClick={() => void handleNewFile()} title="New file">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="10" y1="4" x2="10" y2="16" /><line x1="4" y1="10" x2="16" y2="10" />
+            </svg>
+          </button>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => void handleUpload(e)}
+          />
+          <input
+            ref={uploadCtxDirRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const dir = uploadCtxDirRef.current?.getAttribute("data-dest-dir") ?? undefined;
+              void handleUpload(e, dir);
+            }}
+          />
+        </div>
       </div>
 
       {/* Search bar */}
@@ -579,6 +746,9 @@ export default function VaultTreePanel({
               selectedPath={selectedPath}
               onSelect={onSelectPath}
               onContextMenu={handleCtx}
+              onMove={handleMove}
+              expandedDirs={expandedDirs}
+              onToggleDir={handleToggleDir}
             />
           ))}
         </div>
@@ -591,8 +761,10 @@ export default function VaultTreePanel({
           style={{ left: ctxMenu.x, top: ctxMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
+          <button className="vault-ctx-item" onClick={() => handleRename(ctxMenu.node)}>Rename</button>
           {ctxMenu.node.type === "dir" && (
             <>
+              <button className="vault-ctx-item" onClick={() => void handleCtxUpload(ctxMenu.node.path)}>Upload files here</button>
               <button className="vault-ctx-item" onClick={() => void handleNewFile(ctxMenu.node.path)}>New file</button>
               <button className="vault-ctx-item" onClick={() => void handleNewFolder(ctxMenu.node.path)}>New folder</button>
               <button className="vault-ctx-item" onClick={() => void handleNewKanban(ctxMenu.node.path)}>New kanban</button>

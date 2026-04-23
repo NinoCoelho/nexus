@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getVaultGraph, getVaultEntitySources, type GraphData, type GraphNode, type EntityNode } from "../api";
 import VaultFilePreview from "./VaultFilePreview";
+import {
+  buildMultiEdgeIndex,
+  computeCurveOffset,
+  getControlPoint,
+  getCurveMidpoint,
+  getArrowAngle,
+  drawArrowhead,
+  shortenEdge,
+  drawEdgeCurve,
+} from "./graphEdgeUtils";
 import "./GraphView.css";
 
 const PALETTE = [
@@ -283,7 +293,14 @@ export default function GraphView({ onViewEntityGraph }: { onViewEntityGraph?: (
     const idx = new Map<string, number>();
     nodes.forEach((n, i) => idx.set(n.id, i));
 
-    for (const e of g.edges) {
+    const edgeInfo = buildMultiEdgeIndex(
+      g.edges,
+      (e) => e.from,
+      (e) => e.to,
+    );
+
+    for (let ei = 0; ei < g.edges.length; ei++) {
+      const e = g.edges[ei];
       const ai = idx.get(e.from);
       const bi = idx.get(e.to);
       if (ai === undefined || bi === undefined) continue;
@@ -291,16 +308,48 @@ export default function GraphView({ onViewEntityGraph }: { onViewEntityGraph?: (
       const edgeType = e.type ?? "link";
       const eStyle = EDGE_STYLES[edgeType] ?? EDGE_STYLES.link;
 
-      ctx.beginPath();
+      const info = edgeInfo.get(ei)!;
+      const curveOff = computeCurveOffset(info.indexInGroup, info.count, 20);
+      const isCurved = curveOff !== 0;
+
+      const rA = nodes[ai].nodeType === "entity" ? 6 : nodeRadius((nodes[ai].data?.size ?? 0));
+      const rB = nodes[bi].nodeType === "entity" ? 6 : nodeRadius((nodes[bi].data?.size ?? 0));
+      const shortened = shortenEdge(nodes[ai].x, nodes[ai].y, nodes[bi].x, nodes[bi].y, rB + 3, rA);
+
+      const cp = getControlPoint(shortened.sx, shortened.sy, shortened.ex, shortened.ey, curveOff);
+
       ctx.setLineDash(eStyle.dash);
-      ctx.moveTo(nodes[ai].x, nodes[ai].y);
-      ctx.lineTo(nodes[bi].x, nodes[bi].y);
       ctx.strokeStyle = highlighted ? accent : (eStyle.color || borderColor);
       ctx.lineWidth = highlighted ? 1.5 : 0.8;
       ctx.globalAlpha = highlighted ? 1 : eStyle.alpha;
-      ctx.stroke();
+      drawEdgeCurve(ctx, shortened.sx, shortened.sy, shortened.ex, shortened.ey, cp.cx, cp.cy, isCurved);
+
+      ctx.fillStyle = highlighted ? accent : (eStyle.color || borderColor);
+      const arrowAngle = isCurved
+        ? getArrowAngle(cp.cx, cp.cy, shortened.ex, shortened.ey)
+        : getArrowAngle(shortened.sx, shortened.sy, shortened.ex, shortened.ey);
+      drawArrowhead(ctx, shortened.ex, shortened.ey, arrowAngle, highlighted ? 6 : 4);
+
       ctx.globalAlpha = 1;
       ctx.setLineDash([]);
+
+      if (highlighted && settledRef.current && edgeType !== "link") {
+        const { mx, my } = isCurved
+          ? getCurveMidpoint(shortened.sx, shortened.sy, cp.cx, cp.cy, shortened.ex, shortened.ey)
+          : { mx: (shortened.sx + shortened.ex) / 2, my: (shortened.sy + shortened.ey) / 2 };
+        const label = edgeType.replace(/-/g, " ");
+        ctx.font = "8px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        const m = ctx.measureText(label);
+        const bgPanel = style.getPropertyValue("--bg-panel").trim() || "#1d2025";
+        ctx.fillStyle = bgPanel;
+        ctx.globalAlpha = 0.8;
+        ctx.fillRect(mx - m.width / 2 - 2, my - 12, m.width + 4, 12);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = fgDim;
+        ctx.fillText(label, mx, my - 2);
+      }
     }
 
     for (let i = 0; i < nodes.length; i++) {

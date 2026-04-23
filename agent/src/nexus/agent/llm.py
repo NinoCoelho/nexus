@@ -169,8 +169,11 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
     ) -> ChatResponse:
+        resolved_model = model or self._model
+        if not resolved_model:
+            raise LLMError("No model specified: pass model= or set a default at construction")
         payload: dict[str, Any] = {
-            "model": model or self._model,
+            "model": resolved_model,
             "messages": [_encode_msg(m) for m in messages],
             "temperature": 0.0,
         }
@@ -217,8 +220,11 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        resolved_model = model or self._model
+        if not resolved_model:
+            raise LLMError("No model specified: pass model= or set a default at construction")
         payload: dict[str, Any] = {
-            "model": model or self._model,
+            "model": resolved_model,
             "messages": [_encode_msg(m) for m in messages],
             "temperature": 0.0,
             "stream": True,
@@ -349,6 +355,9 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
     ) -> ChatResponse:
+        resolved_model = model or self._model
+        if not resolved_model:
+            raise LLMError("No model specified: pass model= or set a default at construction")
         system = ""
         filtered: list[dict[str, Any]] = []
         for m in messages:
@@ -358,7 +367,7 @@ class AnthropicProvider(LLMProvider):
                 filtered.append(_encode_msg_anthropic(m))
 
         kwargs: dict[str, Any] = {
-            "model": model or self._model,
+            "model": resolved_model,
             "max_tokens": 4096,
             "messages": filtered,
         }
@@ -377,6 +386,9 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        resolved_model = model or self._model
+        if not resolved_model:
+            raise LLMError("No model specified: pass model= or set a default at construction")
         system = ""
         filtered: list[dict[str, Any]] = []
         for m in messages:
@@ -386,7 +398,7 @@ class AnthropicProvider(LLMProvider):
                 filtered.append(_encode_msg_anthropic(m))
 
         kwargs: dict[str, Any] = {
-            "model": model or self._model,
+            "model": resolved_model,
             "max_tokens": 4096,
             "messages": filtered,
         }

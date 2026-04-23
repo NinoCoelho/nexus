@@ -93,6 +93,28 @@
   box-shadow: var(--shadow);
 }
 
+.user-msg-rollback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease;
+}
+
+.user-msg-meta:hover .user-msg-rollback {
+  opacity: 1;
+}
+
+.user-msg-rollback:hover {
+  color: var(--danger, #c85050);
+}
+
 /* Thinking dots */
 .thinking {
   display: flex;

@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str
     context: str | None = None
+    model: str | None = None
 
 
 class ChatReply(BaseModel):
@@ -45,6 +46,15 @@ class RespondPayload(BaseModel):
 
     request_id: str = Field(min_length=1)
     answer: str
+
+
+class TruncateRequest(BaseModel):
+    before_seq: int
+
+
+class ModelRolePayload(BaseModel):
+    role: str  # "embedding" | "extraction" | "classification"
+    model_id: str
 
 
 class SettingsPayload(BaseModel):

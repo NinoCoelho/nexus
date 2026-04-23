@@ -59,6 +59,12 @@
   color: var(--fg-faint);
 }
 
+.vault-tree-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .vault-tree-add-btn {
   width: 24px;
   height: 24px;
@@ -114,6 +120,13 @@
   color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
 }
+.vault-tree-row--drop {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+.vault-tree-row[draggable="true"] { cursor: grab; }
+.vault-tree-row[draggable="true"]:active { cursor: grabbing; }
 
 .vault-tree-icon { display: flex; align-items: center; flex-shrink: 0; }
 .vault-tree-name { overflow: hidden; text-overflow: ellipsis; }
