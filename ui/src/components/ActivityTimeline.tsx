@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import type { TraceEvent } from "../api";
 import type { TimelineStep } from "./ChatView";
 import StepDetailModal from "./StepDetailModal";
 import "./ActivityTimeline.css";
@@ -23,6 +24,8 @@ function metaFor(tool: string): { label: string; icon: React.ReactElement } {
       return { label: "Kanban", icon: <IconKanban /> };
     case "http_call":
       return { label: "HTTP", icon: <IconGlobe /> };
+    case "terminal":
+      return { label: "Terminal", icon: <IconTerminal /> };
     case "skill_manage":
       return { label: "Authoring skill", icon: <IconPencil /> };
     case "skill_view":
@@ -44,6 +47,10 @@ function subtitleFor(tool: string, args: unknown): string {
   if (tool === "http_call") {
     const url = typeof a.url === "string" ? a.url : "";
     try { return new URL(url).hostname; } catch { return url.slice(0, 24); }
+  }
+  if (tool === "terminal") {
+    const cmd = typeof a.command === "string" ? a.command : "";
+    return cmd.length > 40 ? cmd.slice(0, 40) + "…" : cmd;
   }
   if (tool === "kanban_manage") return typeof a.action === "string" ? a.action : "";
   if (tool === "skill_view") return typeof a.name === "string" ? a.name : "";
@@ -97,6 +104,12 @@ const IconGlobe = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="8" cy="8" r="6" />
     <path d="M2 8h12M8 2a9 9 0 0 1 0 12M8 2a9 9 0 0 0 0 12" />
+  </svg>
+);
+const IconTerminal = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="2 4 6 8 2 12" />
+    <line x1="8" y1="12" x2="14" y2="12" />
   </svg>
 );
 const IconBook = () => (
@@ -167,10 +180,11 @@ function coalesce(steps: TimelineStep[]): CoalescedStep[] {
 
 interface Props {
   steps?: TimelineStep[];
+  trace?: TraceEvent[];
   streaming: boolean;
 }
 
-export default function ActivityTimeline({ steps, streaming }: Props) {
+export default function ActivityTimeline({ steps, trace, streaming }: Props) {
   const [activeGroup, setActiveGroup] = useState<CoalescedStep | null>(null);
 
   if (!steps || steps.length === 0) return null;
@@ -252,6 +266,7 @@ export default function ActivityTimeline({ steps, streaming }: Props) {
       {activeGroup && (
         <StepDetailModal
           group={activeGroup}
+          trace={trace}
           onClose={() => setActiveGroup(null)}
         />
       )}

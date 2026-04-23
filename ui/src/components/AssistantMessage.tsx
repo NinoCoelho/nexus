@@ -92,7 +92,7 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, timeline, timestamp, streaming, onOpenInVault, model }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
@@ -117,7 +117,7 @@ export default function AssistantMessage({ content, timeline, timestamp, streami
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
       <div className="asst-card">
-        <ActivityTimeline steps={timeline} streaming={!!streaming} />
+        <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} />
         <div className="asst-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

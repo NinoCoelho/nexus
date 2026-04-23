@@ -1,6 +1,27 @@
 import React, { useEffect, useRef } from "react";
+import type { TraceEvent } from "../api";
 import type { CoalescedStep } from "./ActivityTimeline";
 import "./StepDetailModal.css";
+
+interface TerminalResult {
+  ok: boolean;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  stdout_truncated?: boolean;
+  stderr_truncated?: boolean;
+  duration_ms?: number;
+  timed_out?: boolean;
+  denied?: boolean;
+  error?: string | null;
+}
+
+interface HttpResult {
+  status: number | null;
+  ok: boolean;
+  body: string;
+  error?: string | null;
+}
 
 function metaLabel(tool: string): string {
   const map: Record<string, string> = {
@@ -12,6 +33,7 @@ function metaLabel(tool: string): string {
     vault_backlinks: "Backlinks",
     kanban_manage: "Kanban",
     http_call: "HTTP Request",
+    terminal: "Terminal",
     skill_manage: "Authoring skill",
     skill_view: "Reading skill",
     skills_list: "Listing skills",
@@ -47,6 +69,13 @@ function ToolIcon({ tool }: { tool: string }) {
         <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="8" cy="8" r="6" />
           <path d="M2 8h12M8 2a9 9 0 0 1 0 12M8 2a9 9 0 0 0 0 12" />
+        </svg>
+      );
+    case "terminal":
+      return (
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="2 3.5 6 7.5 2 11.5" />
+          <line x1="8" y1="11.5" x2="14" y2="11.5" />
         </svg>
       );
     case "kanban_manage":
@@ -113,10 +142,36 @@ function humanizeArgs(args: unknown): string[] {
   return entries;
 }
 
-function resultPreview(val: unknown): string | null {
+function tryParseJson(val: unknown): unknown {
   if (val == null) return null;
-  const s = typeof val === "string" ? val : JSON.stringify(val);
-  return s.length > 400 ? s.slice(0, 400) + "..." : s;
+  if (typeof val === "object") return val;
+  if (typeof val !== "string") return null;
+  try {
+    return JSON.parse(val);
+  } catch {
+    return null;
+  }
+}
+
+function isTerminalResult(obj: unknown): obj is TerminalResult {
+  if (!obj || typeof obj !== "object") return false;
+  const o = obj as Record<string, unknown>;
+  return typeof o.ok === "boolean" && "exit_code" in o && "stdout" in o && "stderr" in o;
+}
+
+function isHttpResult(obj: unknown): obj is HttpResult {
+  if (!obj || typeof obj !== "object") return false;
+  const o = obj as Record<string, unknown>;
+  return typeof o.ok === "boolean" && "status" in o && "body" in o;
+}
+
+function resolveResult(stepResult: unknown, tool: string, trace?: TraceEvent[], stepIdx?: number): unknown {
+  if (trace && stepIdx !== undefined) {
+    const toolTraces = trace.filter((t) => t.tool === tool);
+    const match = toolTraces[stepIdx];
+    if (match?.result != null) return match.result;
+  }
+  return stepResult;
 }
 
 function statusDot(status?: string) {
@@ -131,12 +186,107 @@ function statusText(status?: string): string {
   return "Done";
 }
 
+function TerminalOutput({ data }: { data: TerminalResult }) {
+  return (
+    <div className="sdm-result-terminal">
+      <div className="sdm-term-meta">
+        {data.exit_code != null && (
+          <span className={`sdm-term-exit${data.ok ? " sdm-term-exit--ok" : " sdm-term-exit--fail"}`}>
+            exit {data.exit_code}
+          </span>
+        )}
+        {data.duration_ms != null && data.duration_ms > 0 && (
+          <span className="sdm-term-duration">{data.duration_ms >= 1000 ? `${(data.duration_ms / 1000).toFixed(1)}s` : `${data.duration_ms}ms`}</span>
+        )}
+        {data.timed_out && <span className="sdm-term-badge sdm-term-badge--warn">timed out</span>}
+        {data.denied && <span className="sdm-term-badge sdm-term-badge--warn">denied</span>}
+      </div>
+      {data.error && !data.denied && (
+        <div className="sdm-term-error">{data.error}</div>
+      )}
+      {data.stdout && (
+        <div className="sdm-term-section">
+          <span className="sdm-term-label">stdout</span>
+          <pre className="sdm-term-output">{data.stdout}</pre>
+          {data.stdout_truncated && <span className="sdm-term-truncated">output truncated</span>}
+        </div>
+      )}
+      {data.stderr && (
+        <div className="sdm-term-section">
+          <span className="sdm-term-label sdm-term-label--err">stderr</span>
+          <pre className="sdm-term-output sdm-term-output--err">{data.stderr}</pre>
+          {data.stderr_truncated && <span className="sdm-term-truncated">output truncated</span>}
+        </div>
+      )}
+      {!data.stdout && !data.stderr && !data.error && (
+        <div className="sdm-term-empty">(no output)</div>
+      )}
+    </div>
+  );
+}
+
+function HttpOutput({ data }: { data: HttpResult }) {
+  return (
+    <div className="sdm-result-http">
+      <div className="sdm-http-meta">
+        {data.status != null && (
+          <span className={`sdm-http-status${data.ok ? " sdm-http-status--ok" : " sdm-http-status--fail"}`}>
+            {data.status}
+          </span>
+        )}
+      </div>
+      {data.error && <div className="sdm-term-error">{data.error}</div>}
+      {data.body && (
+        <pre className="sdm-term-output">{data.body.length > 2000 ? data.body.slice(0, 2000) + "\n…" : data.body}</pre>
+      )}
+    </div>
+  );
+}
+
+function GenericResult({ raw }: { raw: string }) {
+  const parsed = tryParseJson(raw);
+  if (parsed && typeof parsed === "object") {
+    return (
+      <pre className="sdm-result-json">{JSON.stringify(parsed, null, 2)}</pre>
+    );
+  }
+  return (
+    <div className="sdm-log-result">
+      <span className="sdm-log-arrow">→</span>
+      {raw.length > 600 ? raw.slice(0, 600) + "…" : raw}
+    </div>
+  );
+}
+
+function FormattedResult({ tool, result, trace, stepIdx }: { tool?: string; result: unknown; trace?: TraceEvent[]; stepIdx?: number }) {
+  const resolved = resolveResult(result, tool ?? "", trace, stepIdx);
+  const parsed = tryParseJson(resolved);
+
+  if (parsed && tool === "terminal" && isTerminalResult(parsed)) {
+    return <TerminalOutput data={parsed} />;
+  }
+  if (parsed && tool === "http_call" && isHttpResult(parsed)) {
+    return <HttpOutput data={parsed} />;
+  }
+
+  const asStr = typeof resolved === "string" ? resolved : resolved != null ? JSON.stringify(resolved) : null;
+  if (!asStr) return null;
+
+  if (parsed && typeof parsed === "object") {
+    if (isTerminalResult(parsed)) return <TerminalOutput data={parsed} />;
+    if (isHttpResult(parsed)) return <HttpOutput data={parsed} />;
+  }
+
+  return <GenericResult raw={asStr} />;
+}
+
 interface Props {
   group: CoalescedStep;
+  trace?: TraceEvent[];
   onClose: () => void;
 }
 
-export default function StepDetailModal({ group, onClose }: Props) {
+export default function StepDetailModal({ group, trace, onClose }: Props) {
   const backdropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -150,6 +300,8 @@ export default function StepDetailModal({ group, onClose }: Props) {
   function handleBackdropClick(e: React.MouseEvent) {
     if (e.target === backdropRef.current) onClose();
   }
+
+  let toolStepIdx = 0;
 
   return (
     <div className="sdm-backdrop" ref={backdropRef} onClick={handleBackdropClick}>
@@ -185,7 +337,8 @@ export default function StepDetailModal({ group, onClose }: Props) {
             <div className="sdm-log">
               {group.steps.map((step, i) => {
                 const args = humanizeArgs(step.args);
-                const res = resultPreview(step.result_preview ?? step.result);
+                if (step.type === "tool") toolStepIdx++;
+                const currentIdx = step.type === "tool" ? toolStepIdx - 1 : undefined;
                 return (
                   <div key={step.id} className="sdm-log-entry">
                     <div className="sdm-log-header">
@@ -200,11 +353,13 @@ export default function StepDetailModal({ group, onClose }: Props) {
                         ))}
                       </div>
                     )}
-                    {res != null && (
-                      <div className="sdm-log-result">
-                        <span className="sdm-log-arrow">→</span>
-                        {res}
-                      </div>
+                    {(step.result_preview ?? step.result) != null && (
+                      <FormattedResult
+                        tool={group.tool}
+                        result={step.result_preview ?? step.result}
+                        trace={trace}
+                        stepIdx={currentIdx}
+                      />
                     )}
                   </div>
                 );

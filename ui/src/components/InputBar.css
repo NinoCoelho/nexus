@@ -4,18 +4,20 @@
   gap: 6px;
 }
 
+/* ── Attachments row ── */
+
 .input-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 8px;
+  padding: 0 12px;
 }
 
 .input-attachment-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  gap: 5px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: var(--bg-inset);
   border: 1px solid var(--border-soft);
@@ -25,6 +27,12 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.input-attachment-chip--audio {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-inset));
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border-soft));
+  color: var(--accent);
 }
 
 .input-attachment-remove {
@@ -42,14 +50,16 @@
   color: var(--bad);
 }
 
+/* ── Input bar (pill) ── */
+
 .input-bar {
   display: flex;
   align-items: flex-end;
-  gap: 4px;
+  gap: 2px;
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
   border-radius: 99px;
-  padding: 6px 8px 6px 12px;
+  padding: 6px 8px 6px 4px;
   transition: border-color 150ms ease;
 }
 
@@ -57,15 +67,15 @@
   border-color: var(--accent);
 }
 
-.input-bar-stubs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+/* ── Left cluster (+ button + menu) ── */
+
+.input-bar-left {
+  position: relative;
   flex-shrink: 0;
-  margin-bottom: 1px;
+  align-self: flex-end;
 }
 
-.input-stub-btn {
+.input-icon-btn {
   width: 32px;
   height: 32px;
   display: flex;
@@ -74,25 +84,104 @@
   background: none;
   border: none;
   color: var(--fg-faint);
-  cursor: default;
   border-radius: 50%;
-  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
 }
 
-.input-stub-btn--active {
-  cursor: pointer;
+.input-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
   color: var(--fg-dim);
 }
 
-.input-stub-btn--active:hover {
-  color: var(--accent);
-  background: var(--bg-hover);
+.input-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.input-stub-btn--active:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+/* ── Popover menu ── */
+
+.input-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 190px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px color-mix(in srgb, var(--shadow-color) 120%, transparent);
+  padding: 4px;
+  z-index: 100;
+  animation: menu-in 120ms ease-out;
 }
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.input-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.input-menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.input-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.input-menu-item.is-active {
+  color: var(--accent);
+}
+
+.input-menu-item.is-active::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.input-menu-sep {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 3px 6px;
+}
+
+.input-menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.input-menu-heading {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+/* ── Textarea ── */
 
 .input-textarea {
   flex: 1;
@@ -119,6 +208,8 @@
   opacity: 0.5;
 }
 
+/* ── Action button (send / stop / mic) ── */
+
 .input-send-btn {
   width: 36px;
   height: 36px;
@@ -131,7 +222,7 @@
   border-radius: 50%;
   color: var(--bg);
   cursor: pointer;
-  transition: background 150ms ease;
+  transition: background 150ms ease, opacity 150ms ease;
 }
 
 .input-send-btn:hover:not(:disabled) {
@@ -144,37 +235,22 @@
   opacity: 0.5;
 }
 
+/* mic variant: subtle ghost style */
+.input-send-btn--mic {
+  background: transparent;
+  color: var(--fg-faint);
+}
+
+.input-send-btn--mic:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-dim);
+}
+
+/* stop variant: red — matches original */
 .input-stop-btn {
   background: var(--danger, #c85050);
 }
 
 .input-stop-btn:hover {
   background: var(--danger-hi, #d96464);
-}
-
-.input-model-select {
-  appearance: none;
-  background: var(--bg-inset);
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  color: var(--fg-dim);
-  font-family: var(--font-ui);
-  font-size: 11px;
-  padding: 4px 22px 4px 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-  align-self: center;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  transition: border-color 150ms ease;
-}
-
-.input-model-select:hover {
-  border-color: var(--accent);
-}
-
-.input-model-select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
