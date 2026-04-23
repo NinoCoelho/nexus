@@ -2,14 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
+import type { TimelineStep } from "./ChatView";
 import VaultFilePreview from "./VaultFilePreview";
-import WorkflowViz from "./WorkflowViz";
-import LiveActivityStrip from "./LiveActivityStrip";
+import ActivityTimeline from "./ActivityTimeline";
 import "./AssistantMessage.css";
 
-// Mermaid is ~280 kB gzipped — lazy-loaded on first diagram so users who
-// never see one don't pay the cost. `startOnLoad: false` so we render
-// explicitly per block; streaming deltas don't trigger a doc re-scan.
 let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
 function loadMermaid() {
   if (!_mermaidPromise) {
@@ -67,6 +64,7 @@ function MermaidBlock({ code }: { code: string }) {
 interface Props {
   content: string;
   trace?: TraceEvent[];
+  timeline?: TimelineStep[];
   timestamp: Date;
   streaming?: boolean;
   onOpenInVault?: (path: string) => void;
@@ -77,57 +75,26 @@ function fmt(d: Date) {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-const META_TOOLS = new Set(["skills_list", "skill_view"]);
-
-/**
- * Normalize a possibly-vault reference into a clean relative vault path.
- * Accepts:
- *   vault://research/foo.md     → research/foo.md
- *   vault:research/foo.md       → research/foo.md
- *   /research/foo.md            → research/foo.md
- *   research/foo.md             → research/foo.md
- * Returns null if it doesn't look like a vault path (no .md, absolute URL, etc).
- */
 function asVaultPath(href: string): string | null {
   if (!href) return null;
-  // strip vault:// or vault: prefix
   const m = href.match(/^vault:\/\/(.+)$/i) ?? href.match(/^vault:(.+)$/i);
   if (m) return m[1].replace(/^\/+/, "");
-  // absolute URL? no
   if (/^https?:\/\//i.test(href)) return null;
-  // anchor / mailto / etc
   if (href.startsWith("#") || href.startsWith("mailto:")) return null;
-  // looks like a markdown file path
   if (/\.mdx?$/i.test(href)) return href.replace(/^\/+/, "");
   return null;
 }
 
-/**
- * Linkify bare vault-path mentions in plain text so the user doesn't have to
- * rely on the model writing `[x](vault://x)` every time. Matches conservative
- * patterns that end in .md and have at least one `/` OR are wrapped in
- * backticks. Returns a markdown-transformed string where those mentions
- * become [path](vault://path).
- */
 function linkifyVaultPaths(content: string): string {
-  // Match paths like research/foo.md or projects/my-plan.md (must contain /).
-  // Avoid replacing content already inside markdown links or code blocks.
-  // Simple strategy: replace only occurrences NOT preceded by `(`, `[`, or `` ` ``.
   return content.replace(
     /(^|[\s("])([a-z0-9][a-z0-9_\-./]*\/[a-z0-9][a-z0-9_\-. ]*\.mdx?)(?=$|[\s.,;:)!"])/gi,
     (_match, pre, path) => `${pre}[${path}](vault://${path})`,
   );
 }
 
-export default function AssistantMessage({ content, trace, timestamp, streaming, onOpenInVault, model }: Props) {
-  const [traceOpen, setTraceOpen] = useState(false);
+export default function AssistantMessage({ content, timeline, timestamp, streaming, onOpenInVault, model }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
-
-  const toolCount = trace
-    ? trace.filter((e) => e.tool && !META_TOOLS.has(e.tool)).length
-    : 0;
-  const showWorkflow = toolCount >= 2;
 
   const processed = useMemo(() => linkifyVaultPaths(content), [content]);
 
@@ -150,17 +117,10 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
       <div className="asst-card">
-        {streaming && trace && trace.length > 0 && (
-          <LiveActivityStrip events={trace} streaming={true} />
-        )}
+        <ActivityTimeline steps={timeline} streaming={!!streaming} />
         <div className="asst-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            // react-markdown sanitizes URLs by default and strips unknown
-            // schemes like `vault://` — the resulting empty href made our
-            // fallback <a> navigate to the current page (full reload).
-            // Preserve vault:// (we handle it ourselves below) and still
-            // block genuinely dangerous schemes.
             urlTransform={(url) => {
               if (/^vault:/i.test(url)) return url;
               if (/^(?:javascript|data|vbscript):/i.test(url)) return "";
@@ -171,8 +131,6 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
                 const match = /language-(\w+)/.exec(className || "");
                 const lang = match?.[1];
                 const raw = String(children ?? "");
-                // Mermaid: render as SVG. Only for actual fenced blocks —
-                // inline `mermaid` code spans (no newline) stay as code.
                 if (lang === "mermaid" && raw.includes("\n")) {
                   return <MermaidBlock code={raw.replace(/\n$/, "")} />;
                 }
@@ -200,12 +158,9 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
                     </button>
                   );
                 }
-                // Empty/missing href: render inert — avoid the navigate-to-
-                // current-page reload if react-markdown ever hands us one.
                 if (!href) {
                   return <span {...rest}>{children}</span>;
                 }
-                // External link: new tab.
                 return (
                   <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
                     {children}
@@ -217,7 +172,6 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
             {processed}
           </ReactMarkdown>
         </div>
-        {showWorkflow && trace && <WorkflowViz trace={trace} />}
         <div className="asst-footer">
           <button
             className="bubble-action-btn"
@@ -242,20 +196,7 @@ export default function AssistantMessage({ content, trace, timestamp, streaming,
               </>
             )}
           </button>
-          {trace && trace.length > 0 && (
-            <button
-              className="asst-trace-toggle"
-              onClick={() => setTraceOpen((v) => !v)}
-            >
-              {traceOpen ? "▾" : "▸"} Tool activity ({trace.length})
-            </button>
-          )}
         </div>
-        {traceOpen && trace && (
-          <pre className="asst-trace-json">
-            {JSON.stringify(trace, null, 2)}
-          </pre>
-        )}
       </div>
       <VaultFilePreview
         path={previewPath}

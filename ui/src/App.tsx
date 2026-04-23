@@ -478,7 +478,7 @@ export default function App() {
     }
 
     const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...state.attachments] : undefined };
-    const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timestamp: new Date(), streaming: true };
+    const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true };
     patchState(key, {
       input: "",
       thinking: true,
@@ -502,31 +502,35 @@ export default function App() {
         sidForPost,
         (event) => {
           if (event.type === "delta") {
-            // Append delta text to the last assistant message.
             setChatStates((prev) => {
               const next = new Map(prev);
               const cur = next.get(key) ?? emptyState();
               const msgs = [...cur.messages];
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-                msgs[lastIdx] = { ...msgs[lastIdx], content: msgs[lastIdx].content + event.text };
+                const prev = msgs[lastIdx];
+                const tl = [...(prev.timeline ?? [])];
+                if (tl.length > 0 && tl[tl.length - 1].type === "text") {
+                  tl[tl.length - 1] = { ...tl[tl.length - 1], text: (tl[tl.length - 1].text ?? "") + event.text };
+                } else {
+                  tl.push({ id: `t${tl.length}`, type: "text", text: event.text });
+                }
+                msgs[lastIdx] = { ...prev, content: prev.content + event.text, timeline: tl };
               }
               next.set(key, { ...cur, messages: msgs });
               return next;
             });
           } else if (event.type === "tool") {
-            // Consolidate: if result_preview is present, patch the most recent
-            // matching trace entry that has no result; else append a new entry.
             setChatStates((prev) => {
               const next = new Map(prev);
               const cur = next.get(key) ?? emptyState();
               const msgs = [...cur.messages];
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-                const prevTrace = msgs[lastIdx].trace ?? [];
+                const prevMsg = msgs[lastIdx];
+                const prevTrace = prevMsg.trace ?? [];
                 let newTrace: TraceEvent[];
                 if (event.result_preview != null) {
-                  // Find last entry with matching name and no result → patch it.
                   const matchIdx = [...prevTrace].reverse().findIndex(
                     (e) => e.tool === event.name && e.result == null
                   );
@@ -541,21 +545,27 @@ export default function App() {
                 } else {
                   newTrace = [...prevTrace, { iter: 0, tool: event.name, args: event.args } as TraceEvent];
                 }
-                msgs[lastIdx] = { ...msgs[lastIdx], trace: newTrace };
+                const tl = [...(prevMsg.timeline ?? [])];
+                if (event.result_preview != null) {
+                  const toolIdx = [...tl].reverse().findIndex(
+                    (s) => s.type === "tool" && s.tool === event.name && s.status === "pending"
+                  );
+                  if (toolIdx !== -1) {
+                    const realIdx = tl.length - 1 - toolIdx;
+                    tl[realIdx] = { ...tl[realIdx], result: event.result_preview, result_preview: typeof event.result_preview === "string" ? event.result_preview : undefined, status: "done" as const };
+                  } else {
+                    tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, result: event.result_preview, result_preview: typeof event.result_preview === "string" ? event.result_preview : undefined, status: "done" });
+                  }
+                } else {
+                  tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, status: "pending" });
+                }
+                msgs[lastIdx] = { ...prevMsg, trace: newTrace, timeline: tl };
               }
               next.set(key, { ...cur, messages: msgs });
               return next;
             });
           } else if (event.type === "done") {
             const routedModel = event.model;
-            const finalAsst: Message = {
-              role: "assistant",
-              content: event.reply,
-              trace: event.trace?.length ? event.trace : undefined,
-              timestamp: new Date(),
-              streaming: false,
-              model: routedModel,
-            };
 
             // Persist last_used_model
             const usedModel = state.selectedModel || routedModel || "";
@@ -569,7 +579,19 @@ export default function App() {
               setChatStates((prev) => {
                 const next = new Map(prev);
                 const fresh = next.get(NEW_KEY) ?? emptyState();
-                // Replace placeholder with final content.
+                const lastMsg = fresh.messages[fresh.messages.length - 1];
+                const preservedTimeline = lastMsg?.timeline?.map((s) =>
+                  s.type === "tool" && s.status === "pending" ? { ...s, status: "done" as const } : s
+                );
+                const finalAsst: Message = {
+                  role: "assistant",
+                  content: event.reply,
+                  trace: event.trace?.length ? event.trace : undefined,
+                  timeline: preservedTimeline,
+                  timestamp: new Date(),
+                  streaming: false,
+                  model: routedModel,
+                };
                 const msgs = fresh.messages.slice(0, -1).concat(finalAsst);
                 next.set(event.session_id, {
                   messages: msgs,
@@ -591,7 +613,19 @@ export default function App() {
                 const msgs = [...cur.messages];
                 const lastIdx = msgs.length - 1;
                 if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-                  msgs[lastIdx] = finalAsst;
+                  const lastMsg = msgs[lastIdx];
+                  const preservedTimeline = lastMsg?.timeline?.map((s) =>
+                    s.type === "tool" && s.status === "pending" ? { ...s, status: "done" as const } : s
+                  );
+                  msgs[lastIdx] = {
+                    role: "assistant",
+                    content: event.reply,
+                    trace: event.trace?.length ? event.trace : undefined,
+                    timeline: preservedTimeline,
+                    timestamp: new Date(),
+                    streaming: false,
+                    model: routedModel,
+                  };
                 }
                 next.set(key, { ...cur, messages: msgs, thinking: false });
                 return next;

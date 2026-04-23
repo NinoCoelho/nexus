@@ -4,10 +4,22 @@ import AssistantMessage from "./AssistantMessage";
 import InputBar from "./InputBar";
 import "./ChatView.css";
 
+export interface TimelineStep {
+  id: string;
+  type: "tool" | "text";
+  tool?: string;
+  args?: unknown;
+  result?: unknown;
+  result_preview?: string;
+  status?: "pending" | "done" | "error";
+  text?: string;
+}
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
   trace?: TraceEvent[];
+  timeline?: TimelineStep[];
   timestamp: Date;
   streaming?: boolean;
   kind?: "limit";
@@ -74,9 +86,9 @@ export default function ChatView({
   // with partial content. Show it inline; only show the dots indicator when
   // the assistant hasn't emitted any text yet.
   const lastMsg = messages[messages.length - 1];
-  const streamingInProgress = thinking && lastMsg?.role === "assistant" && (lastMsg.content ?? "").length > 0;
+  const streamingInProgress = thinking && lastMsg?.role === "assistant" && ((lastMsg.content ?? "").length > 0 || (lastMsg.timeline ?? []).length > 0);
   const visible = messages.filter(
-    (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit",
+    (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit" || (m.timeline ?? []).length > 0,
   );
 
   return (
@@ -127,6 +139,7 @@ export default function ChatView({
                 key={idx}
                 content={msg.content}
                 trace={msg.trace}
+                timeline={msg.timeline}
                 timestamp={msg.timestamp}
                 streaming={msg.streaming}
                 onOpenInVault={onOpenInVault}

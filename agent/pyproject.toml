@@ -23,6 +23,7 @@ dependencies = [
 # Clone both side-by-side and `uv sync` will pick loom up as an editable
 # local install. Adjust if your layout differs.
 loom-framework = { path = "../../loom", editable = true }
+ddgs = { git = "https://github.com/NinoCoelho/ddgs", branch = "main" }
 
 [project.optional-dependencies]
 dev = [

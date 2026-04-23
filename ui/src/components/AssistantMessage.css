@@ -182,7 +182,7 @@
   color: var(--accent-lo);
 }
 
-/* Footer row with copy + trace toggle */
+/* Footer row with copy */
 .asst-footer {
   display: flex;
   justify-content: flex-end;
@@ -210,36 +210,6 @@
 .bubble-action-btn:hover {
   color: var(--bubble-fg);
   background: rgba(0, 0, 0, 0.05);
-}
-
-.asst-trace-toggle {
-  background: none;
-  border: none;
-  color: var(--bubble-fg-dim);
-  font-family: var(--font-ui);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius);
-  transition: all 150ms ease;
-}
-.asst-trace-toggle:hover {
-  color: var(--bubble-fg);
-  background: rgba(0, 0, 0, 0.05);
-}
-
-.asst-trace-json {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  background: var(--bubble-code-bg);
-  border: 1px solid var(--bubble-asst-border);
-  border-radius: var(--radius);
-  padding: 10px;
-  margin: 8px 0 0;
-  overflow-x: auto;
-  color: var(--bubble-fg-dim);
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 /* ── GFM tables ─────────────────────────────────────────────────────── */

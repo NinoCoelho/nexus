@@ -1,0 +1,227 @@
+.sdm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: sdm-fade-in 150ms ease-out;
+}
+
+@keyframes sdm-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.sdm-modal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1);
+  width: 90%;
+  max-width: 520px;
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: sdm-slide-up 200ms ease-out;
+}
+
+@keyframes sdm-slide-up {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.sdm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.sdm-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.sdm-icon--text {
+  color: var(--bubble-fg-dim);
+}
+
+.sdm-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sdm-count {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+.sdm-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition: all 120ms ease;
+  flex-shrink: 0;
+}
+
+.sdm-close:hover {
+  background: var(--bg-inset);
+  color: var(--fg);
+}
+
+.sdm-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ── Log entries ──────────────────────────────────────────────── */
+.sdm-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sdm-log-entry {
+  position: relative;
+  padding: 10px 0 10px 20px;
+}
+
+.sdm-log-entry + .sdm-log-entry {
+  border-top: 1px solid var(--border-soft);
+}
+
+.sdm-log-entry::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 18px;
+  bottom: -11px;
+  width: 1px;
+  background: var(--border-soft);
+}
+
+.sdm-log-entry:last-child::before {
+  display: none;
+}
+
+.sdm-log-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sdm-log-dot {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  flex-shrink: 0;
+}
+
+.sdm-log-dot--done {
+  background: var(--sage, #6a9a7a);
+}
+
+.sdm-log-dot--pending {
+  background: var(--copper, #c07a3a);
+  animation: sdm-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes sdm-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.sdm-log-dot--error {
+  background: var(--bad, #c85a5a);
+}
+
+.sdm-log-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+}
+
+.sdm-log-status {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.sdm-log-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sdm-log-kv {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+  word-break: break-word;
+}
+
+.sdm-log-result {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-faint);
+  background: var(--bg-inset);
+  border-radius: 6px;
+  padding: 6px 10px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.sdm-log-arrow {
+  color: var(--sage, #6a9a7a);
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+/* ── Text content ─────────────────────────────────────────────── */
+.sdm-text-content {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

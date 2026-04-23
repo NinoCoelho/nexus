@@ -1,0 +1,153 @@
+.at-timeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 6px 0 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.at-timeline::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Connecting line ────────────────────────────────────────────── */
+.at-line {
+  width: 16px;
+  height: 1px;
+  background: var(--border-soft, rgba(0, 0, 0, 0.12));
+  flex-shrink: 0;
+}
+
+/* ── Circular badge base ────────────────────────────────────────── */
+.at-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--border-soft, rgba(0, 0, 0, 0.12));
+  background: var(--bg, #fff);
+  color: var(--fg-faint, #888);
+  cursor: pointer;
+  transition: all 180ms ease;
+  flex-shrink: 0;
+  padding: 0;
+  outline: none;
+}
+
+.at-badge:hover {
+  transform: scale(1.12);
+  border-color: var(--accent, #888);
+  color: var(--accent, #888);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.at-badge:active {
+  transform: scale(0.95);
+}
+
+/* ── Badge icon container ───────────────────────────────────────── */
+.at-badge-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 180ms ease;
+}
+
+.at-badge-icon--text {
+  opacity: 0.65;
+}
+
+/* ── Tool badge: idle (pending, not latest) ─────────────────────── */
+.at-badge--idle {
+  border-color: var(--border, rgba(0, 0, 0, 0.15));
+  color: var(--fg-faint, #888);
+}
+
+/* ── Tool badge: done ───────────────────────────────────────────── */
+.at-badge--done {
+  border-color: var(--sage, #6a9a7a);
+  color: var(--sage, #6a9a7a);
+  background: color-mix(in srgb, var(--sage, #6a9a7a) 8%, var(--bg, #fff));
+}
+
+.at-badge--done:hover {
+  border-color: var(--sage, #6a9a7a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sage, #6a9a7a) 15%, transparent);
+}
+
+/* ── Tool badge: pulsing (active during streaming) ──────────────── */
+.at-badge--pulsing {
+  border-color: var(--copper, #c07a3a);
+  color: var(--copper, #c07a3a);
+  background: color-mix(in srgb, var(--copper, #c07a3a) 8%, var(--bg, #fff));
+  animation: at-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes at-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--copper, #c07a3a) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--copper, #c07a3a) 0%, transparent);
+  }
+}
+
+.at-badge--pulsing:hover {
+  animation: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--copper, #c07a3a) 15%, transparent);
+}
+
+/* ── Tool badge: error ──────────────────────────────────────────── */
+.at-badge--error {
+  border-color: var(--bad, #c85a5a);
+  color: var(--bad, #c85a5a);
+  background: color-mix(in srgb, var(--bad, #c85a5a) 8%, var(--bg, #fff));
+}
+
+/* ── Text badge (smaller, neutral) ─────────────────────────────── */
+.at-badge--text {
+  width: 24px;
+  height: 24px;
+  border-color: color-mix(in srgb, var(--border-soft) 80%, transparent);
+  background: var(--bg-inset, rgba(0, 0, 0, 0.03));
+  color: var(--fg-faint, #aaa);
+}
+
+.at-badge--text:hover {
+  border-color: var(--accent, #888);
+  color: var(--accent, #888);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg, #fff));
+}
+
+/* ── Count badge (×N) ───────────────────────────────────────────── */
+.at-badge-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--fg-faint, #888);
+  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.12));
+  pointer-events: none;
+}
+
+.at-badge--done .at-badge-count {
+  background: color-mix(in srgb, var(--sage, #6a9a7a) 12%, var(--bg));
+  color: var(--sage, #6a9a7a);
+  border-color: color-mix(in srgb, var(--sage, #6a9a7a) 30%, transparent);
+}
+
+.at-badge--pulsing .at-badge-count {
+  background: color-mix(in srgb, var(--copper, #c07a3a) 12%, var(--bg));
+  color: var(--copper, #c07a3a);
+  border-color: color-mix(in srgb, var(--copper, #c07a3a) 30%, transparent);
+}
