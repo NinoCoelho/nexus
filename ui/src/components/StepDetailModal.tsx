@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import type { TraceEvent } from "../api";
 import type { CoalescedStep } from "./ActivityTimeline";
+import MarkdownView from "./MarkdownView";
 import "./StepDetailModal.css";
 
 interface TerminalResult {
@@ -125,23 +126,6 @@ function ToolIcon({ tool }: { tool: string }) {
   }
 }
 
-function humanizeArgs(args: unknown): string[] {
-  if (!args || typeof args !== "object") return [];
-  const entries: string[] = [];
-  const obj = args as Record<string, unknown>;
-  for (const [key, val] of Object.entries(obj)) {
-    if (val == null) continue;
-    const display = typeof val === "string"
-      ? val
-      : typeof val === "object"
-      ? JSON.stringify(val)
-      : String(val);
-    const truncated = display.length > 200 ? display.slice(0, 200) + "..." : display;
-    entries.push(`${key}: ${truncated}`);
-  }
-  return entries;
-}
-
 function tryParseJson(val: unknown): unknown {
   if (val == null) return null;
   if (typeof val === "object") return val;
@@ -186,6 +170,111 @@ function statusText(status?: string): string {
   return "Done";
 }
 
+// ── Humanized args ─────────────────────────────────────────────────────────
+
+function ToolArgsSummary({ tool, args }: { tool?: string; args: unknown }) {
+  if (!tool || !args || typeof args !== "object") return null;
+  const a = args as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+  let content: React.ReactNode = null;
+
+  switch (tool) {
+    case "vault_read":
+      content = <>Reading <code className="sdm-arg-code">{str(a.path)}</code></>;
+      break;
+    case "vault_write": {
+      const chars = typeof a.content === "string" ? a.content.length : null;
+      content = (
+        <>
+          Writing to <code className="sdm-arg-code">{str(a.path)}</code>
+          {chars != null && <span className="sdm-arg-dim"> · {chars.toLocaleString()} chars</span>}
+        </>
+      );
+      break;
+    }
+    case "vault_list":
+      content = <>Listing <code className="sdm-arg-code">{str(a.path) || "/"}</code></>;
+      break;
+    case "vault_search":
+    case "vault_semantic_search":
+      content = <>Searching for <span className="sdm-arg-query">"{str(a.query)}"</span></>;
+      break;
+    case "vault_tags":
+      content = a.path
+        ? <>Tags on <code className="sdm-arg-code">{str(a.path)}</code></>
+        : <>Listing all tags</>;
+      break;
+    case "vault_backlinks":
+      content = <>Backlinks for <code className="sdm-arg-code">{str(a.path)}</code></>;
+      break;
+    case "http_call": {
+      const method = str(a.method) || "GET";
+      const url = str(a.url);
+      content = (
+        <>
+          <span className="sdm-arg-method">{method}</span>{" "}
+          <code className="sdm-arg-code sdm-arg-url">{url.length > 80 ? url.slice(0, 80) + "…" : url}</code>
+        </>
+      );
+      break;
+    }
+    case "terminal":
+      content = <code className="sdm-arg-code sdm-arg-cmd">{str(a.command)}</code>;
+      break;
+    case "skill_manage": {
+      const action = str(a.action);
+      const name = str(a.name);
+      content = (
+        <>
+          {action || "manage"} skill{name ? <> <strong>{name}</strong></> : null}
+        </>
+      );
+      break;
+    }
+    case "skill_view":
+      content = <>Reading skill <strong>{str(a.name)}</strong></>;
+      break;
+    case "skills_list":
+      content = <>Listing skills</>;
+      break;
+    case "kanban_manage": {
+      const action = str(a.action);
+      const board = str(a.board ?? a.path ?? "");
+      content = (
+        <>
+          {action || "manage"}{board ? <> on <code className="sdm-arg-code">{board}</code></> : null}
+        </>
+      );
+      break;
+    }
+    default: {
+      const entries = Object.entries(a).filter(([, v]) => v != null);
+      if (entries.length === 0) return null;
+      content = (
+        <>
+          {entries.map(([k, v], i) => (
+            <span key={k}>
+              {i > 0 && <span className="sdm-arg-dim"> · </span>}
+              <span className="sdm-arg-dim">{k}:</span>{" "}
+              <code className="sdm-arg-code">
+                {typeof v === "string"
+                  ? v.length > 80 ? v.slice(0, 80) + "…" : v
+                  : JSON.stringify(v)}
+              </code>
+            </span>
+          ))}
+        </>
+      );
+    }
+  }
+
+  if (!content) return null;
+  return <p className="sdm-args-prose">{content}</p>;
+}
+
+// ── Result renderers ───────────────────────────────────────────────────────
+
 function TerminalOutput({ data }: { data: TerminalResult }) {
   return (
     <div className="sdm-result-terminal">
@@ -226,6 +315,9 @@ function TerminalOutput({ data }: { data: TerminalResult }) {
 }
 
 function HttpOutput({ data }: { data: HttpResult }) {
+  const looksLikeMarkdown = (s: string) =>
+    /^#{1,6} |\*\*|^- |^> |```/.test(s);
+
   return (
     <div className="sdm-result-http">
       <div className="sdm-http-meta">
@@ -236,49 +328,225 @@ function HttpOutput({ data }: { data: HttpResult }) {
         )}
       </div>
       {data.error && <div className="sdm-term-error">{data.error}</div>}
-      {data.body && (
-        <pre className="sdm-term-output">{data.body.length > 2000 ? data.body.slice(0, 2000) + "\n…" : data.body}</pre>
-      )}
+      {data.body && (() => {
+        const body = data.body.length > 4000 ? data.body.slice(0, 4000) + "\n…" : data.body;
+        const jsonParsed = tryParseJson(body);
+        if (jsonParsed && typeof jsonParsed === "object") {
+          return (
+            <div className="sdm-result-markdown">
+              <MarkdownView>{"```json\n" + JSON.stringify(jsonParsed, null, 2) + "\n```"}</MarkdownView>
+            </div>
+          );
+        }
+        if (looksLikeMarkdown(body)) {
+          return <div className="sdm-result-markdown"><MarkdownView>{body}</MarkdownView></div>;
+        }
+        return <pre className="sdm-term-output">{body}</pre>;
+      })()}
     </div>
   );
 }
 
-function GenericResult({ raw }: { raw: string }) {
-  const parsed = tryParseJson(raw);
-  if (parsed && typeof parsed === "object") {
-    return (
-      <pre className="sdm-result-json">{JSON.stringify(parsed, null, 2)}</pre>
-    );
-  }
+function VaultReadResult({ content }: { content: string }) {
   return (
-    <div className="sdm-log-result">
-      <span className="sdm-log-arrow">→</span>
-      {raw.length > 600 ? raw.slice(0, 600) + "…" : raw}
+    <div className="sdm-result-markdown">
+      <MarkdownView>{content}</MarkdownView>
     </div>
   );
+}
+
+interface VaultEntry { path: string; type: string; size: number; }
+function VaultListResult({ entries }: { entries: VaultEntry[] }) {
+  if (!entries.length) return <div className="sdm-empty">No files found</div>;
+  return (
+    <ul className="sdm-file-list">
+      {entries.map((e) => {
+        const parts = e.path.split("/");
+        const name = parts.pop() ?? e.path;
+        const dir = parts.join("/");
+        const isDir = e.type === "dir";
+        return (
+          <li key={e.path} className="sdm-file-item">
+            <span className="sdm-file-icon">
+              {isDir ? (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5H12A1.5 1.5 0 0 1 13.5 6v5A1.5 1.5 0 0 1 12 12.5H4A1.5 1.5 0 0 1 2.5 11z" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2.5a1 1 0 0 1 1-1h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+                  <polyline points="9 1.5 9 5 12 5" />
+                </svg>
+              )}
+            </span>
+            <span className="sdm-file-name">{name}</span>
+            {dir && <span className="sdm-file-dir">{dir}/</span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+interface SearchMatch { path: string; snippet: string; score: number; }
+function VaultSearchResult({ results }: { results: SearchMatch[] }) {
+  if (!results.length) return <div className="sdm-empty">No matches found</div>;
+  return (
+    <div className="sdm-search-results">
+      {results.map((r, i) => {
+        const parts = r.path.split("/");
+        const name = parts.pop() ?? r.path;
+        const dir = parts.join("/");
+        // Convert <mark>…</mark> to bold markdown
+        const snippet = r.snippet.replace(/<mark>/g, "**").replace(/<\/mark>/g, "**");
+        return (
+          <div key={i} className="sdm-search-match">
+            <div className="sdm-match-header">
+              <span className="sdm-match-file">{name}</span>
+              {dir && <span className="sdm-match-path">{dir}/</span>}
+            </div>
+            <div className="sdm-match-snippet">
+              <MarkdownView>{snippet}</MarkdownView>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function KvTable({ data }: { data: Record<string, unknown> }) {
+  const entries = Object.entries(data).filter(([k]) => k !== "ok");
+  if (!entries.length) return null;
+  return (
+    <table className="sdm-kv-table">
+      <tbody>
+        {entries.map(([k, v]) => {
+          const display = typeof v === "string"
+            ? v
+            : Array.isArray(v)
+            ? `[${(v as unknown[]).length} items]`
+            : typeof v === "object" && v !== null
+            ? JSON.stringify(v)
+            : String(v);
+          return (
+            <tr key={k}>
+              <td className="sdm-kv-key">{k}</td>
+              <td className="sdm-kv-val">{display.length > 200 ? display.slice(0, 200) + "…" : display}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function isMarkdownLike(s: string): boolean {
+  return /^#{1,6} |\*\*[\w]|^- [\w]|^> |```/.test(s);
 }
 
 function FormattedResult({ tool, result, trace, stepIdx }: { tool?: string; result: unknown; trace?: TraceEvent[]; stepIdx?: number }) {
   const resolved = resolveResult(result, tool ?? "", trace, stepIdx);
   const parsed = tryParseJson(resolved);
 
-  if (parsed && tool === "terminal" && isTerminalResult(parsed)) {
-    return <TerminalOutput data={parsed} />;
+  if (parsed && isTerminalResult(parsed)) return <TerminalOutput data={parsed} />;
+  if (parsed && isHttpResult(parsed)) return <HttpOutput data={parsed} />;
+
+  // Vault read — render content as markdown
+  if (tool === "vault_read" && parsed && typeof parsed === "object") {
+    const p = parsed as Record<string, unknown>;
+    if (typeof p.content === "string") return <VaultReadResult content={p.content} />;
   }
-  if (parsed && tool === "http_call" && isHttpResult(parsed)) {
-    return <HttpOutput data={parsed} />;
+
+  // Vault list — render file tree
+  if (tool === "vault_list" && parsed && typeof parsed === "object") {
+    const p = parsed as Record<string, unknown>;
+    if (Array.isArray(p.entries)) return <VaultListResult entries={p.entries as VaultEntry[]} />;
+  }
+
+  // Vault search — render match cards
+  if ((tool === "vault_search" || tool === "vault_semantic_search") && parsed && typeof parsed === "object") {
+    const p = parsed as Record<string, unknown>;
+    if (Array.isArray(p.results)) return <VaultSearchResult results={p.results as SearchMatch[]} />;
+  }
+
+  // Vault tags — render tag list or file list
+  if (tool === "vault_tags" && parsed && typeof parsed === "object") {
+    const p = parsed as Record<string, unknown>;
+    const items = Array.isArray(p.tags) ? p.tags as string[] : Array.isArray(p.files) ? p.files as string[] : null;
+    if (items) {
+      return (
+        <ul className="sdm-file-list">
+          {items.map((item, i) => (
+            <li key={i} className="sdm-file-item">
+              <span className="sdm-file-icon">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="5" y1="3" x2="5" y2="13" />
+                  <line x1="11" y1="3" x2="11" y2="13" />
+                  <line x1="2.5" y1="6" x2="13.5" y2="6" />
+                  <line x1="2.5" y1="10" x2="13.5" y2="10" />
+                </svg>
+              </span>
+              <span className="sdm-file-name">{item}</span>
+            </li>
+          ))}
+        </ul>
+      );
+    }
+  }
+
+  // Vault backlinks — render as link list
+  if (tool === "vault_backlinks" && parsed && typeof parsed === "object") {
+    const p = parsed as Record<string, unknown>;
+    const links = Array.isArray(p.backlinks) ? p.backlinks as string[] : null;
+    if (links) {
+      if (!links.length) return <div className="sdm-empty">No backlinks</div>;
+      return (
+        <ul className="sdm-file-list">
+          {links.map((link, i) => {
+            const name = typeof link === "string" ? link.split("/").pop() ?? link : JSON.stringify(link);
+            const dir = typeof link === "string" ? link.split("/").slice(0, -1).join("/") : "";
+            return (
+              <li key={i} className="sdm-file-item">
+                <span className="sdm-file-icon">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6.5 9.5a3.536 3.536 0 0 0 5 0l2-2a3.536 3.536 0 0 0-5-5L7 4" />
+                    <path d="M9.5 6.5a3.536 3.536 0 0 0-5 0l-2 2a3.536 3.536 0 0 0 5 5L9 12" />
+                  </svg>
+                </span>
+                <span className="sdm-file-name">{name}</span>
+                {dir && <span className="sdm-file-dir">{dir}/</span>}
+              </li>
+            );
+          })}
+        </ul>
+      );
+    }
   }
 
   const asStr = typeof resolved === "string" ? resolved : resolved != null ? JSON.stringify(resolved) : null;
   if (!asStr) return null;
 
-  if (parsed && typeof parsed === "object") {
-    if (isTerminalResult(parsed)) return <TerminalOutput data={parsed} />;
-    if (isHttpResult(parsed)) return <HttpOutput data={parsed} />;
+  // String that looks like markdown — render it
+  if (typeof resolved === "string" && isMarkdownLike(resolved)) {
+    return <div className="sdm-result-markdown"><MarkdownView>{resolved}</MarkdownView></div>;
   }
 
-  return <GenericResult raw={asStr} />;
+  // Generic JSON object — KV table
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return <KvTable data={parsed as Record<string, unknown>} />;
+  }
+
+  // Plain text fallback
+  return (
+    <div className="sdm-log-result">
+      <span className="sdm-log-arrow">→</span>
+      {asStr.length > 600 ? asStr.slice(0, 600) + "…" : asStr}
+    </div>
+  );
 }
+
+// ── Modal ──────────────────────────────────────────────────────────────────
 
 interface Props {
   group: CoalescedStep;
@@ -322,7 +590,7 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
                   <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H5l-3 3V3.5z" />
                 </svg>
               </span>
-              <span className="sdm-title">Text response</span>
+              <span className="sdm-title">Thinking</span>
             </>
           )}
           <button className="sdm-close" onClick={onClose} type="button" aria-label="Close">
@@ -336,7 +604,6 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
           {group.type === "tool" ? (
             <div className="sdm-log">
               {group.steps.map((step, i) => {
-                const args = humanizeArgs(step.args);
                 if (step.type === "tool") toolStepIdx++;
                 const currentIdx = step.type === "tool" ? toolStepIdx - 1 : undefined;
                 return (
@@ -346,13 +613,7 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
                       <span className="sdm-log-num">#{i + 1}</span>
                       <span className="sdm-log-status">{statusText(step.status)}</span>
                     </div>
-                    {args.length > 0 && (
-                      <div className="sdm-log-detail">
-                        {args.map((line, j) => (
-                          <div key={j} className="sdm-log-kv">{line}</div>
-                        ))}
-                      </div>
-                    )}
+                    <ToolArgsSummary tool={group.tool} args={step.args} />
                     {(step.result_preview ?? step.result) != null && (
                       <FormattedResult
                         tool={group.tool}
@@ -367,7 +628,12 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
             </div>
           ) : (
             <div className="sdm-text-content">
-              {group.steps.map((s) => s.text ?? "").join("").trim() || "(empty)"}
+              {(() => {
+                const text = group.steps.map((s) => s.text ?? "").join("").trim();
+                return text
+                  ? <MarkdownView>{text}</MarkdownView>
+                  : <span className="sdm-empty">(empty)</span>;
+              })()}
             </div>
           )}
         </div>
