@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@uiw/react-codemirror": "^4.23.7",
     "cytoscape": "^3.33.2",
     "mermaid": "^11.14.0",
     "react": "^19.0.0",

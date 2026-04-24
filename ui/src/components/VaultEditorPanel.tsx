@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import MarkdownView from "./MarkdownView";
+import MarkdownEditor from "./MarkdownEditor";
 import KanbanBoard from "./KanbanBoard";
 import { getVaultFile, putVaultFile } from "../api";
 import "./VaultView.css";
@@ -114,11 +115,10 @@ export default function VaultEditorPanel({ selectedPath, onDispatchToChat, onVie
           ) : isKanban && !editMode ? (
             <KanbanBoard path={selectedPath!} onDispatchToChat={onDispatchToChat} />
           ) : editMode ? (
-            <textarea
-              className="vault-textarea"
+            <MarkdownEditor
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              spellCheck={false}
+              onChange={setContent}
+              className="vault-markdown-editor"
             />
           ) : (
             <div className="vault-preview">

@@ -12,6 +12,7 @@ interface PromptProps extends BaseProps {
   defaultValue?: string;
   placeholder?: string;
   confirmLabel?: string;
+  allowEmpty?: boolean;
   onSubmit: (value: string) => void;
 }
 
@@ -39,7 +40,8 @@ export default function Modal(props: ModalProps) {
       if (e.key === "Escape") props.onCancel();
       if (e.key === "Enter" && props.kind === "prompt") {
         e.preventDefault();
-        if (value.trim()) (props as PromptProps).onSubmit(value);
+        const p = props as PromptProps;
+        if (p.allowEmpty || value.trim()) p.onSubmit(value);
       }
     },
     [props, value],
@@ -75,13 +77,13 @@ export default function Modal(props: ModalProps) {
             }`}
             onClick={() => {
               if (props.kind === "prompt") {
-                if (!value.trim()) return;
+                if (!props.allowEmpty && !value.trim()) return;
                 props.onSubmit(value);
               } else {
                 props.onSubmit();
               }
             }}
-            disabled={props.kind === "prompt" && !value.trim()}
+            disabled={props.kind === "prompt" && !props.allowEmpty && !value.trim()}
           >
             {props.kind === "prompt"
               ? (props.confirmLabel ?? "OK")

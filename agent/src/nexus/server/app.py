@@ -1518,6 +1518,16 @@ def create_app(
         lane = vault_kanban.add_lane(path, title)
         return lane.to_dict()
 
+    @app.patch("/vault/kanban/lanes/{lane_id}")
+    async def vault_kanban_patch_lane(lane_id: str, body: dict, path: str) -> dict:
+        """Update a lane's title or prompt. Body: {title?, prompt?}."""
+        from .. import vault_kanban
+        try:
+            lane = vault_kanban.update_lane(path, lane_id, body)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return lane.to_dict()
+
     @app.delete("/vault/kanban/lanes/{lane_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def vault_kanban_delete_lane(lane_id: str, path: str) -> None:
         from .. import vault_kanban
