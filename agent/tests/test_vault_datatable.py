@@ -127,6 +127,40 @@ def test_set_schema_preserves_rows():
     assert len(tbl["rows"]) == 1
 
 
+def test_add_rows_bulk():
+    schema = {"fields": [{"name": "n", "kind": "number"}]}
+    vault_datatable.create_table("bulk.md", schema)
+    added = vault_datatable.add_rows("bulk.md", [{"n": 1}, {"n": 2}, {"n": 3}])
+    assert len(added) == 3
+    assert all("_id" in r for r in added)
+    tbl = vault_datatable.read_table("bulk.md")
+    assert [r["n"] for r in tbl["rows"]] == [1, 2, 3]
+
+
+def test_set_views_round_trip():
+    schema = {"fields": [{"name": "x", "kind": "text"}]}
+    vault_datatable.create_table("v.md", schema)
+    views = [
+        {"name": "Open", "filter": "open", "sort": {"field": "x", "dir": "asc"}},
+        {"name": "All hidden", "hidden": ["x"]},
+    ]
+    vault_datatable.set_views("v.md", views)
+    tbl = vault_datatable.read_table("v.md")
+    assert len(tbl["views"]) == 2
+    assert tbl["views"][0]["name"] == "Open"
+    assert tbl["views"][0]["sort"] == {"field": "x", "dir": "asc"}
+
+
+def test_views_preserved_on_row_mutation():
+    schema = {"fields": [{"name": "x", "kind": "text"}]}
+    vault_datatable.create_table("v2.md", schema)
+    vault_datatable.set_views("v2.md", [{"name": "A"}])
+    vault_datatable.add_row("v2.md", {"x": "hi"})
+    tbl = vault_datatable.read_table("v2.md")
+    assert len(tbl["views"]) == 1
+    assert tbl["views"][0]["name"] == "A"
+
+
 def test_round_trip_preserves_special_chars():
     schema = {"fields": [{"name": "note", "kind": "text"}]}
     vault_datatable.create_table("notes.md", schema)

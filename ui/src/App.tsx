@@ -209,12 +209,17 @@ export default function App() {
   const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string) => {
     setChatStates((prev) => {
       const next = new Map(prev);
+      const isReal = (s: string) => !!s && s !== "auto" && availableModels.includes(s);
+      const seedModel = isReal(lastUsedModel)
+        ? lastUsedModel
+        : (isReal(defaultModel) ? defaultModel : (availableModels[0] ?? ""));
       next.set(sessionId, {
         messages: [],
         thinking: false,
         input: "",
         historyLoaded: true, // skip GET /sessions — the only "message" is the hidden seed
         attachments: [],
+        selectedModel: seedModel,
       });
       return next;
     });
@@ -223,7 +228,7 @@ export default function App() {
     setView("chat");
     setSessionsRevision((r) => r + 1);
     void title; // title was set server-side on dispatch
-  }, []);
+  }, [availableModels, lastUsedModel, defaultModel]);
 
   const [chatStates, setChatStates] = useState<Map<string, ChatState>>(() => {
     const m = new Map<string, ChatState>();

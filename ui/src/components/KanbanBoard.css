@@ -215,3 +215,90 @@
   margin-left: 3px;
   vertical-align: middle;
 }
+
+/* ── Card metadata: priority dot, due chip, labels, assignees ──────────── */
+.kanban-board-header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.kanban-filter-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
+  background: var(--bg-inset);
+  flex-shrink: 0;
+}
+
+.kanban-filter-input {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+  min-width: 100px;
+}
+
+.kanban-filter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.kanban-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kanban-prio {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.kanban-prio--low     { background: #6b7280; }
+.kanban-prio--med     { background: #3b82f6; }
+.kanban-prio--high    { background: #f59e0b; }
+.kanban-prio--urgent  { background: #ef4444; box-shadow: 0 0 6px #ef4444aa; }
+
+.kanban-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.kanban-due, .kanban-label, .kanban-assignee {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.kanban-due--today {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.kanban-due--overdue {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.kanban-label {
+  background: var(--bg-inset);
+}
+
+.kanban-assignee {
+  font-style: italic;
+}

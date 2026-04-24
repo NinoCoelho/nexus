@@ -204,6 +204,31 @@ function FieldInput({ field, value, onChange }: FieldInputProps) {
     );
   }
 
+  if (kind === "formula") {
+    return (
+      <input
+        type="text"
+        className="form-input"
+        value={String(value ?? "")}
+        readOnly
+        placeholder={field.formula ? `= ${field.formula}` : "(computed)"}
+        title="Formula field — value computed from other fields"
+      />
+    );
+  }
+
+  if (kind === "vault-link") {
+    return (
+      <input
+        type="text"
+        className="form-input"
+        value={String(value ?? "")}
+        placeholder={field.placeholder ?? "vault path (e.g. notes/foo.md)"}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
   // default: text
   return (
     <input

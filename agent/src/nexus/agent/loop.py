@@ -244,6 +244,14 @@ class Agent:
     def _terminal_handler(self, value: Any) -> None:
         self._handlers.terminal = value
 
+    @property
+    def _dispatcher(self) -> Any:
+        return self._handlers.dispatcher
+
+    @_dispatcher.setter
+    def _dispatcher(self, value: Any) -> None:
+        self._handlers.dispatcher = value
+
     def _build_loom_agent(self) -> LoomAgent:
         from ._loom_bridge import LoomProviderAdapter, build_tool_registry
 

@@ -51,6 +51,7 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     frontend_port: int = typer.Option(1890, "--frontend-port", "-fp"),
     no_frontend: bool = typer.Option(False, "--no-frontend", help="Skip launching the frontend dev server"),
+    bundled: bool = typer.Option(False, "--bundled", help="Serve the built UI from the backend on a single port (skips Vite). Run `npm run build` first."),
 ) -> None:
     """Start the Nexus server (backend + frontend)."""
     import shutil
@@ -60,6 +61,20 @@ def serve(
     import uvicorn
 
     from .config import get_frontend_dir
+
+    # --bundled implies the backend serves ui/dist itself; don't spawn Vite.
+    if bundled:
+        no_frontend = True
+        fe = get_frontend_dir()
+        dist = (fe / "dist") if fe is not None else None
+        if dist is None or not (dist / "index.html").is_file():
+            typer.echo(
+                "No built UI found. Run `npm run build` in ui/ first, "
+                "or set NEXUS_UI_DIST to a dist directory.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        typer.echo(f"Serving bundled UI from {dist} at http://{host}:{port}")
 
     frontend_dir = None if no_frontend else get_frontend_dir()
     frontend_proc: list[subprocess.Popen] = []

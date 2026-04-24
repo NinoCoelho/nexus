@@ -43,6 +43,7 @@ _FENCE_RE = re.compile(
 )
 _SCHEMA_SECTION = re.compile(r"^##\s+Schema\s*$", re.MULTILINE | re.IGNORECASE)
 _ROWS_SECTION = re.compile(r"^##\s+Rows\s*$", re.MULTILINE | re.IGNORECASE)
+_VIEWS_SECTION = re.compile(r"^##\s+Views\s*$", re.MULTILINE | re.IGNORECASE)
 
 
 def is_datatable_file(content: str) -> bool:
@@ -99,13 +100,14 @@ def _extract_section_yaml(body: str, section_re: re.Pattern) -> tuple[Any, int, 
 
 
 def read_table(path: str) -> dict[str, Any]:
-    """Read a data-table file and return {'schema': dict, 'rows': list}."""
+    """Read a data-table file and return {'schema', 'rows', 'views'}."""
     file = vault.read_file(path)
     content = file["content"]
     _, body = _extract_frontmatter(content)
 
     schema_raw, _, _ = _extract_section_yaml(body, _SCHEMA_SECTION)
     rows_raw, _, _ = _extract_section_yaml(body, _ROWS_SECTION)
+    views_raw, _, _ = _extract_section_yaml(body, _VIEWS_SECTION)
 
     schema: dict[str, Any] = {}
     if isinstance(schema_raw, dict):
@@ -119,76 +121,103 @@ def read_table(path: str) -> dict[str, Any]:
                     r = {"_id": uuid.uuid4().hex[:8], **r}
                 rows.append(r)
 
-    return {"schema": schema, "rows": rows}
+    views: list[dict[str, Any]] = []
+    if isinstance(views_raw, list):
+        views = [v for v in views_raw if isinstance(v, dict)]
+
+    return {"schema": schema, "rows": rows, "views": views}
 
 
 def _serialize(
     frontmatter: dict[str, Any],
     schema: dict[str, Any],
     rows: list[dict[str, Any]],
+    views: list[dict[str, Any]] | None = None,
 ) -> str:
     fm_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=False).rstrip()
     schema_yaml = yaml.dump(schema, default_flow_style=False, sort_keys=False, allow_unicode=True).rstrip()
     rows_yaml = yaml.dump(rows, default_flow_style=False, sort_keys=False, allow_unicode=True).rstrip()
-    return (
+    out = (
         f"---\n{fm_text}\n---\n\n"
         f"## Schema\n```yaml\n{schema_yaml}\n```\n\n"
         f"## Rows\n```yaml\n{rows_yaml}\n```\n"
     )
+    if views:
+        views_yaml = yaml.dump(views, default_flow_style=False, sort_keys=False, allow_unicode=True).rstrip()
+        out += f"\n## Views\n```yaml\n{views_yaml}\n```\n"
+    return out
+
+
+def _load_state(path: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read frontmatter + table; return (frontmatter, table-dict)."""
+    file = vault.read_file(path)
+    fm, _ = _extract_frontmatter(file["content"])
+    fm.setdefault(DATATABLE_PLUGIN_KEY, "basic")
+    return fm, read_table(path)
 
 
 def create_table(path: str, schema: dict[str, Any]) -> dict[str, Any]:
     """Scaffold a new data-table file and return the table dict."""
     fm = {DATATABLE_PLUGIN_KEY: "basic"}
-    vault.write_file(path, _serialize(fm, schema, []))
-    return {"schema": schema, "rows": []}
+    vault.write_file(path, _serialize(fm, schema, [], []))
+    return {"schema": schema, "rows": [], "views": []}
 
 
 def set_schema(path: str, schema: dict[str, Any]) -> dict[str, Any]:
     """Replace the schema block, preserving existing rows."""
-    file = vault.read_file(path)
-    fm, _ = _extract_frontmatter(file["content"])
-    fm.setdefault(DATATABLE_PLUGIN_KEY, "basic")
-    tbl = read_table(path)
-    vault.write_file(path, _serialize(fm, schema, tbl["rows"]))
-    return {"schema": schema, "rows": tbl["rows"]}
+    fm, tbl = _load_state(path)
+    vault.write_file(path, _serialize(fm, schema, tbl["rows"], tbl.get("views", [])))
+    return {"schema": schema, "rows": tbl["rows"], "views": tbl.get("views", [])}
+
+
+def set_views(path: str, views: list[dict[str, Any]]) -> dict[str, Any]:
+    """Replace the views block."""
+    fm, tbl = _load_state(path)
+    vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"], views))
+    return {"schema": tbl["schema"], "rows": tbl["rows"], "views": views}
 
 
 def add_row(path: str, row: dict[str, Any]) -> dict[str, Any]:
     """Append a row (auto-assigning _id if absent) and return the row."""
-    file = vault.read_file(path)
-    fm, _ = _extract_frontmatter(file["content"])
-    fm.setdefault(DATATABLE_PLUGIN_KEY, "basic")
-    tbl = read_table(path)
+    fm, tbl = _load_state(path)
     if "_id" not in row:
         row = {"_id": uuid.uuid4().hex[:8], **row}
     tbl["rows"].append(row)
-    vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"]))
+    vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"], tbl.get("views", [])))
     return row
+
+
+def add_rows(path: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Append multiple rows in one write (CSV import). Returns new rows."""
+    fm, tbl = _load_state(path)
+    added: list[dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if "_id" not in r:
+            r = {"_id": uuid.uuid4().hex[:8], **r}
+        tbl["rows"].append(r)
+        added.append(r)
+    vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"], tbl.get("views", [])))
+    return added
 
 
 def update_row(path: str, row_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Update fields of an existing row identified by _id."""
-    file = vault.read_file(path)
-    fm, _ = _extract_frontmatter(file["content"])
-    fm.setdefault(DATATABLE_PLUGIN_KEY, "basic")
-    tbl = read_table(path)
+    fm, tbl = _load_state(path)
     for row in tbl["rows"]:
         if str(row.get("_id")) == str(row_id):
             row.update({k: v for k, v in updates.items() if k != "_id"})
-            vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"]))
+            vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"], tbl.get("views", [])))
             return row
     raise KeyError(f"row {row_id!r} not found")
 
 
 def delete_row(path: str, row_id: str) -> None:
     """Delete a row by _id."""
-    file = vault.read_file(path)
-    fm, _ = _extract_frontmatter(file["content"])
-    fm.setdefault(DATATABLE_PLUGIN_KEY, "basic")
-    tbl = read_table(path)
+    fm, tbl = _load_state(path)
     before = len(tbl["rows"])
     tbl["rows"] = [r for r in tbl["rows"] if str(r.get("_id")) != str(row_id)]
     if len(tbl["rows"]) == before:
         raise KeyError(f"row {row_id!r} not found")
-    vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"]))
+    vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"], tbl.get("views", [])))

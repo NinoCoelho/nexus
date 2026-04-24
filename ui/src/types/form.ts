@@ -5,7 +5,9 @@ export type FieldKind =
   | "boolean"
   | "select"
   | "multiselect"
-  | "date";
+  | "date"
+  | "vault-link"
+  | "formula";
 
 export interface FieldSchema {
   name: string;
@@ -16,6 +18,8 @@ export interface FieldSchema {
   choices?: string[];
   placeholder?: string;
   help?: string;
+  /** For kind="formula": expression evaluated against other row fields (e.g. "price * qty"). */
+  formula?: string;
 }
 
 export interface FormSchema {

@@ -1,0 +1,73 @@
+.mention-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px color-mix(in srgb, var(--shadow-color) 120%, transparent);
+  padding: 4px;
+  z-index: 110;
+  animation: menu-in 120ms ease-out;
+}
+
+.mention-picker-empty {
+  padding: 10px 12px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-family: var(--font-ui);
+}
+
+.mention-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.mention-picker-item.is-active,
+.mention-picker-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.mention-picker-icon {
+  display: inline-flex;
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+.mention-picker-item.is-active .mention-picker-icon {
+  color: var(--accent);
+}
+
+.mention-picker-name {
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.mention-picker-dir {
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}

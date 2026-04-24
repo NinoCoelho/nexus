@@ -50,6 +50,27 @@ KANBAN_MANAGE_TOOL = ToolSpec(
             "card_id": {"type": "string", "description": "Card id (move/update/delete)."},
             "body": {"type": "string", "description": "Card body / notes markdown."},
             "position": {"type": "integer", "description": "Insert position within the lane (move_card)."},
+            "due": {"type": "string", "description": "ISO date 'YYYY-MM-DD' for update_card. Empty string clears."},
+            "priority": {
+                "type": "string",
+                "enum": ["", "low", "med", "high", "urgent"],
+                "description": "Card priority (update_card). Empty string clears.",
+            },
+            "labels": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Replace card labels (update_card). Pass [] to clear.",
+            },
+            "assignees": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Replace card assignees (update_card). Pass [] to clear.",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["", "running", "done", "failed"],
+                "description": "Card run status (update_card). Empty string clears.",
+            },
         },
         "required": ["action", "path"],
     },
@@ -98,7 +119,7 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
             if not card_id:
                 return json.dumps({"ok": False, "error": "`card_id` is required"})
             updates: dict[str, Any] = {}
-            for key in ("title", "body"):
+            for key in ("title", "body", "due", "priority", "labels", "assignees", "status"):
                 if key in args:
                     updates[key] = args[key]
             card = vault_kanban.update_card(path, card_id, updates)

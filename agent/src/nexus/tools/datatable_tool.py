@@ -26,8 +26,8 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                 "type": "string",
                 "enum": [
                     "create_table", "view",
-                    "add_row", "update_row", "delete_row",
-                    "list_rows", "set_schema",
+                    "add_row", "add_rows", "update_row", "delete_row",
+                    "list_rows", "set_schema", "set_views",
                 ],
                 "description": "Action to perform.",
             },
@@ -47,9 +47,22 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                 "type": "object",
                 "description": "Row data for add_row or update_row. Key-value pairs matching field names.",
             },
+            "rows": {
+                "type": "array",
+                "description": "List of rows for add_rows (bulk import). Each item is a row dict.",
+                "items": {"type": "object"},
+            },
             "row_id": {
                 "type": "string",
                 "description": "Row identifier (_id field) for update_row or delete_row.",
+            },
+            "views": {
+                "type": "array",
+                "description": (
+                    "List of saved view presets for set_views. "
+                    "Each view: { name: str, filter?: str, sort?: {field, dir: 'asc'|'desc'}, hidden?: [field_names] }"
+                ),
+                "items": {"type": "object"},
             },
         },
         "required": ["action", "path"],
@@ -110,6 +123,20 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             if not schema or not isinstance(schema, dict):
                 return json.dumps({"ok": False, "error": "`schema` is required for set_schema"})
             tbl = vault_datatable.set_schema(path, schema)
+            return json.dumps({"ok": True, "table": tbl})
+
+        if action == "add_rows":
+            rows = args.get("rows")
+            if not isinstance(rows, list):
+                return json.dumps({"ok": False, "error": "`rows` (list) is required for add_rows"})
+            added = vault_datatable.add_rows(path, rows)
+            return json.dumps({"ok": True, "added": added, "count": len(added)})
+
+        if action == "set_views":
+            views = args.get("views")
+            if not isinstance(views, list):
+                return json.dumps({"ok": False, "error": "`views` (list) is required for set_views"})
+            tbl = vault_datatable.set_views(path, views)
             return json.dumps({"ok": True, "table": tbl})
 
         return json.dumps({"ok": False, "error": f"unknown action: {action!r}"})

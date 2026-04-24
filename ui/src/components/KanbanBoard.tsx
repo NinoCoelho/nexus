@@ -10,10 +10,11 @@
  * the backend writes each operation atomically to the .md file.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Modal, { type ModalProps } from "./Modal";
 import CardDetailModal from "./CardDetailModal";
 import CardActivityModal from "./CardActivityModal";
+import LanePromptDialog from "./LanePromptDialog";
 import {
   addVaultKanbanCard,
   addVaultKanbanLane,
@@ -45,6 +46,30 @@ function cardPreview(body: string | undefined): string {
   return para.length > 120 ? para.slice(0, 117) + "…" : para;
 }
 
+const PRIORITY_CLASS: Record<string, string> = {
+  low: "kanban-prio kanban-prio--low",
+  med: "kanban-prio kanban-prio--med",
+  high: "kanban-prio kanban-prio--high",
+  urgent: "kanban-prio kanban-prio--urgent",
+};
+
+function dueBadge(due: string | undefined): { label: string; cls: string } | null {
+  if (!due) return null;
+  // Compare as ISO yyyy-mm-dd against today's date
+  const today = new Date().toISOString().slice(0, 10);
+  const cls = due < today ? "kanban-due kanban-due--overdue"
+    : due === today ? "kanban-due kanban-due--today"
+    : "kanban-due";
+  return { label: due, cls };
+}
+
+interface BoardFilters {
+  text: string;
+  label: string;
+  priority: string;
+  assignee: string;
+}
+
 export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const [board, setBoard] = useState<BoardT | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +78,21 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const [modal, setModal] = useState<ModalProps | null>(null);
   const [detailCard, setDetailCard] = useState<KanbanCard | null>(null);
   const [activityCard, setActivityCard] = useState<KanbanCard | null>(null);
+  const [editLane, setEditLane] = useState<KanbanLane | null>(null);
+  const [filters, setFilters] = useState<BoardFilters>({ text: "", label: "", priority: "", assignee: "" });
+  const [showFilters, setShowFilters] = useState(false);
+
+  const matchesFilters = (card: KanbanCard): boolean => {
+    if (filters.text) {
+      const q = filters.text.toLowerCase();
+      const hay = `${card.title} ${card.body ?? ""} ${(card.labels ?? []).join(" ")}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (filters.label && !(card.labels ?? []).includes(filters.label)) return false;
+    if (filters.priority && card.priority !== filters.priority) return false;
+    if (filters.assignee && !(card.assignees ?? []).includes(filters.assignee)) return false;
+    return true;
+  };
 
   const reload = useCallback(() => {
     setError(null);
@@ -64,12 +104,29 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   useEffect(() => { reload(); }, [reload]);
 
   // Poll while any card is running so the spinner reflects the latest status
-  // without needing a full SSE fan-out just for the card grid.
+  // without needing a full SSE fan-out just for the card grid. The agent may
+  // also mutate the board mid-turn (move_card, update_card via tools), so we
+  // need polling fresh enough to catch lane changes — not just the final
+  // status flip.
   const hasRunning = board?.lanes.some((l) => l.cards.some((c) => c.status === "running")) ?? false;
   useEffect(() => {
     if (!hasRunning) return;
-    const t = setInterval(() => reload(), 3000);
+    const t = setInterval(() => reload(), 1500);
     return () => clearInterval(t);
+  }, [hasRunning, reload]);
+
+  // When a turn finishes (running → done/failed) the final tool calls may
+  // have written to the board file fractionally before the status flip.
+  // Schedule one extra reload shortly after the transition so any
+  // late-arriving moves/edits surface without requiring a manual refresh.
+  const prevHasRunning = useRef(false);
+  useEffect(() => {
+    const transitioned = prevHasRunning.current && !hasRunning;
+    prevHasRunning.current = hasRunning;
+    if (transitioned) {
+      const t = setTimeout(() => reload(), 500);
+      return () => clearTimeout(t);
+    }
   }, [hasRunning, reload]);
 
   if (error) return <div className="kanban-error">Couldn't load board: {error}</div>;
@@ -185,31 +242,67 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   };
 
   const handleEditLanePrompt = (lane: KanbanLane) => {
-    setModal({
-      kind: "prompt",
-      title: `Lane prompt — ${lane.title}`,
-      message: "When a card is dropped into this lane, the prompt below will auto-dispatch to chat with the card as context. Leave empty to disable.",
-      placeholder: "e.g. Summarise what was accomplished in this card.",
-      defaultValue: lane.prompt ?? "",
-      confirmLabel: "Save",
-      allowEmpty: true,
-      onCancel: () => setModal(null),
-      onSubmit: async (val) => {
-        setModal(null);
-        try {
-          await patchVaultKanbanLane(path, lane.id, { prompt: val.trim() || null });
-          reload();
-        } catch { /* ignore */ }
-      },
-    });
+    setEditLane(lane);
   };
 
   return (
     <div className="kanban-board">
       <div className="kanban-board-header">
         <div className="kanban-board-title">{board.title}</div>
-        <button className="kanban-pill" onClick={() => void handleAddLane()}>+ Lane</button>
+        <div className="kanban-board-header-actions">
+          <button
+            className="kanban-pill"
+            onClick={() => setShowFilters((v) => !v)}
+            title="Filter cards"
+          >
+            {showFilters ? "Hide filters" : "Filters"}
+            {(filters.text || filters.label || filters.priority || filters.assignee) && " •"}
+          </button>
+          <button className="kanban-pill" onClick={() => void handleAddLane()}>+ Lane</button>
+        </div>
       </div>
+      {showFilters && (
+        <div className="kanban-filter-bar">
+          <input
+            className="kanban-filter-input"
+            type="search"
+            placeholder="Search…"
+            value={filters.text}
+            onChange={(e) => setFilters((f) => ({ ...f, text: e.target.value }))}
+          />
+          <input
+            className="kanban-filter-input"
+            placeholder="Label"
+            value={filters.label}
+            onChange={(e) => setFilters((f) => ({ ...f, label: e.target.value }))}
+          />
+          <input
+            className="kanban-filter-input"
+            placeholder="Assignee"
+            value={filters.assignee}
+            onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value }))}
+          />
+          <select
+            className="kanban-filter-input"
+            value={filters.priority}
+            onChange={(e) => setFilters((f) => ({ ...f, priority: e.target.value }))}
+          >
+            <option value="">Any priority</option>
+            <option value="urgent">Urgent</option>
+            <option value="high">High</option>
+            <option value="med">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          {(filters.text || filters.label || filters.priority || filters.assignee) && (
+            <button
+              className="kanban-pill"
+              onClick={() => setFilters({ text: "", label: "", priority: "", assignee: "" })}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
       <div className="kanban-lanes">
         {board.lanes.map((lane) => (
           <div key={lane.id} className="kanban-lane">
@@ -244,8 +337,9 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
                 void handleDrop(lane.id, idx);
               }}
             >
-              {lane.cards.map((card, i) => {
+              {lane.cards.filter(matchesFilters).map((card, i) => {
                 const preview = cardPreview(card.body);
+                const due = dueBadge(card.due);
                 return (
                   <div
                     key={card.id}
@@ -273,8 +367,27 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
                       setDetailCard(card);
                     }}
                   >
-                    <div className="kanban-card-title">{card.title}</div>
+                    <div className="kanban-card-title">
+                      {card.priority && (
+                        <span
+                          className={PRIORITY_CLASS[card.priority] ?? "kanban-prio"}
+                          title={`Priority: ${card.priority}`}
+                        />
+                      )}
+                      <span>{card.title}</span>
+                    </div>
                     {preview && <div className="kanban-card-body">{preview}</div>}
+                    {(due || (card.labels && card.labels.length > 0) || (card.assignees && card.assignees.length > 0)) && (
+                      <div className="kanban-card-meta">
+                        {due && <span className={due.cls}>{due.label}</span>}
+                        {(card.labels ?? []).map((l) => (
+                          <span key={l} className="kanban-label">{l}</span>
+                        ))}
+                        {(card.assignees ?? []).map((a) => (
+                          <span key={a} className="kanban-assignee">@{a}</span>
+                        ))}
+                      </div>
+                    )}
                     <div className="kanban-card-actions">
                       {(card.status === "running" || card.status === "done" || card.status === "failed") && (
                         <button
@@ -327,6 +440,21 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
         ))}
       </div>
       {modal && <Modal {...modal} />}
+      {editLane && (
+        <LanePromptDialog
+          lane={editLane}
+          onCancel={() => setEditLane(null)}
+          onSubmit={async (patch) => {
+            try {
+              await patchVaultKanbanLane(path, editLane.id, patch);
+              setEditLane(null);
+              reload();
+            } catch {
+              setEditLane(null);
+            }
+          }}
+        />
+      )}
       {activityCard && activityCard.session_id && (
         <CardActivityModal
           sessionId={activityCard.session_id}

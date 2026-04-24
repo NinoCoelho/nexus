@@ -270,9 +270,14 @@ class AgentHandlers:
         self,
         ask_user: Any | None = None,
         terminal: Any | None = None,
+        dispatcher: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
+        # Async callable: dispatcher(path, card_id?, mode) -> dict
+        # with keys {session_id, seed_message?, path, card_id?, mode}.
+        # Late-bound by app.py so tools can spawn sub-sessions.
+        self.dispatcher = dispatcher
 
 
 def build_tool_registry(
@@ -294,6 +299,8 @@ def build_tool_registry(
     from ..tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
     from ..tools.datatable_tool import DATATABLE_MANAGE_TOOL, handle_datatable_tool
     from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
+    from ..tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
+    from ..tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
     from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from ..tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from ..tools.state_tool import STATE_TOOLS, StateToolHandler
@@ -360,6 +367,18 @@ def build_tool_registry(
         return handle_kanban_tool(args)
 
     registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
+
+    # kanban_query — cross-board search
+    async def _kanban_query(args: dict) -> str:
+        return handle_kanban_query_tool(args)
+
+    registry.register(_SimpleToolHandler(KANBAN_QUERY_TOOL, _kanban_query))
+
+    # dispatch_card — spawn a chat session seeded from a card or vault file
+    async def _dispatch_card(args: dict) -> str:
+        return await handle_dispatch_card_tool(args, handlers.dispatcher)
+
+    registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
 
     # datatable_manage
     async def _datatable(args: dict) -> str:

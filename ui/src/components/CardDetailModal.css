@@ -143,3 +143,52 @@
   padding: 12px 20px;
   flex-shrink: 0;
 }
+
+.card-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 16px 0;
+}
+
+.card-detail-meta-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  background: var(--bg-inset);
+}
+
+.card-detail-meta-edit {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.card-detail-meta-edit label {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--fg-dim);
+  gap: 3px;
+}
+
+.card-detail-meta-edit input,
+.card-detail-meta-edit select {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+}
+
+.card-detail-meta-edit input:focus,
+.card-detail-meta-edit select:focus {
+  outline: none;
+  border-color: var(--accent);
+}

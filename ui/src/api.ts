@@ -221,6 +221,13 @@ export async function postVaultFolder(path: string): Promise<void> {
 
 export interface VaultSearchResult { path: string; snippet: string; score: number }
 
+export async function searchVaultMentions(q: string, limit = 8): Promise<VaultNode[]> {
+  const res = await fetch(`${BASE}/vault/mention?q=${encodeURIComponent(q)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`Vault mention error: ${res.status}`);
+  const data = await res.json() as { results: VaultNode[] };
+  return data.results;
+}
+
 export async function searchVault(q: string, limit = 50): Promise<VaultSearchResult[]> {
   const res = await fetch(`${BASE}/vault/search?q=${encodeURIComponent(q)}&limit=${limit}`);
   if (!res.ok) throw new Error(`Vault search error: ${res.status}`);
@@ -301,6 +308,7 @@ export async function getVaultEntitySources(path: string): Promise<{ path: strin
 // ── Vault-native Kanban ──────────────────────────────────────────────────────
 
 export type KanbanCardStatus = "running" | "done" | "failed";
+export type KanbanCardPriority = "low" | "med" | "high" | "urgent";
 
 export interface KanbanCard {
   id: string;
@@ -308,6 +316,10 @@ export interface KanbanCard {
   body?: string;
   session_id?: string;
   status?: KanbanCardStatus;
+  due?: string;
+  priority?: KanbanCardPriority;
+  labels?: string[];
+  assignees?: string[];
 }
 
 export interface KanbanLane {
@@ -315,6 +327,7 @@ export interface KanbanLane {
   title: string;
   cards: KanbanCard[];
   prompt?: string;
+  model?: string;
 }
 
 export interface KanbanBoard {
@@ -361,7 +374,17 @@ export async function addVaultKanbanCard(
 export async function patchVaultKanbanCard(
   path: string,
   cardId: string,
-  patch: { title?: string; body?: string; lane?: string; position?: number; session_id?: string | null },
+  patch: {
+    title?: string;
+    body?: string;
+    lane?: string;
+    position?: number;
+    session_id?: string | null;
+    due?: string | null;
+    priority?: KanbanCardPriority | "" | null;
+    labels?: string[];
+    assignees?: string[];
+  },
 ): Promise<KanbanCard> {
   const res = await fetch(`${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}?path=${encodeURIComponent(path)}`, {
     method: "PATCH",
@@ -396,10 +419,48 @@ export async function deleteVaultKanbanLane(path: string, laneId: string): Promi
   if (!res.ok) throw new Error(`Kanban lane delete error: ${res.status}`);
 }
 
+export interface KanbanQueryHit {
+  path: string;
+  board_title: string;
+  lane_id: string;
+  lane_title: string;
+  card_id: string;
+  title: string;
+  body: string;
+  due?: string | null;
+  priority?: KanbanCardPriority | null;
+  labels: string[];
+  assignees: string[];
+  status?: KanbanCardStatus | null;
+  session_id?: string | null;
+}
+
+export interface KanbanQuery {
+  text?: string;
+  label?: string;
+  assignee?: string;
+  priority?: KanbanCardPriority;
+  status?: KanbanCardStatus;
+  due_before?: string;
+  due_after?: string;
+  lane?: string;
+  limit?: number;
+}
+
+export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQueryHit[]; count: number }> {
+  const res = await fetch(`${BASE}/vault/kanban/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(q),
+  });
+  if (!res.ok) throw new Error(`Kanban query error: ${res.status}`);
+  return res.json();
+}
+
 export async function patchVaultKanbanLane(
   path: string,
   laneId: string,
-  patch: { title?: string; prompt?: string | null },
+  patch: { title?: string; prompt?: string | null; model?: string | null },
 ): Promise<KanbanLane> {
   const res = await fetch(
     `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}?path=${encodeURIComponent(path)}`,
@@ -415,10 +476,18 @@ export async function patchVaultKanbanLane(
 
 // ── Vault data-table ─────────────────────────────────────────────────────────
 
+export interface DataTableView {
+  name: string;
+  filter?: string;
+  sort?: { field: string; dir: "asc" | "desc" };
+  hidden?: string[];
+}
+
 export interface DataTable {
   path: string;
   schema: { title?: string; fields: import("./types/form").FieldSchema[] };
   rows: Record<string, unknown>[];
+  views?: DataTableView[];
 }
 
 export async function getVaultDataTable(path: string): Promise<DataTable> {
@@ -463,6 +532,45 @@ export async function deleteVaultDataTableRow(path: string, rowId: string): Prom
     { method: "DELETE" },
   );
   if (!res.ok) throw new Error(`DataTable delete row error: ${res.status}`);
+}
+
+export async function bulkAddVaultDataTableRows(
+  path: string,
+  rows: Record<string, unknown>[],
+): Promise<{ added: Record<string, unknown>[]; count: number }> {
+  const res = await fetch(`${BASE}/vault/datatable/rows/bulk?path=${encodeURIComponent(path)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) throw new Error(`DataTable bulk add error: ${res.status}`);
+  return res.json();
+}
+
+export async function setVaultDataTableSchema(
+  path: string,
+  schema: DataTable["schema"],
+): Promise<DataTable> {
+  const res = await fetch(`${BASE}/vault/datatable/schema?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ schema }),
+  });
+  if (!res.ok) throw new Error(`DataTable set schema error: ${res.status}`);
+  return res.json();
+}
+
+export async function setVaultDataTableViews(
+  path: string,
+  views: DataTableView[],
+): Promise<DataTable> {
+  const res = await fetch(`${BASE}/vault/datatable/views?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ views }),
+  });
+  if (!res.ok) throw new Error(`DataTable set views error: ${res.status}`);
+  return res.json();
 }
 
 // ── Dispatch (start chat seeded from a vault file or kanban card) ────────────

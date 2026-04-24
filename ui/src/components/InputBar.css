@@ -95,6 +95,10 @@
 
 /* ── Input bar (pill) ── */
 
+.input-bar-positioner {
+  position: relative;
+}
+
 .input-bar {
   display: flex;
   align-items: flex-end;

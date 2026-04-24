@@ -134,3 +134,198 @@
   color: var(--fg-faint);
   font-size: 13px;
 }
+
+/* Toolbar */
+.dt-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dt-search {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+  min-width: 140px;
+}
+
+.dt-search:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.dt-view-select {
+  min-width: 110px;
+}
+
+/* Sortable headers */
+.dt-th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.dt-th-sortable:hover {
+  color: var(--accent);
+}
+
+.dt-sort-arrow {
+  color: var(--accent);
+  font-size: 9px;
+}
+
+/* Inline cell editor */
+.dt-cell-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 2px 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+}
+
+.dt-cell-input:focus {
+  outline: none;
+}
+
+.dt-cell-formula {
+  color: var(--fg-faint);
+  font-style: italic;
+}
+
+/* Pagination */
+.dt-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.dt-page-info {
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+
+/* Column visibility menu */
+.dt-cols-menu {
+  position: relative;
+}
+
+.dt-cols-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  min-width: 180px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.dt-cols-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+
+.dt-cols-item:hover {
+  background: var(--bg-hover);
+}
+
+/* Schema editor modal */
+.dt-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.dt-modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  min-width: 720px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dt-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.dt-schema-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dt-schema-label {
+  font-size: 12px;
+  color: var(--fg-faint);
+  min-width: 60px;
+}
+
+.dt-schema-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dt-schema-fields-head,
+.dt-schema-field {
+  display: grid;
+  grid-template-columns: 1.2fr 1.2fr 1fr 1.4fr 0.4fr 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.dt-schema-fields-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.dt-schema-field-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.dt-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}

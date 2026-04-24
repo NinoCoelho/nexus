@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import MarkdownView from "./MarkdownView";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
-import { patchVaultKanbanCard, type KanbanCard } from "../api";
+import { patchVaultKanbanCard, type KanbanCard, type KanbanCardPriority } from "../api";
 import "./CardDetailModal.css";
 import "./Modal.css";
 
@@ -29,8 +29,15 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [editTitle, setEditTitle] = useState(card.title);
   const [editBody, setEditBody] = useState(card.body ?? "");
+  const [editDue, setEditDue] = useState(card.due ?? "");
+  const [editPriority, setEditPriority] = useState<KanbanCardPriority | "">((card.priority as KanbanCardPriority) ?? "");
+  const [editLabels, setEditLabels] = useState((card.labels ?? []).join(", "));
+  const [editAssignees, setEditAssignees] = useState((card.assignees ?? []).join(", "));
   const [saving, setSaving] = useState(false);
   const editorRef = useRef<MarkdownEditorHandle>(null);
+
+  const splitCSV = (s: string): string[] =>
+    s.split(",").map((x) => x.trim()).filter(Boolean);
 
   const handleSave = async () => {
     setSaving(true);
@@ -38,6 +45,10 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
       const updated = await patchVaultKanbanCard(boardPath, card.id, {
         title: editTitle.trim() || card.title,
         body: editBody,
+        due: editDue || null,
+        priority: editPriority === "" ? "" : editPriority,
+        labels: splitCSV(editLabels),
+        assignees: splitCSV(editAssignees),
       });
       onSaved(updated);
     } catch {
@@ -48,6 +59,10 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
   const handleCancel = () => {
     setEditTitle(card.title);
     setEditBody(card.body ?? "");
+    setEditDue(card.due ?? "");
+    setEditPriority((card.priority as KanbanCardPriority) ?? "");
+    setEditLabels((card.labels ?? []).join(", "));
+    setEditAssignees((card.assignees ?? []).join(", "));
     setMode("view");
   };
 
@@ -82,6 +97,18 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
                 </button>
               </div>
             </div>
+            {(card.due || card.priority || (card.labels?.length ?? 0) > 0 || (card.assignees?.length ?? 0) > 0) && (
+              <div className="card-detail-meta">
+                {card.priority && <span className="card-detail-meta-pill">priority: {card.priority}</span>}
+                {card.due && <span className="card-detail-meta-pill">due: {card.due}</span>}
+                {(card.labels ?? []).map((l) => (
+                  <span key={l} className="card-detail-meta-pill">#{l}</span>
+                ))}
+                {(card.assignees ?? []).map((a) => (
+                  <span key={a} className="card-detail-meta-pill">@{a}</span>
+                ))}
+              </div>
+            )}
             <div className="card-detail-body">
               {card.body ? (
                 <MarkdownView>{card.body}</MarkdownView>
@@ -100,6 +127,47 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
                 placeholder="Card title"
                 autoFocus
               />
+            </div>
+            <div className="card-detail-meta-edit">
+              <label>
+                Due
+                <input
+                  type="date"
+                  value={editDue}
+                  onChange={(e) => setEditDue(e.target.value)}
+                />
+              </label>
+              <label>
+                Priority
+                <select
+                  value={editPriority}
+                  onChange={(e) => setEditPriority(e.target.value as KanbanCardPriority | "")}
+                >
+                  <option value="">—</option>
+                  <option value="low">Low</option>
+                  <option value="med">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </label>
+              <label>
+                Labels
+                <input
+                  type="text"
+                  value={editLabels}
+                  onChange={(e) => setEditLabels(e.target.value)}
+                  placeholder="comma,separated"
+                />
+              </label>
+              <label>
+                Assignees
+                <input
+                  type="text"
+                  value={editAssignees}
+                  onChange={(e) => setEditAssignees(e.target.value)}
+                  placeholder="comma,separated"
+                />
+              </label>
             </div>
             <div className="card-detail-toolbar">
               {TOOLBAR_ACTIONS.map((btn, i) =>

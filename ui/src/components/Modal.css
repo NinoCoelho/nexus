@@ -84,3 +84,13 @@
   color: #fff;
 }
 .modal-btn--danger:hover { background: #d46868; border-color: #d46868; }
+
+.modal-field-label {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin: 12px 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+}

@@ -50,6 +50,7 @@ _NX_LINE = re.compile(r"^\s*<!--\s*nx:([a-z][a-z0-9-]*)(?:=(.*?))?\s*-->\s*$", r
 
 
 CARD_STATUSES = {"running", "done", "failed"}
+CARD_PRIORITIES = {"low", "med", "high", "urgent"}
 
 
 @dataclass
@@ -59,6 +60,12 @@ class Card:
     body: str = ""
     session_id: str | None = None
     status: str | None = None  # None | "running" | "done" | "failed"
+    # Metadata — all optional. Persisted as nx:<key>=value comments inside the
+    # card body so hand-edited markdown round-trips cleanly.
+    due: str | None = None        # ISO date "YYYY-MM-DD"
+    priority: str | None = None   # one of CARD_PRIORITIES
+    labels: list[str] = field(default_factory=list)
+    assignees: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "title": self.title, "body": self.body}
@@ -66,6 +73,14 @@ class Card:
             out["session_id"] = self.session_id
         if self.status:
             out["status"] = self.status
+        if self.due:
+            out["due"] = self.due
+        if self.priority:
+            out["priority"] = self.priority
+        if self.labels:
+            out["labels"] = list(self.labels)
+        if self.assignees:
+            out["assignees"] = list(self.assignees)
         return out
 
 
@@ -75,11 +90,14 @@ class Lane:
     title: str
     cards: list[Card] = field(default_factory=list)
     prompt: str | None = None
+    model: str | None = None  # model id used when auto-dispatching this lane's prompt
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "title": self.title, "cards": [c.to_dict() for c in self.cards]}
         if self.prompt is not None:
             out["prompt"] = self.prompt
+        if self.model is not None:
+            out["model"] = self.model
         return out
 
 
@@ -177,6 +195,14 @@ def parse(content: str) -> Board:
             card.session_id = meta["session"]
         if "status" in meta and meta["status"] in CARD_STATUSES:
             card.status = meta["status"]
+        if "due" in meta:
+            card.due = meta["due"]
+        if "priority" in meta and meta["priority"] in CARD_PRIORITIES:
+            card.priority = meta["priority"]
+        if "labels" in meta:
+            card.labels = [s.strip() for s in meta["labels"].split(",") if s.strip()]
+        if "assignees" in meta:
+            card.assignees = [s.strip() for s in meta["assignees"].split(",") if s.strip()]
         lane.cards.append(card)
         card = None
         card_lines = []
@@ -219,10 +245,14 @@ def parse(content: str) -> Board:
         board.lanes.append(lane)
 
     lane_prompts: dict[str, str] = frontmatter.get("lane_prompts") or {}
+    lane_models: dict[str, str] = frontmatter.get("lane_models") or {}
     for ln in board.lanes:
         lp = lane_prompts.get(ln.id)
         if lp:
             ln.prompt = str(lp)
+        lm = lane_models.get(ln.id)
+        if lm:
+            ln.model = str(lm)
 
     return board
 
@@ -242,6 +272,11 @@ def serialize(board: Board) -> str:
         fm["lane_prompts"] = lp
     else:
         fm.pop("lane_prompts", None)
+    lm = {ln.id: ln.model for ln in board.lanes if ln.model}
+    if lm:
+        fm["lane_models"] = lm
+    else:
+        fm.pop("lane_models", None)
     fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False).rstrip()
     out = [f"---\n{fm_text}\n---", "", f"# {board.title}", ""]
     for lane in board.lanes:
@@ -254,6 +289,14 @@ def serialize(board: Board) -> str:
                 out.append(f"<!-- nx:session={card.session_id} -->")
             if card.status:
                 out.append(f"<!-- nx:status={card.status} -->")
+            if card.due:
+                out.append(f"<!-- nx:due={card.due} -->")
+            if card.priority:
+                out.append(f"<!-- nx:priority={card.priority} -->")
+            if card.labels:
+                out.append(f"<!-- nx:labels={','.join(card.labels)} -->")
+            if card.assignees:
+                out.append(f"<!-- nx:assignees={','.join(card.assignees)} -->")
             body = (card.body or "").strip()
             if body:
                 out.append("")
@@ -342,8 +385,35 @@ def update_card(
             card.status = raw
         else:
             raise ValueError(f"invalid status {raw!r}; allowed: {sorted(CARD_STATUSES)}")
+    if "due" in updates:
+        raw = updates["due"]
+        card.due = str(raw).strip() if raw else None
+    if "priority" in updates:
+        raw = updates["priority"]
+        if raw is None or raw == "":
+            card.priority = None
+        elif raw in CARD_PRIORITIES:
+            card.priority = raw
+        else:
+            raise ValueError(f"invalid priority {raw!r}; allowed: {sorted(CARD_PRIORITIES)}")
+    if "labels" in updates:
+        raw = updates["labels"]
+        card.labels = _coerce_str_list(raw)
+    if "assignees" in updates:
+        raw = updates["assignees"]
+        card.assignees = _coerce_str_list(raw)
     write_board(path, board)
     return card
+
+
+def _coerce_str_list(raw: Any) -> list[str]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [str(s).strip() for s in raw if str(s).strip()]
+    if isinstance(raw, str):
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    return []
 
 
 def move_card(
@@ -411,5 +481,93 @@ def update_lane(path: str, lane_id: str, updates: dict[str, Any]) -> Lane:
     if "prompt" in updates:
         raw = updates["prompt"]
         lane.prompt = str(raw).strip() if raw else None
+    if "model" in updates:
+        raw = updates["model"]
+        lane.model = str(raw).strip() if raw else None
     write_board(path, board)
     return lane
+
+
+# ── Cross-board query ───────────────────────────────────────────────────────
+
+
+def query_boards(
+    *,
+    text: str | None = None,
+    label: str | None = None,
+    assignee: str | None = None,
+    priority: str | None = None,
+    status: str | None = None,
+    due_before: str | None = None,
+    due_after: str | None = None,
+    lane: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Search every kanban board in the vault for cards matching the criteria.
+
+    Returns a flat list of hit dicts: ``{path, board_title, lane_id, lane_title,
+    card_id, title, body, due, priority, labels, assignees, status, session_id}``.
+    All filters are AND-combined; a missing filter matches everything. ``text``
+    is case-insensitive substring match against title + body + labels.
+    """
+    text_q = text.lower().strip() if text else None
+    hits: list[dict[str, Any]] = []
+    for entry in vault.list_tree():
+        if entry.type != "file":
+            continue
+        path = entry.path
+        if not path.endswith(".md"):
+            continue
+        try:
+            file = vault.read_file(path)
+        except (FileNotFoundError, OSError):
+            continue
+        if not is_kanban_file(file["content"]):
+            continue
+        try:
+            board = parse(file["content"])
+        except Exception:
+            continue
+        for ln in board.lanes:
+            if lane and ln.id != lane and ln.title != lane:
+                continue
+            for card in ln.cards:
+                if status and card.status != status:
+                    continue
+                if priority and card.priority != priority:
+                    continue
+                if label and label not in card.labels:
+                    continue
+                if assignee and assignee not in card.assignees:
+                    continue
+                if due_before and (not card.due or card.due > due_before):
+                    continue
+                if due_after and (not card.due or card.due < due_after):
+                    continue
+                if text_q:
+                    haystack = " ".join([
+                        card.title or "",
+                        card.body or "",
+                        ",".join(card.labels),
+                        ",".join(card.assignees),
+                    ]).lower()
+                    if text_q not in haystack:
+                        continue
+                hits.append({
+                    "path": path,
+                    "board_title": board.title,
+                    "lane_id": ln.id,
+                    "lane_title": ln.title,
+                    "card_id": card.id,
+                    "title": card.title,
+                    "body": card.body,
+                    "due": card.due,
+                    "priority": card.priority,
+                    "labels": list(card.labels),
+                    "assignees": list(card.assignees),
+                    "status": card.status,
+                    "session_id": card.session_id,
+                })
+                if len(hits) >= limit:
+                    return hits
+    return hits

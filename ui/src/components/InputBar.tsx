@@ -12,8 +12,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { transcribeAudio, uploadVaultFiles } from "../api";
+import { searchVaultMentions, transcribeAudio, uploadVaultFiles, type VaultNode } from "../api";
 import { useToast } from "../toast/ToastProvider";
+import MentionPicker, { type MentionPickerHandle } from "./MentionPicker";
 import "./InputBar.css";
 
 interface AttachedFile {
@@ -66,6 +67,101 @@ export default function InputBar({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
+  const [mentionResults, setMentionResults] = useState<VaultNode[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const mentionRef = useRef<MentionPickerHandle>(null);
+  const mentionFetchSeq = useRef(0);
+  const mentionDebounceRef = useRef<number | null>(null);
+
+  /** Inspect the text around the cursor to detect an active `@query` token. */
+  const detectMention = useCallback((text: string, caret: number) => {
+    // Walk back from caret to find an `@` preceded by start-of-string or whitespace.
+    let i = caret - 1;
+    while (i >= 0) {
+      const ch = text[i];
+      if (ch === "@") {
+        const prev = i === 0 ? " " : text[i - 1];
+        if (/\s/.test(prev) || i === 0) {
+          const query = text.slice(i + 1, caret);
+          // bail if query contains whitespace or newline — user moved on
+          if (/\s/.test(query)) return null;
+          return { start: i, query };
+        }
+        return null;
+      }
+      if (/\s/.test(ch)) return null;
+      i--;
+    }
+    return null;
+  }, []);
+
+  const handleTextChange = (text: string) => {
+    onChange(text);
+    adjust();
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    const m = detectMention(text, caret);
+    setMention(m);
+  };
+
+  // Debounced server fetch keyed on the active mention query.
+  useEffect(() => {
+    if (!mention) {
+      setMentionResults([]);
+      setMentionLoading(false);
+      return;
+    }
+    if (mentionDebounceRef.current) window.clearTimeout(mentionDebounceRef.current);
+    setMentionLoading(true);
+    const seq = ++mentionFetchSeq.current;
+    mentionDebounceRef.current = window.setTimeout(async () => {
+      try {
+        const results = await searchVaultMentions(mention.query, 8);
+        if (seq === mentionFetchSeq.current) {
+          setMentionResults(results);
+          setMentionLoading(false);
+        }
+      } catch {
+        if (seq === mentionFetchSeq.current) {
+          setMentionResults([]);
+          setMentionLoading(false);
+        }
+      }
+    }, 80);
+    return () => {
+      if (mentionDebounceRef.current) window.clearTimeout(mentionDebounceRef.current);
+    };
+  }, [mention]);
+
+  const handleSelectionChange = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const m = detectMention(el.value, el.selectionStart ?? 0);
+    setMention(m);
+  };
+
+  const insertMention = useCallback((node: VaultNode) => {
+    if (!mention) return;
+    const el = textareaRef.current;
+    const text = value;
+    const caret = el?.selectionStart ?? text.length;
+    const name = node.path.split("/").pop() || node.path;
+    const link = `[${name}](vault://${node.path}) `;
+    const next = text.slice(0, mention.start) + link + text.slice(caret);
+    const newCaret = mention.start + link.length;
+    onChange(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const e = textareaRef.current;
+      if (e) {
+        e.focus();
+        e.setSelectionRange(newCaret, newCaret);
+        e.style.height = "auto";
+        e.style.height = `${Math.min(e.scrollHeight, 144)}px`;
+      }
+    });
+  }, [mention, value, onChange]);
+
   const hasContent = value.trim().length > 0 || (attachments && attachments.length > 0) || !!audio;
 
   const adjust = () => {
@@ -76,6 +172,7 @@ export default function InputBar({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && mentionRef.current?.handleKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (disabled || transcribing) return;
@@ -223,6 +320,16 @@ export default function InputBar({
           )}
         </div>
       ) : null}
+      <div className="input-bar-positioner">
+        {mention && (
+          <MentionPicker
+            ref={mentionRef}
+            results={mentionResults}
+            loading={mentionLoading}
+            onSelect={insertMention}
+            onClose={() => setMention(null)}
+          />
+        )}
       <div className="input-bar">
         <div className="input-bar-left">
           <button
@@ -245,8 +352,11 @@ export default function InputBar({
           rows={1}
           placeholder="Message Nexus…"
           value={value}
-          onChange={(e) => { onChange(e.target.value); adjust(); }}
+          onChange={(e) => handleTextChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onKeyUp={handleSelectionChange}
+          onClick={handleSelectionChange}
+          onBlur={() => setTimeout(() => setMention(null), 120)}
           disabled={disabled}
         />
         {showModelBadge && (
@@ -308,6 +418,7 @@ export default function InputBar({
             </svg>
           )}
         </button>
+      </div>
       </div>
       <input
         ref={fileInputRef}

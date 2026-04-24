@@ -1519,6 +1519,53 @@ def create_app(
             uploaded.append({"path": rel, "size": len(raw)})
         return {"uploaded": uploaded}
 
+    @app.get("/vault/mention")
+    async def vault_mention_endpoint(q: str = "", limit: int = 8) -> dict:
+        """Path/name autocomplete for the chat `@` mention picker.
+
+        Ranks vault files and folders by how well their basename or path
+        matches the query. Substring matches in basename rank highest, then
+        substring in path, then in-order character matches (loose fuzzy).
+        Returns at most `limit` entries with the same shape as `/vault/tree`.
+        """
+        from ..vault import list_tree
+        query = q.strip().lower()
+        entries = list_tree()
+        if not query:
+            ranked = entries[:limit]
+        else:
+            scored: list[tuple[float, str, object]] = []
+            for e in entries:
+                p = e.path.lower()
+                base = p.rsplit("/", 1)[-1]
+                idx = base.find(query)
+                if idx >= 0:
+                    s = 1000 - idx
+                else:
+                    idx = p.find(query)
+                    if idx >= 0:
+                        s = 500 - idx
+                    else:
+                        i = 0
+                        for ch in p:
+                            if ch == query[i]:
+                                i += 1
+                                if i == len(query):
+                                    break
+                        if i < len(query):
+                            continue
+                        s = 100
+                scored.append((s, e.path, e))
+            scored.sort(key=lambda r: (-r[0], r[1]))
+            ranked = [r[2] for r in scored[:limit]]
+        return {
+            "results": [
+                {"path": e.path, "type": e.type, "size": e.size, "mtime": e.mtime}
+                for e in ranked
+            ],
+            "q": q,
+        }
+
     @app.get("/vault/search")
     async def vault_search_endpoint(q: str = "", limit: int = 50) -> dict:
         from .. import vault_search
@@ -1624,11 +1671,11 @@ def create_app(
                     path, card_id, body["lane"], body.get("position"),
                 )
                 # Also apply any content edits in the same call.
-                updates = {k: body[k] for k in ("title", "body", "session_id", "status") if k in body}
+                updates = {k: body[k] for k in ("title", "body", "session_id", "status", "due", "priority", "labels", "assignees") if k in body}
                 if updates:
                     card = vault_kanban.update_card(path, card_id, updates)
             else:
-                updates = {k: body[k] for k in ("title", "body", "session_id", "status") if k in body}
+                updates = {k: body[k] for k in ("title", "body", "session_id", "status", "due", "priority", "labels", "assignees") if k in body}
                 card = vault_kanban.update_card(path, card_id, updates)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -1655,6 +1702,24 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
+    @app.post("/vault/kanban/query")
+    async def vault_kanban_query(body: dict) -> dict:
+        """Cross-board card search. Body keys (all optional):
+        text, label, assignee, priority, status, due_before, due_after, lane, limit.
+        """
+        from .. import vault_kanban
+        kwargs = {
+            k: body[k]
+            for k in (
+                "text", "label", "assignee", "priority", "status",
+                "due_before", "due_after", "lane",
+            )
+            if k in body and body[k] not in (None, "")
+        }
+        limit = int(body.get("limit") or 100)
+        hits = vault_kanban.query_boards(limit=limit, **kwargs)
+        return {"hits": hits, "count": len(hits)}
+
     @app.post("/vault/kanban/lanes", status_code=status.HTTP_201_CREATED)
     async def vault_kanban_add_lane(body: dict, path: str) -> dict:
         from .. import vault_kanban
@@ -1666,7 +1731,7 @@ def create_app(
 
     @app.patch("/vault/kanban/lanes/{lane_id}")
     async def vault_kanban_patch_lane(lane_id: str, body: dict, path: str) -> dict:
-        """Update a lane's title or prompt. Body: {title?, prompt?}."""
+        """Update a lane's title, prompt, or auto-dispatch model. Body: {title?, prompt?, model?}."""
         from .. import vault_kanban
         try:
             lane = vault_kanban.update_lane(path, lane_id, body)
@@ -1722,6 +1787,42 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
+    @app.post("/vault/datatable/rows/bulk", status_code=status.HTTP_201_CREATED)
+    async def vault_datatable_bulk_add(body: dict, path: str) -> dict:
+        from .. import vault_datatable
+        rows = body.get("rows", [])
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`rows` must be a list")
+        try:
+            added = vault_datatable.add_rows(path, rows)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return {"added": added, "count": len(added)}
+
+    @app.put("/vault/datatable/schema")
+    async def vault_datatable_set_schema(body: dict, path: str) -> dict:
+        from .. import vault_datatable
+        schema = body.get("schema")
+        if not isinstance(schema, dict):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`schema` must be an object")
+        try:
+            tbl = vault_datatable.set_schema(path, schema)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return {"path": path, **tbl}
+
+    @app.put("/vault/datatable/views")
+    async def vault_datatable_set_views(body: dict, path: str) -> dict:
+        from .. import vault_datatable
+        views = body.get("views", [])
+        if not isinstance(views, list):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`views` must be a list")
+        try:
+            tbl = vault_datatable.set_views(path, views)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return {"path": path, **tbl}
+
     # ── vault dispatch ─────────────────────────────────────────────────────────
     # Start a new chat session seeded with the content of a vault file
     # (or a single kanban card). Returns the new session_id + a seed message
@@ -1733,8 +1834,23 @@ def create_app(
     HIDDEN_SEED_MARKER = "<!-- nx:hidden-seed -->\n"
 
     def _compose_card_context_seed(
-        *, lane_prompt: str | None, path: str, card_title: str, card_id: str, card_body: str,
+        *,
+        lane_prompt: str | None,
+        path: str,
+        card_title: str,
+        card_id: str,
+        card_body: str,
+        current_lane_id: str | None = None,
+        current_lane_title: str | None = None,
+        lanes: list[tuple[str, str]] | None = None,
     ) -> str:
+        """Build the seed message for a background lane-prompt dispatch.
+
+        ``lanes`` is the full ordered list of (lane_id, lane_title) on the
+        board so the agent can resolve relative refs like "next lane" without
+        having to read the board first. ``current_lane_*`` identifies which
+        of those lanes contains the card right now.
+        """
         folder = path.rsplit("/", 1)[0] if "/" in path else ""
         parts = []
         if lane_prompt:
@@ -1745,14 +1861,26 @@ def create_app(
             parts.append(f"**Folder:** `{folder}/`")
         parts.append(f"**Card:** {card_title}")
         parts.append(f"**Card ID:** `{card_id}`")
+        if current_lane_id:
+            parts.append(
+                f"**Current lane:** {current_lane_title or current_lane_id} "
+                f"(id `{current_lane_id}`)"
+            )
+        if lanes:
+            parts.append("**Lanes (in order):**")
+            for lid, ltitle in lanes:
+                marker = "  ← current" if lid == current_lane_id else ""
+                parts.append(f"- `{lid}` — {ltitle}{marker}")
         parts.append("")
         if card_body.strip():
             parts.append(card_body.strip())
             parts.append("")
         parts.append(
-            "*Context hints: related files typically live in the same folder as the board. "
-            "To add tasks or sub-plans, edit the board file — cards are `### Heading` blocks "
-            "under a `## Lane` heading with `<!-- nx:id=... -->` metadata. Use your vault tools.*"
+            "*Tools: use `kanban_manage` to mutate this board — for example "
+            f'`{{"action":"move_card","path":"{path}","card_id":"{card_id}","lane":"<lane_id>"}}` '
+            "to move this card to another lane (use the lane ids above), or "
+            "`update_card` to change title/body/status/labels/etc. Use your "
+            "vault tools for related files (typically in the same folder).*"
         )
         return "\n".join(parts)
 
@@ -1783,6 +1911,7 @@ def create_app(
         card_id: str,
         agent_: Agent,
         store: SessionStore,
+        model_id: str | None = None,
     ) -> None:
         """Run one agent turn to completion, publishing events via the trace bus
         and updating the card's status (done/failed) when finished."""
@@ -1807,6 +1936,7 @@ def create_app(
                     history=session.history,
                     context=session.context,
                     session_id=session_id,
+                    model_id=model_id or None,
                 ):
                     etype = event.get("type")
                     if etype == "delta":
@@ -1866,68 +1996,63 @@ def create_app(
         finally:
             CURRENT_SESSION_ID.reset(token)
 
-    @app.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)
-    async def vault_dispatch(
-        body: dict,
-        a: Agent = Depends(get_agent),
-        store: SessionStore = Depends(get_sessions),
+    async def _dispatch_impl(
+        *,
+        path: str,
+        card_id: str | None,
+        mode: str,
+        a: "Agent",
+        store: "SessionStore",
     ) -> dict:
-        """Create a chat session seeded from a vault file or kanban card.
+        """Shared implementation for /vault/dispatch and the dispatch_card tool.
 
-        Body: ``{path, card_id?, mode?}`` where ``mode`` is one of:
-          - ``"chat"`` (default): returns a seed the UI prefills into its input.
-          - ``"background"``: starts the agent server-side; UI doesn't navigate.
-            Stamps ``status=running`` on the card and updates to ``done``/``failed``
-            when the turn finishes. Requires ``card_id``.
-          - ``"chat-hidden"``: creates a session, seeds with a hidden user message,
-            kicks off no background work — the UI will POST to ``/chat/stream`` itself
-            with the returned ``seed_message``, which embeds a marker the chat view
-            filters out of the displayed message list.
+        Raises ValueError / FileNotFoundError / KeyError on user errors so callers
+        can translate (HTTP route → HTTPException; tool → JSON error string).
         """
         from .. import vault, vault_kanban
-        path = body.get("path", "")
-        card_id = body.get("card_id")
-        mode = body.get("mode") or "chat"
         if mode not in ("chat", "background", "chat-hidden"):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid mode")
+            raise ValueError("invalid mode")
         if not path:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
+            raise ValueError("`path` required")
         try:
             file = vault.read_file(path)
         except FileNotFoundError:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+            raise FileNotFoundError("file not found")
 
         title = path.rsplit("/", 1)[-1]
         seed_body = file.get("body") or file["content"]
         seed_title = title
         lane_prompt: str | None = None
+        lane_model: str | None = None
+        current_lane_id: str | None = None
+        current_lane_title: str | None = None
+        all_lanes: list[tuple[str, str]] = []
 
         if card_id:
             try:
                 board = vault_kanban.parse(file["content"])
             except Exception as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+                raise ValueError(str(exc))
             found = vault_kanban._find_card(board, card_id)
             if found is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="card not found")
+                raise KeyError("card not found")
             lane, card, _ = found
             seed_title = card.title
             seed_body = card.body
             lane_prompt = lane.prompt
+            lane_model = lane.model
+            current_lane_id = lane.id
+            current_lane_title = lane.title
+            all_lanes = [(ln.id, ln.title) for ln in board.lanes]
 
         if mode == "background" and not card_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="background dispatch requires a card_id",
-            )
+            raise ValueError("background dispatch requires a card_id")
 
         context_str = f"Dispatched from vault file: {path}"
         if card_id:
             context_str += f" (card {card_id})"
         session = store.create(context=context_str)
 
-        # Title the session with the card title (or filename) up-front so the
-        # sidebar doesn't show "New session" while the agent thinks.
         try:
             store.rename(session.id, (seed_title or title).strip()[:60])
         except Exception:
@@ -1947,6 +2072,9 @@ def create_app(
             seed_message = _compose_card_context_seed(
                 lane_prompt=lane_prompt, path=path, card_title=seed_title,
                 card_id=card_id or "", card_body=seed_body or "",
+                current_lane_id=current_lane_id,
+                current_lane_title=current_lane_title,
+                lanes=all_lanes,
             )
 
         if card_id:
@@ -1970,10 +2098,13 @@ def create_app(
                     card_id=card_id,
                     agent_=a,
                     store=store,
+                    model_id=lane_model,
                 )
             )
-            # Don't leak the seed to the client on background — caller doesn't need it.
-            return {"session_id": session.id, "path": path, "card_id": card_id, "mode": mode}
+            return {
+                "session_id": session.id, "path": path, "card_id": card_id,
+                "mode": mode, "model": lane_model,
+            }
 
         return {
             "session_id": session.id,
@@ -1982,6 +2113,44 @@ def create_app(
             "card_id": card_id,
             "mode": mode,
         }
+
+    # Wire the dispatcher onto the agent so the dispatch_card tool can spawn
+    # sub-sessions in the same process. Late-bound (post-registry build) to
+    # avoid a circular dependency at construction time.
+    async def _agent_dispatcher(*, path: str, card_id: str | None, mode: str) -> dict:
+        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=sessions)
+
+    agent._dispatcher = _agent_dispatcher
+
+    @app.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)
+    async def vault_dispatch(
+        body: dict,
+        a: Agent = Depends(get_agent),
+        store: SessionStore = Depends(get_sessions),
+    ) -> dict:
+        """Create a chat session seeded from a vault file or kanban card.
+
+        Body: ``{path, card_id?, mode?}`` where ``mode`` is one of:
+          - ``"chat"`` (default): returns a seed the UI prefills into its input.
+          - ``"background"``: starts the agent server-side; UI doesn't navigate.
+            Stamps ``status=running`` on the card and updates to ``done``/``failed``
+            when the turn finishes. Requires ``card_id``.
+          - ``"chat-hidden"``: creates a session, seeds with a hidden user message,
+            kicks off no background work — the UI will POST to ``/chat/stream`` itself
+            with the returned ``seed_message``, which embeds a marker the chat view
+            filters out of the displayed message list.
+        """
+        path = body.get("path", "")
+        card_id = body.get("card_id")
+        mode = body.get("mode") or "chat"
+        try:
+            return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=a, store=store)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
     # ── config routes ──────────────────────────────────────────────────────────
 
@@ -2328,4 +2497,61 @@ def create_app(
     from . import transcribe as _transcribe_mod
     _transcribe_mod.register(app)
 
+    _mount_bundled_ui(app)
+
     return app
+
+
+def _resolve_ui_dist() -> "Path | None":
+    """Locate a built UI (``ui/dist``) — env override or sibling of frontend_dir."""
+    import os
+    from pathlib import Path
+
+    env = os.environ.get("NEXUS_UI_DIST")
+    if env:
+        p = Path(env).expanduser()
+        if (p / "index.html").is_file():
+            return p
+
+    from ..config import get_frontend_dir
+    fe = get_frontend_dir()
+    if fe is not None:
+        dist = fe / "dist"
+        if (dist / "index.html").is_file():
+            return dist
+    return None
+
+
+def _mount_bundled_ui(app: FastAPI) -> None:
+    """Serve a built UI from the backend if ``ui/dist`` is available.
+
+    Registered after all API routes, so explicit routes always win. A catch-all
+    GET handler serves static assets and falls back to ``index.html`` for
+    client-side routing.
+    """
+    from pathlib import Path
+    from fastapi.responses import FileResponse, Response
+
+    dist = _resolve_ui_dist()
+    if dist is None:
+        return
+
+    index_html = dist / "index.html"
+    log.info("Serving bundled UI from %s", dist)
+
+    @app.get("/{ui_path:path}", include_in_schema=False)
+    async def _spa(ui_path: str, request: Request) -> Response:
+        if ui_path:
+            try:
+                target = (dist / ui_path).resolve()
+                target.relative_to(dist.resolve())
+                if target.is_file():
+                    return FileResponse(target)
+            except (ValueError, OSError):
+                pass
+        # Only fall back to index.html for browser navigations — API clients
+        # asking for unknown JSON endpoints should get a real 404.
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept or accept == "" or accept == "*/*":
+            return FileResponse(index_html)
+        return Response(status_code=404)
