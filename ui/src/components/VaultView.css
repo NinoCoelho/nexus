@@ -310,6 +310,23 @@
   padding: 24px;
 }
 
+.vault-markdown-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.vault-markdown-editor .cm-editor {
+  height: 100%;
+  width: 100%;
+}
+
+.vault-markdown-editor .cm-scroller {
+  overflow: auto;
+  flex: 1;
+}
+
 /* ── Search bar ───────────────────────────────────────────────────────────── */
 
 .vault-search-bar {

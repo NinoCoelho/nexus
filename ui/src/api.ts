@@ -264,6 +264,7 @@ export interface KanbanLane {
   id: string;
   title: string;
   cards: KanbanCard[];
+  prompt?: string;
 }
 
 export interface KanbanBoard {
@@ -343,6 +344,23 @@ export async function deleteVaultKanbanLane(path: string, laneId: string): Promi
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`Kanban lane delete error: ${res.status}`);
+}
+
+export async function patchVaultKanbanLane(
+  path: string,
+  laneId: string,
+  patch: { title?: string; prompt?: string | null },
+): Promise<KanbanLane> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}?path=${encodeURIComponent(path)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!res.ok) throw new Error(`Kanban lane patch error: ${res.status}`);
+  return res.json();
 }
 
 // ── Dispatch (start chat seeded from a vault file or kanban card) ────────────

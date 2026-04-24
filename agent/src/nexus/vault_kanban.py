@@ -68,9 +68,13 @@ class Lane:
     id: str
     title: str
     cards: list[Card] = field(default_factory=list)
+    prompt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "title": self.title, "cards": [c.to_dict() for c in self.cards]}
+        out: dict[str, Any] = {"id": self.id, "title": self.title, "cards": [c.to_dict() for c in self.cards]}
+        if self.prompt is not None:
+            out["prompt"] = self.prompt
+        return out
 
 
 @dataclass
@@ -205,6 +209,13 @@ def parse(content: str) -> Board:
     flush_card()
     if lane is not None:
         board.lanes.append(lane)
+
+    lane_prompts: dict[str, str] = frontmatter.get("lane_prompts") or {}
+    for ln in board.lanes:
+        lp = lane_prompts.get(ln.id)
+        if lp:
+            ln.prompt = str(lp)
+
     return board
 
 
@@ -218,6 +229,11 @@ def serialize(board: Board) -> str:
     """Serialize a Board back into markdown."""
     fm = dict(board.frontmatter)
     fm.setdefault(KANBAN_PLUGIN_KEY, "basic")
+    lp = {ln.id: ln.prompt for ln in board.lanes if ln.prompt}
+    if lp:
+        fm["lane_prompts"] = lp
+    else:
+        fm.pop("lane_prompts", None)
     fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False).rstrip()
     out = [f"---\n{fm_text}\n---", "", f"# {board.title}", ""]
     for lane in board.lanes:
@@ -365,3 +381,17 @@ def delete_lane(path: str, lane_id: str) -> None:
     board = read_board(path)
     board.lanes = [l for l in board.lanes if l.id != lane_id]
     write_board(path, board)
+
+
+def update_lane(path: str, lane_id: str, updates: dict[str, Any]) -> Lane:
+    board = read_board(path)
+    lane = _find_lane(board, lane_id)
+    if lane is None:
+        raise KeyError(f"lane {lane_id!r} not found")
+    if "title" in updates:
+        lane.title = str(updates["title"])
+    if "prompt" in updates:
+        raw = updates["prompt"]
+        lane.prompt = str(raw).strip() if raw else None
+    write_board(path, board)
+    return lane

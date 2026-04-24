@@ -1,0 +1,56 @@
+.markdown-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.markdown-editor .cm-editor {
+  flex: 1;
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+
+.markdown-editor .cm-scroller {
+  overflow: auto;
+  flex: 1;
+}
+
+.markdown-editor .cm-content {
+  padding: 16px 20px;
+  caret-color: var(--accent);
+}
+
+.markdown-editor .cm-focused {
+  outline: none;
+}
+
+.markdown-editor .cm-cursor,
+.markdown-editor .cm-dropCursor {
+  border-left-color: var(--accent);
+}
+
+.markdown-editor .cm-selectionBackground,
+.markdown-editor .cm-focused .cm-selectionBackground {
+  background: color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+
+/* Markdown syntax highlighting */
+.markdown-editor .tok-strong { font-weight: 700; }
+.markdown-editor .tok-emphasis { font-style: italic; }
+.markdown-editor .tok-monospace {
+  font-family: var(--font-mono);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.markdown-editor .tok-url,
+.markdown-editor .tok-link { color: var(--accent); }
+.markdown-editor .tok-meta { color: var(--fg-dim); }
+.markdown-editor .tok-comment { color: var(--fg-faint); font-style: italic; }

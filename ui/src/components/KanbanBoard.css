@@ -153,3 +153,10 @@
   color: var(--fg-dim);
   font-size: 13px;
 }
+
+.kanban-lane-prompt-indicator {
+  font-size: 10px;
+  color: var(--accent);
+  margin-left: 3px;
+  vertical-align: middle;
+}
