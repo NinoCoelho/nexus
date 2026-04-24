@@ -464,9 +464,10 @@ class Agent:
                 }
 
             elif etype == "done":
+                # loom RFC-0004: model/iterations/tokens are top-level typed
+                # fields on DoneEvent. Only "messages" stays inside context.
                 ctx = ev.get("context") or {}
-                model_used = ctx.get("model") or self._chosen_model
-                # Grab the most recent full_text as reply
+                model_used = ev.get("model") or self._chosen_model
                 reply_text = full_text
                 # Prefer the assembled message list from loom (includes
                 # tool_calls + TOOL role messages). Strip system messages
@@ -489,13 +490,13 @@ class Agent:
                     "session_id": session_id,
                     "reply": reply_text,
                     "trace": list(self._turn_trace),
-                    "skills_touched": list(self._skills_touched),
-                    "iterations": ctx.get("iterations", 0),
+                    "skills_touched": ev.get("skills_touched") or list(self._skills_touched),
+                    "iterations": ev.get("iterations", 0),
                     "messages": persisted_messages,
                     "usage": {
-                        "input_tokens": ctx.get("input_tokens", 0),
-                        "output_tokens": ctx.get("output_tokens", 0),
-                        "tool_calls": ctx.get("tool_calls", 0),
+                        "input_tokens": ev.get("input_tokens", 0),
+                        "output_tokens": ev.get("output_tokens", 0),
+                        "tool_calls": ev.get("tool_calls", 0),
                         "model": model_used,
                     },
                 }
