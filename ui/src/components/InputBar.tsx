@@ -38,8 +38,6 @@ interface Props {
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
-  routingMode?: "fixed" | "auto";
-  onRoutingModeChange?: (mode: "fixed" | "auto") => void;
 }
 
 export default function InputBar({
@@ -54,8 +52,6 @@ export default function InputBar({
   models,
   selectedModel,
   onModelChange,
-  routingMode = "fixed",
-  onRoutingModeChange,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -194,6 +190,9 @@ export default function InputBar({
 
   const isStop = busy || recording;
 
+  const showModelBadge = !hasContent && !!selectedModel;
+  const badgeLabel = selectedModel?.split("/").pop();
+
   return (
     <div className="input-bar-wrapper">
       {(attachments && attachments.length > 0) || audio ? (
@@ -225,54 +224,20 @@ export default function InputBar({
         </div>
       ) : null}
       <div className="input-bar">
-        <div className="input-bar-left" ref={menuRef}>
+        <div className="input-bar-left">
           <button
             className="input-icon-btn"
-            onClick={() => setMenuOpen((o) => !o)}
+            onClick={() => fileInputRef.current?.click()}
             disabled={disabled || uploading}
-            aria-label="Attach or change options"
+            aria-label="Upload file"
+            title="Upload file"
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="10" y1="4" x2="10" y2="16" />
-              <line x1="4" y1="10" x2="16" y2="10" />
+              <path d="M3 14v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
+              <polyline points="7,8 10,4 13,8" />
+              <line x1="10" y1="4" x2="10" y2="14" />
             </svg>
           </button>
-          {menuOpen && (
-            <div className="input-menu">
-              <button className="input-menu-item" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 14v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
-                  <polyline points="7,8 10,4 13,8" />
-                  <line x1="10" y1="4" x2="10" y2="14" />
-                </svg>
-                Upload file
-              </button>
-              {models && models.length >= 1 && (
-                <>
-                  <div className="input-menu-sep" />
-                  <div className="input-menu-group">
-                    <span className="input-menu-heading">
-                      {routingMode === "auto" ? "Model (auto-route is on)" : "Model"}
-                    </span>
-                    {models.map((m) => (
-                      <button
-                        key={m}
-                        className={`input-menu-item${selectedModel === m ? " is-active" : ""}`}
-                        onClick={() => {
-                          onModelChange?.(m);
-                          // Picking a specific model implies fixed mode.
-                          if (routingMode === "auto") onRoutingModeChange?.("fixed");
-                          setMenuOpen(false);
-                        }}
-                      >
-                        {m.split("/").pop()}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
         </div>
         <textarea
           ref={textareaRef}
@@ -284,6 +249,41 @@ export default function InputBar({
           onKeyDown={handleKeyDown}
           disabled={disabled}
         />
+        {showModelBadge && (
+          <div className="input-model-badge-wrap" ref={menuRef}>
+            <button
+              type="button"
+              className="input-model-badge"
+              onClick={() => setMenuOpen((o) => !o)}
+              title="Change model"
+            >
+              <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="10" cy="10" r="3" />
+                <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4" />
+              </svg>
+              {badgeLabel}
+            </button>
+            {menuOpen && models && models.length >= 1 && (
+              <div className="input-menu input-menu--badge">
+                <div className="input-menu-group">
+                  <span className="input-menu-heading">Model</span>
+                  {models.map((m) => (
+                    <button
+                      key={m}
+                      className={`input-menu-item${selectedModel === m ? " is-active" : ""}`}
+                      onClick={() => {
+                        onModelChange?.(m);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {m.split("/").pop()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <button
           className={`input-send-btn${isStop ? " input-stop-btn" : ""}${!hasContent && !isStop ? " input-send-btn--mic" : ""}`}
           onClick={handleActionClick}

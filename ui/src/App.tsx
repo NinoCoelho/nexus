@@ -132,7 +132,6 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [lastUsedModel, setLastUsedModel] = useState<string>("");
   const [defaultModel, setDefaultModel] = useState<string>("");
-  const [routingMode, setRoutingMode] = useState<"fixed" | "auto">("fixed");
   /** Bumps a vault path into VaultView when user clicks "Open in Vault" from a preview modal. */
   const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(initial.vaultPath);
   /** The currently selected file path in the vault tree (lifted so Sidebar tree + editor share it). */
@@ -247,10 +246,6 @@ export default function App() {
           const def = r.default_model ?? "";
           setLastUsedModel(lum);
           setDefaultModel(def);
-          setRoutingMode(r.routing_mode ?? "fixed");
-          // Seed the __new__ slot with last-used (if it's a real id) or the
-          // configured default — never "auto". Auto-routing is a separate
-          // toggle now; starting a fresh chat shouldn't silently opt into it.
           const isReal = (s: string) => s && s !== "auto" && (r.available_models ?? []).includes(s);
           setChatStates((prev) => {
             const next = new Map(prev);
@@ -526,19 +521,23 @@ export default function App() {
         // exist for this session already, preserve them; only seed history
         // for sessions we haven't loaded yet.
         if (cur && cur.historyLoaded) return prev;
+        const isReal = (s: string) => !!s && s !== "auto" && availableModels.includes(s);
+        const seedModel = cur?.selectedModel
+          || (isReal(lastUsedModel) ? lastUsedModel : (isReal(defaultModel) ? defaultModel : (availableModels[0] ?? "")));
         next.set(id, {
           messages: msgs,
           thinking: cur?.thinking ?? false,
           input: cur?.input ?? "",
           historyLoaded: true,
           attachments: cur?.attachments ?? [],
+          selectedModel: seedModel,
         });
         return next;
       });
     } catch {
       patchState(id, { historyLoaded: true });
     }
-  }, [patchState]);
+  }, [patchState, availableModels, lastUsedModel, defaultModel]);
 
   const handleSessionSelect = useCallback((id: string) => {
     setActiveSession(id);
@@ -581,6 +580,10 @@ export default function App() {
 
   const handleModelChange = useCallback((model: string) => {
     patchState(activeKey, { selectedModel: model });
+    if (model && model !== "auto") {
+      setLastUsedModel(model);
+      putRouting({ last_used_model: model }).catch(() => {});
+    }
   }, [activeKey, patchState]);
 
   const handleRollback = useCallback(async (visibleIdx: number) => {
@@ -673,12 +676,7 @@ export default function App() {
     const abortController = new AbortController();
     abortControllersRef.current.set(key, abortController);
 
-    // Auto mode is an explicit toggle now — no magic "auto" string in the
-    // model field. Send a real model id (or empty for server default) plus
-    // the mode separately.
-    const sendModel = routingMode === "auto"
-      ? ""
-      : (state.selectedModel && state.selectedModel !== "auto" ? state.selectedModel : "");
+    const sendModel = state.selectedModel && state.selectedModel !== "auto" ? state.selectedModel : "";
     let sawDone = false;
 
     try {
@@ -752,7 +750,7 @@ export default function App() {
             });
           } else if (event.type === "done") {
             const routedModel = event.model;
-            const routedBy = event.routed_by ?? (routingMode === "auto" ? "auto" : "user");
+            const routedBy = event.routed_by ?? "user";
 
             // Persist the *resolved* model id — never the "auto" sentinel.
             // Prefer what the server actually used; fall back to the user's
@@ -793,7 +791,7 @@ export default function App() {
                   attachments: [],
                   selectedModel: fresh.selectedModel,
                 });
-                next.set(NEW_KEY, emptyState());
+                next.set(NEW_KEY, { ...emptyState(), selectedModel: fresh.selectedModel });
                 return next;
               });
               setActiveSession(event.session_id);
@@ -891,7 +889,6 @@ export default function App() {
         },
         abortController.signal,
         sendModel,
-        routingMode,
       );
       if (!sawDone && !abortController.signal.aborted) {
         // Server closed the stream without a terminal `done`. Pull
@@ -1145,11 +1142,6 @@ export default function App() {
               models={availableModels}
               selectedModel={activeState.selectedModel}
               onModelChange={handleModelChange}
-              routingMode={routingMode}
-              onRoutingModeChange={(mode) => {
-                setRoutingMode(mode);
-                putRouting({ routing_mode: mode }).catch(() => {});
-              }}
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>

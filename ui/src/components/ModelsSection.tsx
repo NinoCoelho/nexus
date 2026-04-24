@@ -12,7 +12,6 @@ import {
   postModel,
   patchModel,
   fetchProviderModels,
-  putRouting,
   setModelRole,
   suggestModelTier,
   type Model,
@@ -249,17 +248,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
 
   const discoveryError = currentDiscovery?.error ?? null;
 
-  const routingMode = routing?.routing_mode ?? "fixed";
   const usingBuiltinEmbedder = !embModelId;
-
-  async function setRoutingMode(mode: "fixed" | "auto") {
-    try {
-      await putRouting({ routing_mode: mode });
-      onRefresh();
-    } catch (e) {
-      toast.error("Failed to set routing mode", { detail: e instanceof Error ? e.message : undefined });
-    }
-  }
 
   return (
     <div className="settings-section">
@@ -272,28 +261,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
           Assign a model to <b>Embedding</b> below to override.
         </div>
       )}
-
-      <div className="settings-card" style={{ padding: "10px 12px" }}>
-        <div className="settings-card-row" style={{ alignItems: "center", gap: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>Auto-route new messages</div>
-            <div style={{ fontSize: 11, color: "var(--fg-faint)", marginTop: 2 }}>
-              {routingMode === "auto"
-                ? "A local classifier picks the best model per turn based on tier + notes."
-                : "All turns use the selected model. Toggle on to let the router pick per turn."}
-            </div>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={routingMode === "auto"}
-            className={`model-role-badge${routingMode === "auto" ? " model-role-badge--active" : ""}`}
-            onClick={() => setRoutingMode(routingMode === "auto" ? "fixed" : "auto")}
-          >
-            {routingMode === "auto" ? "On" : "Off"}
-          </button>
-        </div>
-      </div>
 
       {models.map((m) => {
         if (editingId === m.id) return null;

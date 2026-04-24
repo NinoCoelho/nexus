@@ -112,7 +112,7 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, routedBy }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
@@ -134,12 +134,7 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
         <div className="asst-avatar" aria-hidden="true" />
         <span className="asst-name">Nexus</span>
         {model && (
-          <span
-            className={`asst-model-badge${routedBy === "auto" ? " asst-model-badge--auto" : ""}`}
-            title={routedBy === "auto" ? "Auto-routed by the classifier" : undefined}
-          >
-            {routedBy === "auto" ? `auto → ${model.split("/").pop()}` : `via ${model.split("/").pop()}`}
-          </span>
+          <span className="asst-model-badge">via {model.split("/").pop()}</span>
         )}
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>

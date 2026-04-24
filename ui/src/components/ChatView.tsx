@@ -67,8 +67,6 @@ interface Props {
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
-  routingMode?: "fixed" | "auto";
-  onRoutingModeChange?: (mode: "fixed" | "auto") => void;
 }
 
 function fmt(d: Date) {
@@ -156,8 +154,6 @@ export default function ChatView({
   models,
   selectedModel,
   onModelChange,
-  routingMode,
-  onRoutingModeChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -298,8 +294,6 @@ export default function ChatView({
               models={models}
               selectedModel={selectedModel}
               onModelChange={onModelChange}
-              routingMode={routingMode}
-              onRoutingModeChange={onRoutingModeChange}
             />
           </div>
         </div>
