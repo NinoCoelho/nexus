@@ -172,6 +172,23 @@ export async function uploadVaultFiles(
   return res.json();
 }
 
+export async function transcribeAudio(blob: Blob, language?: string): Promise<{ text: string }> {
+  const form = new FormData();
+  const name = blob.type.includes("webm") ? "audio.webm" : "audio.bin";
+  form.append("file", blob, name);
+  if (language) form.append("language", language);
+  const res = await fetch(`${BASE}/transcribe`, { method: "POST", body: form });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail) detail = j.detail;
+    } catch { /* ignore */ }
+    throw new Error(`Transcription failed: ${detail}`);
+  }
+  return res.json();
+}
+
 export async function getVaultFile(path: string): Promise<VaultFile> {
   const res = await fetch(`${BASE}/vault/file?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`Vault file error: ${res.status}`);
@@ -647,10 +664,24 @@ export interface AgentConfig {
   max_iterations: number;
 }
 
+export interface TranscriptionConfig {
+  mode: "local" | "remote";
+  model: string;
+  language: string;
+  device: "cpu" | "cuda" | "auto";
+  compute_type: string;
+  remote: {
+    base_url: string;
+    api_key_env: string;
+    model: string;
+  };
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
   models: Model[];
+  transcription?: TranscriptionConfig;
 }
 
 export interface RoutingConfig {
@@ -786,6 +817,15 @@ export async function setModelRole(role: string, model_id: string): Promise<{ ro
   });
   if (!res.ok) throw new Error(`Model role error: ${res.status}`);
   return res.json();
+}
+
+export async function clearModelRole(role: string): Promise<void> {
+  const res = await fetch(`${BASE}/models/roles`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role, model_id: "" }),
+  });
+  if (!res.ok) throw new Error(`Model role clear error: ${res.status}`);
 }
 
 // ── Insights ──────────────────────────────────────────────────────────────

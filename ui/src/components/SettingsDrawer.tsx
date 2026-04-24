@@ -32,6 +32,7 @@ import ProvidersSection from "./ProvidersSection";
 import ModelsSection from "./ModelsSection";
 import ReindexModal from "./ReindexModal";
 import AppearanceSection from "./AppearanceSection";
+import TranscriptionSection from "./TranscriptionSection";
 import "./SettingsDrawer.css";
 
 interface Props {
@@ -127,6 +128,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             routing={routing}
             onRefresh={refresh}
           />
+          <TranscriptionSection />
           {graphStats && (
             <section className="graphrag-section">
               <h3 className="graphrag-section-title">Knowledge Graph</h3>

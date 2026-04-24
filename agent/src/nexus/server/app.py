@@ -1966,6 +1966,19 @@ def create_app(
                 "use_inline_key": p.use_inline_key,
                 "type": p.type,
             }
+        t = cfg.transcription
+        out["transcription"] = {
+            "mode": t.mode,
+            "model": t.model,
+            "language": t.language or "",
+            "device": t.device,
+            "compute_type": t.compute_type,
+            "remote": {
+                "base_url": t.remote.base_url,
+                "api_key_env": t.remote.api_key_env,
+                "model": t.remote.model,
+            },
+        }
         return out
 
     def _rebuild_registry(cfg: Any) -> None:
@@ -1998,6 +2011,18 @@ def create_app(
                 raw["providers"][pname] = merged
         if "models" in body:
             raw["models"] = body["models"]
+        if "transcription" in body:
+            existing = raw.get("transcription", {}) or {}
+            patch = body["transcription"] or {}
+            merged = {**existing, **{k: v for k, v in patch.items() if k != "remote"}}
+            if "remote" in patch:
+                merged["remote"] = {
+                    **(existing.get("remote") or {}),
+                    **(patch["remote"] or {}),
+                }
+            if isinstance(merged.get("language"), str) and not merged["language"].strip():
+                merged["language"] = None
+            raw["transcription"] = merged
         new_cfg = NexusConfig(**raw)
         save_cfg(new_cfg)
         _rebuild_registry(new_cfg)
@@ -2247,16 +2272,21 @@ def create_app(
     async def set_model_role(body: ModelRolePayload) -> dict[str, str]:
         from ..config_file import load as load_cfg, save as save_cfg
         cfg = _state["cfg"] or load_cfg()
+        new_id = body.model_id or ""
         if body.role == "embedding":
-            cfg.graphrag.embedding_model_id = body.model_id
+            cfg.graphrag.embedding_model_id = new_id
         elif body.role == "extraction":
-            cfg.graphrag.extraction_model_id = body.model_id
+            cfg.graphrag.extraction_model_id = new_id
         elif body.role == "classification":
-            cfg.agent.classification_model = body.model_id
+            cfg.agent.classification_model = new_id
         else:
             from fastapi import HTTPException
             raise HTTPException(400, f"Unknown role: {body.role}")
         save_cfg(cfg)
-        return {"role": body.role, "model_id": body.model_id}
+        _state["cfg"] = cfg
+        return {"role": body.role, "model_id": new_id}
+
+    from . import transcribe as _transcribe_mod
+    _transcribe_mod.register(app)
 
     return app

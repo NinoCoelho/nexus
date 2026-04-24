@@ -55,7 +55,9 @@ class TruncateRequest(BaseModel):
 
 class ModelRolePayload(BaseModel):
     role: str  # "embedding" | "extraction" | "classification"
-    model_id: str
+    # Pass an empty string (or null) to clear the role and fall back to the
+    # built-in defaults (embedding → fastembed, classification → local).
+    model_id: str | None = ""
 
 
 class SettingsPayload(BaseModel):

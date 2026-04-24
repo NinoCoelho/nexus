@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { uploadVaultFiles } from "../api";
+import { transcribeAudio, uploadVaultFiles } from "../api";
 import { useToast } from "../toast/ToastProvider";
 import "./InputBar.css";
 
@@ -29,7 +29,7 @@ interface AudioAttachment {
 interface Props {
   value: string;
   onChange: (v: string) => void;
-  onSend: () => void;
+  onSend: (overrideText?: string) => void;
   disabled: boolean;
   busy?: boolean;
   onStop?: () => void;
@@ -66,6 +66,7 @@ export default function InputBar({
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [audio, setAudio] = useState<AudioAttachment | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -81,7 +82,9 @@ export default function InputBar({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (hasContent && !disabled) onSend();
+      if (disabled || transcribing) return;
+      if (audio) { void runTranscribeAndSend(); return; }
+      if (hasContent) onSend();
     }
   };
 
@@ -156,9 +159,35 @@ export default function InputBar({
     return () => document.removeEventListener("mousedown", handler);
   }, [menuOpen]);
 
+  const runTranscribeAndSend = useCallback(async () => {
+    if (!audio) return;
+    setTranscribing(true);
+    try {
+      const { text } = await transcribeAudio(audio.blob);
+      const typed = value.trim();
+      const combined = typed ? `${text.trim()}\n\n${typed}` : text.trim();
+      if (!combined) {
+        toast.error("Transcription returned no text");
+        return;
+      }
+      URL.revokeObjectURL(audio.url);
+      setAudio(null);
+      onChange("");
+      onSend(combined);
+    } catch (err) {
+      toast.error("Transcription failed", {
+        detail: err instanceof Error ? err.message : undefined,
+      });
+    } finally {
+      setTranscribing(false);
+    }
+  }, [audio, value, onChange, onSend, toast]);
+
   const handleActionClick = () => {
     if (busy && onStop) { onStop(); return; }
     if (recording) { stopRecording(); return; }
+    if (transcribing) return;
+    if (audio) { void runTranscribeAndSend(); return; }
     if (hasContent) { onSend(); return; }
     startRecording();
   };
@@ -184,8 +213,13 @@ export default function InputBar({
               <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 10 Q6 6 10 10 Q14 14 18 10" strokeDasharray="2 2" />
               </svg>
-              Voice memo
-              <button className="input-attachment-remove" onClick={clearAudio} type="button">&times;</button>
+              {transcribing ? "Transcribing…" : "Voice memo"}
+              <button
+                className="input-attachment-remove"
+                onClick={clearAudio}
+                type="button"
+                disabled={transcribing}
+              >&times;</button>
             </span>
           )}
         </div>

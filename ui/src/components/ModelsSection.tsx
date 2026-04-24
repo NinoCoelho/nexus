@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  clearModelRole,
   deleteModel,
   postModel,
   patchModel,
@@ -101,6 +102,18 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       onRefresh();
     } catch (e) {
       toast.error("Failed to assign role", { detail: e instanceof Error ? e.message : undefined });
+    } finally {
+      setRoleSaving(false);
+    }
+  }
+
+  async function unassignRole(role: string) {
+    setRoleSaving(true);
+    try {
+      await clearModelRole(role);
+      onRefresh();
+    } catch (e) {
+      toast.error("Failed to clear role", { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -239,7 +252,11 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   const discoveryError = currentDiscovery?.error ?? null;
 
   const routingMode = routing?.routing_mode ?? "fixed";
-  const canEnableAuto = !!routing?.classification_model;
+  // Auto-route always works now: with no classification model, the built-in
+  // local classifier ranks models by embedding similarity.
+  const canEnableAuto = true;
+  const usingBuiltinClassifier = !routing?.classification_model;
+  const usingBuiltinEmbedder = !embModelId;
 
   async function setRoutingMode(mode: "fixed" | "auto") {
     try {
@@ -255,6 +272,12 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       <div className="settings-section-label">
         Models {roleSaving && <span style={{ color: "var(--fg-faint)", fontWeight: 400 }}>· saving…</span>}
       </div>
+      {usingBuiltinEmbedder && (
+        <div style={{ fontSize: 11, color: "var(--fg-faint)", marginBottom: 8 }}>
+          GraphRAG is using the built-in local embedder (BAAI/bge-small-en-v1.5, 384-dim).
+          Assign a model to <b>Embedding</b> below to override.
+        </div>
+      )}
 
       <div className="settings-card" style={{ padding: "10px 12px" }}>
         <div className="settings-card-row" style={{ alignItems: "center", gap: 10 }}>
@@ -264,8 +287,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
               {routingMode === "auto"
                 ? "The classifier picks a model per turn based on tier + notes."
                 : "All turns use the selected model. Toggle on to let the classifier pick."}
-              {!canEnableAuto && (
-                <> · <span style={{ color: "var(--warn, #d97757)" }}>Assign an Auto-route model below to enable.</span></>
+              {usingBuiltinClassifier && (
+                <> · <span style={{ color: "var(--fg-faint)" }}>Using built-in local classifier (no Auto-route model selected).</span></>
               )}
             </div>
           </div>
@@ -307,10 +330,13 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
                 <div className="model-role-badges">
                   <button
                     type="button"
-                    className={`model-role-badge ${isEmb ? "model-role-badge--active" : ""} ${!canEmbed(m) ? "model-role-badge--disabled" : ""}`}
-                    onClick={() => !isEmb && canEmbed(m) && assignRole("embedding", m.id)}
-                    disabled={isEmb || !canEmbed(m) || roleSaving}
-                    title={isEmb ? "Embedding model" : canEmbed(m) ? "Set as embedding model" : "Incompatible provider"}
+                    className={`model-role-badge ${isEmb ? "model-role-badge--active" : ""} ${!canEmbed(m) && !isEmb ? "model-role-badge--disabled" : ""}`}
+                    onClick={() => {
+                      if (isEmb) unassignRole("embedding");
+                      else if (canEmbed(m)) assignRole("embedding", m.id);
+                    }}
+                    disabled={(!isEmb && !canEmbed(m)) || roleSaving}
+                    title={isEmb ? "Click to clear (falls back to built-in fastembed)" : canEmbed(m) ? "Set as embedding model" : "Incompatible provider"}
                   >
                     Embedding
                   </button>
@@ -326,9 +352,12 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
                   <button
                     type="button"
                     className={`model-role-badge ${isCls ? "model-role-badge--active" : ""}`}
-                    onClick={() => !isCls && assignRole("classification", m.id)}
-                    disabled={isCls || roleSaving}
-                    title={isCls ? "Auto-routing model" : "Set as auto-routing model"}
+                    onClick={() => {
+                      if (isCls) unassignRole("classification");
+                      else assignRole("classification", m.id);
+                    }}
+                    disabled={roleSaving}
+                    title={isCls ? "Click to clear (falls back to built-in classifier)" : "Set as auto-routing model"}
                   >
                     Auto-route
                   </button>

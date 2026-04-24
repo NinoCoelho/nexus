@@ -52,7 +52,7 @@ interface Props {
   thinking: boolean;
   input: string;
   onInputChange: (v: string) => void;
-  onSend: () => void;
+  onSend: (overrideText?: string) => void;
   onStop?: () => void;
   onContinue?: () => void;
   onDismissLimit?: () => void;

@@ -149,7 +149,12 @@ async def initialize(cfg: Any) -> None:
 
 
 def _resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
-    """Resolve the embedding provider from the model list or fallback config."""
+    """Resolve the embedding provider from the model list or fallback config.
+
+    When no ``embedding_model_id`` is configured and the provider is set to
+    ``"builtin"`` (or defaults), uses the in-process fastembed runner so
+    GraphRAG works out of the box without Ollama.
+    """
     from loom.store.embeddings import OllamaEmbeddingProvider, OpenAIEmbeddingProvider
 
     model_id = getattr(graphrag_cfg, "embedding_model_id", "")
@@ -179,6 +184,9 @@ def _resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
         except Exception:
             log.warning("[graphrag] failed to resolve embedding model %s from registry", model_id, exc_info=True)
 
+    if emb_cfg.provider == "builtin":
+        return _builtin_embedder()
+
     if emb_cfg.provider == "openai":
         return OpenAIEmbeddingProvider(
             model=emb_cfg.model,
@@ -186,11 +194,19 @@ def _resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
             key_env=emb_cfg.key_env,
             dim=emb_cfg.dimensions,
         )
-    return OllamaEmbeddingProvider(
-        model=emb_cfg.model,
-        base_url=emb_cfg.base_url,
-        dim=emb_cfg.dimensions,
-    )
+    if emb_cfg.provider == "ollama":
+        return OllamaEmbeddingProvider(
+            model=emb_cfg.model,
+            base_url=emb_cfg.base_url,
+            dim=emb_cfg.dimensions,
+        )
+    # Unknown / unset — fall back to built-in rather than raising.
+    return _builtin_embedder()
+
+
+def _builtin_embedder() -> Any:
+    from .builtin_embedder import get_builtin_embedder
+    return get_builtin_embedder()
 
 
 def _get_provider_config(cfg: Any, model_id: str) -> Any:

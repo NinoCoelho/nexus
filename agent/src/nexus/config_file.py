@@ -46,11 +46,11 @@ class AgentConfig(BaseModel):
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
-    provider: str = "ollama"
-    model: str = "nomic-embed-text"
-    base_url: str = "http://localhost:11434"
+    provider: str = "builtin"
+    model: str = "BAAI/bge-small-en-v1.5"
+    base_url: str = ""
     key_env: str = ""
-    dimensions: int = 768
+    dimensions: int = 384
 
 
 class GraphRAGExtractionConfig(BaseModel):
@@ -109,6 +109,21 @@ class ScrapeConfig(BaseModel):
     max_content_bytes: int = 102400
 
 
+class RemoteTranscriptionConfig(BaseModel):
+    base_url: str = ""
+    api_key_env: str = ""
+    model: str = "whisper-1"
+
+
+class TranscriptionConfig(BaseModel):
+    mode: Literal["local", "remote"] = "local"
+    model: str = "base"  # faster-whisper size: tiny/base/small/medium/large-v3
+    language: str | None = None
+    device: Literal["cpu", "cuda", "auto"] = "auto"
+    compute_type: str = "int8"
+    remote: RemoteTranscriptionConfig = Field(default_factory=RemoteTranscriptionConfig)
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -116,6 +131,7 @@ class NexusConfig(BaseModel):
     graphrag: GraphRAGConfig = Field(default_factory=GraphRAGConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
+    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
 
 
 # Fresh install starts with providers configured but NO models.
@@ -212,6 +228,18 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "timeout": cfg.scrape.timeout,
             "max_content_bytes": cfg.scrape.max_content_bytes,
         },
+        "transcription": {
+            "mode": cfg.transcription.mode,
+            "model": cfg.transcription.model,
+            "language": cfg.transcription.language or "",
+            "device": cfg.transcription.device,
+            "compute_type": cfg.transcription.compute_type,
+            "remote": {
+                "base_url": cfg.transcription.remote.base_url,
+                "api_key_env": cfg.transcription.remote.api_key_env,
+                "model": cfg.transcription.remote.model,
+            },
+        },
     }
     for m in cfg.models:
         md: dict[str, Any] = {
@@ -271,9 +299,14 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     graphrag = GraphRAGConfig(**raw.get("graphrag", {}))
     search = SearchConfig(**raw.get("search", {}))
     scrape = ScrapeConfig(**raw.get("scrape", {}))
+    t_raw = dict(raw.get("transcription", {}))
+    if isinstance(t_raw.get("language"), str) and not t_raw["language"].strip():
+        t_raw["language"] = None
+    transcription = TranscriptionConfig(**t_raw)
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
+        transcription=transcription,
     )
 
 
