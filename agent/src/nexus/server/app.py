@@ -318,7 +318,6 @@ def create_app(
             current = asyncio.current_task()
             if current is not None:
                 _inflight_turns[session.id] = current
-            cancelled_by_user = False
             try:
                 async for event in a.run_turn_stream(
                     req.message,
@@ -438,7 +437,6 @@ def create_app(
                 }
                 yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
             except asyncio.CancelledError:
-                cancelled_by_user = True
                 yield f"event: error\ndata: {json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
                 yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
             except Exception as exc:
@@ -1167,7 +1165,6 @@ def create_app(
         content_type = request.headers.get("content-type", "")
 
         if "multipart/form-data" in content_type:
-            from fastapi import UploadFile, Form
             form = await request.form()
             file_field = form.get("file")
             if file_field is None:

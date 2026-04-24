@@ -1,3 +1,21 @@
+/**
+ * KnowledgeView — GraphRAG knowledge graph explorer.
+ *
+ * Three panels:
+ *   1. Entity browser — paginated list of extracted entities with type filter
+ *   2. Subgraph visualizer — Cytoscape canvas showing entity/relation graph
+ *   3. Query interface — natural language search over the knowledge graph
+ *
+ * The view supports:
+ *   - Filtering the graph to a specific file/folder (via graphSourceFilter)
+ *   - Reindexing the GraphRAG engine (incremental or full)
+ *   - Clicking entities/relations for detail views
+ *   - Drilling down into entity subgraphs by hop count
+ *
+ * All data comes from the /graph/knowledge/* API endpoints backed by
+ * nexus.agent.graphrag_manager and loom.store.graphrag.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   knowledgeQuery,
@@ -15,16 +33,7 @@ import {
   type SubgraphData,
 } from "../api";
 import VaultFilePreview from "./VaultFilePreview";
-import {
-  buildMultiEdgeIndex,
-  computeCurveOffset,
-  getControlPoint,
-  getCurveMidpoint,
-  getArrowAngle,
-  drawArrowhead,
-  shortenEdge,
-  drawEdgeCurve,
-} from "./graphEdgeUtils";
+import { shortenEdge } from "./graphEdgeUtils";
 import "./KnowledgeView.css";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -58,6 +67,32 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
 interface SimNode {
   id: number; name: string; type: string; degree: number;
   x: number; y: number; vx: number; vy: number; pinned: boolean;
+}
+
+interface MergedEdgeGroup {
+  nodeA: number; // lower id
+  nodeB: number; // higher id
+  relations: Array<{ label: string; from: number; to: number }>;
+}
+
+function buildMergedEdges(edges: Array<{ source: number | string; target: number | string; relation?: string }>): MergedEdgeGroup[] {
+  const groups = new Map<string, MergedEdgeGroup>();
+  for (const e of edges) {
+    const s = Number(e.source);
+    const t = Number(e.target);
+    const lo = Math.min(s, t);
+    const hi = Math.max(s, t);
+    const key = `${lo}|${hi}`;
+    if (!groups.has(key)) {
+      groups.set(key, { nodeA: lo, nodeB: hi, relations: [] });
+    }
+    groups.get(key)!.relations.push({
+      label: e.relation || "",
+      from: s,
+      to: t,
+    });
+  }
+  return Array.from(groups.values());
 }
 
 function EntityDetailCard({
@@ -162,10 +197,13 @@ export default function KnowledgeView({
   const [sourcePath, setSourcePath] = useState("");
   const [sourceSuggestions, setSourceSuggestions] = useState<string[]>([]);
   const [showSourceSuggestions, setShowSourceSuggestions] = useState(false);
+  const [graphSearch, setGraphSearch] = useState("");
+  const [graphSearchCount, setGraphSearchCount] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simNodesRef = useRef<SimNode[]>([]);
   const subgraphRef = useRef<SubgraphData | null>(null);
+  const mergedEdgesRef = useRef<MergedEdgeGroup[]>([]);
   const rafRef = useRef<number | null>(null);
   const runningRef = useRef(false);
   const tickRef = useRef(0);
@@ -175,11 +213,14 @@ export default function KnowledgeView({
   const hoverRef = useRef<number | null>(null);
   const selectedNodeRef = useRef<number | null>(null);
   const selectedEdgeRef = useRef<number | null>(null);
+  const hoveredEdgeGroupRef = useRef<number | null>(null);
   const dragRef = useRef<{ idx: number; moved: boolean } | null>(null);
   const panRef = useRef<{ ox: number; oy: number; mx: number; my: number } | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splitDragRef = useRef<{ startX: number; startRatio: number } | null>(null);
   const mainRef = useRef<HTMLDivElement | null>(null);
+  const edgeTooltipRef = useRef<HTMLDivElement | null>(null);
+  const highlightNodesRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     getKnowledgeStats().then(setStats).catch(() => {});
@@ -328,6 +369,10 @@ export default function KnowledgeView({
       y: h * 0.2 + Math.random() * h * 0.6,
       vx: 0, vy: 0, pinned: false,
     }));
+    mergedEdgesRef.current = buildMergedEdges(subgraphData.edges);
+    // Hide tooltip on data change
+    if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "none";
+    hoveredEdgeGroupRef.current = null;
     settledRef.current = false;
     runningRef.current = true;
     tickRef.current = 0;
@@ -344,75 +389,124 @@ export default function KnowledgeView({
     const canvas = canvasRef.current;
     const sg = subgraphRef.current;
     const nodes = simNodesRef.current;
+    const merged = mergedEdgesRef.current;
     if (!canvas || !sg || nodes.length === 0) return;
 
-    tickRef.current++;
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
-    const idx = new Map<number, number>();
-    nodes.forEach((n, i) => idx.set(n.id, i));
+    const n = nodes.length;
+    const STEPS_PER_FRAME = n > 300 ? 4 : n > 100 ? 3 : 2;
 
-    const fx = new Float64Array(nodes.length);
-    const fy = new Float64Array(nodes.length);
+    // Adaptive parameters based on graph density
+    const avgDegree = n > 0 ? (merged.length * 2) / n : 1;
+    const repulsion = Math.max(800, 5000 / (1 + avgDegree * 0.4));
+    const springRest = Math.max(50, 140 - avgDegree * 6);
+    const springStr = 0.025 + avgDegree * 0.003;
+    const gravity = 0.012 + avgDegree * 0.004;
+    const damping = n > 200 ? 0.7 : 0.82;
+    // Bounding box to prevent runaway nodes
+    const bound = Math.max(canvas.width, canvas.height) * 0.45;
 
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const dx = nodes[j].x - nodes[i].x;
-        const dy = nodes[j].y - nodes[i].y;
-        const d2 = dx * dx + dy * dy + 1;
-        const f = 5000 / d2;
-        const d = Math.sqrt(d2);
-        fx[i] -= f * dx / d; fy[i] -= f * dy / d;
-        fx[j] += f * dx / d; fy[j] += f * dy / d;
+    for (let step = 0; step < STEPS_PER_FRAME; step++) {
+      tickRef.current++;
+      const idx = new Map<number, number>();
+      nodes.forEach((nd, i) => idx.set(nd.id, i));
+
+      const fx = new Float64Array(n);
+      const fy = new Float64Array(n);
+
+      // Grid-based repulsion: O(n·k) instead of O(n²)
+      const CELL = Math.max(springRest * 1.5, 100);
+      const grid = new Map<number, number[]>();
+      for (let i = 0; i < n; i++) {
+        const gx = Math.floor(nodes[i].x / CELL);
+        const gy = Math.floor(nodes[i].y / CELL);
+        const key = gx * 73856093 ^ gy * 19349663;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key)!.push(i);
+      }
+      for (let i = 0; i < n; i++) {
+        const gx = Math.floor(nodes[i].x / CELL);
+        const gy = Math.floor(nodes[i].y / CELL);
+        for (let ddx = -1; ddx <= 1; ddx++) {
+          for (let ddy = -1; ddy <= 1; ddy++) {
+            const nkey = (gx + ddx) * 73856093 ^ (gy + ddy) * 19349663;
+            const cell = grid.get(nkey);
+            if (!cell) continue;
+            for (const j of cell) {
+              if (j <= i) continue;
+              const dx = nodes[j].x - nodes[i].x;
+              const dy = nodes[j].y - nodes[i].y;
+              const d2 = dx * dx + dy * dy + 1;
+              const f = repulsion / d2;
+              const d = Math.sqrt(d2);
+              fx[i] -= f * dx / d; fy[i] -= f * dy / d;
+              fx[j] += f * dx / d; fy[j] += f * dy / d;
+            }
+          }
+        }
+      }
+
+      // Spring forces via merged edges (one spring per pair)
+      for (const g of merged) {
+        const ai = idx.get(g.nodeA);
+        const bi = idx.get(g.nodeB);
+        if (ai === undefined || bi === undefined) continue;
+        const dx = nodes[bi].x - nodes[ai].x;
+        const dy = nodes[bi].y - nodes[ai].y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const weight = Math.min(g.relations.length, 4);
+        const f = (dist - springRest) * springStr * weight;
+        fx[ai] += f * dx / dist; fy[ai] += f * dy / dist;
+        fx[bi] -= f * dx / dist; fy[bi] -= f * dy / dist;
+      }
+
+      // Center gravity (scaled by degree — hub nodes pulled harder)
+      for (let i = 0; i < n; i++) {
+        const g = gravity * (1 + Math.log(nodes[i].degree + 1) * 0.3);
+        fx[i] += (cx - nodes[i].x) * g;
+        fy[i] += (cy - nodes[i].y) * g;
+      }
+
+      let ke = 0;
+      for (let i = 0; i < n; i++) {
+        if (nodes[i].pinned) continue;
+        nodes[i].vx = (nodes[i].vx + fx[i]) * damping;
+        nodes[i].vy = (nodes[i].vy + fy[i]) * damping;
+        nodes[i].x += nodes[i].vx;
+        nodes[i].y += nodes[i].vy;
+        // Clamp to bounding box
+        if (nodes[i].x < cx - bound) { nodes[i].x = cx - bound; nodes[i].vx *= -0.3; }
+        if (nodes[i].x > cx + bound) { nodes[i].x = cx + bound; nodes[i].vx *= -0.3; }
+        if (nodes[i].y < cy - bound) { nodes[i].y = cy - bound; nodes[i].vy *= -0.3; }
+        if (nodes[i].y > cy + bound) { nodes[i].y = cy + bound; nodes[i].vy *= -0.3; }
+        ke += nodes[i].vx * nodes[i].vx + nodes[i].vy * nodes[i].vy;
+      }
+
+      if (ke < 0.1 * n || tickRef.current >= 300) {
+        settledRef.current = true;
+        runningRef.current = false;
+        break;
       }
     }
 
-    for (const e of sg.edges) {
-      const ai = idx.get(Number(e.source));
-      const bi = idx.get(Number(e.target));
-      if (ai === undefined || bi === undefined) continue;
-      const dx = nodes[bi].x - nodes[ai].x;
-      const dy = nodes[bi].y - nodes[ai].y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const f = (dist - 140) * 0.02;
-      fx[ai] += f * dx / dist; fy[ai] += f * dy / dist;
-      fx[bi] -= f * dx / dist; fy[bi] -= f * dy / dist;
-    }
-
-    for (let i = 0; i < nodes.length; i++) {
-      fx[i] += (cx - nodes[i].x) * 0.01;
-      fy[i] += (cy - nodes[i].y) * 0.01;
-    }
-
-    let ke = 0;
-    for (let i = 0; i < nodes.length; i++) {
-      if (nodes[i].pinned) continue;
-      nodes[i].vx = (nodes[i].vx + fx[i]) * 0.82;
-      nodes[i].vy = (nodes[i].vy + fy[i]) * 0.82;
-      nodes[i].x += nodes[i].vx;
-      nodes[i].y += nodes[i].vy;
-      ke += nodes[i].vx * nodes[i].vx + nodes[i].vy * nodes[i].vy;
-    }
-
-    if (ke < 0.15 * nodes.length || tickRef.current >= 400) {
-      settledRef.current = true;
-      runningRef.current = false;
-    }
-
     drawCanvas(canvas, sg, nodes);
+
+    // Auto-fit on first settle
+    if (settledRef.current && tickRef.current <= 310) {
+      fitGraph();
+    }
 
     if (runningRef.current) rafRef.current = requestAnimationFrame(tick);
     else drawCanvas(canvas, sg, nodes);
   }
 
-  function drawCanvas(canvas: HTMLCanvasElement, sg: SubgraphData, nodes: SimNode[]) {
+  function drawCanvas(canvas: HTMLCanvasElement, _sg: SubgraphData, nodes: SimNode[]) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const { x: ox, y: oy } = offsetRef.current;
     const sc = scaleRef.current;
-    const hover = hoverRef.current;
     const selNode = selectedNodeRef.current;
-    const selEdge = selectedEdgeRef.current;
     const style = getComputedStyle(canvas);
     const border = style.getPropertyValue("--border").trim() || "#2c3037";
     const fgDim = style.getPropertyValue("--fg-dim").trim() || "#a39d92";
@@ -428,110 +522,112 @@ export default function KnowledgeView({
     const idx = new Map<number, number>();
     nodes.forEach((n, i) => idx.set(n.id, i));
 
-    const edgeInfo = buildMultiEdgeIndex(
-      sg.edges,
-      (e) => e.source,
-      (e) => e.target,
-    );
+    const highlighted = highlightNodesRef.current;
+    const merged = mergedEdgesRef.current;
 
-    for (let ei = 0; ei < sg.edges.length; ei++) {
-      const e = sg.edges[ei];
-      const ai = idx.get(Number(e.source));
-      const bi = idx.get(Number(e.target));
-      if (ai === undefined || bi === undefined) continue;
-      const hlHover = hover === ai || hover === bi;
-      const hlSel = selNode === ai || selNode === bi || selEdge === ei;
-      const hl = hlHover || hlSel;
+    // Determine if anything is "focused" — a selected node or search highlights
+    const hasFocus = selNode !== null || highlighted.size > 0;
 
-      const info = edgeInfo.get(ei)!;
-      const curveOff = computeCurveOffset(info.indexInGroup, info.count, 24);
-      const isCurved = curveOff !== 0;
-
-      const rA = nodeRadius(nodes[ai].degree);
-      const rB = nodeRadius(nodes[bi].degree);
-      const shortened = shortenEdge(nodes[ai].x, nodes[ai].y, nodes[bi].x, nodes[bi].y, rB + 4, rA);
-
-      const cp = getControlPoint(shortened.sx, shortened.sy, shortened.ex, shortened.ey, curveOff);
-
-      ctx.strokeStyle = hl ? accent : border;
-      ctx.lineWidth = hl ? 1.5 : 0.7;
-      ctx.globalAlpha = hl ? 1 : 0.4;
-      drawEdgeCurve(ctx, shortened.sx, shortened.sy, shortened.ex, shortened.ey, cp.cx, cp.cy, isCurved);
-
-      ctx.fillStyle = hl ? accent : border;
-      const arrowAngle = isCurved
-        ? getArrowAngle(cp.cx, cp.cy, shortened.ex, shortened.ey)
-        : getArrowAngle(shortened.sx, shortened.sy, shortened.ex, shortened.ey);
-      drawArrowhead(ctx, shortened.ex, shortened.ey, arrowAngle, hl ? 7 : 5);
-
-      ctx.globalAlpha = 1;
-
-      if (hl && settledRef.current && e.relation) {
-        const { mx, my } = isCurved
-          ? getCurveMidpoint(shortened.sx, shortened.sy, cp.cx, cp.cy, shortened.ex, shortened.ey)
-          : { mx: (shortened.sx + shortened.ex) / 2, my: (shortened.sy + shortened.ey) / 2 };
-        const label = e.relation.replace(/_/g, " ");
-        ctx.font = "8px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "bottom";
-        const m = ctx.measureText(label);
-        ctx.fillStyle = bgPanel;
-        ctx.globalAlpha = 0.8;
-        ctx.fillRect(mx - m.width / 2 - 2, my - 12, m.width + 4, 12);
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = fgDim;
-        ctx.fillText(label, mx, my - 2);
+    // Build set of all "active" node indices: selected + search + their 1-hop neighbors
+    const activeNodes = new Set<number>();
+    if (hasFocus) {
+      if (selNode !== null) activeNodes.add(selNode);
+      for (const hi of highlighted) activeNodes.add(hi);
+      // Add 1-hop neighbors
+      for (const g of merged) {
+        const ai = idx.get(g.nodeA);
+        const bi = idx.get(g.nodeB);
+        if (ai === undefined || bi === undefined) continue;
+        if (activeNodes.has(ai)) activeNodes.add(bi);
+        if (activeNodes.has(bi)) activeNodes.add(ai);
       }
     }
 
+    // Alpha for inactive elements when something is focused
+    const dimAlpha = 0.08;
+
+    // Viewport bounds (in graph coords) for culling
+    const vl = -ox / sc - 60;
+    const vt = -oy / sc - 60;
+    const vr = (canvas.width - ox) / sc + 60;
+    const vb = (canvas.height - oy) / sc + 60;
+
+    // Draw merged edges — single straight line per node pair
+    for (let gi = 0; gi < merged.length; gi++) {
+      const g = merged[gi];
+      const ai = idx.get(g.nodeA);
+      const bi = idx.get(g.nodeB);
+      if (ai === undefined || bi === undefined) continue;
+
+      // Viewport cull
+      const na = nodes[ai];
+      const nb = nodes[bi];
+      if ((na.x < vl && nb.x < vl) || (na.x > vr && nb.x > vr)) continue;
+      if ((na.y < vt && nb.y < vt) || (na.y > vb && nb.y > vb)) continue;
+
+      // Edge is active only if both endpoints are active
+      const isActive = !hasFocus || (activeNodes.has(ai) && activeNodes.has(bi));
+
+      const rA = nodeRadius(na.degree);
+      const rB = nodeRadius(nb.degree);
+      const shortened = shortenEdge(na.x, na.y, nb.x, nb.y, rB + 4, rA);
+
+      ctx.strokeStyle = isActive && hasFocus ? accent : border;
+      ctx.lineWidth = isActive && hasFocus ? 1.5 : 0.7;
+      ctx.globalAlpha = isActive ? (hasFocus ? 1 : 0.4) : dimAlpha;
+      ctx.beginPath();
+      ctx.moveTo(shortened.sx, shortened.sy);
+      ctx.lineTo(shortened.ex, shortened.ey);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Draw nodes with viewport culling
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
+      if (n.x < vl || n.x > vr || n.y < vt || n.y > vb) continue;
       const r = nodeRadius(n.degree);
       const color = typeColor(n.type);
-      const isHover = hover === i;
-      const isSel = selNode === i;
+      const isActive = !hasFocus || activeNodes.has(i);
+      const isCore = selNode === i || highlighted.has(i);
+      ctx.globalAlpha = isActive ? 1 : dimAlpha;
       ctx.beginPath();
-      ctx.arc(n.x, n.y, r + (isHover || isSel ? 2 : 0), 0, Math.PI * 2);
+      ctx.arc(n.x, n.y, r + (isCore ? 3 : 0), 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
-      if (isHover || isSel) {
-        ctx.strokeStyle = fg;
-        ctx.lineWidth = isSel ? 2 : 1.5;
+      if (isActive && hasFocus) {
+        ctx.strokeStyle = isCore ? accent : fg;
+        ctx.lineWidth = isCore ? 2.5 : 1;
         ctx.stroke();
       }
+      ctx.globalAlpha = 1;
     }
 
+    // Labels
     if (settledRef.current) {
       ctx.font = "9px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
 
-      const focusNode = selNode !== null ? selNode : hover;
-      const neighborSet = new Set<number>();
-      if (focusNode !== null) {
-        for (const e of sg.edges) {
-          const ai = idx.get(Number(e.source));
-          const bi = idx.get(Number(e.target));
-          if (ai === undefined || bi === undefined) continue;
-          if (ai === focusNode) neighborSet.add(bi);
-          if (bi === focusNode) neighborSet.add(ai);
-        }
-      }
-
       for (let i = 0; i < nodes.length; i++) {
         const n = nodes[i];
-        const isHover = hover === i;
-        const isSel = selNode === i;
-        const isNeighbor = neighborSet.has(i);
-        if (n.degree < 3 && !isHover && !isSel && !isNeighbor) continue;
-        const r = nodeRadius(n.degree);
-        const label = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
+        if (n.x < vl || n.x > vr || n.y < vt || n.y > vb) continue;
+        const isActive = !hasFocus || activeNodes.has(i);
+        const isCore = selNode === i || highlighted.has(i);
+        // When focused: only label active nodes. When unfocused: show labels for degree >= 3
+        if (hasFocus) {
+          if (!isActive) continue;
+        } else {
+          if (n.degree < 3) continue;
+        }
+        const r = nodeRadius(n.degree) + (isCore ? 3 : 0);
+        const label = n.name.length > 22 ? n.name.slice(0, 21) + "\u2026" : n.name;
         const metrics = ctx.measureText(label);
+        ctx.globalAlpha = isActive ? 0.9 : dimAlpha;
         ctx.fillStyle = bgPanel;
-        ctx.globalAlpha = 0.85;
         ctx.fillRect(n.x - metrics.width / 2 - 3, n.y + r + 3, metrics.width + 6, 12);
         ctx.globalAlpha = 1;
-        ctx.fillStyle = (isHover || isSel) ? fg : isNeighbor ? fg : fgDim;
+        ctx.fillStyle = isCore ? fg : isActive ? fgDim : fgDim;
         ctx.fillText(label, n.x, n.y + r + 4);
       }
     }
@@ -578,21 +674,20 @@ export default function KnowledgeView({
 
   function hitTestEdge(cx: number, cy: number): number | null {
     const nodes = simNodesRef.current;
-    const sg = subgraphRef.current;
-    if (!sg) return null;
+    const merged = mergedEdgesRef.current;
     const idx = new Map<number, number>();
     nodes.forEach((n, i) => idx.set(n.id, i));
     let best = -1;
     let bestDist = 8;
-    for (let ei = 0; ei < sg.edges.length; ei++) {
-      const e = sg.edges[ei];
-      const ai = idx.get(Number(e.source));
-      const bi = idx.get(Number(e.target));
+    for (let gi = 0; gi < merged.length; gi++) {
+      const g = merged[gi];
+      const ai = idx.get(g.nodeA);
+      const bi = idx.get(g.nodeB);
       if (ai === undefined || bi === undefined) continue;
       const d = distToSegment(cx, cy, nodes[ai].x, nodes[ai].y, nodes[bi].x, nodes[bi].y);
       if (d < bestDist) {
         bestDist = d;
-        best = ei;
+        best = gi;
       }
     }
     return best >= 0 ? best : null;
@@ -617,6 +712,72 @@ export default function KnowledgeView({
   function onCanvasMove(e: React.MouseEvent) {
     const { x: cx, y: cy } = canvasPoint(e);
     hoverRef.current = hitTestNode(cx, cy);
+
+    const selNode = selectedNodeRef.current;
+    const highlighted = highlightNodesRef.current;
+    const hasFocus = selNode !== null || highlighted.size > 0;
+
+    // Build activeNodes set (same logic as drawCanvas) for tooltip gating
+    const activeNodesForTooltip = new Set<number>();
+    if (hasFocus) {
+      if (selNode !== null) activeNodesForTooltip.add(selNode);
+      for (const hi of highlighted) activeNodesForTooltip.add(hi);
+      const mergedEdges = mergedEdgesRef.current;
+      const nodes = simNodesRef.current;
+      const idxMap = new Map<number, number>();
+      nodes.forEach((n, i) => idxMap.set(n.id, i));
+      for (const g of mergedEdges) {
+        const ai = idxMap.get(g.nodeA);
+        const bi = idxMap.get(g.nodeB);
+        if (ai === undefined || bi === undefined) continue;
+        if (activeNodesForTooltip.has(ai)) activeNodesForTooltip.add(bi);
+        if (activeNodesForTooltip.has(bi)) activeNodesForTooltip.add(ai);
+      }
+    }
+
+    // Edge hover tooltip — only on highlighted edges
+    const edgeHit = !dragRef.current && !panRef.current ? hitTestEdge(cx, cy) : null;
+    const prevEdgeGrp = hoveredEdgeGroupRef.current;
+    hoveredEdgeGroupRef.current = edgeHit;
+    const tooltip = edgeTooltipRef.current;
+
+    if (tooltip) {
+      let showTooltip = false;
+      if (hasFocus && edgeHit !== null && simNodesRef.current.length > 0) {
+        const g = mergedEdgesRef.current[edgeHit];
+        if (g && g.relations.length > 0) {
+          const nodes = simNodesRef.current;
+          const idxMap = new Map<number, number>();
+          nodes.forEach((n, i) => idxMap.set(n.id, i));
+          const ai = idxMap.get(g.nodeA);
+          const bi = idxMap.get(g.nodeB);
+          // Only show on edges where both endpoints are active (visually highlighted)
+          if (ai !== undefined && bi !== undefined && activeNodesForTooltip.has(ai) && activeNodesForTooltip.has(bi)) {
+            const nameA = nodes[ai]?.name ?? "";
+            const nameB = nodes[bi]?.name ?? "";
+            const rect = (e.target as HTMLElement).getBoundingClientRect();
+            const localX = e.clientX - rect.left;
+            const localY = e.clientY - rect.top;
+            tooltip.style.display = "block";
+            const ttWidth = 220;
+            const ttLeft = localX + 14 + ttWidth > rect.width ? localX - ttWidth - 8 : localX + 14;
+            tooltip.style.left = `${ttLeft}px`;
+            tooltip.style.top = `${Math.max(4, localY - 8)}px`;
+            tooltip.innerHTML = g.relations.map((r) => {
+              const fromName = r.from === g.nodeA ? nameA : nameB;
+              const toName = r.to === g.nodeB ? nameB : nameA;
+              const dir = "\u2192";
+              return `<div class="kv-edge-tooltip-row"><span class="kv-edge-tooltip-names">${fromName} ${dir} ${toName}</span><span class="kv-edge-tooltip-label">${r.label.replace(/_/g, " ")}</span></div>`;
+            }).join("");
+            showTooltip = true;
+          }
+        }
+      }
+      if (!showTooltip) {
+        tooltip.style.display = "none";
+      }
+    }
+
     if (dragRef.current) {
       dragRef.current.moved = true;
       const n = simNodesRef.current[dragRef.current.idx];
@@ -629,7 +790,7 @@ export default function KnowledgeView({
       };
       redraw();
     } else {
-      redraw();
+      if (edgeHit !== prevEdgeGrp) redraw();
     }
   }
 
@@ -678,11 +839,12 @@ export default function KnowledgeView({
     }
     const edgeHit = hitTestEdge(x, y);
     if (edgeHit !== null) {
-      const sg = subgraphRef.current;
-      if (!sg) return;
-      const edge = sg.edges[edgeHit];
-      const srcNode = simNodesRef.current.find((n) => n.id === Number(edge.source));
-      if (srcNode) void selectEntity(srcNode.id);
+      const merged = mergedEdgesRef.current;
+      const g = merged[edgeHit];
+      if (g) {
+        const node = simNodesRef.current.find((n) => n.id === g.nodeA);
+        if (node) void selectEntity(node.id);
+      }
     }
   }
 
@@ -709,6 +871,98 @@ export default function KnowledgeView({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, []);
+
+  function fitGraph() {
+    const nodes = simNodesRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas || nodes.length === 0) return;
+    const padding = 60;
+
+    // Percentile-based bounds: ignore the worst 5% outliers on each side
+    const xs = nodes.map((nd) => nd.x).sort((a, b) => a - b);
+    const ys = nodes.map((nd) => nd.y).sort((a, b) => a - b);
+    const lo = Math.floor(nodes.length * 0.03);
+    const hi = Math.ceil(nodes.length * 0.97) - 1;
+    const minX = xs[lo];
+    const maxX = xs[hi];
+    const minY = ys[lo];
+    const maxY = ys[hi];
+
+    const gw = (maxX - minX) || 1;
+    const gh = (maxY - minY) || 1;
+    const cw = canvas.width - padding * 2;
+    const ch = canvas.height - padding * 2;
+    // Minimum scale so nodes are always visible; maximum 2.5 for readability
+    const sc = Math.max(0.3, Math.min(cw / gw, ch / gh, 2.5));
+    scaleRef.current = sc;
+    offsetRef.current = {
+      x: (canvas.width - gw * sc) / 2 - minX * sc,
+      y: (canvas.height - gh * sc) / 2 - minY * sc,
+    };
+    redraw();
+  }
+
+  function refreshGraph() {
+    const nodes = simNodesRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas || nodes.length === 0) return;
+    const w = canvas.width || 800;
+    const h = canvas.height || 600;
+    for (const n of nodes) {
+      n.x = w * 0.2 + Math.random() * w * 0.6;
+      n.y = h * 0.2 + Math.random() * h * 0.6;
+      n.vx = 0;
+      n.vy = 0;
+      n.pinned = false;
+    }
+    tickRef.current = 0;
+    settledRef.current = false;
+    runningRef.current = true;
+    // Reset view
+    scaleRef.current = 1;
+    offsetRef.current = { x: 0, y: 0 };
+    startRAF();
+  }
+
+  function zoomGraph(factor: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const sc = scaleRef.current;
+    const newSc = Math.max(0.1, Math.min(10, sc * factor));
+    offsetRef.current = {
+      x: cx - (cx - offsetRef.current.x) * (newSc / sc),
+      y: cy - (cy - offsetRef.current.y) * (newSc / sc),
+    };
+    scaleRef.current = newSc;
+    redraw();
+  }
+
+  function onGraphSearchChange(value: string) {
+    setGraphSearch(value);
+    const nodes = simNodesRef.current;
+    if (!value.trim()) {
+      highlightNodesRef.current = new Set();
+      setGraphSearchCount(0);
+    } else {
+      const q = value.toLowerCase();
+      const matched = new Set<number>();
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].name.toLowerCase().includes(q)) matched.add(i);
+      }
+      highlightNodesRef.current = matched;
+      setGraphSearchCount(matched.size);
+    }
+    redraw();
+  }
+
+  function clearGraphSearch() {
+    setGraphSearch("");
+    highlightNodesRef.current = new Set();
+    setGraphSearchCount(0);
+    redraw();
+  }
 
   const hasResults = queryResult && queryResult.results.length > 0;
   const hasSubgraph = subgraphData && subgraphData.nodes.length > 0;
@@ -969,7 +1223,67 @@ export default function KnowledgeView({
             onMouseUp={onCanvasUp}
             onDoubleClick={onCanvasDblClick}
             onWheel={onCanvasWheel}
+            onMouseLeave={() => {
+              if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "none";
+              hoveredEdgeGroupRef.current = null;
+              hoverRef.current = null;
+              redraw();
+            }}
           />
+          <div ref={edgeTooltipRef} className="kv-edge-tooltip" />
+          <div className="kv-graph-toolbar">
+            <div className="kv-graph-search">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="7" cy="7" r="5" />
+                <line x1="11" y1="11" x2="14" y2="14" />
+              </svg>
+              <input
+                className="kv-graph-search-input"
+                type="text"
+                placeholder="Find entity…"
+                value={graphSearch}
+                onChange={(e) => onGraphSearchChange(e.target.value)}
+                disabled={!hasSubgraph}
+              />
+              {graphSearch && (
+                <span className="kv-graph-search-count">{graphSearchCount}</span>
+              )}
+              {graphSearch && (
+                <button className="kv-graph-search-clear" onClick={clearGraphSearch}>&times;</button>
+              )}
+            </div>
+            <div className="kv-graph-tools">
+              <button className="kv-tool-btn" onClick={refreshGraph} title="Restart layout" disabled={!hasSubgraph}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 1v5h5" />
+                  <path d="M3.5 11A6 6 0 1 0 4.5 4.5L1 6" />
+                </svg>
+              </button>
+              <button className="kv-tool-btn" onClick={fitGraph} title="Fit to view" disabled={!hasSubgraph}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1" y="1" width="6" height="6" rx="1" />
+                  <rect x="9" y="1" width="6" height="6" rx="1" />
+                  <rect x="1" y="9" width="6" height="6" rx="1" />
+                  <rect x="9" y="9" width="6" height="6" rx="1" />
+                </svg>
+              </button>
+              <button className="kv-tool-btn" onClick={() => zoomGraph(1.3)} title="Zoom in" disabled={!hasSubgraph}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="7" cy="7" r="5" />
+                  <line x1="7" y1="5" x2="7" y2="9" />
+                  <line x1="5" y1="7" x2="9" y2="7" />
+                  <line x1="11" y1="11" x2="14" y2="14" />
+                </svg>
+              </button>
+              <button className="kv-tool-btn" onClick={() => zoomGraph(0.7)} title="Zoom out" disabled={!hasSubgraph}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="7" cy="7" r="5" />
+                  <line x1="5" y1="7" x2="9" y2="7" />
+                  <line x1="11" y1="11" x2="14" y2="14" />
+                </svg>
+              </button>
+            </div>
+          </div>
           {!hasSubgraph && (
             <div className="kv-graph-empty">
               {sourceFilter === "file" && sourcePath && subgraphData !== null && !loading ? (

@@ -665,6 +665,7 @@
 .kv-graph-empty {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -700,6 +701,173 @@
 .kv-graph-empty-hint {
   font-size: 11px;
   color: var(--fg-faint);
+}
+
+/* ── Graph toolbar ─────────────────────────────────────────────────────── */
+
+.kv-graph-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.kv-graph-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  pointer-events: auto;
+  min-width: 160px;
+  max-width: 240px;
+  transition: border-color 120ms;
+}
+
+.kv-graph-search:focus-within {
+  border-color: var(--accent);
+}
+
+.kv-graph-search svg {
+  color: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+.kv-graph-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  font-size: 11px;
+  background: none;
+  color: var(--fg);
+  border: none;
+  outline: none;
+}
+
+.kv-graph-search-input::placeholder {
+  color: var(--fg-faint);
+}
+
+.kv-graph-search-count {
+  font-size: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.kv-graph-search-clear {
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.kv-graph-search-clear:hover {
+  color: var(--fg);
+}
+
+.kv-graph-tools {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  pointer-events: auto;
+}
+
+.kv-tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.kv-tool-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-color: var(--fg-faint);
+}
+
+.kv-tool-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.kv-graph-search-input:disabled {
+  opacity: 0.4;
+}
+
+/* ── Edge hover tooltip ────────────────────────────────────────────────── */
+
+.kv-edge-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  min-width: 140px;
+  max-width: 260px;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  font-size: 11px;
+  color: var(--fg);
+  animation: kv-tooltip-in 100ms ease-out;
+}
+
+@keyframes kv-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.kv-edge-tooltip-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.kv-edge-tooltip-row:last-child {
+  border-bottom: none;
+}
+
+.kv-edge-tooltip-names {
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+.kv-edge-tooltip-label {
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-style: italic;
 }
 
 /* ── Loading ────────────────────────────────────────────────────────────── */

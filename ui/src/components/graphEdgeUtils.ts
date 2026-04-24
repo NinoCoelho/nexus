@@ -1,3 +1,16 @@
+/**
+ * graphEdgeUtils — edge layout helpers for Cytoscape graph views.
+ *
+ * When multiple edges exist between the same node pair (e.g. a "link" edge
+ * and a "tag-cooccurrence" edge), we need curve offsets so they don't
+ * overlap. This module computes:
+ *   - Multi-edge index (which parallel edge is this?)
+ *   - Curve offset direction (above/below the straight line)
+ *   - Bezier control point distances
+ *
+ * Shared by GraphView (vault graph) and AgentGraphView (agent graph).
+ */
+
 export interface MultiEdgeInfo {
   count: number;
   indexInGroup: number;
