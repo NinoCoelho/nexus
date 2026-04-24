@@ -491,7 +491,7 @@ class SessionStore:
         assistant = ChatMessage(
             role=Role.ASSISTANT,
             content=(prefix + assistant_text) if (prefix or assistant_text) else "",
-            tool_calls=tcs or None,
+            tool_calls=tcs,
         )
         history = list(base_history)
         history.append(ChatMessage(role=Role.USER, content=user_message))

@@ -10,14 +10,16 @@ This module keeps Nexus's public surface:
   :class:`AskUserResult` so :class:`TerminalHandler` can keep
   destructuring ``ok`` / ``answer`` / ``kind`` / ``timed_out`` / ``error``.
 
-Three interaction kinds are supported (``confirm``, ``choice``,
-``text``). Kinds and the timeout sentinel come from
-``loom.hitl`` so Loom's side can never drift from Nexus's.
+Four interaction kinds are supported (``confirm``, ``choice``, ``text``,
+``form``). Kinds and the timeout sentinel come from ``loom.hitl`` so
+Loom's side can never drift from Nexus's.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -25,6 +27,7 @@ from typing import Any
 from loom.hitl import TIMEOUT_SENTINEL
 
 from .context import CURRENT_SESSION_ID
+from .form_schema import FieldSchema, FormSchema
 from .llm import ToolSpec
 
 ASK_USER_TOOL = ToolSpec(
@@ -50,10 +53,12 @@ ASK_USER_TOOL = ToolSpec(
             },
             "kind": {
                 "type": "string",
-                "enum": ["confirm", "choice", "text"],
+                "enum": ["confirm", "choice", "text", "form"],
                 "description": (
                     "'confirm' for yes/no; 'choice' for a pick-one from "
-                    "`choices`; 'text' for free-form input. Default: 'confirm'."
+                    "`choices`; 'text' for free-form input; 'form' for a "
+                    "multi-field structured form (answer is a JSON object). "
+                    "Default: 'confirm'."
                 ),
             },
             "choices": {
@@ -64,6 +69,26 @@ ASK_USER_TOOL = ToolSpec(
                     "selectable option; the returned answer is one of "
                     "these verbatim."
                 ),
+            },
+            "fields": {
+                "type": "array",
+                "description": (
+                    "Required for kind='form'. Array of field descriptors. "
+                    "Each has: name (str, required), label (str), "
+                    "kind ('text'|'textarea'|'number'|'boolean'|'select'|'multiselect'|'date'), "
+                    "required (bool), default, choices (for select/multiselect), "
+                    "placeholder (str), help (str). "
+                    "Answer comes back as a JSON object keyed by field name."
+                ),
+                "items": {"type": "object"},
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional title shown in the form dialog header.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Optional description shown below the title in the form dialog.",
             },
             "default": {
                 "type": "string",
@@ -87,13 +112,13 @@ ASK_USER_TOOL = ToolSpec(
 )
 
 _DEFAULT_TIMEOUT_SECONDS = 300
-_VALID_KINDS = {"confirm", "choice", "text"}
+_VALID_KINDS = {"confirm", "choice", "text", "form"}
 
 
 @dataclass(frozen=True)
 class AskUserResult:
     ok: bool
-    answer: str | None
+    answer: str | dict | None
     kind: str
     timed_out: bool
     error: str | None = None
@@ -134,6 +159,9 @@ class AskUserHandler:
         self._sessions = session_store
         self._yolo = yolo_mode_getter or (lambda: False)
         self._default_timeout = default_timeout
+        # Side-dict for form requests: maps request_id → extra payload data
+        # so /pending can reconstruct the full form schema on page reload.
+        self._form_extras: dict[str, dict[str, Any]] = {}
 
     async def invoke(self, args: dict[str, Any]) -> AskUserResult:
         prompt = args.get("prompt")
@@ -157,6 +185,23 @@ class AskUserHandler:
                     kind=kind,
                     message="`choices` entries must be non-empty strings",
                 )
+        fields: list[dict] | None = None
+        if kind == "form":
+            raw_fields = args.get("fields")
+            if not isinstance(raw_fields, list) or not raw_fields:
+                return _error(
+                    kind=kind,
+                    message="kind='form' requires a non-empty `fields` array",
+                )
+            try:
+                validated = FormSchema(
+                    title=args.get("title"),
+                    description=args.get("description"),
+                    fields=[FieldSchema.model_validate(f) for f in raw_fields],
+                )
+                fields = [f.model_dump(exclude_none=True) for f in validated.fields]
+            except Exception as exc:
+                return _error(kind=kind, message=f"invalid fields: {exc}")
         default = args.get("default")
         if default is not None and not isinstance(default, str):
             return _error(kind=kind, message="`default` must be a string if provided")
@@ -185,6 +230,19 @@ class AskUserHandler:
                 ),
             )
 
+        # For kind="form" we implement HITL manually so we can include the
+        # field schema in the SSE event data. The broker doesn't know about
+        # form fields, so bypassing it for this kind is intentional.
+        if kind == "form":
+            return await self._ask_form(
+                session_id=session_id,
+                prompt=prompt,
+                fields=fields or [],
+                form_title=args.get("title"),
+                form_description=args.get("description"),
+                timeout_seconds=int(timeout),
+            )
+
         # Delegate to loom.hitl.HitlBroker — it handles YOLO short-circuit
         # (publishing ``user_request_auto``), park-on-Future, timeout +
         # ``user_request_cancelled`` emission, and publish-hook fan-out
@@ -205,6 +263,68 @@ class AskUserHandler:
             kind=kind,
             timed_out=timed_out,
         )
+
+    async def _ask_form(
+        self,
+        *,
+        session_id: str,
+        prompt: str,
+        fields: list[dict],
+        form_title: str | None,
+        form_description: str | None,
+        timeout_seconds: int,
+    ) -> AskUserResult:
+        """Park-on-future HITL for kind='form', publishing full field schema."""
+        from ..server.events import SessionEvent
+
+        request_id = uuid.uuid4().hex
+        extra_data: dict[str, Any] = {
+            "fields": fields,
+            "form_title": form_title,
+            "form_description": form_description,
+        }
+        self._form_extras[request_id] = extra_data
+        fut: asyncio.Future[str] = self._sessions.register_pending(
+            session_id, request_id
+        )
+        self._sessions.publish(
+            session_id,
+            SessionEvent(
+                kind="user_request",
+                data={
+                    "request_id": request_id,
+                    "prompt": prompt,
+                    "kind": "form",
+                    "choices": None,
+                    "default": None,
+                    "timeout_seconds": timeout_seconds,
+                    "fields": fields,
+                    "form_title": form_title,
+                    "form_description": form_description,
+                },
+            ),
+        )
+        try:
+            raw = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            fut.cancel()
+            self._form_extras.pop(request_id, None)
+            return AskUserResult(
+                ok=True, answer=TIMEOUT_SENTINEL, kind="form", timed_out=True
+            )
+        except asyncio.CancelledError:
+            self._form_extras.pop(request_id, None)
+            return AskUserResult(
+                ok=True, answer=TIMEOUT_SENTINEL, kind="form", timed_out=True
+            )
+
+        self._form_extras.pop(request_id, None)
+        decoded: str | dict = raw
+        try:
+            decoded = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return AskUserResult(ok=True, answer=decoded, kind="form", timed_out=False)
 
 
 def _error(*, kind: str, message: str) -> AskUserResult:

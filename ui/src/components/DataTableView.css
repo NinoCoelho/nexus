@@ -1,0 +1,136 @@
+/* DataTableView — interactive CRUD table for vault data-table files. */
+
+.dt-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+
+.dt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.dt-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.dt-form-panel {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  flex-shrink: 0;
+  overflow-y: auto;
+  max-height: 60%;
+}
+
+.dt-form-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.dt-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+
+.dt-table-wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.dt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.dt-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--border);
+  color: var(--fg-faint);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  z-index: 1;
+}
+
+.dt-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--fg);
+  vertical-align: middle;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.dt-actions-col {
+  width: 100px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.dt-action-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  color: var(--fg);
+  cursor: pointer;
+  margin-left: 4px;
+  transition: border-color 120ms ease;
+}
+
+.dt-action-btn:hover {
+  border-color: var(--accent);
+}
+
+.dt-action-btn--delete {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+}
+
+.dt-action-btn--delete:hover {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+
+.dt-error {
+  padding: 16px;
+  color: var(--bad);
+  font-size: 13px;
+}
+
+.dt-loading {
+  padding: 16px;
+  color: var(--fg-faint);
+  font-size: 13px;
+}

@@ -598,16 +598,18 @@ def create_app(
         if not requests:
             return {"pending": None}
         r = requests[0]
-        return {
-            "pending": {
-                "request_id": r.request_id,
-                "prompt": r.prompt,
-                "kind": r.kind,
-                "choices": r.choices,
-                "default": r.default,
-                "timeout_seconds": r.timeout_seconds,
-            }
+        payload: dict[str, Any] = {
+            "request_id": r.request_id,
+            "prompt": r.prompt,
+            "kind": r.kind,
+            "choices": r.choices,
+            "default": r.default,
+            "timeout_seconds": r.timeout_seconds,
         }
+        extras = ask_user_handler._form_extras.get(r.request_id)
+        if extras:
+            payload.update(extras)
+        return {"pending": payload}
 
     @app.post("/chat/{session_id}/cancel")
     async def chat_cancel(
@@ -1677,6 +1679,49 @@ def create_app(
         from .. import vault_kanban
         vault_kanban.delete_lane(path, lane_id)
 
+    # ── vault data-table API ────────────────────────────────────────────────────
+
+    @app.get("/vault/datatable")
+    async def vault_datatable_get(path: str) -> dict:
+        from .. import vault_datatable
+        try:
+            tbl = vault_datatable.read_table(path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+        return {"path": path, **tbl}
+
+    @app.post("/vault/datatable/rows", status_code=status.HTTP_201_CREATED)
+    async def vault_datatable_add_row(body: dict, path: str) -> dict:
+        from .. import vault_datatable
+        row = body.get("row", {})
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`row` must be an object")
+        try:
+            added = vault_datatable.add_row(path, row)
+        except (FileNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return added
+
+    @app.patch("/vault/datatable/rows/{row_id}")
+    async def vault_datatable_update_row(row_id: str, body: dict, path: str) -> dict:
+        from .. import vault_datatable
+        updates = body.get("row", body)
+        if not isinstance(updates, dict):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`row` must be an object")
+        try:
+            updated = vault_datatable.update_row(path, row_id, updates)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        return updated
+
+    @app.delete("/vault/datatable/rows/{row_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def vault_datatable_delete_row(row_id: str, path: str) -> None:
+        from .. import vault_datatable
+        try:
+            vault_datatable.delete_row(path, row_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
     # ── vault dispatch ─────────────────────────────────────────────────────────
     # Start a new chat session seeded with the content of a vault file
     # (or a single kanban card). Returns the new session_id + a seed message
@@ -2228,13 +2273,12 @@ def create_app(
         available = pr.available_model_ids() if pr else []
         if not cfg:
             return {"default_model": None, "last_used_model": None,
-                    "classification_model": None, "available_models": available}
+                    "available_models": available}
         embedding_id = cfg.graphrag.embedding_model_id
         chat_available = [m for m in available if m != embedding_id]
         return {
             "default_model": cfg.agent.default_model,
             "last_used_model": cfg.agent.last_used_model,
-            "classification_model": cfg.agent.classification_model,
             "routing_mode": cfg.agent.routing_mode,
             "available_models": chat_available,
             "embedding_model_id": embedding_id,
@@ -2249,8 +2293,6 @@ def create_app(
             cfg.agent.default_model = body["default_model"]
         if "last_used_model" in body:
             cfg.agent.last_used_model = body["last_used_model"]
-        if "classification_model" in body:
-            cfg.agent.classification_model = body["classification_model"]
         if "routing_mode" in body and body["routing_mode"] in ("fixed", "auto"):
             cfg.agent.routing_mode = body["routing_mode"]
         if "embedding_model_id" in body:
@@ -2262,7 +2304,6 @@ def create_app(
         return {
             "default_model": cfg.agent.default_model,
             "last_used_model": cfg.agent.last_used_model,
-            "classification_model": cfg.agent.classification_model,
             "routing_mode": cfg.agent.routing_mode,
             "embedding_model_id": cfg.graphrag.embedding_model_id,
             "extraction_model_id": cfg.graphrag.extraction_model_id,
@@ -2277,8 +2318,6 @@ def create_app(
             cfg.graphrag.embedding_model_id = new_id
         elif body.role == "extraction":
             cfg.graphrag.extraction_model_id = new_id
-        elif body.role == "classification":
-            cfg.agent.classification_model = new_id
         else:
             from fastapi import HTTPException
             raise HTTPException(400, f"Unknown role: {body.role}")

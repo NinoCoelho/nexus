@@ -8,11 +8,12 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import type { UserRequestPayload } from "../api";
+import FormRenderer from "./FormRenderer";
 import "./ApprovalDialog.css";
 
 interface Props {
   request: UserRequestPayload;
-  onSubmit: (answer: string) => void;
+  onSubmit: (answer: string | Record<string, unknown>) => void;
   onTimeout: () => void;
 }
 
@@ -46,12 +47,21 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout }: Props) 
     <div className="approval-backdrop" role="dialog" aria-modal="true">
       <div className="approval-dialog">
         <div className="approval-header">
-          <span className="approval-title">Agent needs input</span>
+          <span className="approval-title">
+            {request.kind === "form" && request.form_title
+              ? request.form_title
+              : "Agent needs input"}
+          </span>
           <span className="approval-countdown" title="Timeout">
             {formatCountdown(remaining)}
           </span>
         </div>
         <p className="approval-prompt">{request.prompt}</p>
+        {request.kind === "form" && request.form_description && (
+          <p className="approval-prompt" style={{ color: "var(--fg-faint)", fontSize: "12px" }}>
+            {request.form_description}
+          </p>
+        )}
 
         {request.kind === "confirm" && (
           <div className="approval-buttons">
@@ -108,6 +118,14 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout }: Props) 
               Send
             </button>
           </form>
+        )}
+
+        {request.kind === "form" && request.fields && (
+          <FormRenderer
+            fields={request.fields}
+            onSubmit={(values) => onSubmit(values)}
+            submitLabel="Submit"
+          />
         )}
       </div>
     </div>

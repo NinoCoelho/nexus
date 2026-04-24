@@ -292,8 +292,10 @@ def build_tool_registry(
     from ..skills.manager import SkillManager
     from ..tools.acp_call import ACP_CALL_TOOL, acp_call
     from ..tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
+    from ..tools.datatable_tool import DATATABLE_MANAGE_TOOL, handle_datatable_tool
     from ..tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from ..tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
+    from ..tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from ..tools.state_tool import STATE_TOOLS, StateToolHandler
     from ..tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
     from ..agent.ask_user_tool import ASK_USER_TOOL
@@ -358,6 +360,18 @@ def build_tool_registry(
         return handle_kanban_tool(args)
 
     registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
+
+    # datatable_manage
+    async def _datatable(args: dict) -> str:
+        return handle_datatable_tool(args)
+
+    registry.register(_SimpleToolHandler(DATATABLE_MANAGE_TOOL, _datatable))
+
+    # visualize_table
+    async def _visualize(args: dict) -> str:
+        return handle_visualize_tool(args)
+
+    registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
 
     _mem_handler = MemoryHandler()
 

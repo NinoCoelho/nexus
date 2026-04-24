@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
@@ -20,6 +20,7 @@ import type { TimelineStep } from "./ChatView";
 import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
 import ChatInlineFilePreview from "./ChatInlineFilePreview";
+const LazyChartBlock = lazy(() => import("./ChartBlock"));
 import { classify } from "../fileTypes";
 import { vaultRawUrl } from "../api";
 import "./AssistantMessage.css";
@@ -154,11 +155,18 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
             }}
             components={{
               code: ({ className, children, ...rest }) => {
-                const match = /language-(\w+)/.exec(className || "");
+                const match = /language-([\w-]+)/.exec(className || "");
                 const lang = match?.[1];
                 const raw = String(children ?? "");
                 if (lang === "mermaid" && raw.includes("\n")) {
                   return <MermaidBlock code={raw.replace(/\n$/, "")} />;
+                }
+                if (lang === "nexus-chart") {
+                  return (
+                    <Suspense fallback={<span className="mermaid-block" />}>
+                      <LazyChartBlock code={raw.replace(/\n$/, "")} />
+                    </Suspense>
+                  );
                 }
                 return <code className={className} {...rest}>{children}</code>;
               },

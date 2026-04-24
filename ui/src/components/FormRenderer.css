@@ -1,0 +1,88 @@
+/* FormRenderer — generic multi-field form used by HITL form dialogs and
+   DataTableView row editor. Shares approval-btn / approval-* classes from
+   ApprovalDialog.css for button styling. */
+
+.form-renderer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.form-required {
+  color: var(--bad);
+}
+
+.form-help {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+
+.form-input {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+select.form-input {
+  cursor: pointer;
+}
+
+.form-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.form-multiselect {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+}
+
+.form-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--bad);
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 4px;
+}

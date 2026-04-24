@@ -74,7 +74,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
 
   const embModelId = routing?.embedding_model_id ?? "";
   const extModelId = routing?.extraction_model_id ?? "";
-  const clsModelId = routing?.classification_model ?? "";
 
   const providerTypeMap = Object.fromEntries(providers.map((p) => [p.name, p.type ?? "openai_compat"]));
 
@@ -82,7 +81,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
     const roles: string[] = [];
     if (embModelId === m.id) roles.push("embedding");
     if (extModelId === m.id) roles.push("extraction");
-    if (clsModelId === m.id) roles.push("classification");
     return roles;
   }
 
@@ -92,7 +90,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   }
 
   function hasRole(m: Model): boolean {
-    return embModelId === m.id || extModelId === m.id || clsModelId === m.id;
+    return embModelId === m.id || extModelId === m.id;
   }
 
   async function assignRole(role: string, modelId: string) {
@@ -252,10 +250,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   const discoveryError = currentDiscovery?.error ?? null;
 
   const routingMode = routing?.routing_mode ?? "fixed";
-  // Auto-route always works now: with no classification model, the built-in
-  // local classifier ranks models by embedding similarity.
-  const canEnableAuto = true;
-  const usingBuiltinClassifier = !routing?.classification_model;
   const usingBuiltinEmbedder = !embModelId;
 
   async function setRoutingMode(mode: "fixed" | "auto") {
@@ -285,18 +279,14 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
             <div style={{ fontWeight: 600, fontSize: 13 }}>Auto-route new messages</div>
             <div style={{ fontSize: 11, color: "var(--fg-faint)", marginTop: 2 }}>
               {routingMode === "auto"
-                ? "The classifier picks a model per turn based on tier + notes."
-                : "All turns use the selected model. Toggle on to let the classifier pick."}
-              {usingBuiltinClassifier && (
-                <> · <span style={{ color: "var(--fg-faint)" }}>Using built-in local classifier (no Auto-route model selected).</span></>
-              )}
+                ? "A local classifier picks the best model per turn based on tier + notes."
+                : "All turns use the selected model. Toggle on to let the router pick per turn."}
             </div>
           </div>
           <button
             type="button"
             role="switch"
             aria-checked={routingMode === "auto"}
-            disabled={!canEnableAuto && routingMode !== "auto"}
             className={`model-role-badge${routingMode === "auto" ? " model-role-badge--active" : ""}`}
             onClick={() => setRoutingMode(routingMode === "auto" ? "fixed" : "auto")}
           >
@@ -310,7 +300,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
         const roles = getModelRoles(m);
         const isEmb = roles.includes("embedding");
         const isExt = roles.includes("extraction");
-        const isCls = roles.includes("classification");
         const locked = hasRole(m);
         return (
           <div key={m.id} className="settings-card">
@@ -343,23 +332,14 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
                   <button
                     type="button"
                     className={`model-role-badge ${isExt ? "model-role-badge--active" : ""}`}
-                    onClick={() => !isExt && assignRole("extraction", m.id)}
-                    disabled={isExt || roleSaving}
-                    title={isExt ? "Extraction model" : "Set as extraction model"}
-                  >
-                    Extraction
-                  </button>
-                  <button
-                    type="button"
-                    className={`model-role-badge ${isCls ? "model-role-badge--active" : ""}`}
                     onClick={() => {
-                      if (isCls) unassignRole("classification");
-                      else assignRole("classification", m.id);
+                      if (isExt) unassignRole("extraction");
+                      else assignRole("extraction", m.id);
                     }}
                     disabled={roleSaving}
-                    title={isCls ? "Click to clear (falls back to built-in classifier)" : "Set as auto-routing model"}
+                    title={isExt ? "Click to clear extraction model" : "Set as extraction model"}
                   >
-                    Auto-route
+                    Extraction
                   </button>
                 </div>
               </div>

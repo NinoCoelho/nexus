@@ -149,11 +149,12 @@ async def initialize(cfg: Any) -> None:
 
 
 def _resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
-    """Resolve the embedding provider from the model list or fallback config.
+    """Resolve the embedding provider.
 
-    When no ``embedding_model_id`` is configured and the provider is set to
-    ``"builtin"`` (or defaults), uses the in-process fastembed runner so
-    GraphRAG works out of the box without Ollama.
+    With a model selected via ``embedding_model_id`` we honor it. Otherwise
+    we always use the built-in fastembed runner — the legacy
+    ``graphrag.embeddings.provider`` field in old toml configs is ignored
+    so stale ``provider="ollama"`` values don't resurrect an external dep.
     """
     from loom.store.embeddings import OllamaEmbeddingProvider, OpenAIEmbeddingProvider
 
@@ -184,23 +185,6 @@ def _resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
         except Exception:
             log.warning("[graphrag] failed to resolve embedding model %s from registry", model_id, exc_info=True)
 
-    if emb_cfg.provider == "builtin":
-        return _builtin_embedder()
-
-    if emb_cfg.provider == "openai":
-        return OpenAIEmbeddingProvider(
-            model=emb_cfg.model,
-            base_url=emb_cfg.base_url,
-            key_env=emb_cfg.key_env,
-            dim=emb_cfg.dimensions,
-        )
-    if emb_cfg.provider == "ollama":
-        return OllamaEmbeddingProvider(
-            model=emb_cfg.model,
-            base_url=emb_cfg.base_url,
-            dim=emb_cfg.dimensions,
-        )
-    # Unknown / unset — fall back to built-in rather than raising.
     return _builtin_embedder()
 
 
@@ -219,9 +203,11 @@ def _get_provider_config(cfg: Any, model_id: str) -> Any:
 
 def _resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
     extraction_model_id = getattr(graphrag_cfg, "extraction_model_id", "")
-    extraction_model = extraction_model_id or graphrag_cfg.extraction.model
-    if extraction_model is None or extraction_model == "":
-        return None
+    extraction_model = extraction_model_id or getattr(graphrag_cfg.extraction, "model", "")
+    if not extraction_model:
+        log.info("[graphrag] no extraction model configured — using builtin extractor (spaCy + fastembed)")
+        from .builtin_extractor import get_builtin_extractor
+        return get_builtin_extractor()
 
     # First try: match against configured models/providers
     try:
@@ -233,23 +219,15 @@ def _resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
             provider, provider_registry=registry, default_model=extraction_model
         )
     except Exception:
-        pass
+        log.info("[graphrag] extraction model %s not found in registry", extraction_model)
 
-    # Fallback: direct Ollama / OpenAI-compat provider
-    ext_cfg = graphrag_cfg.extraction
-    try:
-        from .llm import OpenAIProvider
-        base_url = ext_cfg.base_url
-        api_key = "ollama"
-        if ext_cfg.key_env:
-            import os
-            api_key = os.environ.get(ext_cfg.key_env, "")
-        provider = OpenAIProvider(base_url=base_url, api_key=api_key, model=extraction_model)
-        from ._loom_bridge import LoomProviderAdapter
-        return LoomProviderAdapter(provider, default_model=extraction_model)
-    except Exception:
-        log.warning("[graphrag] failed to create extraction LLM provider", exc_info=True)
-        return None
+    # No fallback to Ollama — if the model isn't explicitly configured, skip extraction
+    log.warning(
+        "[graphrag] extraction model %r not resolvable — skipping entity extraction. "
+        "Configure extraction_model_id under [graphrag] to enable it.",
+        extraction_model,
+    )
+    return None
 
 
 async def index_vault_file(path: str, content: str) -> None:

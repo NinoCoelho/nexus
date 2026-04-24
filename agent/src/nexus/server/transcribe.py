@@ -22,7 +22,13 @@ log = logging.getLogger(__name__)
 
 @lru_cache(maxsize=4)
 def _get_local_model(model: str, device: str, compute_type: str) -> Any:
-    from faster_whisper import WhisperModel  # lazy import; heavy
+    try:
+        from faster_whisper import WhisperModel  # lazy import; heavy
+    except ImportError:
+        raise RuntimeError(
+            "faster-whisper is not installed. "
+            "Run: uv sync  (or: pip install faster-whisper)"
+        )
 
     log.info("[transcribe] loading faster-whisper model=%s device=%s compute=%s",
              model, device, compute_type)

@@ -154,9 +154,9 @@ export default function InsightsView({ onOpenSession }: Props) {
             <span className={`insights-routing-mode insights-routing-mode--${routing.routing_mode}`}>
               {routing.routing_mode}
             </span>
-            {routing.routing_mode === "auto" && routing.classification_model && (
+            {routing.routing_mode === "auto" && (
               <span className="insights-routing-hint">
-                classifier: {routing.classification_model.split("/").pop()}
+                classifier: built-in
               </span>
             )}
             {routing.routing_mode === "fixed" && routing.default_model && (

@@ -9,9 +9,12 @@
  * links that trigger onOpenInVault in the parent component.
  */
 
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+// ChartBlock lazy-loaded on first nexus-chart fence.
+const LazyChartBlock = lazy(() => import("./ChartBlock"));
 
 // Mermaid is ~280 kB gzipped — lazy-loaded on first diagram.
 let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
@@ -77,11 +80,18 @@ export default function MarkdownView({ children, components, urlTransform }: Pro
       urlTransform={urlTransform}
       components={{
         code: ({ className, children: codeChildren, ...rest }) => {
-          const match = /language-(\w+)/.exec(className || "");
+          const match = /language-([\w-]+)/.exec(className || "");
           const lang = match?.[1];
           const raw = String(codeChildren ?? "");
           if (lang === "mermaid" && raw.includes("\n")) {
             return <MermaidBlock code={raw.replace(/\n$/, "")} />;
+          }
+          if (lang === "nexus-chart") {
+            return (
+              <Suspense fallback={<span className="mermaid-block" />}>
+                <LazyChartBlock code={raw.replace(/\n$/, "")} />
+              </Suspense>
+            );
           }
           return <code className={className} {...rest}>{codeChildren}</code>;
         },

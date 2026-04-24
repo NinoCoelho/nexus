@@ -1,9 +1,9 @@
-"""Smoke tests for the LLM-based router and tier heuristics."""
+"""Smoke tests for the built-in embedding-similarity router and tier heuristics."""
 
 from __future__ import annotations
 
 from nexus.agent.model_profiles import suggest_tier, suggestion_source
-from nexus.agent.router import classify_route, _fallback
+from nexus.agent.router import _fallback
 from nexus.config_file import (
     AgentConfig,
     ModelEntry,
@@ -12,12 +12,11 @@ from nexus.config_file import (
 )
 
 
-def _make_cfg(classification_model: str = "") -> NexusConfig:
+def _make_cfg() -> NexusConfig:
     return NexusConfig(
         agent=AgentConfig(
             routing_mode="auto",
             default_model="openai/gpt-4o-mini",
-            classification_model=classification_model,
         ),
         providers={
             "openai": ProviderConfig(base_url="https://api.openai.com/v1", api_key_env="OPENAI_API_KEY"),
@@ -73,54 +72,3 @@ def test_fallback_uses_default_model():
 def test_fallback_empty_config():
     cfg = NexusConfig(agent=AgentConfig(), providers={}, models=[])
     assert _fallback(cfg) == ""
-
-
-async def test_classify_route_no_classification_model_falls_back():
-    cfg = _make_cfg(classification_model="")
-    picked = await classify_route("hello", cfg, provider_registry=None)
-    assert picked == "openai/gpt-4o-mini"
-
-
-async def test_classify_route_classifier_error_falls_back():
-    cfg = _make_cfg(classification_model="openai/gpt-4o-mini")
-
-    class _Reg:
-        def get_for_model(self, _):
-            raise RuntimeError("upstream down")
-
-    picked = await classify_route("hello", cfg, provider_registry=_Reg())
-    assert picked == "openai/gpt-4o-mini"
-
-
-async def test_classify_route_picks_valid_model():
-    cfg = _make_cfg(classification_model="openai/gpt-4o-mini")
-
-    class _FakeProvider:
-        async def chat(self, messages, model):
-            class R:
-                content = "anthropic/claude-opus-4-7"
-            return R()
-
-    class _Reg:
-        def get_for_model(self, _):
-            return _FakeProvider(), "gpt-4o-mini"
-
-    picked = await classify_route("solve this multi-step puzzle", cfg, provider_registry=_Reg())
-    assert picked == "anthropic/claude-opus-4-7"
-
-
-async def test_classify_route_unknown_pick_falls_back():
-    cfg = _make_cfg(classification_model="openai/gpt-4o-mini")
-
-    class _FakeProvider:
-        async def chat(self, messages, model):
-            class R:
-                content = "not-a-real-id"
-            return R()
-
-    class _Reg:
-        def get_for_model(self, _):
-            return _FakeProvider(), "gpt-4o-mini"
-
-    picked = await classify_route("hello", cfg, provider_registry=_Reg())
-    assert picked == "openai/gpt-4o-mini"

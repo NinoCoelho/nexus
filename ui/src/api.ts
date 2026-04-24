@@ -413,6 +413,58 @@ export async function patchVaultKanbanLane(
   return res.json();
 }
 
+// ── Vault data-table ─────────────────────────────────────────────────────────
+
+export interface DataTable {
+  path: string;
+  schema: { title?: string; fields: import("./types/form").FieldSchema[] };
+  rows: Record<string, unknown>[];
+}
+
+export async function getVaultDataTable(path: string): Promise<DataTable> {
+  const res = await fetch(`${BASE}/vault/datatable?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`DataTable load error: ${res.status}`);
+  return res.json();
+}
+
+export async function addVaultDataTableRow(
+  path: string,
+  row: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${BASE}/vault/datatable/rows?path=${encodeURIComponent(path)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ row }),
+  });
+  if (!res.ok) throw new Error(`DataTable add row error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateVaultDataTableRow(
+  path: string,
+  rowId: string,
+  row: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${BASE}/vault/datatable/rows/${encodeURIComponent(rowId)}?path=${encodeURIComponent(path)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ row }),
+    },
+  );
+  if (!res.ok) throw new Error(`DataTable update row error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteVaultDataTableRow(path: string, rowId: string): Promise<void> {
+  const res = await fetch(
+    `${BASE}/vault/datatable/rows/${encodeURIComponent(rowId)}?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(`DataTable delete row error: ${res.status}`);
+}
+
 // ── Dispatch (start chat seeded from a vault file or kanban card) ────────────
 
 export type DispatchMode = "chat" | "background" | "chat-hidden";
@@ -687,7 +739,6 @@ export interface Config {
 export interface RoutingConfig {
   default_model: string;
   last_used_model: string;
-  classification_model: string;
   routing_mode: "fixed" | "auto";
   available_models: string[];
   embedding_model_id: string;
@@ -795,7 +846,6 @@ export async function getRouting(): Promise<RoutingConfig> {
 export async function putRouting(patch: {
   default_model?: string;
   last_used_model?: string;
-  classification_model?: string;
   routing_mode?: "fixed" | "auto";
   embedding_model_id?: string;
   extraction_model_id?: string;
@@ -1205,10 +1255,13 @@ export async function getInsights(days = 30, model?: string): Promise<InsightsRe
 export interface UserRequestPayload {
   request_id: string;
   prompt: string;
-  kind: "confirm" | "choice" | "text";
+  kind: "confirm" | "choice" | "text" | "form";
   choices: string[] | null;
   default: string | null;
   timeout_seconds: number;
+  fields?: import("./types/form").FieldSchema[];
+  form_title?: string;
+  form_description?: string;
 }
 
 /**
@@ -1278,14 +1331,17 @@ export async function fetchPendingRequest(
 export async function respondToUserRequest(
   session_id: string,
   request_id: string,
-  answer: string,
+  answer: string | Record<string, unknown>,
 ): Promise<void> {
+  // For form kind, answer is a dict; the backend's /respond expects a string
+  // so we JSON-encode it. For all other kinds, answer is already a string.
+  const encoded = typeof answer === "string" ? answer : JSON.stringify(answer);
   const res = await fetch(
     `${BASE}/chat/${encodeURIComponent(session_id)}/respond`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request_id, answer }),
+      body: JSON.stringify({ request_id, answer: encoded }),
     },
   );
   if (!res.ok && res.status !== 404) {

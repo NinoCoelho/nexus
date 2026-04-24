@@ -390,7 +390,7 @@ export default function App() {
   }, [hitlSessionId]);
 
   const handleApprovalSubmit = useCallback(
-    async (answer: string) => {
+    async (answer: string | Record<string, unknown>) => {
       const req = pendingRequest;
       const sid = pendingRequestSession;
       setPendingRequest(null);

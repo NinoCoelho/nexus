@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import MarkdownEditor from "./MarkdownEditor";
 import KanbanBoard from "./KanbanBoard";
+import DataTableView from "./DataTableView";
 import FilePreview from "./FilePreview";
 import { getVaultFile, putVaultFile, vaultRawUrl } from "../api";
 import { classify } from "../fileTypes";
@@ -26,6 +27,15 @@ function isKanbanContent(content: string): boolean {
   if (end === -1) return false;
   const fm = content.slice(3, end);
   return /^\s*kanban-plugin\s*:/m.test(fm);
+}
+
+/** Check if a markdown file declares itself as a data-table via frontmatter. */
+function isDataTableContent(content: string): boolean {
+  if (!content.startsWith("---")) return false;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return false;
+  const fm = content.slice(3, end);
+  return /^\s*data-table-plugin\s*:/m.test(fm);
 }
 
 interface VaultEditorPanelProps {
@@ -89,6 +99,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   }, [editMode, save]);
 
   const isKanban = !!selectedPath && selectedPath.endsWith(".md") && isKanbanContent(content);
+  const isDataTable = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && isDataTableContent(content);
 
   const breadcrumb = selectedPath
     ? selectedPath.split("/").map((part, i, arr) => (
@@ -154,6 +165,8 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
             <div className="vault-file-error">{fileError}</div>
           ) : isKanban && !editMode ? (
             <KanbanBoard path={selectedPath!} onOpenInChat={onOpenInChat} />
+          ) : isDataTable && !editMode ? (
+            <DataTableView path={selectedPath!} />
           ) : editMode && canEdit ? (
             <MarkdownEditor
               value={content}

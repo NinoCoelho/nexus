@@ -1,9 +1,8 @@
-"""Auto-routing: pick the best model for a given user message.
+"""Auto-routing: pick the best model for a user message.
 
-When a ``classification_model`` is configured the full LLM classifier is
-used. When it's absent, the built-in fastembed embedder ranks models by
-cosine similarity between the user's message and each model's
-``strengths``/``notes``/``tier`` label — no external call required.
+Uses the built-in fastembed classifier: ranks models by cosine similarity
+between the user's message and each model's tier/notes/tags label. No
+external LLM call.
 """
 
 from __future__ import annotations
@@ -18,19 +17,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 ROUTE_TRACE: list[str] = []
-
-_CLASSIFICATION_SYSTEM = """\
-You are a model router. Given a user message and available models, pick the \
-cheapest model that can do the job well. Tiers: `fast` = small/cheap/low-latency \
-(greetings, simple lookups, short rewrites); `balanced` = typical chat, coding, \
-analysis; `heavy` = hard reasoning, long chains, architecture, complex debugging. \
-Prefer fast when the request is trivial. Read each model's `notes` — they may \
-list limitations (no tool use, no images) or strengths (language, domain).
-
-Available models:
-{models_block}
-
-Respond with ONLY the model id, nothing else."""
 
 _TIER_BIAS = {"fast": 0.02, "balanced": 0.0, "heavy": -0.02}
 
@@ -47,60 +33,17 @@ _FAST_HINTS = (
 async def classify_route(
     message: str,
     cfg: NexusConfig,
-    provider_registry: Any | None = None,
+    provider_registry: Any | None = None,  # kept for signature compat
 ) -> str:
     if not cfg.models:
         return ""
-
-    if cfg.agent.classification_model and provider_registry:
-        picked = await _llm_classify(message, cfg, provider_registry)
-        if picked:
-            return picked
-
     picked = await _embedding_classify(message, cfg)
     if picked:
         return picked
     return _fallback(cfg)
 
 
-async def _llm_classify(
-    message: str, cfg: NexusConfig, provider_registry: Any,
-) -> str | None:
-    lines: list[str] = []
-    for m in cfg.models:
-        line = f"- {m.id}: tier={m.tier}"
-        if m.notes:
-            line += f", notes={m.notes!r}"
-        if m.tags:
-            line += f", tags={','.join(m.tags)}"
-        lines.append(line)
-    prompt = _CLASSIFICATION_SYSTEM.format(models_block="\n".join(lines))
-
-    try:
-        provider, upstream = provider_registry.get_for_model(cfg.agent.classification_model)
-        from .llm import ChatMessage as CM, Role
-        messages = [
-            CM(role=Role.SYSTEM, content=prompt),
-            CM(role=Role.USER, content=message[:500]),
-        ]
-        result = await provider.chat(messages, model=upstream)
-        picked = (result.content or "").strip().strip("`\"'")
-        valid = {m.id for m in cfg.models}
-        if picked in valid:
-            ROUTE_TRACE.append(f"[router] {picked} (llm-classified)")
-            return picked
-        log.warning("[router] classification model returned unknown model %r, falling back", picked)
-    except Exception:
-        log.warning("[router] classification call failed", exc_info=True)
-    return None
-
-
 async def _embedding_classify(message: str, cfg: NexusConfig) -> str | None:
-    """Pick the best model by cosine similarity against per-model label docs.
-
-    Cheap tier bias keeps trivial prompts on the ``fast`` tier even when a
-    heavy model's notes mention everything under the sun.
-    """
     try:
         from .builtin_embedder import get_builtin_embedder
     except Exception:
