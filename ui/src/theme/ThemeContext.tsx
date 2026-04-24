@@ -1,3 +1,14 @@
+/**
+ * ThemeContext — app-wide theme provider.
+ *
+ * Themes available: mermaidcore (default dark), neutrals (warm dark),
+ * neon (high-contrast), biophilic (earthy/nature).
+ *
+ * Persists the selected theme to localStorage under "nexus-theme".
+ * Applies the theme by setting a data-theme attribute on <html> and
+ * swapping the active CSS class on the root element.
+ */
+
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 export type ThemeName = "mermaidcore" | "neutrals" | "neon" | "biophilic";

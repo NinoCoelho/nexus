@@ -49,17 +49,23 @@ KANBAN_PLUGIN_KEY = "kanban-plugin"
 _NX_LINE = re.compile(r"^\s*<!--\s*nx:([a-z][a-z0-9-]*)(?:=(.*?))?\s*-->\s*$", re.I)
 
 
+CARD_STATUSES = {"running", "done", "failed"}
+
+
 @dataclass
 class Card:
     id: str
     title: str
     body: str = ""
     session_id: str | None = None
+    status: str | None = None  # None | "running" | "done" | "failed"
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "title": self.title, "body": self.body}
         if self.session_id:
             out["session_id"] = self.session_id
+        if self.status:
+            out["status"] = self.status
         return out
 
 
@@ -169,6 +175,8 @@ def parse(content: str) -> Board:
             card.id = meta["id"]
         if "session" in meta:
             card.session_id = meta["session"]
+        if "status" in meta and meta["status"] in CARD_STATUSES:
+            card.status = meta["status"]
         lane.cards.append(card)
         card = None
         card_lines = []
@@ -244,6 +252,8 @@ def serialize(board: Board) -> str:
             out.append(f"<!-- nx:id={_ensure_id(card)} -->")
             if card.session_id:
                 out.append(f"<!-- nx:session={card.session_id} -->")
+            if card.status:
+                out.append(f"<!-- nx:status={card.status} -->")
             body = (card.body or "").strip()
             if body:
                 out.append("")
@@ -324,6 +334,14 @@ def update_card(
     if "session_id" in updates:
         sid = updates["session_id"]
         card.session_id = str(sid) if sid else None
+    if "status" in updates:
+        raw = updates["status"]
+        if raw is None or raw == "":
+            card.status = None
+        elif raw in CARD_STATUSES:
+            card.status = raw
+        else:
+            raise ValueError(f"invalid status {raw!r}; allowed: {sorted(CARD_STATUSES)}")
     write_board(path, board)
     return card
 

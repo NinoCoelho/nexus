@@ -119,8 +119,13 @@ class InsightsEngine:
 
     # ── Top-level report ────────────────────────────────────────────
 
-    def generate(self, days: int = 30) -> dict[str, Any]:
-        """Generate a complete insights report for the last ``days`` days."""
+    def generate(self, days: int = 30, model_filter: str | None = None) -> dict[str, Any]:
+        """Generate a complete insights report for the last ``days`` days.
+
+        If ``model_filter`` is set, the report is scoped to sessions whose
+        ``model`` column matches exactly — useful for "show me what auto picked
+        for this specific model over the last week."
+        """
         cutoff = int(time.time()) - days * 86400
         # Loom stores created_at as an ISO timestamp string ("YYYY-MM-DD HH:MM:SS").
         # Convert the integer cutoff to the same format so SQLite string comparison works.
@@ -129,13 +134,24 @@ class InsightsEngine:
 
         with self._connect() as conn:
             sessions = self._get_sessions(conn, cutoff_iso)
-            message_stats = self._get_message_stats(conn, cutoff_iso)
-            tool_usage = self._get_tool_usage(conn, cutoff_iso)
-            per_session_msg_count = self._get_per_session_counts(conn, cutoff_iso)
+            if model_filter:
+                sessions = [s for s in sessions if (s.get("model") or "") == model_filter]
+                allowed_ids = {s["id"] for s in sessions}
+                message_stats = self._get_message_stats_for(conn, cutoff_iso, allowed_ids)
+                tool_usage = self._get_tool_usage_for(conn, cutoff_iso, allowed_ids)
+                per_session_msg_count = {
+                    k: v for k, v in self._get_per_session_counts(conn, cutoff_iso).items()
+                    if k in allowed_ids
+                }
+            else:
+                message_stats = self._get_message_stats(conn, cutoff_iso)
+                tool_usage = self._get_tool_usage(conn, cutoff_iso)
+                per_session_msg_count = self._get_per_session_counts(conn, cutoff_iso)
 
         if not sessions:
             return {
                 "days": days,
+                "model_filter": model_filter,
                 "empty": True,
                 "overview": {},
                 "tools": [],
@@ -152,6 +168,7 @@ class InsightsEngine:
 
         return {
             "days": days,
+            "model_filter": model_filter,
             "empty": False,
             "overview": overview,
             "models": models,
@@ -160,6 +177,67 @@ class InsightsEngine:
             "top_sessions": top_sessions,
             "generated_at": time.time(),
         }
+
+    def _get_message_stats_for(
+        self, conn: sqlite3.Connection, cutoff: str, session_ids: set[str]
+    ) -> dict[str, int]:
+        if not session_ids:
+            return {"total": 0, "user": 0, "assistant": 0, "tool": 0}
+        placeholders = ",".join("?" * len(session_ids))
+        row = conn.execute(
+            f"""SELECT
+                 COUNT(*) AS total,
+                 SUM(CASE WHEN m.role = 'user'      THEN 1 ELSE 0 END) AS user,
+                 SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS assistant,
+                 SUM(CASE WHEN m.role = 'tool'      THEN 1 ELSE 0 END) AS tool
+               FROM messages m
+               JOIN sessions s ON s.id = m.session_id
+               WHERE s.created_at >= ? AND s.id IN ({placeholders})""",
+            (cutoff, *session_ids),
+        ).fetchone()
+        if not row:
+            return {"total": 0, "user": 0, "assistant": 0, "tool": 0}
+        return {
+            "total": row["total"] or 0,
+            "user": row["user"] or 0,
+            "assistant": row["assistant"] or 0,
+            "tool": row["tool"] or 0,
+        }
+
+    def _get_tool_usage_for(
+        self, conn: sqlite3.Connection, cutoff: str, session_ids: set[str]
+    ) -> dict[str, int]:
+        if not session_ids:
+            return {"_per_session": {}}  # type: ignore[return-value]
+        placeholders = ",".join("?" * len(session_ids))
+        rows = conn.execute(
+            f"""SELECT m.session_id, m.tool_calls
+               FROM messages m
+               JOIN sessions s ON s.id = m.session_id
+               WHERE s.created_at >= ?
+                 AND s.id IN ({placeholders})
+                 AND m.role = 'assistant'
+                 AND m.tool_calls IS NOT NULL""",
+            (cutoff, *session_ids),
+        ).fetchall()
+
+        counts: Counter[str] = Counter()
+        per_session: dict[str, int] = defaultdict(int)
+        for r in rows:
+            try:
+                tcs = json.loads(r["tool_calls"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(tcs, list):
+                continue
+            for tc in tcs:
+                name = _extract_tool_name(tc)
+                if name:
+                    counts[name] += 1
+                    per_session[r["session_id"]] += 1
+        result = dict(counts)
+        result["_per_session"] = per_session  # type: ignore[assignment]
+        return result
 
     # ── SQL ─────────────────────────────────────────────────────────
 
@@ -450,7 +528,7 @@ class InsightsEngine:
             if mm_count > 0:
                 top.append({
                     "label": "Most messages",
-                    "session_id": mm["id"][:16],
+                    "session_id": mm["id"],
                     "title": (mm.get("title") or "Untitled")[:40],
                     "value": f"{mm_count} msgs",
                     "date": datetime.fromtimestamp(_to_epoch(mm["created_at"])).strftime("%b %d")
@@ -465,7 +543,7 @@ class InsightsEngine:
             if _dur(longest) > 0:
                 top.append({
                     "label": "Longest session",
-                    "session_id": longest["id"][:16],
+                    "session_id": longest["id"],
                     "title": (longest.get("title") or "Untitled")[:40],
                     "value": _format_duration(_dur(longest)),
                     "date": datetime.fromtimestamp(_to_epoch(longest["created_at"])).strftime("%b %d")
@@ -480,7 +558,7 @@ class InsightsEngine:
                 if mt and mt_count > 0:
                     top.append({
                         "label": "Most tool calls",
-                        "session_id": mt["id"][:16],
+                        "session_id": mt["id"],
                         "title": (mt.get("title") or "Untitled")[:40],
                         "value": f"{mt_count} calls",
                         "date": datetime.fromtimestamp(_to_epoch(mt["created_at"])).strftime("%b %d")

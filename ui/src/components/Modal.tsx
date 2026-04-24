@@ -1,3 +1,14 @@
+/**
+ * Modal — generic confirm/prompt dialog.
+ *
+ * Two variants controlled by `kind`:
+ *   - "confirm" → Yes/No buttons (optionally styled as danger)
+ *   - "prompt"  → text input + OK/Cancel
+ *
+ * Escape key always cancels. Enter submits (prompt mode only).
+ * Clicking the backdrop cancels.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./Modal.css";
 

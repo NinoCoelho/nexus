@@ -67,6 +67,8 @@ def list_tree() -> list[Entry]:
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Split YAML frontmatter from the body. Returns (frontmatter_dict, body_text).
+    Returns (None, None) if the file doesn't start with a --- fence."""
     if not content.startswith("---"):
         return None, None
     end = content.find("\n---", 3)
@@ -81,13 +83,36 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, Any] | None, str | None]
         return None, None
 
 
+def resolve_path(rel_path: str) -> Path:
+    """Return the absolute Path for a vault-relative path, raising if it
+    escapes the vault root. Caller is responsible for checking existence
+    and file type — used by endpoints that stream raw bytes."""
+    return _safe_resolve(rel_path, _vault_root())
+
+
 def read_file(rel_path: str) -> dict[str, Any]:
     root = _vault_root()
     full = _safe_resolve(rel_path, root)
     if not full.is_file():
         raise FileNotFoundError(f"no such file: {rel_path!r}")
-    content = full.read_text(encoding="utf-8")
-    result: dict[str, Any] = {"path": rel_path, "content": content}
+    try:
+        content = full.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        stat = full.stat()
+        return {
+            "path": rel_path,
+            "content": "",
+            "binary": True,
+            "size": stat.st_size,
+            "mtime": stat.st_mtime,
+        }
+    stat = full.stat()
+    result: dict[str, Any] = {
+        "path": rel_path,
+        "content": content,
+        "size": stat.st_size,
+        "mtime": stat.st_mtime,
+    }
     fm, body = _parse_frontmatter(content)
     if fm is not None:
         result["frontmatter"] = fm

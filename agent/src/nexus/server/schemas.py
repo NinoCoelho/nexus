@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     message: str
     context: str | None = None
     model: str | None = None
+    routing_mode: str | None = None  # "fixed" | "auto"
 
 
 class ChatReply(BaseModel):

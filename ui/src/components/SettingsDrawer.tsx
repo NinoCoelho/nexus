@@ -1,3 +1,19 @@
+/**
+ * SettingsDrawer — slide-out drawer for all Nexus configuration.
+ *
+ * Sections:
+ *   - Providers (API keys, base URLs, connection status)
+ *   - Models (add/remove models, assign strengths)
+ *   - Agent (default model, routing mode, max iterations)
+ *   - GraphRAG (enable/disable, embedding model, reindex)
+ *   - Appearance (theme toggle)
+ *   - Danger zone (reset config)
+ *
+ * The drawer reads from and writes to the backend config endpoints.
+ * On close it bumps settingsRevision in App so other components
+ * (routing, YOLO badge, model picker) refresh their data.
+ */
+
 import { useCallback, useEffect, useState } from "react";
 import {
   getHitlSettings,

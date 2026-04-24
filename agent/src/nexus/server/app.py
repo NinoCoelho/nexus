@@ -47,6 +47,11 @@ _trajectory_logger: TrajectoryLogger | None = (
 # can interrupt a long-running turn. Populated by the chat_stream generator
 # on entry; removed in its finally block.
 _inflight_turns: dict[str, asyncio.Task[Any]] = {}
+# Session ids where /chat/{sid}/cancel was explicitly invoked, so the
+# stream generator's CancelledError handler can distinguish a user-clicked
+# Stop from a client-disconnect (browser reload / tab close). Both trigger
+# ``task.cancel()`` but the persisted status label should differ.
+_user_cancelled: set[str] = set()
 
 _graphrag_index_tasks: dict[str, dict[str, Any]] = {}
 
@@ -298,17 +303,29 @@ def create_app(
 
         cfg = _state.get("cfg")
 
-        # Resolve model_id: if user selected "auto", use LLM classifier;
-        # otherwise use the explicit model or fall back to default.
-        resolved_model_id = req.model
-        if resolved_model_id == "auto":
+        # Resolve routing: explicit `routing_mode` wins; legacy "auto" sentinel
+        # in `model` still accepted. Default: fixed.
+        routing_mode = (getattr(req, "routing_mode", None) or "").lower()
+        if not routing_mode:
+            routing_mode = "auto" if req.model == "auto" else "fixed"
+        resolved_model_id = req.model if req.model and req.model != "auto" else ""
+        routed_by = "user"
+        if routing_mode == "auto":
             from ..agent.router import classify_route
             resolved_model_id = await classify_route(
                 req.message, cfg, _state.get("prov_reg"),
             )
+            routed_by = "auto"
 
         async def event_generator() -> AsyncIterator[str]:
             final_messages = None
+            # Snapshot the pre-turn history so partial-persistence on
+            # abnormal exit can rebuild "history + user + partial assistant"
+            # without double-appending.
+            pre_turn_history = list(session.history)
+            accumulated_text = ""
+            accumulated_tools: list[dict[str, Any]] = []
+            partial_status = "interrupted"
             # Bind session context for the duration of the stream so
             # any ask_user call inside the turn knows which session to
             # publish on. The contextvar is local to this coroutine
@@ -318,6 +335,16 @@ def create_app(
             current = asyncio.current_task()
             if current is not None:
                 _inflight_turns[session.id] = current
+            # Eagerly persist the user message so a crash between POST
+            # and the first delta doesn't lose the prompt the user typed.
+            try:
+                from ..agent.llm import ChatMessage as _CM, Role as _R
+                store.replace_history(
+                    session.id,
+                    pre_turn_history + [_CM(role=_R.USER, content=req.message)],
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                log.exception("pre-turn user message persist failed")
             try:
                 async for event in a.run_turn_stream(
                     req.message,
@@ -329,9 +356,11 @@ def create_app(
                     etype = event.get("type")
 
                     if etype == "delta":
+                        accumulated_text += event.get("text", "")
                         yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
 
                     elif etype == "limit_reached":
+                        partial_status = "iteration_limit"
                         yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
 
                     elif etype in ("tool_exec_start", "tool_exec_result"):
@@ -340,6 +369,20 @@ def create_app(
                             payload["args"] = event["args"]
                         if "result_preview" in event:
                             payload["result_preview"] = event["result_preview"]
+                        # Keep a running tool trace so a mid-turn abort still
+                        # leaves badges in persisted history.
+                        if etype == "tool_exec_start":
+                            accumulated_tools.append({
+                                "name": event.get("name", ""),
+                                "args": event.get("args"),
+                                "status": "pending",
+                            })
+                        else:
+                            for t in reversed(accumulated_tools):
+                                if t.get("name") == event.get("name") and t.get("status") == "pending":
+                                    t["status"] = "done"
+                                    t["result_preview"] = event.get("result_preview")
+                                    break
                         yield f"event: tool\ndata: {json.dumps(payload)}\n\n"
 
                     elif etype == "done":
@@ -395,24 +438,43 @@ def create_app(
                             "skills_touched": event.get("skills_touched", []),
                             "iterations": event.get("iterations", 0),
                             "usage": usage,
+                            "model": usage.get("model") or resolved_model_id,
+                            "routed_by": routed_by,
                         }
                         yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
                     elif etype == "error":
                         # Mid-stream structured error from the agent loop
                         # (e.g. an upstream failure after content was already
-                        # streamed, so retry was impossible). Forward the
-                        # classifier's fields so the UI can show a richer
-                        # message without re-parsing the detail string.
+                        # streamed, so retry was impossible, or a truncation /
+                        # empty-response signal emitted by loop.py before the
+                        # done terminator). Forward the classifier's fields so
+                        # the UI can show a richer message without re-parsing
+                        # the detail string — and stamp partial_status so the
+                        # persisted assistant prefix matches the banner.
+                        reason = event.get("reason")
+                        if reason in ("length", "empty_response", "upstream_timeout"):
+                            partial_status = reason
                         err_payload = {
                             "detail": event.get("detail", ""),
-                            "reason": event.get("reason"),
+                            "reason": reason,
                             "retryable": event.get("retryable"),
                             "status_code": event.get("status_code"),
                         }
                         yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
-
             except (LLMTransportError, MalformedOutputError) as exc:
+                # Map loom's classified reason (timeout / rate_limit / 5xx /
+                # auth / ...) onto our partial_status so the persisted prefix
+                # + UI banner line up. Fall back to llm_error for anything
+                # the classifier doesn't recognise.
+                partial_status = "llm_error"
+                try:
+                    from ..error_classifier import classify_api_error as _c
+                    _reason = _c(exc).reason.value
+                    if _reason == "timeout":
+                        partial_status = "upstream_timeout"
+                except Exception:  # noqa: BLE001
+                    pass
                 # Classify so the client gets a readable summary on top of
                 # the raw detail (e.g. "Provider rate limit — retrying with
                 # backoff." vs. the raw "HTTP 429: ..." body).
@@ -437,9 +499,12 @@ def create_app(
                 }
                 yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
             except asyncio.CancelledError:
+                partial_status = "cancelled" if session.id in _user_cancelled else "interrupted"
+                _user_cancelled.discard(session.id)
                 yield f"event: error\ndata: {json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
                 yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
             except Exception as exc:
+                partial_status = "crashed"
                 # Catch-all so an unexpected error never leaves the client
                 # with ERR_INCOMPLETE_CHUNKED_ENCODING. Emit a proper
                 # error frame then a terminator done so the client can
@@ -448,8 +513,64 @@ def create_app(
                 yield f"event: error\ndata: {json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
                 yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
             finally:
-                if final_messages is not None:
+                if final_messages is not None and partial_status in (
+                    "length", "empty_response", "upstream_timeout",
+                ):
+                    # Loom still delivered a final message list, but the turn
+                    # was truncated / empty / timed out. Stamp the status
+                    # prefix onto the persisted assistant so the UI renders a
+                    # Retry/Continue banner on reload. Falls back to the
+                    # partial-turn writer which knows how to prefix content.
+                    try:
+                        # Find the trailing assistant message in final_messages
+                        # and use its text + tool_calls as the partial state.
+                        last_asst_text = ""
+                        last_asst_tools: list[dict[str, Any]] = []
+                        for m in reversed(final_messages):
+                            if getattr(m, "role", None) and m.role.value == "assistant":
+                                last_asst_text = m.content or ""
+                                if m.tool_calls:
+                                    last_asst_tools = [
+                                        {
+                                            "id": tc.id,
+                                            "name": tc.name,
+                                            "args": tc.arguments,
+                                            "status": "done",
+                                        }
+                                        for tc in m.tool_calls
+                                    ]
+                                break
+                        store.persist_partial_turn(
+                            session.id,
+                            base_history=pre_turn_history,
+                            user_message=req.message,
+                            assistant_text=last_asst_text,
+                            tool_calls=last_asst_tools,
+                            status_note=partial_status,
+                        )
+                    except Exception:  # noqa: BLE001 — best-effort
+                        log.exception("status-stamped partial persist failed")
+                        store.replace_history(session.id, final_messages)
+                elif final_messages is not None:
                     store.replace_history(session.id, final_messages)
+                else:
+                    # Stream didn't reach a `done` event — persist whatever
+                    # we accumulated so a reload can see the partial reply
+                    # and the tool badges that were already executed. This
+                    # is what makes the UI recover gracefully after a
+                    # server restart, a cancel, an LLM timeout, or a loop
+                    # limit hit.
+                    try:
+                        store.persist_partial_turn(
+                            session.id,
+                            base_history=pre_turn_history,
+                            user_message=req.message,
+                            assistant_text=accumulated_text,
+                            tool_calls=accumulated_tools,
+                            status_note=partial_status,
+                        )
+                    except Exception:  # noqa: BLE001 — best-effort
+                        log.exception("partial turn persist failed")
                 CURRENT_SESSION_ID.reset(token)
                 if _inflight_turns.get(session.id) is current:
                     _inflight_turns.pop(session.id, None)
@@ -508,6 +629,7 @@ def create_app(
         task = _inflight_turns.get(session_id)
         cancelled = False
         if task is not None and not task.done():
+            _user_cancelled.add(session_id)
             task.cancel()
             cancelled = True
         return {"ok": True, "cancelled": cancelled}
@@ -940,16 +1062,18 @@ def create_app(
     @app.get("/insights")
     async def get_insights(
         days: int = 30,
+        model: str | None = None,
         store: SessionStore = Depends(get_sessions),
     ) -> dict[str, Any]:
         """Return a usage analytics report for the last ``days`` days.
 
-        Clamps ``days`` into ``[1, 365]`` to keep aggregation cheap.
+        Clamps ``days`` into ``[1, 365]``. Optional ``model`` scopes to sessions
+        whose persisted model slug matches exactly.
         """
         from ..insights import InsightsEngine
         days = max(1, min(int(days), 365))
         engine = InsightsEngine(store._db_path)  # InsightsEngine reads loom's schema directly
-        return engine.generate(days=days)
+        return engine.generate(days=days, model_filter=model or None)
 
     @app.get("/sessions/{session_id}/export")
     async def export_session(
@@ -1271,6 +1395,29 @@ def create_app(
             vault_index.rebuild_from_disk()
         return {"path": path, "forward_links": vault_index.forward_links(path)}
 
+    @app.get("/vault/raw")
+    async def vault_read_raw(path: str):
+        """Stream raw file bytes from the vault with a guessed Content-Type.
+
+        Used by the UI to render images, PDFs, video, audio, and to provide
+        a direct "open in new tab" link for any vault file.
+        """
+        import mimetypes
+        from fastapi.responses import FileResponse
+        from ..vault import resolve_path
+        try:
+            full = resolve_path(path)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        if not full.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no such file: {path!r}")
+        mime, _ = mimetypes.guess_type(full.name)
+        return FileResponse(
+            full,
+            media_type=mime or "application/octet-stream",
+            filename=full.name,
+        )
+
     @app.get("/vault/file")
     async def vault_read_file(path: str) -> dict:
         from ..vault import read_file
@@ -1475,11 +1622,11 @@ def create_app(
                     path, card_id, body["lane"], body.get("position"),
                 )
                 # Also apply any content edits in the same call.
-                updates = {k: body[k] for k in ("title", "body", "session_id") if k in body}
+                updates = {k: body[k] for k in ("title", "body", "session_id", "status") if k in body}
                 if updates:
                     card = vault_kanban.update_card(path, card_id, updates)
             else:
-                updates = {k: body[k] for k in ("title", "body", "session_id") if k in body}
+                updates = {k: body[k] for k in ("title", "body", "session_id", "status") if k in body}
                 card = vault_kanban.update_card(path, card_id, updates)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -1535,14 +1682,169 @@ def create_app(
     # (or a single kanban card). Returns the new session_id + a seed message
     # the client can pre-fill in the input.
 
+    # Marker that the UI strips from displayed messages. The agent still
+    # sees the full content (it's persisted like any user message), but
+    # the chat bubble list filters messages starting with this sentinel.
+    HIDDEN_SEED_MARKER = "<!-- nx:hidden-seed -->\n"
+
+    def _compose_card_context_seed(
+        *, lane_prompt: str | None, path: str, card_title: str, card_id: str, card_body: str,
+    ) -> str:
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        parts = []
+        if lane_prompt:
+            parts.append(lane_prompt.strip())
+            parts.append("")
+        parts.append(f"**Board:** `{path}`")
+        if folder:
+            parts.append(f"**Folder:** `{folder}/`")
+        parts.append(f"**Card:** {card_title}")
+        parts.append(f"**Card ID:** `{card_id}`")
+        parts.append("")
+        if card_body.strip():
+            parts.append(card_body.strip())
+            parts.append("")
+        parts.append(
+            "*Context hints: related files typically live in the same folder as the board. "
+            "To add tasks or sub-plans, edit the board file — cards are `### Heading` blocks "
+            "under a `## Lane` heading with `<!-- nx:id=... -->` metadata. Use your vault tools.*"
+        )
+        return "\n".join(parts)
+
+    def _compose_hidden_chat_seed(*, path: str, card_title: str, card_id: str, card_body: str) -> str:
+        folder = path.rsplit("/", 1)[0] if "/" in path else ""
+        body = [
+            HIDDEN_SEED_MARKER.rstrip(),
+            f"The user just opened this kanban card. Check the board file at `{path}`, "
+            f"read the card, suggest 2-3 concrete next steps to the user, and then wait for instructions. "
+            f"Don't make changes yet.",
+            "",
+            f"**Board:** `{path}`",
+        ]
+        if folder:
+            body.append(f"**Folder:** `{folder}/`")
+        body.append(f"**Card:** {card_title}")
+        body.append(f"**Card ID:** `{card_id}`")
+        if card_body.strip():
+            body.append("")
+            body.append(card_body.strip())
+        return "\n".join(body)
+
+    async def _run_background_agent_turn(
+        *,
+        session_id: str,
+        seed_message: str,
+        card_path: str,
+        card_id: str,
+        agent_: Agent,
+        store: SessionStore,
+    ) -> None:
+        """Run one agent turn to completion, publishing events via the trace bus
+        and updating the card's status (done/failed) when finished."""
+        from .. import vault_kanban
+        token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            session = store.get_or_create(session_id)
+            pre_turn = list(session.history)
+            final_messages = None
+            accumulated_text = ""
+            accumulated_tools: list[dict[str, Any]] = []
+            try:
+                from ..agent.llm import ChatMessage as _CM, Role as _R
+                store.replace_history(
+                    session_id, pre_turn + [_CM(role=_R.USER, content=seed_message)],
+                )
+            except Exception:
+                log.exception("background dispatch: pre-turn persist failed")
+            try:
+                async for event in agent_.run_turn_stream(
+                    seed_message,
+                    history=session.history,
+                    context=session.context,
+                    session_id=session_id,
+                ):
+                    etype = event.get("type")
+                    if etype == "delta":
+                        accumulated_text += event.get("text", "")
+                    elif etype in ("tool_exec_start", "tool_exec_result"):
+                        if etype == "tool_exec_start":
+                            accumulated_tools.append({
+                                "name": event.get("name", ""),
+                                "args": event.get("args"),
+                                "status": "pending",
+                            })
+                        else:
+                            for t in reversed(accumulated_tools):
+                                if t.get("name") == event.get("name") and t.get("status") == "pending":
+                                    t["status"] = "done"
+                                    t["result_preview"] = event.get("result_preview")
+                                    break
+                    elif etype == "done":
+                        final_messages = event.get("messages")
+                        usage = event.get("usage") or {}
+                        try:
+                            store.bump_usage(
+                                session_id,
+                                model=usage.get("model"),
+                                input_tokens=int(usage.get("input_tokens") or 0),
+                                output_tokens=int(usage.get("output_tokens") or 0),
+                                tool_calls=int(usage.get("tool_calls") or 0),
+                            )
+                        except Exception:
+                            log.exception("background dispatch: bump_usage failed")
+                new_status = "done" if final_messages is not None else "failed"
+            except Exception:
+                log.exception("background dispatch: agent loop crashed")
+                new_status = "failed"
+            finally:
+                if final_messages is not None:
+                    try:
+                        store.replace_history(session_id, final_messages)
+                    except Exception:
+                        log.exception("background dispatch: final persist failed")
+                else:
+                    try:
+                        store.persist_partial_turn(
+                            session_id,
+                            base_history=pre_turn,
+                            user_message=seed_message,
+                            assistant_text=accumulated_text,
+                            tool_calls=accumulated_tools,
+                            status_note="background_interrupted",
+                        )
+                    except Exception:
+                        log.exception("background dispatch: partial persist failed")
+            try:
+                vault_kanban.update_card(card_path, card_id, {"status": new_status})
+            except Exception:
+                log.exception("background dispatch: card status update failed")
+        finally:
+            CURRENT_SESSION_ID.reset(token)
+
     @app.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)
     async def vault_dispatch(
         body: dict,
+        a: Agent = Depends(get_agent),
         store: SessionStore = Depends(get_sessions),
     ) -> dict:
+        """Create a chat session seeded from a vault file or kanban card.
+
+        Body: ``{path, card_id?, mode?}`` where ``mode`` is one of:
+          - ``"chat"`` (default): returns a seed the UI prefills into its input.
+          - ``"background"``: starts the agent server-side; UI doesn't navigate.
+            Stamps ``status=running`` on the card and updates to ``done``/``failed``
+            when the turn finishes. Requires ``card_id``.
+          - ``"chat-hidden"``: creates a session, seeds with a hidden user message,
+            kicks off no background work — the UI will POST to ``/chat/stream`` itself
+            with the returned ``seed_message``, which embeds a marker the chat view
+            filters out of the displayed message list.
+        """
         from .. import vault, vault_kanban
         path = body.get("path", "")
         card_id = body.get("card_id")
+        mode = body.get("mode") or "chat"
+        if mode not in ("chat", "background", "chat-hidden"):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid mode")
         if not path:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
         try:
@@ -1553,6 +1855,7 @@ def create_app(
         title = path.rsplit("/", 1)[-1]
         seed_body = file.get("body") or file["content"]
         seed_title = title
+        lane_prompt: str | None = None
 
         if card_id:
             try:
@@ -1562,30 +1865,77 @@ def create_app(
             found = vault_kanban._find_card(board, card_id)
             if found is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="card not found")
-            _, card, _ = found
+            lane, card, _ = found
             seed_title = card.title
             seed_body = card.body
+            lane_prompt = lane.prompt
 
-        seed_message = f"# {seed_title}\n\n{seed_body}".strip() if seed_body else f"# {seed_title}"
+        if mode == "background" and not card_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="background dispatch requires a card_id",
+            )
+
         context_str = f"Dispatched from vault file: {path}"
         if card_id:
             context_str += f" (card {card_id})"
         session = store.create(context=context_str)
 
+        # Title the session with the card title (or filename) up-front so the
+        # sidebar doesn't show "New session" while the agent thinks.
+        try:
+            store.rename(session.id, (seed_title or title).strip()[:60])
+        except Exception:
+            log.exception("dispatch: title rename failed")
+
+        if mode == "chat":
+            seed_message = (
+                f"# {seed_title}\n\n{seed_body}".strip()
+                if seed_body
+                else f"# {seed_title}"
+            )
+        elif mode == "chat-hidden":
+            seed_message = _compose_hidden_chat_seed(
+                path=path, card_title=seed_title, card_id=card_id or "", card_body=seed_body or "",
+            )
+        else:  # background
+            seed_message = _compose_card_context_seed(
+                lane_prompt=lane_prompt, path=path, card_title=seed_title,
+                card_id=card_id or "", card_body=seed_body or "",
+            )
+
         if card_id:
+            updates: dict[str, Any] = {"session_id": session.id}
+            if mode == "background":
+                updates["status"] = "running"
             try:
-                vault_kanban.update_card(path, card_id, {"session_id": session.id})
+                vault_kanban.update_card(path, card_id, updates)
             except Exception:
-                # Non-fatal — session is created; we just couldn't link it
-                # back. Log and continue.
                 import logging
-                logging.getLogger(__name__).warning("dispatch: could not link session to card", exc_info=True)
+                logging.getLogger(__name__).warning(
+                    "dispatch: could not link session to card", exc_info=True,
+                )
+
+        if mode == "background":
+            asyncio.create_task(
+                _run_background_agent_turn(
+                    session_id=session.id,
+                    seed_message=seed_message,
+                    card_path=path,
+                    card_id=card_id,
+                    agent_=a,
+                    store=store,
+                )
+            )
+            # Don't leak the seed to the client on background — caller doesn't need it.
+            return {"session_id": session.id, "path": path, "card_id": card_id, "mode": mode}
 
         return {
             "session_id": session.id,
             "seed_message": seed_message,
             "path": path,
             "card_id": card_id,
+            "mode": mode,
         }
 
     # ── config routes ──────────────────────────────────────────────────────────
@@ -1797,11 +2147,14 @@ def create_app(
 
     @app.post("/models", status_code=status.HTTP_201_CREATED)
     async def add_model(body: dict[str, Any]) -> dict[str, Any]:
-        from ..config_file import load as load_cfg, save as save_cfg, ModelEntry, ModelStrengths
+        from ..config_file import load as load_cfg, save as save_cfg, ModelEntry
+        from ..agent.model_profiles import suggest_tier
         cfg = _state["cfg"] or load_cfg()
-        strengths_data = body.pop("strengths", {})
-        strengths = ModelStrengths(**strengths_data)
-        m = ModelEntry(**body, strengths=strengths)
+        # Legacy callers may still send `strengths` — drop it silently.
+        body.pop("strengths", None)
+        if not body.get("tier"):
+            body["tier"] = suggest_tier(body.get("model_name", ""))
+        m = ModelEntry(**body)
         cfg.models.append(m)
         # Auto-set as default if nothing is set yet — the DWIM path: a user
         # who just configured their first model expects it to be usable.
@@ -1810,6 +2163,30 @@ def create_app(
         save_cfg(cfg)
         _rebuild_registry(cfg)
         return m.model_dump()
+
+    @app.patch("/models/{model_id:path}")
+    async def patch_model(model_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        from ..config_file import load as load_cfg, save as save_cfg
+        from fastapi import HTTPException
+        cfg = _state["cfg"] or load_cfg()
+        for i, m in enumerate(cfg.models):
+            if m.id == model_id:
+                # id and provider are immutable after creation — avoid cascading
+                # breakage (role assignments, last_used_model references).
+                updates = {k: v for k, v in body.items() if k in {"model_name", "tags", "tier", "notes"}}
+                if "tier" in updates and updates["tier"] not in ("fast", "balanced", "heavy"):
+                    raise HTTPException(400, "tier must be fast|balanced|heavy")
+                cfg.models[i] = m.model_copy(update=updates)
+                save_cfg(cfg)
+                _rebuild_registry(cfg)
+                return cfg.models[i].model_dump()
+        raise HTTPException(404, f"model {model_id!r} not found")
+
+    @app.post("/models/suggest-tier")
+    async def suggest_tier_endpoint(body: dict[str, Any]) -> dict[str, str]:
+        from ..agent.model_profiles import suggest_tier, suggestion_source
+        name = body.get("model_name", "") or ""
+        return {"tier": suggest_tier(name), "source": suggestion_source(name)}
 
     @app.delete("/models/{model_id:path}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_model(model_id: str) -> None:
@@ -1827,12 +2204,15 @@ def create_app(
         if not cfg:
             return {"default_model": None, "last_used_model": None,
                     "classification_model": None, "available_models": available}
+        embedding_id = cfg.graphrag.embedding_model_id
+        chat_available = [m for m in available if m != embedding_id]
         return {
             "default_model": cfg.agent.default_model,
             "last_used_model": cfg.agent.last_used_model,
             "classification_model": cfg.agent.classification_model,
-            "available_models": available,
-            "embedding_model_id": cfg.graphrag.embedding_model_id,
+            "routing_mode": cfg.agent.routing_mode,
+            "available_models": chat_available,
+            "embedding_model_id": embedding_id,
             "extraction_model_id": cfg.graphrag.extraction_model_id,
         }
 
@@ -1846,6 +2226,8 @@ def create_app(
             cfg.agent.last_used_model = body["last_used_model"]
         if "classification_model" in body:
             cfg.agent.classification_model = body["classification_model"]
+        if "routing_mode" in body and body["routing_mode"] in ("fixed", "auto"):
+            cfg.agent.routing_mode = body["routing_mode"]
         if "embedding_model_id" in body:
             cfg.graphrag.embedding_model_id = body["embedding_model_id"]
         if "extraction_model_id" in body:
@@ -1856,6 +2238,7 @@ def create_app(
             "default_model": cfg.agent.default_model,
             "last_used_model": cfg.agent.last_used_model,
             "classification_model": cfg.agent.classification_model,
+            "routing_mode": cfg.agent.routing_mode,
             "embedding_model_id": cfg.graphrag.embedding_model_id,
             "extraction_model_id": cfg.graphrag.extraction_model_id,
         }

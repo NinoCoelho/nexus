@@ -1,0 +1,37 @@
+.hover-tooltip {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  background: var(--bg-panel, #1f1f1f);
+  color: var(--fg, #e5e5e5);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hover-tooltip-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.hover-tooltip-label {
+  opacity: 0.65;
+  font-size: 11px;
+}
+
+.hover-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}

@@ -1,3 +1,14 @@
+/**
+ * MarkdownView — safe markdown renderer with GFM + Mermaid support.
+ *
+ * Renders markdown content using react-markdown with remark-gfm (tables,
+ * strikethrough, task lists). Code blocks with language "mermaid" are
+ * lazy-loaded and rendered as SVG diagrams via the mermaid library.
+ *
+ * Vault links (vault://path) are intercepted and rendered as clickable
+ * links that trigger onOpenInVault in the parent component.
+ */
+
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -74,6 +85,11 @@ export default function MarkdownView({ children, components, urlTransform }: Pro
           }
           return <code className={className} {...rest}>{codeChildren}</code>;
         },
+        a: ({ href, children: linkChildren, ...rest }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+            {linkChildren}
+          </a>
+        ),
         ...components,
       }}
     >

@@ -65,6 +65,18 @@ def serve(
     frontend_proc: list[subprocess.Popen] = []
     shutting_down = False
 
+    if not no_frontend and frontend_dir is None:
+        # Explicit diagnostic — the previous silent fallback made users
+        # think the UI was broken when the installed tool just can't see
+        # the repo's ui/ folder. Point them at the env var override.
+        typer.echo(
+            "Frontend dir not found — UI not started.\n"
+            "Set NEXUS_FRONTEND_DIR to your checkout's ui/ path, e.g.:\n"
+            "  NEXUS_FRONTEND_DIR=~/Code/nexus/ui nexus serve\n"
+            "Or pass --no-frontend to suppress this warning.",
+            err=True,
+        )
+
     if frontend_dir is not None:
         npm = shutil.which("npm")
         if npm is None:
@@ -453,11 +465,10 @@ def models_list() -> None:
     table.add_column("Provider")
     table.add_column("Model Name")
     table.add_column("Tags")
-    table.add_column("Strengths")
+    table.add_column("Tier")
+    table.add_column("Notes")
     for m in cfg.models:
-        s = m.strengths
-        strengths_str = f"spd={s.speed} cost={s.cost} rsn={s.reasoning} code={s.coding}"
-        table.add_row(m.id, m.provider, m.model_name, ",".join(m.tags), strengths_str)
+        table.add_row(m.id, m.provider, m.model_name, ",".join(m.tags), m.tier, m.notes or "")
     Console().print(table)
 
 
@@ -467,27 +478,28 @@ def models_add(
     provider: str = typer.Option(..., "--provider"),
     model_name: str = typer.Option(..., "--model"),
     tags: str = typer.Option("", "--tags"),
-    strengths: str = typer.Option("", "--strengths"),
+    tier: str = typer.Option("", "--tier", help="fast|balanced|heavy (auto-detected if omitted)"),
+    notes: str = typer.Option("", "--notes"),
 ) -> None:
     """Add a model."""
-    from .config_file import load, save, ModelEntry, ModelStrengths
+    from .config_file import load, save, ModelEntry
+    from .agent.model_profiles import suggest_tier
     cfg = load()
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-    s_dict: dict[str, int] = {}
-    for part in strengths.split(","):
-        if "=" in part:
-            k, v = part.split("=", 1)
-            s_dict[k.strip()] = int(v.strip())
+    resolved_tier = tier.strip() or suggest_tier(model_name)
+    if resolved_tier not in ("fast", "balanced", "heavy"):
+        raise typer.BadParameter("tier must be fast|balanced|heavy")
     m = ModelEntry(
         id=id,
         provider=provider,
         model_name=model_name,
         tags=tag_list,
-        strengths=ModelStrengths(**s_dict),
+        tier=resolved_tier,  # type: ignore[arg-type]
+        notes=notes,
     )
     cfg.models.append(m)
     save(cfg)
-    typer.echo(f"Model '{id}' added.")
+    typer.echo(f"Model '{id}' added (tier={resolved_tier}).")
 
 
 @models_app.command("remove")

@@ -1,0 +1,128 @@
+.file-preview {
+  width: 100%;
+}
+
+.file-preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+  cursor: zoom-in;
+  border-radius: 6px;
+  background: var(--bg, #111);
+}
+
+.file-preview-image--zoomed {
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.file-preview--compact .file-preview-image {
+  max-width: 280px;
+  max-height: 200px;
+  margin: 0;
+}
+
+.file-preview-pdf {
+  width: 100%;
+  height: 75vh;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--bg, #111);
+}
+
+.file-preview-video,
+.file-preview-audio {
+  width: 100%;
+  max-height: 60vh;
+  display: block;
+}
+
+.file-preview-pre {
+  background: var(--bg, #111);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow: auto;
+  max-height: 60vh;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.file-preview--compact .file-preview-pre {
+  max-height: 240px;
+  font-size: 12px;
+}
+
+.file-preview-csv-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.file-preview-csv-scroll {
+  overflow: auto;
+  max-height: 60vh;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+}
+
+.file-preview-csv-table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  width: 100%;
+}
+
+.file-preview-csv-table th,
+.file-preview-csv-table td {
+  border: 1px solid var(--border, #333);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.file-preview-csv-head th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel, #1a1a1a);
+  font-weight: 600;
+}
+
+.file-preview-btn {
+  display: inline-block;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border, #333);
+  border-radius: 5px;
+  background: var(--bg-panel, #1a1a1a);
+  color: var(--fg, #e5e5e5);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.file-preview-btn:hover {
+  background: var(--bg-hover, #262626);
+}
+
+.file-preview-binary-card {
+  padding: 20px;
+  text-align: center;
+  border: 1px dashed var(--border, #333);
+  border-radius: 8px;
+  background: var(--bg-panel, #1a1a1a);
+}
+
+.file-preview-binary-label {
+  opacity: 0.75;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.file-preview-binary-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}

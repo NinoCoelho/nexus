@@ -1,3 +1,11 @@
+/**
+ * ContextBar — inline search/filter input bar.
+ *
+ * Currently unused (not imported by any other component). Intended as a
+ * compact context-input strip that could sit above the chat or vault view
+ * for quick filtering or command-palette-style input.
+ */
+
 import "./ContextBar.css";
 
 interface Props {

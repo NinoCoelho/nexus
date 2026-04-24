@@ -469,6 +469,32 @@ class Agent:
                 ctx = ev.get("context") or {}
                 model_used = ev.get("model") or self._chosen_model
                 reply_text = full_text
+                stop_reason = ev.get("stop_reason")
+                # Surface truncation + empty response as a retryable error
+                # BEFORE the done frame so the UI renders an actionable banner.
+                if stop_reason == "length":
+                    log.info(
+                        "turn ended truncated (stop_reason=length, reply_len=%d)",
+                        len(reply_text),
+                    )
+                    yield {
+                        "type": "error",
+                        "detail": "Response was truncated — the model hit its output limit.",
+                        "reason": "length",
+                        "retryable": True,
+                        "status_code": None,
+                    }
+                elif not reply_text and stop_reason not in ("tool_use",):
+                    log.info(
+                        "turn ended with empty reply (stop_reason=%s)", stop_reason,
+                    )
+                    yield {
+                        "type": "error",
+                        "detail": "The model returned an empty response.",
+                        "reason": "empty_response",
+                        "retryable": True,
+                        "status_code": None,
+                    }
                 # Prefer the assembled message list from loom (includes
                 # tool_calls + TOOL role messages). Strip system messages
                 # (re-built each turn by before_llm_call). Fall back to a

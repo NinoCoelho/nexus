@@ -1,3 +1,12 @@
+/**
+ * ActivityTimeline — collapsible step-by-step view of what the agent did
+ * during a single turn. Each step is either a tool call (with args + result)
+ * or a text delta. Steps are coalesced so repeated calls to the same tool
+ * show as a single expandable group.
+ *
+ * Clicking a step opens StepDetailModal for the full args/result view.
+ */
+
 import React, { useState } from "react";
 import type { TraceEvent } from "../api";
 import type { TimelineStep } from "./ChatView";

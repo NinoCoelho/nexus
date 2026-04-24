@@ -593,3 +593,35 @@
   cursor: not-allowed;
   font-size: 12px;
 }
+
+.model-tier-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.model-tier-chip--fast { color: #1a9c7a; border-color: #1a9c7a55; }
+.model-tier-chip--balanced { color: #4c8bf5; border-color: #4c8bf555; }
+.model-tier-chip--heavy { color: #d97757; border-color: #d9775755; }
+
+.model-tier-chip--active {
+  background: var(--accent, #4c8bf5);
+  color: var(--bg);
+  border-color: var(--accent, #4c8bf5);
+}
+
+.settings-model-notes {
+  font-size: 11px;
+  color: var(--fg-faint);
+  margin-top: 2px;
+  font-style: italic;
+}

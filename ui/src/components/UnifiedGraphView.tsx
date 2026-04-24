@@ -1,3 +1,14 @@
+/**
+ * UnifiedGraphView — tabbed container for the three graph sub-views.
+ *
+ * - Knowledge: GraphRAG entity/relation graph (extracted from vault files)
+ * - Vault: file-link graph (which vault files reference each other)
+ * - Agent: skill/session graph (which sessions used which skills)
+ *
+ * The `graphSourceFilter` prop lets App.tsx navigate the user to a specific
+ * file/folder subgraph (e.g. "View entity graph" from a vault file preview).
+ */
+
 import { useState } from "react";
 import GraphView from "./GraphView";
 import AgentGraphView from "./AgentGraphView";

@@ -1,3 +1,12 @@
+/**
+ * ReindexModal — full GraphRAG reindex progress dialog.
+ *
+ * Streams reindex progress via SSE from POST /graphrag/reindex.
+ * Shows per-file indexing status, entity/triple counts, and a
+ * progress bar. Supports both incremental (skip unchanged files)
+ * and full (drop + rebuild) modes.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   graphragReindex,

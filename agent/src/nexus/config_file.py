@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import tomllib
 import tomli_w
@@ -18,12 +18,7 @@ log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path.home() / ".nexus" / "config.toml"
 
-
-class ModelStrengths(BaseModel):
-    speed: int = 5
-    cost: int = 5
-    reasoning: int = 5
-    coding: int = 5
+Tier = Literal["fast", "balanced", "heavy"]
 
 
 class ModelEntry(BaseModel):
@@ -31,7 +26,8 @@ class ModelEntry(BaseModel):
     provider: str
     model_name: str
     tags: list[str] = Field(default_factory=list)
-    strengths: ModelStrengths = Field(default_factory=ModelStrengths)
+    tier: Tier = "balanced"
+    notes: str = ""
 
 
 class ProviderConfig(BaseModel):
@@ -45,6 +41,7 @@ class AgentConfig(BaseModel):
     default_model: str = ""
     last_used_model: str = ""
     classification_model: str = ""
+    routing_mode: Literal["fixed", "auto"] = "fixed"
     max_iterations: int = 16
 
 
@@ -128,6 +125,7 @@ _DEFAULT_CONFIG = NexusConfig(
         default_model="",
         last_used_model="",
         classification_model="",
+        routing_mode="fixed",
         max_iterations=16,
     ),
     providers={
@@ -221,7 +219,8 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "provider": m.provider,
             "model_name": m.model_name,
             "tags": m.tags,
-            "strengths": m.strengths.model_dump(),
+            "tier": m.tier,
+            "notes": m.notes,
         }
         d["models"].append(md)
     return d
@@ -244,20 +243,31 @@ def save(cfg: NexusConfig) -> None:
         tomli_w.dump(data, f)
 
 
+def _tier_from_legacy_strengths(s: dict[str, Any]) -> Tier:
+    reasoning = int(s.get("reasoning", 5) or 5)
+    if reasoning <= 4:
+        return "fast"
+    if reasoning >= 8:
+        return "heavy"
+    return "balanced"
+
+
 def _parse(raw: dict[str, Any]) -> NexusConfig:
     agent = AgentConfig(**raw.get("agent", {}))
     providers: dict[str, ProviderConfig] = {}
     for name, pdata in raw.get("providers", {}).items():
-        # Legacy configs won't have use_inline_key or type — defaults apply
-        # Legacy name-based type detection: provider named "anthropic"/"ollama" defaults to that type
         if "type" not in pdata and name in ("anthropic", "ollama"):
             pdata = dict(pdata)
             pdata["type"] = name
         providers[name] = ProviderConfig(**pdata)
     models: list[ModelEntry] = []
     for mdata in raw.get("models", []):
-        strengths = ModelStrengths(**mdata.pop("strengths", {}))
-        models.append(ModelEntry(**mdata, strengths=strengths))
+        mdata = dict(mdata)
+        legacy_strengths = mdata.pop("strengths", None)
+        if "tier" not in mdata and isinstance(legacy_strengths, dict):
+            mdata["tier"] = _tier_from_legacy_strengths(legacy_strengths)
+        mdata.setdefault("notes", "")
+        models.append(ModelEntry(**mdata))
     graphrag = GraphRAGConfig(**raw.get("graphrag", {}))
     search = SearchConfig(**raw.get("search", {}))
     scrape = ScrapeConfig(**raw.get("scrape", {}))
@@ -284,7 +294,7 @@ def apply_env_overlay(cfg: NexusConfig) -> NexusConfig:
                 provider="_env",
                 model_name=model,
                 tags=["env"],
-                strengths=ModelStrengths(speed=5, cost=5, reasoning=5, coding=5),
+                tier="balanced",
             ),
         )
         cfg.agent.default_model = "_env/default"

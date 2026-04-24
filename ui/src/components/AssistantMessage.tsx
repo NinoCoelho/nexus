@@ -3,8 +3,25 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
 import type { TimelineStep } from "./ChatView";
+
+/**
+ * AssistantMessage — renders a single assistant response in the chat.
+ *
+ * Layout: avatar + name header, then one of:
+ *   1. Streaming mode (content still arriving) — shows partial text + activity strip
+ *   2. Final message with timeline — expandable step-by-step breakdown
+ *   3. Final message without timeline — plain rendered markdown
+ *
+ * Tool calls within the response are rendered as compact chips in the
+ * activity strip; clicking one opens the StepDetailModal.
+ * Vault links (vault://path) are intercepted and surfaced as
+ * "Open in Vault" buttons via the onOpenInVault callback.
+ */
 import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
+import ChatInlineFilePreview from "./ChatInlineFilePreview";
+import { classify } from "../fileTypes";
+import { vaultRawUrl } from "../api";
 import "./AssistantMessage.css";
 
 let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
@@ -69,6 +86,7 @@ interface Props {
   streaming?: boolean;
   onOpenInVault?: (path: string) => void;
   model?: string;
+  routedBy?: "user" | "auto";
 }
 
 function fmt(d: Date) {
@@ -86,13 +104,14 @@ function asVaultPath(href: string): string | null {
 }
 
 function linkifyVaultPaths(content: string): string {
+  if (!content) return "";
   return content.replace(
     /(^|[\s("])([a-z0-9][a-z0-9_\-./]*\/[a-z0-9][a-z0-9_\-. ]*\.mdx?)(?=$|[\s.,;:)!"])/gi,
     (_match, pre, path) => `${pre}[${path}](vault://${path})`,
   );
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, routedBy }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
@@ -113,7 +132,14 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
       <div className="asst-header">
         <div className="asst-avatar" aria-hidden="true" />
         <span className="asst-name">Nexus</span>
-        {model && <span className="asst-model-badge">via {model.split("/").pop()}</span>}
+        {model && (
+          <span
+            className={`asst-model-badge${routedBy === "auto" ? " asst-model-badge--auto" : ""}`}
+            title={routedBy === "auto" ? "Auto-routed by the classifier" : undefined}
+          >
+            {routedBy === "auto" ? `auto → ${model.split("/").pop()}` : `via ${model.split("/").pop()}`}
+          </span>
+        )}
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
       <div className="asst-card">
@@ -139,23 +165,48 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
               a: ({ href, children, ...rest }) => {
                 const vaultPath = asVaultPath(href ?? "");
                 if (vaultPath) {
+                  const kind = classify(vaultPath).kind;
+                  // Markdown opens in the Vault view in a new tab; everything
+                  // else opens the raw bytes (images/PDFs/etc.) in a new tab.
+                  const newTabHref = kind === "markdown"
+                    ? `${window.location.pathname}?view=vault&path=${encodeURIComponent(vaultPath)}`
+                    : vaultRawUrl(vaultPath);
                   return (
-                    <button
-                      type="button"
-                      className="vault-inline-link"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setPreviewPath(vaultPath);
-                      }}
-                      title={`Preview ${vaultPath}`}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 2.5a1 1 0 0 1 1-1h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
-                        <polyline points="9 1.5 9 5 12 5" />
-                      </svg>
-                      {children}
-                    </button>
+                    <span className="vault-inline-link-wrap">
+                      <button
+                        type="button"
+                        className="vault-inline-link"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setPreviewPath(vaultPath);
+                        }}
+                        title={`Preview ${vaultPath}`}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 2.5a1 1 0 0 1 1-1h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+                          <polyline points="9 1.5 9 5 12 5" />
+                        </svg>
+                        {children}
+                      </button>
+                      <a
+                        href={newTabHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="vault-inline-link-newtab"
+                        title="Open in a new tab"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3H3v10h10V8" />
+                          <polyline points="9 2 14 2 14 7" />
+                          <line x1="14" y1="2" x2="8" y2="8" />
+                        </svg>
+                      </a>
+                      {kind !== "markdown" && (
+                        <ChatInlineFilePreview path={vaultPath} />
+                      )}
+                    </span>
                   );
                 }
                 if (!href) {

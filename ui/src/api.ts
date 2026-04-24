@@ -27,6 +27,24 @@ export interface SessionDetail {
   messages: SessionMessage[];
 }
 
+/**
+ * Ping the backend /health endpoint. Resolves true on a fast 200, false on
+ * any failure (connection refused, 5xx, timeout). Used by the reachability
+ * pill in the UI.
+ */
+export async function pingHealth(timeoutMs = 3000): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${BASE}/health`, { signal: ctrl.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function getSessions(limit = 50): Promise<SessionSummary[]> {
   const res = await fetch(`${BASE}/sessions?limit=${limit}`);
   if (!res.ok) throw new Error(`Sessions error: ${res.status}`);
@@ -106,7 +124,8 @@ export interface VaultNode {
   path: string;
   type: "file" | "dir";
   size?: number;
-  mtime?: string;
+  /** Unix seconds (float). Backend emits `stat.st_mtime`. */
+  mtime?: number;
 }
 
 export interface VaultTagCount { tag: string; count: number }
@@ -118,6 +137,17 @@ export interface VaultFile {
   body?: string;
   tags?: string[];
   backlinks?: string[];
+  /** File size in bytes. */
+  size?: number;
+  /** Unix seconds (float). */
+  mtime?: number;
+  /** True if the file could not be decoded as UTF-8 text. */
+  binary?: boolean;
+}
+
+/** URL that streams raw bytes of a vault file with a guessed Content-Type. */
+export function vaultRawUrl(path: string): string {
+  return `${BASE}/vault/raw?path=${encodeURIComponent(path)}`;
 }
 
 export async function getVaultTree(): Promise<VaultNode[]> {
@@ -253,11 +283,14 @@ export async function getVaultEntitySources(path: string): Promise<{ path: strin
 
 // ── Vault-native Kanban ──────────────────────────────────────────────────────
 
+export type KanbanCardStatus = "running" | "done" | "failed";
+
 export interface KanbanCard {
   id: string;
   title: string;
   body?: string;
   session_id?: string;
+  status?: KanbanCardStatus;
 }
 
 export interface KanbanLane {
@@ -365,15 +398,26 @@ export async function patchVaultKanbanLane(
 
 // ── Dispatch (start chat seeded from a vault file or kanban card) ────────────
 
+export type DispatchMode = "chat" | "background" | "chat-hidden";
+
 export interface DispatchResult {
   session_id: string;
-  seed_message: string;
+  /** Seed text the caller should feed into /chat/stream. Absent for `background` mode. */
+  seed_message?: string;
   path: string;
   card_id?: string | null;
+  mode?: DispatchMode;
 }
 
+/**
+ * Marker prefix the server uses on seeded user messages that should NOT
+ * render as chat bubbles. The chat view filters messages whose content
+ * starts with this string.
+ */
+export const HIDDEN_SEED_MARKER = "<!-- nx:hidden-seed -->\n";
+
 export async function dispatchFromVault(
-  body: { path: string; card_id?: string },
+  body: { path: string; card_id?: string; mode?: DispatchMode },
 ): Promise<DispatchResult> {
   const res = await fetch(`${BASE}/vault/dispatch`, {
     method: "POST",
@@ -414,9 +458,9 @@ export interface SkillDetail {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "tool"; name: string; args?: unknown; result_preview?: string }
-  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
+  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string; routed_by?: "user" | "auto" }
   | { type: "limit_reached"; iterations: number }
-  | { type: "error"; detail: string };
+  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null };
 
 export async function chatStream(
   message: string,
@@ -424,11 +468,12 @@ export async function chatStream(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   model?: string,
+  routing_mode?: "fixed" | "auto",
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, session_id, model }),
+    body: JSON.stringify({ message, session_id, model, routing_mode }),
     signal,
   });
 
@@ -488,11 +533,18 @@ export async function chatStream(
             trace: (parsed.trace ?? []) as TraceEvent[],
             skills_touched: (parsed.skills_touched ?? []) as string[],
             model: (usage?.model ?? parsed.model) as string | undefined,
+            routed_by: parsed.routed_by as "user" | "auto" | undefined,
           });
         } else if (eventName === "limit_reached") {
           onEvent({ type: "limit_reached", iterations: (parsed.iterations as number) ?? 0 });
         } else if (eventName === "error") {
-          onEvent({ type: "error", detail: parsed.detail as string });
+          onEvent({
+            type: "error",
+            detail: parsed.detail as string,
+            reason: parsed.reason as string | undefined,
+            retryable: parsed.retryable as boolean | undefined,
+            status_code: parsed.status_code as number | null | undefined,
+          });
         }
       } catch { /* malformed frame — skip */ }
     }
@@ -569,19 +621,15 @@ export async function getHealth(): Promise<{ ok: boolean }> {
 
 // ── Settings types ────────────────────────────────────────────────────────────
 
-export interface ModelStrengths {
-  speed: number;
-  cost: number;
-  reasoning: number;
-  coding: number;
-}
+export type ModelTier = "fast" | "balanced" | "heavy";
 
 export interface Model {
   id: string;
   provider: string;
   model_name: string;
   tags: string[];
-  strengths: ModelStrengths;
+  tier: ModelTier;
+  notes: string;
 }
 
 export interface Provider {
@@ -609,6 +657,7 @@ export interface RoutingConfig {
   default_model: string;
   last_used_model: string;
   classification_model: string;
+  routing_mode: "fixed" | "auto";
   available_models: string[];
   embedding_model_id: string;
   extraction_model_id: string;
@@ -683,6 +732,29 @@ export async function deleteModel(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Model delete error: ${res.status}`);
 }
 
+export async function patchModel(
+  id: string,
+  patch: { model_name?: string; tags?: string[]; tier?: ModelTier; notes?: string },
+): Promise<Model> {
+  const res = await fetch(`${BASE}/models/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Model update error: ${res.status}`);
+  return res.json();
+}
+
+export async function suggestModelTier(model_name: string): Promise<{ tier: ModelTier; source: string }> {
+  const res = await fetch(`${BASE}/models/suggest-tier`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_name }),
+  });
+  if (!res.ok) throw new Error(`Suggest tier error: ${res.status}`);
+  return res.json();
+}
+
 export async function getRouting(): Promise<RoutingConfig> {
   const res = await fetch(`${BASE}/routing`);
   if (!res.ok) throw new Error(`Routing error: ${res.status}`);
@@ -693,6 +765,7 @@ export async function putRouting(patch: {
   default_model?: string;
   last_used_model?: string;
   classification_model?: string;
+  routing_mode?: "fixed" | "auto";
   embedding_model_id?: string;
   extraction_model_id?: string;
 }): Promise<RoutingConfig> {
@@ -770,6 +843,7 @@ export interface InsightsModel {
 
 export interface InsightsReport {
   days: number;
+  model_filter?: string | null;
   empty: boolean;
   overview: InsightsOverview;
   models: InsightsModel[];
@@ -1078,8 +1152,10 @@ export async function graphragReindex(
   }
 }
 
-export async function getInsights(days = 30): Promise<InsightsReport> {
-  const res = await fetch(`${BASE}/insights?days=${encodeURIComponent(String(days))}`);
+export async function getInsights(days = 30, model?: string): Promise<InsightsReport> {
+  const q = new URLSearchParams({ days: String(days) });
+  if (model) q.set("model", model);
+  const res = await fetch(`${BASE}/insights?${q.toString()}`);
   if (!res.ok) throw new Error(`Insights error: ${res.status}`);
   return res.json();
 }

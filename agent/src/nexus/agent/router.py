@@ -13,9 +13,12 @@ log = logging.getLogger(__name__)
 ROUTE_TRACE: list[str] = []
 
 _CLASSIFICATION_SYSTEM = """\
-You are a model router. Given a user message and a list of available models with their \
-capability scores (0-10), select the single best model for this task. Balance capability \
-with cost-efficiency — don't pick an expensive model for a trivial task.
+You are a model router. Given a user message and available models, pick the \
+cheapest model that can do the job well. Tiers: `fast` = small/cheap/low-latency \
+(greetings, simple lookups, short rewrites); `balanced` = typical chat, coding, \
+analysis; `heavy` = hard reasoning, long chains, architecture, complex debugging. \
+Prefer fast when the request is trivial. Read each model's `notes` — they may \
+list limitations (no tool use, no images) or strengths (language, domain).
 
 Available models:
 {models_block}
@@ -29,13 +32,17 @@ async def classify_route(
     provider_registry: Any | None = None,
 ) -> str:
     if not cfg.agent.classification_model or not provider_registry:
-        return _fallback(message, cfg)
+        return _fallback(cfg)
 
-    models_block = "\n".join(
-        f"- {m.id}: speed={m.strengths.speed}, cost={m.strengths.cost}, "
-        f"reasoning={m.strengths.reasoning}, coding={m.strengths.coding}"
-        for m in cfg.models
-    )
+    lines: list[str] = []
+    for m in cfg.models:
+        line = f"- {m.id}: tier={m.tier}"
+        if m.notes:
+            line += f", notes={m.notes!r}"
+        if m.tags:
+            line += f", tags={','.join(m.tags)}"
+        lines.append(line)
+    models_block = "\n".join(lines)
     prompt = _CLASSIFICATION_SYSTEM.format(models_block=models_block)
 
     try:
@@ -55,10 +62,10 @@ async def classify_route(
     except Exception:
         log.warning("[router] classification call failed", exc_info=True)
 
-    return _fallback(message, cfg)
+    return _fallback(cfg)
 
 
-def _fallback(message: str, cfg: NexusConfig) -> str:
+def _fallback(cfg: NexusConfig) -> str:
     if cfg.agent.default_model:
         return cfg.agent.default_model
     if cfg.models:

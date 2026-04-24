@@ -6,7 +6,7 @@ import logging
 import os
 
 from .llm import AnthropicProvider, LLMProvider, OpenAIProvider
-from ..config_file import NexusConfig, ModelEntry
+from ..config_file import NexusConfig
 from .. import secrets as _secrets
 
 log = logging.getLogger(__name__)
@@ -57,12 +57,10 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             continue
 
         api_key = ""
-        key_source: str | None = None
 
         if pcfg.use_inline_key:
             api_key = _secrets.get(name) or ""
             if api_key:
-                key_source = "inline"
                 log.info("[provider] %s: key loaded (inline)", name)
             else:
                 log.warning("[provider] %s: use_inline_key=True but no key in secrets — skipping", name)
@@ -70,7 +68,6 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
         elif pcfg.api_key_env:
             api_key = os.environ.get(pcfg.api_key_env, "")
             if api_key:
-                key_source = "env"
                 log.info("[provider] %s: key loaded (env: %s)", name, pcfg.api_key_env)
             else:
                 log.warning("[provider] %s: env var %s not set — skipping", name, pcfg.api_key_env)

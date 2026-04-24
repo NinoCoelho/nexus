@@ -29,14 +29,35 @@ def build_app():
     registry = SkillRegistry(SKILLS_DIR)
     provider_registry = build_registry(cfg)
 
-    # Back-compat: if no provider registry models available, fall back to env-var provider
+    # Resolve the default provider for the Agent's constructor. Preference:
+    #   1. The configured default_model, if it's registered.
+    #   2. The first available model (any other chat model that registered OK).
+    #   3. The legacy env-var OpenAIProvider.
+    # Keep ``provider_registry`` intact in cases 1 and 2 so ``/routing``,
+    # the Settings drawer, and auto-routing still see every model the user
+    # configured — previously a stale ``default_model`` pointing at a
+    # deleted/unregistered model silently nuked the entire registry.
+    default_provider: OpenAIProvider | object
     try:
-        default_provider, default_model_name = provider_registry.get_for_model(cfg.agent.default_model)
+        default_provider, _ = provider_registry.get_for_model(cfg.agent.default_model)
     except KeyError:
-        log.warning("Default model %r not in registry — falling back to env-var provider", cfg.agent.default_model)
-        default_provider = OpenAIProvider(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, model=LLM_MODEL)
-        default_model_name = None
-        provider_registry = None
+        available = provider_registry.available_model_ids()
+        if available:
+            fallback_id = available[0]
+            log.warning(
+                "Default model %r not registered — using %r as the Agent's fallback provider. "
+                "Fix by updating agent.default_model in ~/.nexus/config.toml or picking one in Settings.",
+                cfg.agent.default_model, fallback_id,
+            )
+            default_provider, _ = provider_registry.get_for_model(fallback_id)
+        else:
+            log.warning(
+                "Default model %r not in registry and no other models available — "
+                "falling back to env-var provider.",
+                cfg.agent.default_model,
+            )
+            default_provider = OpenAIProvider(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, model=LLM_MODEL)
+            provider_registry = None
 
     agent = Agent(
         provider=default_provider,

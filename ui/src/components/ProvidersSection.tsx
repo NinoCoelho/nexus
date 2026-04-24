@@ -1,3 +1,16 @@
+/**
+ * ProvidersSection — LLM provider configuration for the settings drawer.
+ *
+ * Each provider card shows:
+ *   - Connection status (green/red indicator)
+ *   - API key input (stored in nexus secrets, not config.toml)
+ *   - Base URL (for OpenAI-compat providers)
+ *   - Type selector (openai_compat / anthropic / ollama)
+ *
+ * Key operations go through the secrets API (POST/DELETE /providers/{name}/key)
+ * so they're never written to the config file.
+ */
+
 import { useState } from "react";
 import { patchConfig, setProviderKey, clearProviderKey, type Provider } from "../api";
 import { useToast } from "../toast/ToastProvider";

@@ -1,3 +1,17 @@
+/**
+ * Sidebar — the main navigation and session management panel.
+ *
+ * Layout (top to bottom):
+ *   1. View switcher (Chat / Vault / Graph / Insights)
+ *   2. Session list with search, rename, delete, export, import
+ *   3. Vault file tree (expandable folders, file selection)
+ *   4. Settings button
+ *
+ * All state flows down from App via props; the sidebar doesn't own any
+ * session or chat state itself. Session mutations (rename, delete, etc.)
+ * bump sessionsRevision so the list refreshes.
+ */
+
 import React, { useEffect, useRef, useState } from "react";
 import { deleteSession, exportSession, getSessions, importSession, patchSession, searchSessions, sessionToVault, type SessionSearchResult, type SessionSummary } from "../api";
 import { useToast } from "../toast/ToastProvider";
@@ -21,6 +35,22 @@ interface Props {
   onVaultOpenPathHandled?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+}
+
+const SIDEBAR_WIDTH_KEY = "sidebar-width";
+const SIDEBAR_MIN_WIDTH = 180;
+const SIDEBAR_MAX_WIDTH = 560;
+
+function loadStoredWidth(): number {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    if (!raw) return 220;
+    const n = parseInt(raw, 10);
+    if (!isFinite(n)) return 220;
+    return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, n));
+  } catch {
+    return 220;
+  }
 }
 
 function fmtRelative(raw: string | number | undefined): string {
@@ -145,6 +175,38 @@ export default function Sidebar({
     try { return localStorage.getItem("sidebar-collapsed") === "true"; }
     catch { return false; }
   });
+  const [width, setWidth] = useState<number>(() => loadStoredWidth());
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* ignore */ }
+  }, [width]);
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    if (collapsed) return;
+    e.preventDefault();
+    setResizing(true);
+    const startX = e.clientX;
+    const startW = width;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.max(
+        SIDEBAR_MIN_WIDTH,
+        Math.min(SIDEBAR_MAX_WIDTH, startW + (ev.clientX - startX)),
+      );
+      setWidth(next);
+    };
+    const onUp = () => {
+      setResizing(false);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
@@ -289,7 +351,10 @@ export default function Sidebar({
   };
 
   return (
-    <aside className={`sidebar${collapsed ? " sidebar--collapsed" : ""}`}>
+    <aside
+      className={`sidebar${collapsed ? " sidebar--collapsed" : ""}`}
+      style={collapsed ? undefined : ({ ["--sidebar-width" as unknown as string]: `${width}px` } as React.CSSProperties)}
+    >
       {/* Top bar */}
       <div className="sidebar-top">
         {!collapsed && (
@@ -571,6 +636,17 @@ export default function Sidebar({
           </div>
         );
       })()}
+
+      {!collapsed && (
+        <div
+          className={`sidebar-resize-handle${resizing ? " sidebar-resize-handle--active" : ""}`}
+          onMouseDown={handleResizeStart}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize"
+        />
+      )}
     </aside>
   );
 }

@@ -1,3 +1,11 @@
+/**
+ * LiveActivityStrip — real-time activity feed for agent tool calls.
+ *
+ * Currently unused (not imported by any other component). Intended to show
+ * a compact horizontal strip of tool-call events during streaming, similar
+ * to ChatGPT's "Searching... Browsing..." progress indicators.
+ */
+
 import React from "react";
 import type { TraceEvent } from "../api";
 import "./LiveActivityStrip.css";

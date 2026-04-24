@@ -1,7 +1,6 @@
 """Build an agent/skill/session graph for the UI graph view."""
 from __future__ import annotations
 
-import json
 import time
 
 from ..skills.registry import SkillRegistry

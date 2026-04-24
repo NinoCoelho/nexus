@@ -1,3 +1,12 @@
+/**
+ * WorkflowViz — vertical timeline visualization of agent tool calls.
+ *
+ * Currently unused (not imported by any other component). Renders a
+ * step-by-step vertical workflow from the trace events, showing each
+ * tool call as a node with connecting lines. An alternative to the
+ * ActivityTimeline component.
+ */
+
 import type { TraceEvent } from "../api";
 import "./WorkflowViz.css";
 

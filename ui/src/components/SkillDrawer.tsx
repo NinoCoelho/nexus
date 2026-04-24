@@ -1,3 +1,13 @@
+/**
+ * SkillDrawer — slide-out panel that loads and renders a skill's SKILL.md.
+ *
+ * Opened from the AgentGraphView (click a skill node) or from the
+ * skill list in Settings. The full body is fetched on open via
+ * GET /skills/{name} — this is the UI side of the progressive-disclosure
+ * pattern (the agent gets name+description in the system prompt and
+ * calls skill_view to load the full body on demand).
+ */
+
 import { useEffect, useState } from "react";
 import MarkdownView from "./MarkdownView";
 import { getSkill, type SkillDetail } from "../api";

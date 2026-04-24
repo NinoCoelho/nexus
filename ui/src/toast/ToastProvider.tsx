@@ -1,3 +1,13 @@
+/**
+ * ToastProvider — lightweight toast notification system.
+ *
+ * Usage: const toast = useToast(); toast.success("Saved");
+ * Supports info, success, warning, error levels with optional
+ * detail text and action buttons. Toasts auto-dismiss after a
+ * configurable duration (default 5s). Maximum 5 visible at once;
+ * oldest is evicted when the limit is hit.
+ */
+
 import {
   createContext,
   useCallback,

@@ -1,3 +1,16 @@
+/**
+ * StepDetailModal — expanded view for a single tool-call or text step
+ * in the assistant's activity timeline.
+ *
+ * Renders rich output for known tool types:
+ *   - `terminal` → exit code, stdout/stderr panes, duration badge
+ *   - `http_call` → status code + body preview
+ *   - Everything else → generic JSON/text result
+ *
+ * Each step shows its arguments (key-value pairs, truncated at 200 chars)
+ * and result (parsed from JSON when possible).
+ */
+
 import React, { useEffect, useRef } from "react";
 import type { TraceEvent } from "../api";
 import type { CoalescedStep } from "./ActivityTimeline";

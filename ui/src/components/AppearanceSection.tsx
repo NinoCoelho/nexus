@@ -1,3 +1,10 @@
+/**
+ * AppearanceSection — theme picker for the settings drawer.
+ *
+ * Three themes: Obsidian (dark, default), Ember (warm dark), Dawn (light).
+ * Selection is stored in localStorage and applied via ThemeProvider.
+ */
+
 import { useTheme, type ThemeName } from "../theme/ThemeContext";
 import "./AppearanceSection.css";
 

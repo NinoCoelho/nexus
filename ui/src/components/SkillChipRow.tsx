@@ -1,3 +1,11 @@
+/**
+ * SkillChipRow — row of pulsing skill-name chips.
+ *
+ * Currently unused (not imported by any other component). Intended to show
+ * which skills the agent is actively using during a turn, with a pulsing
+ * animation on the active chip.
+ */
+
 import { useEffect, useRef, useState } from "react";
 import { getSkills, type SkillSummary } from "../api";
 import "./SkillChipRow.css";

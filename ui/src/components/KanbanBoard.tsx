@@ -1,6 +1,19 @@
+/**
+ * KanbanBoard — interactive kanban board backed by a single vault .md file.
+ *
+ * The board's data model lives in vault_kanban.py on the backend; this
+ * component reads/writes through the /vault/kanban API endpoints. Each card
+ * can optionally link to a chat session (nx:session=<sid>) — clicking a
+ * linked card dispatches to that session via onDispatchToChat.
+ *
+ * Adding/moving/deleting cards is immediate (no explicit save button);
+ * the backend writes each operation atomically to the .md file.
+ */
+
 import { useCallback, useEffect, useState } from "react";
 import Modal, { type ModalProps } from "./Modal";
 import CardDetailModal from "./CardDetailModal";
+import CardActivityModal from "./CardActivityModal";
 import {
   addVaultKanbanCard,
   addVaultKanbanLane,
@@ -18,7 +31,12 @@ import "./KanbanBoard.css";
 
 interface Props {
   path: string;
-  onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+  /**
+   * Called when the user explicitly opens a card in chat (icon button).
+   * The chat view should POST the seed_message to /chat/stream — it
+   * contains a hidden-seed marker the chat bubble renderer filters out.
+   */
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
 }
 
 function cardPreview(body: string | undefined): string {
@@ -27,13 +45,14 @@ function cardPreview(body: string | undefined): string {
   return para.length > 120 ? para.slice(0, 117) + "…" : para;
 }
 
-export default function KanbanBoard({ path, onDispatchToChat }: Props) {
+export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const [board, setBoard] = useState<BoardT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragCard, setDragCard] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<{ lane: string; index: number } | null>(null);
   const [modal, setModal] = useState<ModalProps | null>(null);
   const [detailCard, setDetailCard] = useState<KanbanCard | null>(null);
+  const [activityCard, setActivityCard] = useState<KanbanCard | null>(null);
 
   const reload = useCallback(() => {
     setError(null);
@@ -43,6 +62,15 @@ export default function KanbanBoard({ path, onDispatchToChat }: Props) {
   }, [path]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // Poll while any card is running so the spinner reflects the latest status
+  // without needing a full SSE fan-out just for the card grid.
+  const hasRunning = board?.lanes.some((l) => l.cards.some((c) => c.status === "running")) ?? false;
+  useEffect(() => {
+    if (!hasRunning) return;
+    const t = setInterval(() => reload(), 3000);
+    return () => clearInterval(t);
+  }, [hasRunning, reload]);
 
   if (error) return <div className="kanban-error">Couldn't load board: {error}</div>;
   if (!board) return <div className="kanban-loading">Loading…</div>;
@@ -63,17 +91,31 @@ export default function KanbanBoard({ path, onDispatchToChat }: Props) {
     setDragCard(null);
     setDragOver(null);
     if (!found) return;
+    const movedLanes = found.lane.id !== laneId;
     try {
       await patchVaultKanbanCard(path, cardId, { lane: laneId, position: index });
       reload();
-      if (destLane?.prompt) {
+      if (movedLanes && destLane?.prompt) {
         try {
-          const res = await dispatchFromVault({ path, card_id: cardId });
-          const seed = `${destLane.prompt}\n\n${res.seed_message}`;
-          onDispatchToChat?.(res.session_id, seed);
+          // Fire-and-forget: server runs the agent in the background.
+          // The card flips to status=running and polling picks up the
+          // spinner. User stays on the board.
+          await dispatchFromVault({ path, card_id: cardId, mode: "background" });
+          reload();
         } catch { /* dispatch failure is non-fatal */ }
       }
     } catch { /* ignore move errors */ }
+  };
+
+  const handleOpenInChat = async (card: KanbanCard) => {
+    try {
+      const res = await dispatchFromVault({ path, card_id: card.id, mode: "chat-hidden" });
+      if (res.seed_message) {
+        onOpenInChat?.(res.session_id, res.seed_message, card.title);
+        // Pick up the linked session_id the backend stamped on the card.
+        reload();
+      }
+    } catch { /* ignore */ }
   };
 
   const handleAddCard = (laneId: string) => {
@@ -162,13 +204,6 @@ export default function KanbanBoard({ path, onDispatchToChat }: Props) {
     });
   };
 
-  const handleDispatch = async (card: KanbanCard) => {
-    try {
-      const res = await dispatchFromVault({ path, card_id: card.id });
-      onDispatchToChat?.(res.session_id, res.seed_message);
-    } catch { /* ignore */ }
-  };
-
   return (
     <div className="kanban-board">
       <div className="kanban-board-header">
@@ -241,17 +276,42 @@ export default function KanbanBoard({ path, onDispatchToChat }: Props) {
                     <div className="kanban-card-title">{card.title}</div>
                     {preview && <div className="kanban-card-body">{preview}</div>}
                     <div className="kanban-card-actions">
-                      <button
-                        className="kanban-card-btn"
-                        onClick={() => void handleDispatch(card)}
-                        title="Start chat with this card"
-                      >→ Chat</button>
-                      {card.session_id && (
-                        <span className="kanban-card-session" title={`Session ${card.session_id}`}>●</span>
+                      {(card.status === "running" || card.status === "done" || card.status === "failed") && (
+                        <button
+                          className={`kanban-card-status kanban-card-status--${card.status}`}
+                          onClick={(e) => { e.stopPropagation(); setActivityCard(card); }}
+                          title={
+                            card.status === "running" ? "Agent is working — click to view"
+                            : card.status === "done" ? "Agent finished — click to review"
+                            : "Agent failed — click to view"
+                          }
+                        >
+                          {card.status === "running" && <span className="kanban-card-spin" />}
+                          {card.status === "done" && (
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 8 7 12 13 4" />
+                            </svg>
+                          )}
+                          {card.status === "failed" && (
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="4" y1="4" x2="12" y2="12" />
+                              <line x1="12" y1="4" x2="4" y2="12" />
+                            </svg>
+                          )}
+                        </button>
                       )}
                       <button
+                        className="kanban-card-btn kanban-card-btn--icon"
+                        onClick={(e) => { e.stopPropagation(); void handleOpenInChat(card); }}
+                        title="Open in chat"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H6l-3 3V3.5z" />
+                        </svg>
+                      </button>
+                      <button
                         className="kanban-card-btn kanban-card-btn--danger"
-                        onClick={() => void handleDeleteCard(card.id)}
+                        onClick={(e) => { e.stopPropagation(); void handleDeleteCard(card.id); }}
                         title="Delete card"
                       >×</button>
                     </div>
@@ -267,6 +327,14 @@ export default function KanbanBoard({ path, onDispatchToChat }: Props) {
         ))}
       </div>
       {modal && <Modal {...modal} />}
+      {activityCard && activityCard.session_id && (
+        <CardActivityModal
+          sessionId={activityCard.session_id}
+          cardTitle={activityCard.title}
+          status={activityCard.status}
+          onClose={() => { setActivityCard(null); reload(); }}
+        />
+      )}
       {detailCard && (
         <CardDetailModal
           card={detailCard}

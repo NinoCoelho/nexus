@@ -1,3 +1,16 @@
+/**
+ * InputBar — the bottom input area for the chat view.
+ *
+ * Features:
+ *   - Multi-line textarea (Shift+Enter for newline, Enter to send)
+ *   - Model selector dropdown (when multiple models are available)
+ *   - Vault file attachment via drag-and-drop or the "+" button
+ *   - Stop button (replaces send while a turn is in-flight)
+ *
+ * Attachments are resolved to vault:// URLs before being sent;
+ * the agent receives them as markdown links in the user message.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { uploadVaultFiles } from "../api";
 import { useToast } from "../toast/ToastProvider";
@@ -25,6 +38,8 @@ interface Props {
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
+  routingMode?: "fixed" | "auto";
+  onRoutingModeChange?: (mode: "fixed" | "auto") => void;
 }
 
 export default function InputBar({
@@ -39,6 +54,8 @@ export default function InputBar({
   models,
   selectedModel,
   onModelChange,
+  routingMode = "fixed",
+  onRoutingModeChange,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -200,18 +217,19 @@ export default function InputBar({
                 <>
                   <div className="input-menu-sep" />
                   <div className="input-menu-group">
-                    <span className="input-menu-heading">Model</span>
-                    <button
-                      className={`input-menu-item${!selectedModel ? " is-active" : ""}`}
-                      onClick={() => { onModelChange?.(""); setMenuOpen(false); }}
-                    >
-                      Auto
-                    </button>
+                    <span className="input-menu-heading">
+                      {routingMode === "auto" ? "Model (auto-route is on)" : "Model"}
+                    </span>
                     {models.map((m) => (
                       <button
                         key={m}
                         className={`input-menu-item${selectedModel === m ? " is-active" : ""}`}
-                        onClick={() => { onModelChange?.(m); setMenuOpen(false); }}
+                        onClick={() => {
+                          onModelChange?.(m);
+                          // Picking a specific model implies fixed mode.
+                          if (routingMode === "auto") onRoutingModeChange?.("fixed");
+                          setMenuOpen(false);
+                        }}
                       >
                         {m.split("/").pop()}
                       </button>

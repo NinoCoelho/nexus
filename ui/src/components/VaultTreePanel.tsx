@@ -1,3 +1,18 @@
+/**
+ * VaultTreePanel — file/folder tree browser for the vault.
+ *
+ * Renders an expandable tree of vault files with context menus for:
+ *   - Create file / folder
+ *   - Rename (inline editing)
+ *   - Delete
+ *   - Export to chat (dispatch)
+ *   - Create kanban board
+ *   - View entity graph
+ *
+ * Drag-and-drop file upload is supported on folders. The tree is built
+ * from the flat list returned by GET /vault/tree.
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Modal, { type ModalProps } from "./Modal";
 import "./VaultView.css";
@@ -19,6 +34,8 @@ import {
   type VaultTagCount,
 } from "../api";
 import { useToast } from "../toast/ToastProvider";
+import { iconFor, formatBytes, formatRelativeTime } from "../fileTypes";
+import HoverTooltip from "./HoverTooltip";
 
 // ── Tree helpers ──────────────────────────────────────────────────────────────
 
@@ -26,6 +43,8 @@ interface TreeNode {
   name: string;
   path: string;
   type: "file" | "dir";
+  size?: number;
+  mtime?: number;
   children?: TreeNode[];
 }
 
@@ -41,7 +60,14 @@ function buildTree(nodes: VaultNode[]): TreeNode[] {
   for (const n of sorted) {
     const parts = n.path.split("/");
     const name = parts[parts.length - 1];
-    const node: TreeNode = { name, path: n.path, type: n.type, children: n.type === "dir" ? [] : undefined };
+    const node: TreeNode = {
+      name,
+      path: n.path,
+      type: n.type,
+      size: n.size,
+      mtime: n.mtime,
+      children: n.type === "dir" ? [] : undefined,
+    };
     map.set(n.path, node);
     if (parts.length === 1) {
       root.push(node);
@@ -71,15 +97,6 @@ function FolderIcon({ open }: { open: boolean }) {
   );
 }
 
-function FileIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 2h8l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
-      <polyline points="12 2 12 6 16 6" />
-    </svg>
-  );
-}
-
 interface TreeItemProps {
   node: TreeNode;
   depth: number;
@@ -89,6 +106,34 @@ interface TreeItemProps {
   onMove: (from: string, toDir: string) => void;
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
+  dirCounts: Map<string, { files: number; dirs: number }>;
+}
+
+function buildTooltip(node: TreeNode, dirCounts: Map<string, { files: number; dirs: number }>): React.ReactNode {
+  if (node.type === "file") {
+    const size = formatBytes(node.size);
+    const mt = formatRelativeTime(node.mtime);
+    return (
+      <>
+        <div className="hover-tooltip-title">{node.name}</div>
+        <div className="hover-tooltip-row"><span className="hover-tooltip-label">Path</span><span>{node.path}</span></div>
+        {size && <div className="hover-tooltip-row"><span className="hover-tooltip-label">Size</span><span>{size}</span></div>}
+        {mt && <div className="hover-tooltip-row"><span className="hover-tooltip-label">Modified</span><span>{mt}</span></div>}
+      </>
+    );
+  }
+  const c = dirCounts.get(node.path) ?? { files: 0, dirs: 0 };
+  const parts = [
+    c.files > 0 ? `${c.files} file${c.files === 1 ? "" : "s"}` : null,
+    c.dirs > 0 ? `${c.dirs} subfolder${c.dirs === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  if (parts.length === 0) return <div className="hover-tooltip-title">{node.name} (empty)</div>;
+  return (
+    <>
+      <div className="hover-tooltip-title">{node.name}</div>
+      <div>{parts.join(", ")}</div>
+    </>
+  );
 }
 
 function TreeItem({
@@ -100,6 +145,7 @@ function TreeItem({
   onMove,
   expandedDirs,
   onToggleDir,
+  dirCounts,
 }: TreeItemProps) {
   const [dropOver, setDropOver] = useState(false);
   const isActive = node.path === selectedPath;
@@ -143,22 +189,24 @@ function TreeItem({
 
   return (
     <div>
-      <button
-        className={`vault-tree-row${isActive ? " vault-tree-row--active" : ""}${dropOver ? " vault-tree-row--drop" : ""}`}
-        style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={handleClick}
-        onContextMenu={(e) => onContextMenu(e, node)}
-        draggable
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <span className="vault-tree-icon">
-          {node.type === "dir" ? <FolderIcon open={isOpen} /> : <FileIcon />}
-        </span>
-        <span className="vault-tree-name">{node.name}</span>
-      </button>
+      <HoverTooltip content={buildTooltip(node, dirCounts)} delay={2000}>
+        <button
+          className={`vault-tree-row${isActive ? " vault-tree-row--active" : ""}${dropOver ? " vault-tree-row--drop" : ""}`}
+          style={{ paddingLeft: 8 + depth * 14 }}
+          onClick={handleClick}
+          onContextMenu={(e) => onContextMenu(e, node)}
+          draggable
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <span className="vault-tree-icon">
+            {node.type === "dir" ? <FolderIcon open={isOpen} /> : iconFor(node.path)}
+          </span>
+          <span className="vault-tree-name">{node.name}</span>
+        </button>
+      </HoverTooltip>
       {node.type === "dir" && isOpen && node.children?.map((child) => (
         <TreeItem
           key={child.path}
@@ -170,6 +218,7 @@ function TreeItem({
           onMove={onMove}
           expandedDirs={expandedDirs}
           onToggleDir={onToggleDir}
+          dirCounts={dirCounts}
         />
       ))}
     </div>
@@ -474,7 +523,7 @@ export default function VaultTreePanel({
   const handleDispatchFile = async (filePath: string) => {
     try {
       const res = await dispatchFromVault({ path: filePath });
-      onDispatchToChat?.(res.session_id, res.seed_message);
+      onDispatchToChat?.(res.session_id, res.seed_message ?? "");
     } catch (e) {
       toast.error("Couldn't start chat", { detail: e instanceof Error ? e.message : undefined });
     }
@@ -749,6 +798,7 @@ export default function VaultTreePanel({
               onMove={handleMove}
               expandedDirs={expandedDirs}
               onToggleDir={handleToggleDir}
+              dirCounts={descendantCounts}
             />
           ))}
         </div>

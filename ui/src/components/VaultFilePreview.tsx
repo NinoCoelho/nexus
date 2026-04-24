@@ -1,6 +1,16 @@
+/**
+ * VaultFilePreview — popover-style file preview used inside graph views.
+ *
+ * Shows file metadata (size, tags, backlinks, frontmatter), a rendered
+ * markdown preview, and action buttons (Open in Vault, View Entity Graph,
+ * Index for GraphRAG). Positioned absolutely relative to the clicked
+ * graph node — the parent component controls positioning.
+ */
+
 import { useEffect, useState } from "react";
-import MarkdownView from "./MarkdownView";
-import { getVaultFile, type VaultFile } from "../api";
+import FilePreview from "./FilePreview";
+import { getVaultFile, vaultRawUrl, type VaultFile } from "../api";
+import { classify } from "../fileTypes";
 import "./VaultFilePreview.css";
 
 interface Props {
@@ -41,6 +51,8 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
 
   const rawContent = file?.content ?? "";
   const body = file?.body ?? rawContent;
+  const kind = path ? classify(path).kind : null;
+  const isMarkdown = kind === "markdown";
 
   async function handleCopy() {
     try {
@@ -53,16 +65,28 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
   }
 
   function handleDownload() {
-    const blob = new Blob([rawContent], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const basename = (path ?? "file").split("/").pop() || "file.md";
+    if (!path) return;
+    const basename = path.split("/").pop() || "file";
+    // For text content we have in memory, keep the old blob path (lets the
+    // user save edits-in-flight). For binary files we go straight to raw.
+    if (isMarkdown && rawContent) {
+      const blob = new Blob([rawContent], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = basename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      return;
+    }
     const link = document.createElement("a");
-    link.href = url;
+    link.href = vaultRawUrl(path);
     link.download = basename;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
   }
 
   return (
@@ -111,6 +135,20 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
               </svg>
               <span>Download</span>
             </button>
+            <a
+              className="vault-preview-btn vault-preview-btn--icon"
+              href={vaultRawUrl(path)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open raw file in a new tab"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 3H3v10h10V8" />
+                <polyline points="9 2 14 2 14 7" />
+                <line x1="14" y1="2" x2="8" y2="8" />
+              </svg>
+              <span>Open raw</span>
+            </a>
             {onOpenInVault && (
               <button
                 className="vault-preview-btn vault-preview-btn--icon vault-preview-btn--primary"
@@ -151,7 +189,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
           {error && <p className="vault-preview-error">Could not load: {error}</p>}
           {!loading && !error && file && (
             <div className="vault-preview-content">
-              {file.frontmatter && Object.keys(file.frontmatter).length > 0 && (
+              {isMarkdown && file.frontmatter && Object.keys(file.frontmatter).length > 0 && (
                 <div className="vault-preview-frontmatter">
                   {Object.entries(file.frontmatter).map(([k, v]) => (
                     <div key={k} className="vault-preview-fm-row">
@@ -164,9 +202,14 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
                 </div>
               )}
               <div className="vault-preview-markdown">
-                <MarkdownView>{body}</MarkdownView>
+                <FilePreview
+                  path={path}
+                  content={rawContent}
+                  body={body}
+                  size={file.size}
+                />
               </div>
-              {(file.tags && file.tags.length > 0) && (
+              {isMarkdown && (file.tags && file.tags.length > 0) && (
                 <div className="vault-preview-footer-section">
                   <div className="vault-preview-footer-label">Tags</div>
                   <div className="vault-preview-tags">
@@ -176,7 +219,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
                   </div>
                 </div>
               )}
-              {(file.backlinks && file.backlinks.length > 0) && (
+              {isMarkdown && (file.backlinks && file.backlinks.length > 0) && (
                 <div className="vault-preview-footer-section">
                   <div className="vault-preview-footer-label">Backlinks</div>
                   <div className="vault-preview-backlinks">

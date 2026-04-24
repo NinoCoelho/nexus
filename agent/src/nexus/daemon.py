@@ -63,6 +63,44 @@ class DaemonManager:
         """Check if daemon is currently running."""
         return self.get_pid() is not None
     
+    def _untracked_listener_pid(self, port: int = PORT) -> Optional[int]:
+        """Return the PID of a process listening on ``port`` that is NOT the
+        one recorded in our pidfile, or None. This catches the case where a
+        ``nexus serve`` was started outside the daemon wrapper (or survived
+        after the pidfile was clobbered) — without this the user sees
+        "Stopped" even though the server is healthy on 18989.
+        """
+        tracked = None
+        if self.pid_file.exists():
+            try:
+                tracked = int(self.pid_file.read_text().strip())
+            except (ValueError, OSError):
+                tracked = None
+        try:
+            for conn in psutil.net_connections(kind="inet"):
+                if conn.status != psutil.CONN_LISTEN:
+                    continue
+                if conn.laddr and conn.laddr.port == port and conn.pid and conn.pid != tracked:
+                    return conn.pid
+        except (psutil.AccessDenied, PermissionError):
+            # Fall through to the lsof fallback below.
+            pass
+        # Fallback for macOS where psutil.net_connections returns nothing for
+        # unprivileged callers. lsof exposes listening sockets without root.
+        try:
+            out = subprocess.run(
+                ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+                capture_output=True, text=True, timeout=3,
+            )
+            for line in out.stdout.splitlines():
+                if line.startswith("p"):
+                    pid = int(line[1:])
+                    if pid != tracked:
+                        return pid
+        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+            pass
+        return None
+
     def get_status(self) -> str:
         """Get current daemon status."""
         if self.is_running():
@@ -73,8 +111,15 @@ class DaemonManager:
                 return f"Running (PID: {pid}, Started: {time.ctime(process.create_time())})"
             except psutil.NoSuchProcess:
                 return "Stopped (stale PID file)"
-        else:
-            return "Stopped"
+        # Not tracked — but something may still be listening on the API port.
+        orphan = self._untracked_listener_pid()
+        if orphan is not None:
+            return (
+                f"Stopped (daemon not tracked), but an untracked `nexus serve` "
+                f"is listening on port {PORT} (PID: {orphan}). "
+                f"Run `nexus daemon stop` or kill PID {orphan} before starting."
+            )
+        return "Stopped"
     
     def start(self, host: str = "127.0.0.1", port: int = PORT, detach: bool = True) -> bool:
         """Start the daemon process."""

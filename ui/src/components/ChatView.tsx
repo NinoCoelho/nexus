@@ -26,6 +26,20 @@ export interface Message {
   limitIterations?: number;
   attachments?: { name: string; vaultPath: string }[];
   model?: string;
+  routedBy?: "user" | "auto";
+  /** Set when the turn didn't reach ``done`` — drives the Retry/Continue action row. */
+  partial?: {
+    status:
+      | "interrupted"
+      | "cancelled"
+      | "iteration_limit"
+      | "empty_response"
+      | "llm_error"
+      | "crashed"
+      | "length"
+      | "upstream_timeout";
+    detail?: string;
+  };
 }
 
 /**
@@ -42,6 +56,8 @@ interface Props {
   onStop?: () => void;
   onContinue?: () => void;
   onDismissLimit?: () => void;
+  onRetryPartial?: (msgIndex: number) => void;
+  onContinuePartial?: (msgIndex: number) => void;
   hasModel: boolean | null;
   onOpenSettings: () => void;
   onOpenInVault?: (path: string) => void;
@@ -51,10 +67,73 @@ interface Props {
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
+  routingMode?: "fixed" | "auto";
+  onRoutingModeChange?: (mode: "fixed" | "auto") => void;
 }
 
 function fmt(d: Date) {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+const PARTIAL_LABEL: Record<NonNullable<Message["partial"]>["status"], string> = {
+  interrupted: "This turn was interrupted (connection dropped or server restarted).",
+  cancelled: "You stopped this turn.",
+  iteration_limit: "Hit the per-turn tool-call limit.",
+  empty_response: "The model returned an empty response.",
+  llm_error: "The model call failed mid-turn.",
+  crashed: "The turn crashed unexpectedly.",
+  length: "Response was truncated — the model hit its output limit.",
+  upstream_timeout: "The model didn't respond in time.",
+};
+
+// Statuses where Continue is useful (i.e. the turn has meaningful content
+// to build on). Retry alone for pure-failure states.
+const PARTIAL_CAN_CONTINUE: Record<NonNullable<Message["partial"]>["status"], boolean> = {
+  interrupted: true,
+  cancelled: true,
+  iteration_limit: true,
+  empty_response: false,
+  llm_error: false,
+  crashed: false,
+  length: true,
+  upstream_timeout: false,
+};
+
+function PartialTurnActions({
+  status,
+  onRetry,
+  onContinue,
+}: {
+  status: NonNullable<Message["partial"]>["status"];
+  onRetry?: () => void;
+  onContinue?: () => void;
+}) {
+  const showContinue = PARTIAL_CAN_CONTINUE[status] && !!onContinue;
+  return (
+    <div className="limit-banner" style={{ marginTop: 4 }}>
+      <div className="limit-banner-text">{PARTIAL_LABEL[status]} How do you want to proceed?</div>
+      <div className="limit-banner-actions">
+        {showContinue && (
+          <button
+            className="limit-banner-btn limit-banner-btn-primary"
+            onClick={onContinue}
+            type="button"
+          >
+            Continue
+          </button>
+        )}
+        {onRetry && (
+          <button
+            className={showContinue ? "limit-banner-btn" : "limit-banner-btn limit-banner-btn-primary"}
+            onClick={onRetry}
+            type="button"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function ChatView({
@@ -66,6 +145,8 @@ export default function ChatView({
   onStop,
   onContinue,
   onDismissLimit,
+  onRetryPartial,
+  onContinuePartial,
   hasModel,
   onOpenSettings,
   onOpenInVault,
@@ -75,6 +156,8 @@ export default function ChatView({
   models,
   selectedModel,
   onModelChange,
+  routingMode,
+  onRoutingModeChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -88,7 +171,11 @@ export default function ChatView({
   const lastMsg = messages[messages.length - 1];
   const streamingInProgress = thinking && lastMsg?.role === "assistant" && ((lastMsg.content ?? "").length > 0 || (lastMsg.timeline ?? []).length > 0);
   const visible = messages.filter(
-    (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit" || (m.timeline ?? []).length > 0,
+    (m) =>
+      (m.content ?? "").trim().length > 0 ||
+      m.kind === "limit" ||
+      (m.timeline ?? []).length > 0 ||
+      m.partial != null,
   );
 
   return (
@@ -135,16 +222,27 @@ export default function ChatView({
                 </div>
               </div>
             ) : (
-              <AssistantMessage
-                key={idx}
-                content={msg.content}
-                trace={msg.trace}
-                timeline={msg.timeline}
-                timestamp={msg.timestamp}
-                streaming={msg.streaming}
-                onOpenInVault={onOpenInVault}
-                model={msg.model}
-              />
+              <div key={idx}>
+                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0) && (
+                  <AssistantMessage
+                    content={msg.content}
+                    trace={msg.trace}
+                    timeline={msg.timeline}
+                    timestamp={msg.timestamp}
+                    streaming={msg.streaming}
+                    onOpenInVault={onOpenInVault}
+                    model={msg.model}
+                    routedBy={msg.routedBy}
+                  />
+                )}
+                {msg.partial && !thinking && (
+                  <PartialTurnActions
+                    status={msg.partial.status}
+                    onRetry={onRetryPartial ? () => onRetryPartial(idx) : undefined}
+                    onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
+                  />
+                )}
+              </div>
             )
           ) : (
             <div key={idx} className="user-msg">
@@ -200,6 +298,8 @@ export default function ChatView({
               models={models}
               selectedModel={selectedModel}
               onModelChange={onModelChange}
+              routingMode={routingMode}
+              onRoutingModeChange={onRoutingModeChange}
             />
           </div>
         </div>

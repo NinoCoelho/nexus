@@ -1,3 +1,17 @@
+/**
+ * GraphView — vault file-link graph rendered on a Cytoscape canvas.
+ *
+ * Shows all vault .md/.mdx files as nodes and their [[wiki-links]] /
+ * markdown links as edges. Supports:
+ *   - Scoped queries (file, folder, tag, search, entity) via the scope selector
+ *   - Entity overlay from GraphRAG (when enabled)
+ *   - Node click → opens VaultFilePreview for the selected file
+ *   - Entity click → shows related entities and source files
+ *
+ * Edge bundling and curve offsets are computed by graphEdgeUtils.ts to
+ * avoid overlapping parallel edges between the same node pair.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getVaultGraph, getVaultEntitySources, type GraphData, type GraphNode, type EntityNode } from "../api";
 import VaultFilePreview from "./VaultFilePreview";

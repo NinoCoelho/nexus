@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
-from .llm import ChatMessage, LLMProvider, Role, StopReason
+from .llm import ChatMessage, LLMProvider, Role
 from .loop import Agent, AgentTurn
 from .planner_prompt import PLANNER_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT
 

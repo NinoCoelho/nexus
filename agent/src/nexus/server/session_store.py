@@ -26,7 +26,6 @@ import json
 import logging
 import shutil
 import sqlite3
-import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -35,7 +34,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from loom.hitl import HitlBroker, HitlEvent
+from loom.hitl import HitlBroker
 from loom.store.session import SessionStore as LoomSessionStore
 
 from ..agent.llm import ChatMessage, Role, ToolCall
@@ -390,7 +389,6 @@ class SessionStore:
         )
 
     def get(self, session_id: str) -> Session | None:
-        d = self._loom.get_or_create.__func__  # type: ignore[attr-defined]
         # Use raw DB to avoid creating the session if it doesn't exist.
         row = self._loom._db.execute(
             "SELECT id, title, context FROM sessions WHERE id = ?", (session_id,)
@@ -449,6 +447,56 @@ class SessionStore:
             )
             for r in rows
         ]
+
+    def persist_partial_turn(
+        self,
+        session_id: str,
+        *,
+        base_history: list[ChatMessage],
+        user_message: str,
+        assistant_text: str,
+        tool_calls: list[dict[str, Any]] | None = None,
+        status_note: str | None = None,
+    ) -> None:
+        """Persist the current turn state when the stream didn't reach ``done``.
+
+        Writes ``base_history`` + user + a best-effort assistant message (content
+        prefixed with an ``[interrupted: reason]`` note so the UI can render it
+        as partial). Synthesised ``ToolCall`` entries from the live tool events
+        go on the assistant message so badges survive reload.
+
+        No-op if there's nothing to persist.
+        """
+        if not user_message and not assistant_text and not tool_calls:
+            return
+        tcs: list[ToolCall] = []
+        for t in tool_calls or []:
+            name = t.get("name") or ""
+            if not name:
+                continue
+            args = t.get("args")
+            if isinstance(args, str):
+                try:
+                    args_dict = json.loads(args) if args else {}
+                    if not isinstance(args_dict, dict):
+                        args_dict = {"_raw": args}
+                except (TypeError, json.JSONDecodeError):
+                    args_dict = {"_raw": args}
+            elif isinstance(args, dict):
+                args_dict = args
+            else:
+                args_dict = {}
+            tcs.append(ToolCall(id=t.get("id") or f"partial-{len(tcs)}", name=name, arguments=args_dict))
+        prefix = f"[{status_note}] " if status_note else ""
+        assistant = ChatMessage(
+            role=Role.ASSISTANT,
+            content=(prefix + assistant_text) if (prefix or assistant_text) else "",
+            tool_calls=tcs or None,
+        )
+        history = list(base_history)
+        history.append(ChatMessage(role=Role.USER, content=user_message))
+        history.append(assistant)
+        self.replace_history(session_id, history)
 
     def replace_history(self, session_id: str, history: list[ChatMessage]) -> None:
         loom_msgs = [_to_loom_msg(m) for m in history]

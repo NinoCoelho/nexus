@@ -1,5 +1,19 @@
+/**
+ * InsightsView — analytics dashboard for session history.
+ *
+ * Fetches a report from GET /insights and renders:
+ *   - Overview cards (sessions, messages, tokens, estimated cost)
+ *   - Routing mini-card (current mode + classifier)
+ *   - Model breakdown table (click a row to scope the rest of the dashboard)
+ *   - Top tools by call count
+ *   - Activity heatmap by day-of-week and hour
+ *   - Notable sessions (click to open in chat)
+ *
+ * Time windows: 7 / 30 / 90 / 365 days.
+ */
+
 import { useCallback, useEffect, useState } from "react";
-import { getInsights, type InsightsReport } from "../api";
+import { getInsights, getRouting, type InsightsReport, type RoutingConfig } from "../api";
 import "./InsightsView.css";
 
 type Window = 7 | 30 | 90 | 365;
@@ -25,18 +39,28 @@ function formatCost(cost: number): string {
   return `$${cost.toFixed(2)}`;
 }
 
-export default function InsightsView() {
+interface Props {
+  onOpenSession?: (sessionId: string) => void;
+}
+
+export default function InsightsView({ onOpenSession }: Props) {
   const [days, setDays] = useState<Window>(30);
+  const [modelFilter, setModelFilter] = useState<string | null>(null);
   const [report, setReport] = useState<InsightsReport | null>(null);
+  const [routing, setRouting] = useState<RoutingConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (window: Window) => {
+  const load = useCallback(async (window: Window, model: string | null) => {
     setLoading(true);
     setError(null);
     try {
-      const r = await getInsights(window);
+      const [r, rc] = await Promise.all([
+        getInsights(window, model ?? undefined),
+        getRouting().catch(() => null),
+      ]);
       setReport(r);
+      setRouting(rc);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't load insights");
     } finally {
@@ -45,8 +69,8 @@ export default function InsightsView() {
   }, []);
 
   useEffect(() => {
-    void load(days);
-  }, [days, load]);
+    void load(days, modelFilter);
+  }, [days, modelFilter, load]);
 
   if (loading && !report) {
     return (
@@ -60,7 +84,7 @@ export default function InsightsView() {
     return (
       <div className="insights-view">
         <div className="insights-error">{error}</div>
-        <button className="insights-btn" onClick={() => void load(days)}>Retry</button>
+        <button className="insights-btn" onClick={() => void load(days, modelFilter)}>Retry</button>
       </div>
     );
   }
@@ -72,9 +96,12 @@ export default function InsightsView() {
           <h2 className="insights-title">Insights</h2>
           <WindowSelect days={days} onChange={setDays} />
         </div>
+        {modelFilter && (
+          <FilterPill label={modelFilter} onClear={() => setModelFilter(null)} />
+        )}
         <div className="insights-empty">
-          No sessions in the last {WINDOW_LABELS[days]}. Start chatting to
-          populate this view — every turn adds tokens and tool calls here.
+          No sessions in the last {WINDOW_LABELS[days]}
+          {modelFilter ? ` for ${modelFilter}` : ""}. Start chatting to populate this view.
         </div>
       </div>
     );
@@ -89,6 +116,10 @@ export default function InsightsView() {
         <h2 className="insights-title">Insights</h2>
         <WindowSelect days={days} onChange={setDays} />
       </div>
+
+      {modelFilter && (
+        <FilterPill label={modelFilter} onClear={() => setModelFilter(null)} />
+      )}
 
       {/* Top-row metric tiles */}
       <div className="insights-tiles">
@@ -115,10 +146,37 @@ export default function InsightsView() {
         />
       </div>
 
+      {/* Routing mini-card: current mode (config) + top auto pick (from models breakdown) */}
+      {routing && (
+        <section className="insights-section insights-routing-card">
+          <div>
+            <span className="insights-routing-label">Routing</span>
+            <span className={`insights-routing-mode insights-routing-mode--${routing.routing_mode}`}>
+              {routing.routing_mode}
+            </span>
+            {routing.routing_mode === "auto" && routing.classification_model && (
+              <span className="insights-routing-hint">
+                classifier: {routing.classification_model.split("/").pop()}
+              </span>
+            )}
+            {routing.routing_mode === "fixed" && routing.default_model && (
+              <span className="insights-routing-hint">
+                default: {routing.default_model.split("/").pop()}
+              </span>
+            )}
+          </div>
+          {report.models.length > 0 && (
+            <div className="insights-routing-hint">
+              most-used in window: <strong>{(report.models[0].model || "").split("/").pop() || "—"}</strong>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Models */}
       {report.models.length > 0 && (
         <section className="insights-section">
-          <h3 className="insights-section-title">Models</h3>
+          <h3 className="insights-section-title">Models — click to filter</h3>
           <table className="insights-table">
             <thead>
               <tr>
@@ -131,8 +189,14 @@ export default function InsightsView() {
             <tbody>
               {report.models.map((m) => {
                 const name = m.model.includes("/") ? m.model.split("/").pop() : m.model;
+                const active = modelFilter === m.model;
                 return (
-                  <tr key={m.model}>
+                  <tr
+                    key={m.model}
+                    className={`insights-table-row${active ? " insights-table-row--active" : ""}`}
+                    onClick={() => setModelFilter(active ? null : m.model)}
+                    style={{ cursor: "pointer" }}
+                  >
                     <td title={m.model}>{name}</td>
                     <td className="num">{m.sessions}</td>
                     <td className="num">{m.total_tokens.toLocaleString()}</td>
@@ -210,14 +274,25 @@ export default function InsightsView() {
         <section className="insights-section">
           <h3 className="insights-section-title">Notable sessions</h3>
           <ul className="insights-top-sessions">
-            {report.top_sessions.map((s, i) => (
-              <li key={i} className="insights-top-session">
-                <span className="insights-top-label">{s.label}</span>
-                <span className="insights-top-value">{s.value}</span>
-                <span className="insights-top-title">{s.title}</span>
-                <span className="insights-top-date">{s.date}</span>
-              </li>
-            ))}
+            {report.top_sessions.map((s, i) => {
+              const clickable = !!onOpenSession && !!s.session_id;
+              return (
+                <li
+                  key={i}
+                  className={`insights-top-session${clickable ? " insights-top-session--clickable" : ""}`}
+                  onClick={clickable ? () => onOpenSession!(s.session_id) : undefined}
+                  role={clickable ? "button" : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={clickable ? (e) => { if (e.key === "Enter") onOpenSession!(s.session_id); } : undefined}
+                  title={clickable ? "Open session in chat" : undefined}
+                >
+                  <span className="insights-top-label">{s.label}</span>
+                  <span className="insights-top-value">{s.value}</span>
+                  <span className="insights-top-title">{s.title}</span>
+                  <span className="insights-top-date">{s.date}</span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
@@ -249,6 +324,18 @@ function WindowSelect({ days, onChange }: { days: Window; onChange: (d: Window) 
           {WINDOW_LABELS[d]}
         </button>
       ))}
+    </div>
+  );
+}
+
+function FilterPill({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <div className="insights-filter-pill">
+      <span>Filtered by model:</span>
+      <strong>{label}</strong>
+      <button type="button" className="insights-filter-clear" onClick={onClear} aria-label="Clear filter">
+        ✕
+      </button>
     </div>
   );
 }

@@ -1,3 +1,14 @@
+/**
+ * AgentGraphView — agent/skill/session graph on a Cytoscape canvas.
+ *
+ * Shows the Nexus agent node, all registered skills, and recent sessions.
+ * Edges connect sessions to the skills they used during execution.
+ *
+ * Interactions:
+ *   - Skill node click → opens the SkillDrawer
+ *   - Session node click → navigates to that chat session
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAgentGraph, type AgentGraphData, type AgentGraphNode } from "../api";
 import {

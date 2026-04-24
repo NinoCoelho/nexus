@@ -1,14 +1,13 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 
 .sidebar {
-  width: 220px;
-  min-width: 220px;
+  width: var(--sidebar-width, 220px);
+  min-width: var(--sidebar-width, 220px);
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 150ms ease, min-width 150ms ease;
   flex-shrink: 0;
   position: relative;
 }
@@ -16,6 +15,24 @@
 .sidebar--collapsed {
   width: 56px;
   min-width: 56px;
+  transition: width 150ms ease, min-width 150ms ease;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 50;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle--active {
+  background: var(--accent, rgba(100, 140, 220, 0.4));
 }
 
 /* Top bar */
