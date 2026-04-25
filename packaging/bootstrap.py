@@ -9,6 +9,9 @@ Layout assumed at runtime (relative to this file):
     models/
         fastembed/
         spacy/en_core_web_sm_pkg/...
+        llm/<name>.gguf   # bundled local LLM weights (optional)
+    llama/.../llama-server  # llama.cpp server binary (optional)
+    llm.json              # manifest describing the bundled LLM (optional)
 
 The chosen TCP port is written to NEXUS_PORT_FILE so the Swift app can read
 it without parsing logs. Readiness is signalled by ``GET /health`` → 200.
@@ -16,11 +19,20 @@ it without parsing logs. Readiness is signalled by ``GET /health`` → 200.
 
 from __future__ import annotations
 
+import atexit
+import json
+import logging
 import os
 import shutil
 import socket
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+log = logging.getLogger("nexus.bootstrap")
 
 
 def _pick_free_port() -> int:
@@ -48,7 +60,135 @@ def _seed_spacy_cache(bundled_models: Path) -> None:
     shutil.copytree(meta.parent, cache)
 
 
+def _start_llama(here: Path) -> tuple[subprocess.Popen | None, int | None, str | None]:
+    """Launch the bundled llama.cpp server if a manifest is present.
+
+    Returns (process, port, model_name) on success; (None, None, None) otherwise.
+    """
+    manifest = here / "llm.json"
+    if not manifest.is_file():
+        return None, None, None
+    try:
+        cfg = json.loads(manifest.read_text())
+    except (OSError, ValueError):
+        return None, None, None
+
+    binary = here / cfg["binary"]
+    model = here / cfg["model_file"]
+    if not binary.is_file() or not model.is_file():
+        log.warning("[bootstrap] llm.json present but binary or model missing")
+        return None, None, None
+
+    port = _pick_free_port()
+    log_path = Path.home() / "Library" / "Logs" / "Nexus" / "llama-server.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = open(log_path, "ab")
+
+    cmd = [
+        str(binary), "-m", str(model),
+        "--host", "127.0.0.1", "--port", str(port),
+        "-c", str(int(cfg.get("ctx_size", 4096))),
+        "-ngl", "99",  # offload all layers to Metal
+    ]
+    proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
+
+    deadline = time.time() + 90
+    health_url = f"http://127.0.0.1:{port}/v1/models"
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            log.warning("[bootstrap] llama-server exited early; see %s", log_path)
+            return None, None, None
+        try:
+            with urllib.request.urlopen(health_url, timeout=1.5) as r:
+                if r.status == 200:
+                    return proc, port, cfg["model_name"]
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(0.5)
+
+    log.warning("[bootstrap] llama-server did not become ready in time")
+    proc.terminate()
+    return None, None, None
+
+
+def _seed_local_llm_config(model_name: str, llama_port: int) -> None:
+    """Add/update the `local` provider + bundled model entry in ~/.nexus/config.toml.
+
+    Rewrites the file each launch because the llama-server port is dynamic.
+    Preserves all other providers, models, and settings; only sets
+    ``agent.default_model`` if it was empty.
+    """
+    import tomli_w
+    try:
+        import tomllib  # py3.11+
+    except ImportError:  # pragma: no cover
+        import tomli as tomllib  # type: ignore
+
+    cfg_path = Path.home() / ".nexus" / "config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    raw: dict = {}
+    if cfg_path.is_file():
+        try:
+            with open(cfg_path, "rb") as f:
+                raw = tomllib.load(f)
+        except (OSError, ValueError):
+            raw = {}
+
+    providers = raw.setdefault("providers", {})
+    # Use type="ollama" so registry.py treats this as anonymous (no API key
+    # required). The registry appends "/v1" itself, so base_url omits it.
+    # llama.cpp's server accepts the same OpenAI-compatible endpoints Ollama
+    # exposes, so the OpenAIProvider works transparently against either.
+    providers["local"] = {
+        "base_url": f"http://127.0.0.1:{llama_port}",
+        "api_key_env": "",
+        "use_inline_key": False,
+        "type": "ollama",
+    }
+
+    model_id = f"local/{model_name}"
+    models = raw.setdefault("models", [])
+    found = False
+    for m in models:
+        if m.get("id") == model_id:
+            m["provider"] = "local"
+            m["model_name"] = model_name
+            found = True
+            break
+    if not found:
+        models.append({
+            "id": model_id,
+            "provider": "local",
+            "model_name": model_name,
+            "tags": ["local", "bundled", "offline"],
+            "tier": "fast",
+            "notes": "Bundled with Nexus.app — runs locally via llama.cpp.",
+        })
+
+    agent = raw.setdefault("agent", {})
+    if not agent.get("default_model"):
+        agent["default_model"] = model_id
+
+    with open(cfg_path, "wb") as f:
+        tomli_w.dump(raw, f)
+
+
+def _stop_proc(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    except OSError:
+        pass
+
+
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     here = Path(__file__).resolve().parent
     site = here / "site-packages"
     if site.is_dir():
@@ -64,6 +204,15 @@ def main() -> int:
     ui_dist = here / "ui"
     if (ui_dist / "index.html").is_file():
         os.environ.setdefault("NEXUS_UI_DIST", str(ui_dist))
+
+    llama_proc, llama_port, llama_model = _start_llama(here)
+    if llama_proc is not None:
+        atexit.register(_stop_proc, llama_proc)
+        try:
+            _seed_local_llm_config(llama_model, llama_port)
+            log.info("[bootstrap] local LLM ready: %s on :%d", llama_model, llama_port)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[bootstrap] could not seed local LLM config: %s", e)
 
     port = _pick_free_port()
     port_file = Path(os.environ.get("NEXUS_PORT_FILE", here / ".port"))
