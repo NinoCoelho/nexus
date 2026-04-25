@@ -151,7 +151,11 @@ def _tier_from_legacy_strengths(s: dict[str, Any]) -> Tier:
 
 
 def _parse(raw: dict[str, Any]) -> NexusConfig:
-    agent = AgentConfig(**raw.get("agent", {}))
+    agent_raw = dict(raw.get("agent", {}))
+    # Drop legacy fields that no longer exist on AgentConfig so older
+    # config.toml files keep loading.
+    agent_raw.pop("routing_mode", None)
+    agent = AgentConfig(**agent_raw)
     providers: dict[str, ProviderConfig] = {}
     for name, pdata in raw.get("providers", {}).items():
         if "type" not in pdata and name in ("anthropic", "ollama"):

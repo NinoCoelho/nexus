@@ -101,7 +101,6 @@ async def get_routing(app_state: dict[str, Any] = Depends(get_app_state)) -> dic
     return {
         "default_model": cfg.agent.default_model,
         "last_used_model": cfg.agent.last_used_model,
-        "routing_mode": cfg.agent.routing_mode,
         "available_models": chat_available,
         "embedding_model_id": embedding_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
@@ -120,8 +119,6 @@ async def set_routing(
         cfg.agent.default_model = body["default_model"]
     if "last_used_model" in body:
         cfg.agent.last_used_model = body["last_used_model"]
-    if "routing_mode" in body and body["routing_mode"] in ("fixed", "auto"):
-        cfg.agent.routing_mode = body["routing_mode"]
     if "embedding_model_id" in body:
         cfg.graphrag.embedding_model_id = body["embedding_model_id"]
     if "extraction_model_id" in body:
@@ -131,7 +128,6 @@ async def set_routing(
     return {
         "default_model": cfg.agent.default_model,
         "last_used_model": cfg.agent.last_used_model,
-        "routing_mode": cfg.agent.routing_mode,
         "embedding_model_id": cfg.graphrag.embedding_model_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
     }

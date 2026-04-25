@@ -32,7 +32,6 @@ class ProviderConfig(BaseModel):
 class AgentConfig(BaseModel):
     default_model: str = ""
     last_used_model: str = ""
-    routing_mode: Literal["fixed", "auto"] = "fixed"
     max_iterations: int = 16
 
 
@@ -131,7 +130,6 @@ _DEFAULT_CONFIG = NexusConfig(
     agent=AgentConfig(
         default_model="",
         last_used_model="",
-        routing_mode="fixed",
         max_iterations=16,
     ),
     providers={

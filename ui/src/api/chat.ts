@@ -26,7 +26,7 @@ export interface ChatResponse {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "tool"; name: string; args?: unknown; result_preview?: string }
-  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string; routed_by?: "user" | "auto" }
+  | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null };
 
@@ -42,7 +42,6 @@ export type StreamEvent =
  * @param onEvent - Callback invoked for each received SSE event.
  * @param signal - `AbortSignal` to cancel the request (e.g. the Stop button).
  * @param model - Model identifier to use; omitting uses the server default.
- * @param routing_mode - `"fixed"` uses the configured model; `"auto"` lets the router decide.
  * @throws {Error} If the server returns a non-2xx status.
  */
 export async function chatStream(
@@ -51,12 +50,11 @@ export async function chatStream(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   model?: string,
-  routing_mode?: "fixed" | "auto",
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, session_id, model, routing_mode }),
+    body: JSON.stringify({ message, session_id, model }),
     signal,
   });
 
@@ -116,7 +114,6 @@ export async function chatStream(
             trace: (parsed.trace ?? []) as TraceEvent[],
             skills_touched: (parsed.skills_touched ?? []) as string[],
             model: (usage?.model ?? parsed.model) as string | undefined,
-            routed_by: parsed.routed_by as "user" | "auto" | undefined,
           });
         } else if (eventName === "limit_reached") {
           onEvent({ type: "limit_reached", iterations: (parsed.iterations as number) ?? 0 });

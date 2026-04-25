@@ -4,7 +4,6 @@ import { BASE } from "./base";
 export interface RoutingConfig {
   default_model: string;
   last_used_model: string;
-  routing_mode: "fixed" | "auto";
   available_models: string[];
   embedding_model_id: string;
   extraction_model_id: string;
@@ -19,7 +18,6 @@ export async function getRouting(): Promise<RoutingConfig> {
 export async function putRouting(patch: {
   default_model?: string;
   last_used_model?: string;
-  routing_mode?: "fixed" | "auto";
   embedding_model_id?: string;
   extraction_model_id?: string;
 }): Promise<RoutingConfig> {

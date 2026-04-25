@@ -36,7 +36,6 @@ export interface Message {
   limitIterations?: number;
   attachments?: { name: string; vaultPath: string }[];
   model?: string;
-  routedBy?: "user" | "auto";
   /** Backend-assigned position in session.history; only set for messages
    * loaded from the server. New in-flight turns get a seq after reload. */
   seq?: number;
@@ -245,7 +244,6 @@ export default function ChatView({
                     streaming={msg.streaming}
                     onOpenInVault={onOpenInVault}
                     model={msg.model}
-                    routedBy={msg.routedBy}
                     sessionId={activeSessionId ?? null}
                     seq={msg.seq}
                     feedback={msg.feedback ?? null}

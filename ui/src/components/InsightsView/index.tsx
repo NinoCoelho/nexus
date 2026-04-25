@@ -127,23 +127,17 @@ export default function InsightsView({ onOpenSession }: Props) {
         />
       </div>
 
-      {/* Routing mini-card: current mode (config) + top auto pick (from models breakdown) */}
+      {/* Default-model + most-used summary */}
       {routing && (
         <section className="insights-section insights-routing-card">
           <div>
-            <span className="insights-routing-label">Routing</span>
-            <span className={`insights-routing-mode insights-routing-mode--${routing.routing_mode}`}>
-              {routing.routing_mode}
-            </span>
-            {routing.routing_mode === "auto" && (
+            <span className="insights-routing-label">Default model</span>
+            {routing.default_model ? (
               <span className="insights-routing-hint">
-                classifier: built-in
+                {routing.default_model.split("/").pop()}
               </span>
-            )}
-            {routing.routing_mode === "fixed" && routing.default_model && (
-              <span className="insights-routing-hint">
-                default: {routing.default_model.split("/").pop()}
-              </span>
+            ) : (
+              <span className="insights-routing-hint">—</span>
             )}
           </div>
           {report.models.length > 0 && (

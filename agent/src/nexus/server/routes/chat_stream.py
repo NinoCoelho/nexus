@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from ..deps import get_agent, get_sessions, get_app_state
+from ..deps import get_agent, get_sessions
 from ..schemas import ChatRequest
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
@@ -38,26 +38,13 @@ async def chat_stream_route(
     req: ChatRequest,
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
-    app_state: dict[str, Any] = Depends(get_app_state),
 ) -> StreamingResponse:
 
     session = store.get_or_create(req.session_id, context=req.context)
 
-    cfg = app_state.get("cfg")
-
-    # Resolve routing: explicit `routing_mode` wins; legacy "auto" sentinel
-    # in `model` still accepted. Default: fixed.
-    routing_mode = (getattr(req, "routing_mode", None) or "").lower()
-    if not routing_mode:
-        routing_mode = "auto" if req.model == "auto" else "fixed"
+    # Always fixed routing — auto mode was removed. Legacy callers passing
+    # ``model: "auto"`` are coerced to "use the configured default".
     resolved_model_id = req.model if req.model and req.model != "auto" else ""
-    routed_by = "user"
-    if routing_mode == "auto":
-        from ...agent.router import classify_route
-        resolved_model_id = await classify_route(
-            req.message, cfg, app_state.get("prov_reg"),
-        )
-        routed_by = "auto"
 
     async def event_generator() -> AsyncIterator[str]:
         final_messages = None
@@ -168,7 +155,6 @@ async def chat_stream_route(
                         "iterations": event.get("iterations", 0),
                         "usage": usage,
                         "model": usage.get("model") or resolved_model_id,
-                        "routed_by": routed_by,
                     }
                     yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 

@@ -40,12 +40,6 @@
   letter-spacing: 0;
 }
 
-.asst-model-badge--auto {
-  background: color-mix(in oklab, var(--accent, #4c8bf5) 14%, var(--bg-inset));
-  border-color: color-mix(in oklab, var(--accent, #4c8bf5) 40%, var(--border-soft));
-  color: var(--accent, #4c8bf5);
-}
-
 .asst-time {
   font-size: 11px;
   color: var(--fg-faint);

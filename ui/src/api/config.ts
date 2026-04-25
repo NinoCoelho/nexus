@@ -4,7 +4,6 @@ import type { Model } from "./models";
 
 export interface AgentConfig {
   default_model: string;
-  routing_mode: "fixed" | "auto";
   max_iterations: number;
 }
 

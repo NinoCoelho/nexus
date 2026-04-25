@@ -88,7 +88,6 @@ interface Props {
   streaming?: boolean;
   onOpenInVault?: (path: string) => void;
   model?: string;
-  routedBy?: "user" | "auto";
   sessionId?: string | null;
   seq?: number;
   feedback?: "up" | "down" | null;

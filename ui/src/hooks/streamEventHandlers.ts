@@ -92,10 +92,9 @@ export function applyDoneEvent(
   key: string,
   activeSession: string | null,
   selectedModel: string | undefined,
-  event: { session_id: string; reply: string; model?: string; routed_by?: string; trace?: TraceEvent[] },
+  event: { session_id: string; reply: string; model?: string; trace?: TraceEvent[] },
 ) {
   const routedModel = event.model;
-  const routedBy = (event.routed_by ?? "user") as "user" | "auto";
   const usedModel = (routedModel && routedModel !== "auto")
     ? routedModel
     : (selectedModel && selectedModel !== "auto" ? selectedModel : "");
@@ -118,7 +117,6 @@ export function applyDoneEvent(
         timestamp: new Date(),
         streaming: false,
         model: routedModel,
-        routedBy,
       };
       const msgs = fresh.messages.slice(0, -1).concat(finalAsst);
       next.set(event.session_id, { messages: msgs, thinking: false, input: "", historyLoaded: true, attachments: [], selectedModel: fresh.selectedModel });

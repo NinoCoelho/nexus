@@ -10,7 +10,6 @@ from .daemon_cmd import daemon_app
 from .graphrag_cmd import graphrag_app
 from .models_cmd import models_app
 from .providers_cmd import providers_app
-from .routing_cmd import routing_app
 from .sessions_cmd import sessions_app
 from .skills_cmd import skills_app
 from .trajectories_cmd import trajectories_app
@@ -21,7 +20,6 @@ app = typer.Typer(help="Nexus agent CLI", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(providers_app, name="providers")
 app.add_typer(models_app, name="models")
-app.add_typer(routing_app, name="routing")
 app.add_typer(skills_app, name="skills")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(vault_app, name="vault")

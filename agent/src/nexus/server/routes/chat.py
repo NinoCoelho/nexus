@@ -87,28 +87,14 @@ async def chat(
     # concurrent unrelated requests — don't inherit stale state.
     token = CURRENT_SESSION_ID.set(session.id)
 
-    cfg = app_state.get("cfg")
-    routing_mode = cfg.agent.routing_mode if cfg and cfg.agent else "fixed"
-
     plan_data: list[dict[str, Any]] | None = None
 
     try:
-        if routing_mode == "planner":
-            from .chat_helpers import run_planner_turn
-            turn, plan_data = await run_planner_turn(
-                agent=a,
-                message=req.message,
-                session=session,
-                cfg=cfg,
-                store=store,
-                publish_event_fn=store.publish,
-            )
-        else:
-            turn = await a.run_turn(
-                req.message,
-                history=session.history,
-                context=session.context,
-            )
+        turn = await a.run_turn(
+            req.message,
+            history=session.history,
+            context=session.context,
+        )
     except LLMTransportError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except MalformedOutputError as exc:
