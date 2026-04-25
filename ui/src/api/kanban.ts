@@ -1,4 +1,10 @@
-// API client for vault-native kanban boards.
+/**
+ * @file API client for vault-native Kanban boards.
+ *
+ * Kanban boards are Markdown files in the vault with `kanban-plugin: basic` frontmatter.
+ * All CRUD operations (cards, lanes, boards) go through the backend at `/vault/kanban/*`,
+ * which edits the Markdown file directly — there is no separate store.
+ */
 import { BASE } from "./base";
 
 export type KanbanCardStatus = "running" | "done" | "failed";
@@ -58,12 +64,25 @@ export interface KanbanQuery {
   limit?: number;
 }
 
+/**
+ * Load an existing Kanban board from the vault.
+ *
+ * @param path - Path to the `.md` file relative to the vault root.
+ * @throws {Error} If the file does not exist or is not a valid Kanban board.
+ */
 export async function getVaultKanban(path: string): Promise<KanbanBoard> {
   const res = await fetch(`${BASE}/vault/kanban?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`Kanban load error: ${res.status}`);
   return res.json();
 }
 
+/**
+ * Create a new Kanban board as a Markdown file in the vault.
+ *
+ * @param path - Destination path for the `.md` file (created by the backend).
+ * @param opts - Creation options: `title` and initial `columns` list.
+ * @throws {Error} With the server's `detail` message if creation fails.
+ */
 export async function createVaultKanban(
   path: string,
   opts: { title?: string; columns?: string[] } = {},
@@ -80,6 +99,12 @@ export async function createVaultKanban(
   return res.json();
 }
 
+/**
+ * Add a new card to a board lane.
+ *
+ * @param path - Path to the board's `.md` file.
+ * @param card - Card data: `lane` (destination lane ID), `title`, and optional `body`.
+ */
 export async function addVaultKanbanCard(
   path: string,
   card: { lane: string; title: string; body?: string },
@@ -93,6 +118,16 @@ export async function addVaultKanbanCard(
   return res.json();
 }
 
+/**
+ * Update fields of an existing card (partial PATCH).
+ *
+ * To move a card between lanes: include `lane` in the patch. To reorder within a lane:
+ * include `position` (zero-based index). Explicit `null` values clear the field.
+ *
+ * @param path - Path to the board's `.md` file.
+ * @param cardId - Unique card ID (`<!-- nx:id=<uuid> -->`).
+ * @param patch - Fields to update; absent fields are left unchanged.
+ */
 export async function patchVaultKanbanCard(
   path: string,
   cardId: string,
@@ -117,6 +152,12 @@ export async function patchVaultKanbanCard(
   return res.json();
 }
 
+/**
+ * Permanently remove a card from the board.
+ *
+ * @param path - Path to the board's `.md` file.
+ * @param cardId - Unique ID of the card to remove.
+ */
 export async function deleteVaultKanbanCard(path: string, cardId: string): Promise<void> {
   const res = await fetch(`${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
@@ -124,6 +165,12 @@ export async function deleteVaultKanbanCard(path: string, cardId: string): Promi
   if (!res.ok) throw new Error(`Kanban card delete error: ${res.status}`);
 }
 
+/**
+ * Add a new lane to the board.
+ *
+ * @param path - Path to the board's `.md` file.
+ * @param title - Lane title (displayed as the column header).
+ */
 export async function addVaultKanbanLane(path: string, title: string): Promise<KanbanLane> {
   const res = await fetch(`${BASE}/vault/kanban/lanes?path=${encodeURIComponent(path)}`, {
     method: "POST",
@@ -134,6 +181,12 @@ export async function addVaultKanbanLane(path: string, title: string): Promise<K
   return res.json();
 }
 
+/**
+ * Remove a lane and all its cards from the board.
+ *
+ * @param path - Path to the board's `.md` file.
+ * @param laneId - Unique ID of the lane to remove.
+ */
 export async function deleteVaultKanbanLane(path: string, laneId: string): Promise<void> {
   const res = await fetch(`${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
@@ -141,6 +194,15 @@ export async function deleteVaultKanbanLane(path: string, laneId: string): Promi
   if (!res.ok) throw new Error(`Kanban lane delete error: ${res.status}`);
 }
 
+/**
+ * Run a cross-board query across all Kanban boards in the vault.
+ *
+ * Combines text, label, assignee, priority, status, and date-range filters.
+ * Useful for aggregated views (e.g. "all urgent cards across any board").
+ *
+ * @param q - Search criteria; all fields are optional (implicit AND).
+ * @returns List of hits with full location info (board, lane, card) and total `count`.
+ */
 export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQueryHit[]; count: number }> {
   const res = await fetch(`${BASE}/vault/kanban/query`, {
     method: "POST",
@@ -151,6 +213,17 @@ export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQu
   return res.json();
 }
 
+/**
+ * Update a lane's metadata (title, automation prompt, or default model).
+ *
+ * `prompt` and `model` control the lane's auto-dispatch behaviour: when a card
+ * is moved into the lane, the agent can be triggered automatically with that
+ * prompt and model. Sending `null` clears the field.
+ *
+ * @param path - Path to the board's `.md` file.
+ * @param laneId - Unique ID of the lane to update.
+ * @param patch - Fields to update.
+ */
 export async function patchVaultKanbanLane(
   path: string,
   laneId: string,

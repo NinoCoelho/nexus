@@ -71,6 +71,16 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
 
 
 def handle_datatable_tool(args: dict[str, Any]) -> str:
+    """Dispatch the requested data-table action and return serialized JSON.
+
+    Args:
+        args: Dict containing ``action``, ``path``, and optional fields depending
+              on the action (e.g. ``schema``, ``row``, ``row_id``, ``rows``, ``views``).
+
+    Returns:
+        JSON with ``{"ok": true, ...}`` on success or ``{"ok": false, "error": ...}``
+        for invalid arguments, missing files, or I/O errors.
+    """
     from .. import vault_datatable
 
     action = args.get("action", "")

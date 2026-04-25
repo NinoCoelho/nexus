@@ -1,3 +1,10 @@
+/**
+ * @file Hook for audio recording via the MediaRecorder API.
+ *
+ * Manages the full recording lifecycle: requesting microphone permission,
+ * accumulating audio chunks, and producing an `audio/webm` `Blob` with an
+ * object URL when done. Permission errors are reported via toast rather than thrown.
+ */
 import { useCallback, useRef, useState } from "react";
 import { useToast } from "../../toast/ToastProvider";
 
@@ -6,6 +13,22 @@ export interface AudioAttachment {
   url: string;
 }
 
+/**
+ * Audio recording hook for the input bar.
+ *
+ * @returns
+ *   - `recording` — `true` while recording is active.
+ *   - `audio` — result of the last recording (`blob` + object `url`); `null` when cleared.
+ *   - `setAudio` — direct setter for the audio state (used by the component when consuming the blob).
+ *   - `startRecording` — request microphone access and start recording.
+ *   - `stopRecording` — stop recording and populate `audio`.
+ *   - `clearAudio` — revoke the object URL and clear the state; call when discarding audio.
+ *
+ * @example
+ * ```tsx
+ * const { recording, audio, startRecording, stopRecording, clearAudio } = useAudioRecorder();
+ * ```
+ */
 export function useAudioRecorder() {
   const toast = useToast();
   const [recording, setRecording] = useState(false);

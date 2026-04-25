@@ -1,4 +1,11 @@
-// API client for chat: postChat, chatStream SSE parser, HITL session events.
+/**
+ * @file API client for the chat flow: SSE streaming, HITL, and session events.
+ *
+ * Exports three groups of functionality:
+ * - `chatStream` / `postChat` — sending messages to the agent.
+ * - `subscribeSessionEvents` — per-session SSE channel for HITL and trace events.
+ * - `respondToUserRequest` / `fetchPendingRequest` — responding to HITL approvals.
+ */
 import { BASE, IS_CAPACITOR } from "./base";
 
 export interface TraceEvent {
@@ -23,6 +30,21 @@ export type StreamEvent =
   | { type: "limit_reached"; iterations: number }
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null };
 
+/**
+ * Send a message to the agent via `POST /chat/stream` and process the SSE response.
+ *
+ * The response body is consumed as a text stream; each SSE frame
+ * (`event: <type>\ndata: <json>`) is parsed and dispatched to `onEvent`.
+ * The Promise resolves only when the stream closes or is aborted via `signal`.
+ *
+ * @param message - The user's message text.
+ * @param session_id - Existing session ID, or `undefined` to create a new session.
+ * @param onEvent - Callback invoked for each received SSE event.
+ * @param signal - `AbortSignal` to cancel the request (e.g. the Stop button).
+ * @param model - Model identifier to use; omitting uses the server default.
+ * @param routing_mode - `"fixed"` uses the configured model; `"auto"` lets the router decide.
+ * @throws {Error} If the server returns a non-2xx status.
+ */
 export async function chatStream(
   message: string,
   session_id: string | undefined,
@@ -112,6 +134,18 @@ export async function chatStream(
   }
 }
 
+/**
+ * Send a message to the agent via `POST /chat` (synchronous, non-streaming mode).
+ *
+ * Suitable for non-UI integrations where waiting for the full response is acceptable.
+ * For the interactive UI, prefer `chatStream`.
+ *
+ * @param message - The user's message text.
+ * @param session_id - Existing session ID; omitting creates a new session.
+ * @param context - Additional context prepended to the prompt server-side.
+ * @returns Full response including `session_id`, `reply`, and `trace`.
+ * @throws {Error} If the server returns a non-2xx status.
+ */
 export async function postChat(
   message: string,
   session_id?: string,
@@ -249,6 +283,14 @@ function pollSessionEvents(
   };
 }
 
+/**
+ * Poll `GET /chat/{session_id}/pending` to check for a waiting HITL approval.
+ *
+ * Used by the polling mechanism in environments without EventSource support (Capacitor/iOS).
+ *
+ * @param session_id - Session ID to query.
+ * @returns The pending request payload, or `null` if there is none.
+ */
 export async function fetchPendingRequest(
   session_id: string,
 ): Promise<UserRequestPayload | null> {
@@ -260,6 +302,18 @@ export async function fetchPendingRequest(
   return body.pending ?? null;
 }
 
+/**
+ * Submit the user's answer to a HITL request via `POST /chat/{session_id}/respond`.
+ *
+ * Objects (form responses of `kind: "form"`) are JSON-encoded before sending,
+ * as expected by the backend. A 404 status is silently ignored — it means the
+ * request expired or was cancelled before the answer arrived.
+ *
+ * @param session_id - Session ID where the request originated.
+ * @param request_id - Unique HITL request ID from `UserRequestPayload.request_id`.
+ * @param answer - User's answer: a string for simple kinds, an object for `kind: "form"`.
+ * @throws {Error} If the server returns an error status other than 404.
+ */
 export async function respondToUserRequest(
   session_id: string,
   request_id: string,

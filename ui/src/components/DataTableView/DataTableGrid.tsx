@@ -1,4 +1,9 @@
-// DataTableView — the table grid with sortable headers, inline editing, row actions, and pagination.
+/**
+ * @file DataTableView grid: sortable headers, inline editing, row actions, and pagination.
+ *
+ * Purely presentational component — receives already-processed data (filtered/sorted rows,
+ * current page) and delegates all state logic to the parent via callbacks.
+ */
 
 import type { FieldSchema } from "../../types/form";
 import InlineEditor from "./InlineEditor";
@@ -33,6 +38,32 @@ interface Props {
   onPageChange: (next: number) => void;
 }
 
+/**
+ * Data grid with sorting, inline editing, and pagination.
+ *
+ * Renders the current inline edit state via `InlineEditor` when `editingCell`
+ * is non-null. Field types that support inline editing are defined by `INLINE_EDITABLE`;
+ * other types trigger `onEditRow` (full-form edit).
+ *
+ * @param visibleFields - Visible columns in display order.
+ * @param pageRows - Rows for the current page (subset of `sorted`).
+ * @param sorted - All rows after filtering and sorting (used to compute pagination).
+ * @param rows - Complete set of rows before filtering or sorting.
+ * @param fields - Full field schema, used by InlineEditor.
+ * @param sort - Active sort field and direction; `null` if unsorted.
+ * @param editingCell - Cell currently being edited inline; `null` if none.
+ * @param cellDraft - Intermediate value of the cell being edited.
+ * @param safePage - Current page (already clamped to valid bounds).
+ * @param pageCount - Total number of available pages.
+ * @param onToggleSort - Toggle sort by field; reverses direction if already active.
+ * @param onStartEdit - Begin inline editing of a specific cell.
+ * @param onCellDraftChange - Update the draft value of the cell being edited.
+ * @param onCommitEdit - Persist the current edit.
+ * @param onCancelEdit - Discard the edit without saving.
+ * @param onEditRow - Open the full edit form for a row.
+ * @param onDeleteRow - Delete a row by its ID.
+ * @param onPageChange - Navigate to another page.
+ */
 export default function DataTableGrid({
   visibleFields, pageRows, sorted, rows, fields, sort,
   editingCell, cellDraft, safePage, pageCount,
