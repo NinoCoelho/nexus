@@ -148,26 +148,24 @@ def _seed_local_llm_config(model_name: str, llama_port: int) -> None:
     }
 
     model_id = f"local/{model_name}"
-    models = raw.setdefault("models", [])
-    found = False
-    for m in models:
-        if m.get("id") == model_id:
-            m["provider"] = "local"
-            m["model_name"] = model_name
-            found = True
-            break
-    if not found:
-        models.append({
-            "id": model_id,
-            "provider": "local",
-            "model_name": model_name,
-            "tags": ["local", "bundled", "offline"],
-            "tier": "fast",
-            "notes": "Bundled with Nexus.app — runs locally via llama.cpp.",
-        })
+    # Drop any stale local/* model entries (e.g. from a previous bundle that
+    # shipped a different model) before adding the current one.
+    models = [m for m in raw.get("models", []) if m.get("provider") != "local"]
+    models.append({
+        "id": model_id,
+        "provider": "local",
+        "model_name": model_name,
+        "tags": ["local", "bundled", "offline"],
+        "tier": "fast",
+        "notes": "Bundled with Nexus.app — runs locally via llama.cpp.",
+    })
+    raw["models"] = models
 
     agent = raw.setdefault("agent", {})
-    if not agent.get("default_model"):
+    # Repoint default_model if it pointed at a stale bundled local model
+    # (e.g. user upgraded the .app to a bundle with a different model).
+    cur_default = agent.get("default_model", "")
+    if not cur_default or (cur_default.startswith("local/") and cur_default != model_id):
         agent["default_model"] = model_id
 
     with open(cfg_path, "wb") as f:

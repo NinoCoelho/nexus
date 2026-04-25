@@ -8,8 +8,8 @@
 #   packaging/build.sh                          # full build (signs ad-hoc)
 #   packaging/build.sh --skip-models            # don't pre-download embedding models
 #   packaging/build.sh --skip-sign              # skip codesign step
-#   packaging/build.sh --bundle-llm gemma-e2b   # bundle a local LLM (default)
-#   packaging/build.sh --bundle-llm gemma-e4b   # larger Gemma 3n variant (~2.5 GB)
+#   packaging/build.sh --bundle-llm qwen-3b     # bundle a local LLM (default)
+#   packaging/build.sh --bundle-llm gemma-e4b   # Gemma 3n E4B (~2.5 GB, weaker at tools)
 #   packaging/build.sh --bundle-llm none        # no local LLM (smaller bundle)
 #
 set -euo pipefail
@@ -31,7 +31,7 @@ PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$
 
 SKIP_MODELS=0
 SKIP_SIGN=0
-BUNDLE_LLM="gemma-e2b"
+BUNDLE_LLM="qwen-3b"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-models) SKIP_MODELS=1; shift ;;
@@ -47,17 +47,20 @@ LLAMA_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_TAG}
 
 case "$BUNDLE_LLM" in
   none) LLM_REPO=""; LLM_FILE=""; LLM_NAME="" ;;
-  gemma-e2b)
-    LLM_REPO="bartowski/google_gemma-3n-E2B-it-GGUF"
-    LLM_FILE="google_gemma-3n-E2B-it-Q4_K_M.gguf"
-    LLM_NAME="gemma-3n-e2b"
+  qwen-3b)
+    # Qwen2.5-3B-Instruct: ~1.9 GB Q4, native function-calling support — the
+    # right tradeoff for Nexus's tool-driven loop. Gemma 3n E2B (the previous
+    # default) was ~1.5 GB but couldn't reliably use tools.
+    LLM_REPO="bartowski/Qwen2.5-3B-Instruct-GGUF"
+    LLM_FILE="Qwen2.5-3B-Instruct-Q4_K_M.gguf"
+    LLM_NAME="qwen2.5-3b-instruct"
     ;;
   gemma-e4b)
     LLM_REPO="bartowski/google_gemma-3n-E4B-it-GGUF"
     LLM_FILE="google_gemma-3n-E4B-it-Q4_K_M.gguf"
     LLM_NAME="gemma-3n-e4b"
     ;;
-  *) echo "unknown --bundle-llm value: $BUNDLE_LLM (use gemma-e2b | gemma-e4b | none)" >&2; exit 2 ;;
+  *) echo "unknown --bundle-llm value: $BUNDLE_LLM (use qwen-3b | gemma-e4b | none)" >&2; exit 2 ;;
 esac
 
 [[ -d "$LOOM_DIR" ]] || { echo "loom not found at $LOOM_DIR (set LOOM_DIR=...)" >&2; exit 1; }
