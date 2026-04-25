@@ -87,8 +87,13 @@ def _start_llama(here: Path) -> tuple[subprocess.Popen | None, int | None, str |
     cmd = [
         str(binary), "-m", str(model),
         "--host", "127.0.0.1", "--port", str(port),
-        "-c", str(int(cfg.get("ctx_size", 4096))),
-        "-ngl", "99",  # offload all layers to Metal
+        "-c", str(int(cfg.get("ctx_size", 16384))),
+        "-ngl", "99",     # offload all layers to Metal
+        "--jinja",        # use the GGUF's embedded chat template — required
+                          # for proper tool-call formatting on Qwen / Hermes.
+                          # Without this, llama-server falls back to a generic
+                          # parser that won't emit OpenAI tool_calls and the
+                          # model just narrates "I'll use the tool".
     ]
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
 
@@ -172,6 +177,51 @@ def _seed_local_llm_config(model_name: str, llama_port: int) -> None:
         tomli_w.dump(raw, f)
 
 
+def _strip_local_llm_config() -> None:
+    """Remove the bundled `local` provider + any local/* model rows.
+
+    Runs when bootstrap finds no bundled LLM at startup but the user's config
+    still has the entries seeded by a previous bundle. Leaves all other
+    providers, models, and settings untouched. Clears agent.default_model
+    only if it pointed at the stripped local model.
+    """
+    import tomli_w
+    try:
+        import tomllib
+    except ImportError:  # pragma: no cover
+        import tomli as tomllib  # type: ignore
+
+    cfg_path = Path.home() / ".nexus" / "config.toml"
+    if not cfg_path.is_file():
+        return
+    try:
+        with open(cfg_path, "rb") as f:
+            raw = tomllib.load(f)
+    except (OSError, ValueError):
+        return
+
+    changed = False
+    providers = raw.get("providers", {})
+    if "local" in providers:
+        del providers["local"]
+        changed = True
+
+    before = len(raw.get("models", []))
+    models = [m for m in raw.get("models", []) if m.get("provider") != "local"]
+    if len(models) != before:
+        raw["models"] = models
+        changed = True
+
+    agent = raw.get("agent", {})
+    if str(agent.get("default_model", "")).startswith("local/"):
+        agent["default_model"] = ""
+        changed = True
+
+    if changed:
+        with open(cfg_path, "wb") as f:
+            tomli_w.dump(raw, f)
+
+
 def _stop_proc(proc: subprocess.Popen | None) -> None:
     if proc is None or proc.poll() is not None:
         return
@@ -211,6 +261,13 @@ def main() -> int:
             log.info("[bootstrap] local LLM ready: %s on :%d", llama_model, llama_port)
         except Exception as e:  # noqa: BLE001
             log.warning("[bootstrap] could not seed local LLM config: %s", e)
+    else:
+        # No bundled LLM (or it failed to start). Strip any stale entries left
+        # in the user's config from a previous bundle that did ship one.
+        try:
+            _strip_local_llm_config()
+        except Exception as e:  # noqa: BLE001
+            log.warning("[bootstrap] could not strip stale local LLM config: %s", e)
 
     port = _pick_free_port()
     port_file = Path(os.environ.get("NEXUS_PORT_FILE", here / ".port"))

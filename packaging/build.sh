@@ -8,9 +8,12 @@
 #   packaging/build.sh                          # full build (signs ad-hoc)
 #   packaging/build.sh --skip-models            # don't pre-download embedding models
 #   packaging/build.sh --skip-sign              # skip codesign step
-#   packaging/build.sh --bundle-llm qwen-3b     # bundle a local LLM (default)
-#   packaging/build.sh --bundle-llm gemma-e4b   # Gemma 3n E4B (~2.5 GB, weaker at tools)
-#   packaging/build.sh --bundle-llm none        # no local LLM (smaller bundle)
+#   packaging/build.sh --bundle-llm none        # no local LLM (default)
+#   packaging/build.sh --bundle-llm qwen-3b     # opt-in: Qwen2.5-3B-Instruct (~1.9 GB)
+#   packaging/build.sh --bundle-llm gemma-e4b   # opt-in: Gemma 3n E4B (~2.5 GB,
+#                                                 emits Gemma's tool_code blocks
+#                                                 instead of OpenAI tool_calls
+#                                                 — Nexus's loop won't see them)
 #
 set -euo pipefail
 
@@ -31,7 +34,7 @@ PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$
 
 SKIP_MODELS=0
 SKIP_SIGN=0
-BUNDLE_LLM="qwen-3b"
+BUNDLE_LLM="none"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-models) SKIP_MODELS=1; shift ;;
@@ -147,12 +150,16 @@ if [[ -n "$LLM_REPO" ]]; then
   fi
   cp "$GGUF_CACHE" "$STAGE/models/llm/$LLM_FILE"
 
+  # ctx_size 16384: Nexus's system prompt + tool definitions are ~8K tokens
+  # before any conversation, so 4096 returns 400s on every request. Qwen2.5-3B
+  # supports 32K natively; 16K fits Nexus prompts with room for several turns
+  # while keeping the KV cache around 600 MB.
   cat > "$STAGE/llm.json" <<EOF
 {
   "binary": "llama/${LLAMA_SERVER_REL#./}",
   "model_file": "models/llm/${LLM_FILE}",
   "model_name": "${LLM_NAME}",
-  "ctx_size": 4096
+  "ctx_size": 16384
 }
 EOF
 fi
