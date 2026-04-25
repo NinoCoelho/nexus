@@ -28,8 +28,9 @@ import {
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import { TreeItem } from "./TreeItem";
-import { SnippetText } from "./SnippetText";
 import { ContextMenu } from "./ContextMenu";
+import { SearchResultsPanel } from "./SearchResultsPanel";
+import { TreeHeader } from "./TreeHeader";
 import { buildTree, buildDescendantCounts } from "./treeUtils";
 import { useVaultActions } from "./useVaultActions";
 import type { TreeNode } from "./types";
@@ -69,10 +70,7 @@ export default function VaultTreePanel({
   // Persist expanded dirs across view switches / reloads.
   useEffect(() => {
     try {
-      localStorage.setItem(
-        "nexus.vault.expandedDirs",
-        JSON.stringify(Array.from(expandedDirs)),
-      );
+      localStorage.setItem("nexus.vault.expandedDirs", JSON.stringify(Array.from(expandedDirs)));
     } catch { /* ignore quota errors */ }
   }, [expandedDirs]);
 
@@ -107,9 +105,7 @@ export default function VaultTreePanel({
 
   const refreshTree = useCallback(() => {
     setTreeError(false);
-    getVaultTree()
-      .then(setRawNodes)
-      .catch(() => setTreeError(true));
+    getVaultTree().then(setRawNodes).catch(() => setTreeError(true));
   }, []);
 
   useEffect(() => { refreshTree(); }, [refreshTree]);
@@ -117,30 +113,22 @@ export default function VaultTreePanel({
   // React to an external open request (e.g. "Open in Vault" from a preview modal).
   useEffect(() => {
     if (!openPath) return;
-    setSearchQuery("");
-    setSearchResults([]);
-    setActiveTag(null);
-    setTagFiles([]);
+    setSearchQuery(""); setSearchResults([]); setActiveTag(null); setTagFiles([]);
     onOpenPathHandled?.();
   }, [openPath, onOpenPathHandled]);
 
   const refreshTags = useCallback(() => {
-    getVaultTags()
-      .then((t) => setTags(t.slice(0, 15)))
-      .catch(() => { /* silent — tags are non-critical */ });
+    getVaultTags().then((t) => setTags(t.slice(0, 15))).catch(() => {});
   }, []);
 
   useEffect(() => { refreshTags(); }, [refreshTags]);
 
   const handleTagClick = useCallback((tag: string) => {
     if (activeTag === tag) {
-      setActiveTag(null);
-      setTagFiles([]);
+      setActiveTag(null); setTagFiles([]);
     } else {
       setActiveTag(tag);
-      getVaultTag(tag)
-        .then((r) => setTagFiles(r.files))
-        .catch(() => setTagFiles([]));
+      getVaultTag(tag).then((r) => setTagFiles(r.files)).catch(() => setTagFiles([]));
     }
   }, [activeTag]);
 
@@ -157,8 +145,7 @@ export default function VaultTreePanel({
   const handleToggleDir = useCallback((path: string) => {
     setExpandedDirs((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
   }, []);
@@ -169,17 +156,9 @@ export default function VaultTreePanel({
   const setModalTyped = useCallback((m: ModalProps | null) => setModal(m), []);
 
   const actions = useVaultActions({
-    selectedPath,
-    rawNodes,
-    refreshTree,
-    onSelectPath,
-    onTreeChange,
-    onDispatchToChat,
-    toast,
-    setModal: setModalTyped,
-    setCtxMenu: setCtxMenuNull,
-    descendantCounts,
-    uploadCtxDirRef,
+    selectedPath, rawNodes, refreshTree, onSelectPath, onTreeChange,
+    onDispatchToChat, toast, setModal: setModalTyped, setCtxMenu: setCtxMenuNull,
+    descendantCounts, uploadCtxDirRef,
   });
 
   // Close context menu on any click
@@ -193,82 +172,44 @@ export default function VaultTreePanel({
   // Debounced search
   useEffect(() => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    if (!searchQuery.trim()) {
-      setSearchResults([]);
-      return;
-    }
+    if (!searchQuery.trim()) { setSearchResults([]); return; }
     searchDebounceRef.current = setTimeout(() => {
-      searchVault(searchQuery)
-        .then(setSearchResults)
-        .catch(() => setSearchResults([]));
+      searchVault(searchQuery).then(setSearchResults).catch(() => setSearchResults([]));
     }, 250);
-    return () => {
-      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    };
+    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
   }, [searchQuery]);
 
   // Escape key clears search
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && searchQuery) {
-        setSearchQuery("");
-        setSearchResults([]);
-      }
+      if (e.key === "Escape" && searchQuery) { setSearchQuery(""); setSearchResults([]); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [searchQuery]);
 
   const handleCtx = (e: React.MouseEvent, node: TreeNode) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     setCtxMenu({ x: e.clientX, y: e.clientY, node });
   };
 
   const tree = buildTree(rawNodes);
+  const showResultsPanel = !!searchQuery || !!activeTag;
 
   return (
     <div className="vault-tree vault-tree--sidebar">
-      <div className="vault-tree-header">
-        <span className="vault-tree-title">Files</span>
-        <div className="vault-tree-header-actions">
-          <button className="vault-tree-add-btn" onClick={() => uploadInputRef.current?.click()} title="Upload files">
-            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 14v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
-              <polyline points="7,8 10,4 13,8" />
-              <line x1="10" y1="4" x2="10" y2="14" />
-            </svg>
-          </button>
-          <button className="vault-tree-add-btn" onClick={() => void actions.handleNewFolder()} title="New folder">
-            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M2 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z" />
-              <line x1="10" y1="9" x2="10" y2="14" /><line x1="7.5" y1="11.5" x2="12.5" y2="11.5" />
-            </svg>
-          </button>
-          <button className="vault-tree-add-btn" onClick={() => void actions.handleNewFile()} title="New file">
-            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="10" y1="4" x2="10" y2="16" /><line x1="4" y1="10" x2="16" y2="10" />
-            </svg>
-          </button>
-          <input
-            ref={uploadInputRef}
-            type="file"
-            multiple
-            style={{ display: "none" }}
-            onChange={(e) => void actions.handleUpload(e)}
-          />
-          <input
-            ref={uploadCtxDirRef}
-            type="file"
-            multiple
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const dir = uploadCtxDirRef.current?.getAttribute("data-dest-dir") ?? undefined;
-              void actions.handleUpload(e, dir);
-            }}
-          />
-        </div>
-      </div>
+      <TreeHeader
+        onUploadClick={() => uploadInputRef.current?.click()}
+        onNewFolder={() => void actions.handleNewFolder()}
+        onNewFile={() => void actions.handleNewFile()}
+        uploadInputRef={uploadInputRef}
+        uploadCtxDirRef={uploadCtxDirRef}
+        onUploadChange={(e) => void actions.handleUpload(e)}
+        onCtxUploadChange={(e) => {
+          const dir = uploadCtxDirRef.current?.getAttribute("data-dest-dir") ?? undefined;
+          void actions.handleUpload(e, dir);
+        }}
+      />
 
       {/* Search bar */}
       <div className="vault-search-bar">
@@ -288,17 +229,9 @@ export default function VaultTreePanel({
           spellCheck={false}
         />
         {searchQuery && (
-          <button
-            className="vault-search-clear"
-            onClick={() => { setSearchQuery(""); setSearchResults([]); }}
-            title="Clear"
-          >×</button>
+          <button className="vault-search-clear" onClick={() => { setSearchQuery(""); setSearchResults([]); }} title="Clear">×</button>
         )}
-        <button
-          className="vault-search-reindex"
-          onClick={() => void handleReindex()}
-          title="Reindex vault"
-        >
+        <button className="vault-search-reindex" onClick={() => void handleReindex()} title="Reindex vault">
           <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="1 4 1 10 7 10" />
             <path d="M3.51 15a9 9 0 1 0 .49-3.31" />
@@ -309,67 +242,21 @@ export default function VaultTreePanel({
 
       {treeError && <div className="vault-tree-error">Couldn&apos;t load — is the server running?</div>}
 
-      {searchQuery ? (
-        <div className="vault-search-results">
-          {(() => {
-            const q = searchQuery.trim().toLowerCase().replace(/^#/, "");
-            const suggestions = q
-              ? tags.filter((t) => t.tag.toLowerCase().includes(q)).slice(0, 8)
-              : [];
-            if (!suggestions.length) return null;
-            return (
-              <div className="vault-tag-suggestions">
-                {suggestions.map((t) => (
-                  <button
-                    key={t.tag}
-                    className={`vault-tag-pill${activeTag === t.tag ? " vault-tag-pill--active" : ""}`}
-                    onClick={() => {
-                      setSearchQuery("");
-                      setSearchResults([]);
-                      handleTagClick(t.tag);
-                    }}
-                    title={`${t.count} file${t.count !== 1 ? "s" : ""}`}
-                  >
-                    #{t.tag}
-                  </button>
-                ))}
-              </div>
-            );
-          })()}
-          {searchResults.length === 0 && (
-            <div className="vault-tree-empty">No results</div>
-          )}
-          {searchResults.map((r: VaultSearchResult) => (
-            <button
-              key={r.path}
-              className={`vault-search-result${r.path === selectedPath ? " vault-tree-row--active" : ""}`}
-              onClick={() => { onSelectPath(r.path); }}
-            >
-              <span className="vault-search-result-path">{r.path}</span>
-              <span className="vault-search-snippet"><SnippetText snippet={r.snippet} /></span>
-            </button>
-          ))}
-        </div>
-      ) : activeTag ? (
-        <div className="vault-search-results">
-          {tagFiles.length === 0 && (
-            <div className="vault-tree-empty">No files with tag #{activeTag}</div>
-          )}
-          {tagFiles.map((p) => (
-            <button
-              key={p}
-              className={`vault-search-result${p === selectedPath ? " vault-tree-row--active" : ""}`}
-              onClick={() => { onSelectPath(p); }}
-            >
-              <span className="vault-search-result-path">{p}</span>
-            </button>
-          ))}
-        </div>
+      {showResultsPanel ? (
+        <SearchResultsPanel
+          searchQuery={searchQuery}
+          searchResults={searchResults}
+          tags={tags}
+          activeTag={activeTag}
+          tagFiles={tagFiles}
+          selectedPath={selectedPath}
+          onSelectPath={(p) => onSelectPath(p)}
+          onTagClick={handleTagClick}
+          onClearSearch={() => { setSearchQuery(""); setSearchResults([]); }}
+        />
       ) : (
         <div className="vault-tree-body">
-          {tree.length === 0 && !treeError && (
-            <div className="vault-tree-empty">No files yet</div>
-          )}
+          {tree.length === 0 && !treeError && <div className="vault-tree-empty">No files yet</div>}
           {tree.map((node) => (
             <TreeItem
               key={node.path}
@@ -387,7 +274,6 @@ export default function VaultTreePanel({
         </div>
       )}
 
-      {/* Context menu */}
       {ctxMenu && (
         <ContextMenu
           node={ctxMenu.node}

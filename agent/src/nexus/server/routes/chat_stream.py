@@ -145,34 +145,21 @@ async def chat_stream_route(
                     except Exception:  # noqa: BLE001 — best-effort
                         log.exception("bump_usage failed")
                     if _trajectory_logger:
-                        try:
-                            reply_text = event.get("reply", "")
-                            _trajectory_logger.log(
-                                session_id=session.id,
-                                turn_index=len(session.history) // 2,
-                                state={
-                                    "user_message": req.message,
-                                    "history_length": len(session.history),
-                                    "context": (req.context or "")[:200],
-                                },
-                                action={
-                                    "reply": reply_text[:2000] if reply_text else "",
-                                    "model": usage.get("model") or "",
-                                    "iterations": event.get("iterations", 0),
-                                    "tool_calls": [],
-                                    "input_tokens": int(usage.get("input_tokens") or 0),
-                                    "output_tokens": int(usage.get("output_tokens") or 0),
-                                },
-                                reward={
-                                    "explicit": None,
-                                    "implicit": {
-                                        "turn_completed": True,
-                                        "tool_call_count": int(usage.get("tool_calls") or 0),
-                                    },
-                                },
-                            )
-                        except Exception:  # noqa: BLE001 — best-effort
-                            log.exception("trajectory logging failed (stream)")
+                        from .chat_stream_helpers import log_stream_trajectory
+                        log_stream_trajectory(
+                            trajectory_logger=_trajectory_logger,
+                            session_id=session.id,
+                            turn_index=len(session.history) // 2,
+                            user_message=req.message,
+                            history_length=len(session.history),
+                            context=req.context or "",
+                            reply_text=event.get("reply", ""),
+                            model=usage.get("model") or "",
+                            iterations=event.get("iterations", 0),
+                            input_tokens=int(usage.get("input_tokens") or 0),
+                            output_tokens=int(usage.get("output_tokens") or 0),
+                            tool_calls=int(usage.get("tool_calls") or 0),
+                        )
                     done_payload = {
                         "session_id": event.get("session_id") or session.id,
                         "reply": event.get("reply", ""),
@@ -255,64 +242,17 @@ async def chat_stream_route(
             yield f"event: error\ndata: {json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
             yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
         finally:
-            if final_messages is not None and partial_status in (
-                "length", "empty_response", "upstream_timeout",
-            ):
-                # Loom still delivered a final message list, but the turn
-                # was truncated / empty / timed out. Stamp the status
-                # prefix onto the persisted assistant so the UI renders a
-                # Retry/Continue banner on reload. Falls back to the
-                # partial-turn writer which knows how to prefix content.
-                try:
-                    # Find the trailing assistant message in final_messages
-                    # and use its text + tool_calls as the partial state.
-                    last_asst_text = ""
-                    last_asst_tools: list[dict[str, Any]] = []
-                    for m in reversed(final_messages):
-                        if getattr(m, "role", None) and m.role.value == "assistant":
-                            last_asst_text = m.content or ""
-                            if m.tool_calls:
-                                last_asst_tools = [
-                                    {
-                                        "id": tc.id,
-                                        "name": tc.name,
-                                        "args": tc.arguments,
-                                        "status": "done",
-                                    }
-                                    for tc in m.tool_calls
-                                ]
-                            break
-                    store.persist_partial_turn(
-                        session.id,
-                        base_history=pre_turn_history,
-                        user_message=req.message,
-                        assistant_text=last_asst_text,
-                        tool_calls=last_asst_tools,
-                        status_note=partial_status,
-                    )
-                except Exception:  # noqa: BLE001 — best-effort
-                    log.exception("status-stamped partial persist failed")
-                    store.replace_history(session.id, final_messages)
-            elif final_messages is not None:
-                store.replace_history(session.id, final_messages)
-            else:
-                # Stream didn't reach a `done` event — persist whatever
-                # we accumulated so a reload can see the partial reply
-                # and the tool badges that were already executed. This
-                # is what makes the UI recover gracefully after a
-                # server restart, a cancel, an LLM timeout, or a loop
-                # limit hit.
-                try:
-                    store.persist_partial_turn(
-                        session.id,
-                        base_history=pre_turn_history,
-                        user_message=req.message,
-                        assistant_text=accumulated_text,
-                        tool_calls=accumulated_tools,
-                        status_note=partial_status,
-                    )
-                except Exception:  # noqa: BLE001 — best-effort
-                    log.exception("partial turn persist failed")
+            from .chat_stream_helpers import persist_stream_turn
+            persist_stream_turn(
+                store=store,
+                session_id=session.id,
+                final_messages=final_messages,
+                pre_turn_history=pre_turn_history,
+                user_message=req.message,
+                accumulated_text=accumulated_text,
+                accumulated_tools=accumulated_tools,
+                partial_status=partial_status,
+            )
             CURRENT_SESSION_ID.reset(token)
             if _inflight_turns.get(session.id) is current:
                 _inflight_turns.pop(session.id, None)

@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from ..deps import get_agent, get_sessions, get_registry, get_app_state
-from ..events import SessionEvent
 from ..schemas import (
     ChatReply,
     ChatRequest,
@@ -81,8 +80,6 @@ async def chat(
     store: SessionStore = Depends(get_sessions),
     app_state: dict[str, Any] = Depends(get_app_state),
 ) -> ChatReply:
-    from ...agent.planner import PlannerAgent
-
     session = store.get_or_create(req.session_id, context=req.context)
     # Bind the session to this request context. Tools that need to
     # address the session (ask_user, trace publish) read it from
@@ -97,56 +94,14 @@ async def chat(
 
     try:
         if routing_mode == "planner":
-            trace_events: list[dict[str, Any]] = []
-
-            def _on_planner_trace(event: dict[str, Any]) -> None:
-                trace_events.append(event)
-                # Also forward into the SSE channel so subscribers see plan events
-                sid = CURRENT_SESSION_ID.get()
-                if sid:
-                    store.publish(sid, SessionEvent(kind=event.get("type", "plan_event"), data={k: v for k, v in event.items() if k != "type"}))
-
-            default_model = cfg.agent.default_model if cfg and cfg.agent else None
-            provider, _ = a._resolve_provider(default_model)
-            planner = PlannerAgent(
-                executor=a,
-                llm=provider,
-                planner_model=None,
-                on_trace=_on_planner_trace,
-            )
-            result = await planner.run_turn(
-                req.message,
-                history=session.history,
-                context=session.context,
-            )
-            reply_text = result.reply
-            plan_data = [
-                {
-                    "id": st.id,
-                    "description": st.description,
-                    "status": st.status,
-                    "result_preview": (st.result or "")[:200],
-                }
-                for st in result.sub_tasks
-            ] or None
-            # Build a minimal AgentTurn-like object for history/usage purposes
-            from ...agent.loop import AgentTurn
-            from ...agent.llm import ChatMessage, Role
-            extra_msg = ChatMessage(role=Role.ASSISTANT, content=reply_text)
-            turn_messages = list(session.history) + [
-                ChatMessage(role=Role.USER, content=req.message),
-                extra_msg,
-            ]
-            turn = AgentTurn(
-                reply=reply_text,
-                skills_touched=[],
-                iterations=1,
-                trace=trace_events,
-                messages=turn_messages,
-                input_tokens=0,
-                output_tokens=0,
-                tool_calls=0,
-                model=default_model,
+            from .chat_helpers import run_planner_turn
+            turn, plan_data = await run_planner_turn(
+                agent=a,
+                message=req.message,
+                session=session,
+                cfg=cfg,
+                store=store,
+                publish_event_fn=store.publish,
             )
         else:
             turn = await a.run_turn(
@@ -170,33 +125,21 @@ async def chat(
         tool_calls=turn.tool_calls,
     )
     if _trajectory_logger:
-        try:
-            _trajectory_logger.log(
-                session_id=session.id,
-                turn_index=len(session.history) // 2,
-                state={
-                    "user_message": req.message,
-                    "history_length": len(session.history),
-                    "context": (req.context or "")[:200],
-                },
-                action={
-                    "reply": turn.reply[:2000] if turn.reply else "",
-                    "model": turn.model if turn.model else "",
-                    "iterations": turn.iterations,
-                    "tool_calls": [],
-                    "input_tokens": turn.input_tokens,
-                    "output_tokens": turn.output_tokens,
-                },
-                reward={
-                    "explicit": None,
-                    "implicit": {
-                        "turn_completed": True,
-                        "tool_call_count": turn.tool_calls,
-                    },
-                },
-            )
-        except Exception:  # noqa: BLE001 — best-effort
-            log.exception("trajectory logging failed")
+        from .chat_helpers import log_trajectory
+        log_trajectory(
+            trajectory_logger=_trajectory_logger,
+            session_id=session.id,
+            turn_index=len(session.history) // 2,
+            user_message=req.message,
+            history_length=len(session.history),
+            context=req.context or "",
+            reply=turn.reply or "",
+            model=turn.model or "",
+            iterations=turn.iterations,
+            input_tokens=turn.input_tokens,
+            output_tokens=turn.output_tokens,
+            tool_calls=turn.tool_calls,
+        )
     return ChatReply(
         session_id=session.id,
         reply=turn.reply,

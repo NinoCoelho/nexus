@@ -25,7 +25,6 @@ import {
   getKnowledgeSubgraph,
   getKnowledgeFileSubgraph,
   getKnowledgeFolderSubgraph,
-  getVaultTree,
   type KnowledgeStats,
   type KnowledgeEntity,
   type KnowledgeQueryResult,
@@ -34,10 +33,12 @@ import {
 } from "../../api";
 import VaultFilePreview from "../VaultFilePreview";
 import "../KnowledgeView.css";
-import { typeColor } from "./utils";
-import { useSubgraphSimRefs, drawCanvas } from "./useSubgraphSim";
+import { useSubgraphSimRefs } from "./useSubgraphSim";
 import { SubgraphCanvas } from "./SubgraphCanvas";
 import { EntityPanel } from "./EntityPanel";
+import { SourceFilterBar } from "./SourceFilterBar";
+import { EntityTypeFilter } from "./EntityTypeFilter";
+import { useGraphSearch } from "./useGraphSearch";
 
 export default function KnowledgeView({
   initialSourceFilter,
@@ -66,10 +67,8 @@ export default function KnowledgeView({
   const [sourcePath, setSourcePath] = useState("");
   const [sourceSuggestions, setSourceSuggestions] = useState<string[]>([]);
   const [showSourceSuggestions, setShowSourceSuggestions] = useState(false);
-  const [graphSearch, setGraphSearch] = useState("");
-  const [graphSearchCount, setGraphSearchCount] = useState(0);
-
   const simRefs = useSubgraphSimRefs();
+  const { graphSearch, graphSearchCount, onGraphSearchChange, clearGraphSearch } = useGraphSearch(simRefs);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splitDragRef = useRef<{ startX: number; startRatio: number } | null>(null);
   const mainRef = useRef<HTMLDivElement | null>(null);
@@ -113,41 +112,24 @@ export default function KnowledgeView({
   }, []);
 
   const clearSearch = useCallback(() => {
-    setQueryText("");
-    setQueryResult(null);
-    setSubgraphData(null);
-    setSelectedEntity(null);
-    setPinnedEntities([]);
-    simRefs.selectedNodeRef.current = null;
-    simRefs.selectedEdgeRef.current = null;
+    setQueryText(""); setQueryResult(null); setSubgraphData(null);
+    setSelectedEntity(null); setPinnedEntities([]);
+    simRefs.selectedNodeRef.current = null; simRefs.selectedEdgeRef.current = null;
     if (debounceRef.current) clearTimeout(debounceRef.current);
   }, []);
 
   const applySourceFilter = useCallback(async (mode: "file" | "folder", path: string) => {
     if (!path.trim()) return;
-    setLoading(true);
-    setSelectedEntity(null);
-    setPinnedEntities([]);
-    simRefs.selectedNodeRef.current = null;
-    simRefs.selectedEdgeRef.current = null;
+    setLoading(true); setSelectedEntity(null); setPinnedEntities([]);
+    simRefs.selectedNodeRef.current = null; simRefs.selectedEdgeRef.current = null;
     try {
-      const sg = mode === "file"
-        ? await getKnowledgeFileSubgraph(path)
-        : await getKnowledgeFolderSubgraph(path);
-      setSubgraphData(sg);
-      setQueryResult(null);
-    } catch {
-      setSubgraphData(null);
-    } finally {
-      setLoading(false);
-    }
+      const sg = mode === "file" ? await getKnowledgeFileSubgraph(path) : await getKnowledgeFolderSubgraph(path);
+      setSubgraphData(sg); setQueryResult(null);
+    } catch { setSubgraphData(null); } finally { setLoading(false); }
   }, []);
 
   const clearSourceFilter = useCallback(() => {
-    setSourceFilter("none");
-    setSourcePath("");
-    setSubgraphData(null);
-    setShowSourceSuggestions(false);
+    setSourceFilter("none"); setSourcePath(""); setSubgraphData(null); setShowSourceSuggestions(false);
   }, []);
 
   const onSearchChange = useCallback((value: string) => {
@@ -199,39 +181,8 @@ export default function KnowledgeView({
     [pinnedEntities],
   );
 
-  function onGraphSearchChange(value: string) {
-    setGraphSearch(value);
-    const nodes = simRefs.simNodesRef.current;
-    if (!value.trim()) {
-      simRefs.highlightNodesRef.current = new Set();
-      setGraphSearchCount(0);
-    } else {
-      const q = value.toLowerCase();
-      const matched = new Set<number>();
-      for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].name.toLowerCase().includes(q)) matched.add(i);
-      }
-      simRefs.highlightNodesRef.current = matched;
-      setGraphSearchCount(matched.size);
-    }
-    // Trigger redraw via subgraphRef
-    const sg = simRefs.subgraphRef.current;
-    const canvas = simRefs.canvasRef.current;
-    if (sg && canvas) drawCanvas(canvas, sg, simRefs.simNodesRef.current, simRefs);
-  }
-
-  function clearGraphSearch() {
-    setGraphSearch("");
-    simRefs.highlightNodesRef.current = new Set();
-    setGraphSearchCount(0);
-    const sg = simRefs.subgraphRef.current;
-    const canvas = simRefs.canvasRef.current;
-    if (sg && canvas) drawCanvas(canvas, sg, simRefs.simNodesRef.current, simRefs);
-  }
-
   const hasResults = queryResult && queryResult.results.length > 0;
   const hasSubgraph = subgraphData && subgraphData.nodes.length > 0;
-  const entityTypes = stats?.types ? Object.keys(stats.types) : [];
 
   return (
     <div className="kv">
@@ -252,93 +203,19 @@ export default function KnowledgeView({
       </div>
 
       <div className="kv-filters">
-        <button
-          className={`kv-pill${typeFilter === null ? " kv-pill--active" : ""}`}
-          onClick={() => setTypeFilter(null)}
-        >
-          All
-        </button>
-        {entityTypes.map((t) => (
-          <button
-            key={t}
-            className={`kv-pill${typeFilter === t ? " kv-pill--active" : ""}`}
-            style={{ "--pill-color": typeColor(t) } as React.CSSProperties}
-            onClick={() => setTypeFilter(t)}
-          >
-            {t} <span className="kv-pill-count">{stats?.types[t] ?? 0}</span>
-          </button>
-        ))}
-        <div className="kv-source-filter">
-          <select
-            className="kv-source-filter-select"
-            value={sourceFilter}
-            onChange={(e) => {
-              const v = e.target.value as "none" | "file" | "folder";
-              if (v === "none") clearSourceFilter();
-              else { setSourceFilter(v); setSourcePath(""); }
-            }}
-          >
-            <option value="none">No source filter</option>
-            <option value="file">Filter by file</option>
-            <option value="folder">Filter by folder</option>
-          </select>
-          {sourceFilter !== "none" && (
-            <div className="kv-source-input-wrap">
-              <input
-                className="kv-source-input"
-                type="text"
-                placeholder={sourceFilter === "file" ? "path/to/file.md" : "folder/"}
-                value={sourcePath}
-                onChange={(e) => {
-                  setSourcePath(e.target.value);
-                  setShowSourceSuggestions(true);
-                  const v = e.target.value.toLowerCase();
-                  if (v.length >= 1) {
-                    getVaultTree().then((entries) => {
-                      const paths = entries
-                        .filter(e => {
-                          if (sourceFilter === "file") return e.type === "file";
-                          return e.type === "dir";
-                        })
-                        .map(e => e.path)
-                        .filter(p => p.toLowerCase().includes(v))
-                        .slice(0, 12);
-                      setSourceSuggestions(paths);
-                    });
-                  } else {
-                    setSourceSuggestions([]);
-                  }
-                }}
-                onFocus={() => { if (sourcePath.length >= 1) setShowSourceSuggestions(true); }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    setShowSourceSuggestions(false);
-                    void applySourceFilter(sourceFilter, sourcePath);
-                  }
-                }}
-              />
-              <button className="kv-source-go" onClick={() => void applySourceFilter(sourceFilter, sourcePath)}>Go</button>
-              <button className="kv-source-clear" onClick={clearSourceFilter}>&times;</button>
-              {showSourceSuggestions && sourceSuggestions.length > 0 && (
-                <div className="kv-source-suggestions">
-                  {sourceSuggestions.map(s => (
-                    <button
-                      key={s}
-                      className="kv-source-suggestion"
-                      onClick={() => {
-                        setSourcePath(s);
-                        setShowSourceSuggestions(false);
-                        void applySourceFilter(sourceFilter, s);
-                      }}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <EntityTypeFilter stats={stats} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} />
+        <SourceFilterBar
+          sourceFilter={sourceFilter}
+          sourcePath={sourcePath}
+          sourceSuggestions={sourceSuggestions}
+          showSourceSuggestions={showSourceSuggestions}
+          onFilterModeChange={setSourceFilter}
+          onPathChange={setSourcePath}
+          onSuggestionsChange={setSourceSuggestions}
+          onShowSuggestionsChange={setShowSourceSuggestions}
+          onApply={applySourceFilter}
+          onClear={clearSourceFilter}
+        />
       </div>
 
       {stats && stats.enabled && (
@@ -379,16 +256,10 @@ export default function KnowledgeView({
             splitDragRef.current = { startX: e.clientX, startRatio: splitRatio };
             const onMove = (ev: MouseEvent) => {
               if (!splitDragRef.current || !mainRef.current) return;
-              const totalW = mainRef.current.clientWidth;
               const dx = ev.clientX - splitDragRef.current.startX;
-              const next = Math.max(0.2, Math.min(0.8, splitDragRef.current.startRatio + dx / totalW));
-              setSplitRatio(next);
+              setSplitRatio(Math.max(0.2, Math.min(0.8, splitDragRef.current.startRatio + dx / mainRef.current.clientWidth)));
             };
-            const onUp = () => {
-              splitDragRef.current = null;
-              window.removeEventListener("mousemove", onMove);
-              window.removeEventListener("mouseup", onUp);
-            };
+            const onUp = () => { splitDragRef.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
             window.addEventListener("mousemove", onMove);
             window.addEventListener("mouseup", onUp);
           }}

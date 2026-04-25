@@ -2,9 +2,9 @@
 
 import { useEffect } from "react";
 import type { SubgraphData } from "../../api";
-import { distToSegment, nodeRadius } from "./utils";
 import { drawCanvas, useSubgraphSim } from "./useSubgraphSim";
 import type { SubgraphSimRefs } from "./useSubgraphSim";
+import { makeCanvasHandlers } from "./useCanvasInteractions";
 
 interface SubgraphCanvasProps {
   subgraphData: SubgraphData | null;
@@ -48,10 +48,8 @@ export function SubgraphCanvas({
     const ys = nodes.map((nd) => nd.y).sort((a, b) => a - b);
     const lo = Math.floor(nodes.length * 0.03);
     const hi = Math.ceil(nodes.length * 0.97) - 1;
-    const minX = xs[lo];
-    const maxX = xs[hi];
-    const minY = ys[lo];
-    const maxY = ys[hi];
+    const minX = xs[lo]; const maxX = xs[hi];
+    const minY = ys[lo]; const maxY = ys[hi];
 
     const gw = (maxX - minX) || 1;
     const gh = (maxY - minY) || 1;
@@ -68,6 +66,8 @@ export function SubgraphCanvas({
   }
 
   const { startRAF } = useSubgraphSim(subgraphData, refs, fitGraph);
+  const { onCanvasDown, onCanvasMove, onCanvasUp, onCanvasDblClick, onCanvasWheel, onCanvasLeave, redraw } =
+    makeCanvasHandlers(refs, startRAF, onSelectEntity);
 
   // ResizeObserver to keep canvas dimensions in sync with its parent
   useEffect(() => {
@@ -87,212 +87,6 @@ export function SubgraphCanvas({
     canvas.height = parent.clientHeight;
     return () => ro.disconnect();
   }, []);
-
-  function redraw() {
-    const sg = refs.subgraphRef.current;
-    const canvas = refs.canvasRef.current;
-    if (sg && canvas) drawCanvas(canvas, sg, refs.simNodesRef.current, refs);
-  }
-
-  function canvasPoint(e: React.MouseEvent) {
-    const canvas = refs.canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left - refs.offsetRef.current.x) / refs.scaleRef.current,
-      y: (e.clientY - rect.top - refs.offsetRef.current.y) / refs.scaleRef.current,
-    };
-  }
-
-  function hitTestNode(cx: number, cy: number): number | null {
-    const nodes = refs.simNodesRef.current;
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      const r = nodeRadius(n.degree) + 4;
-      if ((cx - n.x) ** 2 + (cy - n.y) ** 2 <= r * r) return i;
-    }
-    return null;
-  }
-
-  function hitTestEdge(cx: number, cy: number): number | null {
-    const nodes = refs.simNodesRef.current;
-    const merged = refs.mergedEdgesRef.current;
-    const idx = new Map<number, number>();
-    nodes.forEach((n, i) => idx.set(n.id, i));
-    let best = -1;
-    let bestDist = 8;
-    for (let gi = 0; gi < merged.length; gi++) {
-      const g = merged[gi];
-      const ai = idx.get(g.nodeA);
-      const bi = idx.get(g.nodeB);
-      if (ai === undefined || bi === undefined) continue;
-      const d = distToSegment(cx, cy, nodes[ai].x, nodes[ai].y, nodes[bi].x, nodes[bi].y);
-      if (d < bestDist) { bestDist = d; best = gi; }
-    }
-    return best >= 0 ? best : null;
-  }
-
-  function onCanvasDown(e: React.MouseEvent) {
-    const { x, y } = canvasPoint(e);
-    const hit = hitTestNode(x, y);
-    if (hit !== null) {
-      refs.dragRef.current = { idx: hit, moved: false };
-    } else {
-      refs.panRef.current = { ox: refs.offsetRef.current.x, oy: refs.offsetRef.current.y, mx: e.clientX, my: e.clientY };
-    }
-  }
-
-  function onCanvasMove(e: React.MouseEvent) {
-    const { x: cx, y: cy } = canvasPoint(e);
-    refs.hoverRef.current = hitTestNode(cx, cy);
-
-    const selNode = refs.selectedNodeRef.current;
-    const highlighted = refs.highlightNodesRef.current;
-    const hasFocus = selNode !== null || highlighted.size > 0;
-
-    // Build activeNodes set for tooltip gating
-    const activeNodesForTooltip = new Set<number>();
-    if (hasFocus) {
-      if (selNode !== null) activeNodesForTooltip.add(selNode);
-      for (const hi of highlighted) activeNodesForTooltip.add(hi);
-      const mergedEdges = refs.mergedEdgesRef.current;
-      const nodes = refs.simNodesRef.current;
-      const idxMap = new Map<number, number>();
-      nodes.forEach((n, i) => idxMap.set(n.id, i));
-      for (const g of mergedEdges) {
-        const ai = idxMap.get(g.nodeA);
-        const bi = idxMap.get(g.nodeB);
-        if (ai === undefined || bi === undefined) continue;
-        if (activeNodesForTooltip.has(ai)) activeNodesForTooltip.add(bi);
-        if (activeNodesForTooltip.has(bi)) activeNodesForTooltip.add(ai);
-      }
-    }
-
-    // Edge hover tooltip — only on highlighted edges
-    const edgeHit = !refs.dragRef.current && !refs.panRef.current ? hitTestEdge(cx, cy) : null;
-    const prevEdgeGrp = refs.hoveredEdgeGroupRef.current;
-    refs.hoveredEdgeGroupRef.current = edgeHit;
-    const tooltip = refs.edgeTooltipRef.current;
-
-    if (tooltip) {
-      let showTooltip = false;
-      if (hasFocus && edgeHit !== null && refs.simNodesRef.current.length > 0) {
-        const g = refs.mergedEdgesRef.current[edgeHit];
-        if (g && g.relations.length > 0) {
-          const nodes = refs.simNodesRef.current;
-          const idxMap = new Map<number, number>();
-          nodes.forEach((n, i) => idxMap.set(n.id, i));
-          const ai = idxMap.get(g.nodeA);
-          const bi = idxMap.get(g.nodeB);
-          // Only show on edges where both endpoints are active (visually highlighted)
-          if (ai !== undefined && bi !== undefined && activeNodesForTooltip.has(ai) && activeNodesForTooltip.has(bi)) {
-            const nameA = nodes[ai]?.name ?? "";
-            const nameB = nodes[bi]?.name ?? "";
-            const rect = (e.target as HTMLElement).getBoundingClientRect();
-            const localX = e.clientX - rect.left;
-            const localY = e.clientY - rect.top;
-            tooltip.style.display = "block";
-            const ttWidth = 220;
-            const ttLeft = localX + 14 + ttWidth > rect.width ? localX - ttWidth - 8 : localX + 14;
-            tooltip.style.left = `${ttLeft}px`;
-            tooltip.style.top = `${Math.max(4, localY - 8)}px`;
-            tooltip.innerHTML = g.relations.map((r) => {
-              const fromName = r.from === g.nodeA ? nameA : nameB;
-              const toName = r.to === g.nodeB ? nameB : nameA;
-              return `<div class="kv-edge-tooltip-row"><span class="kv-edge-tooltip-names">${fromName} → ${toName}</span><span class="kv-edge-tooltip-label">${r.label.replace(/_/g, " ")}</span></div>`;
-            }).join("");
-            showTooltip = true;
-          }
-        }
-      }
-      if (!showTooltip) tooltip.style.display = "none";
-    }
-
-    if (refs.dragRef.current) {
-      refs.dragRef.current.moved = true;
-      const n = refs.simNodesRef.current[refs.dragRef.current.idx];
-      n.x = cx; n.y = cy; n.vx = 0; n.vy = 0; n.pinned = true;
-      if (!refs.runningRef.current) { refs.runningRef.current = true; refs.settledRef.current = false; startRAF(); }
-    } else if (refs.panRef.current) {
-      refs.offsetRef.current = {
-        x: refs.panRef.current.ox + e.clientX - refs.panRef.current.mx,
-        y: refs.panRef.current.oy + e.clientY - refs.panRef.current.my,
-      };
-      redraw();
-    } else {
-      if (edgeHit !== prevEdgeGrp) redraw();
-    }
-  }
-
-  function onCanvasUp(e: React.MouseEvent) {
-    if (refs.dragRef.current && !refs.dragRef.current.moved) {
-      const { x, y } = canvasPoint(e);
-      const nodeHit = hitTestNode(x, y);
-      if (nodeHit !== null) {
-        if (refs.selectedNodeRef.current === nodeHit) {
-          refs.selectedNodeRef.current = null;
-        } else {
-          refs.selectedNodeRef.current = nodeHit;
-          refs.selectedEdgeRef.current = null;
-        }
-        redraw();
-      } else {
-        const edgeHit = hitTestEdge(x, y);
-        if (edgeHit !== null) {
-          if (refs.selectedEdgeRef.current === edgeHit) {
-            refs.selectedEdgeRef.current = null;
-          } else {
-            refs.selectedEdgeRef.current = edgeHit;
-            refs.selectedNodeRef.current = null;
-          }
-          redraw();
-        } else {
-          if (refs.selectedNodeRef.current !== null || refs.selectedEdgeRef.current !== null) {
-            refs.selectedNodeRef.current = null;
-            refs.selectedEdgeRef.current = null;
-            redraw();
-          }
-        }
-      }
-    }
-    refs.dragRef.current = null;
-    refs.panRef.current = null;
-  }
-
-  function onCanvasDblClick(e: React.MouseEvent) {
-    const { x, y } = canvasPoint(e);
-    const nodeHit = hitTestNode(x, y);
-    if (nodeHit !== null) {
-      const n = refs.simNodesRef.current[nodeHit];
-      void onSelectEntity(n.id);
-      return;
-    }
-    const edgeHit = hitTestEdge(x, y);
-    if (edgeHit !== null) {
-      const merged = refs.mergedEdgesRef.current;
-      const g = merged[edgeHit];
-      if (g) {
-        const node = refs.simNodesRef.current.find((n) => n.id === g.nodeA);
-        if (node) void onSelectEntity(node.id);
-      }
-    }
-  }
-
-  function onCanvasWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    const canvas = refs.canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    const sc = refs.scaleRef.current;
-    const newSc = Math.max(0.1, Math.min(10, sc * factor));
-    refs.offsetRef.current = {
-      x: mx - (mx - refs.offsetRef.current.x) * (newSc / sc),
-      y: my - (my - refs.offsetRef.current.y) * (newSc / sc),
-    };
-    refs.scaleRef.current = newSc;
-    redraw();
-  }
 
   function refreshGraph() {
     const nodes = refs.simNodesRef.current;
@@ -338,12 +132,7 @@ export function SubgraphCanvas({
         onMouseUp={onCanvasUp}
         onDoubleClick={onCanvasDblClick}
         onWheel={onCanvasWheel}
-        onMouseLeave={() => {
-          if (refs.edgeTooltipRef.current) refs.edgeTooltipRef.current.style.display = "none";
-          refs.hoveredEdgeGroupRef.current = null;
-          refs.hoverRef.current = null;
-          redraw();
-        }}
+        onMouseLeave={onCanvasLeave}
       />
       <div ref={refs.edgeTooltipRef} className="kv-edge-tooltip" />
       <div className="kv-graph-toolbar">

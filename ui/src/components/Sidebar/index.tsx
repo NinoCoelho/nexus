@@ -1,21 +1,11 @@
 /**
- * Sidebar — the main navigation and session management panel.
- *
- * Layout (top to bottom):
- *   1. View switcher (Chat / Vault / Graph / Insights)
- *   2. Session list with search, rename, delete, export, import
- *   3. Vault file tree (expandable folders, file selection)
- *   4. Settings button
- *
- * All state flows down from App via props; the sidebar doesn't own any
- * session or chat state itself. Session mutations (rename, delete, etc.)
- * bump sessionsRevision so the list refreshes.
+ * Sidebar — main nav/session panel. State flows from App via props;
+ * session mutations bump sessionsRevision to refresh the list.
  */
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  deleteSession, exportSession, getSessions, importSession,
-  patchSession, searchSessions, sessionToVault,
+  getSessions, searchSessions,
   type SessionSearchResult, type SessionSummary,
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
@@ -24,6 +14,7 @@ import { IconChat, IconVault, IconGraph, IconInsights, IconGear, IconCollapse } 
 import SessionsPanel from "./SessionsPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
+import { useSessionActions } from "./useSessionActions";
 import "../Sidebar.css";
 
 type View = "chat" | "vault" | "graph" | "insights";
@@ -104,7 +95,7 @@ export default function Sidebar({
   // position:fixed popover outside the row's overflow-hidden clip.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const menuId = menu?.id ?? null;
-  const setMenuId = (id: string | null) => { if (id == null) setMenu(null); };
+  const setMenuNull = () => setMenu(null);
   /** ids currently sending to the vault ("summary" mode can take seconds) */
   const [toVaultBusy, setToVaultBusy] = useState<Set<string>>(new Set());
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -135,77 +126,23 @@ export default function Sidebar({
   // Close context menu on outside click
   useEffect(() => {
     if (!menuId) return;
-    const handler = () => setMenuId(null);
+    const handler = () => setMenuNull();
     document.addEventListener("click", handler);
     return () => document.removeEventListener("click", handler);
   }, [menuId]);
 
-  const handleRename = async (id: string) => {
-    try {
-      await patchSession(id, { title: renameValue.trim() || "Untitled" });
-      setSessions((prev) =>
-        prev.map((s) => s.id === id ? { ...s, title: renameValue.trim() || "Untitled" } : s)
-      );
-    } catch { /* ignore */ }
-    setRenamingId(null);
-    setMenuId(null);
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      await deleteSession(id);
-      setSessions((prev) => prev.filter((s) => s.id !== id));
-    } catch { /* ignore */ }
-    setMenuId(null);
-  };
-
-  const handleExport = async (id: string) => {
-    setMenuId(null);
-    try {
-      const { markdown, filename } = await exportSession(id);
-      const blob = new Blob([markdown], { type: "text/markdown" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Downloaded ${filename}`);
-    } catch (e) {
-      toast.error("Download failed", { detail: e instanceof Error ? e.message : undefined });
-    }
-  };
-
-  const handleToVault = async (id: string, mode: "raw" | "summary") => {
-    setMenuId(null);
-    setToVaultBusy((prev) => new Set(prev).add(id));
-    if (mode === "summary") toast.info("Summarizing session…", { duration: 2500 });
-    try {
-      const result = await sessionToVault(id, mode);
-      toast.success(
-        mode === "raw" ? "Saved raw to vault" : "Summary saved to vault",
-        { detail: result.path, duration: 5000 },
-      );
-    } catch (e) {
-      toast.error(
-        mode === "raw" ? "Couldn't save raw to vault" : "Summarize failed",
-        { detail: e instanceof Error ? e.message : undefined },
-      );
-    } finally {
-      setToVaultBusy((prev) => { const next = new Set(prev); next.delete(id); return next; });
-    }
-  };
-
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    // Reset so the same file can be picked again.
-    e.target.value = "";
-    try {
-      const text = await file.text();
-      const result = await importSession(text);
-      onSessionsRevisionBump();
-      onSessionSelect(result.id);
-    } catch { /* ignore */ }
-  };
+  const sessionActions = useSessionActions({
+    sessions,
+    setSessions,
+    renamingId,
+    renameValue,
+    setRenamingId,
+    setMenuNull,
+    setToVaultBusy,
+    onSessionsRevisionBump,
+    onSessionSelect,
+    toast,
+  });
 
   return (
     <aside
@@ -245,7 +182,7 @@ export default function Sidebar({
               <button className="sidebar-import-btn" title="Import session from .md file" onClick={() => importInputRef.current?.click()}>
                 ↑ Import
               </button>
-              <input ref={importInputRef} type="file" accept=".md,text/markdown" style={{ display: "none" }} onChange={(e) => void handleImportFile(e)} />
+              <input ref={importInputRef} type="file" accept=".md,text/markdown" style={{ display: "none" }} onChange={(e) => void sessionActions.handleImportFile(e)} />
             </>
           )}
         </div>
@@ -291,7 +228,7 @@ export default function Sidebar({
           }}
           onTitleDoubleClick={(e, id, title) => { e.stopPropagation(); setRenamingId(id); setRenameValue(title); }}
           onRenameChange={setRenameValue}
-          onRenameCommit={(id) => void handleRename(id)}
+          onRenameCommit={(id) => void sessionActions.handleRename(id)}
           onRenameCancel={() => setRenamingId(null)}
         />
       )}
@@ -336,10 +273,10 @@ export default function Sidebar({
             anchorY={menu.y}
             toVaultBusy={toVaultBusy}
             onRename={() => { setRenamingId(s.id); setRenameValue(s.title); setMenu(null); }}
-            onExport={() => void handleExport(s.id)}
-            onToVaultRaw={() => void handleToVault(s.id, "raw")}
-            onToVaultSummary={() => void handleToVault(s.id, "summary")}
-            onDelete={() => void handleDelete(s.id)}
+            onExport={() => void sessionActions.handleExport(s.id)}
+            onToVaultRaw={() => void sessionActions.handleToVault(s.id, "raw")}
+            onToVaultSummary={() => void sessionActions.handleToVault(s.id, "summary")}
+            onDelete={() => void sessionActions.handleDelete(s.id)}
             onClick={(e) => e.stopPropagation()}
           />
         );
