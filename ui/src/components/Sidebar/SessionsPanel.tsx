@@ -34,6 +34,7 @@ export default function SessionsPanel({
       <div className="sidebar-section-label">Sessions</div>
       <div className="sidebar-search-wrap">
         <input
+          id="nx-session-search"
           className="sidebar-search-input"
           type="search"
           placeholder="Search messages…"

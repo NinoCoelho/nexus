@@ -23,6 +23,8 @@ import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/ch
 import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
+import { useShortcuts } from "./hooks/useShortcuts";
+import ShortcutsModal from "./components/ShortcutsModal";
 
 export default function App() {
   const toast = useToast();
@@ -42,6 +44,7 @@ export default function App() {
   // shows the banner on first load before the first ping resolves.
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's
@@ -208,6 +211,25 @@ export default function App() {
     return () => { active = false; clearInterval(interval); };
   }, [pendingGraphIndex, handleViewEntityGraph, toast]);
 
+  useShortcuts({
+    onShowHelp: useCallback(() => setShortcutsOpen((v) => !v), []),
+    onFocusSearch: useCallback(() => {
+      setMobileDrawerOpen(true);
+      setTimeout(() => {
+        const el = document.getElementById("nx-session-search") as HTMLInputElement | null;
+        el?.focus();
+        el?.select();
+      }, 50);
+    }, []),
+    onToggleSidebar: useCallback(() => setMobileDrawerOpen((v) => !v), []),
+    onNewChat: handleNewChat,
+    onEscape: useCallback(() => {
+      if (shortcutsOpen) setShortcutsOpen(false);
+      else if (settingsOpen) setSettingsOpen(false);
+      else if (mobileDrawerOpen) setMobileDrawerOpen(false);
+    }, [shortcutsOpen, settingsOpen, mobileDrawerOpen]),
+  });
+
   const handleStartGraphIndex = useCallback(async (path: string) => {
     try {
       const res = await graphragIndexFile(path);
@@ -326,6 +348,8 @@ export default function App() {
         onViewChange={setView}
         onOpenDrawer={() => setMobileDrawerOpen(true)}
       />
+
+      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }
