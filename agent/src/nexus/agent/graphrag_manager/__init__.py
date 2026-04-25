@@ -46,6 +46,13 @@ async def initialize(cfg: Any) -> None:
         log.info("[graphrag] disabled in config")
         return
 
+    if _engine is not None:
+        try:
+            _engine.close()
+        except Exception:
+            log.warning("[graphrag] failed to close previous engine", exc_info=True)
+        _engine = None
+
     from loom.store.graphrag import GraphRAGConfig, GraphRAGEngine
 
     _home = get_home()

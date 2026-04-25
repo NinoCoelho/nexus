@@ -89,10 +89,12 @@ export interface GraphragIndexFileResult {
 }
 
 export interface GraphragIndexStatus {
-  status: "unknown" | "indexing" | "done" | "error";
+  status: "unknown" | "indexing" | "done" | "error" | "cancelled";
   node_count?: number;
   edge_count?: number;
   detail?: string;
+  total_chunks?: number;
+  processed_chunks?: number;
   nodes?: { id: number; name: string; type: string; degree?: number }[];
   edges?: { source: number; target: number; relation: string; strength: number }[];
 }
@@ -199,6 +201,16 @@ export async function graphragIndexFile(path: string): Promise<GraphragIndexFile
 export async function getGraphragIndexStatus(path: string): Promise<GraphragIndexStatus> {
   const res = await fetch(`${BASE}/graph/knowledge/index-file-status?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`Index status error: ${res.status}`);
+  return res.json();
+}
+
+export async function cancelGraphragIndexFile(path: string): Promise<{ cancelled: boolean }> {
+  const res = await fetch(`${BASE}/graph/knowledge/index-file-cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error(`Cancel error: ${res.status}`);
   return res.json();
 }
 

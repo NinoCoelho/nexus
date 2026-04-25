@@ -70,12 +70,13 @@ def test_search_gguf_repos_passes_correct_args():
     with patch("huggingface_hub.HfApi", return_value=mock_api):
         search_gguf_repos("llama", limit=5)
 
+    # huggingface_hub 1.x dropped the ``direction`` kwarg; production code
+    # tries the modern signature first and only falls back if TypeError.
     mock_api.list_models.assert_called_once_with(
         search="llama",
         filter="gguf",
         limit=5,
         sort="downloads",
-        direction=-1,
     )
 
 

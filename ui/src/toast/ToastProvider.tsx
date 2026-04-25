@@ -24,6 +24,8 @@ export type ToastKind = "success" | "error" | "info" | "warning";
 export interface ToastAction {
   label: string;
   onClick: () => void;
+  /** When true, the toast stays open after the action click. Default false. */
+  keepOpen?: boolean;
 }
 
 export interface ToastOptions {
@@ -44,10 +46,11 @@ interface Toast {
 }
 
 interface ToastAPI {
-  success: (message: string, opts?: ToastOptions) => void;
-  error: (message: string, opts?: ToastOptions) => void;
-  info: (message: string, opts?: ToastOptions) => void;
-  warning: (message: string, opts?: ToastOptions) => void;
+  success: (message: string, opts?: ToastOptions) => string;
+  error: (message: string, opts?: ToastOptions) => string;
+  info: (message: string, opts?: ToastOptions) => string;
+  warning: (message: string, opts?: ToastOptions) => string;
+  update: (id: string, opts: Partial<ToastOptions> & { message?: string }) => void;
   dismiss: (id: string) => void;
 }
 
@@ -57,10 +60,11 @@ const MAX_TOASTS = 5;
 // ── Context ───────────────────────────────────────────────────────────────────
 
 const ToastContext = createContext<ToastAPI>({
-  success: () => {},
-  error: () => {},
-  info: () => {},
-  warning: () => {},
+  success: () => "",
+  error: () => "",
+  info: () => "",
+  warning: () => "",
+  update: () => {},
   dismiss: () => {},
 });
 
@@ -147,7 +151,7 @@ function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardPr
           className="toast-action-btn"
           onClick={() => {
             toast.action!.onClick();
-            onDismiss(toast.id);
+            if (!toast.action!.keepOpen) onDismiss(toast.id);
           }}
         >
           {toast.action.label}
@@ -196,7 +200,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     }, 300); // matches CSS transition duration
   }, [clearTimer]);
 
-  const show = useCallback((kind: ToastKind, message: string, opts: ToastOptions = {}) => {
+  const show = useCallback((kind: ToastKind, message: string, opts: ToastOptions = {}): string => {
     const id = nextId();
     const duration = opts.duration ?? DEFAULT_DURATION;
     const newToast: Toast = {
@@ -220,12 +224,22 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
 
-    startTimer(id, duration);
+    if (duration > 0) startTimer(id, duration);
+    return id;
   }, [clearTimer, startTimer]);
 
   const dismiss = useCallback((id: string) => {
     startExit(id);
   }, [startExit]);
+
+  const update = useCallback((id: string, opts: Partial<ToastOptions> & { message?: string }) => {
+    setToasts((prev) => prev.map((t) => t.id === id ? {
+      ...t,
+      message: opts.message ?? t.message,
+      detail: opts.detail !== undefined ? opts.detail : t.detail,
+      action: opts.action !== undefined ? opts.action : t.action,
+    } : t));
+  }, []);
 
   const onMouseEnter = useCallback((id: string) => {
     clearTimer(id);
@@ -233,7 +247,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const onMouseLeave = useCallback((id: string) => {
     const toast = toasts.find((t) => t.id === id);
-    if (toast && !toast.exiting) {
+    if (toast && !toast.exiting && toast.duration > 0) {
       startTimer(id, toast.duration);
     }
   }, [toasts, startTimer]);
@@ -244,6 +258,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     error:   useCallback((m, o) => show("error",   m, o), [show]),
     info:    useCallback((m, o) => show("info",    m, o), [show]),
     warning: useCallback((m, o) => show("warning", m, o), [show]),
+    update,
     dismiss,
   };
 

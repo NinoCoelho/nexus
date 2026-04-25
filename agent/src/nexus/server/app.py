@@ -146,6 +146,13 @@ def create_app(
             event_bus.set_loop(asyncio.get_running_loop())
         except Exception:
             log.exception("event_bus setup failed")
+        # Strip stale local-* provider/model entries from a previous run
+        # where the daemon died with running servers.
+        try:
+            from ..local_llm import manager as _local_mgr
+            _local_mgr.cleanup_stale_config()
+        except Exception:
+            log.exception("local_llm config cleanup failed")
         if graphrag_cfg is not None:
             try:
                 from ..agent.graphrag_manager import initialize
@@ -158,6 +165,11 @@ def create_app(
         try:
             yield
         finally:
+            try:
+                from ..local_llm import manager as _local_mgr
+                _local_mgr.stop_all()
+            except Exception:
+                log.exception("local_llm stop_all failed")
             from ..agent.memory import close_memory_store
             close_memory_store()
             await agent.aclose()

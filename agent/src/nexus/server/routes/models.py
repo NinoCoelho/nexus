@@ -125,6 +125,13 @@ async def set_routing(
         cfg.graphrag.extraction_model_id = body["extraction_model_id"]
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
+    if "embedding_model_id" in body or "extraction_model_id" in body:
+        from ...agent.graphrag_manager import initialize as graphrag_init
+        try:
+            await graphrag_init(cfg)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("[graphrag] reinit failed", exc_info=True)
     return {
         "default_model": cfg.agent.default_model,
         "last_used_model": cfg.agent.last_used_model,
@@ -149,4 +156,10 @@ async def set_model_role(
         raise HTTPException(400, f"Unknown role: {body.role}")
     save_cfg(cfg)
     app_state["cfg"] = cfg
+    from ...agent.graphrag_manager import initialize as graphrag_init
+    try:
+        await graphrag_init(cfg)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("[graphrag] reinit failed", exc_info=True)
     return {"role": body.role, "model_id": new_id}

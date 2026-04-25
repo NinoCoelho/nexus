@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -13,6 +13,7 @@ import SettingsDrawer from "./components/SettingsDrawer";
 import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import {
+  cancelGraphragIndexFile,
   getGraphragIndexStatus,
   graphragIndexFile,
   pingHealth,
@@ -57,6 +58,7 @@ export default function App() {
   const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(initial.vaultPath);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
+  const indexingToastIdRef = useRef<string | null>(null);
   // Backend-reachability pill. Polls /health every 15s; shows when the
   // server is unreachable so the user can tell "server is down" apart
   // from "model is still thinking". Starts as null (unknown) — never
@@ -214,15 +216,31 @@ export default function App() {
       getGraphragIndexStatus(capturedPath)
         .then((res) => {
           if (!active) return;
-          if (res.status === "done") {
+          const name = capturedPath.split("/").pop() ?? capturedPath;
+          if (res.status === "indexing") {
+            const total = res.total_chunks ?? 0;
+            const done = res.processed_chunks ?? 0;
+            const pct = total > 0 ? Math.round((done / total) * 100) : null;
+            const detail = total > 0
+              ? `${done} / ${total} chunks${pct !== null ? ` (${pct}%)` : ""}`
+              : "Chunking…";
+            if (indexingToastIdRef.current) {
+              toast.update(indexingToastIdRef.current, { detail });
+            }
+          } else if (res.status === "done") {
             const n = res.node_count ?? res.nodes?.length ?? 0;
-            const name = capturedPath.split("/").pop() ?? capturedPath;
+            if (indexingToastIdRef.current) { toast.dismiss(indexingToastIdRef.current); indexingToastIdRef.current = null; }
             setPendingGraphIndex(null);
             toast.success(`Indexing complete — ${n} entit${n === 1 ? "y" : "ies"} found for ${name}`, {
               duration: 8000,
               action: { label: "View graph", onClick: () => handleViewEntityGraph("file", capturedPath) },
             });
+          } else if (res.status === "cancelled") {
+            if (indexingToastIdRef.current) { toast.dismiss(indexingToastIdRef.current); indexingToastIdRef.current = null; }
+            setPendingGraphIndex(null);
+            toast.info(`Indexing cancelled for ${name}`);
           } else if (res.status === "error") {
+            if (indexingToastIdRef.current) { toast.dismiss(indexingToastIdRef.current); indexingToastIdRef.current = null; }
             setPendingGraphIndex(null);
             toast.error("Indexing failed", { detail: res.detail });
           }
@@ -263,7 +281,27 @@ export default function App() {
       const res = await graphragIndexFile(path);
       if (res.enabled === false) { toast.error("GraphRAG not configured — add an API key in settings"); return; }
       if (res.reason) { toast.info(res.reason === "empty file" ? "File is empty — nothing to index" : res.reason); return; }
-      if (res.queued) { setPendingGraphIndex(path); toast.info(`Indexing started for ${path.split("/").pop() ?? path}…`); }
+      if (res.queued) {
+        setPendingGraphIndex(path);
+        const name = path.split("/").pop() ?? path;
+        indexingToastIdRef.current = toast.info(
+          `Indexing ${name}…`,
+          {
+            detail: "Starting…",
+            duration: 0,
+            action: {
+              label: "Cancel",
+              keepOpen: true,
+              onClick: () => {
+                cancelGraphragIndexFile(path).catch(() => {});
+                if (indexingToastIdRef.current) {
+                  toast.update(indexingToastIdRef.current, { detail: "Cancelling…", action: undefined });
+                }
+              },
+            },
+          },
+        );
+      }
     } catch (e) {
       toast.error("Failed to start indexing", { detail: e instanceof Error ? e.message : undefined });
     }

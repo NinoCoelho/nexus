@@ -44,7 +44,11 @@ export interface DownloadTask {
 export interface InstalledModel {
   filename: string;
   size_bytes: number;
+  is_running: boolean;
+  /** @deprecated alias for is_running, kept for older builds */
   is_active: boolean;
+  port: number | null;
+  slug: string;
 }
 
 export async function getHardware(): Promise<HardwareProbe> {
@@ -91,17 +95,32 @@ export async function listInstalled(): Promise<InstalledModel[]> {
   return res.json();
 }
 
-export async function activateModel(filename: string): Promise<void> {
-  const res = await fetch(`${BASE}/local/activate`, {
+export async function startModel(filename: string): Promise<void> {
+  const res = await fetch(`${BASE}/local/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`Activate error: ${res.status} ${detail}`);
+    throw new Error(`Start error: ${res.status} ${detail}`);
   }
 }
+
+export async function stopModel(filename: string): Promise<void> {
+  const res = await fetch(`${BASE}/local/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Stop error: ${res.status} ${detail}`);
+  }
+}
+
+/** @deprecated use startModel */
+export const activateModel = startModel;
 
 export async function deleteInstalled(filename: string): Promise<void> {
   const res = await fetch(`${BASE}/local/installed/${encodeURIComponent(filename)}`, {

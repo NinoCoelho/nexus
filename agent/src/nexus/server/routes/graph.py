@@ -226,7 +226,11 @@ async def graphrag_index_file(body: dict) -> dict:
     if not content.strip():
         return {"queued": False, "reason": "empty file"}
 
-    _graphrag_index_tasks[path] = {"status": "indexing"}
+    existing = _graphrag_index_tasks.get(path)
+    if existing and existing.get("status") == "indexing":
+        return {"queued": True, "path": path, "already_running": True}
+
+    _graphrag_index_tasks[path] = {"status": "indexing", "task": None}
 
     async def _run() -> None:
         try:
@@ -237,6 +241,9 @@ async def graphrag_index_file(body: dict) -> dict:
                 "node_count": len(sg.get("nodes", [])),
                 "edge_count": len(sg.get("edges", [])),
             }
+        except asyncio.CancelledError:
+            _graphrag_index_tasks[path] = {"status": "cancelled"}
+            raise
         except Exception as exc:
             log.exception("graphrag index-file failed for %s", path)
             detail = str(exc) or exc.__class__.__name__
@@ -244,8 +251,51 @@ async def graphrag_index_file(body: dict) -> dict:
                 detail = "Cannot reach embedding/extraction model — check that the configured provider (e.g. Ollama) is running"
             _graphrag_index_tasks[path] = {"status": "error", "detail": detail}
 
-    asyncio.get_running_loop().create_task(_run())
+    task = asyncio.get_running_loop().create_task(_run())
+    _graphrag_index_tasks[path]["task"] = task
     return {"queued": True, "path": path}
+
+
+def _index_progress(path: str) -> dict:
+    """Count chunks/entities for a source by querying GraphRAG SQLite directly."""
+    import sqlite3
+    from ...agent.graphrag_manager import get_home
+    db_dir = get_home() / "graphrag"
+    chunks_db = db_dir / "graphrag_chunks.sqlite"
+    ents_db = db_dir / "graphrag_entities.sqlite"
+    if not chunks_db.exists() or not ents_db.exists():
+        return {"total_chunks": 0, "processed_chunks": 0}
+    try:
+        conn = sqlite3.connect(f"file:{chunks_db}?mode=ro", uri=True)
+        try:
+            conn.execute(f"ATTACH DATABASE 'file:{ents_db}?mode=ro' AS ents KEY ''")
+        except sqlite3.OperationalError:
+            conn.execute(f"ATTACH DATABASE '{ents_db}' AS ents")
+        cur = conn.execute("SELECT count(*) FROM chunks WHERE source_path = ?", (path,))
+        total = cur.fetchone()[0] or 0
+        cur = conn.execute(
+            "SELECT count(DISTINCT em.chunk_id) FROM ents.entity_mentions em "
+            "JOIN chunks ch ON ch.id = em.chunk_id WHERE ch.source_path = ?",
+            (path,),
+        )
+        processed = cur.fetchone()[0] or 0
+        conn.close()
+        return {"total_chunks": int(total), "processed_chunks": int(processed)}
+    except Exception:
+        log.warning("[graphrag] progress query failed", exc_info=True)
+        return {"total_chunks": 0, "processed_chunks": 0}
+
+
+@router.post("/graph/knowledge/index-file-cancel")
+async def graphrag_index_file_cancel(body: dict) -> dict:
+    path = (body.get("path") or "").strip()
+    info = _graphrag_index_tasks.get(path)
+    if not info or info.get("status") != "indexing":
+        return {"cancelled": False, "reason": "no active job"}
+    task = info.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+    return {"cancelled": True, "path": path}
 
 
 @router.get("/graph/knowledge/index-file-status")
@@ -253,14 +303,16 @@ async def graphrag_index_file_status(path: str) -> dict:
     info = _graphrag_index_tasks.get(path)
     if info is None:
         return {"status": "unknown"}
-    result = {**info}
-    if info.get("status") == "done":
+    result = {k: v for k, v in info.items() if k != "task"}
+    if info.get("status") == "indexing":
+        result.update(_index_progress(path))
+    elif info.get("status") == "done":
         from ...agent.graphrag_manager import source_subgraph
         sg = source_subgraph([path])
         result["nodes"] = sg.get("nodes", [])
         result["edges"] = sg.get("edges", [])
         _graphrag_index_tasks.pop(path, None)
-    elif info.get("status") == "error":
+    elif info.get("status") in ("error", "cancelled"):
         _graphrag_index_tasks.pop(path, None)
     return result
 

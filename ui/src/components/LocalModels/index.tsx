@@ -10,13 +10,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  activateModel,
   deleteInstalled,
   fmtBytes,
   getHardware,
   listDownloads,
   listInstalled,
   startDownload,
+  startModel,
+  stopModel,
   type DownloadTask,
   type HardwareProbe,
   type InstalledModel,
@@ -62,19 +63,17 @@ export default function LocalModels({ onRefresh }: Props) {
     return () => clearInterval(id);
   }, [downloads, refreshLocal]);
 
-  // Auto-activate a freshly-installed model when nothing is active yet —
-  // matches the user's expectation that "Install" makes the model usable
-  // in the chat picker without an extra step.
-  const autoActivatedRef = useRef<Set<string>>(new Set());
+  // Auto-start a freshly-installed model only when no other local model is
+  // running. Subsequent installs are user-driven (Start button) so the user
+  // controls how much memory gets pinned.
+  const autoStartedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (installed.length === 0) return;
-    if (installed.some((m) => m.is_active)) return;
-    const candidate = installed.find((m) => !autoActivatedRef.current.has(m.filename));
+    if (installed.some((m) => m.is_running)) return;
+    const candidate = installed.find((m) => !autoStartedRef.current.has(m.filename));
     if (!candidate) return;
-    autoActivatedRef.current.add(candidate.filename);
-    onActivate(candidate.filename);
-    // onActivate is intentionally omitted from deps: we want this to trigger
-    // exactly once per (filename, no-active-model) transition.
+    autoStartedRef.current.add(candidate.filename);
+    onStart(candidate.filename);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [installed]);
 
@@ -91,15 +90,29 @@ export default function LocalModels({ onRefresh }: Props) {
     }
   }, [refreshLocal, toast]);
 
-  const onActivate = useCallback(async (filename: string) => {
+  const onStart = useCallback(async (filename: string) => {
     setBusy(filename);
     try {
-      await activateModel(filename);
-      toast.success(`Activated ${filename}`);
+      await startModel(filename);
+      toast.success(`Started ${filename}`);
       await refreshLocal();
       onRefresh();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Activate failed");
+      toast.error(e instanceof Error ? e.message : "Start failed");
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshLocal, onRefresh, toast]);
+
+  const onStop = useCallback(async (filename: string) => {
+    setBusy(filename);
+    try {
+      await stopModel(filename);
+      toast.success(`Stopped ${filename}`);
+      await refreshLocal();
+      onRefresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Stop failed");
     } finally {
       setBusy(null);
     }
@@ -160,28 +173,39 @@ export default function LocalModels({ onRefresh }: Props) {
           <p className="local-empty">No models installed yet — pick one below.</p>
         )}
         {installed.map((m) => (
-          <div key={m.filename} className={`local-row${m.is_active ? " local-row--active" : ""}`}>
+          <div key={m.filename} className={`local-row${m.is_running ? " local-row--active" : ""}`}>
             <div className="local-row-main">
               <span className="local-row-name">{m.filename}</span>
               <span className="local-row-meta">
-                {fmtBytes(m.size_bytes)}{m.is_active ? " · in use" : ""}
+                {fmtBytes(m.size_bytes)}
+                {m.is_running ? ` · running on :${m.port}` : " · stopped"}
               </span>
             </div>
             <div className="local-row-actions">
-              {!m.is_active && (
+              {m.is_running ? (
                 <button
                   className="settings-btn"
                   disabled={busy === m.filename}
-                  onClick={() => onActivate(m.filename)}
+                  onClick={() => onStop(m.filename)}
+                  title="Free memory and unregister from chat picker"
                 >
-                  Use this
+                  Stop
+                </button>
+              ) : (
+                <button
+                  className="settings-btn"
+                  disabled={busy === m.filename}
+                  onClick={() => onStart(m.filename)}
+                  title="Spin up llama-server and register for chat / extraction"
+                >
+                  Start
                 </button>
               )}
               <button
                 className="settings-btn settings-btn--danger"
-                disabled={busy === m.filename || m.is_active}
+                disabled={busy === m.filename || m.is_running}
                 onClick={() => onDelete(m.filename)}
-                title={m.is_active ? "Switch to another model first" : ""}
+                title={m.is_running ? "Stop the model first" : ""}
               >
                 Remove
               </button>
