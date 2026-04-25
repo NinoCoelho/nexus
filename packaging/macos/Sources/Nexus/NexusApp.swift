@@ -31,28 +31,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class AppController: ObservableObject {
     @Published var status: String = "Starting…"
     private let server = ServerController()
-    private var window: WebWindowController?
 
     func start() {
         Task {
             do {
                 try server.launch()
                 status = "Waiting for server…"
-                let port = try await server.waitForReady(timeout: 30)
+                let port = try await server.waitForReady(timeout: 60)
                 status = "Running on :\(port)"
-                openWindow(port: port)
+                openInBrowser(port: port)
             } catch {
                 status = "Error: \(error.localizedDescription)"
             }
         }
     }
 
-    func openWindow(port: Int? = nil) {
-        let p = port ?? server.port ?? 18989
-        if window == nil {
-            window = WebWindowController(url: URL(string: "http://127.0.0.1:\(p)/")!)
-        }
-        window?.show()
+    func openInBrowser(port: Int? = nil) {
+        guard let p = port ?? server.port,
+              let url = URL(string: "http://127.0.0.1:\(p)/") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func restartServer() {
@@ -61,9 +58,9 @@ final class AppController: ObservableObject {
             server.terminate()
             do {
                 try server.launch()
-                let port = try await server.waitForReady(timeout: 30)
+                let port = try await server.waitForReady(timeout: 60)
                 status = "Running on :\(port)"
-                window?.reload(url: URL(string: "http://127.0.0.1:\(port)/")!)
+                openInBrowser(port: port)
             } catch {
                 status = "Error: \(error.localizedDescription)"
             }
@@ -94,7 +91,7 @@ struct MenuView: View {
         Text(controller.status)
             .font(.caption)
         Divider()
-        Button("Open Nexus") { controller.openWindow() }
+        Button("Open Nexus") { controller.openInBrowser() }
             .keyboardShortcut("o")
         Button("Restart Server") { controller.restartServer() }
         Divider()

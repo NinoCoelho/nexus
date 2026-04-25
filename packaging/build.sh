@@ -88,7 +88,14 @@ from fastembed import TextEmbedding
 TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=str(models / "fastembed"))
 print("fastembed cached at", models / "fastembed")
 PYEOF
-  # spaCy + faster-whisper warmup is optional; skip unless explicitly requested.
+
+  echo "==> Pre-downloading spaCy en_core_web_sm into bundle"
+  "$PY" -m spacy download en_core_web_sm
+  SPACY_PKG="$("$PY" -c 'import en_core_web_sm, os; print(os.path.dirname(en_core_web_sm.__file__))')"
+  mkdir -p "$STAGE/models/spacy"
+  cp -R "$SPACY_PKG" "$STAGE/models/spacy/en_core_web_sm_pkg"
+  echo "spaCy cached at $STAGE/models/spacy/en_core_web_sm_pkg"
+  # faster-whisper warmup is optional; skip unless explicitly requested.
 fi
 
 cp "$PACKAGING/bootstrap.py" "$STAGE/bootstrap.py"
