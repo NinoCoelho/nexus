@@ -1,171 +1,27 @@
-"""Builtin entity extractor using spaCy NER + fastembed similarity.
-
-Provides zero-config entity extraction for GraphRAG when no external
-LLM is configured. Uses spaCy's ``en_core_web_sm`` model (~12 MB) for
-named-entity recognition and the builtin fastembed model for entity-type
-classification of entities that don't map cleanly from spaCy labels.
-
-Implements the ``chat`` protocol expected by
-:class:`~loom.store.graphrag.GraphRAGEngine` so it can be used as a
-drop-in replacement for an LLM-based extractor.
-"""
+"""BuiltinExtractor class — spaCy NER + fastembed entity/relation extraction."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
+from ._constants import (
+    RELATION_PROTOTYPES,
+    SPACY_LABEL_MAP,
+    TYPE_PROTOTYPES,
+    _SKIP_LABELS,
+)
+from ._helpers import (
+    _cosine_sim,
+    _has_capitalized_token,
+    _is_quality_entity,
+    _make_response,
+    _parse_prompt,
+)
+
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# spaCy NER label → ontology entity type (direct, no embedding needed)
-# ---------------------------------------------------------------------------
-
-SPACY_LABEL_MAP: dict[str, str] = {
-    "PERSON": "person",
-    "ORG": "project",
-    "PRODUCT": "technology",
-    "GPE": "resource",
-    "LOC": "resource",
-    "FAC": "resource",
-    "EVENT": "concept",
-    "WORK_OF_ART": "concept",
-    "LAW": "concept",
-    "NORP": "concept",
-    "LANGUAGE": "concept",
-}
-
-# spaCy labels that are NOT knowledge-graph entities — skip entirely
-_SKIP_LABELS: frozenset[str] = frozenset({
-    "CARDINAL", "DATE", "MONEY", "QUANTITY", "ORDINAL", "PERCENT", "TIME",
-})
-
-# ---------------------------------------------------------------------------
-# Prototype phrases for embedding-similarity fallback (noun phrases only)
-# ---------------------------------------------------------------------------
-
-TYPE_PROTOTYPES: dict[str, list[str]] = {
-    "person": ["person individual human being someone"],
-    "project": ["project initiative task program undertaking plan"],
-    "concept": ["concept idea theory principle notion abstraction topic"],
-    "technology": ["technology tool framework software system platform language library"],
-    "decision": ["decision choice conclusion judgment determination resolution"],
-    "resource": ["resource document material asset reference data source"],
-}
-
-RELATION_PROTOTYPES: dict[str, list[str]] = {
-    "uses": ["uses utilizes employs leverages applies"],
-    "depends_on": ["depends on requires needs relies on necessitates"],
-    "part_of": ["part of component of subset of belongs to contained in member of"],
-    "created_by": ["created by made by built by developed by authored by designed by"],
-    "related_to": ["related to connected to associated with linked to involves"],
-}
-
-# Short / generic noun phrases to skip
-_STOP_NOUNS: frozenset[str] = frozenset({
-    "this", "that", "these", "those", "it", "they", "we", "you", "he", "she",
-    "i", "me", "him", "her", "us", "them", "my", "your", "his", "its",
-    "our", "their", "what", "which", "who", "whom", "whose",
-    "everyone", "everything", "someone", "something", "anyone", "anything",
-    "nothing", "nobody", "none", "all", "some", "many", "few", "much",
-    "more", "most", "other", "another", "such", "way", "thing", "things",
-    "point", "lot", "bit", "part", "rest", "kind", "sort", "case",
-    "matter", "reason", "sense", "idea", "fact", "question", "issue",
-    "problem", "place", "time", "day", "today", "week", "month", "year",
-    "work", "job", "need", "use", "end", "start", "change", "move",
-    "look", "try", "help", "call", "talk", "step", "test", "run",
-    "example", "data", "info", "list", "note", "notes", "text", "file",
-    "content", "line", "section", "name", "number", "key", "value",
-    "set", "group", "type", "form", "field", "result", "results",
-    "first", "second", "third", "next", "last", "new", "old",
-    "good", "bad", "great", "right", "best", "better", "different",
-    "important", "main", "simple", "possible", "real", "true",
-})
-
-# Regex: skip noun phrases that are purely numeric / money-like
-_NUMERIC_RE = re.compile(r'^[\$\€\£]?[\d.,]+%?$')
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _cosine_sim(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    return dot / (na * nb + 1e-8)
-
-
-def _make_response(data: dict[str, Any]) -> Any:
-    """Build a :class:`loom.types.ChatResponse` with JSON content."""
-    from loom.types import ChatMessage, ChatResponse, Role, StopReason, Usage
-
-    return ChatResponse(
-        message=ChatMessage(role=Role.ASSISTANT, content=json.dumps(data)),
-        usage=Usage(),
-        stop_reason=StopReason.STOP,
-        model="builtin-extractor",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Prompt parsing
-# ---------------------------------------------------------------------------
-
-_TYPES_RE = re.compile(r"Entity types to look for:\s*(.+?)(?:\n\n|\r\n\r\n)", re.DOTALL)
-_TEXT_RE = re.compile(r"Text:\n(.+)", re.DOTALL)
-_RESPOND_MARKER = "\n\nRespond with ONLY"
-
-
-def _parse_prompt(prompt: str) -> tuple[list[str], str]:
-    """Return ``(entity_types, text)`` from the extraction prompt."""
-    entity_types: list[str] = []
-    text = ""
-
-    m = _TYPES_RE.search(prompt)
-    if m:
-        entity_types = [t.strip().lower() for t in m.group(1).split(",") if t.strip()]
-
-    m = _TEXT_RE.search(prompt)
-    if m:
-        raw = m.group(1)
-        idx = raw.find(_RESPOND_MARKER)
-        text = (raw[:idx] if idx > 0 else raw).strip()
-
-    return entity_types, text
-
-
-def _has_capitalized_token(name: str) -> bool:
-    """True if the name contains at least one capitalized non-stopword token."""
-    for tok in name.split():
-        if tok and tok[0].isupper() and tok.lower() not in _STOP_NOUNS:
-            return True
-    return False
-
-
-def _is_quality_entity(name: str) -> bool:
-    """Gate: reject noise entities before type classification."""
-    # Too short
-    if len(name) < 3:
-        return False
-    # Purely numeric / money
-    if _NUMERIC_RE.match(name.replace(" ", "")):
-        return False
-    # Known stop word
-    if name.lower() in _STOP_NOUNS:
-        return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# BuiltinExtractor
-# ---------------------------------------------------------------------------
-
-_instance: BuiltinExtractor | None = None
 
 
 class BuiltinExtractor:
@@ -195,7 +51,7 @@ class BuiltinExtractor:
             log.info("[builtin-extractor] loading spaCy en_core_web_sm …")
             self._nlp = await loop.run_in_executor(None, self._load_spacy)
 
-            from .builtin_embedder import get_builtin_embedder
+            from nexus.agent.builtin_embedder import get_builtin_embedder
             self._embedder = get_builtin_embedder()
 
             await self._build_prototype_embeddings()
@@ -441,10 +297,3 @@ class BuiltinExtractor:
                 best_rel = rel
 
         return best_rel
-
-
-def get_builtin_extractor() -> BuiltinExtractor:
-    global _instance
-    if _instance is None:
-        _instance = BuiltinExtractor()
-    return _instance
