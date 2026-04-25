@@ -67,7 +67,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "dimensions": cfg.graphrag.embeddings.dimensions,
             },
             "extraction": {
-                "model": cfg.graphrag.extraction.model,
+                "model": cfg.graphrag.extraction.model or "",
                 "provider": cfg.graphrag.extraction.provider,
                 "base_url": cfg.graphrag.extraction.base_url,
                 "key_env": cfg.graphrag.extraction.key_env,
