@@ -8,12 +8,49 @@ All endpoint implementations live in ``server/routes/``.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+
+_AUTH_FREE_PATHS = {"/health"}
+
+
+class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
+    """Allow loopback clients without auth; require a bearer token otherwise.
+
+    Token is read from the env var ``NEXUS_ACCESS_TOKEN`` at startup. Empty/unset
+    → no auth required at all (back-compat with the dev `nexus serve` flow).
+    Loopback clients (127.0.0.1 / ::1) always bypass the check, so the bundled
+    UI talking to its own server keeps working without a token.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        super().__init__(app)
+        self._token = token
+
+    async def dispatch(self, request: Request, call_next):
+        if not self._token or request.url.path in _AUTH_FREE_PATHS:
+            return await call_next(request)
+        client_host = request.client.host if request.client else ""
+        if client_host in ("127.0.0.1", "::1", "localhost"):
+            return await call_next(request)
+        # Accept token via Authorization: Bearer <t> or ?token=<t>
+        auth = request.headers.get("authorization", "")
+        provided = ""
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:].strip()
+        if not provided:
+            provided = request.query_params.get("token", "")
+        if provided != self._token:
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return await call_next(request)
 
 from ..agent.ask_user_tool import AskUserHandler
 from ..agent.context import CURRENT_SESSION_ID
@@ -126,9 +163,12 @@ def create_app(
             await agent.aclose()
 
     app = FastAPI(title="nexus", version="0.1.0", lifespan=lifespan)
+    _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
+    if _access_token:
+        app.add_middleware(LoopbackOrTokenMiddleware, token=_access_token)
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=r"http://localhost:\d+",
+        allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -158,6 +198,7 @@ def create_app(
     from .routes.providers import router as providers_router
     from .routes.models import router as models_router
     from .routes.share import router as share_router
+    from .routes.local_llm import router as local_llm_router
 
     app.include_router(chat_router)
     app.include_router(chat_stream_router)
@@ -174,6 +215,7 @@ def create_app(
     app.include_router(providers_router)
     app.include_router(models_router)
     app.include_router(share_router)
+    app.include_router(local_llm_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

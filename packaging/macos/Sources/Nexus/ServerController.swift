@@ -9,6 +9,7 @@ import Foundation
 final class ServerController {
     private var process: Process?
     private(set) var port: Int?
+    private(set) var bindHost: String = "127.0.0.1"
 
     enum LaunchError: Error, LocalizedError {
         case missingResource(String)
@@ -71,9 +72,13 @@ final class ServerController {
         let resources = Bundle.main.resourceURL ?? Bundle.main.bundleURL
         let portFile = resources.appendingPathComponent(".port")
 
+        let hostFile = resources.appendingPathComponent(".host")
         while Date() < deadline {
             if let port = readPort(at: portFile) {
                 self.port = port
+                if let h = try? String(contentsOf: hostFile, encoding: .utf8) {
+                    self.bindHost = h.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
                 if await probe(port: port) { return port }
             }
             try? await Task.sleep(nanoseconds: 250_000_000)

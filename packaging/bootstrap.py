@@ -23,6 +23,7 @@ import atexit
 import json
 import logging
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -32,13 +33,50 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+NEXUS_HOME = Path.home() / ".nexus"
+HOST_FILE = NEXUS_HOME / "host.json"
+TOKEN_FILE = NEXUS_HOME / "access_token"
+
 log = logging.getLogger("nexus.bootstrap")
 
 
-def _pick_free_port() -> int:
+def _pick_free_port(host: str = "127.0.0.1") -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
+        s.bind((host, 0))
         return s.getsockname()[1]
+
+
+def _load_host_settings() -> tuple[str, int | None]:
+    """Read user's bind preferences from ~/.nexus/host.json.
+
+    Schema: {"host": "127.0.0.1", "port": 0}  — port 0 means "auto-pick free".
+    Defaults to loopback + auto if file missing or unreadable.
+    """
+    if not HOST_FILE.is_file():
+        return "127.0.0.1", None
+    try:
+        d = json.loads(HOST_FILE.read_text())
+        host = str(d.get("host") or "127.0.0.1")
+        port = int(d.get("port") or 0) or None
+        return host, port
+    except (OSError, ValueError):
+        return "127.0.0.1", None
+
+
+def _ensure_access_token() -> str:
+    """Read or create a persistent random token in ~/.nexus/access_token."""
+    NEXUS_HOME.mkdir(parents=True, exist_ok=True)
+    if TOKEN_FILE.is_file():
+        tok = TOKEN_FILE.read_text().strip()
+        if tok:
+            return tok
+    tok = secrets.token_urlsafe(32)
+    TOKEN_FILE.write_text(tok)
+    try:
+        os.chmod(TOKEN_FILE, 0o600)
+    except OSError:
+        pass
+    return tok
 
 
 def _seed_spacy_cache(bundled_models: Path) -> None:
@@ -269,18 +307,33 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             log.warning("[bootstrap] could not strip stale local LLM config: %s", e)
 
-    port = _pick_free_port()
+    bind_host, requested_port = _load_host_settings()
+    # uvicorn binds to whatever host the user picked; for the port-probe socket
+    # we use loopback so we don't accidentally fail on a hostname that the OS
+    # only binds for incoming traffic.
+    port = requested_port if requested_port else _pick_free_port()
+    token = _ensure_access_token()
+    os.environ["NEXUS_ACCESS_TOKEN"] = token
     port_file = Path(os.environ.get("NEXUS_PORT_FILE", here / ".port"))
     try:
         port_file.write_text(str(port))
     except OSError:
         pass
+    # Write a sibling file with the bind host so the Swift host can show the
+    # right URL in its menu (otherwise it would assume 127.0.0.1).
+    try:
+        (port_file.parent / ".host").write_text(bind_host)
+    except OSError:
+        pass
+
+    log.info("[bootstrap] uvicorn binding %s:%d (auth %s)",
+             bind_host, port, "required for non-loopback" if token else "disabled")
 
     import uvicorn  # type: ignore
 
     uvicorn.run(
         "nexus.main:app",
-        host="127.0.0.1",
+        host=bind_host,
         port=port,
         log_level=os.environ.get("NEXUS_LOG_LEVEL", "info"),
     )
