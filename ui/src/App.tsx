@@ -4,6 +4,7 @@ import "./App.css";
 import "./components/Header.css";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
+import MobileTabBar from "./components/MobileTabBar";
 import ChatView from "./components/ChatView";
 import VaultView from "./components/VaultView";
 import InsightsView from "./components/InsightsView";
@@ -16,6 +17,7 @@ import {
   graphragIndexFile,
   pingHealth,
 } from "./api";
+import { IS_CAPACITOR } from "./api/base";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
 import { useChatSession } from "./hooks/useChatSession";
@@ -39,6 +41,36 @@ export default function App() {
   // from "model is still thinking". Starts as null (unknown) — never
   // shows the banner on first load before the first ping resolves.
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+
+  // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
+  // the right tab. Hash is preferred over query string because it's
+  // self-contained for static hosting and doesn't fight the existing
+  // `?path=` deep link from `readInitialView`.
+  useEffect(() => {
+    const target = `#/${view}`;
+    if (window.location.hash !== target) {
+      window.history.replaceState(null, "", target);
+    }
+  }, [view]);
+  useEffect(() => {
+    const onHash = () => {
+      const m = window.location.hash.match(/^#\/(chat|vault|graph|insights)$/);
+      if (m) setView(m[1] as typeof view);
+    };
+    onHash();
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Dismiss any full-screen overlay (settings, skill drawer, mobile nav)
+  // when the user switches top-level views — otherwise on mobile the
+  // drawer covers the new view and feels stuck.
+  useEffect(() => {
+    setSettingsOpen(false);
+    setOpenSkill(null);
+    setMobileDrawerOpen(false);
+  }, [view]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,8 +116,10 @@ export default function App() {
   // Subscribe to the session's HITL event stream. The UI owns a
   // ``pendingSessionId`` for the not-yet-created "new chat" so the
   // EventSource can open before the first POST — no chicken-and-egg.
-  // Once a real ``activeSession`` exists we prefer that.
-  const hitlSessionId = activeSession ?? pendingSessionId;
+  // Once a real ``activeSession`` exists we prefer that. On Capacitor
+  // the subscription is a 2s /pending poll — skip it for the phantom
+  // pre-session to avoid a perpetual loop before the first message.
+  const hitlSessionId = activeSession ?? (IS_CAPACITOR ? null : pendingSessionId);
   const { pendingRequest, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest } = useApprovalQueue(hitlSessionId);
 
   const handleSessionSelect = useCallback((id: string) => {
@@ -189,7 +223,9 @@ export default function App() {
     <div className="app app--layout">
       <Sidebar
         view={view}
-        onViewChange={setView}
+        onViewChange={(v) => { setView(v); setMobileDrawerOpen(false); }}
+        mobileOpen={mobileDrawerOpen}
+        onMobileClose={() => setMobileDrawerOpen(false)}
         activeSessionId={activeSession}
         onSessionSelect={handleSessionSelect}
         onNewChat={handleNewChat}
@@ -205,7 +241,11 @@ export default function App() {
       />
 
       <div className="app-main">
-        <Header onReset={handleNewChat} yoloMode={yoloMode} />
+        <Header
+          onReset={handleNewChat}
+          yoloMode={yoloMode}
+          onOpenMobileDrawer={() => setMobileDrawerOpen(true)}
+        />
         {backendUp === false && (
           <div style={{ padding: "6px 12px", background: "#b91c1c", color: "white", fontSize: 13, textAlign: "center" }}>
             Backend unreachable — check that <code>nexus serve</code> is running on{" "}
@@ -280,6 +320,12 @@ export default function App() {
           onTimeout={handleApprovalTimeout}
         />
       )}
+
+      <MobileTabBar
+        view={view}
+        onViewChange={setView}
+        onOpenDrawer={() => setMobileDrawerOpen(true)}
+      />
     </div>
   );
 }

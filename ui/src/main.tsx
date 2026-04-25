@@ -12,6 +12,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./tokens.css";
 import App from "./App";
+// mobile.css must load after App's component CSS so its @media overrides
+// win the cascade (component CSS is imported transitively from <App />).
+import "./mobile.css";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./toast/ToastProvider";
 

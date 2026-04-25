@@ -34,6 +34,9 @@ interface Props {
   onVaultOpenPathHandled?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+  /** Mobile drawer open state. When true, sidebar slides in from the left. */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
@@ -47,6 +50,7 @@ export default function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
   sessionsRevision, onSessionsRevisionBump, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
+  mobileOpen = false, onMobileClose,
 }: Props) {
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -145,8 +149,16 @@ export default function Sidebar({
   });
 
   return (
+    <>
+      {mobileOpen && (
+        <div
+          className="sidebar-backdrop mobile-only"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
     <aside
-      className={`sidebar${collapsed ? " sidebar--collapsed" : ""}`}
+      className={`sidebar${collapsed ? " sidebar--collapsed" : ""}${mobileOpen ? " sidebar--mobile-open" : ""}`}
       style={collapsed ? undefined : ({ ["--sidebar-width" as unknown as string]: `${width}px` } as React.CSSProperties)}
     >
       {/* Top bar */}
@@ -293,5 +305,6 @@ export default function Sidebar({
         />
       )}
     </aside>
+    </>
   );
 }

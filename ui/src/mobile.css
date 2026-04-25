@@ -1,0 +1,171 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile overrides — applied at <=768px viewports.
+
+   Strategy: hide the desktop sidebar and surface a bottom tab bar plus a
+   slide-in drawer for sessions. All overrides live here so the desktop
+   CSS stays untouched and the mobile layer is auditable in one place.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Safe-area padding on the app shell so the chrome respects notches and
+   the home indicator. The bottom inset is consumed by the tab bar. */
+.app--layout {
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+/* Mobile-only chrome: hidden on desktop. */
+.mobile-only { display: none !important; }
+.mobile-tab-bar { display: none; }
+
+@media (max-width: 768px) {
+  .desktop-only { display: none !important; }
+  .mobile-only { display: flex !important; }
+
+  /* Stack sidebar + content vertically; sidebar becomes a drawer. */
+  .app--layout { flex-direction: column; }
+
+  /* Sidebar → off-canvas drawer. !important wins over component CSS
+     that lands later in the cascade (e.g. position: relative + 220px
+     widths set by the desktop Sidebar.css module). */
+  .sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 200;
+    width: 84vw !important;
+    max-width: 320px !important;
+    min-width: 0 !important;
+    transform: translateX(-100%);
+    transition: transform 200ms ease;
+    box-shadow: 2px 0 16px rgba(0, 0, 0, 0.35);
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+  .sidebar--mobile-open { transform: translateX(0) !important; }
+  .sidebar--collapsed { width: 84vw !important; min-width: 0 !important; }
+  .sidebar-resize-handle { display: none !important; }
+
+  /* Force the main column to fill the viewport now that the sidebar is
+     out of flow. Some flex parents may otherwise leave a gap where the
+     sidebar's flex slot used to be. */
+  .app,
+  .app--layout,
+  .app-main,
+  .app-content,
+  .view-pane {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+  .app-main { flex: 1 1 100% !important; }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 199;
+    animation: nx-fade-in 150ms ease;
+  }
+  @keyframes nx-fade-in { from { opacity: 0 } to { opacity: 1 } }
+
+  /* Hover-only affordances: always show on touch. */
+  .sidebar-session-menu-btn,
+  .user-msg-rollback {
+    opacity: 1 !important;
+  }
+
+  /* Larger touch targets on mobile. 44x44 is the iOS HIG minimum. */
+  .sidebar-collapse-btn,
+  .input-bar button,
+  .icon-btn,
+  .header button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Inputs ≥16px to prevent iOS zoom-on-focus. */
+  input[type="text"],
+  input[type="search"],
+  input[type="email"],
+  input[type="url"],
+  input[type="password"],
+  input:not([type]),
+  textarea,
+  select,
+  .modal-input,
+  .approval-text-input {
+    font-size: 16px !important;
+  }
+
+  /* Header: leave room for the hamburger button on the left. */
+  .app-content { padding-bottom: calc(56px + var(--safe-bottom)); }
+
+  /* Bottom tab bar. */
+  .mobile-tab-bar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 150;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    padding-bottom: var(--safe-bottom);
+    height: calc(56px + var(--safe-bottom));
+  }
+  .mobile-tab-bar button {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    color: var(--fg-faint);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 6px 0;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-tab-bar button:active { background: var(--bg-hover); }
+  .mobile-tab-bar button.is-active { color: var(--accent); }
+  .mobile-tab-bar svg { width: 22px; height: 22px; }
+
+  /* Modals respect safe area. */
+  .modal-overlay,
+  .approval-overlay {
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+
+  /* Fixed-top drawers (Settings, Skill) and the app header sit under
+     the iOS notch by default. Push their content down by the safe-area
+     inset so the title clears the status bar. */
+  .settings-drawer,
+  .skill-drawer {
+    padding-top: var(--safe-top);
+  }
+  .header {
+    padding-top: var(--safe-top);
+  }
+
+  /* Chat content: drop the desktop max-width pinning. */
+  .chat-view, .chat-view * { max-width: 100% !important; }
+
+  /* Drag handles + resizers don't make sense on touch. */
+  .resize-handle, .vault-tree-resize-handle { display: none !important; }
+}
+
+/* Standalone PWA / Capacitor: always reserve safe-area regardless of
+   media query (the device may be wider than 768px in landscape). */
+@supports (padding: max(0px)) {
+  .modal-overlay, .approval-overlay {
+    padding-top: max(env(safe-area-inset-top), 0px);
+    padding-bottom: max(env(safe-area-inset-bottom), 0px);
+  }
+}

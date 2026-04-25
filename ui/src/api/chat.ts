@@ -1,5 +1,5 @@
 // API client for chat: postChat, chatStream SSE parser, HITL session events.
-import { BASE } from "./base";
+import { BASE, IS_CAPACITOR } from "./base";
 
 export interface TraceEvent {
   iter: number;
@@ -166,18 +166,27 @@ export type SessionEvent =
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } };
 
+/** Returned from subscribeSessionEvents; close() ends the subscription. */
+export interface SessionSubscription {
+  close: () => void;
+}
+
 /**
- * Open an EventSource on the session's event stream.
+ * Subscribe to a session's HITL/event stream.
  *
- * Typed callback fires for every known event kind; unknown kinds are
- * silently dropped so a server adding new events doesn't break old
- * UIs. Returns the underlying EventSource so the caller can close it
- * on unmount — closing is the *only* cleanup required.
+ * Uses EventSource on the web; falls back to polling /pending on
+ * Capacitor (iOS WebView's EventSource over capacitor:// is unreliable)
+ * or environments without EventSource. Polling only surfaces
+ * `user_request` and `user_request_cancelled` — sufficient for HITL,
+ * which is the only consumer at the moment.
  */
 export function subscribeSessionEvents(
   session_id: string,
   onEvent: (event: SessionEvent) => void,
-): EventSource {
+): SessionSubscription {
+  if (IS_CAPACITOR || typeof EventSource === "undefined") {
+    return pollSessionEvents(session_id, onEvent);
+  }
   const url = `${BASE}/chat/${encodeURIComponent(session_id)}/events`;
   const es = new EventSource(url);
 
@@ -201,7 +210,43 @@ export function subscribeSessionEvents(
     });
   }
 
-  return es;
+  return { close: () => es.close() };
+}
+
+function pollSessionEvents(
+  session_id: string,
+  onEvent: (event: SessionEvent) => void,
+): SessionSubscription {
+  let cancelled = false;
+  let lastRequestId: string | null = null;
+  const tick = async () => {
+    if (cancelled) return;
+    try {
+      const req = await fetchPendingRequest(session_id);
+      if (cancelled) return;
+      if (req && req.request_id !== lastRequestId) {
+        lastRequestId = req.request_id;
+        onEvent({ kind: "user_request", data: req });
+      } else if (!req && lastRequestId) {
+        const prev = lastRequestId;
+        lastRequestId = null;
+        onEvent({
+          kind: "user_request_cancelled",
+          data: { request_id: prev, reason: "resolved" },
+        });
+      }
+    } catch {
+      // Network blip — try again next tick.
+    }
+  };
+  void tick();
+  const id = setInterval(tick, 2000);
+  return {
+    close: () => {
+      cancelled = true;
+      clearInterval(id);
+    },
+  };
 }
 
 export async function fetchPendingRequest(
