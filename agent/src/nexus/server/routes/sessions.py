@@ -111,6 +111,7 @@ async def get_session(
             return None
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     feedback_map = store.get_feedback_map(session_id)
+    pinned_set = store.get_pinned_set(session_id)
     return {
         "id": session.id,
         "title": session.title,
@@ -124,6 +125,7 @@ async def get_session(
                 "tool_call_id": m.tool_call_id,
                 "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
                 "feedback": feedback_map.get(i),
+                "pinned": i in pinned_set,
             }
             for i, m in enumerate(session.history)
         ],
@@ -147,6 +149,29 @@ async def delete_session(
     store: SessionStore = Depends(get_sessions),
 ) -> None:
     store.delete(session_id)
+
+
+@router.patch("/sessions/{session_id}/messages/{seq}/pin", status_code=status.HTTP_204_NO_CONTENT)
+async def set_message_pin(
+    session_id: str,
+    seq: int,
+    body: dict,
+    store: SessionStore = Depends(get_sessions),
+) -> None:
+    """Set or clear the pinned flag for a message. Body: ``{"pinned": bool}``."""
+    if store.get(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    pinned = bool(body.get("pinned", False))
+    store.set_pinned(session_id, seq, pinned)
+
+
+@router.get("/pins")
+async def list_pins(
+    limit: int = 50,
+    store: SessionStore = Depends(get_sessions),
+) -> list[dict]:
+    """Return pinned messages across all sessions, newest first."""
+    return store.list_pinned_across_sessions(limit=limit)
 
 
 @router.get("/sessions/{session_id}/trajectories")

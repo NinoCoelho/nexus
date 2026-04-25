@@ -12,6 +12,7 @@ import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
 import { IconChat, IconVault, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
 import SessionsPanel from "./SessionsPanel";
+import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
@@ -218,7 +219,10 @@ export default function Sidebar({
         </nav>
       </div>
 
-      {/* Sessions — only in Chat view */}
+      {/* Pinned + Sessions — only in Chat view */}
+      {view === "chat" && !collapsed && (
+        <PinnedPanel refreshKey={sessionsRevision} onOpenSession={onSessionSelect} />
+      )}
       {view === "chat" && !collapsed && (
         <SessionsPanel
           sessions={sessions}

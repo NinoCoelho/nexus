@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
-import { setMessageFeedback } from "../api";
+import { setMessageFeedback, setMessagePin } from "../api";
 import type { TimelineStep } from "./ChatView";
 
 /**
@@ -93,6 +93,8 @@ interface Props {
   seq?: number;
   feedback?: "up" | "down" | null;
   onFeedbackChange?: (value: "up" | "down" | null) => void;
+  pinned?: boolean;
+  onPinChange?: (pinned: boolean) => void;
 }
 
 function fmt(d: Date) {
@@ -117,11 +119,13 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
+  const [localPinned, setLocalPinned] = useState<boolean>(!!pinned);
   useEffect(() => { setLocalFeedback(feedback ?? null); }, [feedback]);
+  useEffect(() => { setLocalPinned(!!pinned); }, [pinned]);
 
   const processed = useMemo(() => linkifyVaultPaths(content), [content]);
 
@@ -136,6 +140,18 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
   }
 
   const canFeedback = !!sessionId && typeof seq === "number" && !streaming;
+  async function handlePin() {
+    if (!canFeedback || !sessionId || typeof seq !== "number") return;
+    const next = !localPinned;
+    setLocalPinned(next);
+    onPinChange?.(next);
+    try {
+      await setMessagePin(sessionId, seq, next);
+    } catch {
+      setLocalPinned(!next);
+      onPinChange?.(!next);
+    }
+  }
   async function handleFeedback(value: "up" | "down") {
     if (!canFeedback || !sessionId || typeof seq !== "number") return;
     const next = localFeedback === value ? null : value;
@@ -251,6 +267,18 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
         <div className="asst-footer">
           {canFeedback && (
             <>
+              <button
+                className={`bubble-action-btn${localPinned ? " is-active" : ""}`}
+                onClick={handlePin}
+                title={localPinned ? "Unpin" : "Pin this turn"}
+                aria-label="Pin message"
+                aria-pressed={localPinned}
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill={localPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 2h6l-1 4 2 3H4l2-3z" />
+                  <line x1="8" y1="9" x2="8" y2="14" />
+                </svg>
+              </button>
               <button
                 className={`bubble-action-btn${localFeedback === "up" ? " is-active" : ""}`}
                 onClick={() => handleFeedback("up")}

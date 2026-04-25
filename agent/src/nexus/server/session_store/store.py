@@ -238,31 +238,82 @@ class SessionStore(PubSubMixin, QueryMixin):
     def set_feedback(self, session_id: str, seq: int, value: str | None) -> None:
         """Set or clear thumbs feedback for a message in a session.
 
-        ``value`` must be ``"up"``, ``"down"``, or ``None`` (clears the entry).
+        ``value`` must be ``"up"``, ``"down"``, or ``None`` (clears the rating
+        but preserves any pin on the same row).
         """
-        if value is None:
-            self._loom._db.execute(
-                "DELETE FROM message_feedback WHERE session_id = ? AND seq = ?",
-                (session_id, seq),
-            )
-        else:
-            if value not in ("up", "down"):
-                raise ValueError(f"invalid feedback value: {value!r}")
-            self._loom._db.execute(
-                "INSERT INTO message_feedback (session_id, seq, value) VALUES (?, ?, ?) "
-                "ON CONFLICT(session_id, seq) DO UPDATE SET value = excluded.value, "
-                "created_at = CURRENT_TIMESTAMP",
-                (session_id, seq, value),
-            )
+        if value is not None and value not in ("up", "down"):
+            raise ValueError(f"invalid feedback value: {value!r}")
+        self._loom._db.execute(
+            "INSERT INTO message_feedback (session_id, seq, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(session_id, seq) DO UPDATE SET value = excluded.value, "
+            "created_at = CURRENT_TIMESTAMP",
+            (session_id, seq, value),
+        )
+        # Drop fully-empty rows (no rating, no pin) to keep the table tidy.
+        self._loom._db.execute(
+            "DELETE FROM message_feedback "
+            "WHERE session_id = ? AND seq = ? AND value IS NULL AND pinned = 0",
+            (session_id, seq),
+        )
+        self._loom._db.commit()
+
+    def set_pinned(self, session_id: str, seq: int, pinned: bool) -> None:
+        """Set or clear the pinned flag for a message in a session."""
+        self._loom._db.execute(
+            "INSERT INTO message_feedback (session_id, seq, pinned) VALUES (?, ?, ?) "
+            "ON CONFLICT(session_id, seq) DO UPDATE SET pinned = excluded.pinned",
+            (session_id, seq, 1 if pinned else 0),
+        )
+        self._loom._db.execute(
+            "DELETE FROM message_feedback "
+            "WHERE session_id = ? AND seq = ? AND value IS NULL AND pinned = 0",
+            (session_id, seq),
+        )
         self._loom._db.commit()
 
     def get_feedback_map(self, session_id: str) -> dict[int, str]:
         """Return ``{seq: value}`` for all feedback rows of a session."""
         rows = self._loom._db.execute(
-            "SELECT seq, value FROM message_feedback WHERE session_id = ?",
+            "SELECT seq, value FROM message_feedback "
+            "WHERE session_id = ? AND value IS NOT NULL",
             (session_id,),
         ).fetchall()
         return {int(r[0]): str(r[1]) for r in rows}
+
+    def get_pinned_set(self, session_id: str) -> set[int]:
+        """Return the set of seq numbers that are pinned in this session."""
+        rows = self._loom._db.execute(
+            "SELECT seq FROM message_feedback WHERE session_id = ? AND pinned = 1",
+            (session_id,),
+        ).fetchall()
+        return {int(r[0]) for r in rows}
+
+    def list_pinned_across_sessions(self, limit: int = 50) -> list[dict]:
+        """Return recent pinned messages across all sessions, newest first."""
+        rows = self._loom._db.execute(
+            """
+            SELECT mf.session_id, mf.seq, m.role, m.content, m.created_at,
+                   s.title
+            FROM message_feedback mf
+            JOIN messages m ON m.session_id = mf.session_id AND m.seq = mf.seq
+            LEFT JOIN sessions s ON s.id = mf.session_id
+            WHERE mf.pinned = 1
+            ORDER BY datetime(m.created_at) DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 500)),),
+        ).fetchall()
+        return [
+            {
+                "session_id": r[0],
+                "seq": int(r[1]),
+                "role": r[2],
+                "content": r[3] or "",
+                "created_at": r[4],
+                "session_title": r[5] or "New session",
+            }
+            for r in rows
+        ]
 
     def rename(self, session_id: str, title: str) -> None:
         self._loom.set_title(session_id, title)

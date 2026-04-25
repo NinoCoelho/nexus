@@ -42,6 +42,8 @@ export interface Message {
   seq?: number;
   /** Persisted thumbs feedback for assistant turns. */
   feedback?: "up" | "down" | null;
+  /** Persisted pin flag — survives page reload, listed in the sidebar. */
+  pinned?: boolean;
   /** Set when the turn didn't reach ``done`` — drives the Retry/Continue action row. */
   partial?: {
     status:
@@ -106,6 +108,7 @@ interface Props {
   onModelChange?: (model: string) => void;
   activeSessionId?: string | null;
   onFeedbackChange?: (msgIndex: number, value: "up" | "down" | null) => void;
+  onPinChange?: (msgIndex: number, pinned: boolean) => void;
 }
 
 function fmt(d: Date) {
@@ -136,6 +139,7 @@ export default function ChatView({
   onModelChange,
   activeSessionId,
   onFeedbackChange,
+  onPinChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -245,8 +249,12 @@ export default function ChatView({
                     sessionId={activeSessionId ?? null}
                     seq={msg.seq}
                     feedback={msg.feedback ?? null}
+                    pinned={msg.pinned ?? false}
                     onFeedbackChange={
                       onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
+                    }
+                    onPinChange={
+                      onPinChange ? (p) => onPinChange(idx, p) : undefined
                     }
                   />
                 )}

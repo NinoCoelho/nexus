@@ -50,11 +50,23 @@ _FEEDBACK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS message_feedback (
     session_id TEXT NOT NULL,
     seq        INTEGER NOT NULL,
-    value      TEXT NOT NULL CHECK(value IN ('up', 'down')),
+    value      TEXT,
+    pinned     INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (session_id, seq)
+    PRIMARY KEY (session_id, seq),
+    CHECK(value IS NULL OR value IN ('up', 'down'))
 );
 """
+
+
+def _ensure_feedback_pinned_column(db) -> None:
+    """Migrate older databases that pre-date the ``pinned`` column."""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(message_feedback)").fetchall()}
+    if cols and "pinned" not in cols:
+        db.execute(
+            "ALTER TABLE message_feedback ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
+        )
+        db.commit()
 
 
 def init_fts(loom_store: LoomSessionStore) -> None:
@@ -67,6 +79,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     )
     db.executescript(_FTS_SCHEMA)
     db.executescript(_FEEDBACK_SCHEMA)
+    _ensure_feedback_pinned_column(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:
         msg_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]

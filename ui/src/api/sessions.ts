@@ -19,6 +19,38 @@ export interface SessionMessage {
   tool_call_id?: string;
   created_at: string;
   feedback?: "up" | "down" | null;
+  pinned?: boolean;
+}
+
+export interface PinnedMessage {
+  session_id: string;
+  seq: number;
+  role: string;
+  content: string;
+  created_at: string | null;
+  session_title: string;
+}
+
+export async function setMessagePin(
+  sessionId: string,
+  seq: number,
+  pinned: boolean,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/sessions/${encodeURIComponent(sessionId)}/messages/${seq}/pin`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned }),
+    },
+  );
+  if (!res.ok) throw new Error(`Pin error: ${res.status}`);
+}
+
+export async function listPins(limit = 50): Promise<PinnedMessage[]> {
+  const res = await fetch(`${BASE}/pins?limit=${limit}`);
+  if (!res.ok) throw new Error(`Pins error: ${res.status}`);
+  return res.json();
 }
 
 export interface SessionDetail {
