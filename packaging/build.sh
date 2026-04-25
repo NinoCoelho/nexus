@@ -5,9 +5,12 @@
 # models. See packaging/bootstrap.py for the runtime launcher.
 #
 # Usage:
-#   packaging/build.sh                 # full build (signs ad-hoc)
-#   packaging/build.sh --skip-models   # don't pre-download embedding models
-#   packaging/build.sh --skip-sign     # skip codesign step
+#   packaging/build.sh                          # full build (signs ad-hoc)
+#   packaging/build.sh --skip-models            # don't pre-download embedding models
+#   packaging/build.sh --skip-sign              # skip codesign step
+#   packaging/build.sh --bundle-llm gemma-e2b   # bundle a local LLM (default)
+#   packaging/build.sh --bundle-llm gemma-e4b   # larger Gemma 3n variant (~2.5 GB)
+#   packaging/build.sh --bundle-llm none        # no local LLM (smaller bundle)
 #
 set -euo pipefail
 
@@ -28,13 +31,34 @@ PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$
 
 SKIP_MODELS=0
 SKIP_SIGN=0
-for arg in "$@"; do
-  case "$arg" in
-    --skip-models) SKIP_MODELS=1 ;;
-    --skip-sign)   SKIP_SIGN=1 ;;
-    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+BUNDLE_LLM="gemma-e2b"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-models) SKIP_MODELS=1; shift ;;
+    --skip-sign)   SKIP_SIGN=1; shift ;;
+    --bundle-llm)  BUNDLE_LLM="${2:-}"; shift 2 ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+LLAMA_TAG="b8929"
+LLAMA_DIST="llama-${LLAMA_TAG}-bin-macos-arm64.tar.gz"
+LLAMA_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_TAG}/${LLAMA_DIST}"
+
+case "$BUNDLE_LLM" in
+  none) LLM_REPO=""; LLM_FILE=""; LLM_NAME="" ;;
+  gemma-e2b)
+    LLM_REPO="bartowski/google_gemma-3n-E2B-it-GGUF"
+    LLM_FILE="google_gemma-3n-E2B-it-Q4_K_M.gguf"
+    LLM_NAME="gemma-3n-e2b"
+    ;;
+  gemma-e4b)
+    LLM_REPO="bartowski/google_gemma-3n-E4B-it-GGUF"
+    LLM_FILE="google_gemma-3n-E4B-it-Q4_K_M.gguf"
+    LLM_NAME="gemma-3n-e4b"
+    ;;
+  *) echo "unknown --bundle-llm value: $BUNDLE_LLM (use gemma-e2b | gemma-e4b | none)" >&2; exit 2 ;;
+esac
 
 [[ -d "$LOOM_DIR" ]] || { echo "loom not found at $LOOM_DIR (set LOOM_DIR=...)" >&2; exit 1; }
 
@@ -98,6 +122,38 @@ PYEOF
   # faster-whisper warmup is optional; skip unless explicitly requested.
 fi
 
+if [[ -n "$LLM_REPO" ]]; then
+  echo "==> Fetching llama.cpp ($LLAMA_TAG, macos-arm64)"
+  LLAMA_CACHE="$DIST/.cache"
+  mkdir -p "$LLAMA_CACHE"
+  if [[ ! -f "$LLAMA_CACHE/$LLAMA_DIST" ]]; then
+    curl -fSL --retry 3 -o "$LLAMA_CACHE/$LLAMA_DIST" "$LLAMA_URL"
+  fi
+  mkdir -p "$STAGE/llama"
+  tar -xzf "$LLAMA_CACHE/$LLAMA_DIST" -C "$STAGE/llama"
+  LLAMA_SERVER_REL="$(cd "$STAGE/llama" && /usr/bin/find . -type f -name 'llama-server' -perm -u+x | head -1)"
+  [[ -n "$LLAMA_SERVER_REL" ]] || { echo "llama-server not found in archive" >&2; exit 1; }
+  echo "llama-server at llama/${LLAMA_SERVER_REL#./}"
+
+  echo "==> Fetching $LLM_NAME GGUF (this is the largest download — minutes on slow links)"
+  mkdir -p "$STAGE/models/llm"
+  HF_URL="https://huggingface.co/${LLM_REPO}/resolve/main/${LLM_FILE}"
+  GGUF_CACHE="$DIST/.cache/$LLM_FILE"
+  if [[ ! -f "$GGUF_CACHE" ]]; then
+    curl -fSL --retry 3 -o "$GGUF_CACHE" "$HF_URL"
+  fi
+  cp "$GGUF_CACHE" "$STAGE/models/llm/$LLM_FILE"
+
+  cat > "$STAGE/llm.json" <<EOF
+{
+  "binary": "llama/${LLAMA_SERVER_REL#./}",
+  "model_file": "models/llm/${LLM_FILE}",
+  "model_name": "${LLM_NAME}",
+  "ctx_size": 4096
+}
+EOF
+fi
+
 cp "$PACKAGING/bootstrap.py" "$STAGE/bootstrap.py"
 ( cd "$LOOM_DIR" && git rev-parse HEAD > "$STAGE/loom_version.txt" 2>/dev/null || true )
 
@@ -117,6 +173,8 @@ cp -R "$STAGE/python"          "$RES/python"
 cp -R "$STAGE/site-packages"   "$RES/site-packages"
 cp -R "$STAGE/ui"              "$RES/ui"
 [[ -d "$STAGE/models" ]] && cp -R "$STAGE/models" "$RES/models"
+[[ -d "$STAGE/llama" ]]  && cp -R "$STAGE/llama"  "$RES/llama"
+[[ -f "$STAGE/llm.json" ]] && cp "$STAGE/llm.json" "$RES/llm.json"
 cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
 [[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"
 
