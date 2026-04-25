@@ -240,11 +240,57 @@ async def vault_search_endpoint(q: str = "", limit: int = 50) -> dict:
     return {"results": results, "q": q, "count": len(results)}
 
 
+@router.get("/vault/events")
+async def vault_events() -> Any:
+    """SSE stream of vault/index events.
+
+    Emits ``vault.indexed``, ``vault.removed``, ``graphrag.indexed``, and
+    ``graphrag.removed`` events as they occur. Best-effort: dropped frames
+    on slow consumers, no replay on reconnect.
+    """
+    import asyncio
+    import json
+    from fastapi.responses import StreamingResponse
+    from ..event_bus import subscribe, unsubscribe
+
+    queue = subscribe()
+
+    async def _gen():
+        try:
+            yield ": ok\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        except asyncio.CancelledError:
+            raise
+        finally:
+            unsubscribe(queue)
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/vault/reindex")
-async def vault_reindex() -> dict:
-    from ... import vault_search
-    n = vault_search.rebuild_from_disk()
-    return {"indexed": n}
+async def vault_reindex(full: bool = False) -> dict:
+    """Re-index FTS and tag/link metadata.
+
+    With ``?full=1`` rebuilds from scratch. Default is incremental:
+    skip files whose ``(mtime, size)`` matches the index, and prune rows
+    for files that have disappeared on disk.
+    """
+    from ... import vault_search, vault_index
+    n = vault_search.rebuild_from_disk(full=full)
+    try:
+        vault_index.rebuild_from_disk(full=full)
+    except Exception:
+        log.warning("vault_index rebuild failed", exc_info=True)
+    return {"indexed": n, "full": full}
 
 
 @router.get("/vault/graph")
@@ -282,6 +328,97 @@ async def vault_graph_entity_sources(path: str) -> dict:
 async def vault_graph_source_files(entity_id: int) -> dict:
     from ...agent.graphrag_manager import sources_for_entity
     return {"entity_id": entity_id, "source_files": sources_for_entity(entity_id)}
+
+
+@router.get("/vault/csv")
+async def vault_csv_read(
+    path: str,
+    offset: int = 0,
+    limit: int = 100,
+    sort: str | None = None,
+    sort_dir: str = "asc",
+) -> dict:
+    from ... import vault_csv
+    try:
+        return vault_csv.csv_read_page(
+            path, offset=offset, limit=limit, sort=sort, sort_dir=sort_dir
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/vault/csv/row")
+async def vault_csv_add_row(body: dict) -> dict:
+    from ... import vault_csv
+    path = body.get("path", "")
+    values = body.get("values") or {}
+    if not path:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
+    try:
+        return vault_csv.csv_append_row(path, values)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        msg = str(exc)
+        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "too large" in msg else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=msg)
+
+
+@router.patch("/vault/csv/cell")
+async def vault_csv_update_cell(body: dict) -> dict:
+    from ... import vault_csv
+    path = body.get("path", "")
+    row_index = body.get("row_index")
+    column = body.get("column", "")
+    value = body.get("value", "")
+    if not path or row_index is None or not column:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`path`, `row_index`, `column` required",
+        )
+    try:
+        return vault_csv.csv_update_cell(path, int(row_index), column, value)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        msg = str(exc)
+        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "too large" in msg else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=msg)
+
+
+@router.delete("/vault/csv/row")
+async def vault_csv_delete_row(path: str, row_index: int) -> dict:
+    from ... import vault_csv
+    try:
+        return vault_csv.csv_delete_row(path, row_index)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        msg = str(exc)
+        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "too large" in msg else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=msg)
+
+
+@router.post("/vault/csv/schema")
+async def vault_csv_schema_endpoint(body: dict) -> dict:
+    from ... import vault_csv
+    path = body.get("path", "")
+    columns = body.get("columns") or []
+    if not path or not columns:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`path` and `columns` required",
+        )
+    try:
+        return vault_csv.csv_set_schema(path, columns)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        msg = str(exc)
+        code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "too large" in msg else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)

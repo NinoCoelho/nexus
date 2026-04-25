@@ -17,6 +17,7 @@ import MarkdownView from "./MarkdownView";
 import MermaidSnippets from "./MermaidSnippets";
 import KanbanBoard from "./KanbanBoard";
 import DataTableView from "./DataTableView";
+import CsvEditorView from "./CsvEditorView";
 import FilePreview from "./FilePreview";
 import { getVaultFile, putVaultFile, vaultRawUrl } from "../api";
 import { classify } from "../fileTypes";
@@ -126,6 +127,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
 
   const isKanban = !!selectedPath && selectedPath.endsWith(".md") && isKanbanContent(content);
   const isDataTable = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && isDataTableContent(content);
+  const isCsv = fileKind === "csv";
 
   const breadcrumb = selectedPath
     ? selectedPath.split("/").map((part, i, arr) => (
@@ -189,7 +191,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   Open raw
                 </a>
               )}
-              {canEdit && (
+              {canEdit && !isCsv && (
                 <button
                   className={`vault-pill${editMode ? " vault-pill--active" : ""}`}
                   onClick={() => setEditMode((m) => !m)}
@@ -205,6 +207,8 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
             <KanbanBoard path={selectedPath!} onOpenInChat={onOpenInChat} />
           ) : isDataTable && !editMode ? (
             <DataTableView path={selectedPath!} />
+          ) : isCsv ? (
+            <CsvEditorView path={selectedPath!} />
           ) : editMode && canEdit && splitMode && isMarkdown ? (
             <div className="vault-split-pane">
               <MarkdownEditor
