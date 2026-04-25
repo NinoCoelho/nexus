@@ -70,6 +70,46 @@ def models_remove(id: str = typer.Argument(...)) -> None:
     typer.echo(f"Model '{id}' removed.")
 
 
+@models_app.command("update")
+def models_update(
+    id: str = typer.Argument(...),
+    model_name: str = typer.Option(None, "--model"),
+    tags: str = typer.Option(None, "--tags", help="Comma-separated, replaces existing tags."),
+    tier: str = typer.Option(None, "--tier", help="fast|balanced|heavy"),
+    notes: str = typer.Option(None, "--notes"),
+    context_window: int = typer.Option(None, "--context-window"),
+) -> None:
+    """Update fields on an existing model entry. id and provider are immutable."""
+    from ..config_file import load, save
+
+    cfg = load()
+    for i, m in enumerate(cfg.models):
+        if m.id != id:
+            continue
+        updates: dict[str, object] = {}
+        if model_name is not None:
+            updates["model_name"] = model_name
+        if tags is not None:
+            updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+        if tier is not None:
+            if tier not in ("fast", "balanced", "heavy"):
+                raise typer.BadParameter("tier must be fast|balanced|heavy")
+            updates["tier"] = tier
+        if notes is not None:
+            updates["notes"] = notes
+        if context_window is not None:
+            updates["context_window"] = context_window
+        if not updates:
+            typer.echo("Nothing to update.")
+            return
+        cfg.models[i] = m.model_copy(update=updates)
+        save(cfg)
+        typer.echo(f"Model '{id}' updated: {', '.join(updates)}")
+        return
+    typer.echo(f"Model '{id}' not found.")
+    raise typer.Exit(1)
+
+
 @models_app.command("set-default")
 def models_set_default(id: str = typer.Argument(...)) -> None:
     """Set the default model."""

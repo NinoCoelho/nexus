@@ -48,6 +48,40 @@ def providers_add(
     typer.echo(f"Provider '{name}' added.")
 
 
+@providers_app.command("update")
+def providers_update(
+    name: str = typer.Argument(...),
+    base_url: str = typer.Option(None, "--base-url"),
+    key_env: str = typer.Option(None, "--key-env"),
+    type: str = typer.Option(None, "--type", help="openai_compat|anthropic|ollama"),
+) -> None:
+    """Update an existing provider entry."""
+    from ..config_file import load, save
+
+    cfg = load()
+    if name not in cfg.providers:
+        typer.echo(f"Provider '{name}' not found.")
+        raise typer.Exit(1)
+    p = cfg.providers[name]
+    changed: list[str] = []
+    if base_url is not None:
+        p.base_url = base_url
+        changed.append("base_url")
+    if key_env is not None:
+        p.api_key_env = key_env
+        changed.append("api_key_env")
+    if type is not None:
+        if type not in ("openai_compat", "anthropic", "ollama"):
+            raise typer.BadParameter("type must be openai_compat|anthropic|ollama")
+        p.type = type
+        changed.append("type")
+    if not changed:
+        typer.echo("Nothing to update.")
+        return
+    save(cfg)
+    typer.echo(f"Provider '{name}' updated: {', '.join(changed)}")
+
+
 @providers_app.command("set-key")
 def providers_set_key(name: str = typer.Argument(...)) -> None:
     """Set an inline API key for a provider (stored in ~/.nexus/secrets.toml)."""

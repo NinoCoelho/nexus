@@ -29,6 +29,42 @@ def _iso_stamp() -> str:
     return _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+@backup_app.command("list")
+def list_backups(
+    directory: Path = typer.Option(
+        None, "--dir", "-d",
+        help="Directory to list (default: ~/.nexus/backups).",
+    ),
+) -> None:
+    """List archives produced by `nexus backup create`, newest first."""
+    from datetime import datetime
+    from rich.console import Console
+    from rich.table import Table
+
+    target = (directory or _DEFAULT_OUT).expanduser()
+    if not target.is_dir():
+        typer.echo(f"No backup directory at {target}")
+        return
+    rows = sorted(
+        (p for p in target.glob("*.tar.gz") if p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not rows:
+        typer.echo(f"No archives in {target}")
+        return
+    table = Table(title=f"Backups in {target}")
+    table.add_column("File")
+    table.add_column("Size", justify="right")
+    table.add_column("Modified")
+    for p in rows:
+        st = p.stat()
+        size_mb = st.st_size / (1024 * 1024)
+        when = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+        table.add_row(p.name, f"{size_mb:.1f} MB", when)
+    Console().print(table)
+
+
 @backup_app.command("create")
 def create(
     output: Path = typer.Option(
