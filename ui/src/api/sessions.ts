@@ -47,6 +47,41 @@ export async function setMessagePin(
   if (!res.ok) throw new Error(`Pin error: ${res.status}`);
 }
 
+export interface ShareLink {
+  token: string;
+  path: string;
+}
+
+export interface SharedSession {
+  title: string;
+  shared_at: string;
+  now: number;
+  messages: { role: "user" | "assistant"; content: string; created_at: string | null }[];
+}
+
+export async function createSessionShare(sessionId: string): Promise<ShareLink> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/share`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Share error: ${res.status}`);
+  return res.json();
+}
+
+export async function revokeSessionShare(sessionId: string): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/share`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Share revoke error: ${res.status}`);
+  }
+}
+
+export async function getSharedSession(token: string): Promise<SharedSession> {
+  const res = await fetch(`${BASE}/share/${encodeURIComponent(token)}`);
+  if (!res.ok) throw new Error(`Share read error: ${res.status}`);
+  return res.json();
+}
+
 export async function listPins(limit = 50): Promise<PinnedMessage[]> {
   const res = await fetch(`${BASE}/pins?limit=${limit}`);
   if (!res.ok) throw new Error(`Pins error: ${res.status}`);

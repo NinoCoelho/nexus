@@ -28,9 +28,25 @@ import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
 import TrajectoryModal from "./components/TrajectoryModal";
+import SharedSessionView from "./components/SharedSessionView";
 
 export default function App() {
   const toast = useToast();
+  // Detect a read-only share-link route before any state setup. Hash routes
+  // look like ``#/share/<token>``; that page bypasses the rest of the app
+  // entirely, so unauthenticated viewers don't load the chat surface.
+  const [shareToken, setShareToken] = useState<string | null>(() => {
+    const m = window.location.hash.match(/^#\/share\/(.+)$/);
+    return m ? decodeURIComponent(m[1]) : null;
+  });
+  useEffect(() => {
+    const onHash = () => {
+      const m = window.location.hash.match(/^#\/share\/(.+)$/);
+      setShareToken(m ? decodeURIComponent(m[1]) : null);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const initial = readInitialView();
   const [view, setView] = useState(initial.view);
   const [openSkill, setOpenSkill] = useState<string | null>(null);
@@ -252,6 +268,10 @@ export default function App() {
       toast.error("Failed to start indexing", { detail: e instanceof Error ? e.message : undefined });
     }
   }, [toast]);
+
+  if (shareToken) {
+    return <SharedSessionView token={shareToken} />;
+  }
 
   return (
     <div className="app app--layout">

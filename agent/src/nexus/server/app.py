@@ -103,6 +103,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         log.info("Lifespan starting (graphrag_cfg=%s)", "present" if graphrag_cfg is not None else "None")
+        try:
+            import asyncio
+            from . import event_bus
+            event_bus.set_loop(asyncio.get_running_loop())
+        except Exception:
+            log.exception("event_bus setup failed")
         if graphrag_cfg is not None:
             try:
                 from ..agent.graphrag_manager import initialize
@@ -151,6 +157,7 @@ def create_app(
     from .routes.config import router as config_router
     from .routes.providers import router as providers_router
     from .routes.models import router as models_router
+    from .routes.share import router as share_router
 
     app.include_router(chat_router)
     app.include_router(chat_stream_router)
@@ -166,6 +173,7 @@ def create_app(
     app.include_router(config_router)
     app.include_router(providers_router)
     app.include_router(models_router)
+    app.include_router(share_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

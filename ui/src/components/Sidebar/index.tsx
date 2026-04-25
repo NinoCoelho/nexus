@@ -292,6 +292,7 @@ export default function Sidebar({
             onExport={() => void sessionActions.handleExport(s.id)}
             onToVaultRaw={() => void sessionActions.handleToVault(s.id, "raw")}
             onToVaultSummary={() => void sessionActions.handleToVault(s.id, "summary")}
+            onShare={() => void sessionActions.handleShare(s.id)}
             onDelete={() => void sessionActions.handleDelete(s.id)}
             onClick={(e) => e.stopPropagation()}
           />

@@ -2,6 +2,7 @@
 
 import React from "react";
 import {
+  createSessionShare,
   deleteSession,
   exportSession,
   importSession,
@@ -94,6 +95,24 @@ export function useSessionActions({
     }
   };
 
+  const handleShare = async (id: string) => {
+    setMenuNull();
+    try {
+      const link = await createSessionShare(id);
+      const fullUrl = `${window.location.origin}${window.location.pathname}${link.path}`;
+      try {
+        await navigator.clipboard.writeText(fullUrl);
+        toast.success("Share link copied", { detail: "Anyone with the link can view (read-only).", duration: 5000 });
+      } catch {
+        toast.info("Share link ready", { duration: 8000 });
+        // Fallback: surface the URL via prompt so the user can copy manually.
+        window.prompt("Copy this link:", fullUrl);
+      }
+    } catch (e) {
+      toast.error("Couldn't create share link", { detail: e instanceof Error ? e.message : undefined });
+    }
+  };
+
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -110,5 +129,5 @@ export function useSessionActions({
   void sessions; // referenced via closure in rename/delete
   void renamingId;
 
-  return { handleRename, handleDelete, handleExport, handleToVault, handleImportFile };
+  return { handleRename, handleDelete, handleExport, handleToVault, handleShare, handleImportFile };
 }
