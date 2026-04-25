@@ -24,7 +24,9 @@ import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
+import AgentStatusBar from "./components/AgentStatusBar";
 
 export default function App() {
   const toast = useToast();
@@ -236,6 +238,8 @@ export default function App() {
     }, [shortcutsOpen, chatSearchOpen, settingsOpen, mobileDrawerOpen]),
   });
 
+  const sessionUsage = useSessionUsage(activeSession, activeState.thinking);
+
   const handleStartGraphIndex = useCallback(async (path: string) => {
     try {
       const res = await graphragIndexFile(path);
@@ -273,6 +277,11 @@ export default function App() {
           onReset={handleNewChat}
           yoloMode={yoloMode}
           onOpenMobileDrawer={() => setMobileDrawerOpen(true)}
+          statusSlot={
+            view === "chat"
+              ? <AgentStatusBar usage={sessionUsage} thinking={activeState.thinking} />
+              : null
+          }
         />
         {backendUp === false && (
           <div style={{ padding: "6px 12px", background: "#b91c1c", color: "white", fontSize: 13, textAlign: "center" }}>

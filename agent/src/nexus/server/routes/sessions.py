@@ -149,6 +149,44 @@ async def delete_session(
     store.delete(session_id)
 
 
+@router.get("/sessions/{session_id}/usage")
+async def get_session_usage(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Return token/tool/cost totals for a single session.
+
+    Powers the live "agent status bar" in the UI. Pricing is best-effort:
+    ``estimated_cost_usd`` is ``null`` when the model has no entry in the
+    pricing table.
+    """
+    row = store._loom._db.execute(
+        "SELECT model, input_tokens, output_tokens, tool_call_count "
+        "FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from ...usage_pricing import estimate_cost
+
+    model = row[0] or ""
+    in_tok = int(row[1] or 0)
+    out_tok = int(row[2] or 0)
+    tool_calls = int(row[3] or 0)
+    cost, cost_status = (None, "unknown")
+    if model:
+        cost, cost_status = estimate_cost(model, input_tokens=in_tok, output_tokens=out_tok)
+    return {
+        "model": model or None,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "tool_call_count": tool_calls,
+        "estimated_cost_usd": cost,
+        "cost_status": cost_status,
+    }
+
+
 @router.patch("/sessions/{session_id}/messages/{seq}/feedback", status_code=status.HTTP_204_NO_CONTENT)
 async def set_message_feedback(
     session_id: str,

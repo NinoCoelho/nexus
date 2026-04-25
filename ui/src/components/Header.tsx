@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 interface Props {
   onReset: () => void;
   /** When true, the header shows a pulsing "YOLO ON" badge — an
@@ -5,9 +7,11 @@ interface Props {
   yoloMode?: boolean;
   /** Mobile-only: open the slide-in nav drawer. */
   onOpenMobileDrawer?: () => void;
+  /** Optional slot for live session metadata (model, tokens, cost). */
+  statusSlot?: ReactNode;
 }
 
-export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer }: Props) {
+export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, statusSlot }: Props) {
   return (
     <header className="header">
       <div className="header-inner">
@@ -33,6 +37,7 @@ export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer }
           </div>
         </div>
         <div className="header-actions">
+          {statusSlot}
           {yoloMode && (
             <span className="yolo-badge" title="YOLO mode: confirm prompts auto-approved">
               YOLO ON

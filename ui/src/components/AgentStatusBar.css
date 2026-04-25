@@ -1,0 +1,36 @@
+.agent-status-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.agent-status-pill {
+  padding: 2px 7px;
+  background: var(--bg-inset, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agent-status-cost {
+  color: var(--fg-dim);
+}
+
+.agent-status-bar.is-thinking .agent-status-pill {
+  animation: agent-status-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes agent-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (max-width: 640px) {
+  .agent-status-bar {
+    display: none;
+  }
+}

@@ -115,6 +115,21 @@ export async function patchSession(id: string, patch: { title?: string }): Promi
   return res.json();
 }
 
+export interface SessionUsage {
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  tool_call_count: number;
+  estimated_cost_usd: number | null;
+  cost_status: "ok" | "unknown" | "zero";
+}
+
+export async function getSessionUsage(sessionId: string): Promise<SessionUsage> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/usage`);
+  if (!res.ok) throw new Error(`Usage error: ${res.status}`);
+  return res.json();
+}
+
 export async function setMessageFeedback(
   sessionId: string,
   seq: number,
