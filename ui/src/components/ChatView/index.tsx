@@ -249,16 +249,17 @@ export default function ChatView({
               <div className="user-msg-meta">
                 <span className="user-msg-label">You</span>
                 <span className="user-msg-time">{fmt(msg.timestamp)}</span>
-                {!thinking && idx < visible.length - 1 && onRollback && (
+                {!thinking && onRollback && (
                   <button
-                    className="user-msg-rollback"
+                    className="user-msg-edit"
                     onClick={() => onRollback(idx)}
                     type="button"
-                    title="Delete from here and retry"
+                    title="Edit & resend (truncates everything after this turn)"
+                    aria-label="Edit message"
                   >
-                    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="1,4 1,10 7,10" />
-                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11.5 2.5l2 2-7.5 7.5-2.5.5.5-2.5z" />
+                      <path d="M10 4l2 2" />
                     </svg>
                   </button>
                 )}

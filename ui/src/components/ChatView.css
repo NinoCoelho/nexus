@@ -93,7 +93,8 @@
   box-shadow: var(--shadow);
 }
 
-.user-msg-rollback {
+.user-msg-rollback,
+.user-msg-edit {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -107,12 +108,26 @@
   transition: opacity 150ms ease, color 150ms ease;
 }
 
-.user-msg-meta:hover .user-msg-rollback {
+.user-msg-meta:hover .user-msg-rollback,
+.user-msg-meta:hover .user-msg-edit,
+.user-msg-edit:focus-visible,
+.user-msg-rollback:focus-visible {
   opacity: 1;
 }
 
 .user-msg-rollback:hover {
   color: var(--danger, #c85050);
+}
+
+.user-msg-edit:hover {
+  color: var(--accent, var(--fg));
+}
+
+@media (hover: none) {
+  .user-msg-edit,
+  .user-msg-rollback {
+    opacity: 0.7;
+  }
 }
 
 /* Thinking dots */
