@@ -284,6 +284,7 @@ export default function App() {
               ? <AgentStatusBar
                   usage={sessionUsage}
                   thinking={activeState.thinking}
+                  selectedModel={activeState.selectedModel}
                   onOpenTrajectory={activeSession ? () => setTrajectoryOpen(true) : undefined}
                 />
               : null

@@ -5,6 +5,9 @@ interface Props {
   usage: SessionUsage | null;
   thinking?: boolean;
   onOpenTrajectory?: () => void;
+  /** Live UI selection — preferred over usage.model, which records only the
+   *  first model ever used in the session and goes stale on model switch. */
+  selectedModel?: string;
 }
 
 function fmtTokens(n: number): string {
@@ -19,17 +22,19 @@ function fmtCost(c: number | null, status: SessionUsage["cost_status"]): string 
   return `$${c.toFixed(2)}`;
 }
 
-export default function AgentStatusBar({ usage, thinking, onOpenTrajectory }: Props) {
+export default function AgentStatusBar({ usage, thinking, onOpenTrajectory, selectedModel }: Props) {
   if (!usage) return null;
-  const { model, input_tokens, output_tokens, tool_call_count } = usage;
+  const { input_tokens, output_tokens, tool_call_count } = usage;
   const total = input_tokens + output_tokens;
-  if (!model && total === 0 && tool_call_count === 0) return null;
-  const shortModel = model ? model.split("/").pop() : null;
+  // Prefer the live UI selection; fall back to the persisted (first-turn) value.
+  const liveModel = selectedModel && selectedModel !== "auto" ? selectedModel : usage.model;
+  if (!liveModel && total === 0 && tool_call_count === 0) return null;
+  const shortModel = liveModel ? liveModel.split("/").pop() : null;
 
   return (
     <div className={`agent-status-bar${thinking ? " is-thinking" : ""}`}>
       {shortModel && (
-        <span className="agent-status-pill" title={`Model: ${model}`}>
+        <span className="agent-status-pill" title={`Model: ${liveModel}`}>
           {shortModel}
         </span>
       )}
