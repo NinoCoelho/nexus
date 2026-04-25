@@ -4,14 +4,19 @@
  * Manages the full recording lifecycle: requesting microphone permission,
  * accumulating audio chunks, and producing an `audio/webm` `Blob` with an
  * object URL when done. Permission errors are reported via toast rather than thrown.
+ *
+ * Also exposes a live RMS level history and an elapsed-seconds counter so
+ * the UI can render a waveform + timer while recording.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "../../toast/ToastProvider";
 
 export interface AudioAttachment {
   blob: Blob;
   url: string;
 }
+
+const LEVEL_HISTORY = 32; // ring-buffer length for the live waveform
 
 /**
  * Audio recording hook for the input bar.
@@ -33,32 +38,108 @@ export function useAudioRecorder() {
   const toast = useToast();
   const [recording, setRecording] = useState(false);
   const [audio, setAudio] = useState<AudioAttachment | null>(null);
+  const [levels, setLevels] = useState<number[]>(() => new Array(LEVEL_HISTORY).fill(0));
+  const [seconds, setSeconds] = useState(0);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const cancelledRef = useRef(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const cleanupAnalyser = useCallback(() => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (timerRef.current != null) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    try { sourceRef.current?.disconnect(); } catch { /* ignore */ }
+    try { analyserRef.current?.disconnect(); } catch { /* ignore */ }
+    try { void audioCtxRef.current?.close(); } catch { /* ignore */ }
+    sourceRef.current = null;
+    analyserRef.current = null;
+    audioCtxRef.current = null;
+  }, []);
+
+  useEffect(() => () => cleanupAnalyser(), [cleanupAnalyser]);
 
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
+      cancelledRef.current = false;
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        const url = URL.createObjectURL(blob);
-        setAudio({ blob, url });
+        cleanupAnalyser();
+        if (!cancelledRef.current) {
+          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          const url = URL.createObjectURL(blob);
+          setAudio({ blob, url });
+        }
         stream.getTracks().forEach((t) => t.stop());
+        setLevels(new Array(LEVEL_HISTORY).fill(0));
+        setSeconds(0);
       };
       mediaRecorderRef.current = recorder;
       recorder.start();
+
+      // Wire up an analyser for the live waveform.
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new Ctx();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      audioCtxRef.current = ctx;
+      sourceRef.current = src;
+      analyserRef.current = analyser;
+      const buf = new Uint8Array(analyser.fftSize);
+      const tick = () => {
+        analyser.getByteTimeDomainData(buf);
+        // Compute normalised RMS (~0..1).
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        setLevels((prev) => {
+          const next = prev.slice(1);
+          next.push(Math.min(1, rms * 2.4));
+          return next;
+        });
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
+
+      const startedAt = Date.now();
+      timerRef.current = window.setInterval(() => {
+        setSeconds(Math.floor((Date.now() - startedAt) / 1000));
+      }, 250);
+
       setRecording(true);
     } catch {
       toast.error("Microphone access denied");
     }
-  }, [toast]);
+  }, [cleanupAnalyser, toast]);
 
   const stopRecording = useCallback(() => {
+    cancelledRef.current = false;
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+  }, []);
+
+  const cancelRecording = useCallback(() => {
+    cancelledRef.current = true;
     mediaRecorderRef.current?.stop();
     setRecording(false);
   }, []);
@@ -70,5 +151,9 @@ export function useAudioRecorder() {
     }
   }, [audio]);
 
-  return { recording, audio, setAudio, startRecording, stopRecording, clearAudio };
+  return {
+    recording, audio, setAudio,
+    levels, seconds,
+    startRecording, stopRecording, cancelRecording, clearAudio,
+  };
 }

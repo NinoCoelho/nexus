@@ -20,6 +20,7 @@ import { useAudioRecorder } from "./useAudioRecorder";
 import { useMentionPicker } from "./useMentionPicker";
 import AttachmentsBar from "./AttachmentsBar";
 import ModelBadge from "./ModelBadge";
+import RecordingIndicator from "./RecordingIndicator";
 
 interface AttachedFile {
   name: string;
@@ -63,7 +64,7 @@ export default function InputBar({
   const [menuOpen, setMenuOpen] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
 
-  const { recording, audio, setAudio, startRecording, stopRecording, clearAudio } = useAudioRecorder();
+  const { recording, audio, setAudio, levels, seconds, startRecording, stopRecording, cancelRecording, clearAudio } = useAudioRecorder();
   const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(value, onChange);
 
   const hasContent = value.trim().length > 0 || (attachments && attachments.length > 0) || !!audio;
@@ -199,19 +200,27 @@ export default function InputBar({
               </svg>
             </button>
           </div>
-          <textarea
-            ref={textareaRef}
-            className="input-textarea"
-            rows={1}
-            placeholder="Message Nexus…"
-            value={value}
-            onChange={(e) => handleTextChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onKeyUp={handleSelectionChange}
-            onClick={handleSelectionChange}
-            onBlur={() => setTimeout(() => setMention(null), 120)}
-            disabled={disabled}
-          />
+          {recording ? (
+            <RecordingIndicator
+              levels={levels}
+              seconds={seconds}
+              onCancel={cancelRecording}
+            />
+          ) : (
+            <textarea
+              ref={textareaRef}
+              className="input-textarea"
+              rows={1}
+              placeholder="Message Nexus…"
+              value={value}
+              onChange={(e) => handleTextChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onKeyUp={handleSelectionChange}
+              onClick={handleSelectionChange}
+              onBlur={() => setTimeout(() => setMention(null), 120)}
+              disabled={disabled}
+            />
+          )}
           {showModelBadge && (
             <ModelBadge
               selectedModel={selectedModel!}

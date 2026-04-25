@@ -1,0 +1,79 @@
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--bg-inset, rgba(255, 255, 255, 0.04));
+  border-radius: 14px;
+  height: 36px;
+}
+
+.recording-cancel {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(220, 80, 80, 0.15);
+  color: var(--danger, #c85050);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recording-cancel:hover {
+  background: rgba(220, 80, 80, 0.28);
+}
+
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger, #c85050);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.7); }
+}
+
+.recording-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--fg);
+  min-width: 36px;
+}
+
+.recording-waveform {
+  flex: 1;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.recording-bar {
+  width: 3px;
+  background: var(--accent, var(--fg));
+  border-radius: 2px;
+  transition: height 80ms linear;
+  min-height: 2px;
+}
+
+.recording-hint {
+  font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .recording-hint {
+    display: none;
+  }
+}
