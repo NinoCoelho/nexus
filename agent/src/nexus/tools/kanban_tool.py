@@ -29,7 +29,7 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                 "enum": [
                     "create_board", "view",
                     "add_card", "move_card", "update_card", "delete_card",
-                    "add_lane", "delete_lane",
+                    "add_lane", "update_lane", "delete_lane",
                 ],
                 "description": "Action to perform.",
             },
@@ -39,7 +39,19 @@ KANBAN_MANAGE_TOOL = ToolSpec(
             },
             "title": {
                 "type": "string",
-                "description": "Board title (create_board), card title (add_card/update_card), or lane title (add_lane).",
+                "description": "Board title (create_board), card title (add_card/update_card), or lane title (add_lane/update_lane).",
+            },
+            "prompt": {
+                "type": "string",
+                "description": (
+                    "Auto-dispatch prompt for update_lane. When a card is added/moved into "
+                    "the lane, the agent is auto-dispatched with this prompt as context. "
+                    "Empty string clears."
+                ),
+            },
+            "model": {
+                "type": "string",
+                "description": "Model id used for this lane's auto-dispatched runs (update_lane). Empty string clears.",
             },
             "columns": {
                 "type": "array",
@@ -137,6 +149,19 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
             if not title:
                 return json.dumps({"ok": False, "error": "`title` is required"})
             lane = vault_kanban.add_lane(path, title)
+            return json.dumps({"ok": True, "lane": lane.to_dict()})
+
+        if action == "update_lane":
+            lane_id = args.get("lane", "")
+            if not lane_id:
+                return json.dumps({"ok": False, "error": "`lane` (id) is required"})
+            updates: dict[str, Any] = {}
+            for key in ("title", "prompt", "model"):
+                if key in args:
+                    updates[key] = args[key]
+            if not updates:
+                return json.dumps({"ok": False, "error": "no fields to update (title/prompt/model)"})
+            lane = vault_kanban.update_lane(path, lane_id, updates)
             return json.dumps({"ok": True, "lane": lane.to_dict()})
 
         if action == "delete_lane":

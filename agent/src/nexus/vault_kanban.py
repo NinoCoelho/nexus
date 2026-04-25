@@ -38,11 +38,30 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
 from . import vault
+
+# Hook fired after a successful cross-lane move. The server registers a
+# callback that auto-dispatches the destination lane's prompt (with a
+# loop/depth guard) so the agent's tool-driven moves get the same auto-run
+# behavior as a UI drag-drop. Kept as a module-level slot to avoid a circular
+# import between vault_kanban and the server layer.
+LaneChangeHook = Callable[..., None]
+_lane_change_hook: LaneChangeHook | None = None
+
+
+def set_lane_change_hook(fn: LaneChangeHook | None) -> None:
+    """Register a callback fired by ``move_card`` after a cross-lane move.
+
+    The callback receives kwargs: ``path``, ``card_id``, ``src_lane_id``,
+    ``dst_lane_id``, ``dst_lane_prompt`` (may be None — caller decides
+    whether to act).
+    """
+    global _lane_change_hook
+    _lane_change_hook = fn
 
 KANBAN_PLUGIN_KEY = "kanban-plugin"
 
@@ -357,6 +376,23 @@ def add_card(
     card = Card(id=str(uuid.uuid4()), title=title, body=body)
     lane.cards.append(card)
     write_board(path, board)
+
+    # Fire the lane-change hook for "card lands in this lane" symmetry: a
+    # new card created directly in a prompt-bearing lane should run the
+    # prompt, just like a move into that lane does. ``src_lane_id`` is empty
+    # to flag a fresh card with no source lane.
+    if _lane_change_hook is not None:
+        try:
+            _lane_change_hook(
+                path=path,
+                card_id=card.id,
+                src_lane_id="",
+                dst_lane_id=lane.id,
+                dst_lane_prompt=lane.prompt,
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("lane_change_hook raised on add_card")
     return card
 
 
@@ -436,6 +472,22 @@ def move_card(
     else:
         dst_lane.cards.insert(max(0, position), card)
     write_board(path, board)
+
+    # Fire the lane-change hook *after* persisting. Cross-lane only — staying
+    # within the same lane is just a reorder, never an auto-dispatch trigger.
+    if _lane_change_hook is not None and src_lane.id != dst_lane.id:
+        try:
+            _lane_change_hook(
+                path=path,
+                card_id=card.id,
+                src_lane_id=src_lane.id,
+                dst_lane_id=dst_lane.id,
+                dst_lane_prompt=dst_lane.prompt,
+            )
+        except Exception:
+            # Never let a misbehaving hook break a successful move.
+            import logging
+            logging.getLogger(__name__).exception("lane_change_hook raised")
     return card
 
 

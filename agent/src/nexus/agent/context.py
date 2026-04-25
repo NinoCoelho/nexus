@@ -25,3 +25,13 @@ from contextvars import ContextVar
 CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
     "CURRENT_SESSION_ID", default=None
 )
+
+# Tracks the chain of card_ids whose lane-prompts have been auto-dispatched
+# *into* the current execution context. Used by the lane-change hook to
+# detect cycles (A→B→A) and cap cascade depth so a misconfigured set of
+# lane prompts can't infinite-loop. ContextVars copy into asyncio.Tasks
+# spawned via create_task, so the chain propagates through nested
+# background dispatches without explicit plumbing.
+DISPATCH_CHAIN: ContextVar[tuple[str, ...]] = ContextVar(
+    "DISPATCH_CHAIN", default=()
+)

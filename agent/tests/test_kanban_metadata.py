@@ -106,6 +106,33 @@ def test_kanban_query_tool():
     assert out["hits"][0]["title"] == "Triage P0s"
 
 
+def test_kanban_manage_tool_update_lane():
+    vault_kanban.create_empty("k.md", columns=["Triage"])
+    out = json.loads(handle_kanban_tool({
+        "action": "update_lane", "path": "k.md", "lane": "triage",
+        "prompt": "Summarise the card.", "model": "claude-sonnet-4-6",
+    }))
+    assert out["ok"] is True
+    assert out["lane"]["prompt"] == "Summarise the card."
+    assert out["lane"]["model"] == "claude-sonnet-4-6"
+
+    # Clearing the prompt
+    out = json.loads(handle_kanban_tool({
+        "action": "update_lane", "path": "k.md", "lane": "triage", "prompt": "",
+    }))
+    assert out["ok"] is True
+    assert "prompt" not in out["lane"]
+
+
+def test_kanban_manage_tool_update_lane_requires_lane():
+    vault_kanban.create_empty("k.md")
+    out = json.loads(handle_kanban_tool({
+        "action": "update_lane", "path": "k.md", "prompt": "x",
+    }))
+    assert out["ok"] is False
+    assert "lane" in out["error"]
+
+
 def test_lane_model_round_trip():
     vault_kanban.create_empty("lm.md", columns=["Triage"])
     vault_kanban.update_lane("lm.md", "triage", {

@@ -143,24 +143,17 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const handleDrop = async (laneId: string, index: number) => {
     if (!dragCard) return;
     const found = findCard(dragCard);
-    const destLane = board.lanes.find((l) => l.id === laneId);
     const cardId = dragCard;
     setDragCard(null);
     setDragOver(null);
     if (!found) return;
-    const movedLanes = found.lane.id !== laneId;
     try {
+      // Server-side lane-change hook auto-dispatches the destination lane's
+      // prompt (if any), so the UI just persists the move and reloads.
+      // This same path now applies whether the move came from a drag-drop,
+      // an agent tool call, or a third-party API client.
       await patchVaultKanbanCard(path, cardId, { lane: laneId, position: index });
       reload();
-      if (movedLanes && destLane?.prompt) {
-        try {
-          // Fire-and-forget: server runs the agent in the background.
-          // The card flips to status=running and polling picks up the
-          // spinner. User stays on the board.
-          await dispatchFromVault({ path, card_id: cardId, mode: "background" });
-          reload();
-        } catch { /* dispatch failure is non-fatal */ }
-      }
     } catch { /* ignore move errors */ }
   };
 

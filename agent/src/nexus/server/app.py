@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from ..agent.ask_user_tool import AskUserHandler
-from ..agent.context import CURRENT_SESSION_ID
+from ..agent.context import CURRENT_SESSION_ID, DISPATCH_CHAIN
 from ..agent.llm import LLMTransportError, MalformedOutputError
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
@@ -1917,6 +1917,10 @@ def create_app(
         and updating the card's status (done/failed) when finished."""
         from .. import vault_kanban
         token = CURRENT_SESSION_ID.set(session_id)
+        # Record this card on the dispatch chain so any move_card the agent
+        # performs during this turn is recognised by the lane-change hook
+        # as descended from this dispatch (cycle + depth guards).
+        chain_token = DISPATCH_CHAIN.set(DISPATCH_CHAIN.get() + (card_id,))
         try:
             session = store.get_or_create(session_id)
             pre_turn = list(session.history)
@@ -1995,6 +1999,7 @@ def create_app(
                 log.exception("background dispatch: card status update failed")
         finally:
             CURRENT_SESSION_ID.reset(token)
+            DISPATCH_CHAIN.reset(chain_token)
 
     async def _dispatch_impl(
         *,
@@ -2121,6 +2126,50 @@ def create_app(
         return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=sessions)
 
     agent._dispatcher = _agent_dispatcher
+
+    # Lane-change hook: any cross-lane move (UI drag-drop via PATCH, agent
+    # tool via kanban_manage, external API client) auto-dispatches the
+    # destination lane's prompt if one is set. Cycle and depth guards via
+    # the DISPATCH_CHAIN contextvar prevent runaway cascades.
+    MAX_DISPATCH_DEPTH = 5
+
+    def _lane_change_hook(
+        *,
+        path: str,
+        card_id: str,
+        src_lane_id: str,
+        dst_lane_id: str,
+        dst_lane_prompt: str | None,
+    ) -> None:
+        if not dst_lane_prompt:
+            return
+        chain = DISPATCH_CHAIN.get()
+        if card_id in chain:
+            log.info(
+                "lane_change_hook: skipping auto-dispatch for card %s "
+                "(cycle: already in chain %s)", card_id, chain,
+            )
+            return
+        if len(chain) >= MAX_DISPATCH_DEPTH:
+            log.warning(
+                "lane_change_hook: depth limit reached (%d) for card %s, chain=%s",
+                MAX_DISPATCH_DEPTH, card_id, chain,
+            )
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Sync test context with no event loop — silently skip.
+            return
+        loop.create_task(
+            _dispatch_impl(
+                path=path, card_id=card_id, mode="background",
+                a=agent, store=sessions,
+            )
+        )
+
+    from .. import vault_kanban as _vk
+    _vk.set_lane_change_hook(_lane_change_hook)
 
     @app.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)
     async def vault_dispatch(

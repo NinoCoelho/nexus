@@ -282,7 +282,39 @@ export default function VaultTreePanel({
   const [treeError, setTreeError] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const uploadCtxDirRef = useRef<HTMLInputElement | null>(null);
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set());
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("nexus.vault.expandedDirs");
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch { /* ignore */ }
+    return new Set();
+  });
+
+  // Persist expanded dirs across view switches / reloads.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "nexus.vault.expandedDirs",
+        JSON.stringify(Array.from(expandedDirs)),
+      );
+    } catch { /* ignore quota errors */ }
+  }, [expandedDirs]);
+
+  // Auto-expand ancestor folders of the selected file so the tree stays in sync.
+  useEffect(() => {
+    if (!selectedPath || !selectedPath.includes("/")) return;
+    const parts = selectedPath.split("/");
+    const ancestors: string[] = [];
+    for (let i = 1; i < parts.length; i++) ancestors.push(parts.slice(0, i).join("/"));
+    setExpandedDirs((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const a of ancestors) {
+        if (!next.has(a)) { next.add(a); changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [selectedPath]);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");

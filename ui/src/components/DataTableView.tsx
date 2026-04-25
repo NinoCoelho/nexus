@@ -79,12 +79,9 @@ export default function DataTableView({ path }: Props) {
   // Reset paging on filter/search/path change
   useEffect(() => { setPage(0); }, [path, search, sort]);
 
-  if (error) return <div className="dt-error">{error}</div>;
-  if (!table) return <div className="dt-loading">Loading…</div>;
-
-  const fields: FieldSchema[] = table.schema?.fields ?? [];
-  const rows = table.rows ?? [];
-  const views = table.views ?? [];
+  const fields: FieldSchema[] = table?.schema?.fields ?? [];
+  const rows = table?.rows ?? [];
+  const views = table?.views ?? [];
   const visibleFields = fields.filter((f) => !hidden.has(f.name));
 
   // Compute formula values for every row once, in a derived map.
@@ -119,6 +116,9 @@ export default function DataTableView({ path }: Props) {
     copy.sort((a, b) => cmp(a[sort.field], b[sort.field]) * (sort.dir === "asc" ? 1 : -1));
     return copy;
   }, [searched, sort]);
+
+  if (error) return <div className="dt-error">{error}</div>;
+  if (!table) return <div className="dt-loading">Loading…</div>;
 
   // Paginate
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
@@ -234,23 +234,31 @@ export default function DataTableView({ path }: Props) {
     setPage(0);
   }
 
-  async function saveCurrentAsView() {
-    const name = window.prompt("Save current filter/sort/columns as a view called:");
-    if (!name?.trim()) return;
-    const view: DataTableView = {
-      name: name.trim(),
-      filter: search || undefined,
-      sort: sort ?? undefined,
-      hidden: hidden.size > 0 ? Array.from(hidden) : undefined,
-    };
-    const next = [...views.filter((v) => v.name !== view.name), view];
-    try {
-      await setVaultDataTableViews(path, next);
-      setActiveView(view.name);
-      reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "View save failed");
-    }
+  function saveCurrentAsView() {
+    setConfirmModal({
+      kind: "prompt",
+      title: "Save view",
+      message: "Save current filter/sort/columns as a view called:",
+      confirmLabel: "Save",
+      onCancel: () => setConfirmModal(null),
+      onSubmit: async (name: string) => {
+        setConfirmModal(null);
+        const view: DataTableView = {
+          name: name.trim(),
+          filter: search || undefined,
+          sort: sort ?? undefined,
+          hidden: hidden.size > 0 ? Array.from(hidden) : undefined,
+        };
+        const next = [...views.filter((v) => v.name !== view.name), view];
+        try {
+          await setVaultDataTableViews(path, next);
+          setActiveView(view.name);
+          reload();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "View save failed");
+        }
+      },
+    });
   }
 
   async function deleteView(name: string) {
