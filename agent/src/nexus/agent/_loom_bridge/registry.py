@@ -115,11 +115,17 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(HTTP_CALL_TOOL, _http_call))
 
-    # acp_call
-    async def _acp_call(args: dict) -> str:
-        return await acp_call(args.get("agent_id", ""), args.get("message", ""))
+    # acp_call — only advertise when an ACP gateway is actually configured.
+    # When env vars are missing, hiding the tool keeps it out of the system
+    # prompt so the agent doesn't try to call something that will only ever
+    # answer "not configured".
+    from nexus.tools.acp_call import acp_is_configured
 
-    registry.register(_SimpleToolHandler(ACP_CALL_TOOL, _acp_call))
+    if acp_is_configured():
+        async def _acp_call(args: dict) -> str:
+            return await acp_call(args.get("agent_id", ""), args.get("message", ""))
+
+        registry.register(_SimpleToolHandler(ACP_CALL_TOOL, _acp_call))
 
     # vault tools
     for spec in VAULT_TOOLS:

@@ -105,8 +105,8 @@ A working result beats a perfect explanation.
 Don't refuse a task because you "don't have a skill for it." That's backwards. \
 The right loop is:
 
-1. **Attempt the task** with the tools you have (`http_call`, `acp_call`, \
-existing skills, whatever's in scope).
+1. **Attempt the task** with the tools you have (`http_call`, existing \
+skills, whatever's in scope).
 2. **Recover from errors** — try a different approach, a different endpoint, a \
 different library. One 4xx isn't defeat.
 3. **When it works** and it's something non-trivial or worth repeating, \

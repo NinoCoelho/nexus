@@ -41,6 +41,11 @@ def _config_from_env() -> AcpConfig:
     )
 
 
+def acp_is_configured() -> bool:
+    """Return True iff ACP env vars are present so the tool will actually work."""
+    return _config_from_env().configured
+
+
 async def acp_call(agent_id: str, message: str) -> str:
     """Call an external agent over the ACP WebSocket gateway.
 
