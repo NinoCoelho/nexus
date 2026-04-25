@@ -62,5 +62,13 @@ from .chat import chat as _chat_fn  # noqa: E402
 app.command()(_chat_fn)
 
 
+# ── version + doctor ──────────────────────────────────────────────────────────
+
+from .doctor_cmd import doctor as _doctor_fn, version as _version_fn  # noqa: E402
+
+app.command()(_version_fn)
+app.command()(_doctor_fn)
+
+
 if __name__ == "__main__":
     app()
