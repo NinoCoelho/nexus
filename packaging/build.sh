@@ -121,12 +121,14 @@ cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
 [[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"
 
 if [[ "$SKIP_SIGN" -eq 0 ]]; then
-  echo "==> Ad-hoc codesigning bundle (use Developer ID for distribution)"
-  # Sign every dylib/so first, then the interpreter, then the .app last.
-  /usr/bin/find "$RES" \( -name '*.dylib' -o -name '*.so' \) -print0 \
-    | xargs -0 -I{} codesign --force --sign - --options runtime --timestamp=none "{}"
-  codesign --force --sign - --options runtime --timestamp=none "$RES/python/bin/python3" || true
-  codesign --force --deep --sign - --options runtime --timestamp=none "$APP"
+  echo "==> Ad-hoc codesigning bundle"
+  # python-build-standalone's interpreter and dylibs already ship with
+  # consistent ad-hoc signatures. Re-signing them with --options runtime
+  # (hardened runtime) caused Team-ID mismatches between python3 and
+  # libpython3.12.dylib. Sign only the outer .app with --deep, which
+  # re-signs the Nexus host binary and leaves the bundled Python tree's
+  # existing self-consistent signatures intact for files we don't touch.
+  codesign --force --deep --sign - --timestamp=none "$APP"
 fi
 
 echo "==> Done: $APP"
