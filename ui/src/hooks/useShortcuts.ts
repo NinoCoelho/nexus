@@ -5,6 +5,7 @@ export interface ShortcutHandlers {
   onFocusSearch?: () => void;
   onToggleSidebar?: () => void;
   onNewChat?: () => void;
+  onFindInChat?: () => void;
   onEscape?: () => void;
 }
 
@@ -55,6 +56,13 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       if (e.shiftKey && e.key.toLowerCase() === "n" && handlers.onNewChat) {
         e.preventDefault();
         handlers.onNewChat();
+        return;
+      }
+
+      // Cmd+Shift+F — find in current chat.
+      if (e.shiftKey && e.key.toLowerCase() === "f" && handlers.onFindInChat) {
+        e.preventDefault();
+        handlers.onFindInChat();
         return;
       }
     };

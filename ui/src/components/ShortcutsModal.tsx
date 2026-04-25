@@ -24,6 +24,7 @@ const groups: { title: string; items: { keys: string[]; label: string }[] }[] = 
     items: [
       { keys: ["Enter"], label: "Send message" },
       { keys: ["Shift", "Enter"], label: "Newline in input" },
+      { keys: [MOD, "Shift", "F"], label: "Find in current chat" },
     ],
   },
   {

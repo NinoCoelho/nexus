@@ -6,11 +6,12 @@
  * `useChatSession`, so switching sessions or navigating between views never
  * discards in-progress messages.
  */
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TraceEvent } from "../../api";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
 import { PartialTurnActions } from "./partialTurn";
+import ChatSearchBar from "./ChatSearchBar";
 import "../ChatView.css";
 
 export interface TimelineStep {
@@ -79,6 +80,8 @@ export interface Message {
 interface Props {
   messages: Message[];
   thinking: boolean;
+  searchOpen?: boolean;
+  onSearchClose?: () => void;
   input: string;
   onInputChange: (v: string) => void;
   onSend: (overrideText?: string) => void;
@@ -105,6 +108,8 @@ function fmt(d: Date) {
 export default function ChatView({
   messages,
   thinking,
+  searchOpen,
+  onSearchClose,
   input,
   onInputChange,
   onSend,
@@ -124,10 +129,30 @@ export default function ChatView({
   onModelChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, thinking]);
+    if (autoScrollEnabled) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, thinking, autoScrollEnabled]);
+
+  useEffect(() => {
+    if (!searchOpen) setAutoScrollEnabled(true);
+  }, [searchOpen]);
+
+  const handleJumpTo = useCallback((idx: number) => {
+    setAutoScrollEnabled(false);
+    const el = messageRefs.current.get(idx);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.remove("chat-search-highlight");
+      // force reflow so animation restarts
+      void el.offsetWidth;
+      el.classList.add("chat-search-highlight");
+    }
+  }, []);
 
   // During streaming, the last message may be an in-progress assistant message
   // with partial content. Show it inline; only show the dots indicator when
@@ -142,8 +167,19 @@ export default function ChatView({
       m.partial != null,
   );
 
+  const setMsgRef = (idx: number) => (el: HTMLDivElement | null) => {
+    if (el) messageRefs.current.set(idx, el);
+    else messageRefs.current.delete(idx);
+  };
+
   return (
     <div className="chat-view">
+      <ChatSearchBar
+        open={!!searchOpen}
+        messages={visible}
+        onClose={() => onSearchClose?.()}
+        onJumpTo={handleJumpTo}
+      />
       <div className="message-list">
         {visible.length === 0 && !thinking && hasModel === false && (
           <div className="chat-empty chat-empty--setup">
@@ -164,7 +200,7 @@ export default function ChatView({
         {visible.map((msg, idx) =>
           msg.role === "assistant" ? (
             msg.kind === "limit" ? (
-              <div key={idx} className="limit-banner">
+              <div key={idx} ref={setMsgRef(idx)} className="limit-banner">
                 <div className="limit-banner-text">
                   Hit the per-turn tool-call limit ({msg.limitIterations ?? 16}). How do you want to proceed?
                 </div>
@@ -186,7 +222,7 @@ export default function ChatView({
                 </div>
               </div>
             ) : (
-              <div key={idx}>
+              <div key={idx} ref={setMsgRef(idx)}>
                 {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0) && (
                   <AssistantMessage
                     content={msg.content}
@@ -209,7 +245,7 @@ export default function ChatView({
               </div>
             )
           ) : (
-            <div key={idx} className="user-msg">
+            <div key={idx} ref={setMsgRef(idx)} className="user-msg">
               <div className="user-msg-meta">
                 <span className="user-msg-label">You</span>
                 <span className="user-msg-time">{fmt(msg.timestamp)}</span>

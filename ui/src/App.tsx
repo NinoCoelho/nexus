@@ -45,6 +45,7 @@ export default function App() {
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's
@@ -223,11 +224,16 @@ export default function App() {
     }, []),
     onToggleSidebar: useCallback(() => setMobileDrawerOpen((v) => !v), []),
     onNewChat: handleNewChat,
+    onFindInChat: useCallback(() => {
+      if (view !== "chat") setView("chat");
+      setChatSearchOpen(true);
+    }, [view]),
     onEscape: useCallback(() => {
       if (shortcutsOpen) setShortcutsOpen(false);
+      else if (chatSearchOpen) setChatSearchOpen(false);
       else if (settingsOpen) setSettingsOpen(false);
       else if (mobileDrawerOpen) setMobileDrawerOpen(false);
-    }, [shortcutsOpen, settingsOpen, mobileDrawerOpen]),
+    }, [shortcutsOpen, chatSearchOpen, settingsOpen, mobileDrawerOpen]),
   });
 
   const handleStartGraphIndex = useCallback(async (path: string) => {
@@ -280,6 +286,8 @@ export default function App() {
             <ChatView
               messages={activeState.messages}
               thinking={activeState.thinking}
+              searchOpen={chatSearchOpen}
+              onSearchClose={() => setChatSearchOpen(false)}
               input={activeState.input}
               onInputChange={handleInputChange}
               onSend={send}
