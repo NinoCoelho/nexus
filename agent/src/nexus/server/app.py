@@ -36,6 +36,24 @@ def create_app(
     settings_store: SettingsStore | None = None,
     graphrag_cfg: Any | None = None,
 ) -> FastAPI:
+    """Build and return the configured FastAPI application instance.
+
+    Handles all server wiring: HITL (AskUserHandler, TerminalHandler),
+    trace callback for SSE, kanban lane-change hook, bundled static UI,
+    and registration of all routers from ``server/routes/``.
+
+    Args:
+        agent: Agent instance (created in main.py before the app).
+        registry: Skill registry; passed to routes via app.state.
+        sessions: Session store; created internally if not provided.
+        nexus_cfg: Configuration loaded from ``~/.nexus/config.toml``.
+        provider_registry: LLM provider registry; None disables multi-provider routing.
+        settings_store: Runtime settings store; created internally if None.
+        graphrag_cfg: If present, the GraphRAG engine is initialized during lifespan.
+
+    Returns:
+        FastAPI application ready to be served.
+    """
     sessions = sessions or SessionStore()
     settings_store = settings_store or SettingsStore()
 

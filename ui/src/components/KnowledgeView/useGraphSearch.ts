@@ -1,9 +1,29 @@
-// Graph-search state and handler logic for KnowledgeView.
+/**
+ * @file Entity search hook for the KnowledgeView subgraph.
+ *
+ * Tracks the search term and the set of highlighted nodes (`highlightNodesRef`),
+ * applying the filter directly to the simulation refs and triggering a canvas
+ * redraw without causing unnecessary re-renders in the parent component.
+ */
 
 import { useState } from "react";
 import { drawCanvas } from "./useSubgraphSim";
 import type { SubgraphSimRefs } from "./useSubgraphSim";
 
+/**
+ * Hook that manages entity name search within the KnowledgeView subgraph.
+ *
+ * Updates `simRefs.highlightNodesRef` with the indices of nodes matching
+ * the typed term and triggers a canvas redraw. The search is case-insensitive
+ * and substring-based (`includes`).
+ *
+ * @param simRefs - Shared simulation refs for the subgraph.
+ * @returns
+ *   - `graphSearch` — current search term.
+ *   - `graphSearchCount` — number of nodes matching the term.
+ *   - `onGraphSearchChange` — handler for the search input.
+ *   - `clearGraphSearch` — clears the term and removes all highlights.
+ */
 export function useGraphSearch(simRefs: SubgraphSimRefs) {
   const [graphSearch, setGraphSearch] = useState("");
   const [graphSearchCount, setGraphSearchCount] = useState(0);

@@ -90,6 +90,16 @@ KANBAN_MANAGE_TOOL = ToolSpec(
 
 
 def handle_kanban_tool(args: dict[str, Any]) -> str:
+    """Dispatch the requested kanban action and return serialized JSON.
+
+    Args:
+        args: Dict containing ``action``, ``path``, and optional fields depending
+              on the action (e.g. ``card_id``, ``lane``, ``title``, ``body``).
+
+    Returns:
+        JSON with ``{"ok": true, ...}`` on success or ``{"ok": false, "error": ...}``
+        for invalid arguments, missing files, or I/O errors.
+    """
     from .. import vault_kanban
 
     action = args.get("action", "")

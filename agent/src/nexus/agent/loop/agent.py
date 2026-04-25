@@ -25,6 +25,14 @@ TraceCallback = Callable[[str, dict[str, Any]], None]
 
 
 class Agent:
+    """Nexus façade over loom.Agent.
+
+    Manages the LLM provider lifecycle, tool registry, HITL handlers
+    (ask_user, terminal), and per-session trace logic. Exposes two execution
+    modes — blocking (``run_turn``) and streaming (``run_turn_stream``) —
+    translating internal loom events into the format expected by FastAPI routes.
+    """
+
     def __init__(
         self,
         *,
@@ -116,6 +124,18 @@ class Agent:
         context: str | None = None,
         model_id: str | None = None,
     ) -> AgentTurn:
+        """Execute a complete turn in blocking mode and return the result.
+
+        Args:
+            user_message: The user's message for this turn.
+            history: Prior message history for the session.
+            context: Optional additional context injected into the turn.
+            model_id: Force a specific model; None uses the configured default.
+
+        Returns:
+            AgentTurn containing the reply, token usage, event trace, and the
+            message list that should replace the persisted history.
+        """
         self._turn_trace = []
         self._skills_touched = []
         self._chosen_model = model_id
@@ -158,6 +178,24 @@ class Agent:
         session_id: str | None = None,
         model_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        """Execute a turn in streaming mode, yielding typed SSE events.
+
+        Translates internal loom events (content_delta, tool_exec_start,
+        done, error, etc.) into the dictionary format consumed by
+        ``chat_stream.py``. The ``done`` event includes the message list
+        assembled by loom for replacing the persisted history.
+
+        Args:
+            user_message: The user's message for this turn.
+            history: Prior message history for the session.
+            context: Optional additional context (not used by loom directly).
+            session_id: Session ID; forwarded in the ``done`` event to the client.
+            model_id: Force a specific model; None uses the configured default.
+
+        Yields:
+            Dicts typed by ``type`` (delta, tool_exec_start,
+            tool_exec_result, limit_reached, error, done).
+        """
         self._turn_trace = []
         self._skills_touched = []
         self._chosen_model = model_id
@@ -295,6 +333,7 @@ class Agent:
                 }
 
     async def aclose(self) -> None:
+        """Shut down the LLM provider and provider registry, releasing HTTP connections."""
         await self._nexus_provider.aclose()
         if self._provider_registry:
             await self._provider_registry.aclose()

@@ -1,14 +1,15 @@
-// Shared base URL for all API modules.
-//
-// Resolution order:
-//   1. VITE_NEXUS_API (set at build time) — wins if defined.
-//   2. window.__NEXUS_API__ — runtime override (Capacitor inject).
-//   3. http://localhost:18989 in dev / web preview.
-//
-// On Capacitor (mobile), the bundled HTML is served from capacitor://
-// or http://localhost on a random port — `localhost:18989` from the
-// device points at the device itself, not the developer's machine.
-// Set VITE_NEXUS_API at build time for device builds.
+/**
+ * @file Base API URL configuration and Capacitor environment detection.
+ *
+ * The base URL is resolved in the following priority order:
+ *  1. `VITE_NEXUS_API` (Vite build variable) — wins if defined.
+ *  2. `window.__NEXUS_API__` — runtime override injected by Capacitor.
+ *  3. Same origin when served by the backend (single-port deploy).
+ *  4. `http://localhost:18989` as a fallback for the Vite dev server (port 1890).
+ *
+ * For Capacitor device builds, set `VITE_NEXUS_API` to point at the development
+ * machine's IP — `localhost` on a device refers to itself, not the host machine.
+ */
 declare global {
   interface Window {
     __NEXUS_API__?: string;
@@ -27,12 +28,20 @@ const devFallback =
   typeof window !== "undefined" && window.location.port === "1890"
     ? "http://localhost:18989"
     : sameOrigin;
+/**
+ * Base URL for all API calls. Never ends with a trailing slash.
+ * Use this constant in all API modules instead of hard-coding the host.
+ */
 export const BASE = (import.meta.env.VITE_NEXUS_API as string | undefined)
   ?? runtime
   ?? devFallback;
 
-// True when running inside a native Capacitor shell. EventSource over
-// capacitor:// is unreliable on iOS, so callers switch to polling.
+/**
+ * `true` when the app is running inside a native Capacitor shell.
+ *
+ * Used by API modules to choose between EventSource (web) and periodic polling:
+ * `EventSource` over `capacitor://` is unreliable on iOS.
+ */
 export const IS_CAPACITOR =
   typeof window !== "undefined" &&
   // @ts-expect-error — Capacitor injects this global

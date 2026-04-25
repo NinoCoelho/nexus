@@ -109,6 +109,20 @@ VAULT_SEMANTIC_SEARCH_TOOL = ToolSpec(
 
 
 def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
+    """Dispatch a vault tool by name and return serialized JSON.
+
+    Args:
+        name: Tool name (``vault_list``, ``vault_read``, ``vault_write``,
+              ``vault_search``, ``vault_tags``, ``vault_backlinks``,
+              ``vault_semantic_search``).
+        args: Tool parameters as defined by the corresponding ToolSpec.
+
+    Returns:
+        JSON with ``{"ok": true, ...}`` on success or ``{"ok": false, "error": ...}``.
+        Non-serializable values (e.g. ``datetime.date`` from YAML frontmatter)
+        are stringified via ``default=str`` to avoid crashing the SSE stream
+        with a serialization exception.
+    """
     from .. import vault
 
     # json.dumps can't handle datetime.date / datetime.datetime (YAML

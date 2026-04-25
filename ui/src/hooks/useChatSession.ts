@@ -1,3 +1,14 @@
+/**
+ * @file Central chat session management hook for Nexus.
+ *
+ * Owns all chat state (`chatStates` keyed by session key), SSE event routing,
+ * abort controller management, lazy history loading, message rollback, and
+ * the auto-send logic for hidden seeds.
+ *
+ * The special key `NEW_KEY` represents the not-yet-created session (empty input
+ * before the first message). On receiving `done` from the backend, the session
+ * is promoted to its canonical `session_id` via `setActiveSession`.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
 import { chatStream, truncateSession, HIDDEN_SEED_MARKER } from "../api";
@@ -8,6 +19,21 @@ import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
 export type { UseChatSessionResult };
 
+/**
+ * Hook for managing multiple concurrent chat sessions with SSE streaming.
+ *
+ * Maintains a `Map<sessionKey, ChatState>` to preserve the state of all open
+ * sessions simultaneously — switching sessions or views never interrupts an
+ * in-progress stream or loses typed text.
+ *
+ * @param deps.availableModels - List of models available for selection.
+ * @param deps.lastUsedModel - Last model used by the user (persisted).
+ * @param deps.defaultModel - Default model from the server configuration.
+ * @param deps.persistUsedModel - Persists the chosen model for future sessions.
+ * @param freshSessionId - Factory that generates a UUID for new pending sessions;
+ *   needed to open the event SSE channel before the first send.
+ * @returns Full set of state and handlers for the chat views.
+ */
 export function useChatSession(
   deps: { availableModels: string[]; lastUsedModel: string; defaultModel: string; persistUsedModel: (model: string) => void },
   freshSessionId: () => string,

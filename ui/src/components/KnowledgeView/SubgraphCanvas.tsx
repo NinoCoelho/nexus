@@ -1,4 +1,11 @@
-// Sub-component for KnowledgeView: canvas panel with force-directed graph and toolbar.
+/**
+ * @file Knowledge graph canvas panel for the KnowledgeView.
+ *
+ * Combines the force simulation (`useSubgraphSim`), mouse/wheel interactions
+ * (`makeCanvasHandlers`), and a toolbar with entity search, layout refresh,
+ * fit, and zoom controls. All camera logic (pan/zoom/fit) is managed through
+ * mutable refs in `SubgraphSimRefs` to avoid unnecessary re-renders during animation.
+ */
 
 import { useEffect } from "react";
 import type { SubgraphData } from "../../api";
@@ -22,6 +29,27 @@ interface SubgraphCanvasProps {
   graphSearchValue: string;
 }
 
+/**
+ * Vault entity subgraph visualization panel.
+ *
+ * Renders a force-directed canvas with an embedded toolbar.
+ * When there is no subgraph (`hasSubgraph = false`), displays a contextual
+ * empty state — including an index button when `sourceFilter = "file"`.
+ *
+ * @param subgraphData - Subgraph data to visualize; `null` while no selection is active.
+ * @param graphSearch - Active search term (controls highlight of matching nodes).
+ * @param graphSearchCount - Number of nodes matching the current search term.
+ * @param hasSubgraph - Whether there is enough data to render the graph.
+ * @param loading - Shows a "Loading…" placeholder while data is arriving.
+ * @param sourceFilter - Current selection context: `"none"`, `"file"`, or `"folder"`.
+ * @param sourcePath - Vault path of the selected file or folder; used for the index button.
+ * @param onStartGraphIndex - Callback to trigger LLM indexing of a file.
+ * @param refs - Shared simulation refs (canvas, nodes, camera, etc.).
+ * @param onSelectEntity - Callback when an entity is double-clicked on the canvas.
+ * @param onGraphSearchChange - Updates the search term and redraws the canvas.
+ * @param onClearGraphSearch - Clears the active search.
+ * @param graphSearchValue - Controlled value for the search input.
+ */
 export function SubgraphCanvas({
   subgraphData,
   graphSearch,

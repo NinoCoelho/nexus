@@ -1,4 +1,10 @@
-// Canvas drawing logic for GraphView — renders nodes and edges onto a 2D canvas.
+/**
+ * @file Canvas rendering logic for the vault GraphView.
+ *
+ * Draws the knowledge graph (file and entity nodes, typed edges) directly onto
+ * an `HTMLCanvasElement` 2D context. Holds no internal state — receives `DrawState`
+ * and graph data on each frame, making it pure and deterministic.
+ */
 
 import type { GraphData } from "../../api";
 import type { SimNode } from "./types";
@@ -23,6 +29,21 @@ export interface DrawState {
   settled: boolean;
 }
 
+/**
+ * Render the complete graph (edges, nodes, and labels) onto the given canvas.
+ *
+ * Applies the camera transform (`offset` + `scale`) via `ctx.save/translate/scale`.
+ * Colors are read from CSS custom properties on the canvas to respect the active theme.
+ * Nodes of type `"entity"` are drawn as rounded rectangles; file nodes as circles
+ * (radius proportional to file size). Parallel edges are automatically curved via
+ * `buildMultiEdgeIndex`. Labels and arrowheads only appear when `state.settled` is
+ * `true` (force simulation has stabilized), to avoid visual clutter during layout.
+ *
+ * @param canvas - Target canvas element; must be visible in the DOM.
+ * @param g - Graph data: nodes, edges, and orphan list.
+ * @param nodes - Current positions from the force simulation (mutated by the simulator).
+ * @param state - Camera state (pan/zoom) and interaction state (hover/selected/settled).
+ */
 export function draw(
   canvas: HTMLCanvasElement,
   g: GraphData,

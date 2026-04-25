@@ -1,3 +1,11 @@
+/**
+ * @file Main chat interface component for Nexus.
+ *
+ * Exports `ChatView` (presentational/stateless) and the message history data types
+ * (`Message`, `TimelineStep`). All chat state is managed externally by `App` via
+ * `useChatSession`, so switching sessions or navigating between views never
+ * discards in-progress messages.
+ */
 import { useEffect, useRef } from "react";
 import type { TraceEvent } from "../../api";
 import AssistantMessage from "../AssistantMessage";
@@ -44,9 +52,29 @@ export interface Message {
 }
 
 /**
- * Stateless ChatView. All chat state (messages, input, thinking) is owned by
- * App and keyed by session id — this way, switching sessions or views never
- * drops an in-flight "thinking" indicator or partially-entered input.
+ * Stateless chat component. All state (messages, input, thinking indicator)
+ * is owned by `App` and indexed by `session_id` — switching sessions or views
+ * never discards an in-progress response or the text being typed.
+ *
+ * @param messages - Message list for the active session (user and assistant).
+ * @param thinking - `true` while the agent is processing a response.
+ * @param input - Current text in the input bar.
+ * @param onInputChange - Callback to sync input changes with external state.
+ * @param onSend - Trigger a send; accepts an override text for retries/continuations.
+ * @param onStop - Cancel the in-progress stream (Stop button).
+ * @param onContinue - Continue after the iteration-limit banner.
+ * @param onDismissLimit - Dismiss the limit banner without continuing.
+ * @param onRetryPartial - Re-send the partial turn at the given visible index.
+ * @param onContinuePartial - Continue in-place the partial turn at the given index.
+ * @param hasModel - `true` if a model is configured, `false` if not, `null` while loading.
+ * @param onOpenSettings - Open the settings panel (used when no model is configured).
+ * @param onOpenInVault - Navigate to a vault file by path (`vault://` links).
+ * @param attachments - Vault files attached to the next send.
+ * @param onAttachmentsChange - Callback to update the attachment list.
+ * @param onRollback - Remove messages from the given index and restore text to the input.
+ * @param models - Available models for the selector.
+ * @param selectedModel - Currently selected model.
+ * @param onModelChange - Callback when the model selector changes.
  */
 interface Props {
   messages: Message[];
