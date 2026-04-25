@@ -13,9 +13,16 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     frontend_port: int = typer.Option(1890, "--frontend-port", "-fp"),
     no_frontend: bool = typer.Option(False, "--no-frontend", help="Skip launching the frontend dev server"),
-    bundled: bool = typer.Option(False, "--bundled", help="Serve the built UI from the backend on a single port (skips Vite). Run `npm run build` first."),
+    bundled: bool = typer.Option(False, "--bundled", help="Force serving the built UI from the backend on a single port. Run `npm run build` first."),
+    dev: bool = typer.Option(False, "--dev", help="Force spawning the Vite dev server on --frontend-port (two-port dev mode)."),
 ) -> None:
-    """Start the Nexus server (backend + frontend)."""
+    """Start the Nexus server.
+
+    Default: single-port mode — if ``ui/dist`` exists, the backend serves the
+    built UI on ``--port``. Otherwise spawns the Vite dev server on
+    ``--frontend-port``. Use ``--dev`` to force Vite, ``--bundled`` to require
+    a built UI.
+    """
     import shutil
     import signal
     import subprocess
@@ -24,12 +31,22 @@ def serve(
 
     from ..config import get_frontend_dir
 
-    # --bundled implies the backend serves ui/dist itself; don't spawn Vite.
+    if bundled and dev:
+        typer.echo("--bundled and --dev are mutually exclusive.", err=True)
+        raise typer.Exit(code=2)
+
+    fe = get_frontend_dir()
+    dist = (fe / "dist") if fe is not None else None
+    has_dist = dist is not None and (dist / "index.html").is_file()
+
+    # Auto-pick: prefer bundled (single port) when a built UI is available,
+    # fall back to spawning Vite for active development.
+    if not bundled and not dev and not no_frontend:
+        bundled = has_dist
+
     if bundled:
         no_frontend = True
-        fe = get_frontend_dir()
-        dist = (fe / "dist") if fe is not None else None
-        if dist is None or not (dist / "index.html").is_file():
+        if not has_dist:
             typer.echo(
                 "No built UI found. Run `npm run build` in ui/ first, "
                 "or set NEXUS_UI_DIST to a dist directory.",

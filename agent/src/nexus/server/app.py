@@ -242,29 +242,33 @@ def _mount_bundled_ui(app: FastAPI) -> None:
     GET handler serves static assets and falls back to ``index.html`` for
     client-side routing.
     """
-    from fastapi import Request
-    from fastapi.responses import FileResponse, Response
+    from starlette.requests import Request
+    from starlette.responses import FileResponse, Response
 
     dist = _resolve_ui_dist()
     if dist is None:
         return
 
     index_html = dist / "index.html"
+    dist_resolved = dist.resolve()
     log.info("Serving bundled UI from %s", dist)
 
-    @app.get("/{ui_path:path}", include_in_schema=False)
-    async def _spa(ui_path: str, request: Request) -> Response:
+    # Registered as a Starlette route (not a FastAPI route) so FastAPI's
+    # parameter introspection doesn't try to coerce ``request`` into a query
+    # param. Mounted last, so all explicit API routes win.
+    async def _spa(request: Request) -> Response:
+        ui_path = request.path_params.get("ui_path", "") or ""
         if ui_path:
             try:
                 target = (dist / ui_path).resolve()
-                target.relative_to(dist.resolve())
+                target.relative_to(dist_resolved)
                 if target.is_file():
                     return FileResponse(target)
             except (ValueError, OSError):
                 pass
-        # Only fall back to index.html for browser navigations — API clients
-        # asking for unknown JSON endpoints should get a real 404.
         accept = request.headers.get("accept", "")
         if "text/html" in accept or accept == "" or accept == "*/*":
             return FileResponse(index_html)
         return Response(status_code=404)
+
+    app.router.add_route("/{ui_path:path}", _spa, methods=["GET"], include_in_schema=False)
