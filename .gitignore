@@ -1,18 +1,42 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
+uv.lock
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Secrets / local env
 .env
 .env.local
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Editors / tooling
+.claude/
+.idea/
+*.swp
+*.swo
+
+# Node / Vite
 node_modules/
 dist/
 build/
 .vite/
-uv.lock
-*.egg-info/
-.claude/
 
-# Swift Package Manager build artifacts (packaging/macos)
+# Logs
+*.log
+
+# Swift Package Manager (packaging/macos)
 .build/
 .swiftpm/
-*.xcodeproj/
+
+# Xcode (per-user state — keep .xcodeproj/.xcworkspace tracked)
+xcuserdata/
+*.xcuserstate
+DerivedData/
