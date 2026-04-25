@@ -11,3 +11,8 @@ build/
 uv.lock
 *.egg-info/
 .claude/
+
+# Swift Package Manager build artifacts (packaging/macos)
+.build/
+.swiftpm/
+*.xcodeproj/

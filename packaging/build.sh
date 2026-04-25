@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# Build a standalone Nexus.app bundle (arm64) that ships its own Python
+# interpreter, all dependencies, the built UI, and pre-downloaded embedding
+# models. See packaging/bootstrap.py for the runtime launcher.
+#
+# Usage:
+#   packaging/build.sh                 # full build (signs ad-hoc)
+#   packaging/build.sh --skip-models   # don't pre-download embedding models
+#   packaging/build.sh --skip-sign     # skip codesign step
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+REPO_ROOT="$PWD"
+PACKAGING="$REPO_ROOT/packaging"
+LOOM_DIR="${LOOM_DIR:-$REPO_ROOT/../loom}"
+DIST="$REPO_ROOT/dist"
+STAGE="$DIST/stage"
+APP_NAME="Nexus"
+APP="$DIST/$APP_NAME.app"
+
+PY_VERSION="3.12.7"
+PY_BUILD="20241016"
+PY_TRIPLE="aarch64-apple-darwin"
+PY_DIST="cpython-${PY_VERSION}+${PY_BUILD}-${PY_TRIPLE}-install_only.tar.gz"
+PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PY_BUILD}/${PY_DIST}"
+
+SKIP_MODELS=0
+SKIP_SIGN=0
+for arg in "$@"; do
+  case "$arg" in
+    --skip-models) SKIP_MODELS=1 ;;
+    --skip-sign)   SKIP_SIGN=1 ;;
+    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+  esac
+done
+
+[[ -d "$LOOM_DIR" ]] || { echo "loom not found at $LOOM_DIR (set LOOM_DIR=...)" >&2; exit 1; }
+
+echo "==> Cleaning $DIST"
+rm -rf "$DIST"
+mkdir -p "$STAGE"
+
+echo "==> Building UI (npm run build)"
+( cd "$REPO_ROOT/ui" && npm install --no-audit --no-fund && npm run build )
+mkdir -p "$STAGE/ui"
+cp -R "$REPO_ROOT/ui/dist/." "$STAGE/ui/"
+
+echo "==> Fetching standalone CPython"
+PY_CACHE="$DIST/.cache"
+mkdir -p "$PY_CACHE"
+if [[ ! -f "$PY_CACHE/$PY_DIST" ]]; then
+  curl -fsSL -o "$PY_CACHE/$PY_DIST" "$PY_URL"
+fi
+mkdir -p "$STAGE/python"
+tar -xzf "$PY_CACHE/$PY_DIST" -C "$STAGE/python" --strip-components=1
+PY="$STAGE/python/bin/python3"
+"$PY" --version
+
+echo "==> Installing nexus + dependencies into bundled Python"
+"$PY" -m pip install --upgrade pip
+# Install loom first (PEP 660 editable would point outside the bundle, so do a
+# regular install from the local path — this copies it into site-packages).
+"$PY" -m pip install "$LOOM_DIR"
+# Install nexus without re-resolving loom (already satisfied).
+"$PY" -m pip install --no-deps "$REPO_ROOT/agent"
+# Install nexus's deps (loom-framework already satisfied; pip will skip it).
+"$PY" -m pip install \
+  "uvicorn[standard]>=0.29" "openai>=1.50" "anthropic>=0.40" tomli_w \
+  "psutil>=5.9" "python-multipart>=0.0.26" "fastembed>=0.4" "spacy>=3.8" \
+  "faster-whisper>=1.0"
+
+# Move site-packages into the staged Resources layout expected by bootstrap.py.
+SITE_SRC="$(/usr/bin/find "$STAGE/python/lib" -maxdepth 2 -type d -name 'site-packages' | head -1)"
+[[ -n "$SITE_SRC" ]] || { echo "could not locate site-packages" >&2; exit 1; }
+mkdir -p "$STAGE/site-packages"
+cp -R "$SITE_SRC/." "$STAGE/site-packages/"
+
+if [[ "$SKIP_MODELS" -eq 0 ]]; then
+  echo "==> Pre-downloading embedding models into bundle"
+  NEXUS_MODELS_DIR="$STAGE/models" "$PY" - <<'PYEOF'
+import os
+from pathlib import Path
+models = Path(os.environ["NEXUS_MODELS_DIR"])
+(models / "fastembed").mkdir(parents=True, exist_ok=True)
+from fastembed import TextEmbedding
+TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=str(models / "fastembed"))
+print("fastembed cached at", models / "fastembed")
+PYEOF
+  # spaCy + faster-whisper warmup is optional; skip unless explicitly requested.
+fi
+
+cp "$PACKAGING/bootstrap.py" "$STAGE/bootstrap.py"
+( cd "$LOOM_DIR" && git rev-parse HEAD > "$STAGE/loom_version.txt" 2>/dev/null || true )
+
+echo "==> Building Swift host (SwiftPM)"
+SWIFT_PKG="$PACKAGING/macos"
+( cd "$SWIFT_PKG" && swift build -c release --arch arm64 )
+SWIFT_BIN="$SWIFT_PKG/.build/arm64-apple-macosx/release/Nexus"
+[[ -x "$SWIFT_BIN" ]] || { echo "swift build did not produce $SWIFT_BIN" >&2; exit 1; }
+
+echo "==> Assembling $APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$SWIFT_BIN" "$APP/Contents/MacOS/$APP_NAME"
+cp "$PACKAGING/macos/Info.plist" "$APP/Contents/Info.plist"
+
+RES="$APP/Contents/Resources"
+cp -R "$STAGE/python"          "$RES/python"
+cp -R "$STAGE/site-packages"   "$RES/site-packages"
+cp -R "$STAGE/ui"              "$RES/ui"
+[[ -d "$STAGE/models" ]] && cp -R "$STAGE/models" "$RES/models"
+cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
+[[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"
+
+if [[ "$SKIP_SIGN" -eq 0 ]]; then
+  echo "==> Ad-hoc codesigning bundle (use Developer ID for distribution)"
+  # Sign every dylib/so first, then the interpreter, then the .app last.
+  /usr/bin/find "$RES" \( -name '*.dylib' -o -name '*.so' \) -print0 \
+    | xargs -0 -I{} codesign --force --sign - --options runtime --timestamp=none "{}"
+  codesign --force --sign - --options runtime --timestamp=none "$RES/python/bin/python3" || true
+  codesign --force --deep --sign - --options runtime --timestamp=none "$APP"
+fi
+
+echo "==> Done: $APP"
+du -sh "$APP"

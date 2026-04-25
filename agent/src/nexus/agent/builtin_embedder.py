@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,9 @@ class BuiltinEmbedder:
         self._lock = asyncio.Lock()
 
     def _cache_dir(self) -> Path:
-        d = Path.home() / ".nexus" / "models" / "fastembed"
+        base = os.environ.get("NEXUS_MODELS_DIR")
+        root = Path(base) if base else Path.home() / ".nexus" / "models"
+        d = root / "fastembed"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
