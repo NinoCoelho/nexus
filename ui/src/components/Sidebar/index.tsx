@@ -1,0 +1,360 @@
+/**
+ * Sidebar — the main navigation and session management panel.
+ *
+ * Layout (top to bottom):
+ *   1. View switcher (Chat / Vault / Graph / Insights)
+ *   2. Session list with search, rename, delete, export, import
+ *   3. Vault file tree (expandable folders, file selection)
+ *   4. Settings button
+ *
+ * All state flows down from App via props; the sidebar doesn't own any
+ * session or chat state itself. Session mutations (rename, delete, etc.)
+ * bump sessionsRevision so the list refreshes.
+ */
+
+import React, { useEffect, useRef, useState } from "react";
+import {
+  deleteSession, exportSession, getSessions, importSession,
+  patchSession, searchSessions, sessionToVault,
+  type SessionSearchResult, type SessionSummary,
+} from "../../api";
+import { useToast } from "../../toast/ToastProvider";
+import VaultTreePanel from "../VaultTreePanel";
+import { IconChat, IconVault, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
+import SessionsPanel from "./SessionsPanel";
+import SessionContextMenu from "./SessionContextMenu";
+import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
+import "../Sidebar.css";
+
+type View = "chat" | "vault" | "graph" | "insights";
+
+interface Props {
+  view: View;
+  onViewChange: (v: View) => void;
+  activeSessionId: string | null;
+  onSessionSelect: (id: string) => void;
+  onNewChat: () => void;
+  onOpenSettings: () => void;
+  sessionsRevision: number;
+  onSessionsRevisionBump: () => void;
+  vaultSelectedPath: string | null;
+  onVaultSelectPath: (path: string | null) => void;
+  vaultOpenPath?: string | null;
+  onVaultOpenPathHandled?: () => void;
+  onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
+  onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+}
+
+const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
+  { id: "chat",     label: "Chat",      Icon: IconChat },
+  { id: "vault",    label: "Vault",     Icon: IconVault },
+  { id: "graph",    label: "Knowledge", Icon: IconGraph },
+  { id: "insights", label: "Insights",  Icon: IconInsights },
+];
+
+export default function Sidebar({
+  view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
+  sessionsRevision, onSessionsRevisionBump, vaultSelectedPath, onVaultSelectPath,
+  vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
+}: Props) {
+  const toast = useToast();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("sidebar-collapsed") === "true"; }
+    catch { return false; }
+  });
+  const [width, setWidth] = useState<number>(() => loadStoredWidth());
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* ignore */ }
+  }, [width]);
+  useEffect(() => { localStorage.setItem("sidebar-collapsed", String(collapsed)); }, [collapsed]);
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    if (collapsed) return;
+    e.preventDefault();
+    setResizing(true);
+    const startX = e.clientX;
+    const startW = width;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, startW + (ev.clientX - startX)));
+      setWidth(next);
+    };
+    const onUp = () => {
+      setResizing(false);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsError, setSessionsError] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SessionSearchResult[]>([]);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  // Context menu — tracks the id + the anchor rect so we can render as a
+  // position:fixed popover outside the row's overflow-hidden clip.
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const menuId = menu?.id ?? null;
+  const setMenuId = (id: string | null) => { if (id == null) setMenu(null); };
+  /** ids currently sending to the vault ("summary" mode can take seconds) */
+  const [toVaultBusy, setToVaultBusy] = useState<Set<string>>(new Set());
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setSessionsError(false);
+    getSessions(20)
+      .then((s) => setSessions(s.sort((a, b) => {
+        // updated_at is unix seconds (int) from the backend. Backend already
+        // orders by updated_at DESC but we sort again defensively.
+        const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
+        const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
+        return bv - av;
+      })))
+      .catch(() => setSessionsError(true));
+  }, [sessionsRevision]);
+
+  // Debounced search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!searchQuery.trim()) { setSearchResults([]); return; }
+    searchTimerRef.current = setTimeout(() => {
+      searchSessions(searchQuery).then(setSearchResults).catch(() => setSearchResults([]));
+    }, 300);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [searchQuery]);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!menuId) return;
+    const handler = () => setMenuId(null);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [menuId]);
+
+  const handleRename = async (id: string) => {
+    try {
+      await patchSession(id, { title: renameValue.trim() || "Untitled" });
+      setSessions((prev) =>
+        prev.map((s) => s.id === id ? { ...s, title: renameValue.trim() || "Untitled" } : s)
+      );
+    } catch { /* ignore */ }
+    setRenamingId(null);
+    setMenuId(null);
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteSession(id);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+    } catch { /* ignore */ }
+    setMenuId(null);
+  };
+
+  const handleExport = async (id: string) => {
+    setMenuId(null);
+    try {
+      const { markdown, filename } = await exportSession(id);
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Downloaded ${filename}`);
+    } catch (e) {
+      toast.error("Download failed", { detail: e instanceof Error ? e.message : undefined });
+    }
+  };
+
+  const handleToVault = async (id: string, mode: "raw" | "summary") => {
+    setMenuId(null);
+    setToVaultBusy((prev) => new Set(prev).add(id));
+    if (mode === "summary") toast.info("Summarizing session…", { duration: 2500 });
+    try {
+      const result = await sessionToVault(id, mode);
+      toast.success(
+        mode === "raw" ? "Saved raw to vault" : "Summary saved to vault",
+        { detail: result.path, duration: 5000 },
+      );
+    } catch (e) {
+      toast.error(
+        mode === "raw" ? "Couldn't save raw to vault" : "Summarize failed",
+        { detail: e instanceof Error ? e.message : undefined },
+      );
+    } finally {
+      setToVaultBusy((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset so the same file can be picked again.
+    e.target.value = "";
+    try {
+      const text = await file.text();
+      const result = await importSession(text);
+      onSessionsRevisionBump();
+      onSessionSelect(result.id);
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <aside
+      className={`sidebar${collapsed ? " sidebar--collapsed" : ""}`}
+      style={collapsed ? undefined : ({ ["--sidebar-width" as unknown as string]: `${width}px` } as React.CSSProperties)}
+    >
+      {/* Top bar */}
+      <div className="sidebar-top">
+        {!collapsed && (
+          <div className="sidebar-brand">
+            <span className="sidebar-brand-dot" />
+            <span className="sidebar-brand-name">Nexus</span>
+          </div>
+        )}
+        <button
+          className="sidebar-collapse-btn"
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <IconCollapse collapsed={collapsed} />
+        </button>
+      </div>
+
+      {/* New chat + Import */}
+      <div className="sidebar-section">
+        <div className={collapsed ? undefined : "sidebar-new-chat-row"}>
+          <button className="sidebar-new-chat" onClick={onNewChat}>
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="10" y1="4" x2="10" y2="16" />
+              <line x1="4" y1="10" x2="16" y2="10" />
+            </svg>
+            {!collapsed && <span>New chat</span>}
+          </button>
+          {!collapsed && (
+            <>
+              <button className="sidebar-import-btn" title="Import session from .md file" onClick={() => importInputRef.current?.click()}>
+                ↑ Import
+              </button>
+              <input ref={importInputRef} type="file" accept=".md,text/markdown" style={{ display: "none" }} onChange={(e) => void handleImportFile(e)} />
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* View switcher */}
+      <div className="sidebar-section">
+        {!collapsed && <div className="sidebar-section-label">Views</div>}
+        <nav className="sidebar-nav">
+          {VIEWS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
+              onClick={() => onViewChange(id)}
+              title={collapsed ? label : undefined}
+            >
+              <span className="sidebar-nav-icon"><Icon /></span>
+              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* Sessions — only in Chat view */}
+      {view === "chat" && !collapsed && (
+        <SessionsPanel
+          sessions={sessions}
+          sessionsError={sessionsError}
+          activeSessionId={activeSessionId}
+          searchQuery={searchQuery}
+          searchResults={searchResults}
+          renamingId={renamingId}
+          renameValue={renameValue}
+          toVaultBusy={toVaultBusy}
+          menuId={menuId}
+          onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
+          onSessionSelect={onSessionSelect}
+          onContextMenu={(e, id) => { e.preventDefault(); setMenu({ id, x: e.clientX, y: e.clientY }); }}
+          onMenuBtnClick={(e, id) => {
+            e.stopPropagation();
+            if (menu?.id === id) { setMenu(null); }
+            else { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ id, x: r.right + 4, y: r.top }); }
+          }}
+          onTitleDoubleClick={(e, id, title) => { e.stopPropagation(); setRenamingId(id); setRenameValue(title); }}
+          onRenameChange={setRenameValue}
+          onRenameCommit={(id) => void handleRename(id)}
+          onRenameCancel={() => setRenamingId(null)}
+        />
+      )}
+
+      {/* Vault tree — only in Vault view */}
+      {view === "vault" && !collapsed && (
+        <div className="sidebar-section sidebar-vault-section">
+          <VaultTreePanel
+            selectedPath={vaultSelectedPath}
+            onSelectPath={onVaultSelectPath}
+            openPath={vaultOpenPath}
+            onOpenPathHandled={onVaultOpenPathHandled}
+            onDispatchToChat={onDispatchToChat}
+            onViewEntityGraph={onViewEntityGraph}
+          />
+        </div>
+      )}
+
+      {/* Spacer — only when no expandable section is active */}
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && (
+        <div className="sidebar-spacer" />
+      )}
+
+      {/* Settings */}
+      <div className="sidebar-bottom">
+        <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? "Settings" : undefined}>
+          <span className="sidebar-nav-icon"><IconGear /></span>
+          {!collapsed && <span className="sidebar-nav-label">Settings</span>}
+        </button>
+      </div>
+
+      {/* Floating context menu — position:fixed so it escapes the row's
+          overflow:hidden clip. Anchored to the cursor (right-click) or
+          the ⋮ button's rect (left-click). */}
+      {menu && (() => {
+        const s = sessions.find((x) => x.id === menu.id);
+        if (!s) return null;
+        return (
+          <SessionContextMenu
+            session={s}
+            anchorX={menu.x}
+            anchorY={menu.y}
+            toVaultBusy={toVaultBusy}
+            onRename={() => { setRenamingId(s.id); setRenameValue(s.title); setMenu(null); }}
+            onExport={() => void handleExport(s.id)}
+            onToVaultRaw={() => void handleToVault(s.id, "raw")}
+            onToVaultSummary={() => void handleToVault(s.id, "summary")}
+            onDelete={() => void handleDelete(s.id)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        );
+      })()}
+
+      {!collapsed && (
+        <div
+          className={`sidebar-resize-handle${resizing ? " sidebar-resize-handle--active" : ""}`}
+          onMouseDown={handleResizeStart}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize"
+        />
+      )}
+    </aside>
+  );
+}

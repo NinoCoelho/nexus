@@ -1,0 +1,107 @@
+"""Routes for config management: GET/PATCH /config."""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from fastapi import APIRouter, Depends
+
+from ..deps import get_agent, get_app_state
+
+router = APIRouter()
+
+
+def _redact_cfg(cfg: Any) -> dict[str, Any]:
+    if cfg is None:
+        return {}
+    from ...secrets import get as secrets_get
+    out: dict[str, Any] = {
+        "agent": cfg.agent.model_dump(),
+        "providers": {},
+        "models": [m.model_dump() for m in cfg.models],
+    }
+    for name, p in cfg.providers.items():
+        key_source: str | None = None
+        if p.type == "ollama":
+            key_source = "anonymous"
+        elif p.use_inline_key and secrets_get(name):
+            key_source = "inline"
+        elif p.api_key_env and os.environ.get(p.api_key_env):
+            key_source = "env"
+        has_key = key_source is not None
+        out["providers"][name] = {
+            "base_url": p.base_url,
+            "key_env": p.api_key_env,
+            "has_key": has_key,
+            "use_inline_key": p.use_inline_key,
+            "type": p.type,
+        }
+    t = cfg.transcription
+    out["transcription"] = {
+        "mode": t.mode,
+        "model": t.model,
+        "language": t.language or "",
+        "device": t.device,
+        "compute_type": t.compute_type,
+        "remote": {
+            "base_url": t.remote.base_url,
+            "api_key_env": t.remote.api_key_env,
+            "model": t.remote.model,
+        },
+    }
+    return out
+
+
+def _rebuild_registry(cfg: Any, app_state: dict[str, Any], agent: Any) -> None:
+    from ...agent.registry import build_registry
+    new_reg = build_registry(cfg)
+    app_state["prov_reg"] = new_reg
+    agent._provider_registry = new_reg
+    agent._nexus_cfg = cfg
+    app_state["cfg"] = cfg
+
+
+@router.get("/config")
+async def get_config(app_state: dict[str, Any] = Depends(get_app_state)) -> dict[str, Any]:
+    return _redact_cfg(app_state["cfg"])
+
+
+@router.patch("/config")
+async def patch_config(
+    body: dict[str, Any],
+    app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
+) -> dict[str, Any]:
+    from ...config_file import load as load_cfg, save as save_cfg, NexusConfig
+    cfg = app_state["cfg"] or load_cfg()
+    raw = cfg.model_dump()
+    # Shallow merge for "agent"; NESTED merge for "providers" so a partial
+    # edit (e.g. base_url only) doesn't wipe fields like `type` that the
+    # client didn't send. "has_key" is a read-only synthesized flag and is
+    # never persisted.
+    if "agent" in body:
+        raw["agent"].update(body["agent"])
+    if "providers" in body:
+        for pname, patch in body["providers"].items():
+            existing = raw["providers"].get(pname, {})
+            merged = {**existing, **{k: v for k, v in patch.items() if k != "has_key"}}
+            raw["providers"][pname] = merged
+    if "models" in body:
+        raw["models"] = body["models"]
+    if "transcription" in body:
+        existing = raw.get("transcription", {}) or {}
+        patch = body["transcription"] or {}
+        merged = {**existing, **{k: v for k, v in patch.items() if k != "remote"}}
+        if "remote" in patch:
+            merged["remote"] = {
+                **(existing.get("remote") or {}),
+                **(patch["remote"] or {}),
+            }
+        if isinstance(merged.get("language"), str) and not merged["language"].strip():
+            merged["language"] = None
+        raw["transcription"] = merged
+    new_cfg = NexusConfig(**raw)
+    save_cfg(new_cfg)
+    _rebuild_registry(new_cfg, app_state, a)
+    return _redact_cfg(new_cfg)
