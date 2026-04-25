@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from .backup_cmd import backup_app
 from .config_cmd import config_app
 from .daemon_cmd import daemon_app
 from .graphrag_cmd import graphrag_app
@@ -27,6 +28,7 @@ app.add_typer(vault_app, name="vault")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(trajectories_app, name="trajectories")
 app.add_typer(graphrag_app, name="graphrag")
+app.add_typer(backup_app, name="backup")
 
 
 @app.callback()
