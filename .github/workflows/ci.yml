@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Python · pytest + ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out nexus
+        uses: actions/checkout@v4
+        with:
+          path: nexus
+
+      - name: Check out loom (editable sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: NinoCoelho/loom
+          ref: main
+          path: loom
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      - name: uv sync
+        working-directory: nexus/agent
+        run: uv sync --extra dev
+
+      # ruff is currently advisory while existing lint debt gets cleaned up.
+      # Flip continue-on-error to false once the codebase is clean.
+      - name: ruff (advisory)
+        working-directory: nexus/agent
+        continue-on-error: true
+        run: uv run ruff check src tests
+
+      - name: pytest
+        working-directory: nexus/agent
+        run: uv run pytest -q
+
+  frontend:
+    name: UI · vite build (typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: npm ci
+        working-directory: ui
+        run: npm ci
+
+      - name: npm run build
+        working-directory: ui
+        run: npm run build
