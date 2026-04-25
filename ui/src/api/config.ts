@@ -21,11 +21,25 @@ export interface TranscriptionConfig {
   };
 }
 
+export interface SearchProviderEntry {
+  type: "ddgs" | "brave" | "tavily" | string;
+  key_env: string;
+  timeout: number;
+  ready?: boolean;
+}
+
+export interface SearchConfig {
+  enabled: boolean;
+  strategy: "concurrent" | "fallback" | string;
+  providers: SearchProviderEntry[];
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
   models: Model[];
   transcription?: TranscriptionConfig;
+  search?: SearchConfig;
 }
 
 export async function getConfig(): Promise<Config> {

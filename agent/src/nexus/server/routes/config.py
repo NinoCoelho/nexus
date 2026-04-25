@@ -37,6 +37,22 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "use_inline_key": p.use_inline_key,
             "type": p.type,
         }
+    s = cfg.search
+    out["search"] = {
+        "enabled": s.enabled,
+        "strategy": s.strategy,
+        "providers": [
+            {
+                "type": p.type,
+                "key_env": p.key_env,
+                "timeout": p.timeout,
+                # Synthesize a non-persisted "ready" flag so the UI can show
+                # at-a-glance whether a provider will actually do anything.
+                "ready": (p.type == "ddgs") or bool(p.key_env and os.environ.get(p.key_env)),
+            }
+            for p in s.providers
+        ],
+    }
     t = cfg.transcription
     out["transcription"] = {
         "mode": t.mode,
@@ -89,6 +105,24 @@ async def patch_config(
             raw["providers"][pname] = merged
     if "models" in body:
         raw["models"] = body["models"]
+    if "search" in body:
+        existing = raw.get("search", {}) or {}
+        patch = body["search"] or {}
+        merged = {**existing}
+        if "enabled" in patch:
+            merged["enabled"] = bool(patch["enabled"])
+        if "strategy" in patch:
+            merged["strategy"] = str(patch["strategy"])
+        if "providers" in patch:
+            merged["providers"] = [
+                {
+                    "type": str(p.get("type", "ddgs")),
+                    "key_env": str(p.get("key_env", "")),
+                    "timeout": float(p.get("timeout", 10.0)),
+                }
+                for p in (patch["providers"] or [])
+            ]
+        raw["search"] = merged
     if "transcription" in body:
         existing = raw.get("transcription", {}) or {}
         patch = body["transcription"] or {}
