@@ -27,6 +27,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
+import TrajectoryModal from "./components/TrajectoryModal";
 
 export default function App() {
   const toast = useToast();
@@ -48,6 +49,7 @@ export default function App() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [trajectoryOpen, setTrajectoryOpen] = useState(false);
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's
@@ -279,7 +281,11 @@ export default function App() {
           onOpenMobileDrawer={() => setMobileDrawerOpen(true)}
           statusSlot={
             view === "chat"
-              ? <AgentStatusBar usage={sessionUsage} thinking={activeState.thinking} />
+              ? <AgentStatusBar
+                  usage={sessionUsage}
+                  thinking={activeState.thinking}
+                  onOpenTrajectory={activeSession ? () => setTrajectoryOpen(true) : undefined}
+                />
               : null
           }
         />
@@ -391,6 +397,11 @@ export default function App() {
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <TrajectoryModal
+        sessionId={activeSession}
+        open={trajectoryOpen}
+        onClose={() => setTrajectoryOpen(false)}
+      />
     </div>
   );
 }

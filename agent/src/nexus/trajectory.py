@@ -51,6 +51,28 @@ class TrajectoryLogger:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
 
+    def find_for_session(self, session_id: str, *, limit: int = 50) -> list[dict]:
+        """Return all logged records for a session, newest first."""
+        files = sorted(self._dir.glob("trajectories-*.jsonl"), reverse=True)
+        out: list[dict] = []
+        for f in files:
+            try:
+                lines = f.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("session_id") == session_id:
+                    out.append(rec)
+                    if len(out) >= limit:
+                        return out
+        return out
+
     def export(self, output_path: Path, *, since_date: str | None = None) -> int:
         """Concatenate JSONL files into output_path. Returns record count."""
         files = sorted(self._dir.glob("trajectories-*.jsonl"))

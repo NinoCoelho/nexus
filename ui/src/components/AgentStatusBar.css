@@ -20,6 +20,17 @@
   color: var(--fg-dim);
 }
 
+.agent-status-btn {
+  cursor: pointer;
+  font-family: var(--font-ui);
+  color: var(--fg-faint);
+}
+
+.agent-status-btn:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .agent-status-bar.is-thinking .agent-status-pill {
   animation: agent-status-pulse 1.5s ease-in-out infinite;
 }

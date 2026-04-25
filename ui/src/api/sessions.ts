@@ -115,6 +115,32 @@ export async function patchSession(id: string, patch: { title?: string }): Promi
   return res.json();
 }
 
+export interface TrajectoryRecord {
+  trajectory_id: string;
+  session_id: string;
+  turn_index: number;
+  timestamp: number;
+  state: unknown;
+  action: unknown;
+  reward: unknown;
+}
+
+export interface TrajectoriesResponse {
+  enabled: boolean;
+  records: TrajectoryRecord[];
+}
+
+export async function getSessionTrajectories(
+  sessionId: string,
+  limit = 50,
+): Promise<TrajectoriesResponse> {
+  const res = await fetch(
+    `${BASE}/sessions/${encodeURIComponent(sessionId)}/trajectories?limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`Trajectories error: ${res.status}`);
+  return res.json();
+}
+
 export interface SessionUsage {
   model: string | null;
   input_tokens: number;

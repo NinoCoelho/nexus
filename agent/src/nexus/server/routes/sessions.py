@@ -149,6 +149,29 @@ async def delete_session(
     store.delete(session_id)
 
 
+@router.get("/sessions/{session_id}/trajectories")
+async def get_session_trajectories(
+    session_id: str,
+    limit: int = 50,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Return Atropos trajectory records for this session.
+
+    ``enabled`` reflects whether the trajectory logger is wired up
+    (controlled by ``NEXUS_TRAJECTORIES=1``). When disabled, ``records``
+    is always empty — the UI uses this to decide whether to surface
+    the "view trajectory" affordance.
+    """
+    from .chat import _trajectory_logger
+
+    if store.get(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if _trajectory_logger is None:
+        return {"enabled": False, "records": []}
+    records = _trajectory_logger.find_for_session(session_id, limit=max(1, min(limit, 200)))
+    return {"enabled": True, "records": records}
+
+
 @router.get("/sessions/{session_id}/usage")
 async def get_session_usage(
     session_id: str,
