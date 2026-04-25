@@ -11,8 +11,10 @@
  * are atomic, so frequent saves create churn in the FTS/tag indexes).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import MarkdownEditor from "./MarkdownEditor";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
+import MarkdownView from "./MarkdownView";
+import MermaidSnippets from "./MermaidSnippets";
 import KanbanBoard from "./KanbanBoard";
 import DataTableView from "./DataTableView";
 import FilePreview from "./FilePreview";
@@ -51,12 +53,36 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
   const [isBinary, setIsBinary] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [splitMode, setSplitMode] = useState(false);
+  const [previewContent, setPreviewContent] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [fileError, setFileError] = useState<string | null>(null);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
   const fileKind = selectedPath ? classify(selectedPath).kind : null;
   const canEdit = !isBinary && (fileKind === "markdown" || fileKind === "text" || fileKind === "code" || fileKind === "csv" || fileKind === "json");
+  const isMarkdown = fileKind === "markdown";
+
+  // Debounce preview updates so re-renders (esp. mermaid) don't fight the typing.
+  useEffect(() => {
+    if (!splitMode) return;
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(() => setPreviewContent(content), 220);
+    return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current); };
+  }, [content, splitMode]);
+
+  // When entering split mode, seed the preview immediately.
+  useEffect(() => {
+    if (splitMode) setPreviewContent(content);
+  }, [splitMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const insertSnippet = useCallback((body: string) => {
+    setContent((prev) => prev + (prev.endsWith("\n") ? "" : "\n") + body + "\n");
+  }, []);
+
+  const previewBody = useMemo(() => previewContent || content, [previewContent, content]);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -135,6 +161,18 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   Graph
                 </button>
               )}
+              {editMode && canEdit && isMarkdown && (
+                <MermaidSnippets onInsert={insertSnippet} />
+              )}
+              {editMode && canEdit && isMarkdown && (
+                <button
+                  className={`vault-pill${splitMode ? " vault-pill--active" : ""}`}
+                  onClick={() => setSplitMode((s) => !s)}
+                  title="Toggle live preview pane"
+                >
+                  Split
+                </button>
+              )}
               {editMode && canEdit && (
                 <button className="vault-pill" onClick={() => void save()} disabled={saveStatus === "saving"}>
                   Save
@@ -167,8 +205,21 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
             <KanbanBoard path={selectedPath!} onOpenInChat={onOpenInChat} />
           ) : isDataTable && !editMode ? (
             <DataTableView path={selectedPath!} />
+          ) : editMode && canEdit && splitMode && isMarkdown ? (
+            <div className="vault-split-pane">
+              <MarkdownEditor
+                ref={editorRef}
+                value={content}
+                onChange={setContent}
+                className="vault-markdown-editor vault-split-editor"
+              />
+              <div className="vault-split-preview">
+                <MarkdownView>{previewBody}</MarkdownView>
+              </div>
+            </div>
           ) : editMode && canEdit ? (
             <MarkdownEditor
+              ref={editorRef}
               value={content}
               onChange={setContent}
               className="vault-markdown-editor"

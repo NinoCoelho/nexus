@@ -327,6 +327,72 @@
   flex: 1;
 }
 
+/* ── Split pane (editor ↔ live preview) ───────────────────────────────── */
+.vault-split-pane {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.vault-split-editor {
+  border-right: 1px solid var(--border-soft);
+}
+
+.vault-split-preview {
+  overflow: auto;
+  padding: 16px 20px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+@media (max-width: 768px) {
+  .vault-split-pane {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+  .vault-split-editor {
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+}
+
+/* ── Mermaid snippets dropdown ────────────────────────────────────────── */
+.vault-mermaid-snippets {
+  position: relative;
+  display: inline-block;
+}
+
+.vault-mermaid-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--bg-panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  z-index: 30;
+}
+
+.vault-mermaid-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vault-mermaid-menu-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 /* ── Search bar ───────────────────────────────────────────────────────────── */
 
 .vault-search-bar {
