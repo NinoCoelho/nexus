@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -18,6 +19,7 @@ from .helpers import (
     _from_loom_message,
     _to_loom_message,
 )
+from .overflow import check_overflow
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +107,20 @@ class Agent:
     @_dispatcher.setter
     def _dispatcher(self, value: Any) -> None:
         self._handlers.dispatcher = value
+
+    def _context_window_for(self, model_id: str | None) -> int:
+        """Lookup the configured context window for a model id.
+
+        Returns 0 when unknown — the overflow checker treats that as
+        "skip the check" so this stays a strictly opt-in safety net.
+        """
+        cfg = self._nexus_cfg
+        if not (cfg and model_id):
+            return 0
+        for m in getattr(cfg, "models", []) or []:
+            if getattr(m, "id", None) == model_id:
+                return int(getattr(m, "context_window", 0) or 0)
+        return 0
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
         """Return (nexus_provider, upstream_model_name). Kept for app.py compat."""
@@ -211,6 +227,46 @@ class Agent:
             lt.ChatMessage(role=lt.Role.USER, content=user_msg_content)
         )
 
+        # Pre-flight overflow check — refuse the turn now if the request can't
+        # fit in the chosen model's context window. Without this, providers
+        # like z.ai accept the request and reply with HTTP 200 + empty content,
+        # which surfaces as the generic "empty_response" error and triggers an
+        # endless retry loop.
+        ctx_window = self._context_window_for(model_id or self._chosen_model)
+        if ctx_window > 0:
+            check = check_overflow(loom_messages, context_window=ctx_window)
+            if check.overflowed:
+                yield {
+                    "type": "error",
+                    "detail": check.detail,
+                    "reason": "context_overflow",
+                    "retryable": False,
+                    "status_code": None,
+                    "estimated_input_tokens": check.estimated_input_tokens,
+                    "context_window": check.context_window,
+                    "actions": ["compact_history", "new_session"],
+                }
+                yield {
+                    "type": "done",
+                    "session_id": session_id,
+                    "reply": "",
+                    "trace": [{"event": "context_overflow",
+                               "estimated_input_tokens": check.estimated_input_tokens,
+                               "context_window": check.context_window}],
+                    "skills_touched": [],
+                    "iterations": 0,
+                    "messages": list(history or []) + [
+                        ChatMessage(role=Role.USER, content=user_msg_content),
+                    ],
+                    "usage": {
+                        "input_tokens": check.estimated_input_tokens,
+                        "output_tokens": 0,
+                        "tool_calls": 0,
+                        "model": model_id or self._chosen_model,
+                    },
+                }
+                return
+
         # loom yields serialized dicts (via serialize_event=model_dump) but the
         # event structure differs from what app.py expects.  We translate here.
         full_text = ""
@@ -219,7 +275,39 @@ class Agent:
         # not carry the assembled message list.
         _history_snapshot = list(history or [])
 
-        async for raw in self._loom.run_turn_stream(loom_messages, model_id=model_id):
+        # Wire a per-turn thinking sink on the loom adapter. Reasoning chunks
+        # from thinking models (Ollama GLM-4.7-flash, DeepSeek-R1, …) flow
+        # through here as they arrive and we multiplex them into the output
+        # stream alongside loom events. Reset in `finally` so concurrent turns
+        # can't see each other's CoT.
+        thinking_q: asyncio.Queue[str] = asyncio.Queue()
+        adapter = getattr(self._loom, "_provider", None)
+        had_sink_attr = adapter is not None and hasattr(adapter, "_thinking_sink")
+        if had_sink_attr:
+            adapter._thinking_sink = thinking_q.put_nowait  # type: ignore[attr-defined]
+
+        loom_iter = self._loom.run_turn_stream(loom_messages, model_id=model_id).__aiter__()
+        loom_task: asyncio.Task[Any] | None = asyncio.ensure_future(loom_iter.__anext__())
+        q_task: asyncio.Task[str] = asyncio.ensure_future(thinking_q.get())
+        try:
+          while loom_task is not None:
+            done, _pending = await asyncio.wait(
+                {loom_task, q_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if q_task in done:
+                text = q_task.result()
+                if text:
+                    yield {"type": "thinking", "text": text}
+                q_task = asyncio.ensure_future(thinking_q.get())
+            if loom_task not in done:
+                continue
+            try:
+                raw = loom_task.result()
+            except StopAsyncIteration:
+                loom_task = None
+                break
+            loom_task = asyncio.ensure_future(loom_iter.__anext__())
+
             # raw is a dict because serialize_event=model_dump
             etype = raw.get("type") if isinstance(raw, dict) else getattr(raw, "type", None)
             if isinstance(raw, dict):
@@ -293,13 +381,31 @@ class Agent:
                     log.info(
                         "turn ended with empty reply (stop_reason=%s)", stop_reason,
                     )
-                    yield {
+                    # Heuristic: if the request was already large, the most
+                    # likely cause of a 200-with-empty-content is upstream
+                    # context truncation. Surface that so the UI can offer
+                    # "compact history" instead of just "retry".
+                    est_in = check_overflow(
+                        loom_messages, context_window=ctx_window or 0
+                    ).estimated_input_tokens
+                    likely_overflow = ctx_window > 0 and est_in > ctx_window * 70 // 100
+                    err: dict[str, Any] = {
                         "type": "error",
                         "detail": "The model returned an empty response.",
                         "reason": "empty_response",
                         "retryable": True,
                         "status_code": None,
                     }
+                    if likely_overflow:
+                        err["detail"] += (
+                            f" Likely cause: history is at ~{est_in:,}/{ctx_window:,} "
+                            f"tokens — compact the session and try again."
+                        )
+                        err["likely_cause"] = "context_overflow"
+                        err["estimated_input_tokens"] = est_in
+                        err["context_window"] = ctx_window
+                        err["actions"] = ["compact_history", "new_session"]
+                    yield err
                 # Prefer the assembled message list from loom (includes
                 # tool_calls + TOOL role messages). Strip system messages
                 # (re-built each turn by before_llm_call). Fall back to a
@@ -331,6 +437,24 @@ class Agent:
                         "model": model_used,
                     },
                 }
+        finally:
+            # Detach the per-turn sink so background tasks / future turns
+            # never inherit a closure pointing at this turn's queue.
+            if had_sink_attr:
+                adapter._thinking_sink = None  # type: ignore[attr-defined]
+            for t in (loom_task, q_task):
+                if t is not None and not t.done():
+                    t.cancel()
+            # Drain any thinking events that arrived after the loom DoneEvent
+            # (rare, but possible if the model emitted reasoning-only chunks
+            # at the very tail of the stream).
+            while not thinking_q.empty():
+                try:
+                    text = thinking_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if text:
+                    yield {"type": "thinking", "text": text}
 
     async def aclose(self) -> None:
         """Shut down the LLM provider and provider registry, releasing HTTP connections."""

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import loom.types as lt
@@ -34,6 +34,11 @@ class LoomProviderAdapter(LoomLLMProvider):
         self._nexus = provider
         self._registry = provider_registry
         self._default_model = default_model
+        # Optional side-channel for thinking-model chain-of-thought. The Nexus
+        # Agent sets this per-turn; the adapter funnels reasoning chunks here
+        # instead of yielding them to loom (loom's ContentDeltaEvent path
+        # appends to assistant content and would persist the CoT to history).
+        self._thinking_sink: Callable[[str], None] | None = None
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
         """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name)."""
@@ -93,6 +98,16 @@ class LoomProviderAdapter(LoomLLMProvider):
         provider, upstream = self._resolve(model)
         async for ev in provider.chat_stream(nexus_messages, tools=tools, model=upstream):
             etype = ev.get("type")
+
+            if etype == "thinking_delta":
+                sink = self._thinking_sink
+                if sink is not None:
+                    try:
+                        sink(ev.get("text", ""))
+                    except Exception:
+                        # A broken sink must not poison the LLM stream.
+                        pass
+                continue
 
             if etype == "delta":
                 yield lt.ContentDeltaEvent(delta=ev.get("text", ""))

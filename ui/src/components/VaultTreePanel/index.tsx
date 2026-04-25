@@ -27,6 +27,7 @@ import {
   type VaultTagCount,
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import { TreeItem } from "./TreeItem";
 import { ContextMenu } from "./ContextMenu";
 import { SearchResultsPanel } from "./SearchResultsPanel";
@@ -109,6 +110,13 @@ export default function VaultTreePanel({
   }, []);
 
   useEffect(() => { refreshTree(); }, [refreshTree]);
+
+  useVaultEvents((event) => {
+    if (event.type === "vault.indexed" || event.type === "vault.removed") {
+      refreshTree();
+      refreshTags();
+    }
+  });
 
   // React to an external open request (e.g. "Open in Vault" from a preview modal).
   useEffect(() => {

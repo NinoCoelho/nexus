@@ -119,7 +119,8 @@ export function drawCanvas(
     ctx.globalAlpha = 1;
   }
 
-  // Labels — only after simulation settles
+  // Labels — only after simulation settles. When focused, label active
+  // nodes only; otherwise label every visible node (truncated to 22 chars).
   if (refs.settledRef.current) {
     ctx.font = "9px system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -130,12 +131,7 @@ export function drawCanvas(
       if (n.x < vl || n.x > vr || n.y < vt || n.y > vb) continue;
       const isActive = !hasFocus || activeNodes.has(i);
       const isCore = selNode === i || highlighted.has(i);
-      // When focused: only label active nodes. When unfocused: show labels for degree >= 3
-      if (hasFocus) {
-        if (!isActive) continue;
-      } else {
-        if (n.degree < 3) continue;
-      }
+      if (hasFocus && !isActive) continue;
       const r = nodeRadius(n.degree) + (isCore ? 3 : 0);
       const label = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
       const metrics = ctx.measureText(label);

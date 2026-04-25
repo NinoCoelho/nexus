@@ -99,10 +99,11 @@ export async function searchVault(q: string, limit = 50): Promise<VaultSearchRes
   return data.results;
 }
 
-export async function reindexVault(): Promise<{ indexed: number }> {
-  const res = await fetch(`${BASE}/vault/reindex`, { method: "POST" });
+export async function reindexVault(full = false): Promise<{ indexed: number; full?: boolean }> {
+  const url = `${BASE}/vault/reindex${full ? "?full=1" : ""}`;
+  const res = await fetch(url, { method: "POST" });
   if (!res.ok) throw new Error(`Vault reindex error: ${res.status}`);
-  return res.json() as Promise<{ indexed: number }>;
+  return res.json() as Promise<{ indexed: number; full?: boolean }>;
 }
 
 export async function postVaultMove(from: string, to: string): Promise<void> {

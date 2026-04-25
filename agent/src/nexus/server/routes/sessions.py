@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from ..deps import get_sessions
-from ..schemas import TruncateRequest
+from ..schemas import CompactRequest, TruncateRequest
 from ..session_store import SessionStore
 
 log = logging.getLogger(__name__)
@@ -268,6 +268,42 @@ async def truncate_session(
         raise HTTPException(status_code=404, detail="Session not found")
     truncated = session.history[: body.before_seq]
     store.replace_history(session_id, truncated)
+
+
+@router.post("/sessions/{session_id}/compact")
+async def compact_session(
+    session_id: str,
+    body: CompactRequest | None = None,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Compact oversized tool results in a session's history.
+
+    Triggered by the UI's "Compact history" button when a turn fails with
+    ``context_overflow`` (or proactively from the chat menu). Returns a
+    report so the UI can show "saved 1.2 MB across 3 messages".
+    """
+    from ...agent.loop.compact import compact_history
+
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    body = body or CompactRequest()
+    new_history, report = compact_history(
+        session.history,
+        threshold_bytes=body.threshold_bytes,
+        head_keep=body.head_keep_bytes,
+        sample_rows=body.csv_sample_rows,
+    )
+    if report.compacted > 0:
+        store.replace_history(session_id, new_history)
+    return {
+        "inspected_tool_messages": report.inspected,
+        "compacted": report.compacted,
+        "skipped_already_compacted": report.skipped_already_compacted,
+        "bytes_before": report.bytes_before,
+        "bytes_after": report.bytes_after,
+        "saved_bytes": report.saved_bytes,
+    }
 
 
 @router.get("/sessions/{session_id}/export")

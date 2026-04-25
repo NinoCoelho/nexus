@@ -6,6 +6,7 @@ manages the singleton instance, and provides vault indexing hooks.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Iterator
@@ -16,6 +17,7 @@ from ._manifest import (
     is_indexed as _is_indexed,
     mark_indexed as _mark_indexed,
     open_manifest as _get_manifest,
+    remove_path as _manifest_remove_path,
 )
 from ._resolvers import resolve_embedder as _resolve_embedder, resolve_extraction_llm as _resolve_extraction_llm
 
@@ -110,8 +112,50 @@ async def index_vault_file(path: str, content: str) -> None:
     try:
         await _engine.index_source(path, content)
         _mark_indexed(path, content)
+        try:
+            from ..server.event_bus import publish
+            publish({"type": "graphrag.indexed", "path": path})
+        except Exception:
+            pass
     except Exception:
         log.warning("[graphrag] failed to index %s", path, exc_info=True)
+
+
+def schedule_index(path: str, content: str) -> None:
+    """Fire-and-forget GraphRAG indexing of a single vault file.
+
+    Schedules ``index_vault_file`` on the running event loop so callers
+    in synchronous code (``vault.write_file``) don't block on LLM/embedding
+    calls. Silently skips if no loop is running or GraphRAG is disabled.
+    """
+    if _engine is None:
+        return
+    if not content:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(index_vault_file(path, content))
+
+
+def remove_source(path: str) -> None:
+    """Remove a vault file's chunks/entities from GraphRAG and the manifest."""
+    if _engine is None:
+        return
+    try:
+        _engine.remove_source(path)
+    except Exception:
+        log.warning("[graphrag] remove_source failed for %s", path, exc_info=True)
+    try:
+        _manifest_remove_path(path)
+    except Exception:
+        log.warning("[graphrag] manifest remove_path failed for %s", path, exc_info=True)
+    try:
+        from ..server.event_bus import publish
+        publish({"type": "graphrag.removed", "path": path})
+    except Exception:
+        pass
 
 
 async def index_full_vault() -> None:

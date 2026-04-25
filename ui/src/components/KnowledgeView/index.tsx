@@ -16,7 +16,7 @@
  * nexus.agent.graphrag_manager and loom.store.graphrag.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   knowledgeQuery,
   getKnowledgeStats,
@@ -33,8 +33,12 @@ import {
 } from "../../api";
 import VaultFilePreview from "../VaultFilePreview";
 import "../KnowledgeView.css";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import { useSubgraphSimRefs } from "./useSubgraphSim";
 import { SubgraphCanvas } from "./SubgraphCanvas";
+const SubgraphCanvas3D = lazy(() =>
+  import("./SubgraphCanvas3D").then((m) => ({ default: m.SubgraphCanvas3D })),
+);
 import { EntityPanel } from "./EntityPanel";
 import { SourceFilterBar } from "./SourceFilterBar";
 import { EntityTypeFilter } from "./EntityTypeFilter";
@@ -67,16 +71,44 @@ export default function KnowledgeView({
   const [sourcePath, setSourcePath] = useState("");
   const [sourceSuggestions, setSourceSuggestions] = useState<string[]>([]);
   const [showSourceSuggestions, setShowSourceSuggestions] = useState(false);
+  const [graphFullscreen, setGraphFullscreen] = useState(false);
+  const [viewMode, setViewMode] = useState<"2d" | "3d">(() => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("kv:viewMode") : null;
+    return saved === "3d" ? "3d" : "2d";
+  });
+  const toggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      const next = prev === "2d" ? "3d" : "2d";
+      try { window.localStorage.setItem("kv:viewMode", next); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const simRefs = useSubgraphSimRefs();
   const { graphSearch, graphSearchCount, onGraphSearchChange, clearGraphSearch } = useGraphSearch(simRefs);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splitDragRef = useRef<{ startX: number; startRatio: number } | null>(null);
   const mainRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  const refreshKnowledge = useCallback(() => {
     getKnowledgeStats().then(setStats).catch(() => {});
     getKnowledgeEntities({ limit: 200 }).then((r) => setTopEntities(r.entities)).catch(() => {});
   }, []);
+
+  useEffect(() => { refreshKnowledge(); }, [refreshKnowledge]);
+
+  useVaultEvents((event) => {
+    if (event.type !== "graphrag.indexed" && event.type !== "graphrag.removed") return;
+    refreshKnowledge();
+    if (sourceFilter !== "none" && sourcePath) {
+      const matches =
+        sourceFilter === "file"
+          ? event.path === sourcePath
+          : event.path.startsWith(sourcePath.endsWith("/") ? sourcePath : sourcePath + "/");
+      if (matches) void applySourceFilter(sourceFilter, sourcePath);
+    } else if (queryText.trim()) {
+      void doSearch(queryText);
+    }
+  });
 
   useEffect(() => {
     if (!initialSourceFilter) return;
@@ -185,52 +217,57 @@ export default function KnowledgeView({
   const hasSubgraph = subgraphData && subgraphData.nodes.length > 0;
 
   return (
-    <div className="kv">
-      <div className="kv-search-bar">
-        <div className="kv-search-wrap">
-          <input
-            className="kv-search-input"
-            type="text"
-            placeholder="Search your knowledge…"
-            value={queryText}
-            onChange={(e) => onSearchChange(e.target.value)}
-          />
-          {queryText && (
-            <button className="kv-search-clear" onClick={clearSearch}>&times;</button>
+    <div className={`kv${graphFullscreen ? " kv--graph-fullscreen" : ""}`}>
+      {!graphFullscreen && (
+        <>
+          <div className="kv-search-bar">
+            <div className="kv-search-wrap">
+              <input
+                className="kv-search-input"
+                type="text"
+                placeholder="Search your knowledge…"
+                value={queryText}
+                onChange={(e) => onSearchChange(e.target.value)}
+              />
+              {queryText && (
+                <button className="kv-search-clear" onClick={clearSearch}>&times;</button>
+              )}
+            </div>
+            {loading && <span className="kv-search-loading">Searching…</span>}
+          </div>
+
+          <div className="kv-filters">
+            <EntityTypeFilter stats={stats} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} />
+            <SourceFilterBar
+              sourceFilter={sourceFilter}
+              sourcePath={sourcePath}
+              sourceSuggestions={sourceSuggestions}
+              showSourceSuggestions={showSourceSuggestions}
+              onFilterModeChange={setSourceFilter}
+              onPathChange={setSourcePath}
+              onSuggestionsChange={setSourceSuggestions}
+              onShowSuggestionsChange={setShowSourceSuggestions}
+              onApply={applySourceFilter}
+              onClear={clearSourceFilter}
+            />
+          </div>
+
+          {stats && stats.enabled && (
+            <div className="kv-stats">
+              <span>{stats.entities} entities</span>
+              <span className="kv-stats-dot" />
+              <span>{stats.triples} relations</span>
+              <span className="kv-stats-dot" />
+              <span>{stats.component_count} groups</span>
+            </div>
           )}
-        </div>
-        {loading && <span className="kv-search-loading">Searching…</span>}
-      </div>
-
-      <div className="kv-filters">
-        <EntityTypeFilter stats={stats} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} />
-        <SourceFilterBar
-          sourceFilter={sourceFilter}
-          sourcePath={sourcePath}
-          sourceSuggestions={sourceSuggestions}
-          showSourceSuggestions={showSourceSuggestions}
-          onFilterModeChange={setSourceFilter}
-          onPathChange={setSourcePath}
-          onSuggestionsChange={setSourceSuggestions}
-          onShowSuggestionsChange={setShowSourceSuggestions}
-          onApply={applySourceFilter}
-          onClear={clearSourceFilter}
-        />
-      </div>
-
-      {stats && stats.enabled && (
-        <div className="kv-stats">
-          <span>{stats.entities} entities</span>
-          <span className="kv-stats-dot" />
-          <span>{stats.triples} relations</span>
-          <span className="kv-stats-dot" />
-          <span>{stats.component_count} groups</span>
-        </div>
+        </>
       )}
 
       <div className="kv-main" ref={mainRef}>
-        <div className="kv-evidence" style={{ flex: `0 0 ${splitRatio * 100}%` }}>
-          <EntityPanel
+        {!graphFullscreen && (
+          <div className="kv-evidence" style={{ flex: `0 0 ${splitRatio * 100}%` }}>
+            <EntityPanel
             hasResults={!!hasResults}
             loading={loading}
             queryResult={queryResult}
@@ -244,42 +281,68 @@ export default function KnowledgeView({
             onPreviewPath={setPreviewPath}
             onPinEntity={pinEntity}
             onUnpinEntity={unpinEntity}
-            onCloseSelected={closeActive}
-            isPinned={isPinned}
+              onCloseSelected={closeActive}
+              isPinned={isPinned}
+            />
+          </div>
+        )}
+
+        {!graphFullscreen && (
+          <div
+            className="kv-divider"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              splitDragRef.current = { startX: e.clientX, startRatio: splitRatio };
+              const onMove = (ev: MouseEvent) => {
+                if (!splitDragRef.current || !mainRef.current) return;
+                const dx = ev.clientX - splitDragRef.current.startX;
+                setSplitRatio(Math.max(0.2, Math.min(0.8, splitDragRef.current.startRatio + dx / mainRef.current.clientWidth)));
+              };
+              const onUp = () => { splitDragRef.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+            }}
           />
-        </div>
+        )}
 
-        <div
-          className="kv-divider"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            splitDragRef.current = { startX: e.clientX, startRatio: splitRatio };
-            const onMove = (ev: MouseEvent) => {
-              if (!splitDragRef.current || !mainRef.current) return;
-              const dx = ev.clientX - splitDragRef.current.startX;
-              setSplitRatio(Math.max(0.2, Math.min(0.8, splitDragRef.current.startRatio + dx / mainRef.current.clientWidth)));
-            };
-            const onUp = () => { splitDragRef.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-            window.addEventListener("mousemove", onMove);
-            window.addEventListener("mouseup", onUp);
-          }}
-        />
-
-        <SubgraphCanvas
-          subgraphData={subgraphData}
-          graphSearch={graphSearch}
-          graphSearchCount={graphSearchCount}
-          hasSubgraph={!!hasSubgraph}
-          loading={loading}
-          sourceFilter={sourceFilter}
-          sourcePath={sourcePath}
-          onStartGraphIndex={onStartGraphIndex}
-          refs={simRefs}
-          onSelectEntity={(id) => void selectEntity(id)}
-          onGraphSearchChange={onGraphSearchChange}
-          onClearGraphSearch={clearGraphSearch}
-          graphSearchValue={graphSearch}
-        />
+        {viewMode === "3d" ? (
+          <Suspense fallback={<div className="kv-graph"><div className="kv-graph-empty"><p>Loading 3D…</p></div></div>}>
+          <SubgraphCanvas3D
+            subgraphData={subgraphData}
+            hasSubgraph={!!hasSubgraph}
+            loading={loading}
+            sourceFilter={sourceFilter}
+            sourcePath={sourcePath}
+            onStartGraphIndex={onStartGraphIndex}
+            onSelectEntity={(id) => void selectEntity(id)}
+            graphSearch={graphSearch}
+            fullscreen={graphFullscreen}
+            onToggleFullscreen={() => setGraphFullscreen((v) => !v)}
+            viewMode={viewMode}
+            onToggleViewMode={toggleViewMode}
+          />
+          </Suspense>
+        ) : (
+          <SubgraphCanvas
+            subgraphData={subgraphData}
+            graphSearch={graphSearch}
+            graphSearchCount={graphSearchCount}
+            hasSubgraph={!!hasSubgraph}
+            loading={loading}
+            sourceFilter={sourceFilter}
+            sourcePath={sourcePath}
+            onStartGraphIndex={onStartGraphIndex}
+            refs={simRefs}
+            onSelectEntity={(id) => void selectEntity(id)}
+            onGraphSearchChange={onGraphSearchChange}
+            onClearGraphSearch={clearGraphSearch}
+            graphSearchValue={graphSearch}
+            fullscreen={graphFullscreen}
+            onToggleFullscreen={() => setGraphFullscreen((v) => !v)}
+            viewMode={viewMode}
+            onToggleViewMode={toggleViewMode}
+          />
+        )}
       </div>
 
       {previewPath && (

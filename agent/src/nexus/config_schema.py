@@ -20,6 +20,11 @@ class ModelEntry(BaseModel):
     tags: list[str] = Field(default_factory=list)
     tier: Tier = "balanced"
     notes: str = ""
+    # Total context window in tokens (input + output). Used for pre-flight
+    # overflow detection so the agent can refuse a turn whose history won't
+    # fit instead of letting the upstream return an empty 200. 0 = unknown,
+    # treat as "don't check".
+    context_window: int = 0
 
 
 class ProviderConfig(BaseModel):

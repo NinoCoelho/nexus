@@ -21,11 +21,17 @@ def rebuild_from_disk(
     lock: Any,
     extract_tags_fn: Any,
     extract_links_fn: Any,
+    full: bool = False,
 ) -> int:
-    """Re-index all .md/.mdx files under vault_root. Returns file count.
+    """Re-index .md/.mdx files under vault_root. Returns file count.
 
     Parameters are injected by vault_index to avoid circular imports and
     to keep this module free of module-level state.
+
+    With ``full=False`` (default), uses ``file_meta(mtime, size)`` to skip
+    files that haven't changed since last index, and prunes rows for files
+    that no longer exist on disk. With ``full=True``, deletes everything
+    and rebuilds from scratch.
     """
     import yaml
 
@@ -35,16 +41,33 @@ def rebuild_from_disk(
     with lock:
         con = connect_fn()
         try:
-            con.execute("DELETE FROM file_tags")
-            con.execute("DELETE FROM file_links")
+            if full:
+                con.execute("DELETE FROM file_tags")
+                con.execute("DELETE FROM file_links")
+                con.execute("DELETE FROM file_meta")
+
+            existing: dict[str, tuple[float, int]] = {}
+            if not full:
+                for row in con.execute("SELECT path, mtime, size FROM file_meta"):
+                    existing[row[0]] = (row[1], row[2])
+
+            disk_paths: set[str] = set()
             count = 0
             for fp in files:
                 rel_parts = fp.relative_to(vault_root).parts
                 if any(part.startswith(".") for part in rel_parts):
                     continue
                 try:
-                    content = fp.read_text(encoding="utf-8", errors="replace")
                     rel = str(fp.relative_to(vault_root))
+                    disk_paths.add(rel)
+                    st = fp.stat()
+                    if not full:
+                        prev = existing.get(rel)
+                        if prev is not None and prev[0] == st.st_mtime and prev[1] == st.st_size:
+                            count += 1
+                            continue
+
+                    content = fp.read_text(encoding="utf-8", errors="replace")
 
                     # Parse frontmatter
                     fm: dict[str, Any] | None = None
@@ -60,7 +83,10 @@ def rebuild_from_disk(
                             except yaml.YAMLError:
                                 pass
 
-                    # Tags
+                    # Replace this file's rows
+                    con.execute("DELETE FROM file_tags WHERE path = ?", (rel,))
+                    con.execute("DELETE FROM file_links WHERE from_path = ?", (rel,))
+
                     tags = extract_tags_fn(body, fm)
                     for tag in tags:
                         con.execute(
@@ -68,7 +94,6 @@ def rebuild_from_disk(
                             (rel, tag),
                         )
 
-                    # Links (resolve against vault root)
                     raw_links = extract_links_fn(body)
                     src_full = vault_root / rel
                     for dest in raw_links:
@@ -89,9 +114,23 @@ def rebuild_from_disk(
                                 "INSERT OR IGNORE INTO file_links(from_path, to_path) VALUES (?, ?)",
                                 (rel, to_path),
                             )
+
+                    con.execute(
+                        "INSERT OR REPLACE INTO file_meta(path, mtime, size) VALUES (?, ?, ?)",
+                        (rel, st.st_mtime, st.st_size),
+                    )
                     count += 1
                 except OSError as exc:
                     log.warning("vault_index: skipping %s: %s", fp, exc)
+
+            if not full:
+                stale = set(existing.keys()) - disk_paths
+                for rel in stale:
+                    con.execute("DELETE FROM file_tags WHERE path = ?", (rel,))
+                    con.execute("DELETE FROM file_links WHERE from_path = ?", (rel,))
+                    con.execute("DELETE FROM file_links WHERE to_path = ?", (rel,))
+                    con.execute("DELETE FROM file_meta WHERE path = ?", (rel,))
+
             con.commit()
         finally:
             con.close()

@@ -120,6 +120,8 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "tier": m.tier,
             "notes": m.notes,
         }
+        if m.context_window:
+            md["context_window"] = m.context_window
         d["models"].append(md)
     return d
 

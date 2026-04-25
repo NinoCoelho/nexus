@@ -16,3 +16,5 @@ export * from "./routing";
 export * from "./insights";
 export * from "./knowledge";
 export * from "./audio";
+export * from "./events";
+export * from "./localLlm";

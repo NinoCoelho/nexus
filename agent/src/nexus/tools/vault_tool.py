@@ -23,11 +23,35 @@ VAULT_LIST_TOOL = ToolSpec(
 
 VAULT_READ_TOOL = ToolSpec(
     name="vault_read",
-    description="Read a file from the vault. Returns content and parsed frontmatter if present.",
+    description=(
+        "Read a file from the vault. Returns content and parsed frontmatter if present.\n\n"
+        "Files larger than 64KB are auto-truncated. Use `head`/`tail` (line counts) "
+        "or `offset`/`limit` (byte ranges) to read specific slices of large files. "
+        "When the result contains `truncated: true`, the response also includes a "
+        "`slice` object with metadata (lines_returned, next_offset, …) so you can "
+        "page through the file. Reading a 1MB CSV in one shot will pollute the "
+        "conversation context — always slice large files."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Relative path within the vault."},
+            "head": {
+                "type": "integer",
+                "description": "Return only the first N lines. Mutually exclusive with tail/offset/limit.",
+            },
+            "tail": {
+                "type": "integer",
+                "description": "Return only the last N lines. Mutually exclusive with head/offset/limit.",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Byte offset to start reading from (0-based). Pair with `limit`.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum bytes to return (default: 64KB cap when no slice args given).",
+            },
         },
         "required": ["path"],
     },
@@ -145,7 +169,29 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
             path = args.get("path", "")
             if not path:
                 return _dumps({"ok": False, "error": "`path` is required"})
-            result = vault.read_file(path)
+            head = args.get("head")
+            tail = args.get("tail")
+            offset = int(args.get("offset", 0) or 0)
+            limit = args.get("limit")
+            # Default cap: when the agent didn't request a specific slice we
+            # still avoid dumping multi-MB files into the conversation. 64KB
+            # ≈ ~16k tokens, which is a sane budget for a single tool result.
+            DEFAULT_BYTE_CAP = 64 * 1024
+            if head is None and tail is None and limit is None and offset == 0:
+                limit = DEFAULT_BYTE_CAP
+            result = vault.read_file(
+                path,
+                offset=offset,
+                limit=int(limit) if limit is not None else None,
+                head=int(head) if head is not None else None,
+                tail=int(tail) if tail is not None else None,
+            )
+            if result.get("truncated"):
+                result["hint"] = (
+                    "Output truncated. Use `head=N`/`tail=N` for line slices, "
+                    "or `offset`/`limit` (bytes) to page. Field `slice.next_offset` "
+                    "indicates where to resume."
+                )
             return _dumps({"ok": True, **result})
 
         if name == "vault_write":

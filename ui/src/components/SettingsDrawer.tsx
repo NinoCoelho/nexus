@@ -29,6 +29,7 @@ import {
   type RoutingConfig,
 } from "../api";
 import ProvidersSection from "./ProvidersSection";
+import LocalModels from "./LocalModels";
 import ModelsSection from "./ModelsSection";
 import ReindexModal from "./ReindexModal";
 import AppearanceSection from "./AppearanceSection";
@@ -123,6 +124,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           {error && <p className="settings-error">{error}</p>}
           <AppearanceSection />
           <ProvidersSection providers={providers} onRefresh={refresh} />
+          <LocalModels onRefresh={refresh} />
           <ModelsSection
             models={models}
             providers={providers}

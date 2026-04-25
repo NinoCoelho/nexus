@@ -26,7 +26,7 @@ export interface SubgraphSimRefs {
   selectedEdgeRef: React.MutableRefObject<number | null>;
   hoveredEdgeGroupRef: React.MutableRefObject<number | null>;
   dragRef: React.MutableRefObject<{ idx: number; moved: boolean } | null>;
-  panRef: React.MutableRefObject<{ ox: number; oy: number; mx: number; my: number } | null>;
+  panRef: React.MutableRefObject<{ ox: number; oy: number; mx: number; my: number; moved: boolean } | null>;
   edgeTooltipRef: React.MutableRefObject<HTMLDivElement | null>;
   highlightNodesRef: React.MutableRefObject<Set<number>>;
 }
@@ -48,7 +48,7 @@ export function useSubgraphSimRefs(): SubgraphSimRefs {
     selectedEdgeRef: useRef<number | null>(null),
     hoveredEdgeGroupRef: useRef<number | null>(null),
     dragRef: useRef<{ idx: number; moved: boolean } | null>(null),
-    panRef: useRef<{ ox: number; oy: number; mx: number; my: number } | null>(null),
+    panRef: useRef<{ ox: number; oy: number; mx: number; my: number; moved: boolean } | null>(null),
     edgeTooltipRef: useRef<HTMLDivElement | null>(null),
     highlightNodesRef: useRef<Set<number>>(new Set()),
   };

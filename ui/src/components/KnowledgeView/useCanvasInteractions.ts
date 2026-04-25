@@ -54,7 +54,7 @@ export function makeCanvasHandlers(refs: SubgraphSimRefs, startRAF: () => void, 
     if (hit !== null) {
       refs.dragRef.current = { idx: hit, moved: false };
     } else {
-      refs.panRef.current = { ox: refs.offsetRef.current.x, oy: refs.offsetRef.current.y, mx: e.clientX, my: e.clientY };
+      refs.panRef.current = { ox: refs.offsetRef.current.x, oy: refs.offsetRef.current.y, mx: e.clientX, my: e.clientY, moved: false };
     }
   }
 
@@ -116,9 +116,12 @@ export function makeCanvasHandlers(refs: SubgraphSimRefs, startRAF: () => void, 
       n.x = cx; n.y = cy; n.vx = 0; n.vy = 0; n.pinned = true;
       if (!refs.runningRef.current) { refs.runningRef.current = true; refs.settledRef.current = false; startRAF(); }
     } else if (refs.panRef.current) {
+      const dx = e.clientX - refs.panRef.current.mx;
+      const dy = e.clientY - refs.panRef.current.my;
+      if (Math.abs(dx) + Math.abs(dy) > 2) refs.panRef.current.moved = true;
       refs.offsetRef.current = {
-        x: refs.panRef.current.ox + e.clientX - refs.panRef.current.mx,
-        y: refs.panRef.current.oy + e.clientY - refs.panRef.current.my,
+        x: refs.panRef.current.ox + dx,
+        y: refs.panRef.current.oy + dy,
       };
       redraw();
     } else {
@@ -127,7 +130,9 @@ export function makeCanvasHandlers(refs: SubgraphSimRefs, startRAF: () => void, 
   }
 
   function onCanvasUp(e: React.MouseEvent) {
-    if (refs.dragRef.current && !refs.dragRef.current.moved) {
+    const wasNodeClick = refs.dragRef.current && !refs.dragRef.current.moved;
+    const wasBackgroundClick = refs.panRef.current && !refs.panRef.current.moved;
+    if (wasNodeClick || wasBackgroundClick) {
       const canvas = refs.canvasRef.current!;
       const { x, y } = canvasPoint(e, canvas);
       const nodeHit = hitTestNode(x, y);

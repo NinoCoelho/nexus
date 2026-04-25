@@ -90,33 +90,101 @@ def resolve_path(rel_path: str) -> Path:
     return _safe_resolve(rel_path, _vault_root())
 
 
-def read_file(rel_path: str) -> dict[str, Any]:
+def read_file(
+    rel_path: str,
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    head: int | None = None,
+    tail: int | None = None,
+) -> dict[str, Any]:
+    """Read a vault file, optionally a slice.
+
+    Slice modes (mutually exclusive — first match wins):
+      * ``head=N``  → first N lines
+      * ``tail=N``  → last N lines
+      * ``offset``/``limit`` (bytes) → arbitrary byte range; ``offset+limit`` may
+        exceed file size (clamped). When ``limit`` is None the rest of the file
+        from ``offset`` is returned.
+
+    The result always carries ``size`` (original file size in bytes) so callers
+    can detect partial reads. ``truncated`` is set when the returned slice does
+    not cover the whole file.
+    """
     root = _vault_root()
     full = _safe_resolve(rel_path, root)
     if not full.is_file():
         raise FileNotFoundError(f"no such file: {rel_path!r}")
+
+    stat = full.stat()
+    size = stat.st_size
+
     try:
-        content = full.read_text(encoding="utf-8")
+        text = full.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        stat = full.stat()
         return {
             "path": rel_path,
             "content": "",
             "binary": True,
-            "size": stat.st_size,
+            "size": size,
             "mtime": stat.st_mtime,
         }
-    stat = full.stat()
+
+    truncated = False
+    slice_meta: dict[str, Any] = {}
+
+    if head is not None and head >= 0:
+        lines = text.splitlines(keepends=True)
+        total_lines = len(lines)
+        content = "".join(lines[:head])
+        truncated = head < total_lines
+        slice_meta = {"mode": "head", "lines_returned": min(head, total_lines), "total_lines": total_lines}
+    elif tail is not None and tail >= 0:
+        lines = text.splitlines(keepends=True)
+        total_lines = len(lines)
+        content = "".join(lines[-tail:] if tail > 0 else [])
+        truncated = tail < total_lines
+        slice_meta = {"mode": "tail", "lines_returned": min(tail, total_lines), "total_lines": total_lines}
+    elif offset > 0 or limit is not None:
+        if offset < 0:
+            offset = 0
+        if offset >= len(text):
+            content = ""
+            truncated = size > 0
+        elif limit is None:
+            content = text[offset:]
+            truncated = offset > 0
+        else:
+            end = offset + max(0, int(limit))
+            content = text[offset:end]
+            truncated = offset > 0 or end < len(text)
+        next_offset = offset + len(content) if truncated and limit is not None else None
+        slice_meta = {
+            "mode": "byte_range",
+            "offset": offset,
+            "bytes_returned": len(content),
+        }
+        if next_offset is not None and next_offset < len(text):
+            slice_meta["next_offset"] = next_offset
+    else:
+        content = text
+
     result: dict[str, Any] = {
         "path": rel_path,
         "content": content,
-        "size": stat.st_size,
+        "size": size,
         "mtime": stat.st_mtime,
     }
-    fm, body = _parse_frontmatter(content)
-    if fm is not None:
-        result["frontmatter"] = fm
-        result["body"] = body
+    if truncated:
+        result["truncated"] = True
+        result["slice"] = slice_meta
+    # Frontmatter parsing is only meaningful for full reads — partial reads can
+    # cut the YAML block in half. Skip it for slices.
+    if not truncated:
+        fm, body = _parse_frontmatter(content)
+        if fm is not None:
+            result["frontmatter"] = fm
+            result["body"] = body
     return result
 
 
@@ -156,6 +224,17 @@ def write_file(rel_path: str, content: str) -> None:
         vault_graph.invalidate_cache()
     except Exception:
         pass
+    try:
+        from .server.event_bus import publish
+        publish({"type": "vault.indexed", "path": rel_path})
+    except Exception:
+        pass
+    try:
+        from .agent.graphrag_manager import schedule_index
+        schedule_index(rel_path, content)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("graphrag: schedule_index failed", exc_info=True)
 
 
 def delete(rel_path: str, recursive: bool = False) -> None:
@@ -190,6 +269,17 @@ def delete(rel_path: str, recursive: bool = False) -> None:
         except Exception:
             import logging
             logging.getLogger(__name__).warning("vault_index: remove_file failed", exc_info=True)
+        try:
+            from .agent.graphrag_manager import remove_source
+            remove_source(rel)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("graphrag: remove_source failed", exc_info=True)
+        try:
+            from .server.event_bus import publish
+            publish({"type": "vault.removed", "path": rel})
+        except Exception:
+            pass
     try:
         from . import vault_graph
         vault_graph.invalidate_cache()
@@ -218,6 +308,25 @@ def move(from_path: str, to_path: str) -> None:
     try:
         from . import vault_graph
         vault_graph.invalidate_cache()
+    except Exception:
+        pass
+    # GraphRAG keys chunks by source_path, so a rename = remove(old) + index(new).
+    try:
+        from .agent.graphrag_manager import remove_source, schedule_index
+        remove_source(from_path)
+        try:
+            with open(_safe_resolve(to_path, _vault_root()), "r", encoding="utf-8") as f:
+                new_content = f.read()
+            schedule_index(to_path, new_content)
+        except (OSError, UnicodeDecodeError):
+            pass
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("graphrag: move hook failed", exc_info=True)
+    try:
+        from .server.event_bus import publish
+        publish({"type": "vault.removed", "path": from_path})
+        publish({"type": "vault.indexed", "path": to_path})
     except Exception:
         pass
 

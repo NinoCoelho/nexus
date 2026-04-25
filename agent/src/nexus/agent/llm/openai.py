@@ -114,7 +114,13 @@ class OpenAIProvider(LLMProvider):
         self._headers: dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
-        self._client = httpx.AsyncClient(timeout=120.0)
+        # Local reasoning models (GLM-4.7-flash, DeepSeek-R1, Qwen-QwQ, …) can
+        # spend many minutes on the chain-of-thought before emitting any
+        # `delta.content`. A 120s read timeout truncates them mid-thought; we
+        # keep the connect timeout tight but let the read side run unbounded.
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=10.0)
+        )
 
     async def chat(
         self,
@@ -244,6 +250,16 @@ class OpenAIProvider(LLMProvider):
                         continue
                     delta = choices[0].get("delta", {})
                     finish_reason = choices[0].get("finish_reason")
+
+                    # Reasoning delta (chain-of-thought from thinking models —
+                    # GLM-4.7-flash, DeepSeek-R1, Qwen-QwQ — exposed by Ollama
+                    # as `delta.reasoning`, by some OpenAI proxies as
+                    # `delta.reasoning_content`). We surface it as a separate
+                    # event type so consumers can display it without it being
+                    # appended to assistant content / persisted to history.
+                    reasoning_piece = delta.get("reasoning") or delta.get("reasoning_content")
+                    if reasoning_piece:
+                        yield {"type": "thinking_delta", "text": reasoning_piece}
 
                     # Text delta
                     text_piece = delta.get("content")

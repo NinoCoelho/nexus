@@ -69,3 +69,10 @@ def clear_manifest() -> None:
         return
     _manifest_db.execute("DELETE FROM content_hashes")
     _manifest_db.commit()
+
+
+def remove_path(path: str) -> None:
+    if _manifest_db is None:
+        return
+    _manifest_db.execute("DELETE FROM content_hashes WHERE source_path = ?", (path,))
+    _manifest_db.commit()

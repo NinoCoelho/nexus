@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS file_links (
     PRIMARY KEY (from_path, to_path)
 );
 CREATE INDEX IF NOT EXISTS idx_file_links_to ON file_links(to_path);
+
+CREATE TABLE IF NOT EXISTS file_meta (
+    path TEXT PRIMARY KEY,
+    mtime REAL NOT NULL,
+    size INTEGER NOT NULL
+);
 """
 
 
@@ -134,6 +140,13 @@ def reindex_file(path: str, body: str, frontmatter: dict[str, Any] | None) -> No
                 except ValueError:
                     pass
 
+    fp = _VAULT_ROOT.expanduser() / norm
+    try:
+        st = fp.stat()
+        mtime, size = st.st_mtime, st.st_size
+    except OSError:
+        mtime = 0.0
+        size = len((body or "").encode("utf-8", errors="replace"))
     with _lock:
         con = _connect()
         try:
@@ -149,6 +162,10 @@ def reindex_file(path: str, body: str, frontmatter: dict[str, Any] | None) -> No
                         "INSERT OR IGNORE INTO file_links(from_path, to_path) VALUES (?, ?)",
                         (norm, to_path),
                     )
+            con.execute(
+                "INSERT OR REPLACE INTO file_meta(path, mtime, size) VALUES (?, ?, ?)",
+                (norm, mtime, size),
+            )
             con.commit()
         finally:
             con.close()
@@ -163,6 +180,7 @@ def remove_file(path: str) -> None:
             con.execute("DELETE FROM file_tags WHERE path = ?", (norm,))
             con.execute("DELETE FROM file_links WHERE from_path = ?", (norm,))
             con.execute("DELETE FROM file_links WHERE to_path = ?", (norm,))
+            con.execute("DELETE FROM file_meta WHERE path = ?", (norm,))
             con.commit()
         finally:
             con.close()
@@ -183,6 +201,9 @@ def rename_file(from_path: str, to_path: str) -> None:
             )
             con.execute(
                 "UPDATE file_links SET to_path = ? WHERE to_path = ?", (to_norm, from_norm)
+            )
+            con.execute(
+                "UPDATE file_meta SET path = ? WHERE path = ?", (to_norm, from_norm)
             )
             con.commit()
         finally:
@@ -281,8 +302,12 @@ def is_empty() -> bool:
             con.close()
 
 
-def rebuild_from_disk() -> int:
-    """Re-index all .md/.mdx files under the vault root. Returns file count."""
+def rebuild_from_disk(full: bool = False) -> int:
+    """Re-index .md/.mdx files under the vault root.
+
+    With ``full=True``, drop everything and rebuild. Otherwise consult
+    ``file_meta(mtime, size)`` and only touch new or changed files.
+    """
     from .vault_index_rebuild import rebuild_from_disk as _rebuild
     return _rebuild(
         vault_root=_VAULT_ROOT.expanduser(),
@@ -290,4 +315,5 @@ def rebuild_from_disk() -> int:
         lock=_lock,
         extract_tags_fn=_extract_tags,
         extract_links_fn=extract_links,
+        full=full,
     )

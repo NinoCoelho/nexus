@@ -27,6 +27,10 @@ interface SubgraphCanvasProps {
   onGraphSearchChange: (value: string) => void;
   onClearGraphSearch: () => void;
   graphSearchValue: string;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+  viewMode?: "2d" | "3d";
+  onToggleViewMode?: () => void;
 }
 
 /**
@@ -64,6 +68,10 @@ export function SubgraphCanvas({
   onGraphSearchChange,
   onClearGraphSearch,
   graphSearchValue,
+  fullscreen,
+  onToggleFullscreen,
+  viewMode,
+  onToggleViewMode,
 }: SubgraphCanvasProps) {
   function fitGraph() {
     const nodes = refs.simNodesRef.current;
@@ -181,6 +189,15 @@ export function SubgraphCanvas({
           {graphSearch && <button className="kv-graph-search-clear" onClick={onClearGraphSearch}>&times;</button>}
         </div>
         <div className="kv-graph-tools">
+          {onToggleViewMode && (
+            <button
+              className="kv-tool-btn kv-tool-btn--label"
+              onClick={onToggleViewMode}
+              title={viewMode === "3d" ? "Switch to 2D" : "Switch to 3D"}
+            >
+              {viewMode === "3d" ? "2D" : "3D"}
+            </button>
+          )}
           <button className="kv-tool-btn" onClick={refreshGraph} title="Restart layout" disabled={!hasSubgraph}>
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M1 1v5h5" />
@@ -210,6 +227,29 @@ export function SubgraphCanvas({
               <line x1="11" y1="11" x2="14" y2="14" />
             </svg>
           </button>
+          {onToggleFullscreen && (
+            <button
+              className="kv-tool-btn"
+              onClick={onToggleFullscreen}
+              title={fullscreen ? "Exit full view" : "Full view"}
+            >
+              {fullscreen ? (
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 1v4H2" />
+                  <path d="M10 1v4h4" />
+                  <path d="M6 15v-4H2" />
+                  <path d="M10 15v-4h4" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 6V2h4" />
+                  <path d="M14 6V2h-4" />
+                  <path d="M2 10v4h4" />
+                  <path d="M14 10v4h-4" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
       </div>
       {!hasSubgraph && (

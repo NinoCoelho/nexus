@@ -88,6 +88,13 @@ async def chat_stream_route(
                     accumulated_text += event.get("text", "")
                     yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
 
+                elif etype == "thinking":
+                    # Chain-of-thought from reasoning models (Ollama GLM,
+                    # DeepSeek-R1, …). Forwarded as its own SSE channel so
+                    # the UI can render it collapsed without it polluting
+                    # the assistant message body.
+                    yield f"event: thinking\ndata: {json.dumps({'text': event.get('text', '')})}\n\n"
+
                 elif etype == "limit_reached":
                     partial_status = "iteration_limit"
                     yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
@@ -168,7 +175,7 @@ async def chat_stream_route(
                     # the detail string — and stamp partial_status so the
                     # persisted assistant prefix matches the banner.
                     reason = event.get("reason")
-                    if reason in ("length", "empty_response", "upstream_timeout"):
+                    if reason in ("length", "empty_response", "upstream_timeout", "context_overflow"):
                         partial_status = reason
                     err_payload = {
                         "detail": event.get("detail", ""),
@@ -176,6 +183,12 @@ async def chat_stream_route(
                         "retryable": event.get("retryable"),
                         "status_code": event.get("status_code"),
                     }
+                    # Forward overflow-specific fields so the UI can offer a
+                    # "Compact history" button instead of a bare "Retry".
+                    for k in ("likely_cause", "estimated_input_tokens",
+                              "context_window", "actions"):
+                        if k in event:
+                            err_payload[k] = event[k]
                     yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
         except (LLMTransportError, MalformedOutputError) as exc:
             # Map loom's classified reason (timeout / rate_limit / 5xx /

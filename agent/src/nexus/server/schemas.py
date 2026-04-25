@@ -52,6 +52,18 @@ class TruncateRequest(BaseModel):
     before_seq: int
 
 
+class CompactRequest(BaseModel):
+    """Replace oversized tool messages in a session's history with summaries.
+
+    Only TOOL-role messages above ``threshold_bytes`` are rewritten.
+    Assistant/user messages are preserved verbatim.
+    """
+
+    threshold_bytes: int = 32 * 1024
+    head_keep_bytes: int = 2 * 1024
+    csv_sample_rows: int = 5
+
+
 class ModelRolePayload(BaseModel):
     role: str  # "embedding" | "extraction" | "classification"
     # Pass an empty string (or null) to clear the role and fall back to the
