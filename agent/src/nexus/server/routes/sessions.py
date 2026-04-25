@@ -110,17 +110,20 @@ async def get_session(
         if ts is None:
             return None
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    feedback_map = store.get_feedback_map(session_id)
     return {
         "id": session.id,
         "title": session.title,
         "context": session.context,
         "messages": [
             {
+                "seq": i,
                 "role": m.role,
                 "content": m.content,
                 "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
                 "tool_call_id": m.tool_call_id,
                 "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
+                "feedback": feedback_map.get(i),
             }
             for i, m in enumerate(session.history)
         ],
@@ -144,6 +147,28 @@ async def delete_session(
     store: SessionStore = Depends(get_sessions),
 ) -> None:
     store.delete(session_id)
+
+
+@router.patch("/sessions/{session_id}/messages/{seq}/feedback", status_code=status.HTTP_204_NO_CONTENT)
+async def set_message_feedback(
+    session_id: str,
+    seq: int,
+    body: dict,
+    store: SessionStore = Depends(get_sessions),
+) -> None:
+    """Set or clear thumbs feedback for a single assistant message.
+
+    Body: ``{"value": "up" | "down" | null}``. ``null`` clears the entry.
+    """
+    if store.get(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    raw_value = body.get("value")
+    if raw_value is not None and raw_value not in ("up", "down"):
+        raise HTTPException(status_code=422, detail="value must be 'up', 'down', or null")
+    try:
+        store.set_feedback(session_id, seq, raw_value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.patch("/sessions/{session_id}/truncate", status_code=status.HTTP_204_NO_CONTENT)

@@ -42,6 +42,20 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 """
 
+# Feedback table — Nexus-only, sits alongside loom's messages table.
+# Keyed by (session_id, seq) so it survives history rewrites for a given
+# turn. ``ON DELETE CASCADE`` would be ideal but loom doesn't enable
+# foreign keys; we clean up explicitly when a session is deleted.
+_FEEDBACK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS message_feedback (
+    session_id TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    value      TEXT NOT NULL CHECK(value IN ('up', 'down')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (session_id, seq)
+);
+"""
+
 
 def init_fts(loom_store: LoomSessionStore) -> None:
     """Create the FTS5 virtual table + sync triggers if missing."""
@@ -52,6 +66,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
         ).fetchone()
     )
     db.executescript(_FTS_SCHEMA)
+    db.executescript(_FEEDBACK_SCHEMA)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:
         msg_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]

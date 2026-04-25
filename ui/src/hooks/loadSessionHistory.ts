@@ -30,7 +30,7 @@ export async function loadSessionHistory(
         // Hidden seeds are persisted so the agent has context on reload,
         // but they shouldn't show up as chat bubbles.
         if (content.startsWith(HIDDEN_SEED_MARKER)) continue;
-        msgs.push({ role: "user", content, timestamp: parseHistoryTimestamp(m.created_at) });
+        msgs.push({ role: "user", content, timestamp: parseHistoryTimestamp(m.created_at), seq: m.seq });
         continue;
       }
       if (m.role !== "assistant") continue;
@@ -82,6 +82,8 @@ export async function loadSessionHistory(
         timestamp: parseHistoryTimestamp(m.created_at),
         timeline: timeline.length > 0 ? timeline : undefined,
         trace: trace.length > 0 ? trace : undefined,
+        seq: m.seq,
+        feedback: m.feedback ?? null,
         ...(isPartial ? { partial: { status: partialStatus } } : {}),
       });
       i = j - 1;

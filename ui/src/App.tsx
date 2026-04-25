@@ -286,6 +286,30 @@ export default function App() {
             <ChatView
               messages={activeState.messages}
               thinking={activeState.thinking}
+              activeSessionId={activeSession}
+              onFeedbackChange={(idx, value) => {
+                setChatStates((prev) => {
+                  const key = activeSession ?? NEW_KEY;
+                  const cur = prev.get(key);
+                  if (!cur) return prev;
+                  const next = new Map(prev);
+                  const visible = cur.messages.filter(
+                    (m) =>
+                      (m.content ?? "").trim().length > 0 ||
+                      m.kind === "limit" ||
+                      (m.timeline ?? []).length > 0 ||
+                      m.partial != null,
+                  );
+                  const target = visible[idx];
+                  if (!target) return prev;
+                  const fullIdx = cur.messages.indexOf(target);
+                  if (fullIdx < 0) return prev;
+                  const messages = cur.messages.slice();
+                  messages[fullIdx] = { ...messages[fullIdx], feedback: value };
+                  next.set(key, { ...cur, messages });
+                  return next;
+                });
+              }}
               searchOpen={chatSearchOpen}
               onSearchClose={() => setChatSearchOpen(false)}
               input={activeState.input}

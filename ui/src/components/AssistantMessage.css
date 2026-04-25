@@ -217,6 +217,9 @@
   color: var(--bubble-fg);
   background: rgba(0, 0, 0, 0.05);
 }
+.bubble-action-btn.is-active {
+  color: var(--accent, var(--bubble-fg));
+}
 
 /* ── GFM tables ─────────────────────────────────────────────────────── */
 .asst-body table {

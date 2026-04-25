@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
+import { setMessageFeedback } from "../api";
 import type { TimelineStep } from "./ChatView";
 
 /**
@@ -88,6 +89,10 @@ interface Props {
   onOpenInVault?: (path: string) => void;
   model?: string;
   routedBy?: "user" | "auto";
+  sessionId?: string | null;
+  seq?: number;
+  feedback?: "up" | "down" | null;
+  onFeedbackChange?: (value: "up" | "down" | null) => void;
 }
 
 function fmt(d: Date) {
@@ -112,9 +117,11 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
+  useEffect(() => { setLocalFeedback(feedback ?? null); }, [feedback]);
 
   const processed = useMemo(() => linkifyVaultPaths(content), [content]);
 
@@ -125,6 +132,21 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
       setTimeout(() => setCopied(false), 1400);
     } catch {
       // clipboard may be blocked
+    }
+  }
+
+  const canFeedback = !!sessionId && typeof seq === "number" && !streaming;
+  async function handleFeedback(value: "up" | "down") {
+    if (!canFeedback || !sessionId || typeof seq !== "number") return;
+    const next = localFeedback === value ? null : value;
+    setLocalFeedback(next);
+    onFeedbackChange?.(next);
+    try {
+      await setMessageFeedback(sessionId, seq, next);
+    } catch {
+      // revert on failure
+      setLocalFeedback(localFeedback);
+      onFeedbackChange?.(localFeedback);
     }
   }
 
@@ -227,6 +249,34 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
           </ReactMarkdown>
         </div>
         <div className="asst-footer">
+          {canFeedback && (
+            <>
+              <button
+                className={`bubble-action-btn${localFeedback === "up" ? " is-active" : ""}`}
+                onClick={() => handleFeedback("up")}
+                title={localFeedback === "up" ? "Remove thumbs up" : "Helpful"}
+                aria-label="Mark helpful"
+                aria-pressed={localFeedback === "up"}
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill={localFeedback === "up" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 7v6H3a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h3z" />
+                  <path d="M6 7l3-5a1.5 1.5 0 0 1 2.8.9V6h2.4a1.5 1.5 0 0 1 1.5 1.7l-.7 4.5A1.5 1.5 0 0 1 13.5 13.5H6" />
+                </svg>
+              </button>
+              <button
+                className={`bubble-action-btn${localFeedback === "down" ? " is-active" : ""}`}
+                onClick={() => handleFeedback("down")}
+                title={localFeedback === "down" ? "Remove thumbs down" : "Not helpful"}
+                aria-label="Mark not helpful"
+                aria-pressed={localFeedback === "down"}
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill={localFeedback === "down" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 9V3h3a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-3z" />
+                  <path d="M10 9l-3 5a1.5 1.5 0 0 1-2.8-.9V10H1.8A1.5 1.5 0 0 1 .3 8.3L1 3.8A1.5 1.5 0 0 1 2.5 2.5H10" />
+                </svg>
+              </button>
+            </>
+          )}
           <button
             className="bubble-action-btn"
             onClick={handleCopy}

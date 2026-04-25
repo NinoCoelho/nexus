@@ -37,6 +37,11 @@ export interface Message {
   attachments?: { name: string; vaultPath: string }[];
   model?: string;
   routedBy?: "user" | "auto";
+  /** Backend-assigned position in session.history; only set for messages
+   * loaded from the server. New in-flight turns get a seq after reload. */
+  seq?: number;
+  /** Persisted thumbs feedback for assistant turns. */
+  feedback?: "up" | "down" | null;
   /** Set when the turn didn't reach ``done`` — drives the Retry/Continue action row. */
   partial?: {
     status:
@@ -99,6 +104,8 @@ interface Props {
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
+  activeSessionId?: string | null;
+  onFeedbackChange?: (msgIndex: number, value: "up" | "down" | null) => void;
 }
 
 function fmt(d: Date) {
@@ -127,6 +134,8 @@ export default function ChatView({
   models,
   selectedModel,
   onModelChange,
+  activeSessionId,
+  onFeedbackChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -233,6 +242,12 @@ export default function ChatView({
                     onOpenInVault={onOpenInVault}
                     model={msg.model}
                     routedBy={msg.routedBy}
+                    sessionId={activeSessionId ?? null}
+                    seq={msg.seq}
+                    feedback={msg.feedback ?? null}
+                    onFeedbackChange={
+                      onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
+                    }
                   />
                 )}
                 {msg.partial && !thinking && (

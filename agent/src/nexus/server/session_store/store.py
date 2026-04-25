@@ -227,7 +227,42 @@ class SessionStore(PubSubMixin, QueryMixin):
 
     def delete(self, session_id: str) -> None:
         self._loom.delete_session(session_id)
+        self._loom._db.execute(
+            "DELETE FROM message_feedback WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.commit()
         self._cancel_all_pending(session_id)
+
+    # ── feedback ─────────────────────────────────────────────────────────────
+
+    def set_feedback(self, session_id: str, seq: int, value: str | None) -> None:
+        """Set or clear thumbs feedback for a message in a session.
+
+        ``value`` must be ``"up"``, ``"down"``, or ``None`` (clears the entry).
+        """
+        if value is None:
+            self._loom._db.execute(
+                "DELETE FROM message_feedback WHERE session_id = ? AND seq = ?",
+                (session_id, seq),
+            )
+        else:
+            if value not in ("up", "down"):
+                raise ValueError(f"invalid feedback value: {value!r}")
+            self._loom._db.execute(
+                "INSERT INTO message_feedback (session_id, seq, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(session_id, seq) DO UPDATE SET value = excluded.value, "
+                "created_at = CURRENT_TIMESTAMP",
+                (session_id, seq, value),
+            )
+        self._loom._db.commit()
+
+    def get_feedback_map(self, session_id: str) -> dict[int, str]:
+        """Return ``{seq: value}`` for all feedback rows of a session."""
+        rows = self._loom._db.execute(
+            "SELECT seq, value FROM message_feedback WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+        return {int(r[0]): str(r[1]) for r in rows}
 
     def rename(self, session_id: str, title: str) -> None:
         self._loom.set_title(session_id, title)

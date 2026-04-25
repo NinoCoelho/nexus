@@ -12,11 +12,13 @@ export interface SessionSummary {
 }
 
 export interface SessionMessage {
+  seq?: number;
   role: "user" | "assistant" | "tool";
   content: string;
   tool_calls?: unknown;
   tool_call_id?: string;
   created_at: string;
+  feedback?: "up" | "down" | null;
 }
 
 export interface SessionDetail {
@@ -111,6 +113,22 @@ export async function patchSession(id: string, patch: { title?: string }): Promi
   });
   if (!res.ok) throw new Error(`Session patch error: ${res.status}`);
   return res.json();
+}
+
+export async function setMessageFeedback(
+  sessionId: string,
+  seq: number,
+  value: "up" | "down" | null,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/sessions/${encodeURIComponent(sessionId)}/messages/${seq}/feedback`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    },
+  );
+  if (!res.ok) throw new Error(`Feedback error: ${res.status}`);
 }
 
 export async function truncateSession(sessionId: string, beforeSeq: number): Promise<void> {
