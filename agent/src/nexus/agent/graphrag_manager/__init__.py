@@ -105,18 +105,27 @@ async def initialize(cfg: Any) -> None:
 
 
 async def index_vault_file(path: str, content: str) -> None:
+    """Index a single vault file. Raises on failure so callers can surface errors.
+
+    Fire-and-forget callers should use :func:`schedule_index` instead, which
+    swallows exceptions to keep them out of the asyncio task error stream.
+    """
     if _engine is None:
         return
     if _is_indexed(path, content):
         return
+    await _engine.index_source(path, content)
+    _mark_indexed(path, content)
     try:
-        await _engine.index_source(path, content)
-        _mark_indexed(path, content)
-        try:
-            from ..server.event_bus import publish
-            publish({"type": "graphrag.indexed", "path": path})
-        except Exception:
-            pass
+        from ..server.event_bus import publish
+        publish({"type": "graphrag.indexed", "path": path})
+    except Exception:
+        pass
+
+
+async def _index_vault_file_silent(path: str, content: str) -> None:
+    try:
+        await index_vault_file(path, content)
     except Exception:
         log.warning("[graphrag] failed to index %s", path, exc_info=True)
 
@@ -136,7 +145,7 @@ def schedule_index(path: str, content: str) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(index_vault_file(path, content))
+    loop.create_task(_index_vault_file_silent(path, content))
 
 
 def remove_source(path: str) -> None:
@@ -171,9 +180,9 @@ async def index_full_vault() -> None:
                 result = vault.read_file(entry.path)
                 content = result.get("content", "")
                 if content:
-                    await _engine.index_source(entry.path, content)
+                    await _index_vault_file_silent(entry.path, content)
             except Exception:
-                log.warning("[graphrag] failed to index %s", entry.path, exc_info=True)
+                log.warning("[graphrag] failed to read %s", entry.path, exc_info=True)
         log.info("[graphrag] full vault index complete (%d files)", len(entries))
     except Exception:
         log.error("[graphrag] full vault index failed", exc_info=True)

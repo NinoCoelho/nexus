@@ -276,9 +276,9 @@ async def _handle_semantic_search(args: dict[str, Any], _dumps: Any) -> str:
 
 def _trigger_graphrag_index(path: str, content: str) -> None:
     import asyncio
-    from ..agent.graphrag_manager import index_vault_file
+    from ..agent.graphrag_manager import schedule_index
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(index_vault_file(path, content))
+        asyncio.get_running_loop()
     except RuntimeError:
-        pass
+        return
+    schedule_index(path, content)

@@ -239,7 +239,10 @@ async def graphrag_index_file(body: dict) -> dict:
             }
         except Exception as exc:
             log.exception("graphrag index-file failed for %s", path)
-            _graphrag_index_tasks[path] = {"status": "error", "detail": str(exc)}
+            detail = str(exc) or exc.__class__.__name__
+            if "ConnectError" in exc.__class__.__name__ or "All connection attempts failed" in detail:
+                detail = "Cannot reach embedding/extraction model — check that the configured provider (e.g. Ollama) is running"
+            _graphrag_index_tasks[path] = {"status": "error", "detail": detail}
 
     asyncio.get_running_loop().create_task(_run())
     return {"queued": True, "path": path}
