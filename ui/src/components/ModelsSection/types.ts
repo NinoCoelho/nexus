@@ -12,6 +12,10 @@ export interface ModelForm {
   tier: ModelTier;
   notes: string;
   tier_source: "heuristic" | "default" | "manual";
+  is_embedding_capable: boolean;
+  // Empty string = use server default (0 in toml). Stored as string so the
+  // input can be cleared without a NaN flash; coerced on save.
+  context_window: string;
 }
 
 export interface DiscoveryState {
@@ -31,4 +35,6 @@ export const emptyForm: ModelForm = {
   tier: "balanced",
   notes: "",
   tier_source: "default",
+  is_embedding_capable: false,
+  context_window: "",
 };

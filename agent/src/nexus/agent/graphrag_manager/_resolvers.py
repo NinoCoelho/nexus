@@ -8,13 +8,21 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+class GraphRAGConfigError(RuntimeError):
+    """Raised when a configured GraphRAG model can't be resolved.
+
+    Surfaced to the UI via ``/graph/knowledge/health`` and 503 on reindex.
+    Indexing must not silently fall back to a different model — the user
+    must see the error and fix the config.
+    """
+
+
 def resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
     """Resolve the embedding provider.
 
-    With a model selected via ``embedding_model_id`` we honor it. Otherwise
-    we always use the built-in fastembed runner — the legacy
-    ``graphrag.embeddings.provider`` field in old toml configs is ignored
-    so stale ``provider="ollama"`` values don't resurrect an external dep.
+    With a model selected via ``embedding_model_id`` we honor it strictly —
+    no silent fallback to the builtin fastembed runner if registry lookup
+    fails. Only when ``embedding_model_id`` is empty do we use the builtin.
     """
     from loom.store.embeddings import OllamaEmbeddingProvider, OpenAIEmbeddingProvider
 
@@ -26,24 +34,38 @@ def resolve_embedder(cfg: Any, graphrag_cfg: Any) -> Any:
             from nexus.agent.registry import build_registry
             registry = build_registry(cfg)
             provider, upstream = registry.get_for_model(model_id)
-            p_cfg = _get_provider_config(cfg, model_id)
-            p_type = p_cfg.type if p_cfg else "openai_compat"
-            dim = emb_cfg.dimensions
+        except Exception as exc:
+            raise GraphRAGConfigError(
+                f"embedding model {model_id!r} could not be resolved from the model "
+                f"registry: {exc}. Check that the model is registered in config "
+                f"and that its provider is reachable."
+            ) from exc
 
-            if p_type == "ollama":
-                return OllamaEmbeddingProvider(
-                    model=upstream or model_id,
-                    base_url=p_cfg.base_url if p_cfg else "http://localhost:11434",
-                    dim=dim,
-                )
-            return OpenAIEmbeddingProvider(
+        p_cfg = _get_provider_config(cfg, model_id)
+        p_type = p_cfg.type if p_cfg else "openai_compat"
+        dim = emb_cfg.dimensions
+
+        if p_type == "ollama":
+            return OllamaEmbeddingProvider(
                 model=upstream or model_id,
-                base_url=p_cfg.base_url if p_cfg else "",
-                key_env=p_cfg.api_key_env if p_cfg else "",
+                base_url=p_cfg.base_url if p_cfg else "http://localhost:11434",
                 dim=dim,
             )
-        except Exception:
-            log.warning("[graphrag] failed to resolve embedding model %s from registry", model_id, exc_info=True)
+        # OpenAIEmbeddingProvider POSTs to ``{base_url}/embeddings``. Local
+        # llama-server exposes the OpenAI-compat route at ``/v1/embeddings`` —
+        # hitting plain ``/embeddings`` returns its native list-of-floats
+        # response which the OpenAI parser then crashes on with "list indices
+        # must be integers". Normalize by appending /v1 when the configured
+        # base_url doesn't already include a versioned path.
+        emb_base = (p_cfg.base_url if p_cfg else "").rstrip("/")
+        if emb_base and not emb_base.endswith("/v1"):
+            emb_base = f"{emb_base}/v1"
+        return OpenAIEmbeddingProvider(
+            model=upstream or model_id,
+            base_url=emb_base,
+            key_env=p_cfg.api_key_env if p_cfg else "",
+            dim=dim,
+        )
 
     return _builtin_embedder()
 

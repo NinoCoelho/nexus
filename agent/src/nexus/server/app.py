@@ -162,6 +162,17 @@ def create_app(
                 log.info("GraphRAG engine initialized")
             except Exception:
                 log.exception("GraphRAG initialization failed")
+            # Warm the builtin embedder ONNX cache in the background so the
+            # first reindex doesn't block on a 24 MB download. Fire-and-forget;
+            # errors are non-fatal — the model will just download on demand.
+            async def _prefetch_builtin() -> None:
+                try:
+                    from ..agent.builtin_embedder import get_builtin_embedder
+                    await get_builtin_embedder().embed(["__warmup__"])
+                    log.info("[startup] builtin embedder cache warm")
+                except Exception:
+                    log.warning("[startup] builtin embedder prefetch failed", exc_info=True)
+            asyncio.create_task(_prefetch_builtin())
         try:
             yield
         finally:

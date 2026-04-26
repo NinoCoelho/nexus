@@ -19,12 +19,21 @@ from ._manifest import (
     open_manifest as _get_manifest,
     remove_path as _manifest_remove_path,
 )
-from ._resolvers import resolve_embedder as _resolve_embedder, resolve_extraction_llm as _resolve_extraction_llm
+from collections import deque
+from ._resolvers import (
+    GraphRAGConfigError,
+    resolve_embedder as _resolve_embedder,
+    resolve_extraction_llm as _resolve_extraction_llm,
+)
 
 log = logging.getLogger(__name__)
 
 _engine: Any | None = None
 _home: Path | None = None
+_last_init_error: str | None = None
+# Bounded queue of recent per-file indexing failures, exposed via
+# /graph/knowledge/recent-errors. Tuples of (path, error_message, ts).
+_recent_errors: deque[dict[str, Any]] = deque(maxlen=50)
 
 
 def get_home() -> Path:
@@ -37,13 +46,49 @@ def get_engine() -> Any | None:
     return _engine
 
 
+def get_health() -> dict[str, Any]:
+    """Return current GraphRAG readiness state for the UI.
+
+    ``ready=True`` only when the engine initialized successfully. When false,
+    ``error`` carries the human-readable cause from the last failed init —
+    typically an unresolvable embedding model.
+    """
+    return {
+        "ready": _engine is not None,
+        "error": _last_init_error,
+    }
+
+
+def get_recent_errors() -> list[dict[str, Any]]:
+    """Return up to 50 most-recent per-file index failures."""
+    return list(_recent_errors)
+
+
+def _record_error(path: str, exc: BaseException) -> None:
+    import time
+    msg = str(exc) or exc.__class__.__name__
+    _recent_errors.append({"path": path, "error": msg, "ts": time.time()})
+    try:
+        from ..server.event_bus import publish
+        publish({"type": "graphrag.index_failed", "path": path, "error": msg})
+    except Exception:
+        pass
+
+
 async def initialize(cfg: Any) -> None:
-    """Create the GraphRAG engine from Nexus config if enabled."""
-    global _engine, _home
+    """Create the GraphRAG engine from Nexus config if enabled.
+
+    On failure to resolve a configured model, records the error in
+    ``_last_init_error`` and leaves ``_engine`` as ``None``. The exception
+    does **not** propagate so the rest of the app keeps starting; the UI
+    surfaces the failure via ``/graph/knowledge/health``.
+    """
+    global _engine, _home, _last_init_error
 
     graphrag_cfg = getattr(cfg, "graphrag", None)
     if graphrag_cfg is None or not getattr(graphrag_cfg, "enabled", False):
         log.info("[graphrag] disabled in config")
+        _last_init_error = None
         return
 
     if _engine is not None:
@@ -62,7 +107,12 @@ async def initialize(cfg: Any) -> None:
     _get_manifest(db_dir)
 
     emb_cfg = graphrag_cfg.embeddings
-    embedder = _resolve_embedder(cfg, graphrag_cfg)
+    try:
+        embedder = _resolve_embedder(cfg, graphrag_cfg)
+    except GraphRAGConfigError as exc:
+        _last_init_error = str(exc)
+        log.error("[graphrag] init failed: %s", exc)
+        return
 
     from loom.store.graphrag import (
         EmbeddingConfig,
@@ -105,6 +155,7 @@ async def initialize(cfg: Any) -> None:
         db_dir=db_dir,
         llm_provider=llm_for_extraction,
     )
+    _last_init_error = None
     log.info(
         "[graphrag] initialized (embeddings=%s/%s, db=%s)",
         emb_cfg.provider, emb_cfg.model, db_dir,
@@ -130,11 +181,19 @@ async def index_vault_file(path: str, content: str) -> None:
         pass
 
 
-async def _index_vault_file_silent(path: str, content: str) -> None:
+async def _index_vault_file_tracked(path: str, content: str) -> None:
+    """Index one file; record the failure in recent-errors / event_bus on exception.
+
+    Replaces the previous silent variant — failures used to vanish into
+    daemon logs only. Now they surface to the UI via SSE
+    (``graphrag.index_failed``) and the ``/graph/knowledge/recent-errors``
+    endpoint.
+    """
     try:
         await index_vault_file(path, content)
-    except Exception:
-        log.warning("[graphrag] failed to index %s", path, exc_info=True)
+    except Exception as exc:
+        log.warning("[graphrag] failed to index %s: %s", path, exc, exc_info=True)
+        _record_error(path, exc)
 
 
 def schedule_index(path: str, content: str) -> None:
@@ -142,7 +201,7 @@ def schedule_index(path: str, content: str) -> None:
 
     Schedules ``index_vault_file`` on the running event loop so callers
     in synchronous code (``vault.write_file``) don't block on LLM/embedding
-    calls. Silently skips if no loop is running or GraphRAG is disabled.
+    calls. Failures are recorded (UI-visible) instead of swallowed.
     """
     if _engine is None:
         return
@@ -152,7 +211,7 @@ def schedule_index(path: str, content: str) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(_index_vault_file_silent(path, content))
+    loop.create_task(_index_vault_file_tracked(path, content))
 
 
 def remove_source(path: str) -> None:
@@ -187,9 +246,10 @@ async def index_full_vault() -> None:
                 result = vault.read_file(entry.path)
                 content = result.get("content", "")
                 if content:
-                    await _index_vault_file_silent(entry.path, content)
-            except Exception:
+                    await _index_vault_file_tracked(entry.path, content)
+            except Exception as exc:
                 log.warning("[graphrag] failed to read %s", entry.path, exc_info=True)
+                _record_error(entry.path, exc)
         log.info("[graphrag] full vault index complete (%d files)", len(entries))
     except Exception:
         log.error("[graphrag] full vault index failed", exc_info=True)

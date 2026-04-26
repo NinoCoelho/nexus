@@ -56,7 +56,7 @@ export default function ModelRow({
                 else if (canEmbed) onAssignRole("embedding", m.id);
               }}
               disabled={(!isEmb && !canEmbed) || roleSaving}
-              title={isEmb ? "Click to clear (falls back to built-in fastembed)" : canEmbed ? "Set as embedding model" : "Incompatible provider"}
+              title={isEmb ? "Click to clear (falls back to built-in fastembed)" : canEmbed ? "Set as embedding model" : "Edit the model and enable 'Embedding capable' to use this role"}
             >
               Embedding
             </button>

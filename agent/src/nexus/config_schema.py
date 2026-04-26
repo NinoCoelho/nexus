@@ -22,9 +22,14 @@ class ModelEntry(BaseModel):
     notes: str = ""
     # Total context window in tokens (input + output). Used for pre-flight
     # overflow detection so the agent can refuse a turn whose history won't
-    # fit instead of letting the upstream return an empty 200. 0 = unknown,
-    # treat as "don't check".
+    # fit instead of letting the upstream return an empty 200. For local
+    # GGUF models also passed to llama-server as ``--ctx-size`` at start
+    # (Stop/Start to apply changes). 0 = unknown / use server default.
     context_window: int = 0
+    # User-asserted: this model serves embeddings (e.g. all-MiniLM, bge).
+    # Gates which models the UI offers for the embedding role; chat-only
+    # models (gpt-4o, glm-4.7, etc.) should leave this false.
+    is_embedding_capable: bool = False
 
 
 class ProviderConfig(BaseModel):
@@ -42,7 +47,7 @@ class AgentConfig(BaseModel):
 
 class GraphRAGEmbeddingConfig(BaseModel):
     provider: str = "builtin"
-    model: str = "BAAI/bge-small-en-v1.5"
+    model: str = "sentence-transformers/all-MiniLM-L6-v2"
     base_url: str = ""
     key_env: str = ""
     dimensions: int = 384

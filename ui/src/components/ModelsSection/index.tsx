@@ -61,7 +61,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
 
   function canEmbed(m: Model): boolean {
     const ptype = providerTypeMap[m.provider];
-    return EMBEDDING_COMPAT_TYPES.has(ptype);
+    return EMBEDDING_COMPAT_TYPES.has(ptype) && !!m.is_embedding_capable;
   }
 
   function hasRole(m: Model): boolean {
@@ -172,6 +172,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       tier: m.tier,
       notes: m.notes ?? "",
       tier_source: "manual",
+      is_embedding_capable: !!m.is_embedding_capable,
+      context_window: m.context_window && m.context_window > 0 ? String(m.context_window) : "",
     });
   }
 
@@ -183,6 +185,11 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   }
 
   async function saveModel() {
+    const ctxParsed = form.context_window.trim() === "" ? 0 : Number(form.context_window);
+    if (Number.isNaN(ctxParsed) || ctxParsed < 0) {
+      toast.error("Context size must be a non-negative integer");
+      return;
+    }
     if (editingId) {
       try {
         await patchModel(editingId, {
@@ -190,6 +197,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
           tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
           tier: form.tier,
           notes: form.notes,
+          is_embedding_capable: form.is_embedding_capable,
+          context_window: ctxParsed,
         });
         toast.success(`Updated ${editingId}`);
         cancelForm();
@@ -208,6 +217,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
         tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
         tier: form.tier,
         notes: form.notes,
+        is_embedding_capable: form.is_embedding_capable,
+        context_window: ctxParsed > 0 ? ctxParsed : undefined,
       });
       const id = form.id.trim();
       toast.success(`Added model ${id}`);
@@ -232,7 +243,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       </div>
       {usingBuiltinEmbedder && (
         <div style={{ fontSize: 11, color: "var(--fg-faint)", marginBottom: 8 }}>
-          GraphRAG is using the built-in local embedder (BAAI/bge-small-en-v1.5, 384-dim).
+          GraphRAG is using the built-in local embedder
+          (sentence-transformers/all-MiniLM-L6-v2, 384-dim) and the spaCy NER extractor.
           Assign a model to <b>Embedding</b> below to override.
         </div>
       )}

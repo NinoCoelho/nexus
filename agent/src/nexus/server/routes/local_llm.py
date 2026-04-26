@@ -156,12 +156,31 @@ async def start_model(
     if not model_path.is_file():
         raise HTTPException(status_code=404, detail=f"Model file not found: {body.filename}")
 
+    # Look up any user-configured context_window for this model in the
+    # current config so the spawned llama-server uses it. 0 = default.
+    cfg = app_state.get("cfg")
+    expected_slug = manager.slugify(model_path.stem)
+    expected_id = f"local-{expected_slug}/{expected_slug}"
+    ctx_size = 0
+    if cfg is not None:
+        for m in cfg.models:
+            if m.id == expected_id and getattr(m, "context_window", 0) > 0:
+                ctx_size = m.context_window
+                break
+
     try:
-        handle = manager.start(model_path)
+        if ctx_size > 0:
+            handle = manager.start(model_path, ctx_size=ctx_size)
+        else:
+            handle = manager.start(model_path)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    model_id = manager.add_to_config(handle.slug, handle.port)
+    model_id = manager.add_to_config(
+        handle.slug, handle.port,
+        is_embedding=handle.is_embedding,
+        context_window=ctx_size,
+    )
 
     try:
         from ...config_file import load as load_cfg

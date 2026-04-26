@@ -196,6 +196,37 @@ export default function ModelFormPanel({
               placeholder="fast, cheap"
             />
           </div>
+          <div className="settings-field">
+            <label className="settings-field-label" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={form.is_embedding_capable}
+                onChange={(e) => onFormChange({ is_embedding_capable: e.target.checked })}
+              />
+              Embedding capable
+            </label>
+            <span className="settings-field-hint">
+              Mark this model as an embedding model (e.g. all-MiniLM, bge, nomic-embed).
+              Only models with this enabled can be assigned the Embedding role.
+            </span>
+          </div>
+          <div className="settings-field">
+            <label className="settings-field-label">Context size (n_ctx)</label>
+            <input
+              className="settings-input"
+              type="number"
+              min={0}
+              step={1024}
+              value={form.context_window}
+              onChange={(e) => onFormChange({ context_window: e.target.value })}
+              placeholder="0 = server default"
+            />
+            <span className="settings-field-hint">
+              For local GGUF models, passed to llama-server as <code>--ctx-size</code> at start.
+              Stop/Start the model to apply changes. Use ≥4096 if assigning to GraphRAG extraction
+              (smaller contexts cause extraction failures).
+            </span>
+          </div>
         </>
       )}
 

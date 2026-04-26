@@ -15,6 +15,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from pydantic import BaseModel
+
 from ..deps import get_agent, get_sessions, get_registry, get_app_state
 from ..schemas import (
     ChatReply,
@@ -27,8 +29,13 @@ from ..schemas import (
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
+from ...skills.manager import SkillManager
 from ...skills.registry import SkillRegistry
 from ..session_store import SessionStore
+
+
+class SkillUpdate(BaseModel):
+    body: str
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +77,27 @@ async def get_skill(name: str, registry: SkillRegistry = Depends(get_registry)) 
         s = registry.get(name)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no such skill: {name!r}")
+    return SkillDetail(name=s.name, description=s.description, trust=s.trust, body=s.body)
+
+
+@router.put("/skills/{name}", response_model=SkillDetail)
+async def update_skill(
+    name: str,
+    payload: SkillUpdate,
+    registry: SkillRegistry = Depends(get_registry),
+) -> SkillDetail:
+    """Replace a skill's SKILL.md body. Runs the same guard scan as the
+    agent's skill_manage tool; returns 400 if the new content is rejected
+    or fails frontmatter validation."""
+    try:
+        registry.get(name)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no such skill: {name!r}")
+    manager = SkillManager(registry)
+    result = manager.invoke("edit", {"name": name, "content": payload.body})
+    if not result.ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+    s = registry.get(name)
     return SkillDetail(name=s.name, description=s.description, trust=s.trust, body=s.body)
 
 

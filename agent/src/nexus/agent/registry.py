@@ -72,6 +72,11 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             else:
                 log.warning("[provider] %s: env var %s not set — skipping", name, pcfg.api_key_env)
                 continue
+        elif provider_type == "openai_compat" and pcfg.base_url:
+            # Local OpenAI-compatible servers (llama-server, vllm, lm-studio)
+            # commonly don't require auth. Register anonymously so embedding
+            # / extraction models served locally are usable.
+            log.info("[provider] %s initialized (openai_compat, anonymous)", name)
         else:
             # No key configured — only valid for providers that don't need auth
             log.warning("[provider] %s: not configured — skipping", name)

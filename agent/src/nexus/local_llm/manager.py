@@ -27,6 +27,123 @@ class ServerHandle:
     port: int
     slug: str
     model_path: Path
+    is_embedding: bool = False
+
+
+# Architectures (from GGUF metadata `general.architecture`) that produce
+# sentence/token embeddings rather than autoregressive chat completions.
+# llama-server only exposes /v1/embeddings when launched with --embeddings,
+# and chat models refuse to load with that flag — so we must classify
+# before spawning.
+_EMBEDDING_ARCHITECTURES = {
+    "bert",
+    "nomic-bert",
+    "jina-bert-v2",
+    "jina-bert",
+    "roberta",
+    "xlm-roberta",
+    "t5encoder",
+    "gritlm",
+    "gemma-embedding",
+}
+
+# Substrings in `general.architecture` that imply an embedding model even
+# when the exact arch isn't in the set above (e.g. future "*-embedding"
+# variants). Catches naming conventions like "gemma-embedding", "qwen3-embedding".
+_EMBEDDING_ARCH_HINTS = ("embedding", "encoder")
+
+# Filename substrings used as a fallback when GGUF header parsing fails.
+_EMBEDDING_NAME_HINTS = (
+    "minilm", "bge-", "bge_", "nomic-embed", "e5-", "e5_",
+    "gte-", "mxbai-embed", "embed",
+)
+
+
+def _read_gguf_architecture(model_path: Path) -> str | None:
+    """Parse the GGUF header and return ``general.architecture`` if present.
+
+    GGUF v2/v3 layout: 4-byte magic 'GGUF', uint32 version, uint64 tensor
+    count, uint64 metadata-kv count, then kv pairs: key (uint64 len + utf8
+    bytes), value-type (uint32), value (type-dependent). We only need to
+    walk far enough to find ``general.architecture`` — typically the very
+    first KV pair — so we cap at 256 entries to keep this cheap.
+
+    Returns None on any error so callers can fall back to filename hints.
+    """
+    import struct
+
+    try:
+        with open(model_path, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return None
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return None  # v1 used a different layout; not worth supporting
+            f.read(8)  # tensor_count
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 256)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return None  # corrupt / not GGUF we recognize
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                value = _read_gguf_value(f, val_type)
+                if key == "general.architecture" and isinstance(value, str):
+                    return value
+        return None
+    except Exception:
+        return None
+
+
+def _read_gguf_value(f, val_type: int):
+    """Read a single GGUF metadata value. Returns None for skipped/array values."""
+    import struct
+
+    # 0:u8 1:i8 2:u16 3:i16 4:u32 5:i32 6:f32 7:bool 8:string 9:array
+    # 10:u64 11:i64 12:f64
+    fixed = {
+        0: ("<B", 1), 1: ("<b", 1),
+        2: ("<H", 2), 3: ("<h", 2),
+        4: ("<I", 4), 5: ("<i", 4), 6: ("<f", 4),
+        7: ("<?", 1),
+        10: ("<Q", 8), 11: ("<q", 8), 12: ("<d", 8),
+    }
+    if val_type in fixed:
+        fmt, size = fixed[val_type]
+        return struct.unpack(fmt, f.read(size))[0]
+    if val_type == 8:  # string
+        slen = struct.unpack("<Q", f.read(8))[0]
+        if slen > 1 << 20:
+            raise ValueError("string too long")
+        return f.read(slen).decode("utf-8", errors="replace")
+    if val_type == 9:  # array — skip past it, we don't need array values here
+        elem_type = struct.unpack("<I", f.read(4))[0]
+        count = struct.unpack("<Q", f.read(8))[0]
+        for _ in range(count):
+            _read_gguf_value(f, elem_type)
+        return None
+    raise ValueError(f"unknown gguf value type {val_type}")
+
+
+def is_embedding_model(model_path: Path) -> bool:
+    """Detect whether a GGUF file is an embedding model.
+
+    Primary: read ``general.architecture`` from the GGUF header and match
+    against known encoder architectures. Fallback: filename substring
+    heuristic for headers we couldn't parse.
+    """
+    arch = _read_gguf_architecture(model_path)
+    if arch is not None:
+        a = arch.lower()
+        if a in _EMBEDDING_ARCHITECTURES:
+            return True
+        if any(h in a for h in _EMBEDDING_ARCH_HINTS):
+            return True
+        return False
+    name = model_path.name.lower()
+    return any(h in name for h in _EMBEDDING_NAME_HINTS)
 
 
 # Keyed by GGUF filename (the basename, e.g. "Qwen2.5-7B-Instruct-Q4_K_M.gguf").
@@ -129,6 +246,7 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
 
     port = _pick_free_port()
     slug = slugify(model_path.stem)
+    is_emb = is_embedding_model(model_path)
 
     log_path = Path.home() / "Library" / "Logs" / "Nexus" / "llama-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,8 +259,14 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         "--port", str(port),
         "-c", str(ctx_size),
         "-ngl", "99",
-        "--jinja",
     ]
+    if is_emb:
+        # Embedding-only mode: chat-template flags (--jinja) are incompatible
+        # with --embeddings on most builds, and the OpenAI-compat
+        # /v1/embeddings route only exists when this flag is set.
+        cmd += ["--embeddings", "--pooling", "mean"]
+    else:
+        cmd += ["--jinja"]
 
     log.info("[local_llm] starting llama-server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
@@ -161,6 +285,7 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
                 if r.status == 200:
                     handle = ServerHandle(
                         proc=proc, port=port, slug=slug, model_path=model_path,
+                        is_embedding=is_emb,
                     )
                     _servers[filename] = handle
                     log.info(
@@ -237,11 +362,20 @@ def _save_config(cfg_path: Path, raw: dict) -> None:
         tomli_w.dump(raw, f)
 
 
-def add_to_config(slug: str, port: int) -> str:
+def add_to_config(
+    slug: str,
+    port: int,
+    is_embedding: bool = False,
+    context_window: int = 0,
+) -> str:
     """Register a running local model in ``~/.nexus/config.toml``.
 
     Adds (or refreshes) ``providers.local-<slug>`` and a corresponding
     ``[[models]]`` entry. Preserves all other providers, models, and settings.
+
+    Embedding models register as ``openai_compat`` (llama.cpp's
+    ``/v1/embeddings`` endpoint) and are tagged ``is_embedding_capable=true``
+    so the UI's embedding-role selector accepts them.
 
     Returns:
         The model id (``"local-<slug>/<slug>"``).
@@ -250,11 +384,21 @@ def add_to_config(slug: str, port: int) -> str:
 
     providers = raw.setdefault("providers", {})
     pname = _provider_name(slug)
+    # Embedding models are addressed as openai_compat so they hit
+    # llama-server's /v1/embeddings — base_url must include /v1 because
+    # OpenAIEmbeddingProvider POSTs to ``{base_url}/embeddings`` directly.
+    # Chat models register as "ollama"; the registry adds /v1 itself for that
+    # branch, so the bare host is correct there.
+    base_url = (
+        f"http://127.0.0.1:{port}/v1"
+        if is_embedding
+        else f"http://127.0.0.1:{port}"
+    )
     providers[pname] = {
-        "base_url": f"http://127.0.0.1:{port}",
+        "base_url": base_url,
         "api_key_env": "",
         "use_inline_key": False,
-        "type": "ollama",
+        "type": "openai_compat" if is_embedding else "ollama",
     }
 
     # Drop legacy unified `local` provider from the singleton era — it was a
@@ -263,6 +407,13 @@ def add_to_config(slug: str, port: int) -> str:
 
     model_id = f"{pname}/{slug}"
     models = list(raw.get("models", []))
+    # Preserve user-configured context_window across Stop/Start cycles —
+    # the entry is rebuilt below, so capture the prior value first.
+    if context_window <= 0:
+        for m in models:
+            if m.get("id") == model_id and isinstance(m.get("context_window"), int):
+                context_window = m["context_window"]
+                break
     # Drop any prior entries for this exact slug; preserve unrelated local-* entries.
     models = [
         m for m in models
@@ -270,28 +421,40 @@ def add_to_config(slug: str, port: int) -> str:
     ]
     # Also clean up legacy ``provider == "local"`` entries from the singleton era.
     models = [m for m in models if m.get("provider") != "local"]
-    models.append({
+    entry: dict = {
         "id": model_id,
         "provider": pname,
         "model_name": slug,
-        "tags": ["local", "offline"],
+        "tags": ["local", "offline", "embedding"] if is_embedding else ["local", "offline"],
         "tier": "fast",
-        "notes": "Local GGUF model running via llama.cpp.",
-    })
+        "notes": (
+            "Local embedding model served by llama.cpp."
+            if is_embedding
+            else "Local GGUF model running via llama.cpp."
+        ),
+    }
+    if is_embedding:
+        entry["is_embedding_capable"] = True
+    if context_window > 0:
+        entry["context_window"] = context_window
+    models.append(entry)
     raw["models"] = models
 
     agent_cfg = raw.setdefault("agent", {})
     cur_default = agent_cfg.get("default_model", "")
     # Only seed default_model if empty or pointing at a stale local-* model id
-    # that's no longer in our models list.
+    # that's no longer in our models list. Never auto-default to an embedding
+    # model — those can't serve chat.
     valid_ids = {m["id"] for m in models}
-    if not cur_default or (
-        cur_default.startswith(("local/", "local-")) and cur_default not in valid_ids
+    if not is_embedding and (
+        not cur_default or (
+            cur_default.startswith(("local/", "local-")) and cur_default not in valid_ids
+        )
     ):
         agent_cfg["default_model"] = model_id
 
     _save_config(cfg_path, raw)
-    log.info("[local_llm] added to config: %s @ :%d", pname, port)
+    log.info("[local_llm] added to config: %s @ :%d (embedding=%s)", pname, port, is_embedding)
     return model_id
 
 

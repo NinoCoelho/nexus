@@ -58,9 +58,17 @@ async def patch_model(
         if m.id == model_id:
             # id and provider are immutable after creation — avoid cascading
             # breakage (role assignments, last_used_model references).
-            updates = {k: v for k, v in body.items() if k in {"model_name", "tags", "tier", "notes"}}
+            updates = {k: v for k, v in body.items() if k in {"model_name", "tags", "tier", "notes", "is_embedding_capable", "context_window"}}
             if "tier" in updates and updates["tier"] not in ("fast", "balanced", "heavy"):
                 raise HTTPException(400, "tier must be fast|balanced|heavy")
+            if "context_window" in updates:
+                try:
+                    cw = int(updates["context_window"])
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "context_window must be an integer")
+                if cw < 0:
+                    raise HTTPException(400, "context_window must be >= 0 (0 = use server default)")
+                updates["context_window"] = cw
             cfg.models[i] = m.model_copy(update=updates)
             save_cfg(cfg)
             _rebuild_registry(cfg, app_state, a)
@@ -149,6 +157,16 @@ async def set_model_role(
     cfg = app_state["cfg"] or load_cfg()
     new_id = body.model_id or ""
     if body.role == "embedding":
+        if new_id:
+            target = next((m for m in cfg.models if m.id == new_id), None)
+            if target is None:
+                raise HTTPException(404, f"model {new_id!r} not found")
+            if not target.is_embedding_capable:
+                raise HTTPException(
+                    400,
+                    f"model {new_id!r} is not marked as embedding-capable — "
+                    "edit the model and enable 'Embedding capable' first.",
+                )
         cfg.graphrag.embedding_model_id = new_id
     elif body.role == "extraction":
         cfg.graphrag.extraction_model_id = new_id

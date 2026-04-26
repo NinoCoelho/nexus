@@ -51,6 +51,9 @@ type FgInstance = {
   controls?: () => { zoomToCursor?: boolean; screenSpacePanning?: boolean } | undefined;
   d3ReheatSimulation?: () => void;
   zoom?: (factor: number, ms?: number) => void;
+  pauseAnimation?: () => void;
+  renderer?: () => { forceContextLoss?: () => void; dispose?: () => void } | undefined;
+  scene?: () => { clear?: () => void } | undefined;
 };
 
 interface ContextMenu {
@@ -96,6 +99,22 @@ export function SubgraphCanvas3D({
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // Dispose the WebGL context on unmount. Sandboxed webviews cap concurrent
+  // WebGL contexts; without explicit cleanup, switching to a sibling 3D
+  // graph (Vault, Agent) fails with "Error creating WebGL context".
+  useEffect(() => {
+    return () => {
+      const fg = fgRef.current;
+      try {
+        fg?.pauseAnimation?.();
+        fg?.scene?.()?.clear?.();
+        const r = fg?.renderer?.();
+        r?.forceContextLoss?.();
+        r?.dispose?.();
+      } catch { /* ignore */ }
+    };
   }, []);
 
   // Persist selectedNodeId to sessionStorage

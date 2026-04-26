@@ -167,6 +167,24 @@ async def knowledge_subgraph(seed: int, hops: int = 2) -> dict:
     }
 
 
+@router.get("/graph/knowledge/health")
+async def knowledge_health() -> dict:
+    """Report whether GraphRAG initialized successfully.
+
+    ``ready=false`` with ``error`` set means a configured model could not
+    be resolved; the UI should surface this and block reindex attempts.
+    """
+    from ...agent.graphrag_manager import get_health
+    return get_health()
+
+
+@router.get("/graph/knowledge/recent-errors")
+async def knowledge_recent_errors() -> dict:
+    """Up to 50 most-recent per-file indexing failures (newest last)."""
+    from ...agent.graphrag_manager import get_recent_errors
+    return {"errors": get_recent_errors()}
+
+
 @router.get("/graph/knowledge/stats")
 async def knowledge_stats() -> dict:
     from ...agent.graphrag_manager import get_engine
@@ -327,7 +345,18 @@ async def graphrag_reindex(
     Query param ``full=1`` drops all existing data first.
     Default (incremental) skips files whose content hasn't changed.
     """
-    from ...agent.graphrag_manager import index_vault_streaming
+    from ...agent.graphrag_manager import get_engine, get_health, index_vault_streaming
+    health = get_health()
+    if not health.get("ready"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=health.get("error") or "GraphRAG not ready",
+        )
+    if get_engine() is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GraphRAG engine not initialized",
+        )
     nexus_cfg = app_state.get("cfg")
 
     async def _gen():

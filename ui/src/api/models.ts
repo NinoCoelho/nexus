@@ -10,6 +10,8 @@ export interface Model {
   tags: string[];
   tier: ModelTier;
   notes: string;
+  is_embedding_capable?: boolean;
+  context_window?: number;
 }
 
 export async function getModels(): Promise<Model[]> {
@@ -37,7 +39,7 @@ export async function deleteModel(id: string): Promise<void> {
 
 export async function patchModel(
   id: string,
-  patch: { model_name?: string; tags?: string[]; tier?: ModelTier; notes?: string },
+  patch: { model_name?: string; tags?: string[]; tier?: ModelTier; notes?: string; is_embedding_capable?: boolean; context_window?: number },
 ): Promise<Model> {
   const res = await fetch(`${BASE}/models/${encodeURIComponent(id)}`, {
     method: "PATCH",

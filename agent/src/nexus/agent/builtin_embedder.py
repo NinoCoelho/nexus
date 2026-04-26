@@ -15,8 +15,13 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-BUILTIN_MODEL = "BAAI/bge-small-en-v1.5"
+BUILTIN_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 BUILTIN_DIM = 384
+# all-MiniLM-L6-v2 is trained at max_seq_length=256 tokens. fastembed
+# truncates anything longer, so callers don't need to pre-trim — but
+# graphrag chunk_size should stay below ~1000 chars (~250 tokens) to keep
+# embeddings semantically meaningful instead of clipped.
+BUILTIN_MAX_TOKENS = 256
 
 _instance: "BuiltinEmbedder | None" = None
 

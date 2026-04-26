@@ -15,6 +15,10 @@ dependencies = [
     "python-multipart>=0.0.26",
     "fastembed>=0.4",
     "spacy>=3.8",
+    # Bundle the spaCy en_core_web_sm model so the builtin extractor
+    # works offline on first run — pinned because spaCy model wheels are
+    # version-locked to spaCy minor versions.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "faster-whisper>=1.0",
     "loom-framework[anthropic,acp,tui,graphrag,search,scrape]",
     "huggingface_hub>=0.24",
@@ -42,6 +46,10 @@ nexus = "nexus.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nexus"]
+
+[tool.hatch.metadata]
+# Required so direct URL deps (e.g. the en_core_web_sm wheel) are honored.
+allow-direct-references = true
 
 [tool.ruff]
 line-length = 100

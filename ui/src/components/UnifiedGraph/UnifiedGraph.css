@@ -1,0 +1,288 @@
+.ug-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.ug-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.ug-tab {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-dim);
+  cursor: pointer;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ug-tab--active {
+  background: var(--accent-bg, var(--bg-hover));
+  color: var(--fg);
+  border-color: var(--accent, var(--border));
+}
+
+.ug-filters-bar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  background: var(--bg);
+}
+
+.ug-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.ug-canvas-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+
+.ug-canvas {
+  position: absolute;
+  inset: 0;
+  /* Pass-through for the wrapper itself so that the ForceGraph3D <canvas>
+     inside is the actual event target. The wrapper had its own onMouseMove
+     handler, but pointer events for orbit drag must reach the canvas DOM
+     element directly. */
+}
+
+.ug-canvas > div { width: 100%; height: 100%; }
+.ug-canvas canvas { display: block; }
+
+.ug-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+  text-align: center;
+  pointer-events: none;
+}
+
+.ug-empty > * { pointer-events: auto; }
+
+.ug-toolbar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+  flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+}
+
+.ug-tool-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.ug-tool-btn:hover { background: var(--bg-hover); }
+.ug-tool-btn--active { background: var(--accent-bg, var(--bg-hover)); border-color: var(--accent, var(--border)); }
+
+.ug-stat {
+  font-size: 11px;
+  color: var(--fg-faint);
+  padding: 0 4px;
+}
+
+.ug-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ug-floating-detail {
+  position: absolute;
+  top: 64px;
+  right: 12px;
+  width: 380px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 80px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  z-index: 15;
+}
+
+.ug-floating-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ug-floating-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  z-index: 1;
+}
+
+.ug-floating-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.ug-top-entities-popup {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  width: 360px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+  backdrop-filter: blur(8px);
+}
+
+.ug-top-entities-grid { max-height: 50vh; overflow-y: auto; }
+
+.ug-top-entities-empty {
+  font-size: 12px;
+  color: var(--fg-faint);
+  padding: 12px;
+  text-align: center;
+}
+
+.ug--fullscreen .ug-tabs { display: none; }
+.ug--fullscreen .ug-filters-bar { display: none; }
+.ug--fullscreen .ug-floating-detail { display: none; }
+
+.ug-webgl-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.ug-webgl-fallback-card {
+  max-width: 520px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--fg-dim);
+}
+
+.ug-webgl-fallback-card h3 {
+  margin: 0 0 12px;
+  color: var(--fg);
+  font-size: 16px;
+}
+
+.ug-webgl-fallback-reason {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent, #d4855c);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 8px 0;
+}
+
+.ug-webgl-fallback-tips {
+  margin: 12px 0;
+  padding-left: 18px;
+}
+
+.ug-webgl-fallback-tips li { margin: 4px 0; }
+
+.ug-webgl-fallback-tips code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.ug-webgl-fallback-stats {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+/* Neutralize absolute-positioned widgets imported from legacy CSS so they
+   sit inline within our flex layout instead of floating over the canvas. */
+.ug-filters-bar .graph-toolbar,
+.ug-filters-bar .graph-filter-bar,
+.ug-filters-bar .kv-search-bar,
+.ug-filters-bar .kv-filters,
+.ug-filters-bar .kv-stats,
+.ug-filters-bar .kv-filter-chips {
+  position: static !important;
+  background: transparent;
+  border: none;
+  backdrop-filter: none;
+  padding: 4px 0;
+  z-index: auto;
+  max-width: none;
+}
+
+.ug-filters-bar .graph-toolbar { padding: 0; }
+
+/* The KnowledgeView legacy graph-empty was scoped to absolute inside
+   .kv-graph; in our unified layout it lives in the canvas overlay instead. */
+.ug-canvas-wrap .kv-graph-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.ug-canvas-wrap .kv-graph-empty > * { pointer-events: auto; }
