@@ -12,6 +12,7 @@ import {
   postModel,
   patchModel,
   fetchProviderModels,
+  putRouting,
   setModelRole,
   suggestModelTier,
   type Model,
@@ -49,6 +50,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
 
   const embModelId = routing?.embedding_model_id ?? "";
   const extModelId = routing?.extraction_model_id ?? "";
+  const defaultModelId = routing?.default_model ?? "";
 
   const providerTypeMap = Object.fromEntries(providers.map((p) => [p.name, p.type ?? "openai_compat"]));
 
@@ -87,6 +89,31 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       onRefresh();
     } catch (e) {
       toast.error("Failed to clear role", { detail: e instanceof Error ? e.message : undefined });
+    } finally {
+      setRoleSaving(false);
+    }
+  }
+
+  async function setDefault(modelId: string) {
+    setRoleSaving(true);
+    try {
+      await putRouting({ default_model: modelId });
+      toast.success(`Default model set to ${modelId}`);
+      onRefresh();
+    } catch (e) {
+      toast.error("Failed to set default", { detail: e instanceof Error ? e.message : undefined });
+    } finally {
+      setRoleSaving(false);
+    }
+  }
+
+  async function clearDefault() {
+    setRoleSaving(true);
+    try {
+      await putRouting({ default_model: "" });
+      onRefresh();
+    } catch (e) {
+      toast.error("Failed to clear default", { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -257,6 +284,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
             model={m}
             roles={getModelRoles(m)}
             canEmbed={canEmbed(m)}
+            isDefault={defaultModelId === m.id}
             locked={hasRole(m)}
             confirmRemove={confirmRemove}
             roleSaving={roleSaving}
@@ -266,6 +294,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
             onCancelRemove={() => setConfirmRemove(null)}
             onAssignRole={assignRole}
             onUnassignRole={unassignRole}
+            onSetDefault={(id) => void setDefault(id)}
+            onClearDefault={() => void clearDefault()}
           />
         );
       })}

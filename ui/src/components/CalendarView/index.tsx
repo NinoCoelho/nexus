@@ -24,6 +24,7 @@ import {
 import { dispatchFromVault, HIDDEN_SEED_MARKER } from "../../api/dispatch";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
 import EventModal, { type EventDraft } from "./EventModal";
+import Modal, { type ModalProps } from "../Modal";
 import MonthGrid from "./MonthGrid";
 import WeekGrid from "./WeekGrid";
 import {
@@ -53,6 +54,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [visible, setVisible] = useState(() => new Date());
   const [modal, setModal] = useState<{ kind: "create" | "edit"; event?: CalendarEvent; defaultStart: Date } | null>(null);
+  const [promptModal, setPromptModal] = useState<ModalProps | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const window_ = useMemo(() => {
@@ -224,18 +226,30 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
     }
   }, [selectedPath, calendar, reload]);
 
-  const handleCreateNew = useCallback(async () => {
-    const name = window.prompt("New calendar name", "My Calendar");
-    if (!name) return;
-    const slug = name.replace(/[^\w-]+/g, "_");
-    const path = `Calendars/${slug}.md`;
-    try {
-      await createVaultCalendar(path, { title: name });
-      await reloadList();
-      onSelectPath(path);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create calendar");
-    }
+  const handleCreateNew = useCallback(() => {
+    setPromptModal({
+      kind: "prompt",
+      title: "New calendar",
+      message: "Choose a name for your new calendar.",
+      defaultValue: "My Calendar",
+      placeholder: "Calendar name",
+      confirmLabel: "Create",
+      onCancel: () => setPromptModal(null),
+      onSubmit: async (name) => {
+        setPromptModal(null);
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        const slug = trimmed.replace(/[^\w-]+/g, "_");
+        const path = `Calendars/${slug}.md`;
+        try {
+          await createVaultCalendar(path, { title: trimmed });
+          await reloadList();
+          onSelectPath(path);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Failed to create calendar");
+        }
+      },
+    });
   }, [reloadList, onSelectPath]);
 
   const headerLabel =
@@ -255,7 +269,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
             <option key={c.path} value={c.path}>{c.title}</option>
           ))}
         </select>
-        <button onClick={() => void handleCreateNew()}>+ New</button>
+        <button onClick={handleCreateNew}>+ New</button>
 
         <div className="cal-header-spacer" />
 
@@ -343,6 +357,8 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           }
         />
       )}
+
+      {promptModal && <Modal {...promptModal} />}
     </div>
   );
 }

@@ -88,3 +88,4 @@ Two channels on each session:
 - Agent-facing identifiers inside vault markdown (card IDs, session links) use HTML comments prefixed `<!-- nx:... -->` (e.g. `nx:id=<uuid>`, `nx:session=<sid>`).
 - When referencing a vault file in agent output, format as a markdown link with a `vault://path` href — the UI intercepts this to preview inline.
 - Tests use `asyncio_mode = "auto"` — async test functions don't need `@pytest.mark.asyncio`.
+- **Never use native browser dialogs** (`window.alert`, `window.confirm`, `window.prompt`). They're blocking, unstyled, and inconsistent across platforms. Use the system standards instead: `components/Modal.tsx` (`kind: "confirm" | "prompt"`) for confirmations and text input, and `useToast()` from `toast/ToastProvider` for non-blocking notifications (with a `detail` field and optional `action` button for follow-ups like copy-to-clipboard).

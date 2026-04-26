@@ -28,6 +28,32 @@ _FINISH_MAP = {
     "length": StopReason.LENGTH,
 }
 
+# Max pattern length to consider when scanning for runaway repetition.
+# Catches single-char loops ("@@@@…"), short n-gram loops ("ababab…"), and
+# small word loops ("lorem ipsum lorem ipsum…").
+_REPEAT_MAX_PATTERN = 8
+
+
+def _is_repeating_tail(text: str, threshold: int) -> bool:
+    """Return True if the tail of ``text`` is a single ≤8-char pattern repeated
+    for at least ``threshold`` characters. ``threshold <= 0`` disables.
+    """
+    if threshold <= 0 or len(text) < threshold:
+        return False
+    tail = text[-threshold:]
+    for k in range(1, _REPEAT_MAX_PATTERN + 1):
+        if threshold % k:
+            continue
+        pat = tail[:k]
+        # Cheap early-out for the common case (single char like '@')
+        if k == 1:
+            if tail.count(pat) == threshold:
+                return True
+            continue
+        if pat * (threshold // k) == tail:
+            return True
+    return False
+
 
 def _encode_msg(m: ChatMessage) -> dict[str, Any]:
     out: dict[str, Any] = {"role": m.role.value}
@@ -115,9 +141,15 @@ class OpenAIProvider(LLMProvider):
         api_key: str,
         model: str = "",
         read_timeout: float | None = None,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        anti_repeat_threshold: int = 0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._frequency_penalty = float(frequency_penalty or 0.0)
+        self._presence_penalty = float(presence_penalty or 0.0)
+        self._anti_repeat_threshold = int(anti_repeat_threshold or 0)
         self._headers: dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
@@ -147,6 +179,10 @@ class OpenAIProvider(LLMProvider):
             "messages": [_encode_msg(m) for m in messages],
             "temperature": 0.0,
         }
+        if self._frequency_penalty:
+            payload["frequency_penalty"] = self._frequency_penalty
+        if self._presence_penalty:
+            payload["presence_penalty"] = self._presence_penalty
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
@@ -199,6 +235,10 @@ class OpenAIProvider(LLMProvider):
             "temperature": 0.0,
             "stream": True,
         }
+        if self._frequency_penalty:
+            payload["frequency_penalty"] = self._frequency_penalty
+        if self._presence_penalty:
+            payload["presence_penalty"] = self._presence_penalty
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
@@ -240,6 +280,12 @@ class OpenAIProvider(LLMProvider):
                 # it here and attach it to our synthesized `finish` event.
                 stream_usage = Usage()
 
+                # Anti-repetition guard. Tripped if the trailing N chars are a
+                # single ≤8-char pattern repeated; once tripped we synthesize a
+                # finish event and break so the runaway tail can't grow further.
+                aborted_repeat = False
+                repeat_threshold = self._anti_repeat_threshold
+
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -276,6 +322,9 @@ class OpenAIProvider(LLMProvider):
                     if text_piece:
                         full_text += text_piece
                         yield {"type": "delta", "text": text_piece}
+                        if repeat_threshold and _is_repeating_tail(full_text, repeat_threshold):
+                            aborted_repeat = True
+                            break
 
                     # Tool call deltas
                     for tc_delta in delta.get("tool_calls") or []:
@@ -312,6 +361,19 @@ class OpenAIProvider(LLMProvider):
                             "tool_calls": tool_calls,
                             "usage": stream_usage.model_dump(),
                         }
+
+                if aborted_repeat:
+                    # Provider never sent a finish_reason (we cut the stream
+                    # short). Synthesize one so downstream consumers terminate
+                    # cleanly. ``abort_reason`` is advisory metadata.
+                    yield {
+                        "type": "finish",
+                        "finish_reason": StopReason.STOP.value,
+                        "content": full_text,
+                        "tool_calls": [],
+                        "usage": stream_usage.model_dump(),
+                        "abort_reason": "repetition",
+                    }
         except httpx.HTTPError as exc:
             raise LLMTransportError(str(exc)) from exc
 

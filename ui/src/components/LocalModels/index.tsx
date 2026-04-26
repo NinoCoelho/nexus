@@ -25,6 +25,7 @@ import {
 import { useToast } from "../../toast/ToastProvider";
 import { CATALOG, type CatalogEntry } from "./catalog";
 import SearchModal from "./SearchModal";
+import Modal, { type ModalProps } from "../Modal";
 import "./LocalModels.css";
 
 interface Props {
@@ -39,6 +40,7 @@ export default function LocalModels({ onRefresh }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
 
   const refreshLocal = useCallback(async () => {
     try {
@@ -118,18 +120,28 @@ export default function LocalModels({ onRefresh }: Props) {
     }
   }, [refreshLocal, onRefresh, toast]);
 
-  const onDelete = useCallback(async (filename: string) => {
-    if (!window.confirm(`Remove ${filename}? The file will be deleted from disk.`)) return;
-    setBusy(filename);
-    try {
-      await deleteInstalled(filename);
-      toast.success(`Removed ${filename}`);
-      refreshLocal();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
-    } finally {
-      setBusy(null);
-    }
+  const onDelete = useCallback((filename: string) => {
+    setConfirmModal({
+      kind: "confirm",
+      title: "Remove model",
+      message: `Remove ${filename}? The file will be deleted from disk.`,
+      confirmLabel: "Remove",
+      danger: true,
+      onCancel: () => setConfirmModal(null),
+      onSubmit: async () => {
+        setConfirmModal(null);
+        setBusy(filename);
+        try {
+          await deleteInstalled(filename);
+          toast.success(`Removed ${filename}`);
+          refreshLocal();
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Delete failed");
+        } finally {
+          setBusy(null);
+        }
+      },
+    });
   }, [refreshLocal, toast]);
 
   // Map repo_id+filename → in-flight download for catalog state.
@@ -318,6 +330,8 @@ export default function LocalModels({ onRefresh }: Props) {
         installedByFilename={installedByFilename}
         downloadByKey={downloadByKey}
       />
+
+      {confirmModal && <Modal {...confirmModal} />}
 
     </section>
   );

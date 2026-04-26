@@ -13,7 +13,14 @@ import {
 interface ToastAPI {
   success: (msg: string, opts?: { detail?: string; duration?: number }) => void;
   error: (msg: string, opts?: { detail?: string }) => void;
-  info: (msg: string, opts?: { duration?: number }) => void;
+  info: (
+    msg: string,
+    opts?: {
+      detail?: string;
+      duration?: number;
+      action?: { label: string; onClick: () => void; keepOpen?: boolean };
+    },
+  ) => void;
 }
 
 interface SessionActionsOptions {
@@ -104,9 +111,14 @@ export function useSessionActions({
         await navigator.clipboard.writeText(fullUrl);
         toast.success("Share link copied", { detail: "Anyone with the link can view (read-only).", duration: 5000 });
       } catch {
-        toast.info("Share link ready", { duration: 8000 });
-        // Fallback: surface the URL via prompt so the user can copy manually.
-        window.prompt("Copy this link:", fullUrl);
+        toast.info("Share link ready", {
+          detail: fullUrl,
+          duration: 12000,
+          action: {
+            label: "Copy",
+            onClick: () => { void navigator.clipboard.writeText(fullUrl).catch(() => {}); },
+          },
+        });
       }
     } catch (e) {
       toast.error("Couldn't create share link", { detail: e instanceof Error ? e.message : undefined });

@@ -43,6 +43,16 @@ class AgentConfig(BaseModel):
     default_model: str = ""
     last_used_model: str = ""
     max_iterations: int = 16
+    # OpenAI-compat sampling. Frequency penalty mitigates token-degeneracy
+    # loops (e.g. deepseek-coder spitting "@@@@@…" with temp=0). Sent only
+    # when non-zero so strict gateways aren't tripped by no-op fields.
+    frequency_penalty: float = 0.3
+    presence_penalty: float = 0.0
+    # Streaming runaway-repetition guard. If the tail of the assistant's
+    # generation is a single short pattern (≤8 chars) repeated for at least
+    # this many characters, abort the stream with finish_reason=stop. Set 0
+    # to disable.
+    anti_repeat_threshold: int = 200
 
 
 class GraphRAGEmbeddingConfig(BaseModel):

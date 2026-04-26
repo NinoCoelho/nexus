@@ -45,13 +45,24 @@ class ProviderRegistry:
 def build_registry(cfg: NexusConfig) -> ProviderRegistry:
     reg = ProviderRegistry()
 
+    # Sampling/anti-repeat knobs apply to every chat-path OpenAI-compat
+    # provider — local models (deepseek-coder, llama-server) are the ones
+    # that fall into token-degeneracy loops with temp=0.
+    sampling_kwargs = {
+        "frequency_penalty": cfg.agent.frequency_penalty,
+        "presence_penalty": cfg.agent.presence_penalty,
+        "anti_repeat_threshold": cfg.agent.anti_repeat_threshold,
+    }
+
     for name, pcfg in cfg.providers.items():
         provider_type = getattr(pcfg, "type", None) or ("anthropic" if name == "anthropic" else "openai_compat")
 
         # Ollama is anonymous — register without any key
         if provider_type == "ollama":
             base = (pcfg.base_url or "http://localhost:11434").rstrip("/")
-            provider = OpenAIProvider(base_url=f"{base}/v1", api_key="ollama", model="")
+            provider = OpenAIProvider(
+                base_url=f"{base}/v1", api_key="ollama", model="", **sampling_kwargs
+            )
             reg.register_provider(name, provider)
             log.info("[provider] %s initialized (anonymous)", name)
             continue
@@ -85,7 +96,9 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
         if provider_type == "anthropic":
             provider = AnthropicProvider(api_key=api_key, model="")
         elif pcfg.base_url:
-            provider = OpenAIProvider(base_url=pcfg.base_url, api_key=api_key, model="")
+            provider = OpenAIProvider(
+                base_url=pcfg.base_url, api_key=api_key, model="", **sampling_kwargs
+            )
         else:
             log.warning("[provider] %s: openai_compat requires base_url — skipping", name)
             continue

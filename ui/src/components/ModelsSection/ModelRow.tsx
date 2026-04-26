@@ -4,6 +4,7 @@ interface Props {
   model: Model;
   roles: string[];
   canEmbed: boolean;
+  isDefault: boolean;
   locked: boolean;
   confirmRemove: string | null;
   roleSaving: boolean;
@@ -13,12 +14,15 @@ interface Props {
   onCancelRemove: () => void;
   onAssignRole: (role: string, modelId: string) => void;
   onUnassignRole: (role: string) => void;
+  onSetDefault: (modelId: string) => void;
+  onClearDefault: () => void;
 }
 
 export default function ModelRow({
   model: m,
   roles,
   canEmbed,
+  isDefault,
   locked,
   confirmRemove,
   roleSaving,
@@ -28,6 +32,8 @@ export default function ModelRow({
   onCancelRemove,
   onAssignRole,
   onUnassignRole,
+  onSetDefault,
+  onClearDefault,
 }: Props) {
   const isEmb = roles.includes("embedding");
   const isExt = roles.includes("extraction");
@@ -48,6 +54,18 @@ export default function ModelRow({
             ))}
           </div>
           <div className="model-role-badges">
+            <button
+              type="button"
+              className={`model-role-badge ${isDefault ? "model-role-badge--active" : ""}`}
+              onClick={() => {
+                if (isDefault) onClearDefault();
+                else onSetDefault(m.id);
+              }}
+              disabled={roleSaving}
+              title={isDefault ? "Click to clear — new chats will fall back to last-used or first available" : "Use this model when no other choice is made"}
+            >
+              Default
+            </button>
             <button
               type="button"
               className={`model-role-badge ${isEmb ? "model-role-badge--active" : ""} ${!canEmbed && !isEmb ? "model-role-badge--disabled" : ""}`}
