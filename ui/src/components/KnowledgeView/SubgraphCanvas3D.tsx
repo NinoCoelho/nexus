@@ -212,7 +212,7 @@ export function SubgraphCanvas3D({
 
       const label = node.name.length > 22 ? node.name.slice(0, 21) + "…" : node.name;
       const sprite = makeTextSprite(label, isMatch || isSelected);
-      sprite.position.set(0, (isSelected ? radius + 1 : radius) + 2.5, 0);
+      sprite.position.set(0, (isSelected ? radius + 1 : radius) + 1.5, 0);
       group.add(sprite);
 
       return group;
@@ -342,9 +342,11 @@ export function SubgraphCanvas3D({
 
   useEffect(() => {
     if (!data.nodes.length) return;
-    const t = setTimeout(callFit, 500);
+    // Fallback fit in case onEngineStop is delayed; long enough for the
+    // simulation to spread nodes so zoomToFit doesn't zoom into a clump.
+    const t = setTimeout(callFit, 2500);
     return () => clearTimeout(t);
-  }, [data.nodes.length]);
+  }, [data.nodes.length, callFit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,9 +356,9 @@ export function SubgraphCanvas3D({
       if (!fg) return;
       try {
         const link = fg.d3Force?.("link");
-        link?.distance?.(60);
+        link?.distance?.(18);
         const charge = fg.d3Force?.("charge");
-        charge?.strength?.(-220);
+        charge?.strength?.(-45);
       } catch { /* ignore */ }
       try {
         const ctrl = fg.controls?.();
@@ -424,6 +426,7 @@ export function SubgraphCanvas3D({
           onNodeRightClick={onNodeRightClick}
           onLinkHover={onLinkHover}
           onNodeHover={onNodeHover}
+          onEngineStop={callFit}
         />
       ) : (
         <div className="kv-graph-empty">
@@ -633,7 +636,7 @@ function makeTextSprite(text: string, highlighted: boolean): THREE.Sprite {
   texture.minFilter = THREE.LinearFilter;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
-  const scale = 0.09;
+  const scale = 0.05;
   sprite.scale.set(canvas.width * scale, canvas.height * scale, 1);
   return sprite;
 }
