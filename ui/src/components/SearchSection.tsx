@@ -35,10 +35,9 @@ export default function SearchSection() {
 
   if (!cfg) {
     return (
-      <section className="search-section">
-        <h3 className="search-section-title">Web search</h3>
-        {error ? <p className="settings-error">{error}</p> : <p className="settings-loading">Loading…</p>}
-      </section>
+      <div className="search-section">
+        {error ? <p className="settings-error">{error}</p> : <p className="settings-loading">Carregando…</p>}
+      </div>
     );
   }
 
@@ -57,8 +56,7 @@ export default function SearchSection() {
   };
 
   return (
-    <section className="search-section">
-      <h3 className="search-section-title">Web search</h3>
+    <div className="search-section">
       <div className="search-row">
         <label className="search-row-label">
           <input
@@ -124,6 +122,6 @@ export default function SearchSection() {
         </button>
       </div>
       {error && <p className="settings-error">{error}</p>}
-    </section>
+    </div>
   );
 }

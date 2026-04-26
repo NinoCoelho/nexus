@@ -5,7 +5,19 @@ import type { Model } from "./models";
 export interface AgentConfig {
   default_model: string;
   max_iterations: number;
+  temperature?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  anti_repeat_threshold?: number;
 }
+
+export const AGENT_DEFAULTS = {
+  max_iterations: 16,
+  temperature: 0.0,
+  frequency_penalty: 0.3,
+  presence_penalty: 0.0,
+  anti_repeat_threshold: 200,
+} as const;
 
 export interface TranscriptionConfig {
   mode: "local" | "remote";
@@ -41,13 +53,23 @@ export interface Config {
   search?: SearchConfig;
 }
 
+// Patch payload — every nested object is independently partial because the
+// backend (config.py:99) shallow-merges keys it sees and leaves the rest alone.
+export interface ConfigPatch {
+  agent?: Partial<AgentConfig>;
+  providers?: Partial<Config["providers"]>;
+  models?: Model[];
+  transcription?: Partial<TranscriptionConfig>;
+  search?: Partial<SearchConfig>;
+}
+
 export async function getConfig(): Promise<Config> {
   const res = await fetch(`${BASE}/config`);
   if (!res.ok) throw new Error(`Config error: ${res.status}`);
   return res.json();
 }
 
-export async function patchConfig(patch: Partial<Config>): Promise<Config> {
+export async function patchConfig(patch: ConfigPatch): Promise<Config> {
   const res = await fetch(`${BASE}/config`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -55,4 +77,8 @@ export async function patchConfig(patch: Partial<Config>): Promise<Config> {
   });
   if (!res.ok) throw new Error(`Config patch error: ${res.status}`);
   return res.json();
+}
+
+export async function patchAgentConfig(patch: Partial<AgentConfig>): Promise<Config> {
+  return patchConfig({ agent: patch });
 }

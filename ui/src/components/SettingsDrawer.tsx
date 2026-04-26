@@ -1,17 +1,16 @@
 /**
  * SettingsDrawer — slide-out drawer for all Nexus configuration.
  *
- * Sections:
- *   - Providers (API keys, base URLs, connection status)
- *   - Models (add/remove models, assign strengths)
- *   - Agent (default model, routing mode, max iterations)
- *   - GraphRAG (enable/disable, embedding model, reindex)
- *   - Appearance (theme toggle)
- *   - Danger zone (reset config)
+ * Layout:
+ *   - Header (title + close).
+ *   - DefaultModelStrip — pinned, always visible. Lets users change the default
+ *     model from anywhere without hunting for it.
+ *   - SettingsTabs — Início / Modelos / Recursos / Avançado.
+ *   - Active tab body.
  *
- * The drawer reads from and writes to the backend config endpoints.
- * On close it bumps settingsRevision in App so other components
- * (routing, YOLO badge, model picker) refresh their data.
+ * State (routing/providers/models/hitl/graphStats) lives here and is fetched
+ * once on open, then passed down. Tabs are mounted/unmounted by switching but
+ * keep their internal form state where it matters (ModelsSection's editingId).
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -21,37 +20,44 @@ import {
   getModels,
   getProviders,
   getRouting,
-  setHitlSettings,
   type HitlSettings,
   type KnowledgeStats,
   type Model,
   type Provider,
   type RoutingConfig,
 } from "../api";
-import ProvidersSection from "./ProvidersSection";
-import LocalModels from "./LocalModels";
-import ModelsSection from "./ModelsSection";
-import ReindexModal from "./ReindexModal";
-import AppearanceSection from "./AppearanceSection";
-import TranscriptionSection from "./TranscriptionSection";
-import SearchSection from "./SearchSection";
+import AdvancedTab from "./settings/AdvancedTab";
+import DefaultModelStrip from "./settings/DefaultModelStrip";
+import FeaturesTab from "./settings/FeaturesTab";
+import ModelsTab from "./settings/ModelsTab";
+import QuickStartTab from "./settings/QuickStartTab";
+import SettingsTabs from "./settings/SettingsTabs";
 import "./SettingsDrawer.css";
+import "./settings/settings.css";
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
+type TabId = "quick" | "models" | "features" | "advanced";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "quick", label: "Início" },
+  { id: "models", label: "Modelos" },
+  { id: "features", label: "Recursos" },
+  { id: "advanced", label: "Avançado" },
+];
+
 export default function SettingsDrawer({ open, onClose }: Props) {
   const [routing, setRouting] = useState<RoutingConfig | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [hitl, setHitl] = useState<HitlSettings | null>(null);
-  const [hitlSaving, setHitlSaving] = useState(false);
   const [graphStats, setGraphStats] = useState<KnowledgeStats | null>(null);
-  const [reindexOpen, setReindexOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState<TabId>("quick");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -70,27 +76,11 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setHitl(h);
       setGraphStats(ks);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load settings");
+      setError(e instanceof Error ? e.message : "Falha ao carregar configurações");
     } finally {
       setLoading(false);
     }
   }, []);
-
-  const toggleYolo = useCallback(async () => {
-    if (!hitl) return;
-    setHitlSaving(true);
-    const next = !hitl.yolo_mode;
-    setHitl({ ...hitl, yolo_mode: next });
-    try {
-      const updated = await setHitlSettings({ yolo_mode: next });
-      setHitl(updated);
-    } catch (e) {
-      setHitl({ ...hitl, yolo_mode: !next });
-      setError(e instanceof Error ? e.message : "Failed to update YOLO mode");
-    } finally {
-      setHitlSaving(false);
-    }
-  }, [hitl]);
 
   useEffect(() => {
     if (open) refresh();
@@ -112,79 +102,51 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       <div className="drawer-backdrop" onClick={onClose} />
       <div className="settings-drawer">
         <div className="drawer-header">
-          <span className="drawer-title">Settings</span>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">
+          <span className="drawer-title">Configurações</span>
+          <button className="drawer-close" onClick={onClose} aria-label="Fechar">
             ✕
           </button>
         </div>
-        <div className="drawer-body settings-drawer-body">
-          {loading && !routing && (
-            <p className="settings-loading">Loading…</p>
-          )}
-          {error && <p className="settings-error">{error}</p>}
-          <AppearanceSection />
-          <ProvidersSection providers={providers} onRefresh={refresh} />
-          <LocalModels onRefresh={refresh} />
-          <ModelsSection
-            models={models}
-            providers={providers}
+
+        <div className="settings-drawer-pinned">
+          <DefaultModelStrip
             routing={routing}
-            onRefresh={refresh}
+            models={models}
+            onChanged={refresh}
           />
-          <TranscriptionSection />
-          <SearchSection />
-          {graphStats && (
-            <section className="graphrag-section">
-              <h3 className="graphrag-section-title">Knowledge Graph</h3>
-              <div className="graphrag-stats-row">
-                <div className="graphrag-stat">
-                  <span className="graphrag-stat-value">{graphStats.entities}</span>
-                  <span className="graphrag-stat-label">entities</span>
-                </div>
-                <div className="graphrag-stat">
-                  <span className="graphrag-stat-value">{graphStats.triples}</span>
-                  <span className="graphrag-stat-label">relations</span>
-                </div>
-                <div className="graphrag-stat">
-                  <span className="graphrag-stat-value">{graphStats.component_count ?? 0}</span>
-                  <span className="graphrag-stat-label">components</span>
-                </div>
-              </div>
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={() => setReindexOpen(true)}
-              >
-                Update Index
-              </button>
-            </section>
+          <SettingsTabs
+            tabs={TABS}
+            active={active}
+            onChange={(id) => setActive(id as TabId)}
+          />
+        </div>
+
+        <div className="drawer-body settings-drawer-body">
+          {loading && !routing && <p className="settings-loading">Carregando…</p>}
+          {error && <p className="settings-error">{error}</p>}
+
+          {active === "quick" && (
+            <QuickStartTab
+              routing={routing}
+              models={models}
+              providers={providers}
+              onChanged={refresh}
+            />
           )}
-          {hitl && (
-            <section className="hitl-section">
-              <h3 className="hitl-section-title">Human-in-the-loop</h3>
-              <div className="hitl-row">
-                <div className="hitl-row-text">
-                  <label className="hitl-row-label">YOLO mode</label>
-                  <p className="hitl-row-desc">
-                    Auto-approve confirm-style prompts without showing the dialog.
-                    Does not affect choice or text prompts.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={hitl.yolo_mode}
-                  className={`hitl-switch ${hitl.yolo_mode ? "on" : "off"}`}
-                  disabled={hitlSaving}
-                  onClick={toggleYolo}
-                >
-                  <span className="hitl-switch-knob" />
-                </button>
-              </div>
-            </section>
+          {active === "models" && (
+            <ModelsTab
+              routing={routing}
+              providers={providers}
+              models={models}
+              onRefresh={refresh}
+            />
+          )}
+          {active === "features" && <FeaturesTab graphStats={graphStats} />}
+          {active === "advanced" && (
+            <AdvancedTab hitl={hitl} onHitlChanged={setHitl} />
           )}
         </div>
       </div>
-      <ReindexModal open={reindexOpen} onClose={() => setReindexOpen(false)} />
     </>
   );
 }

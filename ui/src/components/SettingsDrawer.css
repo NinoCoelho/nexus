@@ -19,12 +19,22 @@
   to   { transform: translateX(0);    opacity: 1; }
 }
 
+.settings-drawer-pinned {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 20px 0;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 12px;
+}
+
 .settings-drawer-body {
   padding: 20px 24px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 0;
 }
 
 .settings-loading {
@@ -624,4 +634,45 @@
   color: var(--fg-faint);
   margin-top: 2px;
   font-style: italic;
+}
+
+.model-default-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-advanced-roles {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.model-advanced-roles__summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--fg-faint);
+  padding: 2px 0;
+  list-style: none;
+}
+.model-advanced-roles__summary::-webkit-details-marker {
+  display: none;
+}
+.model-advanced-roles__summary::before {
+  content: "▶ ";
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+.model-advanced-roles[open] > .model-advanced-roles__summary::before {
+  transform: rotate(90deg);
+}
+.model-advanced-roles__summary:hover {
+  color: var(--fg);
 }

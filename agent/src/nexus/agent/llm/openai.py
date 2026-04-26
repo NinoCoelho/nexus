@@ -141,12 +141,14 @@ class OpenAIProvider(LLMProvider):
         api_key: str,
         model: str = "",
         read_timeout: float | None = None,
+        temperature: float = 0.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         anti_repeat_threshold: int = 0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._temperature = float(temperature or 0.0)
         self._frequency_penalty = float(frequency_penalty or 0.0)
         self._presence_penalty = float(presence_penalty or 0.0)
         self._anti_repeat_threshold = int(anti_repeat_threshold or 0)
@@ -177,7 +179,7 @@ class OpenAIProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": [_encode_msg(m) for m in messages],
-            "temperature": 0.0,
+            "temperature": self._temperature,
         }
         if self._frequency_penalty:
             payload["frequency_penalty"] = self._frequency_penalty
@@ -232,7 +234,7 @@ class OpenAIProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": [_encode_msg(m) for m in messages],
-            "temperature": 0.0,
+            "temperature": self._temperature,
             "stream": True,
         }
         if self._frequency_penalty:

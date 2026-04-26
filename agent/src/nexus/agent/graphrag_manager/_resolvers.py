@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -150,6 +151,14 @@ def _bounded_extraction_provider(cfg: Any, model_id: str, upstream_name: str | N
         if not base:
             return None
         api_key = ""
+        if getattr(p_cfg, "use_inline_key", False):
+            from nexus import secrets as _secrets
+            provider_name = model_id.split("/", 1)[0]
+            api_key = _secrets.get(provider_name) or ""
+        elif getattr(p_cfg, "api_key_env", ""):
+            api_key = os.environ.get(p_cfg.api_key_env, "")
+        if not api_key:
+            return None
 
     return OpenAIProvider(
         base_url=base,

@@ -86,11 +86,12 @@ def _usage_from_anthropic(raw: Any) -> Usage:
 class AnthropicProvider(LLMProvider):
     """Anthropic native adapter using the anthropic SDK."""
 
-    def __init__(self, *, api_key: str, model: str = "") -> None:
+    def __init__(self, *, api_key: str, model: str = "", temperature: float = 0.0) -> None:
         import anthropic  # type: ignore[import]
 
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+        self._temperature = float(temperature or 0.0)
 
     async def chat(
         self,
@@ -114,6 +115,7 @@ class AnthropicProvider(LLMProvider):
             "model": resolved_model,
             "max_tokens": 4096,
             "messages": filtered,
+            "temperature": self._temperature,
         }
         if system:
             kwargs["system"] = system
@@ -145,6 +147,7 @@ class AnthropicProvider(LLMProvider):
             "model": resolved_model,
             "max_tokens": 4096,
             "messages": filtered,
+            "temperature": self._temperature,
         }
         if system:
             kwargs["system"] = system

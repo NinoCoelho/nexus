@@ -121,9 +121,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
   }
 
   return (
-    <div className="settings-section">
-      <div className="settings-section-label">Providers</div>
-
+    <div className="providers-section">
       {providers.map((p) => (
         <div key={p.name} className="settings-card">
           {editing === p.name ? (

@@ -12,7 +12,6 @@ import {
   postModel,
   patchModel,
   fetchProviderModels,
-  putRouting,
   setModelRole,
   suggestModelTier,
   type Model,
@@ -89,31 +88,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       onRefresh();
     } catch (e) {
       toast.error("Failed to clear role", { detail: e instanceof Error ? e.message : undefined });
-    } finally {
-      setRoleSaving(false);
-    }
-  }
-
-  async function setDefault(modelId: string) {
-    setRoleSaving(true);
-    try {
-      await putRouting({ default_model: modelId });
-      toast.success(`Default model set to ${modelId}`);
-      onRefresh();
-    } catch (e) {
-      toast.error("Failed to set default", { detail: e instanceof Error ? e.message : undefined });
-    } finally {
-      setRoleSaving(false);
-    }
-  }
-
-  async function clearDefault() {
-    setRoleSaving(true);
-    try {
-      await putRouting({ default_model: "" });
-      onRefresh();
-    } catch (e) {
-      toast.error("Failed to clear default", { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -264,15 +238,15 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   const usingBuiltinEmbedder = !embModelId;
 
   return (
-    <div className="settings-section">
-      <div className="settings-section-label">
-        Models {roleSaving && <span style={{ color: "var(--fg-faint)", fontWeight: 400 }}>· saving…</span>}
-      </div>
+    <div className="models-section">
+      {roleSaving && (
+        <div style={{ fontSize: 12, color: "var(--fg-faint)" }}>Salvando…</div>
+      )}
       {usingBuiltinEmbedder && (
-        <div style={{ fontSize: 11, color: "var(--fg-faint)", marginBottom: 8 }}>
-          GraphRAG is using the built-in local embedder
-          (sentence-transformers/all-MiniLM-L6-v2, 384-dim) and the spaCy NER extractor.
-          Assign a model to <b>Embedding</b> below to override.
+        <div style={{ fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.4 }}>
+          GraphRAG está usando o embedder local
+          (sentence-transformers/all-MiniLM-L6-v2) e o extrator spaCy. Atribua um
+          modelo às funções avançadas (Embedding/Extração) para sobrescrever.
         </div>
       )}
 
@@ -294,8 +268,6 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
             onCancelRemove={() => setConfirmRemove(null)}
             onAssignRole={assignRole}
             onUnassignRole={unassignRole}
-            onSetDefault={(id) => void setDefault(id)}
-            onClearDefault={() => void clearDefault()}
           />
         );
       })}

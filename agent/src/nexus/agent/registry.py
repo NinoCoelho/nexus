@@ -49,6 +49,7 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
     # provider — local models (deepseek-coder, llama-server) are the ones
     # that fall into token-degeneracy loops with temp=0.
     sampling_kwargs = {
+        "temperature": cfg.agent.temperature,
         "frequency_penalty": cfg.agent.frequency_penalty,
         "presence_penalty": cfg.agent.presence_penalty,
         "anti_repeat_threshold": cfg.agent.anti_repeat_threshold,
@@ -94,7 +95,9 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             continue
 
         if provider_type == "anthropic":
-            provider = AnthropicProvider(api_key=api_key, model="")
+            provider = AnthropicProvider(
+                api_key=api_key, model="", temperature=cfg.agent.temperature
+            )
         elif pcfg.base_url:
             provider = OpenAIProvider(
                 base_url=pcfg.base_url, api_key=api_key, model="", **sampling_kwargs

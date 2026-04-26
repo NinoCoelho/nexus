@@ -43,6 +43,10 @@ class AgentConfig(BaseModel):
     default_model: str = ""
     last_used_model: str = ""
     max_iterations: int = 16
+    # Sampling temperature. 0.0 keeps tool-calling deterministic — bumping it
+    # introduces creativity at the cost of brittle JSON args, so most users
+    # should leave it at 0.
+    temperature: float = 0.0
     # OpenAI-compat sampling. Frequency penalty mitigates token-degeneracy
     # loops (e.g. deepseek-coder spitting "@@@@@…" with temp=0). Sent only
     # when non-zero so strict gateways aren't tripped by no-op fields.

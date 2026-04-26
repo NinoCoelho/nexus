@@ -159,11 +159,10 @@ export default function LocalModels({ onRefresh }: Props) {
   }, [installed]);
 
   return (
-    <section className="settings-section local-models-section">
-      <h3 className="graphrag-section-title">On-device models</h3>
+    <div className="local-models-section">
       <p className="local-intro">
-        Run free models directly on your computer — no account, no cost,
-        works offline once installed.
+        Rode modelos gratuitos diretamente no seu computador — sem conta,
+        sem custo, funciona offline depois de instalado.
       </p>
 
       {hw && (
@@ -333,6 +332,6 @@ export default function LocalModels({ onRefresh }: Props) {
 
       {confirmModal && <Modal {...confirmModal} />}
 
-    </section>
+    </div>
   );
 }
