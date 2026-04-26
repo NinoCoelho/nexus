@@ -76,6 +76,17 @@ def _rebuild_registry(cfg: Any, app_state: dict[str, Any], agent: Any) -> None:
     agent._provider_registry = new_reg
     agent._nexus_cfg = cfg
     app_state["cfg"] = cfg
+    # Propagate the new registry into the loom adapter so the next turn
+    # picks up fresh provider URLs (e.g. after a local model restart).
+    _loom = getattr(agent, "_loom", None)
+    if _loom is not None:
+        _provider = getattr(_loom, "_provider", None)
+        if _provider is not None and hasattr(_provider, "_registry"):
+            _provider._registry = new_reg
+        if _provider is not None and hasattr(_provider, "_default_model"):
+            _provider._default_model = getattr(
+                getattr(cfg, "agent", None), "default_model", None
+            )
 
 
 @router.get("/config")

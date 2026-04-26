@@ -12,6 +12,7 @@ import {
   postModel,
   patchModel,
   fetchProviderModels,
+  putRouting,
   setModelRole,
   suggestModelTier,
   type Model,
@@ -76,6 +77,19 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       onRefresh();
     } catch (e) {
       toast.error("Failed to assign role", { detail: e instanceof Error ? e.message : undefined });
+    } finally {
+      setRoleSaving(false);
+    }
+  }
+
+  async function setDefaultModel(modelId: string) {
+    setRoleSaving(true);
+    try {
+      await putRouting({ default_model: modelId });
+      toast.success(`Padrão: ${modelId}`);
+      onRefresh();
+    } catch (e) {
+      toast.error("Falha ao setar modelo padrão", { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -268,6 +282,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
             onCancelRemove={() => setConfirmRemove(null)}
             onAssignRole={assignRole}
             onUnassignRole={unassignRole}
+            onSetDefault={setDefaultModel}
           />
         );
       })}

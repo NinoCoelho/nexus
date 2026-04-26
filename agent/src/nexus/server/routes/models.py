@@ -124,7 +124,23 @@ async def set_routing(
     from ...config_file import load as load_cfg, save as save_cfg
     cfg = app_state["cfg"] or load_cfg()
     if "default_model" in body:
-        cfg.agent.default_model = body["default_model"]
+        requested = body["default_model"]
+        if requested:
+            # Validate that the requested model is actually registered.
+            # Without this, a stale or mistyped model id makes the agent
+            # fall back silently to an unrelated provider that may not
+            # have valid auth.
+            pr = app_state.get("prov_reg")
+            if pr is not None:
+                available = pr.available_model_ids()
+                if requested not in available:
+                    raise HTTPException(
+                        400,
+                        f"Model {requested!r} is not available. "
+                        f"Available models: {available}. "
+                        f"Start the local model first or check your provider configuration.",
+                    )
+        cfg.agent.default_model = requested
     if "last_used_model" in body:
         cfg.agent.last_used_model = body["last_used_model"]
     if "embedding_model_id" in body:

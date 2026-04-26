@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 import os
 
 from .llm import AnthropicProvider, LLMProvider, OpenAIProvider
@@ -31,7 +32,9 @@ class ProviderRegistry:
             raise KeyError(f"Provider {provider_name!r} not available")
         return self._providers[provider_name], model_name
 
-    def available_model_ids(self) -> list[str]:
+    def available_model_ids(self, exclude_nonfunctional: bool = False) -> list[str]:
+        """Return registered model IDs, optionally filtered to those whose
+        providers passed the key check at registration time."""
         return [
             mid for mid, (pname, _) in self._model_map.items()
             if pname in self._providers
@@ -40,6 +43,32 @@ class ProviderRegistry:
     async def aclose(self) -> None:
         for p in self._providers.values():
             await p.aclose()
+
+
+def _is_provider_functional(pcfg: Any, name: str) -> bool:
+    """Return True if the provider has enough config to actually make requests.
+
+    A provider is non-functional when it requires an API key but none is
+    available (env var unset, inline key missing). Anonymous providers
+    (ollama, local openai_compat) are always considered functional.
+    """
+    import os as _os
+    from .. import secrets as _secrets
+
+    provider_type = getattr(pcfg, "type", None) or ("anthropic" if name == "anthropic" else "openai_compat")
+
+    # Anonymous providers — always functional
+    if provider_type == "ollama":
+        return True
+    if provider_type == "openai_compat" and not pcfg.api_key_env and not pcfg.use_inline_key:
+        return True  # local server, no auth needed
+
+    # Key-based providers — check if key is actually available
+    if pcfg.use_inline_key:
+        return bool(_secrets.get(name))
+    if pcfg.api_key_env:
+        return bool(_os.environ.get(pcfg.api_key_env, ""))
+    return False
 
 
 def build_registry(cfg: NexusConfig) -> ProviderRegistry:

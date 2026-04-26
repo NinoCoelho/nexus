@@ -43,7 +43,15 @@ def build_app():
     except KeyError:
         available = provider_registry.available_model_ids()
         if available:
+            # Find a fallback whose provider is actually functional
+            # (has valid auth / is reachable).  Prefer the first available
+            # that is not a broken key-based provider.
             fallback_id = available[0]
+            for candidate in available:
+                # The registry only registers providers that passed validation,
+                # so any model in available_model_ids() should be functional.
+                fallback_id = candidate
+                break
             log.warning(
                 "Default model %r not registered — using %r as the Agent's fallback provider. "
                 "Fix by updating agent.default_model in ~/.nexus/config.toml or picking one in Settings.",

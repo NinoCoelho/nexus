@@ -601,6 +601,59 @@ def restart_local_models(models_dir: Path | None = None) -> int:
     return started
 
 
+def reap_orphans() -> list[int]:
+    """Kill llama-server processes whose parent has died (PPID=1).
+
+    When the Nexus daemon crashes or is force-killed, its child
+    llama-server processes survive with PPID=1 (adopted by launchd/init).
+    On the next startup ``restart_local_models`` spawns fresh servers
+    on new ports, leaving the old ones consuming GPU/RAM indefinitely.
+
+    This function scans the process table for ``llama-server`` binaries
+    under ``~/.nexus/llama/`` whose parent is not the current process
+    (or PID 1) and terminates them.  Only processes launched from the
+    user's own ``~/.nexus/llama/`` directory are considered — a system
+    ``llama-server`` started manually by the user is left alone.
+
+    Returns:
+        List of PIDs that were reaped.
+    """
+    import psutil
+
+    reaped: list[int] = []
+    my_pid = os.getpid()
+    llama_prefix = str(Path.home() / ".nexus" / "llama")
+
+    try:
+        for proc in psutil.process_iter(["pid", "ppid", "exe", "cmdline"]):
+            try:
+                exe = proc.info.get("exe") or ""
+                if llama_prefix not in exe:
+                    continue
+                ppid = proc.info.get("ppid", 0)
+                if ppid == my_pid:
+                    continue  # our own child — keep it
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            # This is an orphan — parent is dead (PPID re-parented to 1)
+            # or belongs to a different Nexus instance.
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                try:
+                    proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            reaped.append(proc.pid)
+            log.info("[local_llm] reaped orphan llama-server PID %d", proc.pid)
+    except Exception:
+        log.exception("[local_llm] error during orphan reaping")
+
+    return reaped
+
+
 def _pick_free_port(host: str = "127.0.0.1") -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, 0))

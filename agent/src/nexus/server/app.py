@@ -146,6 +146,16 @@ def create_app(
             event_bus.set_loop(asyncio.get_running_loop())
         except Exception:
             log.exception("event_bus setup failed")
+        # Kill orphan llama-server processes from previous crashed runs
+        # BEFORE restarting models, so we don't accumulate duplicates.
+        try:
+            from ..local_llm import manager as _local_mgr
+            reaped = await asyncio.to_thread(_local_mgr.reap_orphans)
+            if reaped:
+                log.info("[local_llm] reaped %d orphan(s): %s", len(reaped), reaped)
+        except Exception:
+            log.exception("local_llm orphan reap failed")
+
         # Restart any local-* models the user had enabled in a prior run.
         # Each gets a fresh port; we refresh config and rebuild the registry
         # so the agent sees the live URLs without the user opening Settings.
