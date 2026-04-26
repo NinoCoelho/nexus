@@ -276,6 +276,23 @@ export default function App() {
 
   const sessionUsage = useSessionUsage(activeSession, activeState.thinking);
 
+  const handleSpawnSessionFromEntity = useCallback((entityId: number, entityName: string) => {
+    void entityId;
+    _handleNewChat();
+    clearPendingRequest();
+    const seed = `Tell me about "${entityName}" — what do we know, where it appears, and how it connects to other things in my knowledge.`;
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(NEW_KEY);
+      next.set(NEW_KEY, {
+        ...(cur ?? emptyState()),
+        input: seed,
+      });
+      return next;
+    });
+    setView("chat");
+  }, [_handleNewChat, clearPendingRequest, setChatStates]);
+
   const handleStartGraphIndex = useCallback(async (path: string) => {
     try {
       const res = await graphragIndexFile(path);
@@ -444,6 +461,7 @@ export default function App() {
               onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onStartGraphIndex={handleStartGraphIndex}
+              onSpawnSession={handleSpawnSessionFromEntity}
             />
           </div>
           <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>

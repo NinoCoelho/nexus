@@ -895,3 +895,184 @@
   color: var(--fg-faint);
   font-size: 13px;
 }
+
+/* ── Type pill color swatch ─────────────────────────────────────────────── */
+
+.kv-pill-swatch {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 4px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+/* ── Active filter chips ────────────────────────────────────────────────── */
+
+.kv-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 16px 6px;
+  flex-shrink: 0;
+}
+
+.kv-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 10px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-inset));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 12px;
+}
+
+.kv-filter-chip-close {
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 100ms;
+}
+
+.kv-filter-chip-close:hover {
+  color: var(--fg);
+}
+
+/* ── Hop depth selector ─────────────────────────────────────────────────── */
+
+.kv-hop-selector {
+  display: flex;
+  gap: 1px;
+  pointer-events: auto;
+}
+
+.kv-hop-btn {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+
+.kv-hop-btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.kv-hop-btn:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
+
+.kv-hop-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.kv-hop-btn--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.kv-hop-btn--active:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.kv-hop-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Empty state example queries ────────────────────────────────────────── */
+
+.kv-graph-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  margin: 0 0 12px;
+}
+
+.kv-graph-example-queries {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.kv-graph-example-btn {
+  padding: 7px 18px;
+  font-size: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms, background 120ms;
+  font-family: inherit;
+}
+
+.kv-graph-example-btn:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+/* ── Graph loading skeleton ─────────────────────────────────────────────── */
+
+.kv-graph-skeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    var(--bg-inset) 25%,
+    color-mix(in srgb, var(--bg-hover) 60%, var(--bg-inset)) 50%,
+    var(--bg-inset) 75%
+  );
+  background-size: 200% 100%;
+  animation: kv-skeleton-shimmer 1.4s infinite;
+}
+
+@keyframes kv-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ── Node right-click context menu ─────────────────────────────────────── */
+
+.kv-context-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 160px;
+  padding: 4px 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.kv-context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  font-size: 12px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 100ms, color 100ms;
+}
+
+.kv-context-menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}

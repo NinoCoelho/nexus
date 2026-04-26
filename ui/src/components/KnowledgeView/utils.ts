@@ -1,20 +1,7 @@
 // Pure helpers for KnowledgeView: colors, geometry, edge merging.
 
 import type { MergedEdgeGroup } from "./types";
-
-export const TYPE_COLORS: Record<string, string> = {
-  person: "#c9a84c",
-  project: "#b87333",
-  concept: "#7a5e9e",
-  technology: "#5e7a9e",
-  decision: "#9e4a3a",
-  resource: "#4a9e7a",
-};
-const DEFAULT_COLOR = "#7a9e7e";
-
-export function typeColor(t: string) {
-  return TYPE_COLORS[t] ?? DEFAULT_COLOR;
-}
+export { TYPE_COLORS, DEFAULT_TYPE_COLOR, typeColor } from "./typeColors";
 
 export function nodeRadius(degree: number) {
   return Math.max(3, Math.min(10, 3 + Math.log(degree + 1) * 1.8));

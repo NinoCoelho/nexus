@@ -1,6 +1,6 @@
-// Entity type filter pills for KnowledgeView.
+// Entity type filter pills for KnowledgeView — each pill is also a color legend swatch.
 
-import { typeColor } from "./utils";
+import { typeColor } from "./typeColors";
 import type { KnowledgeStats } from "../../api";
 
 interface EntityTypeFilterProps {
@@ -25,8 +25,12 @@ export function EntityTypeFilter({ stats, typeFilter, onTypeFilterChange }: Enti
           key={t}
           className={`kv-pill${typeFilter === t ? " kv-pill--active" : ""}`}
           style={{ "--pill-color": typeColor(t) } as React.CSSProperties}
-          onClick={() => onTypeFilterChange(t)}
+          onClick={() => onTypeFilterChange(typeFilter === t ? null : t)}
         >
+          <span
+            className="kv-pill-swatch"
+            style={{ background: typeColor(t) }}
+          />
           {t} <span className="kv-pill-count">{stats?.types[t] ?? 0}</span>
         </button>
       ))}

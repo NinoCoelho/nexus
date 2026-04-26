@@ -1,22 +1,4 @@
-/**
- * KnowledgeView — GraphRAG knowledge graph explorer.
- *
- * Three panels:
- *   1. Entity browser — paginated list of extracted entities with type filter
- *   2. Subgraph visualizer — Cytoscape canvas showing entity/relation graph
- *   3. Query interface — natural language search over the knowledge graph
- *
- * The view supports:
- *   - Filtering the graph to a specific file/folder (via graphSourceFilter)
- *   - Reindexing the GraphRAG engine (incremental or full)
- *   - Clicking entities/relations for detail views
- *   - Drilling down into entity subgraphs by hop count
- *
- * All data comes from the /graph/knowledge/* API endpoints backed by
- * nexus.agent.graphrag_manager and loom.store.graphrag.
- */
-
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   knowledgeQuery,
   getKnowledgeStats,
@@ -34,26 +16,24 @@ import {
 import VaultFilePreview from "../VaultFilePreview";
 import "../KnowledgeView.css";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
-import { useSubgraphSimRefs } from "./useSubgraphSim";
-import { SubgraphCanvas } from "./SubgraphCanvas";
-const SubgraphCanvas3D = lazy(() =>
-  import("./SubgraphCanvas3D").then((m) => ({ default: m.SubgraphCanvas3D })),
-);
+import { SubgraphCanvas3D } from "./SubgraphCanvas3D";
 import { EntityPanel } from "./EntityPanel";
 import { SourceFilterBar } from "./SourceFilterBar";
 import { EntityTypeFilter } from "./EntityTypeFilter";
-import { useGraphSearch } from "./useGraphSearch";
+import { FilterChips } from "./FilterChips";
 
 export default function KnowledgeView({
   initialSourceFilter,
   onSourceFilterHandled,
   onViewEntityGraph,
   onStartGraphIndex,
+  onSpawnSession,
 }: {
   initialSourceFilter?: { mode: "file" | "folder"; path: string } | null;
   onSourceFilterHandled?: () => void;
   onViewEntityGraph?: (path: string) => void;
   onStartGraphIndex?: (path: string) => void;
+  onSpawnSession?: (entityId: number, entityName: string) => void;
 }) {
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [queryResult, setQueryResult] = useState<KnowledgeQueryResult | null>(null);
@@ -72,19 +52,10 @@ export default function KnowledgeView({
   const [sourceSuggestions, setSourceSuggestions] = useState<string[]>([]);
   const [showSourceSuggestions, setShowSourceSuggestions] = useState(false);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
-  const [viewMode, setViewMode] = useState<"2d" | "3d">(() => {
-    const saved = typeof window !== "undefined" ? window.localStorage.getItem("kv:viewMode") : null;
-    return saved === "3d" ? "3d" : "2d";
+  const [graphSearch, setGraphSearch] = useState("");
+  const [hopDepth, setHopDepth] = useState<number>(() => {
+    try { return parseInt(sessionStorage.getItem("kv:hopDepth") ?? "2", 10) || 2; } catch { return 2; }
   });
-  const toggleViewMode = useCallback(() => {
-    setViewMode((prev) => {
-      const next = prev === "2d" ? "3d" : "2d";
-      try { window.localStorage.setItem("kv:viewMode", next); } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
-  const simRefs = useSubgraphSimRefs();
-  const { graphSearch, graphSearchCount, onGraphSearchChange, clearGraphSearch } = useGraphSearch(simRefs);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splitDragRef = useRef<{ startX: number; startRatio: number } | null>(null);
   const mainRef = useRef<HTMLDivElement | null>(null);
@@ -124,8 +95,6 @@ export default function KnowledgeView({
     setLoading(true);
     setSelectedEntity(null);
     setPinnedEntities([]);
-    simRefs.selectedNodeRef.current = null;
-    simRefs.selectedEdgeRef.current = null;
     try {
       const result = await knowledgeQuery(q);
       setQueryResult(result);
@@ -146,14 +115,12 @@ export default function KnowledgeView({
   const clearSearch = useCallback(() => {
     setQueryText(""); setQueryResult(null); setSubgraphData(null);
     setSelectedEntity(null); setPinnedEntities([]);
-    simRefs.selectedNodeRef.current = null; simRefs.selectedEdgeRef.current = null;
     if (debounceRef.current) clearTimeout(debounceRef.current);
   }, []);
 
   const applySourceFilter = useCallback(async (mode: "file" | "folder", path: string) => {
     if (!path.trim()) return;
     setLoading(true); setSelectedEntity(null); setPinnedEntities([]);
-    simRefs.selectedNodeRef.current = null; simRefs.selectedEdgeRef.current = null;
     try {
       const sg = mode === "file" ? await getKnowledgeFileSubgraph(path) : await getKnowledgeFolderSubgraph(path);
       setSubgraphData(sg); setQueryResult(null);
@@ -175,24 +142,42 @@ export default function KnowledgeView({
     debounceRef.current = setTimeout(() => void doSearch(value), 300);
   }, [doSearch]);
 
+  // Re-trigger search when typeFilter changes if there's an active query
+  useEffect(() => {
+    if (!queryText.trim()) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => void doSearch(queryText), 300);
+  }, [typeFilter]);
+
   useEffect(() => {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, []);
 
-  const selectEntity = useCallback(async (id: number) => {
+  const selectEntity = useCallback(async (id: number, hops?: number) => {
     try {
       const [detail, sg] = await Promise.all([
         getKnowledgeEntity(id),
-        getKnowledgeSubgraph(id, 2),
+        getKnowledgeSubgraph(id, hops ?? hopDepth),
       ]);
       setSelectedEntity(detail);
       setSubgraphData(sg);
-      simRefs.selectedNodeRef.current = null;
-      simRefs.selectedEdgeRef.current = null;
     } catch {
       setSelectedEntity(null);
     }
-  }, []);
+  }, [hopDepth]);
+
+  // When hopDepth changes and a node is selected, refetch its subgraph
+  const lastSelectedIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (lastSelectedIdRef.current !== null) {
+      void selectEntity(lastSelectedIdRef.current, hopDepth);
+    }
+  }, [hopDepth]);
+
+  // Track selected entity id for hop refetch
+  useEffect(() => {
+    lastSelectedIdRef.current = selectedEntity?.entity?.id ?? null;
+  }, [selectedEntity]);
 
   const pinEntity = useCallback((detail: EntityDetail) => {
     if (!detail.entity) return;
@@ -213,8 +198,42 @@ export default function KnowledgeView({
     [pinnedEntities],
   );
 
-  const hasResults = queryResult && queryResult.results.length > 0;
-  const hasSubgraph = subgraphData && subgraphData.nodes.length > 0;
+  // Client-side typeFilter applied to subgraph
+  const filteredSubgraphData = useMemo((): SubgraphData | null => {
+    if (!subgraphData || !typeFilter) return subgraphData;
+    const hiddenIds = new Set(
+      subgraphData.nodes.filter((n) => n.type !== typeFilter).map((n) => n.id),
+    );
+    const visibleNodes = subgraphData.nodes.filter((n) => n.type === typeFilter);
+    const visibleEdges = subgraphData.edges.filter(
+      (e) => !hiddenIds.has(e.source) && !hiddenIds.has(e.target),
+    );
+    return { ...subgraphData, nodes: visibleNodes, edges: visibleEdges };
+  }, [subgraphData, typeFilter]);
+
+  // Client-side typeFilter on queryResult
+  const filteredQueryResult = useMemo((): KnowledgeQueryResult | null => {
+    if (!queryResult || !typeFilter) return queryResult;
+    const filtered = queryResult.results.filter(
+      (r) => !r.related_entities || r.related_entities.length === 0 ||
+        r.related_entities.some((name) =>
+          topEntities.some((e) => e.name === name && e.type === typeFilter),
+        ),
+    );
+    return { ...queryResult, results: filtered };
+  }, [queryResult, typeFilter, topEntities]);
+
+  const hasResults = filteredQueryResult && filteredQueryResult.results.length > 0;
+  const hasSubgraph = filteredSubgraphData && filteredSubgraphData.nodes.length > 0;
+
+  const onExampleQuery = useCallback((q: string) => {
+    setQueryText(q);
+    void doSearch(q);
+  }, [doSearch]);
+
+  const handleHopDepthChange = useCallback((h: number) => {
+    setHopDepth(h);
+  }, []);
 
   return (
     <div className={`kv${graphFullscreen ? " kv--graph-fullscreen" : ""}`}>
@@ -252,6 +271,16 @@ export default function KnowledgeView({
             />
           </div>
 
+          <FilterChips
+            typeFilter={typeFilter}
+            sourceFilter={sourceFilter}
+            sourcePath={sourcePath}
+            queryText={queryText}
+            onClearType={() => setTypeFilter(null)}
+            onClearSource={clearSourceFilter}
+            onClearQuery={clearSearch}
+          />
+
           {stats && stats.enabled && (
             <div className="kv-stats">
               <span>{stats.entities} entities</span>
@@ -268,19 +297,19 @@ export default function KnowledgeView({
         {!graphFullscreen && (
           <div className="kv-evidence" style={{ flex: `0 0 ${splitRatio * 100}%` }}>
             <EntityPanel
-            hasResults={!!hasResults}
-            loading={loading}
-            queryResult={queryResult}
-            topEntities={topEntities}
-            typeFilter={typeFilter}
-            entityFilter={entityFilter}
-            onEntityFilterChange={setEntityFilter}
-            selectedEntity={selectedEntity}
-            pinnedEntities={pinnedEntities}
-            onSelectEntity={(id) => void selectEntity(id)}
-            onPreviewPath={setPreviewPath}
-            onPinEntity={pinEntity}
-            onUnpinEntity={unpinEntity}
+              hasResults={!!hasResults}
+              loading={loading}
+              queryResult={filteredQueryResult}
+              topEntities={topEntities}
+              typeFilter={typeFilter}
+              entityFilter={entityFilter}
+              onEntityFilterChange={setEntityFilter}
+              selectedEntity={selectedEntity}
+              pinnedEntities={pinnedEntities}
+              onSelectEntity={(id) => void selectEntity(id)}
+              onPreviewPath={setPreviewPath}
+              onPinEntity={pinEntity}
+              onUnpinEntity={unpinEntity}
               onCloseSelected={closeActive}
               isPinned={isPinned}
             />
@@ -298,51 +327,34 @@ export default function KnowledgeView({
                 const dx = ev.clientX - splitDragRef.current.startX;
                 setSplitRatio(Math.max(0.2, Math.min(0.8, splitDragRef.current.startRatio + dx / mainRef.current.clientWidth)));
               };
-              const onUp = () => { splitDragRef.current = null; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+              const onUp = () => {
+                splitDragRef.current = null;
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+              };
               window.addEventListener("mousemove", onMove);
               window.addEventListener("mouseup", onUp);
             }}
           />
         )}
 
-        {viewMode === "3d" ? (
-          <Suspense fallback={<div className="kv-graph"><div className="kv-graph-empty"><p>Loading 3D…</p></div></div>}>
-          <SubgraphCanvas3D
-            subgraphData={subgraphData}
-            hasSubgraph={!!hasSubgraph}
-            loading={loading}
-            sourceFilter={sourceFilter}
-            sourcePath={sourcePath}
-            onStartGraphIndex={onStartGraphIndex}
-            onSelectEntity={(id) => void selectEntity(id)}
-            graphSearch={graphSearch}
-            fullscreen={graphFullscreen}
-            onToggleFullscreen={() => setGraphFullscreen((v) => !v)}
-            viewMode={viewMode}
-            onToggleViewMode={toggleViewMode}
-          />
-          </Suspense>
-        ) : (
-          <SubgraphCanvas
-            subgraphData={subgraphData}
-            graphSearch={graphSearch}
-            graphSearchCount={graphSearchCount}
-            hasSubgraph={!!hasSubgraph}
-            loading={loading}
-            sourceFilter={sourceFilter}
-            sourcePath={sourcePath}
-            onStartGraphIndex={onStartGraphIndex}
-            refs={simRefs}
-            onSelectEntity={(id) => void selectEntity(id)}
-            onGraphSearchChange={onGraphSearchChange}
-            onClearGraphSearch={clearGraphSearch}
-            graphSearchValue={graphSearch}
-            fullscreen={graphFullscreen}
-            onToggleFullscreen={() => setGraphFullscreen((v) => !v)}
-            viewMode={viewMode}
-            onToggleViewMode={toggleViewMode}
-          />
-        )}
+        <SubgraphCanvas3D
+          subgraphData={filteredSubgraphData}
+          hasSubgraph={!!hasSubgraph}
+          loading={loading}
+          sourceFilter={sourceFilter}
+          sourcePath={sourcePath}
+          onStartGraphIndex={onStartGraphIndex}
+          onSelectEntity={(id) => void selectEntity(id)}
+          graphSearch={graphSearch}
+          onGraphSearchChange={setGraphSearch}
+          fullscreen={graphFullscreen}
+          onToggleFullscreen={() => setGraphFullscreen((v) => !v)}
+          hopDepth={hopDepth}
+          onHopDepthChange={handleHopDepthChange}
+          onExampleQuery={onExampleQuery}
+          onSpawnSession={onSpawnSession}
+        />
       </div>
 
       {previewPath && (
