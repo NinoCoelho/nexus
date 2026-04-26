@@ -263,3 +263,48 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+/* ── Reasoning / thinking section ───────────────────────────────────── */
+.asst-thinking {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: var(--muted, #888);
+  border-left: 2px solid var(--border, #ddd);
+  padding-left: 10px;
+}
+.asst-thinking > summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+.asst-thinking > summary::-webkit-details-marker {
+  display: none;
+}
+.asst-thinking > summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 10px;
+  transition: transform 120ms ease;
+}
+.asst-thinking[open] > summary::before {
+  transform: rotate(90deg);
+}
+.asst-thinking-count {
+  opacity: 0.6;
+}
+.asst-thinking-body {
+  margin: 6px 0 4px 0;
+  padding: 8px;
+  background: var(--bg-inset, rgba(0, 0, 0, 0.02));
+  border-radius: var(--radius, 6px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}

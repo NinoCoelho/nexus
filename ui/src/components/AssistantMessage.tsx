@@ -94,6 +94,7 @@ interface Props {
   onFeedbackChange?: (value: "up" | "down" | null) => void;
   pinned?: boolean;
   onPinChange?: (pinned: boolean) => void;
+  thinking?: string;
 }
 
 function fmt(d: Date) {
@@ -118,11 +119,12 @@ function linkifyVaultPaths(content: string): string {
   );
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking }: Props) {
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
   const [localPinned, setLocalPinned] = useState<boolean>(!!pinned);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
   useEffect(() => { setLocalFeedback(feedback ?? null); }, [feedback]);
   useEffect(() => { setLocalPinned(!!pinned); }, [pinned]);
 
@@ -176,6 +178,19 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
       <div className="asst-card">
+        {thinking && thinking.length > 0 && (
+          <details
+            className="asst-thinking"
+            open={thinkingOpen}
+            onToggle={(e) => setThinkingOpen((e.target as HTMLDetailsElement).open)}
+          >
+            <summary>
+              {streaming ? "Thinking…" : "Thinking"}
+              <span className="asst-thinking-count"> ({thinking.length} chars)</span>
+            </summary>
+            <pre className="asst-thinking-body">{thinking}</pre>
+          </details>
+        )}
         <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} />
         <div className="asst-body">
           <ReactMarkdown

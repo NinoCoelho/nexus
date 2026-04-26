@@ -34,6 +34,25 @@ export function applyDeltaEvent(
   });
 }
 
+export function applyThinkingEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  text: string,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const msgs = [...cur.messages];
+    const lastIdx = msgs.length - 1;
+    if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+      const last = msgs[lastIdx];
+      msgs[lastIdx] = { ...last, thinking: (last.thinking ?? "") + text };
+    }
+    next.set(key, { ...cur, messages: msgs });
+    return next;
+  });
+}
+
 export function applyToolEvent(
   setChatStates: SetChatStates,
   key: string,

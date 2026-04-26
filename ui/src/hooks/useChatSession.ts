@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
 import { chatStream, truncateSession, HIDDEN_SEED_MARKER } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -172,6 +172,8 @@ export function useChatSession(
       await chatStream(text, sidForPost, (event) => {
         if (event.type === "delta") {
           applyDeltaEvent(setChatStates, key, event.text);
+        } else if (event.type === "thinking") {
+          applyThinkingEvent(setChatStates, key, event.text);
         } else if (event.type === "tool") {
           applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview });
         } else if (event.type === "done") {

@@ -25,6 +25,7 @@ export interface ChatResponse {
 
 export type StreamEvent =
   | { type: "delta"; text: string }
+  | { type: "thinking"; text: string }
   | { type: "tool"; name: string; args?: unknown; result_preview?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
@@ -98,6 +99,8 @@ export async function chatStream(
         const parsed = JSON.parse(dataLine) as Record<string, unknown>;
         if (eventName === "delta") {
           onEvent({ type: "delta", text: parsed.text as string });
+        } else if (eventName === "thinking") {
+          onEvent({ type: "thinking", text: (parsed.text as string) ?? "" });
         } else if (eventName === "tool") {
           onEvent({
             type: "tool",

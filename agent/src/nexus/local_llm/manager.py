@@ -266,14 +266,16 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         # /v1/embeddings route only exists when this flag is set.
         cmd += ["--embeddings", "--pooling", "mean"]
     else:
-        # `--reasoning-format none` keeps `<think>…</think>` tokens inline in
-        # `delta.content` instead of routing them to `delta.reasoning_content`.
-        # The Nexus UI's chat stream parser doesn't render the `thinking` SSE
-        # channel today, so without this flag a reasoning model (DeepSeek-R1,
-        # QwQ, GLM thinking) appears to "stop" after thinking — its CoT goes
-        # into a channel the UI drops on the floor. Inline keeps the model's
-        # output visible end-to-end.
-        cmd += ["--jinja", "--reasoning-format", "none"]
+        # `--jinja` enables the chat template so tool-calling and reasoning
+        # routing work as the model expects. We let `--reasoning-format`
+        # default to `auto`: for thinking models (DeepSeek-R1, QwQ, GLM
+        # `<think>…</think>`) llama.cpp routes the CoT to
+        # `delta.reasoning_content` and the post-think content to
+        # `delta.content`. Inlining the CoT (the previous behavior) made the
+        # CoT leak into the assistant message and broke llama.cpp's tool-call
+        # parser, which only scans the post-think tail. The Nexus UI renders
+        # the separate `thinking` SSE channel as a collapsed section.
+        cmd += ["--jinja"]
 
     log.info("[local_llm] starting llama-server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)

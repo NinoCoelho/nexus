@@ -43,6 +43,10 @@ export interface Message {
   feedback?: "up" | "down" | null;
   /** Persisted pin flag — survives page reload, listed in the sidebar. */
   pinned?: boolean;
+  /** Chain-of-thought reasoning streamed via the `thinking` SSE channel from
+   * reasoning models (DeepSeek-R1, GLM thinking, …). Rendered as a collapsed
+   * section so it doesn't pollute the visible reply. */
+  thinking?: string;
   /** Set when the turn didn't reach ``done`` — drives the Retry/Continue action row. */
   partial?: {
     status:
@@ -235,11 +239,12 @@ export default function ChatView({
               </div>
             ) : (
               <div key={idx} ref={setMsgRef(idx)}>
-                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0) && (
+                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0) && (
                   <AssistantMessage
                     content={msg.content}
                     trace={msg.trace}
                     timeline={msg.timeline}
+                    thinking={msg.thinking}
                     timestamp={msg.timestamp}
                     streaming={msg.streaming}
                     onOpenInVault={onOpenInVault}
