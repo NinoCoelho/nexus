@@ -102,7 +102,9 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     flyTo,
   }), [callFit, callReheat, callZoom, flyTo]);
 
-  // Tune d3 forces so 215+ disconnected nodes don't spread to infinity.
+  // Tune d3 forces and OrbitControls behavior. screenSpacePanning makes
+  // right-click drag pan the camera in screen space (rather than world
+  // space), which feels natural on 3D scatter plots.
   useEffect(() => {
     let cancelled = false;
     const apply = () => {
@@ -112,6 +114,13 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
       try {
         fg.d3Force?.("link")?.distance?.(18);
         fg.d3Force?.("charge")?.strength?.(-45);
+      } catch { /* ignore */ }
+      try {
+        const ctrl = fg.controls?.();
+        if (ctrl) {
+          ctrl.zoomToCursor = true;
+          ctrl.screenSpacePanning = true;
+        }
       } catch { /* ignore */ }
     };
     const id = setTimeout(apply, 0);

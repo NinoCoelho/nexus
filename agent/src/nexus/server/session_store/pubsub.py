@@ -21,6 +21,18 @@ from loom.hitl import HitlBroker
 
 from ..events import SessionEvent
 
+# Event kinds that fan out to the global notifications channel in addition
+# to per-session subscribers. Kept narrow so non-HITL traffic (delta /
+# tool_call / tool_result / iter / reply) stays scoped to the session.
+# ``calendar_alert`` is a fire-and-forget notification (no answer expected)
+# the calendar heartbeat publishes when a non-prompt event fires.
+_GLOBAL_HITL_KINDS = frozenset({
+    "user_request",
+    "user_request_auto",
+    "user_request_cancelled",
+    "calendar_alert",
+})
+
 
 class PubSubMixin:
     """Mixin providing publish/subscribe and HITL pending-future management.
@@ -31,6 +43,12 @@ class PubSubMixin:
     def _init_pubsub(self) -> None:
         self._lock: Lock = Lock()
         self._subscribers: dict[str, list[asyncio.Queue[SessionEvent | None]]] = {}
+        # Subscribers to the cross-session HITL notifications channel.
+        # Each queue receives ``(session_id, event)`` tuples for whitelisted
+        # event kinds (see _GLOBAL_HITL_KINDS).
+        self._global_subscribers: list[
+            asyncio.Queue[tuple[str, SessionEvent] | None]
+        ] = []
         self._broker = HitlBroker(
             publish_hook=lambda sid, ev: self.publish(
                 sid, SessionEvent(kind=ev.kind, data=dict(ev.data))
@@ -46,8 +64,15 @@ class PubSubMixin:
     def publish(self, session_id: str, event: SessionEvent) -> None:
         with self._lock:
             subscribers = list(self._subscribers.get(session_id, ()))
+            global_subscribers = (
+                list(self._global_subscribers)
+                if event.kind in _GLOBAL_HITL_KINDS
+                else ()
+            )
         for q in subscribers:
             q.put_nowait(event)
+        for gq in global_subscribers:
+            gq.put_nowait((session_id, event))
 
     async def subscribe(self, session_id: str) -> AsyncIterator[SessionEvent]:
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
@@ -66,6 +91,30 @@ class PubSubMixin:
                     subs.remove(queue)
                     if not subs:
                         self._subscribers.pop(session_id, None)
+
+    async def subscribe_global(
+        self,
+    ) -> AsyncIterator[tuple[str, SessionEvent]]:
+        """Subscribe to the cross-session HITL notifications channel.
+
+        Yields ``(session_id, event)`` tuples whenever any session
+        publishes an event whose kind is in ``_GLOBAL_HITL_KINDS``.
+        Used by ``GET /notifications/events`` so the UI can surface a
+        single popup regardless of which session is currently active.
+        """
+        queue: asyncio.Queue[tuple[str, SessionEvent] | None] = asyncio.Queue()
+        with self._lock:
+            self._global_subscribers.append(queue)
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                yield item
+        finally:
+            with self._lock:
+                if queue in self._global_subscribers:
+                    self._global_subscribers.remove(queue)
 
     # ── HITL pending futures ─────────────────────────────────────────────────
 

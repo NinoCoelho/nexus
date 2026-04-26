@@ -1,12 +1,18 @@
 /**
  * Loads and hydrates session history from the backend into the chat state map.
- * Extracted from useChatSession to keep that file under the 300 LOC limit.
+ *
+ * The persistence layer writes one ``assistant`` row per tool-call iteration,
+ * so a single logical turn becomes N+1 rows in the database. The live UI
+ * accumulates those iterations into one bubble; this loader does the same on
+ * reload so the post-refresh view matches the live-stream view.
  */
-import type { Message } from "../components/ChatView";
+import type { Message, TimelineStep } from "../components/ChatView";
 import { getSession, HIDDEN_SEED_MARKER, type TraceEvent } from "../api";
 import { parseHistoryTimestamp, type ChatState } from "../types/chat";
 
 type SetChatStates = React.Dispatch<React.SetStateAction<Map<string, ChatState>>>;
+
+const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed)\]\s*/;
 
 export async function loadSessionHistory(
   id: string,
@@ -16,40 +22,52 @@ export async function loadSessionHistory(
 ): Promise<void> {
   try {
     const detail = await getSession(id);
-    // Hydrate badges from persisted tool_calls + tool result messages.
-    // Assistant messages with tool_calls are followed by role="tool"
-    // entries carrying the result; pair them so the UI can render the
-    // same timeline it showed live.
     const raw = detail.messages;
     const msgs: Message[] = [];
+
+    // Bubble accumulator: a single assistant Message that absorbs every
+    // assistant row (and its paired tool-result rows) until the next visible
+    // user message. Hidden-seed user messages (continue / retry) don't break
+    // the grouping — they're just continuations of the same logical turn.
+    let bubble: Message | null = null;
+    const flush = () => {
+      if (bubble) {
+        msgs.push(bubble);
+        bubble = null;
+      }
+    };
+
     for (let i = 0; i < raw.length; i++) {
       const m = raw[i];
+
       if (m.role === "user") {
         const content = m.content ?? "";
         if (content.trim().length === 0) continue;
-        // Hidden seeds are persisted so the agent has context on reload,
-        // but they shouldn't show up as chat bubbles.
         if (content.startsWith(HIDDEN_SEED_MARKER)) continue;
-        msgs.push({ role: "user", content, timestamp: parseHistoryTimestamp(m.created_at), seq: m.seq, pinned: m.pinned ?? false });
+        flush();
+        msgs.push({
+          role: "user",
+          content,
+          timestamp: parseHistoryTimestamp(m.created_at),
+          seq: m.seq,
+          pinned: m.pinned ?? false,
+        });
         continue;
       }
+
       if (m.role !== "assistant") continue;
+
       const toolCalls = Array.isArray(m.tool_calls)
         ? (m.tool_calls as Array<{ id?: string; name?: string; arguments?: unknown }>)
         : [];
-      // Assistants whose content was stamped with a partial-status prefix
-      // ([interrupted], [cancelled], [iteration_limit], [empty_response],
-      // [llm_error], [crashed]) had their turn aborted mid-flight — their
-      // tool calls without a paired result are genuinely unfinished.
-      // Everything else is a completed turn: default tools to "done" so
-      // the detail modal doesn't show a forever-running indicator.
+
       const rawContent = m.content ?? "";
-      const partialMatch = rawContent.match(/^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed)\]\s*/);
+      const partialMatch = rawContent.match(PARTIAL_PREFIX_RE);
       const isPartial = partialMatch != null;
       const partialStatus = (partialMatch?.[1] ?? "interrupted") as NonNullable<Message["partial"]>["status"];
       const content = isPartial ? rawContent.slice(partialMatch![0].length) : rawContent;
-      // Collect paired tool results that follow this assistant message,
-      // keyed by tool_call_id if available, otherwise by position.
+
+      // Pair tool-result rows immediately following this assistant.
       const resultsById = new Map<string, string>();
       const resultsByPos: string[] = [];
       let j = i + 1;
@@ -60,35 +78,77 @@ export async function loadSessionHistory(
         resultsByPos.push(preview);
         j++;
       }
-      const timeline: NonNullable<Message["timeline"]> = [];
-      const trace: TraceEvent[] = [];
-      if (content.length > 0) {
-        timeline.push({ id: `h-t-${msgs.length}`, type: "text", text: content });
+
+      if (bubble == null) {
+        bubble = {
+          role: "assistant",
+          content: "",
+          timeline: [],
+          trace: [],
+          timestamp: parseHistoryTimestamp(m.created_at),
+          seq: m.seq,
+          feedback: m.feedback ?? null,
+          pinned: m.pinned ?? false,
+        };
       }
+
+      const timeline: TimelineStep[] = bubble.timeline ?? [];
+      const trace: TraceEvent[] = bubble.trace ?? [];
+      const bubbleIdx = msgs.length;
+
+      if (content.length > 0) {
+        const sep = bubble.content && bubble.content.length > 0 ? "\n\n" : "";
+        bubble.content = bubble.content + sep + content;
+        timeline.push({
+          id: `h-t-${bubbleIdx}-${timeline.length}`,
+          type: "text",
+          text: content,
+        });
+      }
+
       toolCalls.forEach((tc, tcIdx) => {
         const name = tc.name ?? "";
         if (!name) return;
         const args = tc.arguments;
         const preview = resultsById.get(tc.id ?? "") ?? resultsByPos[tcIdx];
         const status: "pending" | "done" = preview != null ? "done" : isPartial ? "pending" : "done";
-        timeline.push({ id: `h-c-${msgs.length}-${timeline.length}`, type: "tool", tool: name, args, result_preview: preview, status });
+        timeline.push({
+          id: `h-c-${bubbleIdx}-${timeline.length}`,
+          type: "tool",
+          tool: name,
+          args,
+          result_preview: preview,
+          status,
+        });
         trace.push({ iter: 0, tool: name, args, result: preview } as TraceEvent);
       });
-      // Skip fully-empty assistant messages (no text + no tool calls).
-      if ((m.content ?? "").trim().length === 0 && timeline.length === 0) continue;
-      msgs.push({
-        role: "assistant",
-        content,
-        timestamp: parseHistoryTimestamp(m.created_at),
-        timeline: timeline.length > 0 ? timeline : undefined,
-        trace: trace.length > 0 ? trace : undefined,
-        seq: m.seq,
-        feedback: m.feedback ?? null,
-        pinned: m.pinned ?? false,
-        ...(isPartial ? { partial: { status: partialStatus } } : {}),
-      });
+
+      bubble.timeline = timeline;
+      bubble.trace = trace;
+      // Anchor metadata on the latest assistant row in the bubble — that's
+      // where the visible reply lands and where feedback/pin/timestamp belong.
+      bubble.timestamp = parseHistoryTimestamp(m.created_at);
+      bubble.seq = m.seq;
+      bubble.feedback = m.feedback ?? null;
+      bubble.pinned = m.pinned ?? false;
+      // A non-partial latest row means the turn finished cleanly even if an
+      // earlier iteration was marked partial — drop the flag so the
+      // Retry/Continue banner doesn't appear on a completed bubble.
+      bubble.partial = isPartial ? { status: partialStatus } : undefined;
+
       i = j - 1;
     }
+
+    flush();
+
+    const filtered = msgs.filter((mm) => {
+      if (mm.role !== "assistant") return true;
+      const hasText = (mm.content ?? "").trim().length > 0;
+      const hasTimeline = (mm.timeline ?? []).length > 0;
+      const hasPartial = mm.partial != null;
+      return hasText || hasTimeline || hasPartial;
+    });
+
     setChatStates((prev) => {
       const next = new Map(prev);
       const cur = next.get(id);
@@ -98,7 +158,7 @@ export async function loadSessionHistory(
       if (cur && cur.historyLoaded) return prev;
       const seedModel = cur?.selectedModel || computeSeedModel();
       next.set(id, {
-        messages: msgs,
+        messages: filtered,
         thinking: cur?.thinking ?? false,
         input: cur?.input ?? "",
         historyLoaded: true,

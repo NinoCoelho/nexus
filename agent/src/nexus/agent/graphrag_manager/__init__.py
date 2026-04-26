@@ -34,6 +34,10 @@ _last_init_error: str | None = None
 # Bounded queue of recent per-file indexing failures, exposed via
 # /graph/knowledge/recent-errors. Tuples of (path, error_message, ts).
 _recent_errors: deque[dict[str, Any]] = deque(maxlen=50)
+# Cap concurrent schedule_index() tasks so a vault-edit storm cannot pile up
+# dozens of in-flight Ollama requests and saturate the httpx connection pool.
+_INDEX_CONCURRENCY = 2
+_index_semaphore: asyncio.Semaphore | None = None
 
 
 def get_home() -> Path:
@@ -196,12 +200,27 @@ async def _index_vault_file_tracked(path: str, content: str) -> None:
         _record_error(path, exc)
 
 
+async def _index_vault_file_bounded(path: str, content: str) -> None:
+    """Same as ``_index_vault_file_tracked`` but gated on a semaphore.
+
+    Prevents a vault-edit storm from queuing dozens of simultaneous Ollama
+    extraction calls, which would saturate the httpx connection pool and
+    make unrelated LLM-backed endpoints freeze.
+    """
+    global _index_semaphore
+    if _index_semaphore is None:
+        _index_semaphore = asyncio.Semaphore(_INDEX_CONCURRENCY)
+    async with _index_semaphore:
+        await _index_vault_file_tracked(path, content)
+
+
 def schedule_index(path: str, content: str) -> None:
     """Fire-and-forget GraphRAG indexing of a single vault file.
 
     Schedules ``index_vault_file`` on the running event loop so callers
     in synchronous code (``vault.write_file``) don't block on LLM/embedding
     calls. Failures are recorded (UI-visible) instead of swallowed.
+    Concurrent indexing is capped via :data:`_INDEX_CONCURRENCY`.
     """
     if _engine is None:
         return
@@ -211,7 +230,7 @@ def schedule_index(path: str, content: str) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(_index_vault_file_tracked(path, content))
+    loop.create_task(_index_vault_file_bounded(path, content))
 
 
 def remove_source(path: str) -> None:

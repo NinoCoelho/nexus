@@ -173,9 +173,86 @@ def create_app(
                 except Exception:
                     log.warning("[startup] builtin embedder prefetch failed", exc_info=True)
             asyncio.create_task(_prefetch_builtin())
+
+        # ── calendar bootstrap + heartbeat scheduler ─────────────────────────
+        scheduler = None
+        try:
+            from .. import vault_calendar
+            from ..calendar_runtime import (
+                set_dispatcher as _set_cal_dispatcher,
+                set_notifier as _set_cal_notifier,
+            )
+            from ..heartbeat_drivers import DRIVERS_DIR
+            from pathlib import Path
+            from loom.heartbeat import (
+                HeartbeatRegistry,
+                HeartbeatScheduler,
+                HeartbeatStore,
+            )
+
+            vault_calendar.ensure_default_calendar()
+            vault_calendar.sweep_missed(grace_minutes=5)
+
+            # Hand the calendar driver a way to invoke vault dispatch. Bound
+            # here (not at module-load time) so it sees the live agent + store.
+            from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
+
+            async def _calendar_dispatcher(*, path: str, event_id: str, mode: str = "background") -> dict:
+                return await _cal_dispatch(
+                    path=path, card_id=None, event_id=event_id,
+                    mode=mode, a=agent, store=sessions,
+                )
+            _set_cal_dispatcher(_calendar_dispatcher)
+
+            # Notifier — fire-and-forget calendar_alert publishes onto the
+            # cross-session SSE channel. The UI's useCalendarAlerts hook
+            # subscribes to /notifications/events and surfaces a toast.
+            from .events import SessionEvent
+
+            def _calendar_notifier(payload: dict) -> None:
+                # Use a synthetic session id so the fanout works through the
+                # store's per-session router; the UI ignores session_id for
+                # calendar_alert events.
+                sessions.publish(
+                    "__calendar__",
+                    SessionEvent(kind="calendar_alert", data=payload),
+                )
+            _set_cal_notifier(_calendar_notifier)
+
+            heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
+            heartbeats_dir.mkdir(parents=True, exist_ok=True)
+            db_path = Path("~/.nexus/heartbeat.db").expanduser()
+            registry = HeartbeatRegistry(
+                heartbeats_dir=heartbeats_dir,
+                additional_dirs=[DRIVERS_DIR],
+            )
+            registry.scan()
+            store = HeartbeatStore(db_path)
+
+            async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
+                # Driver dispatches inline and returns events=[], so this is
+                # never called. Return a placeholder AgentTurn-shaped object
+                # in case loom's contract changes.
+                from loom.loop import AgentTurn
+                return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
+
+            scheduler = HeartbeatScheduler(
+                registry, store, run_fn=_noop_run_fn, tick_interval=60.0,
+            )
+            scheduler.start()
+            app.state.heartbeat_scheduler = scheduler
+            log.info("heartbeat scheduler started (calendar_trigger registered)")
+        except Exception:
+            log.exception("heartbeat / calendar bootstrap failed")
+
         try:
             yield
         finally:
+            if scheduler is not None:
+                try:
+                    scheduler.stop()
+                except Exception:
+                    log.exception("heartbeat scheduler stop failed")
             try:
                 from ..local_llm import manager as _local_mgr
                 _local_mgr.stop_all()
@@ -215,6 +292,7 @@ def create_app(
     from .routes.insights import router as insights_router
     from .routes.vault import router as vault_router
     from .routes.vault_kanban import router as vault_kanban_router
+    from .routes.vault_calendar import router as vault_calendar_router
     from .routes.vault_datatable import router as vault_datatable_router
     from .routes.vault_dispatch import router as vault_dispatch_router
     from .routes.config import router as config_router
@@ -222,6 +300,7 @@ def create_app(
     from .routes.models import router as models_router
     from .routes.share import router as share_router
     from .routes.local_llm import router as local_llm_router
+    from .routes.notifications import router as notifications_router
 
     app.include_router(chat_router)
     app.include_router(chat_stream_router)
@@ -232,6 +311,7 @@ def create_app(
     app.include_router(insights_router)
     app.include_router(vault_router)
     app.include_router(vault_kanban_router)
+    app.include_router(vault_calendar_router)
     app.include_router(vault_datatable_router)
     app.include_router(vault_dispatch_router)
     app.include_router(config_router)
@@ -239,6 +319,7 @@ def create_app(
     app.include_router(models_router)
     app.include_router(share_router)
     app.include_router(local_llm_router)
+    app.include_router(notifications_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

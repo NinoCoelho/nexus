@@ -15,9 +15,10 @@ interface VaultViewProps {
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
   onViewEntityGraph?: (path: string) => void;
+  onOpenCalendar?: (path: string) => void;
 }
 
-export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat, onViewEntityGraph }: VaultViewProps) {
+export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat, onViewEntityGraph, onOpenCalendar }: VaultViewProps) {
   return (
     <div className="vault-view vault-view--editor-only">
       <VaultEditorPanel
@@ -25,6 +26,7 @@ export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat
         onDispatchToChat={onDispatchToChat}
         onOpenInChat={onOpenInChat}
         onViewEntityGraph={onViewEntityGraph}
+        onOpenCalendar={onOpenCalendar}
       />
     </div>
   );

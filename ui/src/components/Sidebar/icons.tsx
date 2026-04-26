@@ -40,6 +40,17 @@ export function IconInsights() {
   );
 }
 
+export function IconCalendar() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="14" height="13" rx="2" />
+      <line x1="3" y1="8" x2="17" y2="8" />
+      <line x1="7" y1="2" x2="7" y2="5" />
+      <line x1="13" y1="2" x2="13" y2="5" />
+    </svg>
+  );
+}
+
 export function IconGear() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

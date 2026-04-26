@@ -129,6 +129,31 @@ export default function CardActivityModal({ sessionId, cardTitle, status, onClos
         });
         return;
       }
+      if (event.kind === "delta") {
+        // Stream assistant text into the same trailing live-text bubble
+        // we settle on `reply`. Token-level updates so the modal feels
+        // alive while the agent is composing.
+        const chunk = event.data.text ?? "";
+        if (!chunk) return;
+        setLive((prev) => {
+          const accum = prev.reply + chunk;
+          const tail = prev.timeline[prev.timeline.length - 1];
+          if (tail && tail.type === "text" && tail.id.startsWith("l-t-")) {
+            const next = prev.timeline.slice(0, -1);
+            next.push({ ...tail, text: accum });
+            return { ...prev, reply: accum, timeline: next };
+          }
+          return {
+            ...prev,
+            reply: accum,
+            timeline: [
+              ...prev.timeline,
+              { id: `l-t-${stepCounter.current++}`, type: "text", text: accum },
+            ],
+          };
+        });
+        return;
+      }
       if (event.kind === "reply") {
         const text = event.data.text ?? "";
         setLive((prev) => ({

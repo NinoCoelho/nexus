@@ -318,6 +318,10 @@ class Agent:
             if etype == "content_delta":
                 delta = ev.get("delta", "")
                 full_text += delta
+                # Mirror to the trace bus so /chat/{sid}/events subscribers
+                # (e.g. CardActivityModal) can render typing live, not only
+                # after the post-turn `reply` event.
+                self._on_event("delta", {"text": delta})
                 yield {"type": "delta", "text": delta}
 
             elif etype == "tool_call_delta":
@@ -331,17 +335,25 @@ class Agent:
                 }
 
             elif etype == "tool_exec_start":
+                tool_name = ev.get("name", "")
+                tool_args = ev.get("arguments", "")
+                # Mirror to the trace bus so off-stream subscribers see
+                # tool steps live, not only on turn completion.
+                self._on_event("tool_call", {"name": tool_name, "args": tool_args})
                 yield {
                     "type": "tool_exec_start",
-                    "name": ev.get("name", ""),
-                    "args": ev.get("arguments", ""),
+                    "name": tool_name,
+                    "args": tool_args,
                 }
 
             elif etype == "tool_exec_result":
+                tool_name = ev.get("name", "")
+                preview = (ev.get("text") or "")[:200]
+                self._on_event("tool_result", {"name": tool_name, "preview": preview})
                 yield {
                     "type": "tool_exec_result",
-                    "name": ev.get("name", ""),
-                    "result_preview": (ev.get("text") or "")[:200],
+                    "name": tool_name,
+                    "result_preview": preview,
                 }
 
             elif etype == "limit_reached":

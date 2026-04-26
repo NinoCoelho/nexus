@@ -217,19 +217,32 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
 
   const hasResults = !!filteredQueryResult && filteredQueryResult.results.length > 0;
 
-  // Adapt to UnifiedGraphData
+  // Adapt to UnifiedGraphData. Seed each node with a position on a sphere
+  // so a fresh subgraph (after click) doesn't pile every node at (0,0,0)
+  // while the simulation is still spreading them out.
   const data: UnifiedGraphData = useMemo(() => {
     const sg = filteredSubgraph;
     if (!sg) return { nodes: [], links: [] };
-    const nodes: UnifiedNode[] = sg.nodes.map((n) => ({
-      id: `kn:${n.id}`,
-      label: n.name,
-      kind: n.type,
-      degree: n.degree,
-      color: TYPE_COLORS[n.type] ?? DEFAULT_TYPE_COLOR,
-      geometry: "sphere",
-      meta: { entityId: n.id, entityName: n.name, entityType: n.type },
-    }));
+    const N = sg.nodes.length;
+    const radius = Math.max(40, Math.cbrt(N) * 18);
+    const nodes: (UnifiedNode & { x?: number; y?: number; z?: number })[] = sg.nodes.map((n, i) => {
+      // Deterministic Fibonacci-sphere initial layout — repeat-stable so
+      // re-renders with the same data don't jitter.
+      const phi = Math.acos(1 - 2 * (i + 0.5) / Math.max(1, N));
+      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+      return {
+        id: `kn:${n.id}`,
+        label: n.name,
+        kind: n.type,
+        degree: n.degree,
+        color: TYPE_COLORS[n.type] ?? DEFAULT_TYPE_COLOR,
+        geometry: "sphere",
+        meta: { entityId: n.id, entityName: n.name, entityType: n.type },
+        x: radius * Math.sin(phi) * Math.cos(theta),
+        y: radius * Math.sin(phi) * Math.sin(theta),
+        z: radius * Math.cos(phi),
+      };
+    });
 
     const groups = new Map<string, { source: string; target: string; kind: string; relations: { from: string; to: string; label: string }[] }>();
     for (const e of sg.edges) {

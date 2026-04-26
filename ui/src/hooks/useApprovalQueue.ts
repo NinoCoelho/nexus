@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  fetchPendingRequest,
+  fetchPendingNotifications,
   respondToUserRequest,
-  subscribeSessionEvents,
+  subscribeGlobalNotifications,
+  type PendingNotification,
   type UserRequestPayload,
 } from "../api";
+
+interface QueuedRequest {
+  request: UserRequestPayload;
+  session_id: string;
+}
 
 interface UseApprovalQueueResult {
   pendingRequest: UserRequestPayload | null;
@@ -14,84 +20,98 @@ interface UseApprovalQueueResult {
 }
 
 /**
- * Manages the HITL (human-in-the-loop) approval queue for a given session.
- * Opens an SSE EventSource before the first POST so first-turn approval
- * events are never missed. Recovers any pending request that was published
- * before the EventSource (re)opened.
+ * Manages the cross-session HITL approval queue.
+ *
+ * Subscribes once to ``/notifications/events`` so a popup appears for
+ * any agent's question regardless of which view is active. Recovers
+ * any pending requests that fired while no subscriber was connected
+ * via ``/notifications/pending`` on mount. Multiple concurrent
+ * requests are queued and surfaced one-at-a-time.
  */
-export function useApprovalQueue(hitlSessionId: string | null): UseApprovalQueueResult {
-  const [pendingRequest, setPendingRequest] = useState<UserRequestPayload | null>(null);
-  const [pendingRequestSession, setPendingRequestSession] = useState<string | null>(null);
+export function useApprovalQueue(): UseApprovalQueueResult {
+  const [queue, setQueue] = useState<QueuedRequest[]>([]);
 
-  // Subscribe to the session's HITL event stream. The UI owns a
-  // ``pendingSessionId`` for the not-yet-created "new chat" so the
-  // EventSource can open before the first POST — no chicken-and-egg.
-  // Once a real ``activeSession`` exists we prefer that.
   useEffect(() => {
-    if (!hitlSessionId) return;
-
-    // Recover any request that was published before the EventSource
-    // (re)opened — the publish bus is fire-and-forget, so reload /
-    // late subscribe / tab restore would otherwise miss the modal.
     let cancelled = false;
-    fetchPendingRequest(hitlSessionId)
-      .then((req) => {
-        if (cancelled || !req) return;
-        setPendingRequest(req);
-        setPendingRequestSession(hitlSessionId);
+    fetchPendingNotifications()
+      .then((items: PendingNotification[]) => {
+        if (cancelled) return;
+        const recovered = items.map((it) => {
+          const { session_id, ...rest } = it;
+          return { session_id, request: rest as UserRequestPayload };
+        });
+        if (recovered.length === 0) return;
+        setQueue((prev) => {
+          const seen = new Set(prev.map((q) => q.request.request_id));
+          const merged = [...prev];
+          for (const r of recovered) {
+            if (!seen.has(r.request.request_id)) merged.push(r);
+          }
+          return merged;
+        });
       })
       .catch(() => {});
 
-    const es = subscribeSessionEvents(hitlSessionId, (event) => {
+    const sub = subscribeGlobalNotifications((sessionId, event) => {
       if (event.kind === "user_request") {
-        setPendingRequest(event.data);
-        setPendingRequestSession(hitlSessionId);
+        setQueue((prev) => {
+          if (prev.some((q) => q.request.request_id === event.data.request_id)) {
+            return prev;
+          }
+          return [...prev, { session_id: sessionId, request: event.data }];
+        });
         return;
       }
       if (
         event.kind === "user_request_cancelled" ||
         event.kind === "user_request_auto"
       ) {
-        setPendingRequest(null);
-        setPendingRequestSession(null);
-        return;
+        const rid =
+          event.kind === "user_request_cancelled"
+            ? event.data.request_id
+            : null;
+        setQueue((prev) =>
+          rid
+            ? prev.filter((q) => q.request.request_id !== rid)
+            : prev,
+        );
       }
-      // iter / reply / tool_call / tool_result are already handled by
-      // the /chat/stream POST response — ignore here to avoid
-      // double-counting the activity strip.
     });
+
     return () => {
       cancelled = true;
-      es.close();
+      sub.close();
     };
-  }, [hitlSessionId]);
+  }, []);
+
+  const head = queue[0] ?? null;
 
   const handleApprovalSubmit = useCallback(
     async (answer: string | Record<string, unknown>) => {
-      const req = pendingRequest;
-      const sid = pendingRequestSession;
-      setPendingRequest(null);
-      setPendingRequestSession(null);
-      if (!req || !sid) return;
+      const item = head;
+      if (!item) return;
+      setQueue((prev) => prev.slice(1));
       try {
-        await respondToUserRequest(sid, req.request_id, answer);
+        await respondToUserRequest(item.session_id, item.request.request_id, answer);
       } catch {
-        // Stale responses (404) are fine — the dialog is already
-        // closed. Any other error is rare enough to log and ignore.
+        // Stale responses (404) are fine — dialog already closed.
       }
     },
-    [pendingRequest, pendingRequestSession],
+    [head],
   );
 
   const handleApprovalTimeout = useCallback(() => {
-    setPendingRequest(null);
-    setPendingRequestSession(null);
+    setQueue((prev) => prev.slice(1));
   }, []);
 
   const clearPendingRequest = useCallback(() => {
-    setPendingRequest(null);
-    setPendingRequestSession(null);
+    setQueue([]);
   }, []);
 
-  return { pendingRequest, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest };
+  return {
+    pendingRequest: head?.request ?? null,
+    handleApprovalSubmit,
+    handleApprovalTimeout,
+    clearPendingRequest,
+  };
 }

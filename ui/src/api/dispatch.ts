@@ -9,6 +9,7 @@ export interface DispatchResult {
   seed_message?: string;
   path: string;
   card_id?: string | null;
+  event_id?: string | null;
   mode?: DispatchMode;
 }
 
@@ -20,7 +21,7 @@ export interface DispatchResult {
 export const HIDDEN_SEED_MARKER = "<!-- nx:hidden-seed -->\n";
 
 export async function dispatchFromVault(
-  body: { path: string; card_id?: string; mode?: DispatchMode },
+  body: { path: string; card_id?: string; event_id?: string; mode?: DispatchMode },
 ): Promise<DispatchResult> {
   const res = await fetch(`${BASE}/vault/dispatch`, {
     method: "POST",

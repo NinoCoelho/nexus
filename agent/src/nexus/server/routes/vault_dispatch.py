@@ -100,6 +100,74 @@ def _compose_hidden_chat_seed(*, path: str, card_title: str, card_id: str, card_
     return "\n".join(body)
 
 
+def _compose_event_context_seed(
+    *,
+    calendar_prompt: str | None,
+    path: str,
+    event_title: str,
+    event_id: str,
+    event_body: str,
+    start: str,
+    end: str | None,
+    rrule: str | None,
+) -> str:
+    """Build the seed message for a background calendar-event dispatch."""
+    folder = path.rsplit("/", 1)[0] if "/" in path else ""
+    parts: list[str] = []
+    if calendar_prompt:
+        parts.append(calendar_prompt.strip())
+        parts.append("")
+    parts.append(f"**Calendar:** `{path}`")
+    if folder:
+        parts.append(f"**Folder:** `{folder}/`")
+    parts.append(f"**Event:** {event_title}")
+    parts.append(f"**Event ID:** `{event_id}`")
+    parts.append(f"**Start:** {start}")
+    if end:
+        parts.append(f"**End:** {end}")
+    if rrule:
+        parts.append(f"**Recurrence (RRULE):** `{rrule}`")
+    parts.append("")
+    if event_body.strip():
+        parts.append(event_body.strip())
+        parts.append("")
+    parts.append(
+        "*Tools: use `calendar_manage` to mutate this calendar — for example "
+        f'`{{"action":"update_event","path":"{path}","event_id":"{event_id}","status":"done"}}` '
+        "to mark this event done, or `add_event` to create a follow-up. Use your "
+        "vault tools for related files (typically in the same folder).*"
+    )
+    return "\n".join(parts)
+
+
+def _compose_hidden_event_seed(
+    *,
+    path: str,
+    event_title: str,
+    event_id: str,
+    event_body: str,
+    start: str,
+) -> str:
+    folder = path.rsplit("/", 1)[0] if "/" in path else ""
+    body = [
+        HIDDEN_SEED_MARKER.rstrip(),
+        f"The user just opened this calendar event. Check the calendar file at `{path}`, "
+        f"read the event, suggest 2-3 concrete next steps to the user, and then wait for "
+        f"instructions. Don't make changes yet.",
+        "",
+        f"**Calendar:** `{path}`",
+    ]
+    if folder:
+        body.append(f"**Folder:** `{folder}/`")
+    body.append(f"**Event:** {event_title}")
+    body.append(f"**Event ID:** `{event_id}`")
+    body.append(f"**Start:** {start}")
+    if event_body.strip():
+        body.append("")
+        body.append(event_body.strip())
+    return "\n".join(body)
+
+
 async def _run_background_agent_turn(
     *,
     session_id: str,
@@ -109,9 +177,10 @@ async def _run_background_agent_turn(
     agent_: Agent,
     store: SessionStore,
     model_id: str | None = None,
+    entity_kind: str = "card",
 ) -> None:
     """Run one agent turn to completion, publishing events via the trace bus
-    and updating the card's status (done/failed) when finished."""
+    and updating the entity's status (done/failed) when finished."""
     from .vault_dispatch_helpers import run_background_agent_turn
     await run_background_agent_turn(
         session_id=session_id,
@@ -121,6 +190,7 @@ async def _run_background_agent_turn(
         agent_=agent_,
         store=store,
         model_id=model_id,
+        entity_kind=entity_kind,
     )
 
 
@@ -131,8 +201,12 @@ async def _dispatch_impl(
     mode: str,
     a: "Agent",
     store: "SessionStore",
+    event_id: str | None = None,
 ) -> dict:
     """Shared implementation for /vault/dispatch and the dispatch_card tool.
+
+    Either ``card_id`` or ``event_id`` may be provided (mutually exclusive).
+    A bare path with neither acts as a generic vault dispatch (chat mode only).
 
     Raises ValueError / FileNotFoundError / KeyError on user errors so callers
     can translate (HTTP route → HTTPException; tool → JSON error string).
@@ -142,6 +216,8 @@ async def _dispatch_impl(
         raise ValueError("invalid mode")
     if not path:
         raise ValueError("`path` required")
+    if card_id and event_id:
+        raise ValueError("pass at most one of `card_id` or `event_id`")
     try:
         file = vault.read_file(path)
     except FileNotFoundError:
@@ -155,13 +231,20 @@ async def _dispatch_impl(
     current_lane_id: str | None = None
     current_lane_title: str | None = None
     all_lanes: list[tuple[str, str]] = []
+    # calendar branch state
+    calendar_prompt: str | None = None
+    event_start: str = ""
+    event_end: str | None = None
+    event_rrule: str | None = None
+    entity_kind = "card"
 
     if card_id:
         try:
             board = vault_kanban.parse(file["content"])
         except Exception as exc:
             raise ValueError(str(exc))
-        found = vault_kanban._find_card(board, card_id)
+        from ...vault_kanban.cards import _find_card
+        found = _find_card(board, card_id)
         if found is None:
             raise KeyError("card not found")
         lane, card, _ = found
@@ -173,12 +256,34 @@ async def _dispatch_impl(
         current_lane_title = lane.title
         all_lanes = [(ln.id, ln.title) for ln in board.lanes]
 
-    if mode == "background" and not card_id:
-        raise ValueError("background dispatch requires a card_id")
+    is_fire_window_event = False
+    if event_id:
+        from ... import vault_calendar
+        try:
+            cal = vault_calendar.parse(file["content"])
+        except Exception as exc:
+            raise ValueError(str(exc))
+        found_ev = vault_calendar.find_event(cal, event_id)
+        if found_ev is None:
+            raise KeyError("event not found")
+        ev, _ = found_ev
+        seed_title = ev.title
+        seed_body = ev.body
+        calendar_prompt = cal.calendar_prompt
+        event_start = ev.start
+        event_end = ev.end
+        event_rrule = ev.rrule
+        entity_kind = "event"
+        is_fire_window_event = ev.has_fire_window
+
+    if mode == "background" and not (card_id or event_id):
+        raise ValueError("background dispatch requires a card_id or event_id")
 
     context_str = f"Dispatched from vault file: {path}"
     if card_id:
         context_str += f" (card {card_id})"
+    elif event_id:
+        context_str += f" (event {event_id})"
     session = store.create(context=context_str)
 
     try:
@@ -193,17 +298,32 @@ async def _dispatch_impl(
             else f"# {seed_title}"
         )
     elif mode == "chat-hidden":
-        seed_message = _compose_hidden_chat_seed(
-            path=path, card_title=seed_title, card_id=card_id or "", card_body=seed_body or "",
-        )
+        if event_id:
+            seed_message = _compose_hidden_event_seed(
+                path=path, event_title=seed_title, event_id=event_id,
+                event_body=seed_body or "", start=event_start,
+            )
+        else:
+            seed_message = _compose_hidden_chat_seed(
+                path=path, card_title=seed_title, card_id=card_id or "",
+                card_body=seed_body or "",
+            )
     else:  # background
-        seed_message = _compose_card_context_seed(
-            lane_prompt=lane_prompt, path=path, card_title=seed_title,
-            card_id=card_id or "", card_body=seed_body or "",
-            current_lane_id=current_lane_id,
-            current_lane_title=current_lane_title,
-            lanes=all_lanes,
-        )
+        if event_id:
+            seed_message = _compose_event_context_seed(
+                calendar_prompt=calendar_prompt, path=path,
+                event_title=seed_title, event_id=event_id,
+                event_body=seed_body or "", start=event_start,
+                end=event_end, rrule=event_rrule,
+            )
+        else:
+            seed_message = _compose_card_context_seed(
+                lane_prompt=lane_prompt, path=path, card_title=seed_title,
+                card_id=card_id or "", card_body=seed_body or "",
+                current_lane_id=current_lane_id,
+                current_lane_title=current_lane_title,
+                lanes=all_lanes,
+            )
 
     if card_id:
         updates: dict[str, Any] = {"session_id": session.id}
@@ -216,6 +336,20 @@ async def _dispatch_impl(
             _logging.getLogger(__name__).warning(
                 "dispatch: could not link session to card", exc_info=True,
             )
+    elif event_id:
+        from ... import vault_calendar
+        ev_updates: dict[str, Any] = {"session_id": session.id}
+        # Fire-window events stay "scheduled" forever — next intra-day slot
+        # will fire them again. Don't overwrite status here.
+        if mode == "background" and not is_fire_window_event:
+            ev_updates["status"] = "triggered"
+        try:
+            vault_calendar.update_event(path, event_id, ev_updates)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "dispatch: could not link session to event", exc_info=True,
+            )
 
     if mode == "background":
         asyncio.create_task(
@@ -223,15 +357,16 @@ async def _dispatch_impl(
                 session_id=session.id,
                 seed_message=seed_message,
                 card_path=path,
-                card_id=card_id,
+                card_id=event_id or card_id,
                 agent_=a,
                 store=store,
                 model_id=lane_model,
+                entity_kind=entity_kind,
             )
         )
         return {
             "session_id": session.id, "path": path, "card_id": card_id,
-            "mode": mode, "model": lane_model,
+            "event_id": event_id, "mode": mode, "model": lane_model,
         }
 
     return {
@@ -239,6 +374,7 @@ async def _dispatch_impl(
         "seed_message": seed_message,
         "path": path,
         "card_id": card_id,
+        "event_id": event_id,
         "mode": mode,
     }
 
@@ -263,9 +399,13 @@ async def vault_dispatch(
     """
     path = body.get("path", "")
     card_id = body.get("card_id")
+    event_id = body.get("event_id")
     mode = body.get("mode") or "chat"
     try:
-        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=a, store=store)
+        return await _dispatch_impl(
+            path=path, card_id=card_id, event_id=event_id,
+            mode=mode, a=a, store=store,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     except FileNotFoundError as exc:

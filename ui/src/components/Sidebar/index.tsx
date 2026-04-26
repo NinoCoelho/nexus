@@ -10,7 +10,7 @@ import {
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
-import { IconChat, IconVault, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -18,7 +18,7 @@ import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDT
 import { useSessionActions } from "./useSessionActions";
 import "../Sidebar.css";
 
-type View = "chat" | "vault" | "graph" | "insights";
+type View = "chat" | "calendar" | "vault" | "graph" | "insights";
 
 interface Props {
   view: View;
@@ -42,6 +42,7 @@ interface Props {
 
 const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
   { id: "chat",     label: "Chat",      Icon: IconChat },
+  { id: "calendar", label: "Calendar",  Icon: IconCalendar },
   { id: "vault",    label: "Vault",     Icon: IconVault },
   { id: "graph",    label: "Knowledge", Icon: IconGraph },
   { id: "insights", label: "Insights",  Icon: IconInsights },

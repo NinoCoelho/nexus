@@ -188,14 +188,27 @@ export interface UserRequestPayload {
  * Opened once per session on mount; carries every trace + HITL event
  * until the EventSource is closed.
  */
+export type CalendarAlertPayload = {
+  path: string;
+  event_id: string;
+  title: string;
+  body?: string | null;
+  start: string;
+  end?: string | null;
+  calendar_title?: string;
+  all_day?: boolean;
+};
+
 export type SessionEvent =
   | { kind: "iter"; data: { n: number } }
+  | { kind: "delta"; data: { text: string } }
   | { kind: "tool_call"; data: { name: string; args: unknown } }
   | { kind: "tool_result"; data: { name: string; preview: string } }
   | { kind: "reply"; data: { text: string } }
   | { kind: "user_request"; data: UserRequestPayload }
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
-  | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } };
+  | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
+  | { kind: "calendar_alert"; data: CalendarAlertPayload };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */
 export interface SessionSubscription {
@@ -223,6 +236,7 @@ export function subscribeSessionEvents(
 
   const kinds: SessionEvent["kind"][] = [
     "iter",
+    "delta",
     "tool_call",
     "tool_result",
     "reply",
@@ -311,6 +325,141 @@ export async function fetchPendingRequest(
  * @param answer - User's answer: a string for simple kinds, an object for `kind: "form"`.
  * @throws {Error} If the server returns an error status other than 404.
  */
+// ── Global HITL notifications ───────────────────────────────────────────
+//
+// /notifications/events fans out user_request* events from any session
+// so the UI can pop a single approval dialog regardless of the active
+// view. /notifications/pending is the reload-recovery snapshot.
+
+/** Pending HITL request augmented with the originating session id. */
+export type PendingNotification = UserRequestPayload & { session_id: string };
+
+/**
+ * Subscribe to the cross-session HITL notifications channel.
+ *
+ * Only ``user_request`` / ``user_request_auto`` /
+ * ``user_request_cancelled`` events flow on this channel — non-HITL
+ * activity (delta, tool_call, …) stays scoped to per-session
+ * ``/chat/{sid}/events``. Capacitor environments fall back to polling
+ * ``/notifications/pending`` every 2s.
+ *
+ * All callers share a single EventSource (refcounted) so multiple hooks
+ * mounting in parallel don't burn through the browser's per-host
+ * connection budget.
+ */
+type GlobalNotifListener = (sessionId: string, event: SessionEvent) => void;
+const globalNotifListeners = new Set<GlobalNotifListener>();
+let globalNotifSource: EventSource | null = null;
+
+function openGlobalNotifSource(): void {
+  if (globalNotifSource) return;
+  const es = new EventSource(`${BASE}/notifications/events`);
+  const kinds: SessionEvent["kind"][] = [
+    "user_request",
+    "user_request_auto",
+    "user_request_cancelled",
+    "calendar_alert",
+  ];
+  for (const kind of kinds) {
+    es.addEventListener(kind, (evt) => {
+      let session_id: string;
+      let rest: Record<string, unknown>;
+      try {
+        const raw = JSON.parse((evt as MessageEvent).data) as Record<
+          string,
+          unknown
+        > & { session_id: string };
+        ({ session_id, ...rest } = raw);
+      } catch {
+        return;
+      }
+      const event = { kind, data: rest } as SessionEvent;
+      for (const fn of globalNotifListeners) {
+        try { fn(session_id, event); } catch { /* shield other listeners */ }
+      }
+    });
+  }
+  globalNotifSource = es;
+}
+
+export function subscribeGlobalNotifications(
+  onEvent: GlobalNotifListener,
+): SessionSubscription {
+  if (IS_CAPACITOR || typeof EventSource === "undefined") {
+    return pollGlobalNotifications(onEvent);
+  }
+  globalNotifListeners.add(onEvent);
+  openGlobalNotifSource();
+  return {
+    close: () => {
+      globalNotifListeners.delete(onEvent);
+      if (globalNotifListeners.size === 0) {
+        globalNotifSource?.close();
+        globalNotifSource = null;
+      }
+    },
+  };
+}
+
+function pollGlobalNotifications(
+  onEvent: (sessionId: string, event: SessionEvent) => void,
+): SessionSubscription {
+  let cancelled = false;
+  let lastSeen = new Set<string>();
+  const tick = async () => {
+    if (cancelled) return;
+    try {
+      const items = await fetchPendingNotifications();
+      if (cancelled) return;
+      const seen = new Set<string>();
+      for (const it of items) {
+        seen.add(it.request_id);
+        if (!lastSeen.has(it.request_id)) {
+          const { session_id, ...rest } = it;
+          onEvent(session_id, {
+            kind: "user_request",
+            data: rest as UserRequestPayload,
+          });
+        }
+      }
+      for (const prev of lastSeen) {
+        if (!seen.has(prev)) {
+          // Original session is unknown post-resolution — scope-mismatch
+          // is acceptable since the dialog only needs request_id to clear.
+          onEvent("", {
+            kind: "user_request_cancelled",
+            data: { request_id: prev, reason: "resolved" },
+          });
+        }
+      }
+      lastSeen = seen;
+    } catch {
+      // Network blip — try again.
+    }
+  };
+  void tick();
+  const id = setInterval(tick, 2000);
+  return {
+    close: () => {
+      cancelled = true;
+      clearInterval(id);
+    },
+  };
+}
+
+/**
+ * Snapshot every pending HITL request across all sessions.
+ *
+ * Used at app mount to recover any popup that fired while no global
+ * subscriber was connected (cold tab / hard reload).
+ */
+export async function fetchPendingNotifications(): Promise<PendingNotification[]> {
+  const res = await fetch(`${BASE}/notifications/pending`);
+  if (!res.ok) return [];
+  const body = (await res.json()) as { pending: PendingNotification[] };
+  return body.pending ?? [];
+}
+
 export async function respondToUserRequest(
   session_id: string,
   request_id: string,

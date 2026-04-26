@@ -28,10 +28,16 @@ async def run_background_agent_turn(
     agent_: "Agent",
     store: "SessionStore",
     model_id: str | None = None,
+    entity_kind: str = "card",
 ) -> None:
     """Run one agent turn to completion, publishing events via the trace bus
-    and updating the card's status (done/failed) when finished."""
-    from ... import vault_kanban
+    and updating the entity's status (done/failed) when finished.
+
+    ``entity_kind`` selects which vault module owns the linked entity. Defaults
+    to ``"card"`` (kanban) for back-compat; pass ``"event"`` to dispatch a
+    calendar event. ``card_path``/``card_id`` are the entity's vault path and
+    id regardless of kind.
+    """
     token = CURRENT_SESSION_ID.set(session_id)
     # Record this card on the dispatch chain so any move_card the agent
     # performs during this turn is recognised by the lane-change hook
@@ -110,9 +116,21 @@ async def run_background_agent_turn(
                 except Exception:
                     log.exception("background dispatch: partial persist failed")
         try:
-            vault_kanban.update_card(card_path, card_id, {"status": new_status})
+            if entity_kind == "event":
+                from ... import vault_calendar
+                cal = vault_calendar.read_calendar(card_path)
+                found = vault_calendar.find_event(cal, card_id)
+                if found and found[0].has_fire_window:
+                    # Fire-window events keep status="scheduled" so the next
+                    # intra-day slot can fire them. Don't overwrite.
+                    pass
+                else:
+                    vault_calendar.update_event(card_path, card_id, {"status": new_status})
+            else:
+                from ... import vault_kanban
+                vault_kanban.update_card(card_path, card_id, {"status": new_status})
         except Exception:
-            log.exception("background dispatch: card status update failed")
+            log.exception("background dispatch: %s status update failed", entity_kind)
     finally:
         CURRENT_SESSION_ID.reset(token)
         DISPATCH_CHAIN.reset(chain_token)

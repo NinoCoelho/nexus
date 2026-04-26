@@ -20,6 +20,7 @@ import DataTableView from "./DataTableView";
 import CsvEditorView from "./CsvEditorView";
 import FilePreview from "./FilePreview";
 import { getVaultFile, putVaultFile, vaultRawUrl } from "../api";
+import { useVaultEvents } from "../hooks/useVaultEvents";
 import { classify } from "../fileTypes";
 import "./VaultView.css";
 
@@ -41,15 +42,26 @@ function isDataTableContent(content: string): boolean {
   return /^\s*data-table-plugin\s*:/m.test(fm);
 }
 
+/** Check if a markdown file declares itself as a calendar via frontmatter. */
+function isCalendarContent(content: string): boolean {
+  if (!content.startsWith("---")) return false;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return false;
+  const fm = content.slice(3, end);
+  return /^\s*calendar-plugin\s*:/m.test(fm);
+}
+
 interface VaultEditorPanelProps {
   selectedPath: string | null;
   /** Kept for sidebar plumbing symmetry; not consumed in the editor itself. */
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
   onViewEntityGraph?: (path: string) => void;
+  /** Called when the user opens a `.md` file with `calendar-plugin:` frontmatter. */
+  onOpenCalendar?: (path: string) => void;
 }
 
-export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph }: VaultEditorPanelProps) {
+export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar }: VaultEditorPanelProps) {
   const [content, setContent] = useState("");
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
   const [isBinary, setIsBinary] = useState(false);
@@ -62,6 +74,9 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<MarkdownEditorHandle>(null);
+  // Tracks when the user's most recent save committed so the SSE echo
+  // (`vault.indexed` for our own write) doesn't cause an immediate refetch.
+  const lastSavedAtRef = useRef(0);
   const fileKind = selectedPath ? classify(selectedPath).kind : null;
   const canEdit = !isBinary && (fileKind === "markdown" || fileKind === "text" || fileKind === "code" || fileKind === "csv" || fileKind === "json");
   const isMarkdown = fileKind === "markdown";
@@ -85,26 +100,53 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
 
   const previewBody = useMemo(() => previewContent || content, [previewContent, content]);
 
+  const loadFile = useCallback(() => {
+    if (!selectedPath) return;
+    getVaultFile(selectedPath)
+      .then((f) => {
+        setContent(f.content ?? "");
+        setFileSize(f.size);
+        setIsBinary(!!f.binary);
+        setFileError(null);
+      })
+      .catch(() => setFileError("Couldn't load file — is the server running?"));
+  }, [selectedPath]);
+
   useEffect(() => {
     if (!selectedPath) return;
     setFileError(null);
     setEditMode(false);
     setIsBinary(false);
     setFileSize(undefined);
-    getVaultFile(selectedPath)
-      .then((f) => {
-        setContent(f.content ?? "");
-        setFileSize(f.size);
-        setIsBinary(!!f.binary);
-      })
-      .catch(() => setFileError("Couldn't load file — is the server running?"));
-  }, [selectedPath]);
+    loadFile();
+  }, [selectedPath, loadFile]);
+
+  // Auto-refresh when the file changes on disk (e.g. the agent wrote it). We
+  // skip while the user is editing so we don't clobber their unsaved buffer,
+  // and skip briefly after our own save so the SSE echo doesn't cause a
+  // redundant refetch right as the user toggles back to View mode.
+  useVaultEvents((ev) => {
+    if (!selectedPath || ev.path !== selectedPath) return;
+    if (ev.type === "vault.removed") {
+      setContent("");
+      setEditMode(false);
+      setFileError("File no longer exists");
+      return;
+    }
+    if (ev.type === "vault.indexed") {
+      if (editMode) return;
+      if (saveStatus === "saving") return;
+      if (Date.now() - lastSavedAtRef.current < 750) return;
+      loadFile();
+    }
+  });
 
   const save = useCallback(async () => {
     if (!selectedPath) return;
     setSaveStatus("saving");
     try {
       await putVaultFile(selectedPath, content);
+      lastSavedAtRef.current = Date.now();
       setSaveStatus("saved");
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => setSaveStatus("idle"), 1200);
@@ -126,8 +168,17 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   }, [editMode, save]);
 
   const isKanban = !!selectedPath && selectedPath.endsWith(".md") && isKanbanContent(content);
-  const isDataTable = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && isDataTableContent(content);
+  const isCalendar = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && isCalendarContent(content);
+  const isDataTable = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && !isCalendar && isDataTableContent(content);
   const isCsv = fileKind === "csv";
+
+  // Calendars are owned by the Calendar view (it has the dropdown of all
+  // calendars in the vault). Hand off the path and bail out of inline render.
+  useEffect(() => {
+    if (isCalendar && selectedPath && onOpenCalendar) {
+      onOpenCalendar(selectedPath);
+    }
+  }, [isCalendar, selectedPath, onOpenCalendar]);
 
   const breadcrumb = selectedPath
     ? selectedPath.split("/").map((part, i, arr) => (

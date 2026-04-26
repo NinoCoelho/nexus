@@ -204,6 +204,12 @@ export default function UnifiedGraph({
             <span className="ug-stat">{stats.nodes} nodes</span>
             <span className="ug-stat">{stats.links} edges</span>
 
+            <button
+              className="ug-tool-btn ug-tool-btn--hint"
+              title="Drag = rotate · Right-drag = pan · Scroll = zoom"
+            >
+              ?
+            </button>
             <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)">↻</button>
             <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomIn()} title="Zoom in">+</button>
             <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomOut()} title="Zoom out">−</button>

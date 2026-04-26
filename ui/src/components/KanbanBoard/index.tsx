@@ -28,6 +28,7 @@ import {
   type KanbanCard,
   type KanbanLane,
 } from "../../api";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import "../KanbanBoard.css";
 import KanbanLaneColumn from "./KanbanLaneColumn";
 import KanbanFilterBar from "./KanbanFilterBar";
@@ -101,6 +102,33 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
       return () => clearTimeout(t);
     }
   }, [hasRunning, reload]);
+
+  // Live-refresh on writes to this board's file. A single agent turn often
+  // fires several mutations (add_card, then update_card, then move_card),
+  // so debounce 200ms to coalesce them into a single reload. Skip while a
+  // drag is in flight — handleDrop will reload on its own.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useVaultEvents((ev) => {
+    if (ev.path !== path) return;
+    if (ev.type === "vault.removed") {
+      setError("Board file was deleted");
+      setBoard(null);
+      return;
+    }
+    if (ev.type === "vault.indexed") {
+      if (dragCard !== null) return;
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = setTimeout(() => {
+        reloadTimerRef.current = null;
+        reload();
+      }, 200);
+    }
+  });
+  useEffect(() => {
+    return () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    };
+  }, []);
 
   if (error) return <div className="kanban-error">Couldn't load board: {error}</div>;
   if (!board) return <div className="kanban-loading">Loading…</div>;

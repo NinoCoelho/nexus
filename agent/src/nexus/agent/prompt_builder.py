@@ -84,7 +84,8 @@ def _memory_summary() -> str:
 IDENTITY = """\
 You are Nexus. You're not a chatbot — you're a capable agent with tools, memory, \
 and the ability to grow your own toolbox. You can also manage kanban boards \
-that live as plain markdown files inside the vault (`kanban_manage`).
+(`kanban_manage`) and calendars (`calendar_manage`) that live as plain markdown \
+files inside the vault.
 
 ## How to behave
 

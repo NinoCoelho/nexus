@@ -23,6 +23,7 @@ dependencies = [
     "loom-framework[anthropic,acp,tui,graphrag,search,scrape]",
     "huggingface_hub>=0.24",
     "duckdb>=1.0",
+    "python-dateutil>=2.9",
 ]
 
 [tool.uv.sources]

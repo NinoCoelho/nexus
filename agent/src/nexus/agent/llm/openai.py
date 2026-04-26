@@ -108,7 +108,14 @@ def _usage_from_openai(raw: dict[str, Any]) -> Usage:
 class OpenAIProvider(LLMProvider):
     """OpenAI-compatible HTTP adapter (no vendor SDK)."""
 
-    def __init__(self, *, base_url: str, api_key: str, model: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str = "",
+        read_timeout: float | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -117,9 +124,12 @@ class OpenAIProvider(LLMProvider):
         # Local reasoning models (GLM-4.7-flash, DeepSeek-R1, Qwen-QwQ, …) can
         # spend many minutes on the chain-of-thought before emitting any
         # `delta.content`. A 120s read timeout truncates them mid-thought; we
-        # keep the connect timeout tight but let the read side run unbounded.
+        # keep the connect timeout tight but let the read side run unbounded
+        # by default. Callers that issue non-streaming batch requests
+        # (e.g. GraphRAG extraction) should pass an explicit ``read_timeout``
+        # to bound a hung Ollama from blocking the event loop indefinitely.
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=10.0)
+            timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=60.0, pool=10.0)
         )
 
     async def chat(

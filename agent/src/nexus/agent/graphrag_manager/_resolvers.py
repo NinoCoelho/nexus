@@ -83,6 +83,9 @@ def _get_provider_config(cfg: Any, model_id: str) -> Any:
     return None
 
 
+_EXTRACTION_READ_TIMEOUT = 60.0  # seconds; bounds Ollama hangs during indexing
+
+
 def resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
     extraction_model_id = getattr(graphrag_cfg, "extraction_model_id", "")
     extraction_model = extraction_model_id or getattr(graphrag_cfg.extraction, "model", "")
@@ -97,6 +100,16 @@ def resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
         registry = build_registry(cfg)
         provider, upstream_name = registry.get_for_model(extraction_model)
         from nexus.agent._loom_bridge import LoomProviderAdapter
+
+        # Extraction is a batch (non-streaming) call. Substitute the shared
+        # registry provider with a dedicated OpenAIProvider that has a bounded
+        # read timeout so a hung Ollama can't pin a FastAPI worker forever.
+        # Falls back to the shared provider for non-OpenAI-compat backends
+        # (e.g. Anthropic), where the streaming chat client is acceptable.
+        bounded = _bounded_extraction_provider(cfg, extraction_model, upstream_name)
+        if bounded is not None:
+            return LoomProviderAdapter(bounded, default_model=upstream_name or extraction_model)
+
         return LoomProviderAdapter(
             provider, provider_registry=registry, default_model=extraction_model
         )
@@ -110,3 +123,37 @@ def resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
         extraction_model,
     )
     return None
+
+
+def _bounded_extraction_provider(cfg: Any, model_id: str, upstream_name: str | None) -> Any | None:
+    """Return a fresh OpenAIProvider with a finite read timeout for extraction.
+
+    Returns ``None`` for providers where the bounded variant doesn't apply
+    (Anthropic, missing config) — caller should fall back to the registry.
+    """
+    p_cfg = _get_provider_config(cfg, model_id)
+    if p_cfg is None:
+        return None
+    p_type = getattr(p_cfg, "type", None) or "openai_compat"
+    if p_type not in ("ollama", "openai_compat"):
+        return None
+
+    from nexus.agent.llm.openai import OpenAIProvider
+
+    base = (getattr(p_cfg, "base_url", "") or "").rstrip("/")
+    if p_type == "ollama":
+        base = base or "http://localhost:11434"
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        api_key = "ollama"
+    else:
+        if not base:
+            return None
+        api_key = ""
+
+    return OpenAIProvider(
+        base_url=base,
+        api_key=api_key,
+        model=upstream_name or "",
+        read_timeout=_EXTRACTION_READ_TIMEOUT,
+    )

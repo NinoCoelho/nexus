@@ -75,6 +75,7 @@ def build_tool_registry(
     from nexus.tools.datatable_tool import DATATABLE_MANAGE_TOOL, handle_datatable_tool
     from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
+    from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
@@ -154,6 +155,12 @@ def build_tool_registry(
         return handle_kanban_query_tool(args)
 
     registry.register(_SimpleToolHandler(KANBAN_QUERY_TOOL, _kanban_query))
+
+    # calendar_manage
+    async def _calendar(args: dict) -> str:
+        return handle_calendar_tool(args)
+
+    registry.register(_SimpleToolHandler(CALENDAR_MANAGE_TOOL, _calendar))
 
     # dispatch_card — spawn a chat session seeded from a card or vault file
     async def _dispatch_card(args: dict) -> str:

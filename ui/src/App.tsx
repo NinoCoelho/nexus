@@ -6,6 +6,7 @@ import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import MobileTabBar from "./components/MobileTabBar";
 import ChatView from "./components/ChatView";
+import CalendarView from "./components/CalendarView";
 import VaultView from "./components/VaultView";
 import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
@@ -18,12 +19,12 @@ import {
   graphragIndexFile,
   pingHealth,
 } from "./api";
-import { IS_CAPACITOR } from "./api/base";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
 import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
+import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
@@ -56,6 +57,8 @@ export default function App() {
   const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(initial.vaultPath);
   /** The currently selected file path in the vault tree (lifted so Sidebar tree + editor share it). */
   const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(initial.vaultPath);
+  /** Currently selected calendar (.md path) inside the Calendar view. Lifted here so view switches preserve it. */
+  const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -81,7 +84,7 @@ export default function App() {
   }, [view]);
   useEffect(() => {
     const onHash = () => {
-      const m = window.location.hash.match(/^#\/(chat|vault|graph|insights)$/);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|graph|insights)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();
@@ -117,7 +120,7 @@ export default function App() {
   const {
     activeState, activeSession, setActiveSession, setChatStates,
     sessionsRevision, setSessionsRevision,
-    pendingAutoSend, pendingSessionId,
+    pendingAutoSend,
     send, handleStop, handleRollback, handleContinue,
     handleContinuePartial, handleRetryPartial, dismissLimitBanner,
     handleInputChange, handleAttachmentsChange, handleModelChange,
@@ -139,14 +142,13 @@ export default function App() {
     });
   }, [availableModels, lastUsedModel, defaultModel, setChatStates]);
 
-  // Subscribe to the session's HITL event stream. The UI owns a
-  // ``pendingSessionId`` for the not-yet-created "new chat" so the
-  // EventSource can open before the first POST — no chicken-and-egg.
-  // Once a real ``activeSession`` exists we prefer that. On Capacitor
-  // the subscription is a 2s /pending poll — skip it for the phantom
-  // pre-session to avoid a perpetual loop before the first message.
-  const hitlSessionId = activeSession ?? (IS_CAPACITOR ? null : pendingSessionId);
-  const { pendingRequest, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest } = useApprovalQueue(hitlSessionId);
+  // Cross-session HITL subscription. ``useApprovalQueue`` listens on
+  // /notifications/events so any agent's question (active chat,
+  // backgrounded kanban card, …) pops up regardless of the current
+  // view. Recovers pending requests on mount via
+  // /notifications/pending so a hard reload mid-question still
+  // surfaces the dialog.
+  const { pendingRequest, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest } = useApprovalQueue();
 
   const handleSessionSelect = useCallback((id: string) => {
     _handleSessionSelect(id);
@@ -164,6 +166,13 @@ export default function App() {
     setVaultSelectedPath(path);
     setView("vault");
   }, []);
+
+  const handleOpenCalendar = useCallback((path: string) => {
+    setCalendarSelectedPath(path);
+    setView("calendar");
+  }, []);
+
+  useCalendarAlerts({ onOpenCalendar: handleOpenCalendar });
 
   const handleViewEntityGraph = useCallback((mode: "file" | "folder", path: string) => {
     setGraphSourceFilter({ mode, path });
@@ -445,12 +454,20 @@ export default function App() {
               onModelChange={handleModelChange}
             />
           </div>
+          <div className="view-pane" style={{ display: view === "calendar" ? "flex" : "none" }}>
+            <CalendarView
+              selectedPath={calendarSelectedPath}
+              onSelectPath={setCalendarSelectedPath}
+              onOpenInChat={handleOpenInChat}
+            />
+          </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
             <VaultView
               selectedPath={vaultSelectedPath}
               onDispatchToChat={handleDispatchToChat}
               onOpenInChat={handleOpenInChat}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
+              onOpenCalendar={handleOpenCalendar}
             />
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
