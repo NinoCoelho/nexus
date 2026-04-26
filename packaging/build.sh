@@ -107,6 +107,18 @@ SITE_SRC="$(/usr/bin/find "$STAGE/python/lib" -maxdepth 2 -type d -name 'site-pa
 mkdir -p "$STAGE/site-packages"
 cp -R "$SITE_SRC/." "$STAGE/site-packages/"
 
+echo "==> Stripping .py sources from nexus + loom (bytecode-only)"
+# -b emits .pyc next to the .py instead of __pycache__/, so the import system
+# still resolves modules after we delete the .py files.
+# --invalidation-mode unchecked-hash skips the source-mtime check that would
+# normally make orphan .pyc warn at runtime.
+"$PY" -m compileall -b -q -f --invalidation-mode unchecked-hash \
+  "$STAGE/site-packages/nexus" "$STAGE/site-packages/loom"
+/usr/bin/find "$STAGE/site-packages/nexus" "$STAGE/site-packages/loom" \
+  -type f -name '*.py' -delete
+/usr/bin/find "$STAGE/site-packages/nexus" "$STAGE/site-packages/loom" \
+  -type d -name '__pycache__' -exec rm -rf {} +
+
 if [[ "$SKIP_MODELS" -eq 0 ]]; then
   echo "==> Pre-downloading embedding models into bundle"
   NEXUS_MODELS_DIR="$STAGE/models" "$PY" - <<'PYEOF'
