@@ -14,9 +14,13 @@ interface QueuedRequest {
 
 interface UseApprovalQueueResult {
   pendingRequest: UserRequestPayload | null;
+  /** Total pending count, for the "1 of N" indicator on the dialog. */
+  queueLength: number;
   handleApprovalSubmit: (answer: string | Record<string, unknown>) => Promise<void>;
   handleApprovalTimeout: () => void;
   clearPendingRequest: () => void;
+  /** Move a specific pending request to the front of the queue. No-op if absent. */
+  focusRequest: (request_id: string) => void;
 }
 
 /**
@@ -108,10 +112,23 @@ export function useApprovalQueue(): UseApprovalQueueResult {
     setQueue([]);
   }, []);
 
+  const focusRequest = useCallback((request_id: string) => {
+    setQueue((prev) => {
+      const idx = prev.findIndex((q) => q.request.request_id === request_id);
+      if (idx <= 0) return prev;
+      const next = [...prev];
+      const [item] = next.splice(idx, 1);
+      next.unshift(item);
+      return next;
+    });
+  }, []);
+
   return {
     pendingRequest: head?.request ?? null,
+    queueLength: queue.length,
     handleApprovalSubmit,
     handleApprovalTimeout,
     clearPendingRequest,
+    focusRequest,
   };
 }

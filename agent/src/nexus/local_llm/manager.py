@@ -266,7 +266,14 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         # /v1/embeddings route only exists when this flag is set.
         cmd += ["--embeddings", "--pooling", "mean"]
     else:
-        cmd += ["--jinja"]
+        # `--reasoning-format none` keeps `<think>…</think>` tokens inline in
+        # `delta.content` instead of routing them to `delta.reasoning_content`.
+        # The Nexus UI's chat stream parser doesn't render the `thinking` SSE
+        # channel today, so without this flag a reasoning model (DeepSeek-R1,
+        # QwQ, GLM thinking) appears to "stop" after thinking — its CoT goes
+        # into a channel the UI drops on the floor. Inline keeps the model's
+        # output visible end-to-end.
+        cmd += ["--jinja", "--reasoning-format", "none"]
 
     log.info("[local_llm] starting llama-server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
@@ -523,6 +530,75 @@ def cleanup_stale_config() -> None:
     if changed:
         _save_config(cfg_path, raw)
         log.info("[local_llm] cleaned up stale local-* entries")
+
+
+def restart_local_models(models_dir: Path | None = None) -> int:
+    """Restart every local-* provider previously registered in config.
+
+    Called at server startup so a model the user enabled in a prior run is
+    available for chat as soon as the daemon comes up — no need to open
+    Settings to spawn its llama-server. Each restarted model gets a fresh
+    port (the previous run's port is gone with the dead process); we refresh
+    its config entry via ``add_to_config`` so the registry sees the live URL.
+
+    For each ``providers.local-<slug>`` in config, we look up the matching
+    GGUF in ``models_dir`` (default: ``~/.nexus/models/llm/``) by slugifying
+    the file stem. Missing GGUF, missing binary, or a server that fails to
+    come up → the entry is removed instead of left to dangle.
+
+    Returns:
+        Count of models successfully (re)started.
+    """
+    cfg_path, raw = _load_config()
+    providers = raw.get("providers", {}) or {}
+    models = raw.get("models", []) or []
+
+    targets: list[tuple[str, int]] = []  # (slug, configured_ctx)
+    for pname in list(providers.keys()):
+        if not pname.startswith("local-") or pname == "local":
+            continue
+        slug = pname[len("local-"):]
+        if not slug:
+            continue
+        ctx = 0
+        for m in models:
+            if m.get("provider") == pname and isinstance(m.get("context_window"), int):
+                ctx = m["context_window"]
+                break
+        targets.append((slug, ctx))
+
+    if not targets:
+        return 0
+
+    mdir = models_dir or (Path.home() / ".nexus" / "models" / "llm")
+    ggufs: list[Path] = sorted(mdir.glob("*.gguf")) if mdir.is_dir() else []
+    by_slug = {slugify(p.stem): p for p in ggufs}
+
+    started = 0
+    for slug, ctx in targets:
+        gguf = by_slug.get(slug)
+        if gguf is None:
+            log.warning("[local_llm] no GGUF found for slug %r — removing from config", slug)
+            remove_from_config(slug)
+            continue
+        try:
+            handle = start(gguf, ctx_size=ctx) if ctx > 0 else start(gguf)
+        except RuntimeError as exc:
+            log.warning(
+                "[local_llm] failed to restart %s (%s) — removing from config: %s",
+                slug, gguf.name, exc,
+            )
+            remove_from_config(slug)
+            continue
+        add_to_config(
+            handle.slug, handle.port,
+            is_embedding=handle.is_embedding,
+            context_window=ctx,
+        )
+        started += 1
+        log.info("[local_llm] restarted %s on :%d", slug, handle.port)
+
+    return started
 
 
 def _pick_free_port(host: str = "127.0.0.1") -> int:

@@ -31,6 +31,10 @@ export interface CalendarEvent {
   fire_from?: string | null;
   fire_to?: string | null;
   fire_every_min?: number | null;
+  /** Per-event model id used when the agent runs this event. */
+  model?: string | null;
+  /** ``"agent"`` opts the event into auto-firing; anything else is a plain entry. */
+  assignee?: string | null;
   /** Present in range queries — UTC ISO of the resolved (recurring) occurrence. */
   occurrence_start?: string;
   /** Present in range queries — vault-relative file path. */
@@ -135,6 +139,8 @@ export async function addVaultCalendarEvent(
     fire_from?: string;
     fire_to?: string;
     fire_every_min?: number;
+    model?: string;
+    assignee?: string;
   },
 ): Promise<CalendarEvent> {
   const res = await fetch(
@@ -165,6 +171,8 @@ export async function patchVaultCalendarEvent(
     fire_from: string | null;
     fire_to: string | null;
     fire_every_min: number | null;
+    model: string | null;
+    assignee: string | null;
   }>,
 ): Promise<CalendarEvent> {
   const res = await fetch(

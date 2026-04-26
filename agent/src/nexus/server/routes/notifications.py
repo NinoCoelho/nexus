@@ -61,6 +61,22 @@ async def notifications_events(
     )
 
 
+@router.get("/notifications/history")
+async def notifications_history(
+    limit: int = 50,
+    store: SessionStore = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Recent HITL events with status, for the bell dropdown.
+
+    Survives daemon restart (rows are persisted), so a prompt that
+    timed out while the user was AFK is still visible. Pruned to the
+    last 200 rows / last 7 days on each insert burst (see
+    ``trim_hitl_events``); the UI's ``limit`` is just a page size on
+    top of that retention.
+    """
+    return {"history": store.list_hitl_events(limit=limit)}
+
+
 @router.get("/notifications/pending")
 async def notifications_pending(
     request: Request,

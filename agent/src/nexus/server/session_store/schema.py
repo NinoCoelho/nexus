@@ -58,6 +58,43 @@ CREATE TABLE IF NOT EXISTS message_feedback (
 );
 """
 
+# Durable HITL event log — feeds the bell/notification center so the user can
+# see prompts that fired (and possibly timed out) while no UI was attached.
+# In-memory ``_pending`` futures live in pubsub.py and are lost on restart;
+# this table is the user-visible audit trail.
+_HITL_EVENTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS hitl_events (
+    request_id   TEXT PRIMARY KEY,
+    session_id   TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    prompt       TEXT NOT NULL,
+    payload_json TEXT,
+    status       TEXT NOT NULL,
+    answer       TEXT,
+    reason       TEXT,
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at  TEXT,
+    CHECK(status IN ('pending','answered','auto_answered','cancelled','timed_out'))
+);
+CREATE INDEX IF NOT EXISTS hitl_events_created_idx
+    ON hitl_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS hitl_events_session_idx
+    ON hitl_events(session_id);
+"""
+
+# Browser Web Push subscriptions. Single-user app, so no user id —
+# the endpoint is unique per browser/profile.
+_PUSH_SUBS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint     TEXT PRIMARY KEY,
+    p256dh       TEXT NOT NULL,
+    auth         TEXT NOT NULL,
+    user_agent   TEXT,
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 
 def _ensure_feedback_pinned_column(db) -> None:
     """Migrate older databases that pre-date the ``pinned`` column."""
@@ -79,6 +116,8 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     )
     db.executescript(_FTS_SCHEMA)
     db.executescript(_FEEDBACK_SCHEMA)
+    db.executescript(_HITL_EVENTS_SCHEMA)
+    db.executescript(_PUSH_SUBS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:

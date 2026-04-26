@@ -86,6 +86,12 @@ def update_calendar(path: str, updates: dict[str, Any]) -> Calendar:
             cal.frontmatter["default_duration_min"] = int(updates["default_duration_min"])
         except (TypeError, ValueError):
             pass
+    if "default_model" in updates:
+        v = updates["default_model"]
+        if v:
+            cal.frontmatter["default_model"] = str(v)
+        else:
+            cal.frontmatter.pop("default_model", None)
     write_calendar(path, cal)
     return cal
 

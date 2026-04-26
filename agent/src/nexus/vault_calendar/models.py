@@ -18,6 +18,11 @@ EVENT_STATUSES = {"scheduled", "triggered", "done", "failed", "missed", "cancell
 # overriding the calendar-level auto_trigger default. Absent → inherit.
 EVENT_TRIGGERS = {"on_start", "off"}
 
+# Sentinel value of ``Event.assignee`` that opts an event into agent dispatch.
+# Any other (or missing) value means the event is a plain calendar entry —
+# the heartbeat driver will not fire it, regardless of prompt/trigger.
+ASSIGNEE_AGENT = "agent"
+
 
 @dataclass
 class Event:
@@ -45,6 +50,14 @@ class Event:
     fire_from: str | None = None  # "HH:MM" local time
     fire_to: str | None = None  # "HH:MM" local time
     fire_every_min: int | None = None
+    # Specific model id to use when the agent runs this event. Falls back to
+    # the calendar's ``default_model``, then the agent's configured default.
+    model: str | None = None
+    # Who/what runs this event. ``"agent"`` opts in to heartbeat-driven
+    # dispatch; anything else (including None) makes it a plain calendar
+    # entry that never fires. Free-form values are reserved for future
+    # human-attendee tracking.
+    assignee: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -72,7 +85,15 @@ class Event:
             out["fire_to"] = self.fire_to
         if self.fire_every_min:
             out["fire_every_min"] = self.fire_every_min
+        if self.model:
+            out["model"] = self.model
+        if self.assignee:
+            out["assignee"] = self.assignee
         return out
+
+    @property
+    def is_agent_assigned(self) -> bool:
+        return self.assignee == ASSIGNEE_AGENT
 
     @property
     def has_fire_window(self) -> bool:
@@ -111,6 +132,11 @@ class Calendar:
         except (TypeError, ValueError):
             return 30
 
+    @property
+    def default_model(self) -> str | None:
+        v = self.frontmatter.get("default_model")
+        return str(v) if v else None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "title": self.title,
@@ -119,6 +145,7 @@ class Calendar:
             "timezone": self.timezone,
             "auto_trigger": self.auto_trigger,
             "default_duration_min": self.default_duration_min,
+            "default_model": self.default_model,
         }
 
 

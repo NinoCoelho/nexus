@@ -38,6 +38,15 @@ def effective_prompt(event: Event, cal: Calendar) -> str | None:
     return None
 
 
+def effective_model(event: Event, cal: Calendar) -> str | None:
+    """Per-event model override → calendar default → agent default (None)."""
+    if event.model and event.model.strip():
+        return event.model.strip()
+    if cal.default_model:
+        return cal.default_model
+    return None
+
+
 _HHMM_RE = __import__("re").compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -70,6 +79,8 @@ def add_event(
     fire_from: str | None = None,
     fire_to: str | None = None,
     fire_every_min: int | None = None,
+    model: str | None = None,
+    assignee: str | None = None,
 ) -> Event:
     if status not in EVENT_STATUSES:
         raise ValueError(f"invalid status {status!r}; allowed: {sorted(EVENT_STATUSES)}")
@@ -93,6 +104,8 @@ def add_event(
         fire_from=fire_from,
         fire_to=fire_to,
         fire_every_min=fire_every_min,
+        model=(model.strip() if isinstance(model, str) and model.strip() else None),
+        assignee=(assignee.strip() if isinstance(assignee, str) and assignee.strip() else None),
     )
     cal.events.append(event)
     write_calendar(path, cal)
@@ -155,6 +168,12 @@ def update_event(path: str, event_id: str, updates: dict[str, Any]) -> Event:
     if "prompt" in updates:
         v = updates["prompt"]
         ev.prompt = str(v).strip() if v and str(v).strip() else None
+    if "model" in updates:
+        v = updates["model"]
+        ev.model = str(v).strip() if v and str(v).strip() else None
+    if "assignee" in updates:
+        v = updates["assignee"]
+        ev.assignee = str(v).strip() if v and str(v).strip() else None
     write_calendar(path, cal)
     return ev
 

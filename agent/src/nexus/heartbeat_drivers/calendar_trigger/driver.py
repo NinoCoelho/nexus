@@ -80,6 +80,10 @@ class Driver(HeartbeatDriver):
             for ev in list(cal.events):
                 if ev.status != "scheduled":
                     continue
+                if not ev.is_agent_assigned:
+                    # Events without an agent assignee are plain calendar
+                    # entries — never auto-fire, never alert.
+                    continue
                 if vault_calendar.effective_trigger(ev, cal) != "on_start":
                     continue
 

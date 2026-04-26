@@ -9,9 +9,11 @@ interface Props {
   onOpenMobileDrawer?: () => void;
   /** Optional slot for live session metadata (model, tokens, cost). */
   statusSlot?: ReactNode;
+  /** Optional slot rendered before the YOLO badge (notification bell, etc). */
+  notificationSlot?: ReactNode;
 }
 
-export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, statusSlot }: Props) {
+export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, statusSlot, notificationSlot }: Props) {
   return (
     <header className="header">
       <div className="header-inner">
@@ -38,6 +40,7 @@ export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, 
         </div>
         <div className="header-actions">
           {statusSlot}
+          {notificationSlot}
           {yoloMode && (
             <span className="yolo-badge" title="YOLO mode: confirm prompts auto-approved">
               YOLO ON

@@ -15,9 +15,11 @@ interface Props {
   request: UserRequestPayload;
   onSubmit: (answer: string | Record<string, unknown>) => void;
   onTimeout: () => void;
+  /** Total pending including this one — when > 1 a "1 of N" hint shows. */
+  queueLength?: number;
 }
 
-export default function ApprovalDialog({ request, onSubmit, onTimeout }: Props) {
+export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLength = 1 }: Props) {
   const [remaining, setRemaining] = useState(request.timeout_seconds);
   const [textValue, setTextValue] = useState(request.default ?? "");
 
@@ -56,6 +58,11 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout }: Props) 
             {formatCountdown(remaining)}
           </span>
         </div>
+        {queueLength > 1 && (
+          <div className="approval-queue-hint" title="Total pending HITL requests">
+            1 of {queueLength} pending
+          </div>
+        )}
         <p className="approval-prompt">{request.prompt}</p>
         {request.kind === "form" && request.form_description && (
           <p className="approval-prompt" style={{ color: "var(--fg-faint)", fontSize: "12px" }}>

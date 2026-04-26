@@ -147,6 +147,8 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_from: draft.fire_from ?? undefined,
           fire_to: draft.fire_to ?? undefined,
           fire_every_min: draft.fire_every_min ?? undefined,
+          model: draft.model ?? undefined,
+          assignee: draft.assignee ?? undefined,
         });
       } else {
         await patchVaultCalendarEvent(selectedPath, modal.event.id, {
@@ -162,6 +164,8 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_from: draft.fire_from,
           fire_to: draft.fire_to,
           fire_every_min: draft.fire_every_min,
+          model: draft.model,
+          assignee: draft.assignee,
         });
       }
       setModal(null);

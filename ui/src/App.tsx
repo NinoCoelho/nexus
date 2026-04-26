@@ -25,6 +25,9 @@ import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
+import { useNotificationCenter } from "./hooks/useNotificationCenter";
+import { usePushSubscription } from "./hooks/usePushSubscription";
+import NotificationBell from "./components/NotificationBell";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
@@ -148,7 +151,22 @@ export default function App() {
   // view. Recovers pending requests on mount via
   // /notifications/pending so a hard reload mid-question still
   // surfaces the dialog.
-  const { pendingRequest, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest } = useApprovalQueue();
+  const { pendingRequest, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest } = useApprovalQueue();
+
+  // Bell + Web Push: durable HITL history visible from any view, plus
+  // OS-level notifications when no Nexus tab is open. The push hook
+  // registers /sw.js once and (after permission) keeps a live
+  // subscription registered with the backend.
+  const push = usePushSubscription();
+  const notificationCenter = useNotificationCenter();
+  // When the SW relays a click on an OS notification (or a deep link
+  // ?respond=<rid>), hop the approval queue to that specific request.
+  useEffect(() => {
+    const rid = notificationCenter.pendingFocusRequestId;
+    if (!rid) return;
+    focusRequest(rid);
+    notificationCenter.clearPendingFocus();
+  }, [notificationCenter.pendingFocusRequestId, focusRequest, notificationCenter]);
 
   const handleSessionSelect = useCallback((id: string) => {
     _handleSessionSelect(id);
@@ -373,6 +391,16 @@ export default function App() {
                 />
               : null
           }
+          notificationSlot={
+            <NotificationBell
+              history={notificationCenter.history}
+              pendingCount={notificationCenter.pendingCount}
+              pushPermission={push.permission}
+              pushSubscribed={push.subscribed}
+              onRequestPushPermission={() => { void push.requestPermission(); }}
+              onRefresh={notificationCenter.refresh}
+            />
+          }
         />
         {backendUp === false && (
           <div style={{ padding: "6px 12px", background: "#b91c1c", color: "white", fontSize: 13, textAlign: "center" }}>
@@ -504,6 +532,7 @@ export default function App() {
           request={pendingRequest}
           onSubmit={handleApprovalSubmit}
           onTimeout={handleApprovalTimeout}
+          queueLength={queueLength}
         />
       )}
 

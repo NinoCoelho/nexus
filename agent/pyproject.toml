@@ -24,6 +24,8 @@ dependencies = [
     "huggingface_hub>=0.24",
     "duckdb>=1.0",
     "python-dateutil>=2.9",
+    "pywebpush>=2.0",
+    "cryptography>=42.0",
 ]
 
 [tool.uv.sources]

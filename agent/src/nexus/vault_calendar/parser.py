@@ -111,6 +111,15 @@ def parse(content: str) -> Calendar:
                 event.prompt = urllib.parse.unquote(meta["prompt"])
             except Exception:
                 event.prompt = meta["prompt"]
+        if "model" in meta:
+            event.model = meta["model"]
+        if "assignee" in meta:
+            event.assignee = meta["assignee"]
+        elif event.prompt or event.model:
+            # Backward-compat: legacy events written before the assignee
+            # gate existed implicitly meant "run with agent". Infer it so
+            # they keep firing; the next write normalises the file.
+            event.assignee = "agent"
         cal.events.append(event)
         event = None
         event_lines = []
@@ -164,6 +173,10 @@ def serialize(cal: Calendar) -> str:
             # percent-encode so newlines and special chars survive a single-line HTML comment
             encoded = urllib.parse.quote(event.prompt, safe="")
             out.append(f"<!-- nx:prompt={encoded} -->")
+        if event.model:
+            out.append(f"<!-- nx:model={event.model} -->")
+        if event.assignee:
+            out.append(f"<!-- nx:assignee={event.assignee} -->")
         body = (event.body or "").strip()
         if body:
             out.append("")

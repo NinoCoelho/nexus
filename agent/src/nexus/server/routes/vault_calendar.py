@@ -107,6 +107,12 @@ async def vault_calendar_add_event(body: dict, path: str) -> dict:
             rrule=body.get("rrule"),
             all_day=bool(body.get("all_day", False)),
             status=body.get("status", "scheduled"),
+            prompt=body.get("prompt"),
+            fire_from=body.get("fire_from"),
+            fire_to=body.get("fire_to"),
+            fire_every_min=body.get("fire_every_min"),
+            model=body.get("model"),
+            assignee=body.get("assignee"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -154,7 +160,20 @@ async def vault_calendar_fire_event(
     store: SessionStore = Depends(get_sessions),
 ) -> dict:
     """Manually fire a missed/scheduled event in background mode. Returns the new session id."""
+    from ... import vault_calendar
     from .vault_dispatch import _dispatch_impl
+    try:
+        cal = vault_calendar.read_calendar(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    found = vault_calendar.find_event(cal, event_id)
+    if found is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="event not found")
+    if not found[0].is_agent_assigned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="event is not assigned to the agent",
+        )
     try:
         return await _dispatch_impl(
             path=path, card_id=None, event_id=event_id,

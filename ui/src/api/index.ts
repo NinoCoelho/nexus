@@ -18,3 +18,4 @@ export * from "./knowledge";
 export * from "./audio";
 export * from "./events";
 export * from "./localLlm";
+export * from "./notifications";

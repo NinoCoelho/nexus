@@ -146,13 +146,28 @@ def create_app(
             event_bus.set_loop(asyncio.get_running_loop())
         except Exception:
             log.exception("event_bus setup failed")
-        # Strip stale local-* provider/model entries from a previous run
-        # where the daemon died with running servers.
+        # Restart any local-* models the user had enabled in a prior run.
+        # Each gets a fresh port; we refresh config and rebuild the registry
+        # so the agent sees the live URLs without the user opening Settings.
+        # Models whose GGUF is gone (or that fail to spawn) get pruned instead.
         try:
             from ..local_llm import manager as _local_mgr
-            _local_mgr.cleanup_stale_config()
+
+            def _restart_blocking() -> int:
+                return _local_mgr.restart_local_models()
+
+            started = await asyncio.to_thread(_restart_blocking)
+            if started > 0:
+                from ..config_file import load as _load_cfg
+                from .routes.config import _rebuild_registry
+                _rebuild_registry(_load_cfg(), mutable_state, agent)
+                log.info("[local_llm] restarted %d local model(s) at startup", started)
+            else:
+                # No live entries to restart — strip any dangling local-*
+                # entries left in config from an unclean shutdown.
+                _local_mgr.cleanup_stale_config()
         except Exception:
-            log.exception("local_llm config cleanup failed")
+            log.exception("local_llm restart failed")
         if graphrag_cfg is not None:
             try:
                 from ..agent.graphrag_manager import initialize
@@ -301,6 +316,7 @@ def create_app(
     from .routes.share import router as share_router
     from .routes.local_llm import router as local_llm_router
     from .routes.notifications import router as notifications_router
+    from .routes.push import router as push_router
 
     app.include_router(chat_router)
     app.include_router(chat_stream_router)
@@ -320,6 +336,7 @@ def create_app(
     app.include_router(share_router)
     app.include_router(local_llm_router)
     app.include_router(notifications_router)
+    app.include_router(push_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

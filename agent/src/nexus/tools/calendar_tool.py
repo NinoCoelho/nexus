@@ -111,6 +111,28 @@ CALENDAR_MANAGE_TOOL = ToolSpec(
                     "(e.g. 30 = every half hour). Set 0 to clear."
                 ),
             },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Per-event model id used when the agent runs this event. "
+                    "Falls back to the calendar's default_model, then the agent's "
+                    "configured default. Empty string clears."
+                ),
+            },
+            "default_model": {
+                "type": "string",
+                "description": (
+                    "Calendar-level default model id (update_calendar). Empty string clears."
+                ),
+            },
+            "assignee": {
+                "type": "string",
+                "description": (
+                    "Set to 'agent' to opt this event into auto-firing (heartbeat "
+                    "dispatch). Any other value (or empty string) makes the event "
+                    "a plain calendar entry that never fires."
+                ),
+            },
             "status": {
                 "type": "string",
                 "enum": ["", "scheduled", "triggered", "done", "failed", "missed", "cancelled"],
@@ -154,7 +176,7 @@ def handle_calendar_tool(args: dict[str, Any]) -> str:
 
         if action == "update_calendar":
             updates: dict[str, Any] = {}
-            for key in ("title", "prompt", "timezone", "auto_trigger", "default_duration_min"):
+            for key in ("title", "prompt", "timezone", "auto_trigger", "default_duration_min", "default_model"):
                 if key in args:
                     updates[key] = args[key]
             if not updates:
@@ -191,6 +213,8 @@ def handle_calendar_tool(args: dict[str, Any]) -> str:
                 fire_from=args.get("fire_from") or None,
                 fire_to=args.get("fire_to") or None,
                 fire_every_min=int(fire_every) if fire_every else None,
+                model=args.get("model") or None,
+                assignee=args.get("assignee") or None,
             )
             return json.dumps({"ok": True, "event": ev.to_dict()})
 
@@ -202,6 +226,7 @@ def handle_calendar_tool(args: dict[str, Any]) -> str:
             for key in (
                 "title", "body", "start", "end", "status", "trigger", "rrule",
                 "all_day", "session_id", "fire_from", "fire_to", "fire_every_min",
+                "model", "assignee",
             ):
                 if key in args:
                     updates[key] = args[key]

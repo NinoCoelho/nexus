@@ -22,6 +22,34 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | None:
+    """Validate the requested model id against the live provider registry,
+    falling back to the agent's configured default when the request is
+    missing or unavailable.
+
+    Returns ``None`` when no usable model is known (caller lets the agent
+    loop pick whatever default it has wired up).
+    """
+    if requested:
+        requested = requested.strip() or None
+    pr = getattr(agent_, "_provider_registry", None)
+    available = pr.available_model_ids() if pr is not None else []
+    if requested and (not available or requested in available):
+        return requested
+    cfg = getattr(agent_, "_nexus_cfg", None)
+    default = (cfg.agent.default_model if cfg and getattr(cfg, "agent", None) else None) or None
+    if requested:
+        log.warning(
+            "dispatch: requested model %r not in available %s; falling back",
+            requested, available,
+        )
+    if default and (not available or default in available):
+        return default
+    if available:
+        return available[0]
+    return None
+
 # Marker that the UI strips from displayed messages. The agent still
 # sees the full content (it's persisted like any user message), but
 # the chat bubble list filters messages starting with this sentinel.
@@ -275,6 +303,7 @@ async def _dispatch_impl(
         event_rrule = ev.rrule
         entity_kind = "event"
         is_fire_window_event = ev.has_fire_window
+        lane_model = vault_calendar.effective_model(ev, cal)
 
     if mode == "background" and not (card_id or event_id):
         raise ValueError("background dispatch requires a card_id or event_id")
@@ -352,6 +381,7 @@ async def _dispatch_impl(
             )
 
     if mode == "background":
+        resolved_model = _resolve_dispatch_model(lane_model, a)
         asyncio.create_task(
             _run_background_agent_turn(
                 session_id=session.id,
@@ -360,13 +390,13 @@ async def _dispatch_impl(
                 card_id=event_id or card_id,
                 agent_=a,
                 store=store,
-                model_id=lane_model,
+                model_id=resolved_model,
                 entity_kind=entity_kind,
             )
         )
         return {
             "session_id": session.id, "path": path, "card_id": card_id,
-            "event_id": event_id, "mode": mode, "model": lane_model,
+            "event_id": event_id, "mode": mode, "model": resolved_model,
         }
 
     return {

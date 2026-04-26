@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import type { CalendarEvent, EventStatus, EventTrigger } from "../../api/calendar";
+import { getRouting } from "../../api";
 import RepeatPicker from "./RepeatPicker";
 import { fromLocalInputValue, toLocalInputValue } from "./dateUtils";
 
@@ -23,6 +24,8 @@ export interface EventDraft {
   fire_from: string | null;
   fire_to: string | null;
   fire_every_min: number | null;
+  model: string | null;
+  assignee: string | null;
 }
 
 interface Props {
@@ -59,6 +62,9 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
   const [fireEvery, setFireEvery] = useState<string>(
     ev?.fire_every_min ? String(ev.fire_every_min) : "",
   );
+  const [model, setModel] = useState(ev?.model ?? "");
+  const [assignedToAgent, setAssignedToAgent] = useState(ev?.assignee === "agent");
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -67,6 +73,17 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assignedToAgent) return;
+    getRouting()
+      .then((r) => {
+        if (!cancelled) setAvailableModels(r.available_models ?? []);
+      })
+      .catch(() => { /* offline: leave list empty, falls back to free-text input */ });
+    return () => { cancelled = true; };
+  }, [assignedToAgent]);
 
   function handleSave() {
     if (!title.trim()) return;
@@ -86,13 +103,15 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
       startIso,
       endIso,
       status,
-      trigger,
+      trigger: assignedToAgent ? trigger : "",
       rrule: rrule.trim(),
       all_day: allDay,
-      prompt: prompt.trim(),
-      fire_from: allDay && fireFrom ? fireFrom : null,
-      fire_to: allDay && fireTo ? fireTo : null,
-      fire_every_min: allDay && !Number.isNaN(fireEveryNum) ? fireEveryNum : null,
+      prompt: assignedToAgent ? prompt.trim() : "",
+      fire_from: assignedToAgent && allDay && fireFrom ? fireFrom : null,
+      fire_to: assignedToAgent && allDay && fireTo ? fireTo : null,
+      fire_every_min: assignedToAgent && allDay && !Number.isNaN(fireEveryNum) ? fireEveryNum : null,
+      model: assignedToAgent && model.trim() ? model.trim() : null,
+      assignee: assignedToAgent ? "agent" : null,
     });
   }
 
@@ -156,66 +175,100 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
             ))}
           </select>
 
-          <span className="cal-modal-grid-label">Auto-fire</span>
-          <select
-            value={trigger}
-            onChange={(e) => setTrigger(e.target.value as EventTrigger | "")}
-          >
-            <option value="">Inherit calendar</option>
-            <option value="on_start">On start</option>
-            <option value="off">Off</option>
-          </select>
+          <span className="cal-modal-grid-label">Atribuir agente</span>
+          <span>
+            <input
+              type="checkbox"
+              checked={assignedToAgent}
+              onChange={(e) => setAssignedToAgent(e.target.checked)}
+              title="When checked, the agent runs at fire time using the prompt below."
+            />
+          </span>
         </div>
 
-        {allDay && (
+        {assignedToAgent && (
           <fieldset className="cal-modal-fieldset">
-            <legend>Auto-fire window</legend>
-            <p className="cal-modal-hint">
-              For automated rotines (e.g. "check news every 30 min during business hours").
-              Leave blank for a record-only event.
-            </p>
+            <legend>Agent settings</legend>
+
             <div className="cal-modal-grid">
-              <span className="cal-modal-grid-label">From</span>
-              <input
-                type="time"
-                value={fireFrom}
-                onChange={(e) => setFireFrom(e.target.value)}
-              />
-              <span className="cal-modal-grid-label">To</span>
-              <input
-                type="time"
-                value={fireTo}
-                onChange={(e) => setFireTo(e.target.value)}
-              />
-              <span className="cal-modal-grid-label">Every</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span className="cal-modal-grid-label">Auto-fire</span>
+              <select
+                value={trigger}
+                onChange={(e) => setTrigger(e.target.value as EventTrigger | "")}
+              >
+                <option value="">Inherit calendar</option>
+                <option value="on_start">On start</option>
+                <option value="off">Off</option>
+              </select>
+
+              <span className="cal-modal-grid-label">Model</span>
+              {availableModels.length > 0 ? (
+                <select value={model} onChange={(e) => setModel(e.target.value)}>
+                  <option value="">— Use default —</option>
+                  {availableModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              ) : (
                 <input
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={fireEvery}
-                  onChange={(e) => setFireEvery(e.target.value)}
-                  placeholder="30"
-                  style={{ width: 80 }}
+                  type="text"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="Model id (leave blank to use default)"
                 />
-                <span style={{ fontSize: 12, color: "var(--fg-faint)" }}>min</span>
-              </span>
+              )}
             </div>
+
+            <label className="cal-modal-notes">
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                Agent prompt
+                {prompt.trim() && <span title="Agent will run at fire time" style={{ color: "var(--accent, #4d7cff)" }}>⚡</span>}
+              </span>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Leave blank to inherit the calendar prompt, or notify only."
+                style={{ minHeight: 56 }}
+              />
+            </label>
+
+            {allDay && (
+              <>
+                <p className="cal-modal-hint">
+                  Auto-fire window — for automated rotines (e.g. "check news every 30 min during business hours").
+                  Leave blank for a single fire at start.
+                </p>
+                <div className="cal-modal-grid">
+                  <span className="cal-modal-grid-label">From</span>
+                  <input
+                    type="time"
+                    value={fireFrom}
+                    onChange={(e) => setFireFrom(e.target.value)}
+                  />
+                  <span className="cal-modal-grid-label">To</span>
+                  <input
+                    type="time"
+                    value={fireTo}
+                    onChange={(e) => setFireTo(e.target.value)}
+                  />
+                  <span className="cal-modal-grid-label">Every</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={fireEvery}
+                      onChange={(e) => setFireEvery(e.target.value)}
+                      placeholder="30"
+                      style={{ width: 80 }}
+                    />
+                    <span style={{ fontSize: 12, color: "var(--fg-faint)" }}>min</span>
+                  </span>
+                </div>
+              </>
+            )}
           </fieldset>
         )}
-
-        <label className="cal-modal-notes">
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            Agent prompt
-            {prompt.trim() && <span title="Agent will run at fire time" style={{ color: "var(--accent, #4d7cff)" }}>⚡</span>}
-          </span>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Leave blank to just notify. Add a prompt to run the agent at fire time."
-            style={{ minHeight: 56 }}
-          />
-        </label>
 
         <label className="cal-modal-notes">
           Notes
@@ -230,7 +283,7 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
           {onDelete && ev && (
             <button className="danger" onClick={onDelete}>Delete</button>
           )}
-          {onFireNow && ev && (status === "missed" || status === "scheduled") && (
+          {onFireNow && ev && assignedToAgent && (status === "missed" || status === "scheduled") && (
             <button onClick={onFireNow}>Fire now</button>
           )}
           {onOpenInChat && ev && (
