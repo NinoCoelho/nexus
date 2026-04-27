@@ -51,8 +51,24 @@ class BuiltinEmbedder:
         return d
 
     def _load_sync(self) -> Any:
+        # Silence the UserWarning fastembed prints when loading any of the
+        # paraphrase-multilingual / multilingual-e5 models reminding callers
+        # that pooling switched from CLS to mean. Mean pooling matches what
+        # sentence-transformers itself uses for these models, so the new
+        # behavior is the correct one — Nexus has no legacy CLS vectors to
+        # preserve. The warning fires on every fresh process and just
+        # confuses users.
+        import warnings
+
         from fastembed import TextEmbedding
-        return TextEmbedding(model_name=self.model, cache_dir=str(self._cache_dir()))
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="The model .* now uses mean pooling instead of CLS embedding.*",
+                category=UserWarning,
+            )
+            return TextEmbedding(model_name=self.model, cache_dir=str(self._cache_dir()))
 
     async def _ensure_loaded(self) -> Any:
         if self._impl is not None:

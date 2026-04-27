@@ -103,8 +103,30 @@ class BuiltinExtractor:
         try:
             return spacy.load(model_name)
         except OSError:
-            log.info("[builtin-extractor] downloading %s (~12 MB) …", model_name)
-            spacy.cli.download(model_name)  # type: ignore[attr-defined]
+            # Nexus pins en_core_web_sm + pt_core_news_sm as wheels in its
+            # pyproject so a normal install picks them up. We only reach
+            # this fallback when the install env is stale — typically an
+            # old `uv tool install nexus` from before pt was added. The
+            # default spacy.cli.download shells out to pip; under a uv
+            # tool env the pip wrapper bails with the confusing
+            # "No virtual environment found" before eventually recovering.
+            log.warning(
+                "[builtin-extractor] %s missing from current env — attempting "
+                "spacy.cli.download. If this errors with `No virtual environment "
+                "found`, run `uv tool upgrade nexus` (or `uv sync` from agent/) "
+                "to refresh the install with the bundled wheel.",
+                model_name,
+            )
+            try:
+                spacy.cli.download(model_name)  # type: ignore[attr-defined]
+            except SystemExit as exc:
+                raise RuntimeError(
+                    f"failed to install spaCy model {model_name!r}: "
+                    f"pip exit code {exc.code}. The model is bundled with "
+                    "Nexus — your install env is out of date. Run "
+                    "`uv tool upgrade nexus` (if installed via uv tool) or "
+                    "`uv sync` from agent/ (if running from source).",
+                ) from exc
             nlp = spacy.load(model_name)
             try:
                 cache.parent.mkdir(parents=True, exist_ok=True)

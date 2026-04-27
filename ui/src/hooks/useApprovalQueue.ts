@@ -6,6 +6,7 @@ import {
   type PendingNotification,
   type UserRequestPayload,
 } from "../api";
+import { sounds } from "./useSounds";
 
 interface QueuedRequest {
   request: UserRequestPayload;
@@ -62,6 +63,7 @@ export function useApprovalQueue(): UseApprovalQueueResult {
           if (prev.some((q) => q.request.request_id === event.data.request_id)) {
             return prev;
           }
+          sounds.popupOpen();
           return [...prev, { session_id: sessionId, request: event.data }];
         });
         return;

@@ -6,6 +6,7 @@
 import type { Message } from "../components/ChatView";
 import type { TraceEvent } from "../api";
 import { emptyState, prettifyStreamError, NEW_KEY, type ChatState } from "../types/chat";
+import { sounds } from "./useSounds";
 
 type SetChatStates = React.Dispatch<React.SetStateAction<Map<string, ChatState>>>;
 
@@ -96,6 +97,7 @@ export function applyToolEvent(
       }
     } else {
       tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, status: "pending" });
+      sounds.agentStep();
     }
     msgs[lastIdx] = { ...prevMsg, trace: newTrace, timeline: tl };
     next.set(key, { ...cur, messages: msgs });
@@ -118,6 +120,7 @@ export function applyDoneEvent(
     ? routedModel
     : (selectedModel && selectedModel !== "auto" ? selectedModel : "");
   if (usedModel) persistUsedModel(usedModel);
+  sounds.finalResponse();
 
   if (!activeSession) {
     // First message — migrate __new__ to the real session id.

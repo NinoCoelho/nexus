@@ -15,6 +15,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { sounds } from "../hooks/useSounds";
 import "./ToastProvider.css";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -223,6 +224,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
+    sounds.notification();
 
     if (duration > 0) startTimer(id, duration);
     return id;

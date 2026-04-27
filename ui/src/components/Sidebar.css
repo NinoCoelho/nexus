@@ -51,23 +51,9 @@
   align-items: center;
   gap: 8px;
   overflow: hidden;
+  min-width: 0;
 }
 
-.sidebar-brand-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, var(--accent-hi), var(--accent-lo));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
-  flex-shrink: 0;
-}
-
-.sidebar-brand-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--fg);
-  white-space: nowrap;
-}
 
 .sidebar-collapse-btn {
   width: 28px;

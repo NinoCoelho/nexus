@@ -17,6 +17,7 @@ import App from "./App";
 import "./mobile.css";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./toast/ToastProvider";
+import { SplashScreen } from "./components/SplashScreen";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("No #root element");
@@ -25,6 +26,7 @@ createRoot(root).render(
     <ThemeProvider>
       <ToastProvider>
         <App />
+        <SplashScreen />
       </ToastProvider>
     </ThemeProvider>
   </StrictMode>,

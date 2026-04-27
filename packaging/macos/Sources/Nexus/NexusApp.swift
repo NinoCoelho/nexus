@@ -34,6 +34,7 @@ final class AppController: ObservableObject {
     @Published var startAtLogin: Bool = SMAppService.mainApp.status == .enabled
     private let server = ServerController()
     private let prefsWindow = PreferencesWindowController()
+    private let notifier = HitlNotifier()
 
     func start() {
         Task {
@@ -43,6 +44,7 @@ final class AppController: ObservableObject {
                 let port = try await server.waitForReady(timeout: 60)
                 status = "Running on \(server.bindHost):\(port)"
                 openInBrowser(port: port)
+                notifier.start(server: server)
             } catch {
                 status = "Error: \(error.localizedDescription)"
             }
@@ -62,12 +64,14 @@ final class AppController: ObservableObject {
     func restartServer() {
         Task {
             status = "Restarting…"
+            notifier.stop()
             server.terminate()
             do {
                 try server.launch()
                 let port = try await server.waitForReady(timeout: 60)
                 status = "Running on \(server.bindHost):\(port)"
                 openInBrowser(port: port)
+                notifier.start(server: server)
             } catch {
                 status = "Error: \(error.localizedDescription)"
             }
@@ -111,6 +115,7 @@ final class AppController: ObservableObject {
     }
 
     func shutdown() {
+        notifier.stop()
         server.terminate()
     }
 }

@@ -60,8 +60,8 @@ self.addEventListener("push", (event) => {
         tag: requestId || "nexus-hitl",
         data: { request_id: requestId, session_id: sessionId, kind },
         requireInteraction: kind !== "confirm",
-        icon: "/icons/nexus-192.svg",
-        badge: "/icons/nexus-192.svg",
+        icon: "/icons/nexus-192.png",
+        badge: "/icons/nexus-192.png",
       });
     })(),
   );

@@ -9,6 +9,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import type { UserRequestPayload } from "../api";
 import FormRenderer from "./FormRenderer";
+import { sounds } from "../hooks/useSounds";
 import "./ApprovalDialog.css";
 
 interface Props {
@@ -33,7 +34,12 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
           onTimeout();
           return 0;
         }
-        return r - 1;
+        const next = r - 1;
+        // Per-second tick during the final 10s ramp-down.
+        if (next > 0 && next <= 10) sounds.countdownTick();
+        // Every minute of waiting, nudge the user with an attention chime.
+        else if (next > 0 && next % 60 === 0) sounds.attention();
+        return next;
       });
     }, 1000);
     return () => clearInterval(id);

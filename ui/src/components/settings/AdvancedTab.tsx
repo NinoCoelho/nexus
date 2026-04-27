@@ -7,6 +7,14 @@ import {
   type AgentConfig,
   type HitlSettings,
 } from "../../api";
+import {
+  SOUND_KEYS,
+  SOUND_LABELS,
+  soundToneCount,
+  sounds,
+  useSoundMute,
+  useSoundVolumes,
+} from "../../hooks/useSounds";
 import { useToast } from "../../toast/ToastProvider";
 import NumberFieldWithDefault from "./NumberFieldWithDefault";
 import SettingsField from "./SettingsField";
@@ -19,6 +27,8 @@ interface Props {
 
 export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
   const toast = useToast();
+  const { muted: soundMuted, setMuted: setSoundMuted } = useSoundMute();
+  const { volumes: soundVolumes, setVolume: setSoundVolume } = useSoundVolumes();
   const [agent, setAgent] = useState<AgentConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [hitlSaving, setHitlSaving] = useState(false);
@@ -251,6 +261,75 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </button>
           </SettingsField>
         )}
+      </SettingsSection>
+
+      <SettingsSection
+        title="Sons"
+        icon="🔔"
+        description="Toques discretos para resposta final, notificações, popups e passos do agente. Os sons são sintetizados localmente — nenhum áudio é baixado."
+      >
+        <SettingsField
+          label="Modo silencioso"
+          hint="Quando ativado, todos os efeitos sonoros são suprimidos."
+          help={{
+            title: "Modo silencioso",
+            body: (
+              <>
+                Desliga todos os sons da interface: chime de resposta final,
+                aviso de notificação, alerta de popup, tique-taque da contagem
+                regressiva, lembrete de atenção e o tom grave dos passos do
+                agente. A preferência é guardada no navegador (localStorage)
+                e respeitada por todas as abas abertas.
+              </>
+            ),
+          }}
+          layout="row"
+        >
+          <button
+            type="button"
+            role="switch"
+            aria-checked={soundMuted}
+            className={`hitl-switch ${soundMuted ? "on" : "off"}`}
+            onClick={() => setSoundMuted(!soundMuted)}
+          >
+            <span className="hitl-switch-knob" />
+          </button>
+        </SettingsField>
+        {SOUND_KEYS.map((key) => {
+          const value = soundVolumes[key];
+          const tones = soundToneCount(key);
+          return (
+            <SettingsField
+              key={key}
+              label={SOUND_LABELS[key]}
+              hint={`${tones === 2 ? "2 tons" : "1 tom"} • ${Math.round(value * 100)}%`}
+              layout="row"
+            >
+              <div className="sound-row">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(value * 100)}
+                  disabled={soundMuted}
+                  onChange={(e) => setSoundVolume(key, Number(e.target.value) / 100)}
+                  className="sound-slider"
+                  aria-label={`Volume de ${SOUND_LABELS[key]}`}
+                />
+                <button
+                  type="button"
+                  className="settings-btn"
+                  disabled={soundMuted}
+                  onClick={() => sounds[key]()}
+                  title="Tocar este som"
+                >
+                  Tocar
+                </button>
+              </div>
+            </SettingsField>
+          );
+        })}
       </SettingsSection>
     </>
   );

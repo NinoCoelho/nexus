@@ -77,6 +77,27 @@ def get_recent_errors() -> list[dict[str, Any]]:
     return list(_recent_errors)
 
 
+def _effective_embedder_id(cfg: Any, graphrag_cfg: Any) -> str:
+    """Return the embedder identifier actually used by ``_resolve_embedder``.
+
+    The config has three slots that determine which embedder runs:
+    ``embedding_model_id`` (registry-pinned), ``embeddings.model`` (provider-
+    qualified name), and the builtin fallback. Mirrors the precedence in
+    :func:`_resolvers.resolve_embedder` so the manifest tracks the same
+    string the engine just loaded — otherwise stale detection misses the
+    common case where users leave ``embeddings.model`` blank ("use builtin").
+    """
+    pinned = getattr(graphrag_cfg, "embedding_model_id", "") or ""
+    if pinned:
+        return pinned
+    emb_cfg = graphrag_cfg.embeddings
+    model = (getattr(emb_cfg, "model", "") or "").strip()
+    if model:
+        return model
+    from nexus.agent.builtin_embedder import BUILTIN_MODEL
+    return BUILTIN_MODEL
+
+
 def _record_error(path: str, exc: BaseException) -> None:
     import time
     msg = str(exc) or exc.__class__.__name__
@@ -132,16 +153,22 @@ async def initialize(cfg: Any) -> None:
 
     emb_cfg = graphrag_cfg.embeddings
 
-    # Stale-embedder detection: compare the embedder model used to build
-    # the current vector store with what we're about to load. Mismatch
+    # Resolve the *effective* embedder identifier so stale detection works
+    # for the common config pattern of leaving ``embeddings.model`` blank
+    # (which means "use the builtin"). Storing the empty string in the
+    # manifest would let any later upgrade of the builtin go undetected.
+    effective_embedder = _effective_embedder_id(cfg, graphrag_cfg)
+
+    # Stale-embedder detection: compare the embedder used to build the
+    # current vector store with what we're about to load. Mismatch
     # doesn't block init (reads still return whatever's there) but warns
     # the user — the geometry change makes new vs old vectors incomparable.
     _stale_warning = None
     previous_embedder = _get_index_meta("embedder_model")
-    if previous_embedder and previous_embedder != emb_cfg.model:
+    if previous_embedder and previous_embedder != effective_embedder:
         _stale_warning = (
             f"embedder changed: index built with {previous_embedder!r} but "
-            f"config now uses {emb_cfg.model!r}. Existing vectors are stale; "
+            f"config now uses {effective_embedder!r}. Existing vectors are stale; "
             "run `uv run nexus graphrag reindex` to rebuild."
         )
         log.warning("[graphrag] %s", _stale_warning)
@@ -150,11 +177,11 @@ async def initialize(cfg: Any) -> None:
             publish({
                 "type": "graphrag.stale",
                 "previous": previous_embedder,
-                "current": emb_cfg.model,
+                "current": effective_embedder,
             })
         except Exception:
             pass
-    _set_index_meta("embedder_model", emb_cfg.model)
+    _set_index_meta("embedder_model", effective_embedder)
 
     try:
         embedder = _resolve_embedder(cfg, graphrag_cfg)

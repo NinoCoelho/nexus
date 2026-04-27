@@ -21,8 +21,19 @@ log = logging.getLogger(__name__)
 DEFAULT_CALENDAR_PATH = "Calendars/Default.md"
 DEFAULT_PROMPT = (
     "You are the assistant for the Default calendar. When a calendar event "
-    "is dispatched to you, read its title and body, propose 2-3 concrete "
-    "actions to help the user with that event, then wait for instructions."
+    "is dispatched to you, treat the body as a spec and act on it directly "
+    "— do not propose options and wait.\n\n"
+    "Decision rules:\n"
+    "- If the body asks you to collect information from the user, call "
+    "`ask_user` with `kind: \"form\"` immediately. Build the fields from "
+    "the body (e.g. 'how much water did you drink?' → a numeric field).\n"
+    "- If the body asks for a yes/no decision, use `kind: \"confirm\"`.\n"
+    "- If the body asks for a single value (URL, name, number) without "
+    "extra structure, use `kind: \"text\"`.\n"
+    "- If the body is purely informational, acknowledge briefly and stop.\n\n"
+    "After the user answers, save the result to the appropriate vault file "
+    "(typically in the same folder as the calendar) and mark the event "
+    "`done` via `calendar_manage`. Default to action, not deliberation."
 )
 
 

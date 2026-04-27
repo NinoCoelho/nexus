@@ -16,6 +16,7 @@ import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
+import { BrandMark } from "../BrandMark";
 import "../Sidebar.css";
 
 type View = "chat" | "calendar" | "vault" | "graph" | "insights";
@@ -167,8 +168,7 @@ export default function Sidebar({
       <div className="sidebar-top">
         {!collapsed && (
           <div className="sidebar-brand">
-            <span className="sidebar-brand-dot" />
-            <span className="sidebar-brand-name">Nexus</span>
+            <BrandMark size="sm" />
           </div>
         )}
         <button
