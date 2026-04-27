@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _BUNDLED_SKILLS_DIR = Path(__file__).parent.parent.parent.parent.parent / "skills"
+_SEEDED_MARKER = ".seeded-builtins.json"
 
 
 class SkillRegistry:
@@ -26,24 +27,62 @@ class SkillRegistry:
         self._dir = skills_dir
         self._by_name: dict[str, Skill] = {}
         self._ensure_dir()
-        self._seed_if_empty()
+        self._seed_new_builtins()
         self.reload()
 
     def _ensure_dir(self) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def _seed_if_empty(self) -> None:
-        if any(self._dir.iterdir()):
-            return
+    def _seed_new_builtins(self) -> None:
+        """Copy bundled skills that have never been seeded into the user dir.
+
+        A marker file records names that were previously seeded so deletions
+        and user modifications survive across upgrades. Existing installs
+        that predate the marker are migrated by treating any currently
+        installed skill as already-seeded.
+        """
         bundled = _BUNDLED_SKILLS_DIR
         if not bundled.is_dir():
             return
+
+        seeded = self._load_seeded_marker()
+        if seeded is None:
+            seeded = {child.name for child in self._dir.iterdir() if child.is_dir()}
+
+        changed = False
         for child in bundled.iterdir():
-            if (child / "SKILL.md").is_file():
-                dest = self._dir / child.name
+            if not (child / "SKILL.md").is_file():
+                continue
+            name = child.name
+            if name in seeded:
+                continue
+            dest = self._dir / name
+            if not dest.exists():
                 shutil.copytree(child, dest, dirs_exist_ok=True)
                 _write_meta(dest, trust="builtin")
-                log.info("seeded builtin skill: %s", child.name)
+                log.info("seeded builtin skill: %s", name)
+            seeded.add(name)
+            changed = True
+
+        if changed or self._load_seeded_marker() is None:
+            self._write_seeded_marker(seeded)
+
+    def _seeded_marker_path(self) -> Path:
+        return self._dir / _SEEDED_MARKER
+
+    def _load_seeded_marker(self) -> set[str] | None:
+        path = self._seeded_marker_path()
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            return set(data.get("seeded", []))
+        except Exception:
+            return None
+
+    def _write_seeded_marker(self, seeded: set[str]) -> None:
+        path = self._seeded_marker_path()
+        path.write_text(json.dumps({"seeded": sorted(seeded)}, indent=2))
 
     def reload(self) -> None:
         self._by_name = {}
