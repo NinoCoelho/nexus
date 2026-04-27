@@ -4,7 +4,6 @@ import "./AgentStatusBar.css";
 interface Props {
   usage: SessionUsage | null;
   thinking?: boolean;
-  onOpenTrajectory?: () => void;
   /** Live UI selection — preferred over usage.model, which records only the
    *  first model ever used in the session and goes stale on model switch. */
   selectedModel?: string;
@@ -22,7 +21,7 @@ function fmtCost(c: number | null, status: SessionUsage["cost_status"]): string 
   return `$${c.toFixed(2)}`;
 }
 
-export default function AgentStatusBar({ usage, thinking, onOpenTrajectory, selectedModel }: Props) {
+export default function AgentStatusBar({ usage, thinking, selectedModel }: Props) {
   if (!usage) return null;
   const { input_tokens, output_tokens, tool_call_count } = usage;
   const total = input_tokens + output_tokens;
@@ -58,17 +57,6 @@ export default function AgentStatusBar({ usage, thinking, onOpenTrajectory, sele
       >
         {fmtCost(usage.estimated_cost_usd, usage.cost_status)}
       </span>
-      {onOpenTrajectory && (
-        <button
-          type="button"
-          className="agent-status-pill agent-status-btn"
-          onClick={onOpenTrajectory}
-          title="View trajectory log for this session"
-          aria-label="View trajectory log"
-        >
-          ⎘
-        </button>
-      )}
     </div>
   );
 }

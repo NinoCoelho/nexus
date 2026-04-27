@@ -15,9 +15,11 @@ import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import {
   cancelGraphragIndexFile,
+  cancelHitlRequest,
   getGraphragIndexStatus,
   graphragIndexFile,
   pingHealth,
+  respondToUserRequest,
 } from "./api";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
@@ -32,7 +34,6 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
-import TrajectoryModal from "./components/TrajectoryModal";
 import SharedSessionView from "./components/SharedSessionView";
 
 export default function App() {
@@ -73,7 +74,6 @@ export default function App() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
-  const [trajectoryOpen, setTrajectoryOpen] = useState(false);
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's
@@ -151,7 +151,7 @@ export default function App() {
   // view. Recovers pending requests on mount via
   // /notifications/pending so a hard reload mid-question still
   // surfaces the dialog.
-  const { pendingRequest, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest } = useApprovalQueue();
+  const { pendingRequest, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest, dropRequest } = useApprovalQueue();
 
   // Bell + Web Push: durable HITL history visible from any view, plus
   // OS-level notifications when no Nexus tab is open. The push hook
@@ -387,7 +387,6 @@ export default function App() {
                   usage={sessionUsage}
                   thinking={activeState.thinking}
                   selectedModel={activeState.selectedModel}
-                  onOpenTrajectory={activeSession ? () => setTrajectoryOpen(true) : undefined}
                 />
               : null
           }
@@ -399,6 +398,16 @@ export default function App() {
               pushSubscribed={push.subscribed}
               onRequestPushPermission={() => { void push.requestPermission(); }}
               onRefresh={notificationCenter.refresh}
+              onSelectPending={focusRequest}
+              onJumpToChat={handleSessionSelect}
+              onCancel={async (sid, rid) => {
+                await cancelHitlRequest(sid, rid);
+                dropRequest(rid);
+              }}
+              onAnswer={async (sid, rid, answer) => {
+                await respondToUserRequest(sid, rid, answer);
+                dropRequest(rid);
+              }}
             />
           }
         />
@@ -543,11 +552,6 @@ export default function App() {
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-      <TrajectoryModal
-        sessionId={activeSession}
-        open={trajectoryOpen}
-        onClose={() => setTrajectoryOpen(false)}
-      />
     </div>
   );
 }

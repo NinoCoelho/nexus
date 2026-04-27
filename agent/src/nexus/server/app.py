@@ -149,38 +149,51 @@ def create_app(
             event_bus.set_loop(asyncio.get_running_loop())
         except Exception:
             log.exception("event_bus setup failed")
+        # ``NEXUS_SKIP_LOCAL_LLM_RESTART=1`` skips both the orphan reap and
+        # the model-restart path. Tests set it because:
+        #   - reap_orphans() walks the host process table and kills any
+        #     llama-server it finds whose parent isn't the test process —
+        #     which would terminate the real daemon's running models.
+        #   - restart_local_models() reads the user's real
+        #     ~/.nexus/config.toml, blocks for seconds spawning GGUFs the
+        #     test never asked for, and may rewrite the config when a GGUF
+        #     can't be found.
+        skip_local_llm = bool(os.environ.get("NEXUS_SKIP_LOCAL_LLM_RESTART"))
+
         # Kill orphan llama-server processes from previous crashed runs
         # BEFORE restarting models, so we don't accumulate duplicates.
-        try:
-            from ..local_llm import manager as _local_mgr
-            reaped = await asyncio.to_thread(_local_mgr.reap_orphans)
-            if reaped:
-                log.info("[local_llm] reaped %d orphan(s): %s", len(reaped), reaped)
-        except Exception:
-            log.exception("local_llm orphan reap failed")
+        if not skip_local_llm:
+            try:
+                from ..local_llm import manager as _local_mgr
+                reaped = await asyncio.to_thread(_local_mgr.reap_orphans)
+                if reaped:
+                    log.info("[local_llm] reaped %d orphan(s): %s", len(reaped), reaped)
+            except Exception:
+                log.exception("local_llm orphan reap failed")
 
         # Restart any local-* models the user had enabled in a prior run.
         # Each gets a fresh port; we refresh config and rebuild the registry
         # so the agent sees the live URLs without the user opening Settings.
         # Models whose GGUF is gone (or that fail to spawn) get pruned instead.
-        try:
-            from ..local_llm import manager as _local_mgr
+        if not skip_local_llm:
+            try:
+                from ..local_llm import manager as _local_mgr
 
-            def _restart_blocking() -> int:
-                return _local_mgr.restart_local_models()
+                def _restart_blocking() -> int:
+                    return _local_mgr.restart_local_models()
 
-            started = await asyncio.to_thread(_restart_blocking)
-            if started > 0:
-                from ..config_file import load as _load_cfg
-                from .routes.config import _rebuild_registry
-                _rebuild_registry(_load_cfg(), mutable_state, agent)
-                log.info("[local_llm] restarted %d local model(s) at startup", started)
-            else:
-                # No live entries to restart — strip any dangling local-*
-                # entries left in config from an unclean shutdown.
-                _local_mgr.cleanup_stale_config()
-        except Exception:
-            log.exception("local_llm restart failed")
+                started = await asyncio.to_thread(_restart_blocking)
+                if started > 0:
+                    from ..config_file import load as _load_cfg
+                    from .routes.config import _rebuild_registry
+                    _rebuild_registry(_load_cfg(), mutable_state, agent)
+                    log.info("[local_llm] restarted %d local model(s) at startup", started)
+                else:
+                    # No live entries to restart — strip any dangling local-*
+                    # entries left in config from an unclean shutdown.
+                    _local_mgr.cleanup_stale_config()
+            except Exception:
+                log.exception("local_llm restart failed")
         # ── parked HITL sweep (durable async ask_user) ──────────────────────
         # Re-publish ``user_request`` for any rows that were left parked when
         # the server stopped, so connected clients re-queue them in the bell.
