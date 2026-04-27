@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loom.tools.base import ToolHandler, ToolResult
 from loom.tools.registry import ToolRegistry
 
 from nexus.agent.llm import ToolSpec
+
+if TYPE_CHECKING:
+    from loom.home import AgentHome
+    from loom.permissions import AgentPermissions
 
 
 class _SimpleToolHandler(ToolHandler):
@@ -60,6 +64,8 @@ def build_tool_registry(
     handlers: AgentHandlers,
     search_cfg: Any | None = None,
     scrape_cfg: Any | None = None,
+    home: "AgentHome | None" = None,
+    permissions: "AgentPermissions | None" = None,
 ) -> ToolRegistry:
     """Build a loom ToolRegistry populated with all Nexus tools.
 
@@ -245,6 +251,13 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
     registry.register(_SimpleToolHandler(TERMINAL_TOOL, _terminal))
+
+    # edit_profile — gated by AgentPermissions. Default Loom permissions allow
+    # USER.md updates only; SOUL/IDENTITY return permission_denied.
+    if home is not None and permissions is not None:
+        from loom.tools.profile import EditIdentityTool
+
+        registry.register(EditIdentityTool(home, permissions))
 
     # Web search — enabled by default via search.enabled (default: True).
     if search_cfg and getattr(search_cfg, "enabled", False):

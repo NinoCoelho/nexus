@@ -5,7 +5,7 @@ Isolated here to keep agent.py under 300 LOC.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
 from loom.loop import Agent as LoomAgent, AgentConfig
@@ -13,6 +13,10 @@ from loom.loop import Agent as LoomAgent, AgentConfig
 from ..prompt_builder import build_system_prompt
 from ...skills.registry import SkillRegistry
 from .helpers import DEFAULT_MAX_TOOL_ITERATIONS, _AFFIRMATIVES, _NEGATIVES
+
+if TYPE_CHECKING:
+    from loom.home import AgentHome
+    from loom.permissions import AgentPermissions
 
 
 def build_loom_agent(
@@ -25,6 +29,8 @@ def build_loom_agent(
     get_chosen_model: Any,
     get_turn_trace: Any,
     on_trace_event: Any,
+    home: "AgentHome | None" = None,
+    permissions: "AgentPermissions | None" = None,
 ) -> LoomAgent:
     """Build and return the configured loom.Agent.
 
@@ -45,6 +51,8 @@ def build_loom_agent(
         handlers=handlers,
         search_cfg=nexus_cfg.search if nexus_cfg else None,
         scrape_cfg=nexus_cfg.scrape if nexus_cfg else None,
+        home=home,
+        permissions=permissions,
     )
 
     max_iter = (
@@ -68,7 +76,7 @@ def build_loom_agent(
     def _before_llm_call(messages: list[lt.ChatMessage]) -> list[lt.ChatMessage]:
         _iter_counter[0] += 1
         on_trace_event("iter", {"n": _iter_counter[0]})
-        sys_prompt = build_system_prompt(registry)
+        sys_prompt = build_system_prompt(registry, home=home)
         return [
             lt.ChatMessage(role=lt.Role.SYSTEM, content=sys_prompt),
             *[m for m in messages if m.role != lt.Role.SYSTEM],

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import uvicorn
+from loom.home import AgentHome
+from loom.permissions import AgentPermissions
 
 from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, PORT, SKILLS_DIR
 from .config_file import load as load_config, apply_env_overlay
@@ -14,6 +17,27 @@ from .agent.registry import build_registry
 from .redact import install_redaction
 from .server.app import create_app
 from .skills.registry import SkillRegistry
+
+
+_NEXUS_USER_DEFAULT = """\
+<!-- Stable facts only: name, timezone, tone, recurring context. -->
+<!-- Free-form notes about the user belong in vault/me.md, not here. -->
+
+(empty — the agent will fill this in as it learns about you)
+"""
+
+
+def _build_agent_home() -> tuple[AgentHome, AgentPermissions]:
+    """Initialize ~/.nexus/USER.md (Loom AgentHome) without touching the
+    other Loom-managed paths Nexus already manages on its own (skills/,
+    vault/, memory/). Defaults: only USER.md is writable by the agent.
+    """
+    home_path = Path("~/.nexus").expanduser()
+    home_path.mkdir(parents=True, exist_ok=True)
+    home = AgentHome(home_path, name="nexus")
+    if not home.user_path.exists():
+        home.write_user(_NEXUS_USER_DEFAULT)
+    return home, AgentPermissions()
 
 log = logging.getLogger(__name__)
 
@@ -67,11 +91,15 @@ def build_app():
             default_provider = OpenAIProvider(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, model=LLM_MODEL)
             provider_registry = None
 
+    home, permissions = _build_agent_home()
+
     agent = Agent(
         provider=default_provider,
         registry=registry,
         provider_registry=provider_registry,
         nexus_cfg=cfg,
+        home=home,
+        permissions=permissions,
     )
 
     graphrag_cfg = cfg.graphrag if cfg.graphrag.enabled else None

@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..skills.registry import SkillRegistry
+
+if TYPE_CHECKING:
+    from loom.home import AgentHome
 
 _MEMORY_DIR = Path("~/.nexus/vault/memory").expanduser()
 _MEMORY_MAX_TOTAL = 1500
@@ -210,13 +214,39 @@ changes, and keep them current.
 """
 
 
+_USER_NUDGE = (
+    "Update this file via `edit_profile(file=\"user\", ...)` when you learn a "
+    "**stable** fact about the user (name, preferred tone, timezone, recurring "
+    "context). Keep it short — task-specific or ephemeral facts go in "
+    "`vault/memory/` or `vault/me.md`."
+)
+
+
+def _user_block(home: "AgentHome | None") -> str:
+    if home is None:
+        return ""
+    try:
+        content = home.read_user().strip()
+    except Exception:
+        return ""
+    if not content:
+        return ""
+    return f"## About the user\n\n{content}\n\n{_USER_NUDGE}"
+
+
 def build_system_prompt(
     registry: SkillRegistry,
     *,
     context: str | None = None,
+    home: "AgentHome | None" = None,
 ) -> str:
     _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
+
+    user_block = _user_block(home)
+    if user_block:
+        parts.append(user_block)
+        parts.append("")
 
     if context:
         parts.append(f"## Session context\n\n{context}")

@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
 from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
@@ -21,6 +21,10 @@ from .helpers import (
     _to_loom_message,
 )
 from .overflow import check_overflow
+
+if TYPE_CHECKING:
+    from loom.home import AgentHome
+    from loom.permissions import AgentPermissions
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +49,8 @@ class Agent:
         provider_registry: Any | None = None,
         nexus_cfg: Any | None = None,
         ask_user_handler: AskUserHandler | None = None,
+        home: "AgentHome | None" = None,
+        permissions: "AgentPermissions | None" = None,
     ) -> None:
         from .._loom_bridge import AgentHandlers
 
@@ -53,6 +59,8 @@ class Agent:
         self._trace = trace
         self._provider_registry = provider_registry
         self._nexus_cfg = nexus_cfg
+        self._home = home
+        self._permissions = permissions
         # _handlers is a mutable container shared with the tool registry
         # so late-binding by app.py is reflected at dispatch time.
         self._handlers = AgentHandlers(ask_user=ask_user_handler)
@@ -72,6 +80,8 @@ class Agent:
             get_chosen_model=lambda: self._chosen_model,
             get_turn_trace=lambda: self._turn_trace,
             on_trace_event=self._on_event,
+            home=self._home,
+            permissions=self._permissions,
         )
         # SessionStore is wired in by app.py so the streaming loop can
         # update the parked-tool-call snapshot used by ask_user_tool when
