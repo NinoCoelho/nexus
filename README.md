@@ -1,9 +1,11 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/Nexus-Agentic%20Platform-copper?style=for-the-badge&labelColor=1a1a2e&color=b87333">
-  <img alt="Nexus" src="https://img.shields.io/badge/Nexus-Agentic%20Platform-copper?style=for-the-badge&labelColor=f5f5f5&color=b87333">
-</picture>
+<p align="center">
+  <img src="ui/public/images/nexus_banner_splash.png" alt="Nexus" width="320" />
+</p>
 
-**A self-evolving single-agent platform** with runtime skill authoring, a tool-calling agentic loop powered by [Loom](../../loom), pluggable LLM providers, optional auto-routing, vault-native knowledge management, kanban boards, and a full-featured React web UI.
+<p align="center">
+  <strong>A self-evolving single-agent platform.</strong><br/>
+  Runtime skill authoring, a tool-calling loop powered by <a href="https://github.com/NinoCoelho/loom">Loom</a>, a vault-native knowledge base with kanban + calendar + datatables, a 3D knowledge graph, human-in-the-loop approvals, and a full React 19 web UI — desktop, browser, and packaged macOS app.
+</p>
 
 ---
 
@@ -18,13 +20,16 @@
   - [Progressive Disclosure](#progressive-disclosure)
   - [Tool System](#tool-system)
   - [Vault & Knowledge Graph](#vault--knowledge-graph)
-  - [Kanban System](#kanban-system)
+  - [Kanban, Calendar, DataTables, CSV](#kanban-calendar-datatables-csv)
+  - [Calendar Triggers (Heartbeat)](#calendar-triggers-heartbeat)
   - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
+  - [Web Push Notifications](#web-push-notifications)
   - [Skill System & Self-Evolution](#skill-system--self-evolution)
-  - [Security Guard](#security-guard)
-  - [Model Routing](#model-routing)
-  - [Configuration System](#configuration-system)
-  - [Session Persistence](#session-persistence)
+  - [Ontology Management](#ontology-management)
+  - [Local LLMs](#local-llms)
+  - [Public Tunnel (Sharing)](#public-tunnel-sharing)
+  - [Audio Transcription](#audio-transcription)
+  - [Session Persistence & Sharing](#session-persistence--sharing)
   - [Daemon & Process Management](#daemon--process-management)
   - [Frontend Architecture](#frontend-architecture)
 - [Project Layout](#project-layout)
@@ -32,37 +37,36 @@
 - [CLI Reference](#cli-reference)
 - [API Reference](#api-reference)
 - [Configuration Guide](#configuration-guide)
-- [Design Tokens](#design-tokens)
 - [License](#license)
 
 ---
 
 ## Overview
 
-Nexus is a self-evolving agentic platform that combines a Python FastAPI backend with a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime, manage a markdown-based knowledge vault, operate kanban boards, and interact with users through a human-in-the-loop (HITL) approval system.
+Nexus is a self-evolving agentic platform with a Python FastAPI backend and a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime; manage a markdown knowledge vault with FTS + GraphRAG; operate Obsidian-compatible kanban boards, an iCal-style calendar, and DuckDB-backed datatables; trigger turns from calendar events; and interact with users through a human-in-the-loop approval system that streams via SSE and Web Push.
 
-The core agentic loop is powered by **Loom** — a reusable agentic framework that provides the tool-calling iteration engine, LLM provider abstractions, session persistence, HITL broker, and error handling. Nexus builds on Loom by adding domain-specific tools (vault, kanban, skill management), a rich web UI, TOML-based configuration, and self-evolution capabilities.
+The agentic loop is powered by **Loom** — a reusable framework that provides the tool-calling iteration engine, LLM provider abstractions, session persistence, HITL broker, heartbeat drivers, GraphRAG memory, and error classification. Nexus layers on domain tools (vault, kanban, calendar, datatables, skill management, ontology), a rich web UI, TOML-based config, optional local LLMs (llama.cpp), public tunneling (ngrok), and self-evolution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Nexus Platform                          │
 │                                                                 │
-│   ┌─────────────┐    ┌─────────────┐    ┌──────────────────┐   │
-│   │  React UI   │◄──►│  FastAPI    │───►│  Loom Agent Loop │   │
-│   │  (Vite)     │SSE │  Server     │    │  (Core Engine)   │   │
-│   └─────────────┘    └──────┬──────┘    └───────┬──────────┘   │
+│   ┌─────────────┐    ┌─────────────┐    ┌──────────────────┐    │
+│   │  React UI   │◄──►│  FastAPI    │───►│  Loom Agent Loop │    │
+│   │  (Vite)     │SSE │  Server     │    │  (Core Engine)   │    │
+│   └─────────────┘    └──────┬──────┘    └───────┬──────────┘    │
 │                             │                    │              │
-│                    ┌────────▼────────┐  ┌───────▼──────────┐   │
-│                    │ Session Store   │  │  Tool Registry   │   │
-│                    │ (SQLite WAL)    │  │  (15+ tools)     │   │
-│                    └─────────────────┘  └───────┬──────────┘   │
-│                                                  │              │
-│                              ┌───────────────────┼──────────┐   │
-│                              │                   │          │   │
-│                        ┌─────▼─────┐   ┌────────▼───┐  ┌──▼────────┐
-│                        │   Vault   │   │   Skills   │  │  HITL     │
-│                        │  + Kanban │   │  + Guard   │  │  Broker   │
-│                        └───────────┘   └────────────┘  └───────────┘
+│                    ┌────────▼─────────┐  ┌──────▼───────────┐   │
+│                    │  Session Store   │  │  Tool Registry   │   │
+│                    │  (SQLite WAL)    │  │  (20+ tools)     │   │
+│                    └──────────────────┘  └──────┬───────────┘   │
+│                                                 │               │
+│      ┌─────────┬─────────┬─────────┬────────────┼──────────┐    │
+│      │         │         │         │            │          │    │
+│  ┌───▼───┐ ┌───▼────┐ ┌──▼─────┐ ┌─▼────┐ ┌─────▼────┐ ┌───▼──┐ │
+│  │ Vault │ │Kanban+ │ │Skills+ │ │HITL +│ │Local LLM │ │Tunnel│ │
+│  │GraphRAG│ │Calendar│ │ Guard │ │ Push │ │llama.cpp │ │ngrok │ │
+│  └───────┘ └────────┘ └───────┘ └──────┘ └──────────┘ └──────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,16 +74,32 @@ The core agentic loop is powered by **Loom** — a reusable agentic framework th
 
 | Feature | Description |
 |---------|-------------|
-| **Self-Evolving Agent** | Creates, edits, patches, and deletes its own skills at runtime via `skill_manage` tool with security guard scanning |
-| **Progressive Disclosure** | System prompt carries only skill names + descriptions; full bodies are loaded on demand to minimize token usage |
-| **Multi-Provider** | Any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, Groq, LM Studio, Ollama, vLLM) plus native Anthropic |
-| **Auto Routing** | Optional per-task model selection by classifying coding/reasoning/trivial/balanced and scoring model strengths |
-| **Vault Knowledge Base** | Markdown files with FTS5 search, backlinks graph, tag indexing, and Obsidian-compatible kanban boards |
-| **Kanban Boards** | Vault-native boards stored as `.md` files with `kanban-plugin:` frontmatter — no separate store |
-| **Human-in-the-Loop** | `ask_user` (confirm/choice/text) and `terminal` (shell commands) with YOLO mode for unattended runs |
-| **Dual Interface** | Terminal CLI (`nexus chat`) and full web UI with chat, vault, graph, agent-graph, and insights views |
-| **Daemon Mode** | Background process with PID tracking, log management, and cross-platform service installation |
-| **ACP-Ready** | Agent Communication Protocol stub for inter-agent communication via external gateways |
+| **Self-Evolving Agent** | Creates/edits/patches/deletes its own skills at runtime via `skill_manage`, with regex security guard + rollback |
+| **Progressive Disclosure** | System prompt carries only skill names + descriptions; full bodies load on demand to keep tokens lean |
+| **Multi-Provider LLMs** | Any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, Groq, vLLM) plus native Anthropic and local Ollama / llama.cpp |
+| **Bundled Local LLM** | Ship-and-run Qwen2.5-3B-Instruct via llama.cpp; UI for searching / downloading / activating Hugging Face GGUFs |
+| **Reasoning Stream** | Streams `thinking` events from reasoning-capable models into a collapsible block above each assistant turn |
+| **Vault Knowledge Base** | Markdown files + FTS5 search + tag index + backlinks graph + GraphRAG semantic recall |
+| **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions) |
+| **Kanban Boards** | Vault-native (`kanban-plugin: basic`) — boards are markdown files; cards can dispatch chat sessions |
+| **Calendar** | Vault-native iCal-style events with RRULE recurrence, MonthGrid + WeekGrid views, RepeatPicker |
+| **Calendar Triggers** | Heartbeat driver fires events on schedule into agent turns; supports single-shot and intra-day fire windows |
+| **DataTables + CSV** | DuckDB-backed analytics tools and a CSV editor for tabular vault content |
+| **Ontology Tool** | Agent-managed entity/relation schema for GraphRAG over the vault |
+| **Human-in-the-Loop** | `ask_user` (confirm/choice/text) and `terminal` (shell) gated by SSE approval dialogs; YOLO mode for unattended runs |
+| **Web Push** | Background push notifications for HITL prompts when the tab is closed (VAPID) |
+| **Public Tunnel** | One-click ngrok exposure with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs |
+| **Read-Only Share Links** | Publish a session as a read-only public link with a generated token |
+| **Audio Transcription** | Local or remote transcription with live waveform + cancel UI |
+| **Backup / Restore** | `nexus backup create` and `restore` for the entire `~/.nexus/` data directory |
+| **In-Chat Search + Pins** | Cmd+Shift+F across the active session; pin assistant turns to a sidebar bookmarks list |
+| **Edit User Messages** | Pencil-affordance on user turns rewinds + re-runs the conversation from that point |
+| **Daemon Mode** | Background process with PID/log management and systemd / launchd / NSSM service installers |
+| **Desktop App** | Packaged `Nexus.app` macOS bundle with menu bar autostart and prefs (loopback-only bind; remote access via `nexus tunnel`) |
+| **Mobile-Friendly** | Capacitor-friendly responsive layout; iOS Xcode project scaffolding included |
+| **One-Line Install** | `curl … | bash` clones, installs uv + deps, and writes a default config |
+| **Skills From Git** | `nexus skills install <git-url-or-path>` |
+| **ACP Bridge** | Optional Agent Communication Protocol over WebSocket with Ed25519 device auth |
 
 ---
 
@@ -89,57 +109,64 @@ The core agentic loop is powered by **Loom** — a reusable agentic framework th
 
 ```mermaid
 graph TB
-    subgraph "Frontend (React 19 + Vite)"
-        UI["Web UI<br/>port 1890"]
+    subgraph "Frontend"
+        UI["Web UI (port 1890)"]
+        APP["Nexus.app (macOS bundle)"]
+        MOB["Mobile (Capacitor / iOS)"]
         CLI["CLI / TUI"]
     end
 
-    subgraph "Backend (FastAPI)"
-        API["FastAPI Server<br/>port 18989"]
-        SSE_S["SSE: /chat/stream"]
-        SSE_E["SSE: /chat/{sid}/events"]
+    subgraph "Backend (FastAPI :18989)"
+        API["FastAPI Server"]
+        SSE_T["SSE: /chat/stream (per-turn)"]
+        SSE_E["SSE: /chat/{sid}/events (session)"]
+        PUSH["Web Push (VAPID)"]
+        TUN["Tunnel Manager (ngrok)"]
     end
 
     subgraph "Agent Core"
-        LOOP["Nexus Agent<br/>(façade over Loom)"]
-        LOOM["Loom Agent Loop<br/>tool-call iteration"]
-        BRIDGE["Loom Bridge<br/>type adapters"]
-        TOOLS["Tool Registry<br/>15+ tools"]
+        LOOP["Nexus Agent (façade over Loom)"]
+        BRIDGE["Loom Bridge (type adapters)"]
+        LOOM["Loom Agent Loop"]
+        TOOLS["Tool Registry (20+ tools)"]
+        HB["Heartbeat Drivers (calendar)"]
     end
 
     subgraph "LLM Providers"
         OAI["OpenAI-Compatible"]
         ANT["Anthropic"]
         OLL["Ollama / vLLM"]
+        LLAMA["Local llama.cpp"]
     end
 
     subgraph "Persistence"
-        VAULT["Vault<br/>~/.nexus/vault/"]
-        SKILLS["Skills<br/>~/.nexus/skills/"]
-        SESSIONS["Sessions DB<br/>SQLite WAL"]
-        CONFIG["Config<br/>~/.nexus/config.toml"]
+        VAULT["Vault ~/.nexus/vault/"]
+        SKILLS["Skills ~/.nexus/skills/"]
+        SESSIONS["Sessions DB (SQLite WAL)"]
+        GRAPHRAG["GraphRAG store"]
+        CONFIG["~/.nexus/config.toml"]
     end
 
     UI -->|"HTTP + SSE"| API
-    CLI -->|"HTTP / stdio"| API
-    API --> SSE_S
+    APP --> UI
+    MOB --> API
+    CLI --> API
+    API --> SSE_T
     API --> SSE_E
+    API --> PUSH
+    API --> TUN
     API --> LOOP
-    LOOP --> BRIDGE
-    BRIDGE --> LOOM
-    LOOM --> TOOLS
-    LOOM -->|"LoomProviderAdapter"| OAI
-    LOOM -->|"LoomProviderAdapter"| ANT
-    LOOM -->|"LoomProviderAdapter"| OLL
-    TOOLS --> VAULT
-    TOOLS --> SKILLS
+    LOOP --> BRIDGE --> LOOM --> TOOLS
+    HB --> LOOP
+    LOOM --> OAI & ANT & OLL & LLAMA
+    TOOLS --> VAULT & SKILLS & GRAPHRAG
     API --> SESSIONS
     LOOP --> CONFIG
 ```
 
 ### Loom Integration
 
-Nexus is built on top of **Loom**, a reusable agentic-core framework that provides the fundamental infrastructure for LLM-powered agents. Loom is installed as a local editable dependency:
+Nexus depends on **Loom** as a local editable path:
 
 ```toml
 # agent/pyproject.toml
@@ -147,7 +174,7 @@ Nexus is built on top of **Loom**, a reusable agentic-core framework that provid
 loom = { path = "../../loom", editable = true }
 ```
 
-Both repositories must be cloned side by side:
+Both repos live side by side:
 
 ```
 <parent>/
@@ -155,90 +182,37 @@ Both repositories must be cloned side by side:
   nexus/   # this repo
 ```
 
-#### What Loom Provides
-
-```mermaid
-graph LR
-    subgraph "Loom Framework"
-        LOOP["Agent Loop<br/>(tool-call iteration)"]
-        TYPES["Core Types<br/>(Role, ToolSpec, Usage, ChatMessage)"]
-        TOOLS["Tool ABC<br/>(ToolHandler, ToolRegistry)"]
-        HITL["HITL Broker<br/>(Future registry + pub/sub)"]
-        STORE["Session Store<br/>(SQLite WAL)"]
-        MEM["Memory Store<br/>(FTS5 + salience)"]
-        ERR["Error Classification<br/>(7-stage pipeline)"]
-        ACP["ACP Protocol<br/>(Ed25519 + WebSocket)"]
-        RETRY["Retry Logic<br/>(jittered backoff)"]
-    end
-```
-
-#### Façade + Adapter Pattern
-
-Nexus does **not** use Loom's built-in server or runtime directly. Instead, it uses a **façade + adapter** pattern:
-
-```mermaid
-graph TB
-    subgraph "Nexus Layer"
-        NAGENT["Nexus Agent<br/>(loop.py)"]
-        NPROV["Nexus LLM Providers<br/>(OpenAI, Anthropic)"]
-        NTOOLS["Nexus Tool Handlers"]
-    end
-
-    subgraph "Bridge (_loom_bridge.py)"
-        ADAPTER["LoomProviderAdapter<br/>wraps Nexus providers"]
-        SIMPLE["_SimpleToolHandler<br/>wraps Nexus handlers"]
-        REG["build_tool_registry()<br/>populates Loom registry"]
-    end
-
-    subgraph "Loom Layer"
-        LAGENT["Loom Agent<br/>(loom.loop.Agent)"]
-        LREG["Loom ToolRegistry"]
-        LLOOP["Core Loop<br/>LLM → tools → iterate"]
-    end
-
-    NAGENT -->|"delegates to"| LAGENT
-    NAGENT --> ADAPTER
-    ADAPTER -->|"satisfies Loom<br/>provider protocol"| LAGENT
-    NTOOLS --> SIMPLE
-    SIMPLE --> REG
-    REG --> LREG
-    LREG --> LAGENT
-    LAGENT --> LLOOP
-
-    style ADAPTER fill:#b87333,color:#fff
-    style SIMPLE fill:#b87333,color:#fff
-    style REG fill:#b87333,color:#fff
-```
-
-The bridge (`agent/src/nexus/agent/_loom_bridge.py`) resolves two key type divergences:
-
-| Concern | Nexus | Loom | Bridge Solution |
-|---------|-------|------|-----------------|
-| `ToolCall.arguments` | `dict` | JSON `str` | `LoomProviderAdapter` converts at boundary |
-| `ChatResponse` shape | flat (content + tool_calls) | wrapped (`message=ChatMessage(...)`) | `LoomProviderAdapter` wraps/unwraps |
-
-#### Loom Modules Used by Nexus
+Nexus does **not** use Loom's built-in server. It composes Loom via a façade + adapter pattern in `agent/src/nexus/agent/_loom_bridge/`:
 
 | Loom Module | Nexus Usage |
 |---|---|
-| `loom.loop.Agent, AgentConfig` | Core agentic loop (tool-call iteration, retry, streaming) |
-| `loom.tools.base.ToolHandler, ToolResult` | Base class for tool adapters |
-| `loom.tools.registry.ToolRegistry` | Tool dispatch by name |
+| `loom.loop.Agent, AgentConfig` | Core tool-call loop, retry, streaming |
+| `loom.tools.base.ToolHandler, ToolResult` | Base for tool adapters |
+| `loom.tools.registry.ToolRegistry` | Tool dispatch |
 | `loom.hitl.HitlBroker, HitlEvent` | Session-scoped HITL Future registry + pub/sub |
-| `loom.store.session.SessionStore` | SQLite session persistence (direct reuse) |
+| `loom.heartbeat.HeartbeatDriver` | Calendar trigger driver |
+| `loom.store.session.SessionStore` | SQLite session persistence |
 | `loom.store.memory.MemoryStore` | BM25 + salience memory recall |
-| `loom.acp.AcpConfig, call_agent` | Agent Communication Protocol calls |
-| `loom.errors.*` | 7-stage error classification pipeline |
-| `loom.types.*` | Core types: `Role`, `ToolSpec`, `Usage`, `ChatMessage`, stream events |
+| `loom.acp.AcpConfig, call_agent` | Agent Communication Protocol |
+| `loom.errors.*` | 7-stage error classification |
+| `loom.types.*` | `Role`, `ToolSpec`, `Usage`, `ChatMessage`, stream events |
+| `loom.search.WebSearchTool` | DDGS / Brave / Tavily web search |
+
+The bridge resolves two type divergences:
+
+| Concern | Nexus | Loom | Bridge Solution |
+|---|---|---|---|
+| `ToolCall.arguments` | `dict` | JSON `str` | `LoomProviderAdapter` converts at boundary |
+| `ChatResponse` shape | flat | wrapped (`message=ChatMessage(...)`) | `LoomProviderAdapter` wraps/unwraps |
 
 ### Agent Loop
 
-The agent loop in `agent/src/nexus/agent/loop.py` is a façade over `loom.loop.Agent` that preserves the Nexus external API. Each turn follows this flow:
+`agent/src/nexus/agent/loop/` is a façade over `loom.loop.Agent` that preserves the Nexus external API. Each turn:
 
 ```mermaid
 sequenceDiagram
     participant U as User / UI
-    participant S as FastAPI Server
+    participant S as FastAPI
     participant A as Nexus Agent
     participant L as Loom Agent
     participant P as LLM Provider
@@ -246,110 +220,119 @@ sequenceDiagram
 
     U->>S: POST /chat/stream
     S->>A: run_turn_stream(message, history)
-    A->>A: before_llm_call hook<br/>(rebuild system prompt)
+    A->>A: before_llm_call hook (rebuild prompt)
     A->>L: run_turn_stream()
-    
-    loop Tool-Calling Loop (max 32 iterations)
+
+    loop Tool-Calling Loop (max 32)
         L->>P: chat_stream(messages, tools)
-        P-->>L: SSE stream (deltas, tool_calls)
-        L-->>S: content_delta events
-        
-        alt Tool calls received
-            L->>T: dispatch(tool_name, args)
+        P-->>L: SSE deltas (content, thinking, tool_calls)
+        L-->>S: delta + thinking events
+
+        alt Tool calls
+            L->>T: dispatch(name, args)
             T-->>L: ToolResult
             L-->>S: tool_exec events
-            L->>A: before_llm_call hook<br/>(fresh prompt)
-        else Stop reason
+            L->>A: rebuild prompt
+        else Stop
             L-->>A: DoneEvent
         end
     end
-    
-    A-->>S: SSE events (done, error)
-    S-->>U: SSE stream complete
+
+    A-->>S: done / error
+    S-->>U: SSE complete
 ```
 
-Key behaviors:
-
-- **`before_llm_call` hook**: Rebuilds the system prompt on every iteration, ensuring the latest skill list and memory state are always current.
-- **`choose_model` hook**: When routing mode is `auto`, scores and selects the best model per-turn.
-- **Max iterations**: Default 32, configurable via `agent.max_iterations` in config.
-- **Streaming**: `run_turn_stream()` translates Loom's Pydantic stream events into Nexus's lightweight dict-based SSE events.
+- **`before_llm_call` hook**: Rebuilds the system prompt every iteration so skill list + memory + ontology are always current.
+- **Reasoning stream**: `thinking` events from reasoning-capable models render in a collapsible reasoning block on each assistant turn.
+- **Max iterations**: 32 by default; configurable.
+- **Streaming**: `run_turn_stream()` translates Loom Pydantic stream events into lightweight dict-based SSE events for the UI.
 
 ### Progressive Disclosure
-
-Token efficiency is critical. Nexus uses a progressive disclosure strategy for skills:
 
 ```mermaid
 graph LR
     subgraph "System Prompt (every turn)"
-        ID["Identity Block<br/>~150 lines"]
+        ID["Identity Block"]
         CTX["Session Context"]
-        SD["Skill Names +<br/>Descriptions Only"]
-        MEM["Memory Summary<br/>(top 5 files, 1500 char cap)"]
+        SD["Skill Names + Descriptions Only"]
+        MEM["Vault Memory Summary"]
+        ONTO["Ontology Summary"]
     end
 
     subgraph "On-Demand"
-        SV["skill_view tool<br/>loads full SKILL.md body"]
+        SV["skill_view → full SKILL.md"]
     end
 
     ID --> SD
     CTX --> SD
     MEM --> SD
-    SD -->|"agent decides<br/>to use a skill"| SV
+    ONTO --> SD
+    SD -->|"agent decides"| SV
 ```
 
-This keeps the system prompt small. The agent only pays the token cost of a full skill body when it actively decides to use it.
+The agent only pays the token cost of a full skill body when it actively decides to use the skill.
 
 ### Tool System
 
-Nexus registers 17 tools into Loom's `ToolRegistry` via `build_tool_registry()` in `_loom_bridge.py`:
+Tools are registered into Loom's `ToolRegistry` via `_loom_bridge/registry.py`:
 
 ```mermaid
 graph TB
     REG["Loom ToolRegistry"]
 
-    subgraph "Knowledge Tools"
-        VL["vault_list"]
-        VR["vault_read"]
-        VW["vault_write"]
-        VS["vault_search"]
-        VT["vault_tags"]
-        VB["vault_backlinks"]
-        KM["kanban_manage"]
+    subgraph "Knowledge"
+        VL["vault_list / read / write / search / tags / backlinks"]
+        VSEM["vault_semantic_search (GraphRAG)"]
+        ONT["ontology_manage"]
     end
 
-    subgraph "Skill Tools"
+    subgraph "Boards & Schedules"
+        KM["kanban_manage"]
+        KQ["kanban_query"]
+        DC["dispatch_card"]
+        CAL["calendar_manage"]
+    end
+
+    subgraph "Tabular"
+        DT["datatable_manage"]
+        CSV["csv_tool"]
+        VIS["visualize_table"]
+    end
+
+    subgraph "Skills"
         SL["skills_list"]
         SV["skill_view"]
-        SM["skill_manage<br/>(create/edit/patch/delete)"]
+        SM["skill_manage (create/edit/patch/delete)"]
     end
 
-    subgraph "Memory Tools"
-        MR["memory_read<br/>(vault-backed)"]
-        MW["memory_write<br/>(vault + GraphRAG)"]
+    subgraph "Memory"
+        MR["memory_read"]
+        MW["memory_write"]
     end
 
-    subgraph "External Tools"
-        HTTP["http_call<br/>(GET/POST)"]
-        ACP["acp_call<br/>(agent protocol)"]
+    subgraph "External"
+        HTTP["http_call"]
+        WEB["web_search (DDGS / Brave / Tavily)"]
+        ACP["acp_call (optional)"]
     end
 
-    subgraph "HITL Tools"
-        ASK["ask_user<br/>(confirm/choice/text)"]
-        TERM["terminal<br/>(shell commands)"]
+    subgraph "HITL"
+        ASK["ask_user (confirm/choice/text)"]
+        TERM["terminal (shell)"]
     end
 
-    REG --> VL & VR & VW & VS & VT & VB
-    REG --> KM
+    REG --> VL & VSEM & ONT
+    REG --> KM & KQ & DC & CAL
+    REG --> DT & CSV & VIS
     REG --> SL & SV & SM
     REG --> MR & MW
-    REG --> HTTP & ACP
+    REG --> HTTP & WEB & ACP
     REG --> ASK & TERM
 
     style REG fill:#1a1a2e,color:#fff
 ```
 
-Each tool is wrapped in a `_SimpleToolHandler` that adapts sync/async callables to Loom's `ToolHandler` ABC. HITL tools (`ask_user`, `terminal`) use late-binding via a mutable `AgentHandlers` container, allowing the server to wire them after construction.
+Each tool is wrapped in a `_SimpleToolHandler` that adapts sync/async callables to Loom's `ToolHandler` ABC. HITL tools use late-binding via a mutable `AgentHandlers` container so the server can wire them after construction. `acp_call` is registered only when an ACP gateway is configured. `web_search` is registered only when at least one provider is enabled in config.
 
 ### Vault & Knowledge Graph
 
@@ -357,118 +340,105 @@ The vault (`~/.nexus/vault/`) is a folder of markdown files with rich indexing:
 
 ```mermaid
 graph TB
-    subgraph "~/.nexus/vault/"
-        FILES["Markdown Files<br/>(.md with YAML frontmatter)"]
-    end
-
-    subgraph "Indexes (SQLite)"
-        FTS["FTS5 Search Index<br/>(vault_index.sqlite)<br/>BM25 ranking + snippets"]
-        META["Tag + Backlink Index<br/>(vault_meta.sqlite)<br/>file_tags + file_links"]
-    end
-
-    subgraph "Derived Views"
-        GRAPH["Backlink Graph<br/>(nodes + edges + orphans)"]
-        TAGS["Tag Cloud<br/>(frontmatter + #hashtags)"]
-        SEARCH["Full-Text Search<br/>(highlighted results)"]
-    end
+    FILES["Markdown Files (.md + YAML frontmatter)"]
+    FTS["FTS5 Search Index (vault_index.sqlite)"]
+    META["Tag + Backlink Index (vault_meta.sqlite)"]
+    GRAG["GraphRAG Store (entities + relations + embeddings)"]
+    GRAPH["Backlink Graph (nodes + edges + orphans)"]
+    TAGS["Tag Cloud"]
+    SEARCH["Full-Text Search (BM25 + snippets)"]
+    SEM["Semantic Recall"]
 
     FILES -->|"index on write"| FTS
     FILES -->|"index on write"| META
+    FILES -->|"index on write"| GRAG
     META --> GRAPH
     META --> TAGS
     FTS --> SEARCH
+    GRAG --> SEM
 ```
 
-Features:
+- Atomic writes (`tempfile.mkstemp` + `os.replace`).
+- Path-traversal protection via `_safe_resolve()`.
+- 1 MiB file size limit.
+- Tag extraction from frontmatter `tags:` and body `#hashtags` (code blocks excluded).
+- Backlink extraction from markdown links and bare path mentions.
+- 3D / 2D unified graph view with scoped subgraphs (file / folder / agent / session).
 
-- **Atomic writes**: All file mutations use `tempfile.mkstemp` + `os.replace` to prevent corruption.
-- **Path traversal protection**: `_safe_resolve()` prevents `../` attacks.
-- **1 MiB file size limit**: Enforced on write.
-- **Tag extraction**: From YAML frontmatter `tags:` lists and body `#hashtags` (code blocks excluded).
-- **Backlink extraction**: From markdown link destinations and bare path mentions.
-- **Graph API**: Returns nodes (path, size, folder), edges (from → to), and orphan nodes.
+### Kanban, Calendar, DataTables, CSV
 
-### Kanban System
+The vault is more than markdown — Nexus parses several frontmatter shapes to power richer views, all stored as plain `.md` files:
 
-Kanban boards are **vault-native** — stored as regular `.md` files with Obsidian-compatible format:
+| View | Frontmatter trigger | Notes |
+|---|---|---|
+| **Kanban** | `kanban-plugin: basic` | Obsidian-compatible. Lanes = `## H2`, cards = `### H3` with `<!-- nx:id=<uuid> -->`. Cards can dispatch chat sessions and link the session id back. |
+| **Calendar** | `nx-calendar: true` events under a calendar root | iCal RRULE recurrence; MonthGrid + WeekGrid; EventModal + RepeatPicker UI. |
+| **DataTable** | `nx-datatable: true` | DuckDB-backed CRUD with column types, filters, and inline cell editing. |
+| **CSV** | file extension `.csv` | First-class editor inside `VaultEditorPanel`. |
 
-```mermaid
-graph LR
-    subgraph "Vault File (kanban.md)"
-        FM["---<br/>kanban-plugin: basic<br/>---"]
-        L1["## To Do"]
-        C1["### Buy groceries<br/>&lt;!-- nx:id=uuid --&gt;"]
-        C2["### Write docs<br/>&lt;!-- nx:id=uuid --&gt;<br/>&lt;!-- nx:session=sid --&gt;"]
-        L2["## Done"]
-        C3["### Ship v1"]
-    end
+The `dispatch_card` and `kanban_query` tools let the agent operate on boards directly. `calendar_manage` reads/writes events. `datatable_manage` and `csv_tool` mutate tabular data; `visualize_table` produces charts.
 
-    subgraph "UI Renders"
-        KB["KanbanBoard.tsx<br/>(drag-drop lanes + cards)"]
-    end
+### Calendar Triggers (Heartbeat)
 
-    FM --> KB
-    L1 --> KB
-    C1 --> KB
-    C2 --> KB
-    L2 --> KB
-    C3 --> KB
-```
+`agent/src/nexus/heartbeat_drivers/calendar_trigger/` is a Loom `HeartbeatDriver` that scans the vault every minute and dispatches events whose start time has arrived:
 
-- **Format**: Obsidian Kanban plugin compatible (`kanban-plugin: basic` frontmatter).
-- **Lanes**: `## Lane Title` headings with optional `<!-- nx:lane-id=<id> -->`.
-- **Cards**: `### Card Title` headings with `<!-- nx:id=<uuid> -->` and optional `<!-- nx:session=<sid> -->`.
-- **No separate store**: The vault IS the store. Kanban operations read/write the markdown directly.
-- **Chat dispatch**: Cards can spawn chat sessions via `POST /vault/dispatch`, linking the session ID back into the card.
+- **Single-shot**: `scheduled → triggered → done`. RRULE recurrences re-fire on each occurrence; only `cancelled` opts out. Per-occurrence dedup via a `fired_events` state map.
+- **Intra-day fire window**: `all_day=true` + `fire_from` + `fire_to` + `fire_every_min` repeats inside a local time window without flipping status.
+- Fired events flow through the same vault-dispatch pipeline as kanban cards, so the spawned session id is stamped back into the markdown atomically.
 
 ### Human-in-the-Loop (HITL)
 
-Nexus supports two HITL channels per session, enabling real-time user interaction during agent turns:
+Two SSE channels per session:
 
 ```mermaid
 sequenceDiagram
     participant A as Agent
-    participant B as HitlBroker (Loom)
-    participant SSE as SSE Events
-    participant UI as Web UI
+    participant B as HitlBroker
+    participant SSE as SSE Channel
+    participant UI as UI (or Push)
     participant S as Server
 
     A->>B: ask_user("Confirm delete?")
     B->>B: Park on asyncio.Future
-    B->>SSE: publish(user_request event)
-    SSE->>UI: EventSource notification
-    UI->>UI: Show ApprovalDialog
+    B->>SSE: publish(user_request)
+    SSE->>UI: ApprovalDialog (or Web Push)
 
-    alt User Approves
-        UI->>S: POST /chat/{sid}/respond
+    alt Approves
+        UI->>S: POST /chat/{sid}/hitl/{rid}/answer
         S->>B: resolve_pending(answer)
         B->>A: Future resolves
-        A->>A: Continue turn
     else Timeout
         B->>A: TIMEOUT_SENTINEL
-    else YOLO Mode
-        B->>B: Auto-approve confirms
-        SSE->>UI: user_request_auto event
+    else YOLO
+        B->>B: auto-approve confirms
+        SSE->>UI: user_request_auto
     end
 ```
 
-Two SSE channels:
+1. **Per-turn SSE** (`POST /chat/stream`): `delta`, `thinking`, `tool`, `done`, `limit_reached`, `error`.
+2. **Session-scoped SSE** (`GET /chat/{sid}/events`): persistent channel for `user_request`, `user_request_auto`, `user_request_cancelled`. The UI opens this *before* the first POST using a client-generated `pendingSessionId`, so dialogs never miss events.
 
-1. **Per-turn SSE** (`POST /chat/stream`): Delivers `delta`, `tool`, `done`, `limit_reached`, `error` events during a single turn.
-2. **Session-scoped SSE** (`GET /chat/{sid}/events`): Persistent channel for out-of-band events (`user_request`, `user_request_auto`, `user_request_cancelled`). The UI opens this *before* the first POST using a client-generated `pendingSessionId`, so approval dialogs never miss events.
+`/chat/{sid}/pending` lets a reloaded tab recover the in-flight question.
+
+### Web Push Notifications
+
+For mobile and closed-tab scenarios, Nexus also delivers HITL prompts as Web Push:
+
+- Server exposes a VAPID public key via `/vapid-public-key`.
+- Client subscribes via `/subscribe` (service worker registers the push manager).
+- HITL events publish to the subscription, so the user sees a system notification even when the tab is in the background or the device is locked.
 
 ### Skill System & Self-Evolution
 
-The agent can author its own skills at runtime, enabling self-evolution:
-
 ```mermaid
 graph TB
-    subgraph "Skill Lifecycle"
-        CREATE["skill_manage: create<br/>Validate + guard scan + write"]
-        EDIT["skill_manage: edit<br/>Full replacement"]
-        PATCH["skill_manage: patch<br/>Find-and-replace"]
-        DELETE["skill_manage: delete<br/>Remove directory"]
-        FILES["skill_manage: write_file<br/>Auxiliary files"]
+    subgraph "Lifecycle"
+        CREATE["create"]
+        EDIT["edit (full replace)"]
+        PATCH["patch (find/replace)"]
+        DELETE["delete"]
+        FILES["write_file (auxiliary)"]
+        INSTALL["nexus skills install <git-url>"]
     end
 
     subgraph "Storage (~/.nexus/skills/)"
@@ -476,21 +446,16 @@ graph TB
     end
 
     subgraph "Trust Tiers"
-        BUILTIN["builtin — bundled, seeded on first run"]
-        USER["user — created via CLI"]
-        AGENT["agent — created by the agent"]
+        BUILTIN["builtin (bundled, seeded on first run)"]
+        USER["user (CLI / git install)"]
+        AGENT["agent (created by the loop)"]
     end
 
-    CREATE --> SKDIR
-    EDIT --> SKDIR
-    PATCH --> SKDIR
-    FILES --> SKDIR
-    SKDIR --> BUILTIN
-    SKDIR --> USER
-    SKDIR --> AGENT
+    CREATE & EDIT & PATCH & DELETE & FILES & INSTALL --> SKDIR
+    SKDIR --> BUILTIN & USER & AGENT
 ```
 
-Skills are Markdown documents with YAML frontmatter:
+Skills are markdown with YAML frontmatter:
 
 ```markdown
 ---
@@ -501,206 +466,175 @@ description: Does something useful
 # Instructions for the agent...
 ```
 
-### Security Guard
-
-Every agent-authored skill write passes through the security guard (`skills/guard.py`):
+Every agent-authored write passes through `skills/guard.py`:
 
 ```mermaid
 graph LR
-    WRITE["Skill Write Request"] --> SCAN["Guard Scanner<br/>(regex patterns)"]
-    
-    SCAN -->|safe| ALLOW["Allow write"]
-    SCAN -->|caution| WARN["Allow + log warning"]
+    WRITE["Skill Write"] --> SCAN["Guard (regex)"]
+    SCAN -->|safe| ALLOW["Allow"]
+    SCAN -->|caution| WARN["Allow + log"]
     SCAN -->|dangerous| BLOCK["Block + rollback"]
-    
+
     style BLOCK fill:#c0392b,color:#fff
     style WARN fill:#f39c12,color:#000
     style ALLOW fill:#27ae60,color:#fff
 ```
 
-**Dangerous patterns** (blocks the write):
-- Credential exfiltration: `curl $TOKEN`, `.ssh/`, `.aws/`, `base64 + env`
-- Destructive commands: `rm -rf /`, `dd`, `mkfs`
-- Prompt injection phrases
+- **Dangerous** (block): credential exfil (`curl $TOKEN`, `.ssh/`, `.aws/`, `base64 + env`), destructive shell (`rm -rf /`, `dd`, `mkfs`), prompt injection.
+- **Caution** (allow + log): persistence (`cron`, `launchd`, `systemd`, `.bashrc`).
 
-**Caution patterns** (allows but logs):
-- Persistence mechanisms: `cron`, `launchd`, `systemd`, `.bashrc`
+### Ontology Management
 
-### Model Routing
+`ontology_tool` (and the matching `ontology_manage` system prompt) lets the agent maintain an entity/relation schema for GraphRAG:
 
-```mermaid
-graph TB
-    MSG["User Message"] --> MODE{"Routing Mode?"}
-    
-    MODE -->|fixed| DEF["Use default_model"]
-    MODE -->|auto| CLASS["Classify Message"]
-    
-    CLASS --> CODING["coding"]
-    CLASS --> REASONING["reasoning"]
-    CLASS --> TRIVIAL["trivial"]
-    CLASS --> BALANCED["balanced"]
-    
-    CODING --> SCORE["Score models by<br/>strengths (speed/cost/<br/>reasoning/coding)"]
-    REASONING --> SCORE
-    TRIVIAL --> SCORE
-    BALANCED --> SCORE
-    
-    SCORE --> BEST["Select highest score"]
-    
-    DEF --> CALL["LLM Call"]
-    BEST --> CALL
-```
+- Define entity types (e.g. `Person`, `Project`) and relations (`worksOn`, `partOf`).
+- The vault indexer enriches GraphRAG with these typed entities/relations.
+- Semantic search (`vault_semantic_search`) walks the typed graph to retrieve context.
 
-Classification uses regex patterns against the message content. Each configured model has strength scores (1-10) for speed, cost, reasoning, and coding. The highest-scoring model is selected per-turn.
+### Local LLMs
 
-### Configuration System
+Nexus can run an LLM entirely on the user's machine via llama.cpp:
 
-```mermaid
-graph TB
-    subgraph "Precedence (highest → lowest)"
-        ENV["Environment Variables<br/>NEXUS_LLM_BASE_URL +<br/>NEXUS_LLM_API_KEY +<br/>NEXUS_LLM_MODEL<br/>(all three required)"]
-        TOML["~/.nexus/config.toml<br/>TOML-based config"]
-        DFL["Defaults"]
-    end
+- Bundled default: **Qwen2.5-3B-Instruct** in the macOS app.
+- `/local/*` API to inspect hardware, search Hugging Face, list/download GGUFs, activate / start / stop a local server.
+- Integrates as just another OpenAI-compatible provider in the registry.
 
-    ENV --> TOML
-    TOML --> DFL
+### Public Tunnel (Sharing)
 
-    subgraph "Config Structure"
-        AGENT["[agent]<br/>default_model, routing_mode,<br/>max_iterations"]
-        PROV["[providers.*]<br/>base_url, api_key_env,<br/>type (openai_compat/anthropic/ollama)"]
-        MODL["[[models]]<br/>id, provider, model_name,<br/>tags, strengths"]
-    end
+`agent/src/nexus/tunnel/` wraps a tunnel provider (ngrok) so the local server can be exposed temporarily through a login-form flow:
 
-    TOML --> AGENT & PROV & MODL
+- `POST /tunnel/start` opens the ngrok tunnel and generates two secrets:
+  - **long token** (32 bytes) — set as an `HttpOnly Secure SameSite=Strict` cookie after redemption. Never appears in any URL.
+  - **short access code** (8 chars from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, formatted `XXXX-XXXX`) — typed by the user on the phone's login form. Never appears in any URL either; only travels in the POST body of `/tunnel/redeem`.
+- `GET /tunnel/status` (loopback only) returns the URL **and** the access code so the desktop UI can display them.
+- `POST /tunnel/stop` tears the tunnel down — both secrets are cleared, any in-flight cookies become 401.
+- `POST /tunnel/redeem` (reachable through the tunnel without a cookie) takes `{code: ...}`, validates it timing-safely (`hmac.compare_digest`, normalized for case + dashes), and seats the cookie on success. Per-IP rate-limited (8 wrong attempts / 10 min) on top of the 32^8 ≈ 1.1e12 entropy.
+- `GET /tunnel/auth-status` (also reachable through the tunnel) tells the SPA whether to render the login form.
 
-    subgraph "Secrets"
-        SEC["~/.nexus/secrets.toml<br/>(0600 permissions)<br/>API keys per provider"]
-        SET["~/.nexus/settings.json<br/>yolo_mode, preferences"]
-    end
-```
+#### Network model
 
-API keys are referenced by environment variable name (`key_env`), never stored inline in config. The secrets store at `~/.nexus/secrets.toml` is 0600 permission-guarded.
+Nexus **always** binds to `127.0.0.1`. There is no `--host` flag and no way to expose the listener on `0.0.0.0` from the CLI. Remote access is exclusively via a tunnel that runs as a local client connecting *to* the loopback bind:
 
-### Session Persistence
+- `nexus tunnel start` — managed ngrok tunnel with the auth flow described above.
+- `cloudflared tunnel --url http://localhost:18989` — same idea, bring-your-own.
+- Tailscale, ssh `-L`, etc. — same idea.
 
-Sessions are persisted in SQLite (WAL mode) via Loom's `SessionStore`, extended by Nexus with FTS5 search:
+The middleware separates **direct loopback** (no proxy headers → bundled UI on the user's own machine, zero-config bypass) from **tunnel-proxied** (proxy headers present → cookie required). Tunnel-public surface is a strict allowlist:
+
+- `/tunnel/redeem` and `/tunnel/auth-status` — the login flow.
+- Static SPA shell + `/assets`, `/icons`, `/manifest.json`, `/favicon.ico` — harmless, no secrets baked in.
+- Everything else (`/chat`, `/sessions`, `/vault`, …) requires the cookie.
+
+`/tunnel/start|stop|status|authtoken` are loopback-only at the route level; even with a valid cookie, a tunnel-proxied request to those returns 403.
+
+FastAPI's auto-generated `/docs`, `/redoc`, `/openapi.json` are disabled — the API surface isn't part of the public contract. Standard browser-hardening response headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) are set by `SecurityHeadersMiddleware`.
+
+State is **in-memory only**; restarting the daemon resets the tunnel to off, which is intentional — activation is always explicit.
+
+### Audio Transcription
+
+`POST /transcribe` accepts audio and returns text. The UI provides a live waveform + timer + cancel during recording. Backed by either a local model or a remote provider, configurable in Settings.
+
+### Session Persistence & Sharing
 
 ```mermaid
 graph TB
     subgraph "~/.nexus/sessions.sqlite"
-        SESS["sessions table<br/>(id, title, created_at, updated_at)"]
-        MSGS["messages table<br/>(session_id, role, content,<br/>tool_calls, timestamp)"]
-        FTS["messages_fts<br/>(FTS5 virtual table)<br/>BM25 search + snippets"]
+        SESS["sessions"]
+        MSGS["messages (role, content, tool_calls, thinking)"]
+        FTS["messages_fts (FTS5)"]
+        FB["feedback (per-message thumbs)"]
+        PIN["pins (bookmarked turns)"]
+        SHARE["share_tokens (read-only links)"]
     end
 
-    subgraph "Operations"
-        GET["get_or_create()"]
-        HIST["replace_history()"]
-        SRCH["search(query)"]
-        EXP["export(sid) → markdown"]
-    end
-
-    GET --> SESS
-    HIST --> MSGS
-    SRCH --> FTS
-    EXP --> MSGS
+    GET["get_or_create()"] --> SESS
+    HIST["replace_history()"] --> MSGS
+    SRCH["search()"] --> FTS
+    EXP["export()"] --> MSGS
+    SH["POST /sessions/{sid}/share"] --> SHARE
+    PIN_API["POST /sessions/{sid}/messages/{seq}/pin"] --> PIN
+    FB_API["POST /sessions/{sid}/messages/{seq}/feedback"] --> FB
 ```
 
-Legacy migration is handled automatically: pre-loom integer timestamps are converted to ISO format on first access.
+- **Pins**: Cmd-pin assistant turns; the sidebar shows a bookmarks list across sessions.
+- **Per-message feedback**: thumbs up/down stored per turn, surfaced in `nexus insights`.
+- **Read-only share links**: `POST /sessions/{sid}/share` mints a token; `GET /share/{token}` returns the public read-only view.
+- **Compact / truncate**: `POST /sessions/{sid}/compact` and `/truncate` to manage long contexts.
+- **Vault export**: `POST /sessions/{sid}/to-vault` saves raw or LLM-summarized.
+
+Legacy migration is automatic: pre-Loom integer timestamps are converted to ISO format on first access.
 
 ### Daemon & Process Management
 
 ```mermaid
 graph TB
-    subgraph "Daemon Manager"
-        START["start() → detached subprocess"]
-        STOP["stop() → SIGTERM (5s) → SIGKILL"]
-        STATUS["status() → PID, CPU, memory"]
-        LOGS["logs() → tail with optional follow"]
-    end
+    START["start() → detached subprocess"]
+    STOP["stop() → SIGTERM (5s) → SIGKILL"]
+    STATUS["status() → PID / CPU / memory"]
+    LOGS["logs() → tail / follow"]
 
-    subgraph "Platform Services"
-        LINUX["systemd (Linux)"]
-        MAC["launchd (macOS)"]
-        WIN["NSSM (Windows)"]
-    end
+    PID["~/.nexus/nexus-daemon.pid"]
+    LOG["~/.nexus/nexus-daemon.log"]
 
-    subgraph "Files"
-        PID["~/.nexus/nexus-daemon.pid"]
-        LOG["~/.nexus/nexus-daemon.log"]
-    end
+    LINUX["systemd"]
+    MAC["launchd + Nexus.app"]
+    WIN["NSSM"]
 
-    START --> PID
-    START --> LOG
+    START --> PID & LOG & LINUX & MAC & WIN
     STOP --> PID
     STATUS --> PID
     LOGS --> LOG
-    START --> LINUX
-    START --> MAC
-    START --> WIN
 ```
+
+Includes orphan-process cleanup on restart and a packaged macOS app bundle (`Nexus.app`) with menu options for autostart, host/port preferences, and access-token management.
 
 ### Frontend Architecture
 
-The frontend is a React 19 + Vite SPA with no external state management library:
+React 19 + Vite SPA. No external state management library — all state lives in `App.tsx` keyed by session id:
 
 ```mermaid
 graph TB
-    subgraph "Entry"
-        MAIN["main.tsx<br/>StrictMode + ToastProvider"]
-        APP["App.tsx<br/>All global state<br/>(useState only)"]
-    end
+    MAIN["main.tsx (StrictMode + ToastProvider + SplashScreen)"]
+    APP["App.tsx (all global state)"]
 
     MAIN --> APP
 
-    subgraph "Layout"
-        SIDEBAR["Sidebar<br/>views, sessions, vault tree"]
-        HEADER["Header<br/>YOLO badge"]
-        CONTENT["Content Area<br/>(view-dependent)"]
-    end
+    SIDEBAR["Sidebar (views, sessions, vault tree, pins)"]
+    HEADER["Header (model + tokens + cost + YOLO badge)"]
+    CONTENT["Content Area"]
 
-    APP --> SIDEBAR
-    APP --> HEADER
-    APP --> CONTENT
+    APP --> SIDEBAR & HEADER & CONTENT
 
-    subgraph "Views"
-        CHAT["ChatView<br/>messages + InputBar"]
-        VAULT["VaultView → VaultEditorPanel<br/>preview / edit / kanban"]
-        GRAPH["GraphView<br/>Canvas2D force-directed"]
-        INSIGHTS["InsightsView<br/>analytics dashboard"]
-        AGENTG["AgentGraphView<br/>(lazy-loaded)"]
-    end
+    CHAT["ChatView (messages + reasoning + InputBar + search)"]
+    VAULT["VaultView → VaultEditorPanel (preview / edit / kanban / calendar / csv / datatable)"]
+    GRAPH["GraphView (Canvas2D + 3D)"]
+    INSIGHTS["InsightsView"]
+    AGENTG["AgentGraphView (lazy)"]
 
-    CONTENT --> CHAT
-    CONTENT --> VAULT
-    CONTENT --> GRAPH
-    CONTENT --> INSIGHTS
-    CONTENT --> AGENTG
+    CONTENT --> CHAT & VAULT & GRAPH & INSIGHTS & AGENTG
 
-    subgraph "Overlays"
-        SKILLD["SkillDrawer"]
-        SETTD["SettingsDrawer<br/>routing + providers + models"]
-        APPROVE["ApprovalDialog<br/>(HITL)"]
-    end
+    SKILLD["SkillDrawer"]
+    SETTD["SettingsDrawer (providers / models / advanced)"]
+    APPROVE["ApprovalDialog (HITL)"]
+    SHORT["Shortcuts cheat sheet"]
 
-    APP --> SKILLD
-    APP --> SETTD
-    APP --> APPROVE
+    APP --> SKILLD & SETTD & APPROVE & SHORT
 ```
 
-Key frontend design decisions:
+Frontend design decisions:
 
 | Decision | Implementation |
-|----------|---------------|
-| **State management** | All state in `App.tsx` via `useState` + `useCallback` + `useRef` — no Redux/Zustand |
-| **Per-session state** | `Map<string, ChatState>` keyed by session ID, with a `__new__` slot for not-yet-created sessions |
-| **View switching** | `display: none/flex` toggling, not conditional rendering — prevents losing in-flight streaming state |
-| **SSE parsing** | Manual `ReadableStream` parsing for POST-based SSE; native `EventSource` for session-scoped events |
-| **Mermaid rendering** | Lazy-loaded (~280KB gzipped) on first `language-mermaid` code block |
-| **Agent graph** | `React.lazy()` loaded only when the `agentgraph` view is activated |
-| **Canvas rendering** | Custom Canvas2D force-directed graph (not Cytoscape) with physics simulation |
-| **Kanban detection** | `VaultEditorPanel` parses frontmatter for `kanban-plugin:` to decide render mode |
+|---|---|
+| **State management** | `useState` + `useCallback` + `useRef` only |
+| **Per-session state** | `Map<string, ChatState>` keyed by sid, with a `__new__` slot for not-yet-created sessions |
+| **View switching** | `display: none/flex` (not conditional rendering) — preserves in-flight streaming |
+| **SSE** | Manual `ReadableStream` parsing for POST SSE; native `EventSource` for session events |
+| **Mermaid** | Lazy-loaded on first `language-mermaid` block |
+| **3D graph** | force-graph + custom physics; 2D fallback |
+| **Mobile** | Capacitor-friendly responsive layout; iOS Xcode project under `ui/ios/` |
+| **Splash** | `SplashScreen` + `BrandMark` shown on first load (one chime, sessionStorage-gated) |
+| **Theming** | Adaptive theme system with continuous brightness knob; tokens in `ui/src/tokens.css` |
 
 ---
 
@@ -708,87 +642,81 @@ Key frontend design decisions:
 
 ```
 nexus/
-├── agent/                          # Python backend
-│   ├── pyproject.toml              # Dependencies (loom as local editable)
+├── agent/                              # Python backend
+│   ├── pyproject.toml                  # Loom as local editable
 │   └── src/nexus/
-│       ├── __init__.py
-│       ├── cli.py                  # Typer CLI entry point
-│       ├── main.py                 # Uvicorn server entry point
-│       ├── daemon.py               # Background process management
-│       ├── config.py               # Legacy env-var config
-│       ├── config_file.py          # TOML config (~/.nexus/config.toml)
-│       ├── secrets.py              # API key store (0600 secrets.toml)
-│       ├── redact.py               # Secret redaction for logs
-│       ├── retry.py                # Jittered exponential backoff
-│       ├── insights.py             # Session analytics engine
-│       ├── usage_pricing.py        # Token cost estimation
-│       ├── trajectory.py           # RL trajectory logger
-│       ├── agent/                  # Core agent system
-│       │   ├── loop.py             # Agent façade over Loom Agent
-│       │   ├── _loom_bridge.py     # Type adapters (Nexus ↔ Loom)
-│       │   ├── llm.py             # LLM providers (OpenAI, Anthropic)
-│       │   ├── prompt_builder.py   # System prompt with progressive disclosure
-│       │   ├── registry.py         # Provider registry
-│       │   ├── router.py           # Auto-routing model selection
-│       │   ├── planner.py          # Planner-executor split routing
-│       │   ├── context.py          # ContextVar for session_id
-│       │   ├── ask_user_tool.py    # HITL ask_user tool
-│       │   └── terminal_tool.py    # HITL terminal tool
-│       ├── server/                 # FastAPI application
-│       │   ├── app.py             # All route definitions
-│       │   ├── schemas.py          # Pydantic request/response models
-│       │   ├── events.py           # SSE event dataclass
-│       │   ├── session_store.py    # SQLite sessions over Loom
-│       │   ├── settings.py         # User preferences (YOLO mode)
-│       │   └── graph.py            # Agent/skill/session graph
-│       ├── skills/                 # Skill lifecycle
-│       │   ├── types.py            # Skill Pydantic model
-│       │   ├── registry.py         # SkillRegistry (disk scanning)
-│       │   ├── manager.py          # SkillManager (CRUD + guard)
-│       │   └── guard.py            # Regex security scanner
-│       ├── tools/                  # Agent tools
-│       │   ├── vault_tool.py       # vault_list/read/write/search/tags/backlinks
-│       │   ├── kanban_tool.py      # kanban_manage
-│       │   ├── state_tool.py       # skills_list + skill_view
-│       │   ├── memory_tool.py      # memory_read/write (vault-backed)
-│       │   ├── http_call.py        # HTTP GET/POST
-│       │   └── acp_call.py         # Agent Communication Protocol
-│       ├── vault.py                # Vault file operations
-│       ├── vault_search.py         # FTS5 full-text search index
-│       ├── vault_index.py          # Tag + backlink index
-│       ├── vault_graph.py          # Backlink graph builder
-│       ├── vault_kanban.py         # Kanban parser/serializer
-│       ├── vault_provider.py       # Loom VaultProvider adapter
-│       └── error_classifier.py     # Error classification shim
-├── ui/                             # React frontend
-│   ├── package.json               # React 19, Vite 6, TypeScript 5.7
-│   ├── vite.config.ts             # Dev server on port 1890
-│   ├── tsconfig.json              # Strict mode, ES2022
+│       ├── cli/                        # Typer CLI (sessions, vault, kanban, skills, providers, models, …)
+│       ├── main.py                     # Uvicorn entry
+│       ├── daemon/                     # Background process + service installers
+│       ├── config.py / config_file.py / config_schema.py
+│       ├── secrets.py                  # 0600 secrets.toml
+│       ├── redact.py                   # Secret redaction for logs
+│       ├── insights/                   # Session analytics
+│       ├── usage_pricing.py
+│       ├── trajectory.py               # RL trajectory logger
+│       ├── push/                       # Web Push (VAPID)
+│       ├── tunnel/                     # ngrok tunnel manager
+│       ├── local_llm/                  # llama.cpp lifecycle, HF search, downloads
+│       ├── heartbeat_drivers/
+│       │   └── calendar_trigger/       # Vault calendar event firing
+│       ├── calendar_runtime.py
+│       ├── agent/
+│       │   ├── loop/                   # Façade over loom.loop.Agent
+│       │   ├── _loom_bridge/           # Type adapters + tool registry builder
+│       │   ├── llm/                    # OpenAI / Anthropic provider adapters
+│       │   ├── prompt_builder.py       # Progressive-disclosure system prompt
+│       │   ├── registry.py             # Provider registry
+│       │   ├── planner.py              # Planner-executor split routing
+│       │   ├── ontology_store.py       # Ontology persistence
+│       │   ├── graphrag_manager/       # GraphRAG indexing + recall
+│       │   ├── builtin_extractor/      # Entity/relation extraction
+│       │   ├── builtin_embedder.py
+│       │   ├── ask_user_tool.py        # HITL ask_user
+│       │   └── terminal_tool.py        # HITL terminal
+│       ├── server/
+│       │   ├── app.py                  # Route registration
+│       │   └── routes/
+│       │       ├── chat.py / chat_stream.py
+│       │       ├── sessions.py / sessions_vault.py
+│       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py
+│       │       ├── providers.py / models.py / config.py / settings.py
+│       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
+│       │       ├── insights.py / graph.py
+│       ├── skills/                     # SkillRegistry + SkillManager + guard
+│       ├── tools/                      # vault, kanban, kanban_query, calendar, datatable, csv,
+│       │                               # visualize, dispatch_card, ontology, memory, http, acp
+│       ├── vault.py + vault_*.py       # vault search / index / graph / kanban / calendar / csv / datatable
+│       └── tests/
+├── ui/                                 # React frontend
+│   ├── package.json                    # React 19 + Vite 6 + TypeScript 5.7
+│   ├── vite.config.ts                  # Dev server :1890
+│   ├── public/
+│   │   ├── images/nexus_banner_splash.png
+│   │   └── icons/
+│   ├── ios/                            # Capacitor iOS project
 │   └── src/
-│       ├── App.tsx                # Root component (all state)
-│       ├── api.ts                 # All API communication + SSE
-│       ├── App.css                # Two-column layout
-│       ├── tokens.css             # Design tokens
-│       ├── toast/                 # Toast notification system
+│       ├── App.tsx
+│       ├── api.ts
+│       ├── tokens.css
+│       ├── toast/
 │       └── components/
-│           ├── ChatView.tsx       # Chat messages + input
-│           ├── VaultView.tsx      # Vault wrapper
-│           ├── GraphView.tsx      # Force-directed graph
-│           ├── InsightsView.tsx   # Analytics dashboard
-│           ├── AgentGraphView.tsx # Agent graph (lazy)
-│           ├── KanbanBoard.tsx    # Drag-drop kanban
-│           ├── MarkdownView.tsx   # react-markdown + mermaid
-│           ├── VaultEditorPanel.tsx # File editor (3 modes)
-│           ├── Sidebar.tsx        # Navigation + sessions
-│           ├── SettingsDrawer.tsx # Settings panel
-│           ├── ApprovalDialog.tsx # HITL approval modal
-│           └── ...                # 20+ other components
-├── skills/                         # Bundled skills (seeded on first run)
-│   └── hello-world/SKILL.md
-├── CLAUDE.md                       # AI assistant guidance
-├── PLAN.md                         # Full design document
-├── install.sh                      # One-line installer
-└── LICENSE                         # Apache 2.0
+│           ├── ChatView.tsx
+│           ├── AssistantMessage.tsx        # reasoning + structured tool results
+│           ├── VaultView.tsx + VaultEditorPanel.tsx
+│           ├── KanbanBoard.tsx
+│           ├── CalendarView/                # MonthGrid + WeekGrid + RepeatPicker + EventModal
+│           ├── GraphView.tsx + AgentGraphView.tsx + SubgraphCanvas3D.tsx
+│           ├── InsightsView.tsx
+│           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid
+│           ├── BrandMark.tsx + SplashScreen.tsx
+│           ├── SettingsDrawer.tsx
+│           ├── ApprovalDialog.tsx
+│           └── …
+├── skills/                             # Bundled skills (seeded on first run)
+├── packaging/macos/                    # Nexus.app scaffolding
+├── install.sh                          # One-line installer
+├── CLAUDE.md
+└── LICENSE                             # Apache 2.0
 ```
 
 ---
@@ -807,7 +735,7 @@ Env overrides: `NEXUS_DIR`, `NEXUS_REF`, `NEXUS_NO_UI=1`, `NEXUS_NO_INIT=1`.
 
 ### Manual Install
 
-Prerequisites: Python 3.12+, [uv](https://docs.astral.sh/uv/) (`brew install uv`), Node 20+.
+Prerequisites: Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 20+.
 
 ```bash
 # Clone both repos side by side
@@ -815,21 +743,32 @@ git clone git@github.com:NinoCoelho/loom.git ../loom
 git clone git@github.com:NinoCoelho/nexus.git
 cd nexus/agent
 
-# Install backend
 uv sync
-
-# First-time config
 uv run nexus config init
 
-# Set API keys
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Verify
 uv run nexus config show
 uv run nexus providers list
 uv run nexus models list
 ```
+
+#### Optional skill extras
+
+Some bundled skills depend on extra Python packages or system assets. Install only what you need:
+
+```bash
+# Enables the `pdf-maker` skill (Pillow + fpdf2)
+uv sync --extra pdf
+
+# Enables full browser scraping for the `web-scrape` skill (downloads Playwright browsers, ~500MB)
+uv run scrapling install --force
+```
+
+`web-scrape` works out-of-the-box for static HTTP requests via `Fetcher.get()` — only the JS-rendered / anti-bot fetchers (`PlayWrightFetcher`, `StealthyFetcher`) require the browser install above.
+
+For best `pdf-maker` output, also drop the Inter and Montserrat font families into `~/.nexus/fonts/`. Without them the renderer falls back to Arial.
 
 ### Run
 
@@ -837,57 +776,73 @@ uv run nexus models list
 
 ```bash
 uv run nexus daemon start          # background daemon on port 18989
-uv run nexus daemon status         # PID, CPU, memory
-uv run nexus daemon logs           # tail logs
-uv run nexus daemon stop           # graceful shutdown
+uv run nexus daemon status
+uv run nexus daemon logs --follow
+uv run nexus daemon stop
 ```
 
 #### System Service
 
 ```bash
-uv run nexus daemon install --user    # systemd/launchd auto-start
+uv run nexus daemon install --user    # systemd / launchd auto-start
 uv run nexus daemon uninstall --user
 ```
 
-#### Manual Server
+#### macOS App
+
+A packaged `Nexus.app` bundle lives in `packaging/macos/`. Menu bar options cover autostart and port preferences. The app always binds to `127.0.0.1`; remote access goes through `nexus tunnel`.
+
+#### Manual Server + UI
 
 ```bash
 uv run nexus serve --port 18989    # foreground
 
-# Frontend (separate terminal)
 cd ../ui
 npm install
 npm run dev                        # http://localhost:1890
 ```
 
+The UI reads its API base from `VITE_NEXUS_API` (default `http://localhost:18989`).
+
 #### CLI Only
 
 ```bash
-uv run nexus chat                  # interactive TUI
+uv run nexus chat
 ```
 
-On first run, bundled skills from `skills/` are copied into `~/.nexus/skills/` and marked `trust="builtin"`.
+Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`.
 
 ---
 
 ## CLI Reference
 
-### Daemon Management
+### Daemon
 
 ```bash
-nexus daemon start [--host 127.0.0.1] [--port 18989] [--detach/--no-detach]
-nexus daemon stop
-nexus daemon restart
-nexus daemon status
+nexus daemon start [--port 18989] [--detach/--no-detach]
+nexus daemon stop | restart | status
 nexus daemon logs [--lines 50] [--follow]
 nexus daemon install [--user|--system]
 nexus daemon uninstall [--user|--system]
 ```
 
+The listener always binds to `127.0.0.1`. To expose remotely, use `nexus tunnel start` (or any local-client tunnel like cloudflared / tailscale).
+
+### Tunnel (Public Sharing)
+
+```bash
+nexus tunnel set-token <ngrok-authtoken>     # one-time setup
+nexus tunnel start                            # opens tunnel, prints URL + access code + QR
+nexus tunnel status
+nexus tunnel stop
+```
+
+The phone navigates to the URL, the SPA detects the missing cookie, shows a login form. The user types the 8-character access code → server seats an HttpOnly cookie → app loads. The code is the credential; the URL alone is harmless.
+
 ### Server & Chat
 
 ```bash
-nexus serve [--port 18989] [--host 127.0.0.1]
+nexus serve [--port 18989]
 nexus chat  [--session <id>] [--model <id>] [--context <str>]
 ```
 
@@ -897,17 +852,19 @@ nexus chat  [--session <id>] [--model <id>] [--context <str>]
 nexus config init | show | path
 nexus providers list | add <name> --base-url <url> [--key-env <VAR>] | remove <name>
 nexus models    list | add <id> --provider <p> --model <name> [--tags ...] | remove <id> | set-default <id>
-nexus routing   set <fixed|auto>
-nexus skills    list | view <name> | remove <name>
+nexus skills    list | view <name> | install <git-url-or-path> | remove <name>
+nexus version
+nexus doctor
 ```
 
-### Advanced
+### Sessions / Vault
 
 ```bash
-nexus sessions list | show <id> | export <id> | import <path>
-nexus vault ls | search <query> | reindex | tags | backlinks <path>
-nexus kanban boards | list [--board default]
-nexus insights [--days 30] [--json]
+nexus sessions list | show <id> | export <id> | import <path> | edit <id> | stats | query <q>
+nexus vault     ls | search <q> | reindex | tags | backlinks <path>
+nexus kanban    boards | list [--board default]
+nexus insights  [--days 30] [--json]
+nexus backup    create [--out <path>] | restore <path>
 ```
 
 ---
@@ -917,78 +874,107 @@ nexus insights [--days 30] [--json]
 ### Chat & HITL
 
 | Route | Method | Description |
-|-------|--------|-------------|
+|---|---|---|
 | `/chat` | POST | Non-streaming turn |
-| `/chat/stream` | POST | SSE per-turn stream (deltas, tool calls, done) |
-| `/chat/{sid}/events` | GET | SSE session-scoped events (user_request, cancellations) |
-| `/chat/{sid}/pending` | GET | Recover pending HITL request after page reload |
-| `/chat/{sid}/respond` | POST | Resolve pending HITL request |
+| `/chat/stream` | POST | SSE per-turn (delta, thinking, tool, done) |
+| `/chat/{sid}/events` | GET | SSE session-scoped (user_request, cancellations) |
+| `/chat/{sid}/pending` | GET | Recover pending HITL after reload |
+| `/chat/{sid}/hitl/{rid}/answer` | POST | Resolve pending HITL |
 | `/chat/{sid}/cancel` | POST | Cancel in-flight turn |
 
 ### Sessions
 
 | Route | Method | Description |
-|-------|--------|-------------|
-| `/sessions` | GET | List sessions |
-| `/sessions/search` | GET | FTS5 search with BM25 |
-| `/sessions/{sid}` | GET | Get session with messages |
-| `/sessions/{sid}` | PATCH | Rename session |
-| `/sessions/{sid}` | DELETE | Delete session |
-| `/sessions/{sid}/export` | GET | Export as markdown |
-| `/sessions/{sid}/to-vault` | POST | Save to vault (raw or LLM-summarized) |
-| `/sessions/import` | POST | Import from markdown |
+|---|---|---|
+| `/sessions` | GET | List |
+| `/sessions/search` | GET | FTS5 search |
+| `/sessions/{sid}` | GET / PATCH / DELETE | CRUD |
+| `/sessions/{sid}/export` | GET | Markdown |
+| `/sessions/{sid}/to-vault` | POST | Save (raw or summarized) |
+| `/sessions/{sid}/share` | POST | Mint read-only share token |
+| `/sessions/{sid}/compact` | POST | LLM-summarize older turns |
+| `/sessions/{sid}/truncate` | POST | Drop tail |
+| `/sessions/{sid}/usage` | GET | Token / cost breakdown |
+| `/sessions/{sid}/trajectories` | GET | RL trajectory log |
+| `/sessions/{sid}/messages/{seq}/pin` | POST | Bookmark a turn |
+| `/sessions/{sid}/messages/{seq}/feedback` | POST | Thumbs up/down |
+| `/sessions/import` | POST | Import markdown |
+| `/share/{token}` | GET | Public read-only view |
+| `/pins` | GET | All bookmarked turns |
 
 ### Vault
 
 | Route | Method | Description |
-|-------|--------|-------------|
-| `/vault/tree` | GET | File tree listing |
-| `/vault/file` | GET | Read file (with tags + backlinks) |
-| `/vault/file` | PUT | Write file |
-| `/vault/file` | DELETE | Delete file |
+|---|---|---|
+| `/vault/tree` | GET | File tree |
+| `/vault/file` | GET / PUT / DELETE | Read / write / delete |
 | `/vault/folder` | POST | Create folder |
-| `/vault/search` | GET | FTS5 search |
-| `/vault/reindex` | POST | Rebuild search index |
+| `/vault/move` | POST | Move/rename |
+| `/vault/search` | GET | FTS5 |
+| `/vault/reindex` | POST | Rebuild index |
 | `/vault/graph` | GET | Backlink graph |
-| `/vault/move` | POST | Move/rename file |
-| `/vault/tags` | GET | Tag index |
-| `/vault/tags/{tag}` | GET | Files for a tag |
-| `/vault/backlinks` | GET | Backlinks for a file |
-| `/vault/dispatch` | POST | Create session seeded from vault file/card |
+| `/vault/tags` / `/vault/tags/{tag}` | GET | Tag index |
+| `/vault/backlinks` | GET | Backlinks |
+| `/vault/dispatch` | POST | Spawn session from file/card |
+| `/vault/calendar*` | GET / POST / PATCH / DELETE | Calendar events + RRULE + manual fire |
+| `/vault/csv*` | GET / POST / PATCH / DELETE | CSV editor |
+| `/graphrag/reindex` | POST | Rebuild GraphRAG store |
+| `/graph/knowledge*` | GET / POST | GraphRAG entities, subgraphs, queries, indexing status |
 
 ### Kanban
 
 | Route | Method | Description |
-|-------|--------|-------------|
-| `/vault/kanban` | GET | Read board |
-| `/vault/kanban` | POST | Create board |
+|---|---|---|
+| `/vault/kanban` | GET / POST | Read / create board |
 | `/vault/kanban/cards` | POST | Add card |
-| `/vault/kanban/cards/{id}` | PATCH | Update/move card |
-| `/vault/kanban/cards/{id}` | DELETE | Delete card |
+| `/vault/kanban/cards/{id}` | PATCH / DELETE | Update / move / delete card |
 | `/vault/kanban/lanes` | POST | Add lane |
 | `/vault/kanban/lanes/{id}` | DELETE | Delete lane |
 
-### Config, Providers, Models
+### Local LLMs
 
 | Route | Method | Description |
-|-------|--------|-------------|
-| `/config` | GET/PATCH | View/update config |
-| `/providers` | GET | List providers with key status |
-| `/providers/{name}/models` | GET | Fetch upstream models |
-| `/providers/{name}/key` | POST/DELETE | Set/clear API key |
-| `/models` | GET/POST/DELETE | Model CRUD |
-| `/routing` | GET/PUT | Routing config |
-| `/settings` | GET/POST | YOLO mode toggle |
+|---|---|---|
+| `/local/hardware` | GET | CPU / RAM / GPU |
+| `/local/hf/search` | GET | Hugging Face search |
+| `/local/hf/repo/{owner}/{repo}/files` | GET | Repo file list |
+| `/local/installed` | GET / DELETE | Installed GGUFs |
+| `/local/download` / `/downloads` | POST / GET | Download mgmt |
+| `/local/activate` | POST | Set active model |
+| `/local/start` / `/local/stop` | POST | llama.cpp lifecycle |
 
-### Other
+### Tunnel & Notifications
 
 | Route | Method | Description |
-|-------|--------|-------------|
-| `/health` | GET | Liveness check |
-| `/skills` | GET | List skills |
-| `/skills/{name}` | GET | Full SKILL.md |
-| `/graph` | GET | Agent/skill/session graph |
-| `/insights` | GET | Token/cost/model/tool analytics |
+|---|---|---|
+| `/tunnel/start` / `/stop` / `/status` | POST / GET | ngrok lifecycle |
+| `/tunnel/authtoken` | POST | Set ngrok auth token |
+| `/vapid-public-key` | GET | Web Push public key |
+| `/subscribe` | POST | Register push subscription |
+| `/notifications/events` / `/pending` / `/history` | GET | Push channel state |
+| `/transcribe` | POST | Audio → text |
+
+### Config / Models / Settings
+
+| Route | Method | Description |
+|---|---|---|
+| `/config` | GET / PATCH | View / update config |
+| `/providers` | GET | List with key status |
+| `/providers/{name}/models` | GET | Upstream model list |
+| `/providers/{name}/key` | POST / DELETE | Set / clear API key |
+| `/models` / `/models/{id:path}` | GET / POST / DELETE | Model CRUD |
+| `/models/roles` / `/models/suggest-tier` | GET | Role mapping helpers |
+| `/routing` | GET / PUT | Routing config |
+| `/settings` | GET / POST | YOLO mode + preferences |
+
+### Misc
+
+| Route | Method | Description |
+|---|---|---|
+| `/health` | GET | Liveness |
+| `/skills` / `/skills/{name}` | GET | Skill list / body |
+| `/graph` | GET | Agent / skill / session graph |
+| `/insights` | GET | Token / cost / model / tool analytics |
 
 ---
 
@@ -999,7 +985,6 @@ The canonical config lives at `~/.nexus/config.toml`:
 ```toml
 [agent]
 default_model = "gpt-4o"
-routing_mode = "fixed"       # "fixed", "auto", or "planner"
 max_iterations = 32
 
 [providers.openai]
@@ -1022,28 +1007,16 @@ provider = "openai"
 model_name = "gpt-4o"
 tags = ["fast", "capable"]
 
-[models.strengths]
-speed = 7
-cost = 4
-reasoning = 8
-coding = 8
-
 [[models]]
 id = "claude-sonnet"
 provider = "anthropic"
 model_name = "claude-sonnet-4-20250514"
 tags = ["reasoning", "coding"]
-
-[models.strengths]
-speed = 6
-cost = 5
-reasoning = 9
-coding = 9
 ```
 
 ### Environment Variable Override
 
-When **all three** of these are set, they override the config file:
+When **all three** are set, they override the config file:
 
 ```bash
 export NEXUS_LLM_BASE_URL="https://api.openai.com/v1"
@@ -1057,26 +1030,20 @@ export NEXUS_LLM_MODEL="gpt-4o"
 ~/.nexus/
 ├── config.toml          # Main configuration
 ├── secrets.toml         # API keys (0600)
-├── settings.json        # UI preferences (YOLO mode)
-├── sessions.sqlite      # Session + message storage
+├── settings.json        # UI preferences (YOLO mode, theme)
+├── sessions.sqlite      # Sessions + messages + FTS + pins + feedback + share tokens
 ├── vault/               # Markdown knowledge base
-│   └── **/*.md
 ├── vault_index.sqlite   # FTS5 search index
 ├── vault_meta.sqlite    # Tag + backlink index
+├── graphrag/            # GraphRAG store (entities + relations + embeddings)
 ├── skills/              # Agent skills
-│   └── <name>/
-│       ├── SKILL.md
-│       └── .meta.json
-├── memory/              # Legacy (migrated to vault/memory/)
-├── nexus-daemon.pid     # Daemon PID file
-└── nexus-daemon.log     # Daemon log file
+├── local_llm/           # Downloaded GGUFs
+├── push/                # VAPID keys + subscriptions
+├── nexus-daemon.pid
+└── nexus-daemon.log
 ```
 
----
-
-## Design Tokens
-
-The UI uses a warm dark slate + copper + sage palette. All tokens are defined as CSS custom properties in `ui/src/tokens.css`.
+API keys are referenced by environment variable name (`api_key_env`), never stored inline. The secrets store at `~/.nexus/secrets.toml` is 0600 permission-guarded.
 
 ---
 
