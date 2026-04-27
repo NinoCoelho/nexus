@@ -191,13 +191,87 @@
 
 .cal-week-event {
   position: absolute;
-  left: 4px;
-  right: 4px;
   border-radius: 4px;
   padding: 4px 6px;
   font-size: 11px;
   z-index: 1;
   cursor: pointer;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  outline: 1px solid rgba(0, 0, 0, 0.15);
+  outline-offset: -1px;
+}
+
+/* Today column gets a faint accent tint behind everything else. */
+.cal-week-col.today {
+  background: linear-gradient(rgba(77, 124, 255, 0.04), rgba(77, 124, 255, 0.04));
+}
+
+/* Current-time indicator line on the today column. */
+.cal-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 2px solid #ef4444;
+  z-index: 2;
+  pointer-events: none;
+}
+.cal-now-line::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+/* All-day row above the hour grid. */
+.cal-week-allday-row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 38px; /* roughly the header height */
+  z-index: 2;
+}
+.cal-week-allday-gutter {
+  width: 56px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--fg-faint);
+  text-align: right;
+  padding: 4px 4px 0 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cal-week-allday-col {
+  position: relative;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.cal-week-allday-col.today {
+  background: rgba(77, 124, 255, 0.05);
+}
+.cal-week-allday-event {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  outline: 1px solid rgba(0, 0, 0, 0.15);
+  outline-offset: -1px;
 }
 
 /* ── modal ──────────────────────────────────────────────────────── */
