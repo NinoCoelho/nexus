@@ -189,6 +189,7 @@ echo "==> Assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SWIFT_BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp "$PACKAGING/macos/Info.plist" "$APP/Contents/Info.plist"
+cp "$PACKAGING/macos/Nexus.icns" "$APP/Contents/Resources/Nexus.icns"
 
 RES="$APP/Contents/Resources"
 cp -R "$STAGE/python"          "$RES/python"

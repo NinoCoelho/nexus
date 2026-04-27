@@ -5,7 +5,7 @@
  *   - Header (title + close).
  *   - DefaultModelStrip — pinned, always visible. Lets users change the default
  *     model from anywhere without hunting for it.
- *   - SettingsTabs — Início / Modelos / Recursos / Avançado.
+ *   - SettingsTabs — Quick start / Models / Features / Advanced.
  *   - Active tab body.
  *
  * State (routing/providers/models/hitl/graphStats) lives here and is fetched
@@ -43,10 +43,10 @@ interface Props {
 type TabId = "quick" | "models" | "features" | "advanced";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "quick", label: "Início" },
-  { id: "models", label: "Modelos" },
-  { id: "features", label: "Recursos" },
-  { id: "advanced", label: "Avançado" },
+  { id: "quick", label: "Quick start" },
+  { id: "models", label: "Models" },
+  { id: "features", label: "Features" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 export default function SettingsDrawer({ open, onClose }: Props) {
@@ -76,7 +76,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setHitl(h);
       setGraphStats(ks);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao carregar configurações");
+      setError(e instanceof Error ? e.message : "Failed to load settings");
     } finally {
       setLoading(false);
     }
@@ -102,8 +102,8 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       <div className="drawer-backdrop" onClick={onClose} />
       <div className="settings-drawer">
         <div className="drawer-header">
-          <span className="drawer-title">Configurações</span>
-          <button className="drawer-close" onClick={onClose} aria-label="Fechar">
+          <span className="drawer-title">Settings</span>
+          <button className="drawer-close" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
@@ -122,7 +122,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
         </div>
 
         <div className="drawer-body settings-drawer-body">
-          {loading && !routing && <p className="settings-loading">Carregando…</p>}
+          {loading && !routing && <p className="settings-loading">Loading…</p>}
           {error && <p className="settings-error">{error}</p>}
 
           {active === "quick" && (

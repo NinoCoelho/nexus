@@ -15,17 +15,17 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
   return (
     <>
       <SettingsSection
-        title="Provedores cloud"
+        title="Cloud providers"
         icon="☁"
         collapsible
         defaultOpen
         help={{
-          title: "O que é um provedor?",
+          title: "What is a provider?",
           body: (
             <>
-              Um provedor é um serviço (OpenAI, Anthropic, Ollama, etc.) que hospeda
-              os modelos. Para usar um modelo cloud você precisa de uma chave de API
-              do provedor. Ollama e servidores locais não precisam de chave.
+              A provider is a service (OpenAI, Anthropic, Ollama, etc.) that
+              hosts models. To use a cloud model you need an API key from the
+              provider. Ollama and local servers don't need a key.
             </>
           ),
         }}
@@ -34,17 +34,17 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
       </SettingsSection>
 
       <SettingsSection
-        title="Modelos no dispositivo"
+        title="On-device models"
         icon="💻"
         collapsible
         defaultOpen={false}
         help={{
-          title: "Modelos no dispositivo",
+          title: "On-device models",
           body: (
             <>
-              Modelos rodando localmente via llama.cpp ou Ollama. Funcionam sem
-              internet e sem cobrança por uso, mas dependem do hardware da sua
-              máquina (RAM, GPU).
+              Models running locally via llama.cpp or Ollama. They work
+              without internet and without per-use billing, but depend on
+              your machine's hardware (RAM, GPU).
             </>
           ),
         }}
@@ -53,18 +53,19 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
       </SettingsSection>
 
       <SettingsSection
-        title="Gerenciar modelos"
+        title="Manage models"
         icon="📋"
         collapsible
         defaultOpen
         help={{
-          title: "Modelos cadastrados",
+          title: "Registered models",
           body: (
             <>
-              Lista de modelos disponíveis para o agente. Cada modelo aponta para
-              um provedor + nome upstream. <b>Padrão</b> é o modelo escolhido para
-              novas conversas (configure na tira do topo). <b>Funções avançadas</b>{" "}
-              (Embedding/Extração) só aparecem se você usa GraphRAG.
+              List of models available to the agent. Each model points to a
+              provider + upstream name. <b>Default</b> is the model chosen
+              for new conversations (set it in the top strip).{" "}
+              <b>Advanced roles</b> (Embedding/Extraction) only appear if
+              you use GraphRAG.
             </>
           ),
         }}
