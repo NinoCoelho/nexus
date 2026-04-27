@@ -28,6 +28,10 @@ dependencies = [
     "python-dateutil>=2.9",
     "pywebpush>=2.0",
     "cryptography>=42.0",
+    # Public sharing tunnel (ngrok). pyngrok auto-downloads the ngrok binary
+    # on first use; qrcode renders a scannable code in the CLI's `tunnel start`.
+    "pyngrok>=7.0",
+    "qrcode>=7.4",
 ]
 
 [tool.uv.sources]
@@ -44,6 +48,12 @@ dev = [
     "ruff",
     "pytest",
     "pytest-asyncio",
+]
+# Bundled `pdf-maker` skill needs Pillow + fpdf2 to render PDFs.
+# Install with: `uv sync --extra pdf`
+pdf = [
+    "Pillow>=10.0",
+    "fpdf2>=2.7",
 ]
 
 [project.scripts]
