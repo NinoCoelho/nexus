@@ -471,17 +471,43 @@ export async function respondToUserRequest(
   // For form kind, answer is a dict; the backend's /respond expects a string
   // so we JSON-encode it. For all other kinds, answer is already a string.
   const encoded = typeof answer === "string" ? answer : JSON.stringify(answer);
+  const body = JSON.stringify({ request_id, answer: encoded });
   const res = await fetch(
     `${BASE}/chat/${encodeURIComponent(session_id)}/respond`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request_id, answer: encoded }),
+      body,
     },
   );
-  if (!res.ok && res.status !== 404) {
+  if (res.ok || res.status === 404) {
     // 404 is expected on a stale request (timed out, session reset) —
     // the UI treats it as a no-op and the dialog is already closed.
-    throw new Error(`Respond error: ${res.status}`);
+    return;
   }
+  if (res.status === 409) {
+    // Request has parked: /respond is the wrong endpoint. The agent's turn
+    // ended waiting for the answer; resume via /hitl/{rid}/answer, which
+    // streams the agent's continuation back as SSE. The chat view's own
+    // /chat/{sid}/events subscription picks up the resumed turn — so here
+    // we just need to confirm the POST was accepted, then drop the body.
+    const resume = await fetch(
+      `${BASE}/chat/${encodeURIComponent(session_id)}/hitl/${encodeURIComponent(request_id)}/answer`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      },
+    );
+    if (!resume.ok && resume.status !== 404) {
+      throw new Error(`Respond (parked resume) error: ${resume.status}`);
+    }
+    // Drain the SSE body so the connection closes cleanly without surfacing
+    // it to the caller — the chat view's own subscription is the consumer.
+    if (resume.body) {
+      void resume.body.cancel().catch(() => {});
+    }
+    return;
+  }
+  throw new Error(`Respond error: ${res.status}`);
 }

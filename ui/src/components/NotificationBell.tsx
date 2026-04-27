@@ -10,6 +10,18 @@ interface Props {
   pushSubscribed: boolean;
   onRequestPushPermission: () => void;
   onRefresh: () => void;
+  /** Clicking a pending row hops the approval queue to that request_id. */
+  onSelectPending?: (request_id: string) => void;
+  /** Jump to the chat session that produced the request. */
+  onJumpToChat?: (session_id: string) => void;
+  /** ✕ on a pending row — cancels the request (and the live turn behind it). */
+  onCancel?: (session_id: string, request_id: string) => Promise<void> | void;
+  /** Inline answer (Allow/Deny on confirm kind, no modal needed). */
+  onAnswer?: (
+    session_id: string,
+    request_id: string,
+    answer: string,
+  ) => Promise<void> | void;
 }
 
 export default function NotificationBell({
@@ -19,9 +31,14 @@ export default function NotificationBell({
   pushSubscribed,
   onRequestPushPermission,
   onRefresh,
+  onSelectPending,
+  onJumpToChat,
+  onCancel,
+  onAnswer,
 }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -93,22 +110,143 @@ export default function NotificationBell({
             <div className="nx-bell-empty">No HITL events yet.</div>
           ) : (
             <ul className="nx-bell-list">
-              {history.map((row) => (
-                <li key={row.request_id} className={`nx-bell-item nx-bell-item--${row.status}`}>
-                  <div className="nx-bell-item-row">
-                    <span className={`nx-bell-status nx-bell-status--${row.status}`}>
-                      {statusLabel(row.status)}
-                    </span>
-                    <span className="nx-bell-time" title={row.created_at}>
-                      {relativeTime(row.created_at)}
-                    </span>
-                  </div>
-                  <div className="nx-bell-prompt">{row.prompt}</div>
-                  {row.answer && (
-                    <div className="nx-bell-answer">→ {row.answer}</div>
-                  )}
-                </li>
-              ))}
+              {history.map((row) => {
+                const isPending = row.status === "pending";
+                const selectable = isPending && !!onSelectPending;
+                const isBusy = busy === row.request_id;
+                const handleSelect = () => {
+                  if (!selectable) return;
+                  onSelectPending!(row.request_id);
+                  setOpen(false);
+                };
+                const handleJump = (e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  if (!onJumpToChat) return;
+                  onJumpToChat(row.session_id);
+                  setOpen(false);
+                };
+                const handleCancel = async (e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  if (!onCancel || isBusy) return;
+                  setBusy(row.request_id);
+                  try {
+                    await onCancel(row.session_id, row.request_id);
+                    onRefresh();
+                  } finally {
+                    setBusy(null);
+                  }
+                };
+                const handleAnswer = async (
+                  e: React.MouseEvent,
+                  answer: string,
+                ) => {
+                  e.stopPropagation();
+                  if (!onAnswer || isBusy) return;
+                  setBusy(row.request_id);
+                  try {
+                    await onAnswer(row.session_id, row.request_id, answer);
+                    onRefresh();
+                  } finally {
+                    setBusy(null);
+                  }
+                };
+                return (
+                  <li
+                    key={row.request_id}
+                    className={
+                      `nx-bell-item nx-bell-item--${row.status}` +
+                      (selectable ? " nx-bell-item--clickable" : "")
+                    }
+                    role={selectable ? "button" : undefined}
+                    tabIndex={selectable ? 0 : undefined}
+                    onClick={selectable ? handleSelect : undefined}
+                    onKeyDown={
+                      selectable
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleSelect();
+                            }
+                          }
+                        : undefined
+                    }
+                  >
+                    <div className="nx-bell-item-row">
+                      <span className={`nx-bell-status nx-bell-status--${row.status}`}>
+                        {statusLabel(row.status)}
+                      </span>
+                      {isPending && (
+                        <span
+                          className={
+                            "nx-bell-mode nx-bell-mode--" +
+                            (row.parked ? "parked" : "live")
+                          }
+                          title={
+                            row.parked
+                              ? "Parked: agent's turn ended; resume any time."
+                              : "Live: agent's turn is blocked waiting on this answer."
+                          }
+                        >
+                          {row.parked ? "PARKED" : "LIVE"}
+                        </span>
+                      )}
+                      <span className="nx-bell-spacer" />
+                      <span className="nx-bell-time" title={row.created_at}>
+                        {relativeTime(row.created_at)}
+                      </span>
+                      {isPending && onCancel && (
+                        <button
+                          type="button"
+                          className="nx-bell-x"
+                          onClick={handleCancel}
+                          disabled={isBusy}
+                          title="Cancel this request"
+                          aria-label="Cancel request"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+
+                    {(row.session_title || isPending) && onJumpToChat && (
+                      <button
+                        type="button"
+                        className="nx-bell-jump"
+                        onClick={handleJump}
+                        title="Open the chat that produced this request"
+                      >
+                        ↳ {row.session_title || "Open chat"}
+                      </button>
+                    )}
+
+                    <div className="nx-bell-prompt">{row.prompt}</div>
+                    {row.answer && (
+                      <div className="nx-bell-answer">→ {row.answer}</div>
+                    )}
+
+                    {isPending && row.kind === "confirm" && onAnswer && (
+                      <div className="nx-bell-inline-actions">
+                        <button
+                          type="button"
+                          className="nx-bell-act nx-bell-act--deny"
+                          onClick={(e) => handleAnswer(e, "no")}
+                          disabled={isBusy}
+                        >
+                          Deny
+                        </button>
+                        <button
+                          type="button"
+                          className="nx-bell-act nx-bell-act--allow"
+                          onClick={(e) => handleAnswer(e, "yes")}
+                          disabled={isBusy}
+                        >
+                          Allow
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

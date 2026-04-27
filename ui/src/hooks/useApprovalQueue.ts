@@ -22,6 +22,9 @@ interface UseApprovalQueueResult {
   clearPendingRequest: () => void;
   /** Move a specific pending request to the front of the queue. No-op if absent. */
   focusRequest: (request_id: string) => void;
+  /** Drop a specific pending request from the queue (e.g., after answering or
+   * cancelling it via the bell, so the modal doesn't re-surface it). */
+  dropRequest: (request_id: string) => void;
 }
 
 /**
@@ -125,6 +128,10 @@ export function useApprovalQueue(): UseApprovalQueueResult {
     });
   }, []);
 
+  const dropRequest = useCallback((request_id: string) => {
+    setQueue((prev) => prev.filter((q) => q.request.request_id !== request_id));
+  }, []);
+
   return {
     pendingRequest: head?.request ?? null,
     queueLength: queue.length,
@@ -132,5 +139,6 @@ export function useApprovalQueue(): UseApprovalQueueResult {
     handleApprovalTimeout,
     clearPendingRequest,
     focusRequest,
+    dropRequest,
   };
 }

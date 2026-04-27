@@ -198,6 +198,68 @@ async def chat_pending(
     return {"pending": payload}
 
 
+@router.post("/chat/{session_id}/hitl/{request_id}/cancel")
+async def chat_hitl_cancel(
+    session_id: str,
+    request_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict[str, Any]:
+    """Cancel a specific HITL request from the bell.
+
+    Two cases:
+
+    * **parked** — durable row in ``hitl_pending``. The agent's turn
+      already ended. We just mark the row cancelled and broadcast
+      ``user_request_cancelled`` so the bell drops it.
+    * **live** — request still held in-memory by the broker; the
+      agent's turn is blocked waiting for an answer. Cancel the
+      future *and* the inflight turn task so the whole operation
+      unwinds (matches the user-facing "cancel this operation"
+      meaning of the bell's ✕ button).
+    """
+    from ..events import SessionEvent
+
+    parked_row = store.get_hitl_pending(request_id)
+    if parked_row is not None and parked_row.get("status") == "parked":
+        store.cancel_hitl_pending(request_id, reason="user_cancelled")
+        store.publish(
+            session_id,
+            SessionEvent(
+                kind="user_request_cancelled",
+                data={"request_id": request_id, "reason": "user_cancelled"},
+            ),
+        )
+        return {"ok": True, "cancelled": "parked"}
+
+    # Live path: drop the broker future first so ask_user returns
+    # quickly, then abort the inflight turn task so the agent stops.
+    cancelled_future = store.cancel_pending(session_id, request_id)
+    store.publish(
+        session_id,
+        SessionEvent(
+            kind="user_request_cancelled",
+            data={"request_id": request_id, "reason": "user_cancelled"},
+        ),
+    )
+    task = _inflight_turns.get(session_id)
+    cancelled_task = False
+    if task is not None and not task.done():
+        _user_cancelled.add(session_id)
+        task.cancel()
+        cancelled_task = True
+    if not cancelled_future and not cancelled_task:
+        # Nothing to cancel — request already resolved or never existed.
+        # Returning ok=True keeps the UI state consistent (bell row will
+        # already be in answered/cancelled status).
+        return {"ok": True, "cancelled": "already_resolved"}
+    return {
+        "ok": True,
+        "cancelled": "live",
+        "future_cancelled": cancelled_future,
+        "task_cancelled": cancelled_task,
+    }
+
+
 @router.post("/chat/{session_id}/cancel")
 async def chat_cancel(
     session_id: str,

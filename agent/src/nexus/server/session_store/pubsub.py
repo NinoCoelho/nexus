@@ -217,10 +217,20 @@ class PubSubMixin:
         return self._loom._db  # type: ignore[attr-defined]
 
     def list_hitl_events(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        # LEFT JOIN sessions for the title (so the bell can show "parked
+        # in <chat>") and hitl_pending to flag rows that landed durably
+        # — durable = "parked", in-memory = "live", they need different
+        # cancel paths and different urgency cues.
         rows = self._hitl_db().execute(
-            "SELECT request_id, session_id, kind, prompt, payload_json, "
-            "       status, answer, reason, created_at, resolved_at "
-            "FROM hitl_events ORDER BY created_at DESC, ROWID DESC LIMIT ?",
+            "SELECT e.request_id, e.session_id, e.kind, e.prompt, "
+            "       e.payload_json, e.status, e.answer, e.reason, "
+            "       e.created_at, e.resolved_at, "
+            "       s.title, "
+            "       CASE WHEN p.status = 'parked' THEN 1 ELSE 0 END "
+            "  FROM hitl_events e "
+            "  LEFT JOIN sessions s ON s.id = e.session_id "
+            "  LEFT JOIN hitl_pending p ON p.request_id = e.request_id "
+            " ORDER BY e.created_at DESC, e.ROWID DESC LIMIT ?",
             (max(1, min(int(limit), 500)),),
         ).fetchall()
         out: list[dict[str, Any]] = []
@@ -245,6 +255,8 @@ class PubSubMixin:
                 "reason": r[7],
                 "created_at": r[8],
                 "resolved_at": r[9],
+                "session_title": r[10],
+                "parked": bool(r[11]),
             })
         return out
 
@@ -409,6 +421,19 @@ class PubSubMixin:
         )
         self._hitl_db().commit()
         won = (cur.rowcount or 0) > 0
+        # Mirror to hitl_events so the bell history reflects the resolution.
+        # Without this the row stays 'pending' in the bell forever even
+        # though hitl_pending shows it answered.
+        if won:
+            try:
+                answer_text = (
+                    answer if isinstance(answer, str) else answer_json
+                )
+                self._mark_hitl_resolved(
+                    request_id, status="answered", answer=answer_text,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("hitl history update on park-answer failed")
         row = self.get_hitl_pending(request_id)
         if row is None:
             return None
@@ -426,7 +451,17 @@ class PubSubMixin:
             (new_status, request_id),
         )
         self._hitl_db().commit()
-        return (cur.rowcount or 0) > 0
+        won = (cur.rowcount or 0) > 0
+        # Mirror to hitl_events. Otherwise a superseded / session_reset /
+        # expired parked row would linger as 'pending' in the bell.
+        if won:
+            try:
+                self._mark_hitl_resolved(
+                    request_id, status=new_status, reason=reason,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("hitl history update on park-cancel failed")
+        return won
 
     def trim_hitl_pending(self, *, keep_days: int = 30) -> int:
         cur = self._hitl_db().execute(

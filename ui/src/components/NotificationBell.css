@@ -120,6 +120,17 @@
   background: color-mix(in srgb, var(--accent-lo) 8%, transparent);
 }
 
+.nx-bell-item--clickable {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.nx-bell-item--clickable:hover,
+.nx-bell-item--clickable:focus-visible {
+  background: color-mix(in srgb, var(--accent-lo) 18%, transparent);
+  outline: none;
+}
+
 .nx-bell-item-row {
   display: flex;
   justify-content: space-between;
@@ -176,4 +187,107 @@
   font-size: 12px;
   color: var(--fg-dim);
   font-style: italic;
+}
+
+.nx-bell-mode {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+
+.nx-bell-mode--live {
+  background: var(--bad);
+  color: #fff;
+}
+
+.nx-bell-mode--parked {
+  background: var(--bg-hover);
+  color: var(--fg-dim);
+  border: 1px solid var(--border-soft);
+}
+
+.nx-bell-spacer {
+  flex: 1;
+}
+
+.nx-bell-x {
+  background: transparent;
+  color: var(--fg-faint);
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  margin-left: 6px;
+  border-radius: 4px;
+}
+
+.nx-bell-x:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--bad);
+}
+
+.nx-bell-x:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.nx-bell-jump {
+  background: transparent;
+  border: none;
+  color: var(--accent-hi, var(--accent-lo));
+  font-size: 11px;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  align-self: flex-start;
+}
+
+.nx-bell-jump:hover {
+  text-decoration: underline;
+}
+
+.nx-bell-inline-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.nx-bell-act {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.nx-bell-act:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-lo) 15%, var(--bg-hover));
+}
+
+.nx-bell-act--allow {
+  background: var(--accent-lo);
+  color: #fff;
+  border-color: var(--accent-lo);
+}
+
+.nx-bell-act--allow:hover:not(:disabled) {
+  background: var(--accent-hi);
+}
+
+.nx-bell-act--deny {
+  /* keeps the neutral default */
+}
+
+.nx-bell-act:disabled {
+  opacity: 0.5;
+  cursor: progress;
 }

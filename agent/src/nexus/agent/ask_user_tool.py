@@ -244,6 +244,40 @@ class AskUserHandler:
         """
         from ..server.events import SessionEvent
 
+        # Supersede any parked form on this session before opening a new one.
+        # If the agent re-asks the same form (e.g., a retry loop after a bad
+        # answer), the user would otherwise see the old form re-published on
+        # every reconnect. Cancel and broadcast so the UI removes the stale
+        # entry from queue + bell.
+        if kind == "form":
+            try:
+                stale = self._sessions.list_pending_for_session(
+                    session_id, kind="form",
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                stale = []
+            for row in stale:
+                stale_rid = row.get("request_id")
+                if not stale_rid:
+                    continue
+                try:
+                    self._sessions.cancel_hitl_pending(
+                        stale_rid, reason="superseded",
+                    )
+                    self._sessions.publish(
+                        session_id,
+                        SessionEvent(
+                            kind="user_request_cancelled",
+                            data={
+                                "request_id": stale_rid,
+                                "reason": "superseded",
+                            },
+                        ),
+                    )
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                self._form_extras.pop(stale_rid, None)
+
         request_id = uuid.uuid4().hex
         if kind == "form":
             extra_data: dict[str, Any] = {

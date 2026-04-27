@@ -25,6 +25,22 @@ export interface HitlEventRow extends Omit<UserRequestPayload, "request_id"> {
   reason: string | null;
   created_at: string;
   resolved_at: string | null;
+  /** Title of the originating session (null for sessions without one). */
+  session_title: string | null;
+  /** True when the row has a durable `hitl_pending` parked row backing it. */
+  parked: boolean;
+}
+
+/** Cancel a specific HITL request. Routes to /respond's cancel sibling on the
+ * server, which knows how to handle parked vs live differently. */
+export async function cancelHitlRequest(
+  session_id: string,
+  request_id: string,
+): Promise<void> {
+  await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/hitl/${encodeURIComponent(request_id)}/cancel`,
+    { method: "POST" },
+  );
 }
 
 export async function fetchNotificationHistory(

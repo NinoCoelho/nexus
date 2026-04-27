@@ -360,3 +360,93 @@ async def test_to_text_is_json_round_trip(tmp_path: Path) -> None:
         assert parsed["answer"] == "__timeout__"
     finally:
         CURRENT_SESSION_ID.reset(token)
+
+
+async def test_form_supersedes_existing_parked_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new form ask_user on a session with a stale parked form must
+    cancel the stale row and broadcast user_request_cancelled, so the
+    UI replaces the old form instead of stacking another one.
+
+    Repros the "varios pedidos do mesmo formulario" symptom: an agent
+    retry loop that re-asks the same form would otherwise leave one
+    parked row per call, each republished on every reconnect.
+    """
+    from nexus.agent import ask_user_tool as module
+
+    store = _store(tmp_path)
+    session_id, token = _bind_session(store)
+    try:
+        # Plant a stale parked form for this session, mimicking the row
+        # that ``_ask_parkable`` would have written on a previous call.
+        stale_rid = "stale-rid"
+        store.persist_hitl_pending(
+            session_id=session_id,
+            request_id=stale_rid,
+            tool_call_id="tc-1",
+            kind="form",
+            prompt="old form",
+            choices=None,
+            fields=[{"name": "url", "type": "text"}],
+            form_title="Old",
+            form_description=None,
+            default=None,
+            timeout_seconds=300,
+        )
+        assert store.get_hitl_pending(stale_rid)["status"] == "parked"
+
+        # Make the new ask_user park almost immediately so we can observe
+        # the cancel + new publish without burning seconds in the test.
+        monkeypatch.setattr(module, "_PARK_THRESHOLD_SECONDS", 0.05)
+
+        events: list[SessionEvent] = []
+
+        async def capture() -> None:
+            async for ev in store.subscribe(session_id):
+                events.append(ev)
+                # Stop once we've seen the cancel + the new request.
+                kinds = [e.kind for e in events]
+                if (
+                    "user_request_cancelled" in kinds
+                    and "user_request" in kinds
+                ):
+                    return
+
+        consumer = asyncio.create_task(capture())
+        await asyncio.sleep(0)  # let the subscriber register
+
+        handler = AskUserHandler(session_store=store)
+        result = await handler.invoke(
+            {
+                "prompt": "What URL?",
+                "kind": "form",
+                "fields": [{"name": "url", "type": "text"}],
+                "title": "New",
+                "timeout_seconds": 5,
+            }
+        )
+
+        await asyncio.wait_for(consumer, timeout=2.0)
+
+        # Stale row was cancelled (not still 'parked').
+        stale_row = store.get_hitl_pending(stale_rid)
+        assert stale_row is not None
+        assert stale_row["status"] == "cancelled"
+
+        # The cancel event names the stale rid with reason="superseded".
+        cancels = [e for e in events if e.kind == "user_request_cancelled"]
+        assert any(
+            e.data.get("request_id") == stale_rid
+            and e.data.get("reason") == "superseded"
+            for e in cancels
+        ), f"expected superseded cancel for {stale_rid}, got {cancels}"
+
+        # The new ask_user still parked normally and returned a sentinel.
+        assert result.ok
+        assert result.answer is not None
+        assert result.answer.startswith("__parked__:")
+        new_rid = result.answer.removeprefix("__parked__:")
+        assert new_rid != stale_rid
+    finally:
+        CURRENT_SESSION_ID.reset(token)
