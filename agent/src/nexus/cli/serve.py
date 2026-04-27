@@ -10,7 +10,6 @@ app = typer.Typer(help="Nexus agent CLI", no_args_is_help=True)
 @app.command()
 def serve(
     port: int = typer.Option(18989, "--port", "-p"),
-    host: str = typer.Option("127.0.0.1", "--host"),
     frontend_port: int = typer.Option(1890, "--frontend-port", "-fp"),
     no_frontend: bool = typer.Option(False, "--no-frontend", help="Skip launching the frontend dev server"),
     bundled: bool = typer.Option(False, "--bundled", help="Force serving the built UI from the backend on a single port. Run `npm run build` first."),
@@ -18,11 +17,17 @@ def serve(
 ) -> None:
     """Start the Nexus server.
 
+    Always binds to 127.0.0.1. Remote access is intentionally only supported
+    through a tunnel (``nexus tunnel start``) so that the auth + sharing flow
+    is the single path for exposure. To use cloudflared / tailscale instead,
+    point them at ``http://localhost:18989``; they're tunnels too.
+
     Default: single-port mode — if ``ui/dist`` exists, the backend serves the
     built UI on ``--port``. Otherwise spawns the Vite dev server on
     ``--frontend-port``. Use ``--dev`` to force Vite, ``--bundled`` to require
     a built UI.
     """
+    host = "127.0.0.1"
     import shutil
     import signal
     import subprocess

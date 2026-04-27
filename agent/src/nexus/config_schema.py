@@ -145,6 +145,17 @@ class TranscriptionConfig(BaseModel):
     remote: RemoteTranscriptionConfig = Field(default_factory=RemoteTranscriptionConfig)
 
 
+class TunnelConfig(BaseModel):
+    # Currently only ngrok is wired. Kept as a Literal so adding cloudflared
+    # later is a one-line schema change.
+    provider: Literal["ngrok"] = "ngrok"
+    # Env var that holds the user's ngrok authtoken. Never store the token
+    # itself in config.toml — only the variable name. Setting it here lets
+    # users point at a custom env var if NGROK_AUTHTOKEN clashes.
+    authtoken_env: str = "NGROK_AUTHTOKEN"
+    region: str = "us"
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -153,6 +164,7 @@ class NexusConfig(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    tunnel: TunnelConfig = Field(default_factory=TunnelConfig)
 
 
 # Fresh install starts with providers configured but NO models.

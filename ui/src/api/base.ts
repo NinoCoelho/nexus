@@ -48,3 +48,60 @@ export const IS_CAPACITOR =
   (typeof window.Capacitor !== "undefined") &&
   // @ts-expect-error — same
   window.Capacitor?.isNativePlatform?.() === true;
+
+/**
+ * Tunnel auth bootstrap.
+ *
+ * The new flow keeps secrets out of URLs entirely. The phone navigates to a
+ * plain URL like `https://abc.ngrok-free.app/`, the SPA loads (the middleware
+ * lets static UI through), and then we probe `/tunnel/auth-status`. If the
+ * server reports `requires_redeem`, the app renders a login form where the
+ * user types the short access code shown on the desktop. The form POSTs to
+ * `/tunnel/redeem`, which validates the code and seats an HttpOnly cookie —
+ * everything from that point on works exactly like a same-origin install.
+ *
+ * Code never touches the URL bar, browser history, or the ngrok request log.
+ */
+
+export interface AuthProbe {
+  /** True only when the server says we're behind an active tunnel without a cookie. */
+  requiresRedeem: boolean;
+  /** True when the server is currently exposing itself via ngrok. */
+  tunnelActive: boolean;
+}
+
+export async function probeTunnelAuth(): Promise<AuthProbe> {
+  try {
+    const res = await fetch(`${BASE}/tunnel/auth-status`, {
+      credentials: "include",
+    });
+    if (!res.ok) {
+      return { requiresRedeem: false, tunnelActive: false };
+    }
+    const data = await res.json();
+    return {
+      requiresRedeem: Boolean(data.requires_redeem),
+      tunnelActive: Boolean(data.tunnel_active),
+    };
+  } catch {
+    return { requiresRedeem: false, tunnelActive: false };
+  }
+}
+
+export async function redeemTunnelCode(code: string): Promise<void> {
+  const res = await fetch(`${BASE}/tunnel/redeem`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.json())?.detail ?? "";
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || "Invalid code");
+  }
+}

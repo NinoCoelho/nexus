@@ -4,6 +4,7 @@ import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
 import SettingsSection from "./SettingsSection";
+import SharingSection from "./SharingSection";
 
 interface Props {
   graphStats: KnowledgeStats | null;
@@ -95,6 +96,8 @@ export default function FeaturesTab({ graphStats }: Props) {
           </div>
         </SettingsSection>
       )}
+
+      <SharingSection />
 
       <ReindexModal open={reindexOpen} onClose={() => setReindexOpen(false)} />
     </>

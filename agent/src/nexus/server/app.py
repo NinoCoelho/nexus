@@ -20,37 +20,160 @@ from starlette.responses import JSONResponse
 
 
 _AUTH_FREE_PATHS = {"/health"}
+# Cookie name used to carry the tunnel token. HttpOnly + SameSite=Strict so
+# it survives SSE (which can't set headers) but never leaks via JS or cross-site.
+TUNNEL_COOKIE = "nexus_tunnel_token"
+
+# Endpoints the phone needs to reach BEFORE it has a cookie, so the login flow
+# can complete: probe auth, exchange code for cookie. Listed explicitly so the
+# tunnel-traffic gate has a tight, auditable allowlist.
+TUNNEL_PUBLIC_PATHS = frozenset({
+    "/tunnel/redeem",
+    "/tunnel/auth-status",
+})
+
+# API surface that must require a cookie when reached through the tunnel. This
+# is an allowlist of *prefixes*; everything not matching is treated as static
+# UI content (SPA shell, /assets, /icons, /manifest.json, /favicon.ico, etc.)
+# and allowed through. Static UI is harmless without auth — the data routes
+# below carry all the actual session state.
+TUNNEL_PROTECTED_PREFIXES = (
+    "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
+    "/models", "/routing", "/graph", "/graphrag", "/insights", "/share",
+    "/local", "/notifications", "/push", "/transcribe", "/audio", "/health",
+)
+
+
+def _is_proxied(request: Request) -> bool:
+    """Heuristic: the request hopped through a reverse proxy (i.e. came via the tunnel).
+
+    ngrok, cloudflared, and most edge proxies set ``x-forwarded-for`` and
+    ``x-forwarded-proto``. Direct loopback connections do not. This is what lets
+    us bypass auth for the bundled UI talking to its own server while still
+    enforcing it for the same loopback IP when the connection traversed a tunnel.
+    """
+    h = request.headers
+    return bool(h.get("x-forwarded-for") or h.get("x-forwarded-host") or h.get("ngrok-trace-id"))
+
+
+def _tunnel_path_requires_auth(path: str) -> bool:
+    """Decide whether a tunnel-side request must present a valid cookie.
+
+    Returns True for protected API surfaces and the loopback-only tunnel admin
+    endpoints (which will then 403 from inside the route). False for the public
+    redeem/probe endpoints and for any non-API path that's most likely static
+    UI content.
+    """
+    if path in TUNNEL_PUBLIC_PATHS:
+        return False
+    if path.startswith("/tunnel/"):
+        # /tunnel/start, /stop, /status, /authtoken — admin. Require a cookie
+        # so the request gets to the route, where _require_loopback will 403.
+        return True
+    return any(path.startswith(p) for p in TUNNEL_PROTECTED_PREFIXES)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Set baseline security response headers on every response.
+
+    These don't replace the auth gate, they harden the *browser side* of the
+    interaction:
+      * X-Content-Type-Options=nosniff blocks MIME-sniffing attacks.
+      * X-Frame-Options=DENY prevents clickjacking via iframe embedding.
+      * Referrer-Policy=same-origin keeps the tunnel URL from leaking via
+        outbound link clicks (the ngrok hostname itself is sensitive).
+      * Permissions-Policy disables sensors / payment / autoplay we never use.
+
+    No CSP yet — adding one without breaking mermaid / katex / dynamic imports
+    is a separate effort. SameSite=Strict + HttpOnly on the auth cookie already
+    blocks the worst classes of XSS exfil.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "geolocation=(), microphone=(self), camera=(), payment=()",
+        )
+        return response
 
 
 class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
-    """Allow loopback clients without auth; require a bearer token otherwise.
+    """Auth gate combining the legacy access-token flow with the tunnel-token flow.
 
-    Token is read from the env var ``NEXUS_ACCESS_TOKEN`` at startup. Empty/unset
-    → no auth required at all (back-compat with the dev `nexus serve` flow).
-    Loopback clients (127.0.0.1 / ::1) always bypass the check, so the bundled
-    UI talking to its own server keeps working without a token.
+    Two independent token sources are accepted:
+
+    1. ``NEXUS_ACCESS_TOKEN`` (env, set at startup): protects the server when
+       running on a non-loopback bind. This is the back-compat path; empty/unset
+       means no enforcement for *direct* clients.
+    2. The dynamic tunnel token (``nexus.tunnel.manager``): generated when the
+       user activates sharing. Required on every request that arrived via the
+       tunnel (detected by proxy headers — see ``_is_proxied``).
+
+    Direct loopback clients with no proxy headers always bypass auth, so the
+    bundled UI on the user's own machine keeps working with zero config.
     """
 
-    def __init__(self, app, token: str) -> None:
+    def __init__(self, app, access_token: str) -> None:
         super().__init__(app)
-        self._token = token
+        self._access_token = access_token
 
     async def dispatch(self, request: Request, call_next):
-        if not self._token or request.url.path in _AUTH_FREE_PATHS:
-            return await call_next(request)
+        from ..tunnel import get_manager  # local import to avoid cycles
+        tunnel = get_manager()
+
+        path = request.url.path
         client_host = request.client.host if request.client else ""
-        if client_host in ("127.0.0.1", "::1", "localhost"):
-            return await call_next(request)
-        # Accept token via Authorization: Bearer <t> or ?token=<t>
-        auth = request.headers.get("authorization", "")
+        is_loopback = client_host in ("127.0.0.1", "::1", "localhost")
+        proxied = _is_proxied(request)
+
+        # Pull a cookie/header token candidate. Used to authorize protected
+        # tunnel traffic; the short access code never travels through here —
+        # it goes directly to /tunnel/redeem in a POST body.
         provided = ""
+        auth = request.headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
             provided = auth[7:].strip()
         if not provided:
-            provided = request.query_params.get("token", "")
-        if provided != self._token:
-            return JSONResponse({"detail": "unauthorized"}, status_code=401)
-        return await call_next(request)
+            provided = request.cookies.get(TUNNEL_COOKIE, "")
+
+        # Tunnel path. Two policies depending on what's being accessed:
+        #   * Static UI / login probes / redeem  → pass through (route enforces).
+        #   * Protected API + admin              → require valid cookie.
+        # The split is what lets the SPA load on the phone before the user has
+        # entered the access code: HTML/JS/CSS comes back fine, then the SPA
+        # calls /tunnel/auth-status, sees `requires_redeem: true`, and shows
+        # the login form. POST /tunnel/redeem then installs the cookie.
+        if tunnel.is_active() and proxied:
+            if not _tunnel_path_requires_auth(path):
+                return await call_next(request)
+            if not tunnel.validate_token(provided):
+                return JSONResponse({"detail": "unauthorized"}, status_code=401)
+            return await call_next(request)
+
+        if path in _AUTH_FREE_PATHS:
+            return await call_next(request)
+
+        # Direct loopback (no proxy headers) — bundled UI talking to itself.
+        if is_loopback and not proxied:
+            return await call_next(request)
+
+        # Legacy NEXUS_ACCESS_TOKEN gate for non-loopback binds.
+        if self._access_token:
+            if provided != self._access_token:
+                # Fall back to the legacy ?token= flow only on the non-tunnel
+                # path; tunnel traffic should never carry secrets in the URL.
+                qp_token = request.query_params.get("token", "")
+                if qp_token != self._access_token:
+                    return JSONResponse({"detail": "unauthorized"}, status_code=401)
+            return await call_next(request)
+
+        # Non-loopback request, tunnel inactive, no access token configured →
+        # close it down rather than silently allowing it.
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
 
 from ..agent.ask_user_tool import AskUserHandler
 from ..agent.context import CURRENT_SESSION_ID
@@ -149,38 +272,51 @@ def create_app(
             event_bus.set_loop(asyncio.get_running_loop())
         except Exception:
             log.exception("event_bus setup failed")
+        # ``NEXUS_SKIP_LOCAL_LLM_RESTART=1`` skips both the orphan reap and
+        # the model-restart path. Tests set it because:
+        #   - reap_orphans() walks the host process table and kills any
+        #     llama-server it finds whose parent isn't the test process —
+        #     which would terminate the real daemon's running models.
+        #   - restart_local_models() reads the user's real
+        #     ~/.nexus/config.toml, blocks for seconds spawning GGUFs the
+        #     test never asked for, and may rewrite the config when a GGUF
+        #     can't be found.
+        skip_local_llm = bool(os.environ.get("NEXUS_SKIP_LOCAL_LLM_RESTART"))
+
         # Kill orphan llama-server processes from previous crashed runs
         # BEFORE restarting models, so we don't accumulate duplicates.
-        try:
-            from ..local_llm import manager as _local_mgr
-            reaped = await asyncio.to_thread(_local_mgr.reap_orphans)
-            if reaped:
-                log.info("[local_llm] reaped %d orphan(s): %s", len(reaped), reaped)
-        except Exception:
-            log.exception("local_llm orphan reap failed")
+        if not skip_local_llm:
+            try:
+                from ..local_llm import manager as _local_mgr
+                reaped = await asyncio.to_thread(_local_mgr.reap_orphans)
+                if reaped:
+                    log.info("[local_llm] reaped %d orphan(s): %s", len(reaped), reaped)
+            except Exception:
+                log.exception("local_llm orphan reap failed")
 
         # Restart any local-* models the user had enabled in a prior run.
         # Each gets a fresh port; we refresh config and rebuild the registry
         # so the agent sees the live URLs without the user opening Settings.
         # Models whose GGUF is gone (or that fail to spawn) get pruned instead.
-        try:
-            from ..local_llm import manager as _local_mgr
+        if not skip_local_llm:
+            try:
+                from ..local_llm import manager as _local_mgr
 
-            def _restart_blocking() -> int:
-                return _local_mgr.restart_local_models()
+                def _restart_blocking() -> int:
+                    return _local_mgr.restart_local_models()
 
-            started = await asyncio.to_thread(_restart_blocking)
-            if started > 0:
-                from ..config_file import load as _load_cfg
-                from .routes.config import _rebuild_registry
-                _rebuild_registry(_load_cfg(), mutable_state, agent)
-                log.info("[local_llm] restarted %d local model(s) at startup", started)
-            else:
-                # No live entries to restart — strip any dangling local-*
-                # entries left in config from an unclean shutdown.
-                _local_mgr.cleanup_stale_config()
-        except Exception:
-            log.exception("local_llm restart failed")
+                started = await asyncio.to_thread(_restart_blocking)
+                if started > 0:
+                    from ..config_file import load as _load_cfg
+                    from .routes.config import _rebuild_registry
+                    _rebuild_registry(_load_cfg(), mutable_state, agent)
+                    log.info("[local_llm] restarted %d local model(s) at startup", started)
+                else:
+                    # No live entries to restart — strip any dangling local-*
+                    # entries left in config from an unclean shutdown.
+                    _local_mgr.cleanup_stale_config()
+            except Exception:
+                log.exception("local_llm restart failed")
         # ── parked HITL sweep (durable async ask_user) ──────────────────────
         # Re-publish ``user_request`` for any rows that were left parked when
         # the server stopped, so connected clients re-queue them in the bell.
@@ -343,10 +479,24 @@ def create_app(
             close_memory_store()
             await agent.aclose()
 
-    app = FastAPI(title="nexus", version="0.1.0", lifespan=lifespan)
+    # Single-user app, not a third-party API — disable FastAPI's auto-generated
+    # /docs, /redoc, /openapi.json. Otherwise anyone with the tunnel URL could
+    # enumerate the full API surface, which is unnecessary information leakage.
+    app = FastAPI(
+        title="nexus",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    # Middleware is always installed: the legacy NEXUS_ACCESS_TOKEN path is
+    # opt-in (empty string disables it for direct loopback), but the tunnel
+    # auth path must remain reachable on every request so it can enforce the
+    # token on traffic that traversed the public ngrok proxy.
     _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
-    if _access_token:
-        app.add_middleware(LoopbackOrTokenMiddleware, token=_access_token)
+    app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",
@@ -383,6 +533,7 @@ def create_app(
     from .routes.local_llm import router as local_llm_router
     from .routes.notifications import router as notifications_router
     from .routes.push import router as push_router
+    from .routes.tunnel import router as tunnel_router
 
     app.include_router(chat_router)
     app.include_router(chat_stream_router)
@@ -403,6 +554,7 @@ def create_app(
     app.include_router(local_llm_router)
     app.include_router(notifications_router)
     app.include_router(push_router)
+    app.include_router(tunnel_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

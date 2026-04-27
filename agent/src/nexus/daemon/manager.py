@@ -121,8 +121,16 @@ class DaemonManager(DaemonDisplayMixin):
             )
         return "Stopped"
 
-    def start(self, host: str = "127.0.0.1", port: int = PORT, detach: bool = True) -> bool:
-        """Start the daemon process."""
+    def start(self, port: int = PORT, detach: bool = True) -> bool:
+        """Start the daemon process.
+
+        Always binds to ``127.0.0.1``. Remote access is intentionally only
+        supported through a tunnel (``nexus tunnel start``), which routes
+        through the auth-aware login flow. Cloudflared, tailscale, etc. are
+        all clients that connect *to* the loopback bind, so they don't need a
+        non-loopback listener either.
+        """
+        host = "127.0.0.1"
         if self.is_running():
             self.console.print("[red]Daemon is already running.[/red]")
             return False
@@ -283,9 +291,9 @@ finally:
             self.console.print(f"[red]Error stopping {label}: {e}[/red]")
             return False
 
-    def restart(self, host: str = "127.0.0.1", port: int = PORT) -> bool:
-        """Restart the daemon process."""
+    def restart(self, port: int = PORT) -> bool:
+        """Restart the daemon process. Always binds to 127.0.0.1."""
         self.stop()
         time.sleep(1)  # Give it a moment to stop
-        return self.start(host, port)
+        return self.start(port=port)
 

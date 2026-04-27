@@ -9,23 +9,27 @@ daemon_app = typer.Typer(help="Daemon management commands", no_args_is_help=True
 
 @daemon_app.command("start")
 def daemon_start(
-    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     port: int = typer.Option(18989, "--port", "-p", help="Port to bind to"),
     detach: bool = typer.Option(True, "--detach/--no-detach", help="Run as daemon or in foreground"),
     no_frontend: bool = typer.Option(False, "--no-frontend", help="Skip launching the frontend dev server"),
 ) -> None:
-    """Start the Nexus daemon."""
+    """Start the Nexus daemon.
+
+    Always binds to 127.0.0.1. Remote access is exposed only via
+    ``nexus tunnel start`` (or any local-client tunnel like cloudflared /
+    tailscale), which keeps the auth flow as the single path of exposure.
+    """
     from ..daemon import daemon_manager
     if no_frontend:
         from ..daemon import DaemonManager
         original = DaemonManager._start_frontend
         DaemonManager._start_frontend = lambda self: None
         try:
-            daemon_manager.start(host=host, port=port, detach=detach)
+            daemon_manager.start(port=port, detach=detach)
         finally:
             DaemonManager._start_frontend = original
     else:
-        daemon_manager.start(host=host, port=port, detach=detach)
+        daemon_manager.start(port=port, detach=detach)
 
 
 @daemon_app.command("stop")
@@ -37,12 +41,11 @@ def daemon_stop() -> None:
 
 @daemon_app.command("restart")
 def daemon_restart(
-    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     port: int = typer.Option(18989, "--port", "-p", help="Port to bind to"),
 ) -> None:
-    """Restart the Nexus daemon."""
+    """Restart the Nexus daemon. Always binds to 127.0.0.1."""
     from ..daemon import daemon_manager
-    daemon_manager.restart(host=host, port=port)
+    daemon_manager.restart(port=port)
 
 
 @daemon_app.command("status")

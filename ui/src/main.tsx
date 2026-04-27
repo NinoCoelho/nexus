@@ -18,6 +18,7 @@ import "./mobile.css";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ToastProvider } from "./toast/ToastProvider";
 import { SplashScreen } from "./components/SplashScreen";
+import AuthGate from "./components/AuthGate";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("No #root element");
@@ -25,8 +26,10 @@ createRoot(root).render(
   <StrictMode>
     <ThemeProvider>
       <ToastProvider>
-        <App />
-        <SplashScreen />
+        <AuthGate>
+          <App />
+          <SplashScreen />
+        </AuthGate>
       </ToastProvider>
     </ThemeProvider>
   </StrictMode>,
