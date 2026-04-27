@@ -9,6 +9,7 @@ import re
 # ---------------------------------------------------------------------------
 
 SPACY_LABEL_MAP: dict[str, str] = {
+    # en_core_web_sm (OntoNotes labels)
     "PERSON": "person",
     "ORG": "project",
     "PRODUCT": "technology",
@@ -20,6 +21,10 @@ SPACY_LABEL_MAP: dict[str, str] = {
     "LAW": "concept",
     "NORP": "concept",
     "LANGUAGE": "concept",
+    # pt_core_news_sm (CoNLL-style labels). MISC is intentionally absent
+    # so the embedding classifier picks a more specific type.
+    "PER": "person",
+    # ORG / LOC already covered above.
 }
 
 # spaCy labels that are NOT knowledge-graph entities — skip entirely
@@ -28,24 +33,28 @@ _SKIP_LABELS: frozenset[str] = frozenset({
 })
 
 # ---------------------------------------------------------------------------
-# Prototype phrases for embedding-similarity fallback (noun phrases only)
+# Bilingual prototype phrases (en + pt) used as fallback for the multilingual
+# embedder. Each phrase concatenates English and Portuguese tokens so a
+# single embedding anchors both languages — multilingual-MiniLM keeps them
+# in close subspaces, but anchoring with native tokens lifts recall when
+# the entity name itself is in pt.
 # ---------------------------------------------------------------------------
 
 TYPE_PROTOTYPES: dict[str, list[str]] = {
-    "person": ["person individual human being someone"],
-    "project": ["project initiative task program undertaking plan"],
-    "concept": ["concept idea theory principle notion abstraction topic"],
-    "technology": ["technology tool framework software system platform language library"],
-    "decision": ["decision choice conclusion judgment determination resolution"],
-    "resource": ["resource document material asset reference data source"],
+    "person": ["person individual human being someone | pessoa indivíduo humano alguém"],
+    "project": ["project initiative task program undertaking plan | projeto iniciativa programa empreendimento"],
+    "concept": ["concept idea theory principle notion abstraction topic | conceito ideia teoria princípio noção tópico"],
+    "technology": ["technology tool framework software system platform language library | tecnologia ferramenta framework sistema plataforma linguagem biblioteca"],
+    "decision": ["decision choice conclusion judgment determination resolution | decisão escolha conclusão julgamento determinação resolução"],
+    "resource": ["resource document material asset reference data source | recurso documento material ativo referência fonte"],
 }
 
 RELATION_PROTOTYPES: dict[str, list[str]] = {
-    "uses": ["uses utilizes employs leverages applies"],
-    "depends_on": ["depends on requires needs relies on necessitates"],
-    "part_of": ["part of component of subset of belongs to contained in member of"],
-    "created_by": ["created by made by built by developed by authored by designed by"],
-    "related_to": ["related to connected to associated with linked to involves"],
+    "uses": ["uses utilizes employs leverages applies | usa utiliza emprega aplica"],
+    "depends_on": ["depends on requires needs relies on necessitates | depende de requer precisa necessita"],
+    "part_of": ["part of component of subset of belongs to contained in member of | parte de componente de pertence a contido em membro de"],
+    "created_by": ["created by made by built by developed by authored by designed by | criado por feito por desenvolvido por projetado por"],
+    "related_to": ["related to connected to associated with linked to involves | relacionado a conectado a associado com envolve"],
 }
 
 # Short / generic noun phrases to skip

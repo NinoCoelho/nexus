@@ -7,6 +7,7 @@ which imports the shared tracking dicts from this module.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -271,7 +272,28 @@ async def chat_respond(
 ) -> None:
     """Resolve a pending ``ask_user`` request. 404 when the request
     is unknown — most commonly because it timed out or the session
-    was reset before the user clicked through."""
+    was reset before the user clicked through.
+
+    For requests that have *parked* (the agent ended the turn waiting
+    for an async answer), this endpoint returns 409 with the parked
+    request id; the UI must resume via
+    ``POST /chat/{session_id}/hitl/{request_id}/answer``.
+    """
+    parked = store.get_hitl_pending(body.request_id)
+    if parked is not None and parked.get("status") == "parked":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "reason": "parked",
+                "request_id": body.request_id,
+                "session_id": parked.get("session_id"),
+                "message": (
+                    "request is parked; answer via "
+                    f"/chat/{parked.get('session_id')}/hitl/"
+                    f"{body.request_id}/answer to resume the turn"
+                ),
+            },
+        )
     resolved = store.resolve_pending(
         session_id, body.request_id, body.answer
     )
@@ -283,3 +305,217 @@ async def chat_respond(
                 f"{session_id!r} (timed out or already resolved)"
             ),
         )
+
+
+@router.post("/chat/{session_id}/hitl/{request_id}/answer")
+async def chat_hitl_answer(
+    session_id: str,
+    request_id: str,
+    body: RespondPayload,
+    a: Agent = Depends(get_agent),
+    store: SessionStore = Depends(get_sessions),
+) -> StreamingResponse:
+    """Resume a parked ``ask_user`` request and stream the agent's
+    continuation as SSE.
+
+    Two outcomes:
+
+    1. **Idempotent duplicate** — another client already answered. Returns
+       the recorded answer in a single ``done`` SSE frame and closes.
+    2. **First answer wins** — marks the row answered, decodes the answer
+       into a tool result, drives ``Agent.continue_after_hitl`` and forwards
+       events identically to ``/chat/stream``.
+
+    A 404 means the request was never parked (timed out without parking,
+    or already cleaned up).
+    """
+    if request_id != body.request_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path request_id and body.request_id must match",
+        )
+
+    parked = store.get_hitl_pending(request_id)
+    if parked is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no parked request {request_id!r}",
+        )
+    if parked.get("session_id") != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="request_id belongs to a different session",
+        )
+
+    # Decode the answer the same way ask_user_tool decodes broker answers
+    # (form payloads come in as JSON strings; everything else as plain text).
+    raw_answer = body.answer
+    decoded: Any = raw_answer
+    if isinstance(raw_answer, str):
+        try:
+            decoded = json.loads(raw_answer)
+        except (json.JSONDecodeError, ValueError):
+            decoded = raw_answer
+
+    row = store.mark_hitl_pending_answered(request_id, decoded)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no parked request {request_id!r}",
+        )
+
+    already_answered = bool(row.get("already_answered"))
+
+    async def event_generator() -> AsyncIterator[str]:
+        if already_answered:
+            # Idempotent duplicate — emit a synthetic done with the prior
+            # answer so the second caller can unwind its UI cleanly.
+            payload = {
+                "session_id": session_id,
+                "reply": "",
+                "duplicate": True,
+                "answer": row.get("answer_json"),
+            }
+            yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+            return
+
+        token = CURRENT_SESSION_ID.set(session_id)
+        current = asyncio.current_task()
+        if current is not None:
+            _inflight_turns[session_id] = current
+        accumulated_text = ""
+        accumulated_tools: list[dict[str, Any]] = []
+        final_messages = None
+        partial_status = "interrupted"
+        try:
+            async for event in a.continue_after_hitl(
+                session_id=session_id,
+                request_id=request_id,
+                answer=decoded,
+            ):
+                etype = event.get("type")
+                if etype == "delta":
+                    accumulated_text += event.get("text", "")
+                    yield (
+                        f"event: delta\ndata: "
+                        f"{json.dumps({'text': event['text']})}\n\n"
+                    )
+                elif etype == "thinking":
+                    yield (
+                        f"event: thinking\ndata: "
+                        f"{json.dumps({'text': event.get('text', '')})}\n\n"
+                    )
+                elif etype in ("tool_exec_start", "tool_exec_result"):
+                    payload = {"name": event.get("name", "")}
+                    if "args" in event:
+                        payload["args"] = event["args"]
+                    if "result_preview" in event:
+                        payload["result_preview"] = event["result_preview"]
+                    if etype == "tool_exec_start":
+                        accumulated_tools.append({
+                            "name": event.get("name", ""),
+                            "args": event.get("args"),
+                            "status": "pending",
+                        })
+                    else:
+                        for t in reversed(accumulated_tools):
+                            if (
+                                t.get("name") == event.get("name")
+                                and t.get("status") == "pending"
+                            ):
+                                t["status"] = "done"
+                                t["result_preview"] = event.get("result_preview")
+                                break
+                    yield f"event: tool\ndata: {json.dumps(payload)}\n\n"
+                elif etype == "limit_reached":
+                    yield (
+                        f"event: limit_reached\ndata: "
+                        f"{json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
+                    )
+                elif etype == "done":
+                    final_messages = event.get("messages")
+                    usage = event.get("usage") or {}
+                    try:
+                        store.bump_usage(
+                            session_id,
+                            model=usage.get("model"),
+                            input_tokens=int(usage.get("input_tokens") or 0),
+                            output_tokens=int(usage.get("output_tokens") or 0),
+                            tool_calls=int(usage.get("tool_calls") or 0),
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.exception("bump_usage failed (resume)")
+                    done_payload = {
+                        "session_id": event.get("session_id") or session_id,
+                        "reply": event.get("reply", ""),
+                        "trace": event.get("trace", []),
+                        "skills_touched": event.get("skills_touched", []),
+                        "iterations": event.get("iterations", 0),
+                        "usage": usage,
+                        "model": usage.get("model"),
+                    }
+                    yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+                elif etype == "error":
+                    err_payload = {
+                        "detail": event.get("detail", ""),
+                        "reason": event.get("reason"),
+                        "retryable": event.get("retryable"),
+                        "status_code": event.get("status_code"),
+                    }
+                    yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+        except (LLMTransportError, MalformedOutputError) as exc:
+            partial_status = "llm_error"
+            yield (
+                f"event: error\ndata: "
+                f"{json.dumps({'detail': str(exc)})}\n\n"
+            )
+        except asyncio.CancelledError:
+            partial_status = "cancelled"
+            yield (
+                f"event: error\ndata: "
+                f"{json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
+            )
+            yield (
+                f"event: done\ndata: "
+                f"{json.dumps({'session_id': session_id, 'reply': ''})}\n\n"
+            )
+        except Exception as exc:  # noqa: BLE001
+            partial_status = "crashed"
+            log.exception("hitl resume crashed")
+            yield (
+                f"event: error\ndata: "
+                f"{json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
+            )
+            yield (
+                f"event: done\ndata: "
+                f"{json.dumps({'session_id': session_id, 'reply': ''})}\n\n"
+            )
+        finally:
+            if final_messages is not None:
+                try:
+                    store.replace_history(session_id, final_messages)
+                except Exception:  # noqa: BLE001
+                    log.exception("replace_history (resume) failed")
+            elif accumulated_text or accumulated_tools:
+                try:
+                    sess = store.get(session_id)
+                    base = list(sess.history) if sess else []
+                    store.persist_partial_turn(
+                        session_id,
+                        base_history=base,
+                        user_message="",  # resumed turn has no fresh user msg
+                        assistant_text=accumulated_text,
+                        tool_calls=accumulated_tools,
+                        status_note=partial_status,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("persist_partial_turn (resume) failed")
+            CURRENT_SESSION_ID.reset(token)
+            if _inflight_turns.get(session_id) is current:
+                _inflight_turns.pop(session_id, None)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

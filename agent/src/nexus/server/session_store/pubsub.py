@@ -39,6 +39,38 @@ _GLOBAL_HITL_KINDS = frozenset({
 })
 
 
+def _row_to_pending_dict(r: Any) -> dict[str, Any]:
+    """Hydrate a hitl_pending row tuple into the dict shape used by routes."""
+    def _load(s: Any) -> Any:
+        if not s:
+            return None
+        try:
+            return json.loads(s)
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+    return {
+        "request_id": r[0],
+        "session_id": r[1],
+        "tool_call_id": r[2],
+        "kind": r[3],
+        "prompt": r[4],
+        "choices": _load(r[5]),
+        "fields": _load(r[6]),
+        "form_title": r[7],
+        "form_description": r[8],
+        "default": r[9],
+        "timeout_seconds": r[10],
+        "deadline_at": r[11],
+        "created_at": r[12],
+        "parked_messages_json": r[13] or "[]",
+        "model_id": r[14],
+        "status": r[15],
+        "answered_at": r[16],
+        "answer_json": r[17],
+    }
+
+
 class PubSubMixin:
     """Mixin providing publish/subscribe and HITL pending-future management.
 
@@ -54,6 +86,15 @@ class PubSubMixin:
         self._global_subscribers: list[
             asyncio.Queue[tuple[str, SessionEvent] | None]
         ] = []
+        # In-flight tool_call_id keyed by session_id, updated by the agent
+        # façade on each tool_exec_start. ask_user_tool reads this when it
+        # parks a request so we can persist tool_call_id alongside the
+        # parked snapshot. Sequential within a turn; no lock needed.
+        self._latest_tool_call_id: dict[str, str] = {}
+        # Last assembled loom messages snapshot keyed by session_id, kept
+        # by the agent façade so ask_user_tool can persist a recoverable
+        # parked state from any tool dispatch point in the turn.
+        self._latest_messages_snapshot: dict[str, list[dict[str, Any]]] = {}
         self._broker = HitlBroker(
             publish_hook=lambda sid, ev: self.publish(
                 sid, SessionEvent(kind=ev.kind, data=dict(ev.data))
@@ -220,6 +261,185 @@ class PubSubMixin:
         self._hitl_db().commit()
         return removed
 
+    # ── Durable parked HITL state (survives restart) ─────────────────────────
+
+    def persist_hitl_pending(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        tool_call_id: str,
+        kind: str,
+        prompt: str,
+        choices: list[str] | None,
+        fields: list[dict[str, Any]] | None,
+        form_title: str | None,
+        form_description: str | None,
+        default: str | None,
+        timeout_seconds: int | None,
+        deadline_at: str | None = None,
+        parked_messages_json: str | None = None,
+        model_id: str | None = None,
+    ) -> None:
+        """Insert (or refresh) a parked HITL request row.
+
+        Idempotent on ``request_id`` so retries during park don't duplicate.
+        ``parked_messages_json`` may be empty initially — the agent façade
+        backfills it once the working snapshot is known.
+        """
+        self._hitl_db().execute(
+            "INSERT OR REPLACE INTO hitl_pending "
+            "(request_id, session_id, tool_call_id, kind, prompt, "
+            " choices_json, fields_json, form_title, form_description, "
+            " \"default\", timeout_seconds, deadline_at, "
+            " parked_messages_json, model_id, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'parked')",
+            (
+                request_id,
+                session_id,
+                tool_call_id,
+                kind,
+                prompt,
+                json.dumps(choices) if choices is not None else None,
+                json.dumps(fields) if fields is not None else None,
+                form_title,
+                form_description,
+                default,
+                int(timeout_seconds) if timeout_seconds is not None else None,
+                deadline_at,
+                parked_messages_json or "[]",
+                model_id,
+            ),
+        )
+        self._hitl_db().commit()
+
+    def update_hitl_pending_snapshot(
+        self,
+        request_id: str,
+        parked_messages_json: str,
+        *,
+        model_id: str | None = None,
+    ) -> bool:
+        """Backfill the snapshot once the agent façade has assembled it.
+
+        Returns False if the row is missing or already resolved.
+        """
+        cur = self._hitl_db().execute(
+            "UPDATE hitl_pending SET parked_messages_json = ?, "
+            "       model_id = COALESCE(?, model_id) "
+            "WHERE request_id = ? AND status = 'parked'",
+            (parked_messages_json, model_id, request_id),
+        )
+        self._hitl_db().commit()
+        return (cur.rowcount or 0) > 0
+
+    def get_hitl_pending(self, request_id: str) -> dict[str, Any] | None:
+        row = self._hitl_db().execute(
+            "SELECT request_id, session_id, tool_call_id, kind, prompt, "
+            "       choices_json, fields_json, form_title, form_description, "
+            "       \"default\", timeout_seconds, deadline_at, created_at, "
+            "       parked_messages_json, model_id, status, "
+            "       answered_at, answer_json "
+            "FROM hitl_pending WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_pending_dict(row)
+
+    def list_pending_for_session(
+        self, session_id: str, *, kind: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if kind is not None:
+            rows = self._hitl_db().execute(
+                "SELECT request_id, session_id, tool_call_id, kind, prompt, "
+                "       choices_json, fields_json, form_title, form_description, "
+                "       \"default\", timeout_seconds, deadline_at, created_at, "
+                "       parked_messages_json, model_id, status, "
+                "       answered_at, answer_json "
+                "FROM hitl_pending "
+                "WHERE session_id = ? AND status = 'parked' AND kind = ? "
+                "ORDER BY created_at ASC",
+                (session_id, kind),
+            ).fetchall()
+        else:
+            rows = self._hitl_db().execute(
+                "SELECT request_id, session_id, tool_call_id, kind, prompt, "
+                "       choices_json, fields_json, form_title, form_description, "
+                "       \"default\", timeout_seconds, deadline_at, created_at, "
+                "       parked_messages_json, model_id, status, "
+                "       answered_at, answer_json "
+                "FROM hitl_pending "
+                "WHERE session_id = ? AND status = 'parked' "
+                "ORDER BY created_at ASC",
+                (session_id,),
+            ).fetchall()
+        return [_row_to_pending_dict(r) for r in rows]
+
+    def list_all_pending(self) -> list[dict[str, Any]]:
+        rows = self._hitl_db().execute(
+            "SELECT request_id, session_id, tool_call_id, kind, prompt, "
+            "       choices_json, fields_json, form_title, form_description, "
+            "       \"default\", timeout_seconds, deadline_at, created_at, "
+            "       parked_messages_json, model_id, status, "
+            "       answered_at, answer_json "
+            "FROM hitl_pending WHERE status = 'parked' "
+            "ORDER BY created_at ASC"
+        ).fetchall()
+        return [_row_to_pending_dict(r) for r in rows]
+
+    def mark_hitl_pending_answered(
+        self, request_id: str, answer: Any,
+    ) -> dict[str, Any] | None:
+        """Atomically resolve a parked request.
+
+        Returns the row (with ``already_answered`` set) when a row exists.
+        Returns None if no such request_id was ever parked.
+        """
+        try:
+            answer_json = json.dumps(answer, ensure_ascii=False)
+        except (TypeError, ValueError):
+            answer_json = json.dumps(str(answer))
+        cur = self._hitl_db().execute(
+            "UPDATE hitl_pending "
+            "SET status = 'answered', answered_at = CURRENT_TIMESTAMP, "
+            "    answer_json = ? "
+            "WHERE request_id = ? AND status = 'parked'",
+            (answer_json, request_id),
+        )
+        self._hitl_db().commit()
+        won = (cur.rowcount or 0) > 0
+        row = self.get_hitl_pending(request_id)
+        if row is None:
+            return None
+        row["already_answered"] = not won
+        return row
+
+    def cancel_hitl_pending(
+        self, request_id: str, *, reason: str = "cancelled",
+    ) -> bool:
+        new_status = "expired" if reason == "expired" else "cancelled"
+        cur = self._hitl_db().execute(
+            "UPDATE hitl_pending SET status = ?, "
+            "       answered_at = CURRENT_TIMESTAMP "
+            "WHERE request_id = ? AND status = 'parked'",
+            (new_status, request_id),
+        )
+        self._hitl_db().commit()
+        return (cur.rowcount or 0) > 0
+
+    def trim_hitl_pending(self, *, keep_days: int = 30) -> int:
+        cur = self._hitl_db().execute(
+            "DELETE FROM hitl_pending "
+            "WHERE status != 'parked' "
+            "  AND datetime(COALESCE(answered_at, created_at)) "
+            "      < datetime('now', ?)",
+            (f"-{int(keep_days)} days",),
+        )
+        removed = cur.rowcount or 0
+        self._hitl_db().commit()
+        return removed
+
     def list_push_subscriptions(self) -> list[dict[str, Any]]:
         rows = self._hitl_db().execute(
             "SELECT endpoint, p256dh, auth, user_agent FROM push_subscriptions"
@@ -340,3 +560,45 @@ class PubSubMixin:
 
     def _cancel_all_pending(self, session_id: str) -> None:
         self._broker.cancel_session(session_id, reason="session_reset")
+        # Mark any durable parked rows for this session as cancelled too.
+        try:
+            for row in self.list_pending_for_session(session_id):
+                self.cancel_hitl_pending(row["request_id"], reason="session_reset")
+        except Exception:  # noqa: BLE001
+            log.exception("cancel parked rows on session reset failed")
+
+    # ── Per-turn dispatch context (set by agent façade) ──────────────────────
+
+    def set_pending_tool_call(self, session_id: str, tool_call_id: str) -> None:
+        """Record the tool_call_id loom is about to dispatch for this session.
+
+        Updated on each ``tool_exec_start`` so HITL handlers (ask_user) can
+        persist it alongside their parked state. Race-free because tool
+        dispatch is sequential within a turn.
+        """
+        self._latest_tool_call_id[session_id] = tool_call_id
+
+    def get_pending_tool_call(self, session_id: str) -> str | None:
+        return self._latest_tool_call_id.get(session_id)
+
+    def clear_pending_tool_call(self, session_id: str) -> None:
+        self._latest_tool_call_id.pop(session_id, None)
+
+    def set_messages_snapshot(
+        self, session_id: str, messages_json: list[dict[str, Any]],
+    ) -> None:
+        """Snapshot of loom's all_messages up through the current dispatch.
+
+        The agent façade keeps this updated as it forwards loom events.
+        ask_user_tool persists it with the parked row so resume can rebuild
+        the conversation exactly where it left off.
+        """
+        self._latest_messages_snapshot[session_id] = messages_json
+
+    def get_messages_snapshot(
+        self, session_id: str,
+    ) -> list[dict[str, Any]] | None:
+        return self._latest_messages_snapshot.get(session_id)
+
+    def clear_messages_snapshot(self, session_id: str) -> None:
+        self._latest_messages_snapshot.pop(session_id, None)

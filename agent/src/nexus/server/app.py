@@ -114,6 +114,9 @@ def create_app(
 
     agent._ask_user_handler = ask_user_handler
     agent._terminal_handler = TerminalHandler(ask_user_handler=ask_user_handler)
+    # Give the agent the SessionStore so the streaming loop can persist
+    # parked HITL snapshots and the resume entry-point can rehydrate them.
+    agent._sessions = sessions
 
     # Trace callback routes every agent event (iter, tool_call,
     # tool_result, reply) into the SSE subscriber fanout for whichever
@@ -178,6 +181,59 @@ def create_app(
                 _local_mgr.cleanup_stale_config()
         except Exception:
             log.exception("local_llm restart failed")
+        # ── parked HITL sweep (durable async ask_user) ──────────────────────
+        # Re-publish ``user_request`` for any rows that were left parked when
+        # the server stopped, so connected clients re-queue them in the bell.
+        # Also expire rows whose deadline_at has passed (rare — most parked
+        # requests are open-ended). Best-effort; failures don't block boot.
+        try:
+            from .events import SessionEvent as _SE
+            from datetime import datetime, timezone
+
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            re_published = 0
+            for row in sessions.list_all_pending():
+                deadline = row.get("deadline_at")
+                if deadline and deadline < now_iso:
+                    sessions.cancel_hitl_pending(
+                        row["request_id"], reason="expired",
+                    )
+                    sessions.publish(
+                        row["session_id"],
+                        _SE(
+                            kind="user_request_cancelled",
+                            data={
+                                "request_id": row["request_id"],
+                                "reason": "expired",
+                            },
+                        ),
+                    )
+                    continue
+                ev_data: dict[str, Any] = {
+                    "request_id": row["request_id"],
+                    "prompt": row["prompt"],
+                    "kind": row["kind"],
+                    "choices": row.get("choices"),
+                    "default": row.get("default"),
+                    "timeout_seconds": row.get("timeout_seconds"),
+                }
+                if row.get("kind") == "form":
+                    ev_data["fields"] = row.get("fields")
+                    ev_data["form_title"] = row.get("form_title")
+                    ev_data["form_description"] = row.get("form_description")
+                sessions.publish(
+                    row["session_id"], _SE(kind="user_request", data=ev_data),
+                )
+                re_published += 1
+            if re_published:
+                log.info(
+                    "[hitl] re-published %d parked request(s) at startup",
+                    re_published,
+                )
+            sessions.trim_hitl_pending(keep_days=30)
+        except Exception:
+            log.exception("hitl parked sweep failed")
+
         if graphrag_cfg is not None:
             try:
                 from ..agent.graphrag_manager import initialize

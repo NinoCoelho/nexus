@@ -81,6 +81,7 @@ def build_tool_registry(
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
     from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
+    from nexus.tools.ontology_tool import ONTOLOGY_MANAGE_TOOL, make_ontology_handler
     from nexus.agent.ask_user_tool import ASK_USER_TOOL
     from nexus.agent.terminal_tool import TERMINAL_TOOL
 
@@ -109,6 +110,31 @@ def build_tool_registry(
         )
 
     registry.register(_SimpleToolHandler(SKILL_MANAGE_TOOL, _skill_manage))
+
+    # ontology_manage — vault-backed CRUD over GraphRAG ontology + propose flow.
+    # ask_user is wired through `handlers` (late-bound) so the propose action
+    # can confirm with the user without a registry rebuild. cfg is reloaded
+    # per-call so writes that mutate ontology pick up the freshest config
+    # before re-initializing the engine.
+    async def _ontology_ask_user(args: dict) -> Any:
+        h = handlers.ask_user
+        if h is None:
+            return None
+        return await h.invoke(args)
+
+    def _load_cfg() -> Any:
+        from nexus.config_file import load as load_config
+        return load_config()
+
+    _ontology_handler = make_ontology_handler(
+        ask_user=_ontology_ask_user,
+        cfg_loader=_load_cfg,
+    )
+
+    async def _ontology_manage(args: dict) -> str:
+        return await _ontology_handler(args)
+
+    registry.register(_SimpleToolHandler(ONTOLOGY_MANAGE_TOOL, _ontology_manage))
 
     # http_call
     async def _http_call(args: dict) -> str:

@@ -14,10 +14,12 @@ from typing import Any, Iterator
 from ._manifest import (
     clear_manifest as clear_manifest,
     close_manifest,
+    get_meta as _get_index_meta,
     is_indexed as _is_indexed,
     mark_indexed as _mark_indexed,
     open_manifest as _get_manifest,
     remove_path as _manifest_remove_path,
+    set_meta as _set_index_meta,
 )
 from collections import deque
 from ._resolvers import (
@@ -31,6 +33,12 @@ log = logging.getLogger(__name__)
 _engine: Any | None = None
 _home: Path | None = None
 _last_init_error: str | None = None
+# Independent of ``_last_init_error``: a non-fatal warning surfaced to the
+# UI when the configured embedder differs from the one used to build the
+# current vector store. The engine still initializes (so reads still work
+# against the stale vectors), but new queries against new content drift in
+# similarity geometry. User clears it by running ``nexus graphrag reindex``.
+_stale_warning: str | None = None
 # Bounded queue of recent per-file indexing failures, exposed via
 # /graph/knowledge/recent-errors. Tuples of (path, error_message, ts).
 _recent_errors: deque[dict[str, Any]] = deque(maxlen=50)
@@ -60,6 +68,7 @@ def get_health() -> dict[str, Any]:
     return {
         "ready": _engine is not None,
         "error": _last_init_error,
+        "stale_warning": _stale_warning,
     }
 
 
@@ -87,12 +96,13 @@ async def initialize(cfg: Any) -> None:
     does **not** propagate so the rest of the app keeps starting; the UI
     surfaces the failure via ``/graph/knowledge/health``.
     """
-    global _engine, _home, _last_init_error
+    global _engine, _home, _last_init_error, _stale_warning
 
     graphrag_cfg = getattr(cfg, "graphrag", None)
     if graphrag_cfg is None or not getattr(graphrag_cfg, "enabled", False):
         log.info("[graphrag] disabled in config")
         _last_init_error = None
+        _stale_warning = None
         return
 
     if _engine is not None:
@@ -101,6 +111,16 @@ async def initialize(cfg: Any) -> None:
         except Exception:
             log.warning("[graphrag] failed to close previous engine", exc_info=True)
         _engine = None
+
+    # Reset the builtin extractor singleton so its prototype embeddings
+    # get rebuilt from the (possibly updated) ontology on the next call.
+    # Cheap: the singleton itself just holds the spaCy pipelines and a
+    # dict of cached vectors; reset throws away the vectors only.
+    try:
+        from nexus.agent import builtin_extractor as _be
+        _be._instance = None
+    except Exception:
+        pass
 
     from loom.store.graphrag import GraphRAGConfig, GraphRAGEngine
 
@@ -111,6 +131,31 @@ async def initialize(cfg: Any) -> None:
     _get_manifest(db_dir)
 
     emb_cfg = graphrag_cfg.embeddings
+
+    # Stale-embedder detection: compare the embedder model used to build
+    # the current vector store with what we're about to load. Mismatch
+    # doesn't block init (reads still return whatever's there) but warns
+    # the user — the geometry change makes new vs old vectors incomparable.
+    _stale_warning = None
+    previous_embedder = _get_index_meta("embedder_model")
+    if previous_embedder and previous_embedder != emb_cfg.model:
+        _stale_warning = (
+            f"embedder changed: index built with {previous_embedder!r} but "
+            f"config now uses {emb_cfg.model!r}. Existing vectors are stale; "
+            "run `uv run nexus graphrag reindex` to rebuild."
+        )
+        log.warning("[graphrag] %s", _stale_warning)
+        try:
+            from ..server.event_bus import publish
+            publish({
+                "type": "graphrag.stale",
+                "previous": previous_embedder,
+                "current": emb_cfg.model,
+            })
+        except Exception:
+            pass
+    _set_index_meta("embedder_model", emb_cfg.model)
+
     try:
         embedder = _resolve_embedder(cfg, graphrag_cfg)
     except GraphRAGConfigError as exc:
@@ -124,12 +169,39 @@ async def initialize(cfg: Any) -> None:
         OntologyConfig,
     )
 
-    ont = graphrag_cfg.ontology
-    ontology_cfg = OntologyConfig(
-        entity_types=ont.entity_types,
-        core_relations=ont.core_relations,
-        allow_custom_relations=ont.allow_custom_relations,
-    )
+    # Ontology source of truth is the vault (~/.nexus/vault/_system/ontology/).
+    # Seed it from config defaults the first time around, then read through
+    # the store for entity_types / core_relations / allow_custom_relations.
+    from nexus.agent.builtin_extractor import RELATION_PROTOTYPES, TYPE_PROTOTYPES
+    from nexus.agent.ontology_store import OntologyStore
+
+    vault_root = _home / "vault"
+    store = OntologyStore(vault_root)
+    cfg_ont = graphrag_cfg.ontology
+    if not store.exists():
+        store.seed_if_empty(
+            entity_types=cfg_ont.entity_types,
+            core_relations=cfg_ont.core_relations,
+            allow_custom_relations=cfg_ont.allow_custom_relations,
+            type_prototypes=TYPE_PROTOTYPES,
+            relation_prototypes=RELATION_PROTOTYPES,
+        )
+    try:
+        snapshot = store.load()
+    except (FileNotFoundError, ValueError) as exc:
+        log.error("[graphrag] failed to load ontology from vault: %s", exc)
+        # Fall back to config-provided values so init still succeeds.
+        ontology_cfg = OntologyConfig(
+            entity_types=cfg_ont.entity_types,
+            core_relations=cfg_ont.core_relations,
+            allow_custom_relations=cfg_ont.allow_custom_relations,
+        )
+    else:
+        ontology_cfg = OntologyConfig(
+            entity_types=snapshot.type_names(),
+            core_relations=snapshot.relation_names(),
+            allow_custom_relations=snapshot.allow_custom_relations,
+        )
 
     engine_cfg = GraphRAGConfig(
         enabled=True,
@@ -294,7 +366,8 @@ def drop_data() -> int:
 
     Returns the number of database files removed.
     """
-    global _engine
+    global _engine, _stale_warning
+    _stale_warning = None
     home = get_home()
     db_dir = home / "graphrag"
     if not db_dir.is_dir():

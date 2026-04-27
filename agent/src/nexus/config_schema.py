@@ -61,7 +61,7 @@ class AgentConfig(BaseModel):
 
 class GraphRAGEmbeddingConfig(BaseModel):
     provider: str = "builtin"
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     base_url: str = ""
     key_env: str = ""
     dimensions: int = 384
@@ -76,6 +76,13 @@ class GraphRAGExtractionConfig(BaseModel):
 
 
 class GraphRAGOntologyConfig(BaseModel):
+    # Source of truth for the ontology lives at
+    # ``~/.nexus/vault/_system/ontology/`` (entity_types.csv,
+    # relations.csv, INSTRUCTIONS.md, meta.json) and is editable by the
+    # user and the agent (via the ``ontology_manage`` tool). The fields
+    # below are kept ONLY as the seed used the first time the vault
+    # ontology folder is created. After seeding, ``OntologyStore`` is
+    # the authoritative reader during ``graphrag_manager.initialize``.
     entity_types: list[str] = Field(default_factory=lambda: [
         "person", "organization", "project", "note", "concept",
         "technology", "decision", "event", "source", "task",

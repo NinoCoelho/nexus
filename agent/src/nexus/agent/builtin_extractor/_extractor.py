@@ -23,6 +23,34 @@ from ._helpers import (
 
 log = logging.getLogger(__name__)
 
+# Languages we ship spaCy NER pipelines for. en is the historical default;
+# pt was added when the embedder switched to multilingual.
+_SPACY_MODELS: dict[str, str] = {
+    "en": "en_core_web_sm",
+    "pt": "pt_core_news_sm",
+}
+
+
+def _detect_lang(text: str) -> str:
+    """Best-effort language tag — returns one of _SPACY_MODELS keys.
+
+    Why: routes a chunk to the right spaCy NER pipeline. Falls back to ``en``
+    on any langdetect failure (empty text, unsupported language, missing
+    optional dep) so extraction never breaks because of detection.
+    """
+    snippet = text.strip()[:600]
+    if not snippet:
+        return "en"
+    try:
+        from langdetect import DetectorFactory, detect
+        # langdetect is non-deterministic by default; pin the seed once at
+        # module level so the same chunk always resolves to the same tag.
+        DetectorFactory.seed = 0
+        tag = detect(snippet)
+    except Exception:
+        return "en"
+    return tag if tag in _SPACY_MODELS else "en"
+
 
 class BuiltinExtractor:
     """Zero-config entity extractor: spaCy NER + fastembed similarity.
@@ -32,7 +60,7 @@ class BuiltinExtractor:
     """
 
     def __init__(self) -> None:
-        self._nlp: Any = None
+        self._nlps: dict[str, Any] = {}
         self._embedder: Any = None
         self._type_embs: dict[str, list[float]] = {}
         self._rel_embs: dict[str, list[float]] = {}
@@ -41,28 +69,31 @@ class BuiltinExtractor:
     # -- lazy init ----------------------------------------------------------
 
     async def _ensure_loaded(self) -> None:
-        if self._nlp is not None:
+        if self._nlps:
             return
         async with self._lock:
-            if self._nlp is not None:
+            if self._nlps:
                 return
             loop = asyncio.get_running_loop()
 
-            log.info("[builtin-extractor] loading spaCy en_core_web_sm …")
-            self._nlp = await loop.run_in_executor(None, self._load_spacy)
+            for lang, model_name in _SPACY_MODELS.items():
+                log.info("[builtin-extractor] loading spaCy %s …", model_name)
+                self._nlps[lang] = await loop.run_in_executor(
+                    None, self._load_spacy, model_name,
+                )
 
             from nexus.agent.builtin_embedder import get_builtin_embedder
             self._embedder = get_builtin_embedder()
 
             await self._build_prototype_embeddings()
-            log.info("[builtin-extractor] ready (spacy + fastembed)")
+            log.info("[builtin-extractor] ready (spacy=%s + fastembed)", list(self._nlps))
 
     @staticmethod
-    def _load_spacy() -> Any:
+    def _load_spacy(model_name: str) -> Any:
         import spacy
 
         # Try loading from our cache first
-        cache = Path.home() / ".nexus" / "models" / "spacy" / "en_core_web_sm"
+        cache = Path.home() / ".nexus" / "models" / "spacy" / model_name
         if cache.is_dir():
             try:
                 return spacy.load(str(cache))
@@ -70,11 +101,11 @@ class BuiltinExtractor:
                 pass
 
         try:
-            return spacy.load("en_core_web_sm")
+            return spacy.load(model_name)
         except OSError:
-            log.info("[builtin-extractor] downloading en_core_web_sm (~12 MB) …")
-            spacy.cli.download("en_core_web_sm")  # type: ignore[attr-defined]
-            nlp = spacy.load("en_core_web_sm")
+            log.info("[builtin-extractor] downloading %s (~12 MB) …", model_name)
+            spacy.cli.download(model_name)  # type: ignore[attr-defined]
+            nlp = spacy.load(model_name)
             try:
                 cache.parent.mkdir(parents=True, exist_ok=True)
                 nlp.to_disk(str(cache))
@@ -83,12 +114,31 @@ class BuiltinExtractor:
             return nlp
 
     async def _build_prototype_embeddings(self) -> None:
+        # Vault ontology is the source of truth when present; the constants
+        # are kept only as the bootstrap fallback for the very first run
+        # before ``graphrag_manager.initialize`` has had a chance to seed
+        # the vault folder.
+        type_protos: dict[str, list[str]] = TYPE_PROTOTYPES
+        rel_protos: dict[str, list[str]] = RELATION_PROTOTYPES
+        try:
+            from nexus.agent.ontology_store import OntologyStore
+            store = OntologyStore(Path.home() / ".nexus" / "vault")
+            if store.exists():
+                snap = store.load()
+                type_protos = snap.type_prototypes()
+                rel_protos = snap.relation_prototypes()
+        except Exception as exc:
+            log.warning("[builtin-extractor] using constant prototypes: %s", exc)
+
         texts: list[str] = []
         keys: list[tuple[str, str]] = []
-
-        for name, phrases in {**TYPE_PROTOTYPES, **RELATION_PROTOTYPES}.items():
+        for name, phrases in type_protos.items():
             for phrase in phrases:
-                keys.append(("type" if name in TYPE_PROTOTYPES else "rel", name))
+                keys.append(("type", name))
+                texts.append(phrase)
+        for name, phrases in rel_protos.items():
+            for phrase in phrases:
+                keys.append(("rel", name))
                 texts.append(phrase)
 
         embs = await self._embedder.embed(texts)
@@ -118,9 +168,14 @@ class BuiltinExtractor:
         if not text:
             return _make_response({"entities": [], "relations": []})
 
-        # spaCy NLP is CPU-bound
+        # spaCy NLP is CPU-bound. Pick the per-language pipeline once per
+        # chunk; en is the safe default if detection fails or returns a
+        # language we don't ship a model for.
+        snippet = text[:3000]
+        lang = _detect_lang(snippet)
+        nlp = self._nlps.get(lang) or self._nlps["en"]
         loop = asyncio.get_running_loop()
-        doc = await loop.run_in_executor(None, lambda: self._nlp(text[:3000]))
+        doc = await loop.run_in_executor(None, lambda: nlp(snippet))
 
         entities = await self._extract_entities(doc, entity_types)
         relations = await self._extract_relations(doc, entities)

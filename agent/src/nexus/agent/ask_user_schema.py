@@ -84,6 +84,17 @@ ASK_USER_TOOL = ToolSpec(
                     "questions that need investigation."
                 ),
             },
+            "parkable": {
+                "type": "boolean",
+                "description": (
+                    "Opt-in for kind='text' or 'choice': if the user does "
+                    "not respond within ~30s, park the request and end the "
+                    "turn cleanly. The session resumes when the user "
+                    "answers via the bell or push notification. "
+                    "kind='form' parks by default; kind='confirm' never "
+                    "parks (approvals must stay synchronous). Default false."
+                ),
+            },
         },
         "required": ["prompt"],
     },

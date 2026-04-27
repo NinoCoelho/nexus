@@ -82,6 +82,41 @@ CREATE INDEX IF NOT EXISTS hitl_events_session_idx
     ON hitl_events(session_id);
 """
 
+# Durable parked HITL request state — survives server restart so the agent
+# can resume a turn after the user answers (potentially much) later.
+# `parked_messages_json` is the snapshot of loom's all_messages up through the
+# ASSISTANT message that contains the ask_user tool_call. On resume we append
+# a TOOL message with the user's answer and run a fresh `run_turn_stream`
+# from that history.
+_HITL_PENDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS hitl_pending (
+    request_id           TEXT PRIMARY KEY,
+    session_id           TEXT NOT NULL,
+    tool_call_id         TEXT NOT NULL,
+    kind                 TEXT NOT NULL,
+    prompt               TEXT NOT NULL,
+    choices_json         TEXT,
+    fields_json          TEXT,
+    form_title           TEXT,
+    form_description     TEXT,
+    "default"            TEXT,
+    timeout_seconds      INTEGER,
+    deadline_at          TEXT,
+    created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    parked_messages_json TEXT NOT NULL DEFAULT '[]',
+    model_id             TEXT,
+    status               TEXT NOT NULL DEFAULT 'parked',
+    answered_at          TEXT,
+    answer_json          TEXT,
+    CHECK(status IN ('parked','answered','expired','cancelled'))
+);
+CREATE INDEX IF NOT EXISTS hitl_pending_session_idx
+    ON hitl_pending(session_id, status);
+CREATE INDEX IF NOT EXISTS hitl_pending_deadline_idx
+    ON hitl_pending(deadline_at)
+    WHERE deadline_at IS NOT NULL;
+"""
+
 # Browser Web Push subscriptions. Single-user app, so no user id —
 # the endpoint is unique per browser/profile.
 _PUSH_SUBS_SCHEMA = """
@@ -117,6 +152,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_FTS_SCHEMA)
     db.executescript(_FEEDBACK_SCHEMA)
     db.executescript(_HITL_EVENTS_SCHEMA)
+    db.executescript(_HITL_PENDING_SCHEMA)
     db.executescript(_PUSH_SUBS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     # Backfill FTS for existing messages when the table was just created.

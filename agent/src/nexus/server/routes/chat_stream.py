@@ -39,8 +39,28 @@ async def chat_stream_route(
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
 ) -> StreamingResponse:
+    from fastapi import HTTPException, status as _status
 
     session = store.get_or_create(req.session_id, context=req.context)
+
+    # Block if a form is parked on this session — the agent's previous turn
+    # is waiting for an async answer, and starting a new turn now would
+    # orphan the parked tool_call. Confirm/text/choice timeouts don't
+    # park, so this only fires when a long-running form is outstanding.
+    parked_forms = store.list_pending_for_session(session.id, kind="form")
+    if parked_forms:
+        raise HTTPException(
+            status_code=_status.HTTP_409_CONFLICT,
+            detail={
+                "reason": "parked_form",
+                "request_id": parked_forms[0]["request_id"],
+                "session_id": session.id,
+                "message": (
+                    "answer the parked form first via "
+                    f"/chat/{session.id}/hitl/{parked_forms[0]['request_id']}/answer"
+                ),
+            },
+        )
 
     # Always fixed routing — auto mode was removed. Legacy callers passing
     # ``model: "auto"`` are coerced to "use the configured default".

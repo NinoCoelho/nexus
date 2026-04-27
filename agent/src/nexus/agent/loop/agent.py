@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import loom.types as lt
-from ..ask_user_tool import AskUserHandler
+from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
 from ..llm import ChatMessage, LLMProvider, Role, StreamEvent
 from ..terminal_tool import TerminalHandler
 from ...skills.registry import SkillRegistry
@@ -72,6 +73,11 @@ class Agent:
             get_turn_trace=lambda: self._turn_trace,
             on_trace_event=self._on_event,
         )
+        # SessionStore is wired in by app.py so the streaming loop can
+        # update the parked-tool-call snapshot used by ask_user_tool when
+        # it parks a request. None during tests that drive the agent
+        # directly without a server.
+        self._sessions: Any | None = None
 
     def _on_event(self, kind: str, payload: dict[str, Any]) -> None:
         entry = {"event": kind, **payload}
@@ -275,6 +281,52 @@ class Agent:
         # not carry the assembled message list.
         _history_snapshot = list(history or [])
 
+        # Mirror of loom's all_messages for the parking flow. We only need this
+        # when ask_user_tool parks: the snapshot up through the ASSISTANT
+        # message that issued the parked tool_call is what we persist as
+        # parked_messages_json so a later resume turn can re-enter loom from
+        # exactly that history. Built incrementally as events stream:
+        #   content_delta + tool_call_delta accumulate into pending state →
+        #   materialised on the first tool_exec_start of an LLM iteration →
+        #   tool_exec_result appends a TOOL message (skipped when parking).
+        working_messages: list[lt.ChatMessage] = list(loom_messages)
+        pending_content_chunks: list[str] = []
+        pending_tcs: dict[int, dict[str, str]] = {}
+        materialised_for_iter = False
+        # Map (event-emitted) tool_call_id → name so tool_exec_result can
+        # append a TOOL message with the right id even though loom's
+        # ToolExecResultEvent carries it directly anyway. Kept defensively.
+        _tc_id_by_index: dict[int, str] = {}
+        # Last tool_call_id emitted in tool_exec_start, so tool_exec_result
+        # can append the matching TOOL message even when loom's payload
+        # somehow drops it (older serialisers). Updated per dispatch.
+        last_tool_exec_id: str | None = None
+        last_tool_exec_name: str | None = None
+
+        def _materialise_assistant_if_needed() -> None:
+            nonlocal materialised_for_iter
+            if materialised_for_iter:
+                return
+            tcs: list[lt.ToolCall] = []
+            for idx in sorted(pending_tcs.keys()):
+                p = pending_tcs[idx]
+                tcs.append(
+                    lt.ToolCall(
+                        id=p.get("id") or f"tc_{idx}",
+                        name=p.get("name") or "",
+                        arguments=p.get("arguments") or "",
+                    )
+                )
+            content = "".join(pending_content_chunks) or None
+            working_messages.append(
+                lt.ChatMessage(
+                    role=lt.Role.ASSISTANT,
+                    content=content,
+                    tool_calls=tcs or None,
+                )
+            )
+            materialised_for_iter = True
+
         # Wire a per-turn thinking sink on the loom adapter. Reasoning chunks
         # from thinking models (Ollama GLM-4.7-flash, DeepSeek-R1, …) flow
         # through here as they arrive and we multiplex them into the output
@@ -318,6 +370,8 @@ class Agent:
             if etype == "content_delta":
                 delta = ev.get("delta", "")
                 full_text += delta
+                pending_content_chunks.append(delta)
+                materialised_for_iter = False
                 # Mirror to the trace bus so /chat/{sid}/events subscribers
                 # (e.g. CardActivityModal) can render typing live, not only
                 # after the post-turn `reply` event.
@@ -325,6 +379,20 @@ class Agent:
                 yield {"type": "delta", "text": delta}
 
             elif etype == "tool_call_delta":
+                idx = ev.get("index")
+                if isinstance(idx, int):
+                    slot = pending_tcs.setdefault(
+                        idx, {"id": "", "name": "", "arguments": ""},
+                    )
+                    if ev.get("id"):
+                        slot["id"] = ev["id"]
+                        _tc_id_by_index[idx] = ev["id"]
+                    if ev.get("name"):
+                        slot["name"] = ev["name"]
+                    args_delta = ev.get("arguments_delta")
+                    if args_delta:
+                        slot["arguments"] = (slot.get("arguments") or "") + args_delta
+                    materialised_for_iter = False
                 # Forward tool streaming deltas (UI progress)
                 yield {
                     "type": "tool_call_delta",
@@ -337,6 +405,26 @@ class Agent:
             elif etype == "tool_exec_start":
                 tool_name = ev.get("name", "")
                 tool_args = ev.get("arguments", "")
+                tool_call_id = ev.get("tool_call_id") or ""
+                last_tool_exec_id = tool_call_id or None
+                last_tool_exec_name = tool_name or None
+                # Materialise the assistant message that issued this tool
+                # call before dispatch so a parking persist later has the
+                # correct snapshot.
+                _materialise_assistant_if_needed()
+                # Make tool_call_id visible to ask_user_tool through the
+                # session store. Sequential within a turn — no race.
+                if self._sessions is not None and session_id and tool_call_id:
+                    try:
+                        self._sessions.set_pending_tool_call(
+                            session_id, tool_call_id,
+                        )
+                        self._sessions.set_messages_snapshot(
+                            session_id,
+                            [m.model_dump() for m in working_messages],
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.exception("set_pending_tool_call failed")
                 # Mirror to the trace bus so off-stream subscribers see
                 # tool steps live, not only on turn completion.
                 self._on_event("tool_call", {"name": tool_name, "args": tool_args})
@@ -348,7 +436,97 @@ class Agent:
 
             elif etype == "tool_exec_result":
                 tool_name = ev.get("name", "")
-                preview = (ev.get("text") or "")[:200]
+                result_text = ev.get("text") or ""
+                preview = result_text[:200]
+                # Detect the parked sentinel BEFORE appending a TOOL message
+                # to working_messages. We don't want the sentinel to land in
+                # persisted history — it isn't a real tool result.
+                parked_request_id = parse_parked_sentinel(result_text)
+                if parked_request_id:
+                    # Snapshot the messages up through the assistant tool_call
+                    # (NOT the sentinel TOOL message — that's intentional) and
+                    # write it onto the parked row so a resume turn can
+                    # re-enter loom from the same history.
+                    snapshot_dump = [
+                        m.model_dump() for m in working_messages
+                    ]
+                    if self._sessions is not None:
+                        try:
+                            self._sessions.update_hitl_pending_snapshot(
+                                parked_request_id,
+                                json.dumps(snapshot_dump, ensure_ascii=False),
+                                model_id=self._chosen_model,
+                            )
+                        except Exception:  # noqa: BLE001
+                            log.exception(
+                                "parked snapshot persist failed for %s",
+                                parked_request_id,
+                            )
+                        try:
+                            self._sessions.clear_pending_tool_call(session_id or "")
+                            self._sessions.clear_messages_snapshot(session_id or "")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    self._on_event(
+                        "parked",
+                        {"request_id": parked_request_id},
+                    )
+                    yield {
+                        "type": "parked",
+                        "request_id": parked_request_id,
+                        "session_id": session_id,
+                    }
+                    # Persist whatever assistant prefix has streamed so far
+                    # so the UI shows the partial turn (e.g., "give me a
+                    # moment while I check…" before the form).
+                    persisted_messages = (
+                        _history_snapshot
+                        + [ChatMessage(role=Role.USER, content=user_msg_content)]
+                        + (
+                            [ChatMessage(role=Role.ASSISTANT, content=full_text)]
+                            if full_text
+                            else []
+                        )
+                    )
+                    yield {
+                        "type": "done",
+                        "session_id": session_id,
+                        "reply": full_text,
+                        "trace": list(self._turn_trace),
+                        "skills_touched": list(self._skills_touched),
+                        "iterations": 0,
+                        "messages": persisted_messages,
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "tool_calls": 0,
+                            "model": self._chosen_model,
+                        },
+                        "parked_request_id": parked_request_id,
+                    }
+                    # Stop consuming loom_iter — finally-block cancels the
+                    # outstanding loom_task so loom never appends the
+                    # sentinel TOOL message and never makes another LLM call.
+                    return
+                # Normal flow: append a TOOL message mirroring loom's append
+                # at loop.py:756 so working_messages stays in sync.
+                tcid = ev.get("tool_call_id") or last_tool_exec_id or ""
+                tc_name = (
+                    ev.get("name") or last_tool_exec_name or tool_name
+                )
+                working_messages.append(
+                    lt.ChatMessage(
+                        role=lt.Role.TOOL,
+                        content=result_text,
+                        tool_call_id=tcid,
+                        name=tc_name,
+                    )
+                )
+                # Reset per-iteration accumulators so the NEXT LLM call
+                # starts with a fresh content/tcs buffer.
+                pending_content_chunks.clear()
+                pending_tcs.clear()
+                materialised_for_iter = False
                 self._on_event("tool_result", {"name": tool_name, "preview": preview})
                 yield {
                     "type": "tool_exec_result",
@@ -467,6 +645,174 @@ class Agent:
                     break
                 if text:
                     yield {"type": "thinking", "text": text}
+
+    async def continue_after_hitl(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        answer: Any,
+    ) -> AsyncIterator[StreamEvent]:
+        """Resume a parked turn after the user answers via the bell or push.
+
+        Loads the snapshot persisted at park time, appends a TOOL message
+        carrying the answer (matching the original tool_call_id), and drives
+        loom's stream from that history. Loom is stateless w.r.t. its
+        ``run_turn_stream`` entry-point, so handing it a history that ends
+        in TOOL is enough to make it call the LLM again and continue.
+        """
+        if self._sessions is None:
+            raise RuntimeError("continue_after_hitl: session_store not wired")
+        row = self._sessions.get_hitl_pending(request_id)
+        if row is None:
+            raise LookupError(f"no parked request: {request_id!r}")
+
+        try:
+            raw_snapshot = json.loads(row.get("parked_messages_json") or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"corrupt parked snapshot for {request_id!r}"
+            ) from exc
+
+        loom_messages: list[lt.ChatMessage] = []
+        for m in raw_snapshot:
+            try:
+                loom_messages.append(lt.ChatMessage(**m))
+            except Exception:  # noqa: BLE001
+                # A row that pre-dates a schema change shouldn't crash the
+                # whole resume — drop unknown fields and keep going.
+                loom_messages.append(
+                    lt.ChatMessage(
+                        role=lt.Role(m.get("role", "user")),
+                        content=m.get("content"),
+                    )
+                )
+
+        # Build the TOOL message answering the parked tool_call. The answer
+        # is serialised to a string the LLM can consume. Forms come in as
+        # dicts; everything else as a plain string.
+        if isinstance(answer, str):
+            tool_content = answer
+        else:
+            try:
+                tool_content = json.dumps(answer, ensure_ascii=False)
+            except (TypeError, ValueError):
+                tool_content = str(answer)
+        loom_messages.append(
+            lt.ChatMessage(
+                role=lt.Role.TOOL,
+                content=tool_content,
+                tool_call_id=row["tool_call_id"],
+                name="ask_user",
+            )
+        )
+
+        # Re-derive _pending_question from the most recent ASSISTANT text in
+        # the snapshot so terse follow-up replies in the next user turn are
+        # still annotated correctly.
+        last_assistant = next(
+            (m for m in reversed(loom_messages) if m.role == lt.Role.ASSISTANT),
+            None,
+        )
+        if last_assistant and last_assistant.content:
+            from .helpers import _extract_pending_question
+            self._loom._pending_question = _extract_pending_question(
+                last_assistant.content
+            )
+        else:
+            self._loom._pending_question = None
+
+        self._turn_trace = []
+        self._skills_touched = []
+        self._chosen_model = row.get("model_id") or self._chosen_model
+
+        full_text = ""
+        history_snapshot = [_from_loom_message(m) for m in loom_messages[:-1]]
+
+        async for raw in self._loom.run_turn_stream(
+            loom_messages, model_id=self._chosen_model,
+        ):
+            etype = raw.get("type") if isinstance(raw, dict) else getattr(raw, "type", None)
+            ev = raw if isinstance(raw, dict) else raw.model_dump()
+
+            if etype == "content_delta":
+                delta = ev.get("delta", "")
+                full_text += delta
+                self._on_event("delta", {"text": delta})
+                yield {"type": "delta", "text": delta}
+            elif etype == "tool_call_delta":
+                yield {
+                    "type": "tool_call_delta",
+                    "index": ev.get("index"),
+                    "id": ev.get("id"),
+                    "name": ev.get("name"),
+                    "args_delta": ev.get("arguments_delta"),
+                }
+            elif etype == "tool_exec_start":
+                tool_name = ev.get("name", "")
+                self._on_event(
+                    "tool_call",
+                    {"name": tool_name, "args": ev.get("arguments", "")},
+                )
+                yield {
+                    "type": "tool_exec_start",
+                    "name": tool_name,
+                    "args": ev.get("arguments", ""),
+                }
+            elif etype == "tool_exec_result":
+                tool_name = ev.get("name", "")
+                preview = (ev.get("text") or "")[:200]
+                self._on_event(
+                    "tool_result", {"name": tool_name, "preview": preview},
+                )
+                yield {
+                    "type": "tool_exec_result",
+                    "name": tool_name,
+                    "result_preview": preview,
+                }
+            elif etype == "limit_reached":
+                yield {
+                    "type": "limit_reached",
+                    "iterations": ev.get("iterations", 0),
+                }
+            elif etype == "error":
+                yield {
+                    "type": "error",
+                    "detail": ev.get("message", ""),
+                    "reason": ev.get("reason"),
+                    "retryable": ev.get("retryable", False),
+                    "status_code": ev.get("status_code"),
+                }
+            elif etype == "done":
+                ctx = ev.get("context") or {}
+                model_used = ev.get("model") or self._chosen_model
+                loom_msgs = ctx.get("messages")
+                if loom_msgs:
+                    persisted_messages = [
+                        _from_loom_message(lt.ChatMessage(**m))
+                        for m in loom_msgs
+                        if m.get("role") != "system"
+                    ]
+                else:
+                    persisted_messages = history_snapshot + [
+                        ChatMessage(role=Role.ASSISTANT, content=full_text),
+                    ]
+                yield {
+                    "type": "done",
+                    "session_id": session_id,
+                    "reply": full_text,
+                    "trace": list(self._turn_trace),
+                    "skills_touched": ev.get("skills_touched")
+                    or list(self._skills_touched),
+                    "iterations": ev.get("iterations", 0),
+                    "messages": persisted_messages,
+                    "usage": {
+                        "input_tokens": ev.get("input_tokens", 0),
+                        "output_tokens": ev.get("output_tokens", 0),
+                        "tool_calls": ev.get("tool_calls", 0),
+                        "model": model_used,
+                    },
+                }
 
     async def aclose(self) -> None:
         """Shut down the LLM provider and provider registry, releasing HTTP connections."""

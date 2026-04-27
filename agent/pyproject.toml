@@ -15,10 +15,12 @@ dependencies = [
     "python-multipart>=0.0.26",
     "fastembed>=0.4",
     "spacy>=3.8",
-    # Bundle the spaCy en_core_web_sm model so the builtin extractor
-    # works offline on first run — pinned because spaCy model wheels are
-    # version-locked to spaCy minor versions.
+    "langdetect>=1.0",
+    # Bundle the spaCy en_core_web_sm and pt_core_news_sm models so the
+    # builtin extractor works offline on first run — pinned because spaCy
+    # model wheels are version-locked to spaCy minor versions.
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "pt-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_sm-3.8.0/pt_core_news_sm-3.8.0-py3-none-any.whl",
     "faster-whisper>=1.0",
     "loom-framework[anthropic,acp,tui,graphrag,search,scrape]",
     "huggingface_hub>=0.24",
@@ -61,3 +63,6 @@ line-length = 100
 # Treat async def tests as asyncio by default so we don't have to
 # sprinkle ``@pytest.mark.asyncio`` on every HITL test.
 asyncio_mode = "auto"
+markers = [
+    "slow: tests that download multi-MB models or hit the network",
+]

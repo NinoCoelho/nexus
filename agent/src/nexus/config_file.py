@@ -145,6 +145,30 @@ def save(cfg: NexusConfig) -> None:
         tomli_w.dump(data, f)
 
 
+def _migrate_legacy_embedder(graphrag_raw: dict[str, Any]) -> None:
+    """Auto-upgrade users pinned to the old English-only embedder.
+
+    Why: the builtin embedder switched from all-MiniLM-L6-v2 (English-only)
+    to paraphrase-multilingual-MiniLM-L12-v2 (multilingual, same 384 dim).
+    Configs written by previous Nexus versions still carry the old model
+    name as if it were a deliberate pin; rewriting it transparently keeps
+    Portuguese vault content from being silently mis-embedded after upgrade.
+    A user who explicitly pinned a different model is left untouched.
+    """
+    from .agent.builtin_embedder import BUILTIN_MODEL, LEGACY_MODELS
+
+    emb = graphrag_raw.get("embeddings")
+    if not isinstance(emb, dict):
+        return
+    current = emb.get("model", "")
+    if current in LEGACY_MODELS:
+        emb["model"] = BUILTIN_MODEL
+        log.info(
+            "[config] migrated graphrag.embeddings.model: %s -> %s",
+            current, BUILTIN_MODEL,
+        )
+
+
 def _tier_from_legacy_strengths(s: dict[str, Any]) -> Tier:
     reasoning = int(s.get("reasoning", 5) or 5)
     if reasoning <= 4:
@@ -174,7 +198,9 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
             mdata["tier"] = _tier_from_legacy_strengths(legacy_strengths)
         mdata.setdefault("notes", "")
         models.append(ModelEntry(**mdata))
-    graphrag = GraphRAGConfig(**raw.get("graphrag", {}))
+    graphrag_raw = dict(raw.get("graphrag", {}))
+    _migrate_legacy_embedder(graphrag_raw)
+    graphrag = GraphRAGConfig(**graphrag_raw)
     search = SearchConfig(**raw.get("search", {}))
     scrape = ScrapeConfig(**raw.get("scrape", {}))
     t_raw = dict(raw.get("transcription", {}))

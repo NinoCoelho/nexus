@@ -34,6 +34,28 @@ from .llm import ToolSpec  # noqa: F401 — imported by callers via this module
 _DEFAULT_TIMEOUT_SECONDS = 300
 _VALID_KINDS = {"confirm", "choice", "text", "form"}
 
+# How long ask_user waits synchronously before parking a parkable request.
+# The number is small on purpose: parkable kinds are async by design, so
+# every additional second we hold the turn open is a second we burn the
+# prompt cache and pay LLM throughput for the privilege of doing nothing.
+_PARK_THRESHOLD_SECONDS = 30
+
+# Sentinel returned from a parkable ask_user when the user did not answer
+# within the threshold. The agent façade detects this in tool_exec_result,
+# persists the working snapshot, emits a `parked` event, and ends the turn.
+# Non-parked timeouts still use loom.hitl.TIMEOUT_SENTINEL.
+_PARKED_SENTINEL_PREFIX = "__parked__:"
+
+
+def parked_sentinel(request_id: str) -> str:
+    return f"{_PARKED_SENTINEL_PREFIX}{request_id}"
+
+
+def parse_parked_sentinel(text: str | None) -> str | None:
+    if not isinstance(text, str) or not text.startswith(_PARKED_SENTINEL_PREFIX):
+        return None
+    return text[len(_PARKED_SENTINEL_PREFIX):] or None
+
 
 @dataclass(frozen=True)
 class AskUserResult:
@@ -150,16 +172,31 @@ class AskUserHandler:
                 ),
             )
 
-        # For kind="form" we implement HITL manually so we can include the
-        # field schema in the SSE event data. The broker doesn't know about
-        # form fields, so bypassing it for this kind is intentional.
-        if kind == "form":
-            return await self._ask_form(
+        # Parking eligibility:
+        #  - kind='form' always parks (forms are async by design — fields can
+        #    take real time to fill out, often after a context switch).
+        #  - kind='text' / 'choice' park only when the caller opts in via
+        #    `parkable: true`. Default is synchronous so existing skills
+        #    that ask quick questions don't suddenly drop the turn.
+        #  - kind='confirm' never parks. Approvals are semantically "now-or-
+        #    never" — a stale yes/no on a destructive action read days later
+        #    is dangerous; we'd rather time out and force the agent to
+        #    re-ask in a fresh context.
+        parkable_opt_in = bool(args.get("parkable", False))
+        is_parkable = kind == "form" or (
+            kind in ("text", "choice") and parkable_opt_in
+        )
+
+        if is_parkable:
+            return await self._ask_parkable(
                 session_id=session_id,
                 prompt=prompt,
-                fields=fields or [],
-                form_title=args.get("title"),
-                form_description=args.get("description"),
+                kind=kind,
+                choices=choices if kind == "choice" else None,
+                fields=fields or [] if kind == "form" else None,
+                form_title=args.get("title") if kind == "form" else None,
+                form_description=args.get("description") if kind == "form" else None,
+                default=default,
                 timeout_seconds=int(timeout),
             )
 
@@ -184,67 +221,107 @@ class AskUserHandler:
             timed_out=timed_out,
         )
 
-    async def _ask_form(
+    async def _ask_parkable(
         self,
         *,
         session_id: str,
         prompt: str,
-        fields: list[dict],
+        kind: str,
+        choices: list[str] | None,
+        fields: list[dict] | None,
         form_title: str | None,
         form_description: str | None,
+        default: str | None,
         timeout_seconds: int,
     ) -> AskUserResult:
-        """Park-on-future HITL for kind='form', publishing full field schema."""
+        """Park-after-threshold HITL.
+
+        Waits up to ``_PARK_THRESHOLD_SECONDS`` for an answer. If none
+        arrives, persists a ``hitl_pending`` row and returns the parked
+        sentinel — the agent façade detects it and ends the turn cleanly.
+        ``parked_messages_json`` is left empty here; the façade backfills
+        it once it knows the working snapshot at dispatch time.
+        """
         from ..server.events import SessionEvent
 
         request_id = uuid.uuid4().hex
-        extra_data: dict[str, Any] = {
-            "fields": fields,
-            "form_title": form_title,
-            "form_description": form_description,
-        }
-        self._form_extras[request_id] = extra_data
+        if kind == "form":
+            extra_data: dict[str, Any] = {
+                "fields": fields or [],
+                "form_title": form_title,
+                "form_description": form_description,
+            }
+            self._form_extras[request_id] = extra_data
+
         fut: asyncio.Future[str] = self._sessions.register_pending(
             session_id, request_id
         )
+        event_data: dict[str, Any] = {
+            "request_id": request_id,
+            "prompt": prompt,
+            "kind": kind,
+            "choices": choices,
+            "default": default,
+            "timeout_seconds": timeout_seconds,
+        }
+        if kind == "form":
+            event_data["fields"] = fields or []
+            event_data["form_title"] = form_title
+            event_data["form_description"] = form_description
         self._sessions.publish(
-            session_id,
-            SessionEvent(
-                kind="user_request",
-                data={
-                    "request_id": request_id,
-                    "prompt": prompt,
-                    "kind": "form",
-                    "choices": None,
-                    "default": None,
-                    "timeout_seconds": timeout_seconds,
-                    "fields": fields,
-                    "form_title": form_title,
-                    "form_description": form_description,
-                },
-            ),
+            session_id, SessionEvent(kind="user_request", data=event_data),
         )
+
+        wait_for = min(_PARK_THRESHOLD_SECONDS, max(1, int(timeout_seconds)))
         try:
-            raw = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout_seconds)
+            raw = await asyncio.wait_for(asyncio.shield(fut), timeout=wait_for)
         except asyncio.TimeoutError:
-            fut.cancel()
-            self._form_extras.pop(request_id, None)
+            # Park: persist enough state to resume after restart, cancel the
+            # broker future so a future /respond goes through the resume
+            # endpoint instead of a stale in-memory promise, and return the
+            # sentinel for the agent façade to act on.
+            self._sessions.cancel_pending(session_id, request_id)
+            tool_call_id = (
+                self._sessions.get_pending_tool_call(session_id) or ""
+            )
+            try:
+                self._sessions.persist_hitl_pending(
+                    session_id=session_id,
+                    request_id=request_id,
+                    tool_call_id=tool_call_id,
+                    kind=kind,
+                    prompt=prompt,
+                    choices=choices,
+                    fields=fields if kind == "form" else None,
+                    form_title=form_title,
+                    form_description=form_description,
+                    default=default,
+                    timeout_seconds=int(timeout_seconds),
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                # Even if persistence fails the parked sentinel still ends
+                # the turn cleanly; we just won't be able to resume.
+                pass
             return AskUserResult(
-                ok=True, answer=TIMEOUT_SENTINEL, kind="form", timed_out=True
+                ok=True,
+                answer=parked_sentinel(request_id),
+                kind=kind,
+                timed_out=False,
             )
         except asyncio.CancelledError:
             self._form_extras.pop(request_id, None)
             return AskUserResult(
-                ok=True, answer=TIMEOUT_SENTINEL, kind="form", timed_out=True
+                ok=True, answer=TIMEOUT_SENTINEL, kind=kind, timed_out=True,
             )
 
+        # Answered within the threshold — clean up and decode.
         self._form_extras.pop(request_id, None)
         decoded: str | dict = raw
         try:
             decoded = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             pass
-        return AskUserResult(ok=True, answer=decoded, kind="form", timed_out=False)
+        return AskUserResult(ok=True, answer=decoded, kind=kind, timed_out=False)
 
 
 def _error(*, kind: str, message: str) -> AskUserResult:

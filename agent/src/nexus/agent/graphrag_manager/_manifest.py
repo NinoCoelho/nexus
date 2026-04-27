@@ -29,8 +29,37 @@ def open_manifest(db_dir: Path) -> sqlite3.Connection:
             indexed_at REAL NOT NULL
         )
     """)
+    # Tiny key/value table for index-wide metadata (embedder model used,
+    # ontology version, etc). Lets ``initialize()`` detect when a change
+    # makes the existing vectors stale without scanning every row.
+    _manifest_db.execute("""
+        CREATE TABLE IF NOT EXISTS index_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    """)
     _manifest_db.commit()
     return _manifest_db
+
+
+def get_meta(key: str) -> str | None:
+    if _manifest_db is None:
+        return None
+    row = _manifest_db.execute(
+        "SELECT value FROM index_meta WHERE key = ?", (key,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(key: str, value: str) -> None:
+    if _manifest_db is None:
+        return
+    _manifest_db.execute(
+        "INSERT OR REPLACE INTO index_meta (key, value, updated_at) VALUES (?, ?, ?)",
+        (key, value, time.time()),
+    )
+    _manifest_db.commit()
 
 
 def close_manifest() -> None:
