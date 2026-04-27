@@ -27,6 +27,51 @@
   --font-mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Legacy / semantic aliases
+   ───────────────────────────────────────────────────────────────────────────
+   Components were authored against several token names that were renamed at
+   some point (--panel, --bg-soft, --bg-elevated, --hover-bg, etc.).  Without
+   an alias they resolved to `initial` (transparent) — which is the source of
+   the "dark-on-dark" / "black-on-black" reports.  These aliases point each
+   legacy name at a canonical per-theme token; CSS variables inherit by
+   reference, so this single block covers every theme automatically.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --panel:          var(--bg-panel);
+  --panel-hover:    var(--bg-hover);
+  --bg-soft:        var(--bg-panel);
+  --bg-soft-2:      var(--bg-hover);
+  --bg-elevated:    var(--bg-panel);
+  --bg-input:       var(--bg-inset);
+  --bg-subtle:      var(--bg-hover);
+  --surface-inset:  var(--bg-inset);
+  --hover-bg:       var(--bg-hover);
+  --input-bg:       var(--bg-inset);
+  --code-bg:        var(--bg-inset);
+  --border-faint:   var(--border-soft);
+  --muted:          var(--fg-dim);
+  --btn-disabled:   var(--fg-faint);
+
+  /* Translucent accent surfaces (used for active tabs, hover halos, soft
+     selection backgrounds).  color-mix keeps them theme-aware. */
+  --accent-bg:      color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-soft:    color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-subtle:  color-mix(in srgb, var(--accent) 22%, transparent);
+
+  /* Foreground for text/icons sitting on an `--accent` fill.
+     Every theme's --accent lands in the mid-to-light lightness band
+     (HSL L 40%–80%), so a near-black on-color clears WCAG AA (≥4.5:1)
+     across both modes — Material 3 'onPrimary' pattern. */
+  --fg-on-accent:   hsl(0, 0%, 8%);
+
+  /* Foreground for text on saturated status fills (--bad / --warn / --ok).
+     Those tokens stay in the mid-saturation darker band even in light mode,
+     so white text is the safer pair. */
+  --fg-on-status:   hsl(0, 0%, 100%);
+}
+
 :root.theme-transitioning body,
 :root.theme-transitioning .app,
 :root.theme-transitioning .sidebar,

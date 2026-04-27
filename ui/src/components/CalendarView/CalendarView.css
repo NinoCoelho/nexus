@@ -40,9 +40,9 @@
 }
 .cal-header button:hover { background: var(--bg-soft-2, var(--bg-soft)); }
 .cal-header button.active {
-  background: var(--accent, #4d7cff);
-  color: white;
-  border-color: var(--accent, #4d7cff);
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
 }
 
 .cal-header-spacer { flex: 1; }
@@ -89,8 +89,8 @@
   position: relative;
 }
 .cal-month-cell.today .cal-day-num {
-  background: var(--accent, #4d7cff);
-  color: white;
+  background: var(--accent);
+  color: var(--fg-on-accent);
   border-radius: 50%;
   width: 22px;
   height: 22px;
@@ -124,7 +124,7 @@
   font-size: 12px;
   text-align: center;
 }
-.cal-week-header-cell.today { color: var(--accent, #4d7cff); font-weight: 600; }
+.cal-week-header-cell.today { color: var(--accent); font-weight: 600; }
 .cal-week-hour-label {
   font-size: 10px;
   color: var(--fg-faint);
@@ -148,8 +148,8 @@
 /* ── event blocks ───────────────────────────────────────────────── */
 .cal-event {
   position: relative;
-  background: var(--accent, #4d7cff);
-  color: white;
+  background: var(--accent);
+  color: var(--fg-on-accent);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 11px;
@@ -161,12 +161,12 @@
   align-items: center;
   gap: 4px;
 }
-.cal-event--missed { background: #d97706; }
-.cal-event--done { background: #059669; opacity: 0.7; text-decoration: line-through; }
-.cal-event--cancelled { background: #6b7280; opacity: 0.6; text-decoration: line-through; }
-.cal-event--failed { background: #dc2626; }
-.cal-event--triggered { background: #7c3aed; }
-.cal-event--in_progress { background: #7c3aed; }
+.cal-event--missed { background: #d97706; color: #fff; }
+.cal-event--done { background: #059669; color: #fff; opacity: 0.75; text-decoration: line-through; }
+.cal-event--cancelled { background: #6b7280; color: #fff; opacity: 0.7; text-decoration: line-through; }
+.cal-event--failed { background: #dc2626; color: #fff; }
+.cal-event--triggered { background: #7c3aed; color: #fff; }
+.cal-event--in_progress { background: #7c3aed; color: #fff; }
 .cal-event-chat-btn {
   background: rgba(255, 255, 255, 0.18);
   border: none;
@@ -203,7 +203,7 @@
 
 /* Today column gets a faint accent tint behind everything else. */
 .cal-week-col.today {
-  background: linear-gradient(rgba(77, 124, 255, 0.04), rgba(77, 124, 255, 0.04));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 /* Current-time indicator line on the today column. */
@@ -253,7 +253,7 @@
   min-width: 0;
 }
 .cal-week-allday-col.today {
-  background: rgba(77, 124, 255, 0.05);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 .cal-week-allday-event {
   position: absolute;
@@ -394,9 +394,9 @@
 }
 .cal-day-picker button:hover { background: var(--bg-soft); }
 .cal-day-picker button.active {
-  background: var(--accent, #4d7cff);
-  color: white;
-  border-color: var(--accent, #4d7cff);
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
 }
 .cal-modal label {
   display: flex;
@@ -434,9 +434,9 @@
   cursor: pointer;
 }
 .cal-modal-actions .primary {
-  background: var(--accent, #4d7cff);
-  border-color: var(--accent, #4d7cff);
-  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--fg-on-accent);
 }
-.cal-modal-actions .danger { color: #dc2626; }
+.cal-modal-actions .danger { color: var(--bad); }
 .cal-modal-actions .spacer { flex: 1; }

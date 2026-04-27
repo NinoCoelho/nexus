@@ -74,16 +74,16 @@
 .modal-btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #1a1209;
+  color: var(--fg-on-accent);
 }
 .modal-btn--primary:hover { background: var(--accent-hi); border-color: var(--accent-hi); }
 
 .modal-btn--danger {
-  background: var(--rust, #c85a5a);
-  border-color: var(--rust, #c85a5a);
-  color: #fff;
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--fg-on-status);
 }
-.modal-btn--danger:hover { background: #d46868; border-color: #d46868; }
+.modal-btn--danger:hover { background: var(--danger-hi); border-color: var(--danger-hi); }
 
 .modal-field-label {
   display: block;

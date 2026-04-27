@@ -67,8 +67,8 @@
   width: calc(100% - 16px);
   margin: 8px;
   padding: 8px 12px;
-  background: var(--accent-lo);
-  color: #fff;
+  background: var(--accent);
+  color: var(--fg-on-accent);
   border: none;
   border-radius: var(--radius);
   font-size: 12px;
@@ -274,9 +274,9 @@
 }
 
 .nx-bell-act--allow {
-  background: var(--accent-lo);
-  color: #fff;
-  border-color: var(--accent-lo);
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
 }
 
 .nx-bell-act--allow:hover:not(:disabled) {
