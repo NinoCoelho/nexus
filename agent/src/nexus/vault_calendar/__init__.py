@@ -45,7 +45,6 @@ from .events import (
     add_event,
     delete_event,
     effective_model,
-    effective_prompt,
     effective_trigger,
     find_event,
     fire_event,
@@ -90,7 +89,6 @@ __all__ = [
     "find_event",
     "fire_event",
     "effective_trigger",
-    "effective_prompt",
     "effective_model",
     # recurrence
     "expand_window",

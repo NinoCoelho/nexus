@@ -20,7 +20,7 @@ EVENT_TRIGGERS = {"on_start", "off"}
 
 # Sentinel value of ``Event.assignee`` that opts an event into agent dispatch.
 # Any other (or missing) value means the event is a plain calendar entry —
-# the heartbeat driver will not fire it, regardless of prompt/trigger.
+# the heartbeat driver will not fire it.
 ASSIGNEE_AGENT = "agent"
 
 
@@ -36,12 +36,6 @@ class Event:
     rrule: str | None = None  # iCal RRULE string (e.g. "FREQ=WEEKLY;BYDAY=MO")
     session_id: str | None = None
     all_day: bool = False
-    # Per-event prompt. When set (or inherited from the calendar's
-    # ``calendar_prompt``), the heartbeat driver dispatches the agent with
-    # this prompt as context. When empty AND the calendar has no prompt,
-    # the driver only publishes a ``calendar_alert`` notification — the
-    # event behaves like a plain reminder.
-    prompt: str | None = None
     # Fire-window fields — only meaningful for all_day events. When set, the
     # heartbeat driver fires the event repeatedly during the window
     # [fire_from, fire_to] in the calendar's local timezone, every
@@ -77,8 +71,6 @@ class Event:
             out["rrule"] = self.rrule
         if self.session_id:
             out["session_id"] = self.session_id
-        if self.prompt:
-            out["prompt"] = self.prompt
         if self.fire_from:
             out["fire_from"] = self.fire_from
         if self.fire_to:

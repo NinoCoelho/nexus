@@ -24,20 +24,6 @@ def effective_trigger(event: Event, cal: Calendar) -> str:
     return "on_start" if cal.auto_trigger else "off"
 
 
-def effective_prompt(event: Event, cal: Calendar) -> str | None:
-    """Per-event prompt, falling back to the calendar-level prompt.
-
-    When the result is a non-empty string, the heartbeat driver runs the
-    agent at fire time. When None/empty, the driver only emits a
-    ``calendar_alert`` notification — the event acts as a plain reminder.
-    """
-    if event.prompt and event.prompt.strip():
-        return event.prompt
-    if cal.calendar_prompt and cal.calendar_prompt.strip():
-        return cal.calendar_prompt
-    return None
-
-
 def effective_model(event: Event, cal: Calendar) -> str | None:
     """Per-event model override → calendar default → agent default (None)."""
     if event.model and event.model.strip():
@@ -75,7 +61,6 @@ def add_event(
     rrule: str | None = None,
     all_day: bool = False,
     status: str = "scheduled",
-    prompt: str | None = None,
     fire_from: str | None = None,
     fire_to: str | None = None,
     fire_every_min: int | None = None,
@@ -100,7 +85,6 @@ def add_event(
         trigger=trigger,
         rrule=rrule,
         all_day=all_day,
-        prompt=prompt or None,
         fire_from=fire_from,
         fire_to=fire_to,
         fire_every_min=fire_every_min,
@@ -165,9 +149,6 @@ def update_event(path: str, event_id: str, updates: dict[str, Any]) -> Event:
             iv = int(v)
             _validate_fire_every(iv)
             ev.fire_every_min = iv
-    if "prompt" in updates:
-        v = updates["prompt"]
-        ev.prompt = str(v).strip() if v and str(v).strip() else None
     if "model" in updates:
         v = updates["model"]
         ev.model = str(v).strip() if v and str(v).strip() else None

@@ -108,8 +108,40 @@
   font-size: 11px;
   color: var(--fg-dim);
   margin-top: 4px;
-  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+  line-height: 1.45;
 }
+/* Markdown elements inside the card preview — keep them proportional and
+   compact so they fit the small column width without dominating the title. */
+.kanban-card-body p,
+.kanban-card-body ul,
+.kanban-card-body ol,
+.kanban-card-body pre,
+.kanban-card-body blockquote {
+  margin: 0 0 4px 0;
+}
+.kanban-card-body p:last-child,
+.kanban-card-body ul:last-child,
+.kanban-card-body ol:last-child,
+.kanban-card-body pre:last-child,
+.kanban-card-body blockquote:last-child { margin-bottom: 0; }
+.kanban-card-body ul,
+.kanban-card-body ol { padding-left: 16px; }
+.kanban-card-body h1,
+.kanban-card-body h2,
+.kanban-card-body h3,
+.kanban-card-body h4 {
+  font-size: 12px;
+  margin: 4px 0 2px;
+  font-weight: 600;
+}
+.kanban-card-body pre {
+  font-size: 10px;
+  padding: 4px 6px;
+  overflow-x: auto;
+}
+.kanban-card-body code { font-size: 10px; }
 
 .kanban-card-actions {
   display: flex;

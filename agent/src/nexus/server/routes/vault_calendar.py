@@ -107,7 +107,6 @@ async def vault_calendar_add_event(body: dict, path: str) -> dict:
             rrule=body.get("rrule"),
             all_day=bool(body.get("all_day", False)),
             status=body.get("status", "scheduled"),
-            prompt=body.get("prompt"),
             fire_from=body.get("fire_from"),
             fire_to=body.get("fire_to"),
             fire_every_min=body.get("fire_every_min"),

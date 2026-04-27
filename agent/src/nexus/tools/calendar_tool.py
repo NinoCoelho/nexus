@@ -82,16 +82,6 @@ CALENDAR_MANAGE_TOOL = ToolSpec(
                 "description": "iCal RRULE (e.g. 'FREQ=WEEKLY;BYDAY=MO'). Empty string clears.",
             },
             "all_day": {"type": "boolean", "description": "Mark event as all-day."},
-            "event_prompt": {
-                "type": "string",
-                "description": (
-                    "Per-event prompt. When set (or inherited from the calendar's "
-                    "prompt), the agent runs at the event's fire time with this "
-                    "prompt as system context. When empty AND the calendar has no "
-                    "prompt, the event only triggers a notification (calendar_alert) "
-                    "to the user — like a plain reminder. Empty string clears."
-                ),
-            },
             "fire_from": {
                 "type": "string",
                 "description": (
@@ -129,8 +119,10 @@ CALENDAR_MANAGE_TOOL = ToolSpec(
                 "type": "string",
                 "description": (
                     "Set to 'agent' to opt this event into auto-firing (heartbeat "
-                    "dispatch). Any other value (or empty string) makes the event "
-                    "a plain calendar entry that never fires."
+                    "dispatch). When fired, the event's body is passed to the agent "
+                    "as context (prefixed by the calendar-level `prompt` if any). "
+                    "Any other value (or empty string) makes the event a plain "
+                    "calendar entry that never fires."
                 ),
             },
             "status": {
@@ -209,7 +201,6 @@ def handle_calendar_tool(args: dict[str, Any]) -> str:
                 rrule=args.get("rrule") or None,
                 all_day=bool(args.get("all_day", False)),
                 status=args.get("status") or "scheduled",
-                prompt=args.get("event_prompt") or None,
                 fire_from=args.get("fire_from") or None,
                 fire_to=args.get("fire_to") or None,
                 fire_every_min=int(fire_every) if fire_every else None,
@@ -230,8 +221,6 @@ def handle_calendar_tool(args: dict[str, Any]) -> str:
             ):
                 if key in args:
                     updates[key] = args[key]
-            if "event_prompt" in args:
-                updates["prompt"] = args["event_prompt"]
             ev = vault_calendar.update_event(path, event_id, updates)
             return json.dumps({"ok": True, "event": ev.to_dict()})
 

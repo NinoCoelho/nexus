@@ -1,12 +1,20 @@
 import { useRef, useState } from "react";
 import MarkdownView from "./MarkdownView";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
-import { patchVaultKanbanCard, type KanbanCard, type KanbanCardPriority } from "../api";
+import {
+  addVaultKanbanCard,
+  patchVaultKanbanCard,
+  type KanbanCard,
+  type KanbanCardPriority,
+} from "../api";
 import "./CardDetailModal.css";
 import "./Modal.css";
 
 interface Props {
-  card: KanbanCard;
+  /** Existing card to edit. Omit for create mode (pair with `lane`). */
+  card?: KanbanCard;
+  /** Required for create mode — destination lane id for the new card. */
+  lane?: string;
   boardPath: string;
   onClose: () => void;
   onSaved: (card: KanbanCard) => void;
@@ -25,25 +33,58 @@ const TOOLBAR_ACTIONS = [
   { label: "🔗",  title: "Link",          action: "link",  args: [],            cls: "" },
 ] as const;
 
-export default function CardDetailModal({ card, boardPath, onClose, onSaved }: Props) {
-  const [mode, setMode] = useState<"view" | "edit">("view");
-  const [editTitle, setEditTitle] = useState(card.title);
-  const [editBody, setEditBody] = useState(card.body ?? "");
-  const [editDue, setEditDue] = useState(card.due ?? "");
-  const [editPriority, setEditPriority] = useState<KanbanCardPriority | "">((card.priority as KanbanCardPriority) ?? "");
-  const [editLabels, setEditLabels] = useState((card.labels ?? []).join(", "));
-  const [editAssignees, setEditAssignees] = useState((card.assignees ?? []).join(", "));
+export default function CardDetailModal({ card, lane, boardPath, onClose, onSaved }: Props) {
+  const isCreate = !card;
+  // Create mode skips the read-only view and lands directly on the form.
+  const [mode, setMode] = useState<"view" | "edit">(isCreate ? "edit" : "view");
+  const [editTitle, setEditTitle] = useState(card?.title ?? "");
+  const [editBody, setEditBody] = useState(card?.body ?? "");
+  const [editDue, setEditDue] = useState(card?.due ?? "");
+  const [editPriority, setEditPriority] = useState<KanbanCardPriority | "">(
+    (card?.priority as KanbanCardPriority) ?? "",
+  );
+  const [editLabels, setEditLabels] = useState((card?.labels ?? []).join(", "));
+  const [editAssignees, setEditAssignees] = useState((card?.assignees ?? []).join(", "));
   const [saving, setSaving] = useState(false);
   const editorRef = useRef<MarkdownEditorHandle>(null);
 
   const splitCSV = (s: string): string[] =>
     s.split(",").map((x) => x.trim()).filter(Boolean);
 
+  const hasMetadata =
+    !!editDue || editPriority !== "" || !!editLabels.trim() || !!editAssignees.trim();
+  const trimmedTitle = editTitle.trim();
+  const canSave = isCreate ? trimmedTitle.length > 0 : true;
+
   const handleSave = async () => {
+    if (!canSave) return;
     setSaving(true);
     try {
-      const updated = await patchVaultKanbanCard(boardPath, card.id, {
-        title: editTitle.trim() || card.title,
+      if (isCreate) {
+        if (!lane) {
+          // Programmer error — lane is required for create mode.
+          setSaving(false);
+          return;
+        }
+        const created = await addVaultKanbanCard(boardPath, {
+          lane,
+          title: trimmedTitle,
+          body: editBody,
+        });
+        // POST endpoint only accepts {lane, title, body}; apply the rest via PATCH.
+        const final = hasMetadata
+          ? await patchVaultKanbanCard(boardPath, created.id, {
+              due: editDue || null,
+              priority: editPriority === "" ? "" : editPriority,
+              labels: splitCSV(editLabels),
+              assignees: splitCSV(editAssignees),
+            })
+          : created;
+        onSaved(final);
+        return;
+      }
+      const updated = await patchVaultKanbanCard(boardPath, card!.id, {
+        title: trimmedTitle || card!.title,
         body: editBody,
         due: editDue || null,
         priority: editPriority === "" ? "" : editPriority,
@@ -57,12 +98,16 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
   };
 
   const handleCancel = () => {
-    setEditTitle(card.title);
-    setEditBody(card.body ?? "");
-    setEditDue(card.due ?? "");
-    setEditPriority((card.priority as KanbanCardPriority) ?? "");
-    setEditLabels((card.labels ?? []).join(", "));
-    setEditAssignees((card.assignees ?? []).join(", "));
+    if (isCreate) {
+      onClose();
+      return;
+    }
+    setEditTitle(card!.title);
+    setEditBody(card!.body ?? "");
+    setEditDue(card!.due ?? "");
+    setEditPriority((card!.priority as KanbanCardPriority) ?? "");
+    setEditLabels((card!.labels ?? []).join(", "));
+    setEditAssignees((card!.assignees ?? []).join(", "));
     setMode("view");
   };
 
@@ -84,7 +129,7 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
         className="modal-dialog card-detail-modal"
         onClick={(e) => e.stopPropagation()}
       >
-        {mode === "view" ? (
+        {mode === "view" && card ? (
           <>
             <div className="card-detail-header">
               <div className="card-detail-title">{card.title}</div>
@@ -193,7 +238,6 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
                 ref={editorRef}
                 value={editBody}
                 onChange={setEditBody}
-                blockHeadings
                 wordWrap
                 className="card-detail-cm"
               />
@@ -205,9 +249,9 @@ export default function CardDetailModal({ card, boardPath, onClose, onSaved }: P
               <button
                 className="modal-btn modal-btn--primary"
                 onClick={() => void handleSave()}
-                disabled={saving}
+                disabled={saving || !canSave}
               >
-                {saving ? "Saving…" : "Save"}
+                {saving ? "Saving…" : isCreate ? "Create" : "Save"}
               </button>
             </div>
           </>

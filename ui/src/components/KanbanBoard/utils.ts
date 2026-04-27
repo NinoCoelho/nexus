@@ -1,9 +1,3 @@
-export function cardPreview(body: string | undefined): string {
-  if (!body) return "";
-  const para = body.split(/\n\s*\n/)[0] ?? "";
-  return para.length > 120 ? para.slice(0, 117) + "…" : para;
-}
-
 export const PRIORITY_CLASS: Record<string, string> = {
   low: "kanban-prio kanban-prio--low",
   med: "kanban-prio kanban-prio--med",

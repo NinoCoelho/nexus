@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import urllib.parse
 import uuid
 from typing import Any
 
@@ -106,19 +105,16 @@ def parse(content: str) -> Calendar:
                 event.fire_every_min = int(meta["fire-every"])
             except ValueError:
                 pass
-        if "prompt" in meta:
-            try:
-                event.prompt = urllib.parse.unquote(meta["prompt"])
-            except Exception:
-                event.prompt = meta["prompt"]
         if "model" in meta:
             event.model = meta["model"]
         if "assignee" in meta:
             event.assignee = meta["assignee"]
-        elif event.prompt or event.model:
+        elif "prompt" in meta or event.model:
             # Backward-compat: legacy events written before the assignee
-            # gate existed implicitly meant "run with agent". Infer it so
-            # they keep firing; the next write normalises the file.
+            # gate existed implicitly meant "run with agent" when they had
+            # a prompt or a model. Infer it so they keep firing; the next
+            # write normalises the file. The legacy ``prompt`` value itself
+            # is dropped — body now carries the agent context.
             event.assignee = "agent"
         cal.events.append(event)
         event = None
@@ -169,10 +165,6 @@ def serialize(cal: Calendar) -> str:
             out.append(f"<!-- nx:fire-to={event.fire_to} -->")
         if event.fire_every_min:
             out.append(f"<!-- nx:fire-every={event.fire_every_min} -->")
-        if event.prompt:
-            # percent-encode so newlines and special chars survive a single-line HTML comment
-            encoded = urllib.parse.quote(event.prompt, safe="")
-            out.append(f"<!-- nx:prompt={encoded} -->")
         if event.model:
             out.append(f"<!-- nx:model={event.model} -->")
         if event.assignee:

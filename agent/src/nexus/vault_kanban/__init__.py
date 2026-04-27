@@ -12,22 +12,35 @@ body organized as:
     # Board title
 
     ## Lane title
-    <!-- nx:lane-id=<id> -->   (optional)
 
-    ### Card title
-    <!-- nx:id=<uuid> -->
-    <!-- nx:session=<sid> -->   (optional, linked chat session)
+    - [ ] Card title
+        <!-- nx:id=<uuid> -->
+        <!-- nx:session=<sid> -->   (optional, linked chat session)
 
-    optional card body / notes
+        Optional card body / notes — rich markdown is preserved verbatim
+        because the whole block is indented as a list-item continuation:
 
-    ### Another card
-    <!-- nx:id=<uuid> -->
+        ## Sub-heading inside body works
+        - sub-list item
+        ```python
+        fenced code blocks too
+        ```
+
+    - [ ] Another card
+        <!-- nx:id=<uuid> -->
 
     ## Another lane
 
-Cards also parse from GFM task-list syntax (``- [ ] title``) for Obsidian
-plugin compatibility, but we always serialize as ``###`` headings with
-``<!-- nx:id=... -->`` so IDs survive reloads.
+Cards are emitted as GFM task-list items (``- [ ] title`` or ``- [x] title``)
+matching the Obsidian Kanban plugin's on-disk format. All metadata and body
+content live inside the list item, indented with 4 spaces or a tab — the same
+rule CommonMark uses for list-item continuation. This means *anything* inside
+the body (sub-headings, sub-lists, code fences, blockquotes) round-trips
+losslessly without confusing the parser.
+
+For backwards compatibility the parser still accepts the older header-style
+(``### Card title`` followed by free body text); the serializer always emits
+the list-style. Older boards migrate automatically on the next write.
 
 The plain-markdown file remains editable by hand and renders sensibly in any
 markdown viewer — the ``<!-- nx:* -->`` comments are invisible.

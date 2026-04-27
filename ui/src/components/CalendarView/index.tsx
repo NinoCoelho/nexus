@@ -23,6 +23,7 @@ import {
 } from "../../api/calendar";
 import { dispatchFromVault, HIDDEN_SEED_MARKER } from "../../api/dispatch";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
+import CalendarSettingsModal from "./CalendarSettingsModal";
 import EventModal, { type EventDraft } from "./EventModal";
 import Modal, { type ModalProps } from "../Modal";
 import MonthGrid from "./MonthGrid";
@@ -55,6 +56,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
   const [visible, setVisible] = useState(() => new Date());
   const [modal, setModal] = useState<{ kind: "create" | "edit"; event?: CalendarEvent; defaultStart: Date } | null>(null);
   const [promptModal, setPromptModal] = useState<ModalProps | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const window_ = useMemo(() => {
@@ -145,7 +147,6 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           rrule: draft.rrule || undefined,
           all_day: draft.all_day,
           status: draft.status,
-          prompt: draft.prompt || undefined,
           fire_from: draft.fire_from ?? undefined,
           fire_to: draft.fire_to ?? undefined,
           fire_every_min: draft.fire_every_min ?? undefined,
@@ -162,7 +163,6 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           trigger: draft.trigger,
           rrule: draft.rrule || null,
           all_day: draft.all_day,
-          prompt: draft.prompt || null,
           fire_from: draft.fire_from,
           fire_to: draft.fire_to,
           fire_every_min: draft.fire_every_min,
@@ -225,6 +225,17 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       setError(e instanceof Error ? e.message : "Failed to update calendar");
     }
   }, [selectedPath, calendar, reload]);
+
+  const handleSettingsSave = useCallback(async (updates: { title: string; prompt: string; timezone: string }) => {
+    if (!selectedPath) return;
+    try {
+      await patchVaultCalendar(selectedPath, updates);
+      setSettingsOpen(false);
+      void reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update calendar");
+    }
+  }, [selectedPath, reload]);
 
   const handleCreateNew = useCallback(() => {
     setPromptModal({
@@ -294,6 +305,9 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
             Auto-fire
           </label>
         )}
+        {calendar && (
+          <button title="Calendar settings" onClick={() => setSettingsOpen(true)}>⚙</button>
+        )}
       </div>
 
       {error && (
@@ -312,7 +326,6 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
             <MonthGrid
               visible={visible}
               events={events}
-              calendarHasPrompt={!!(calendar?.calendar_prompt && calendar.calendar_prompt.trim())}
               onCellClick={openCreate}
               onEventClick={openEdit}
               onEventOpenChat={(ev) => void handleEventOpenChat(ev)}
@@ -323,7 +336,6 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
               start={window_.from}
               days={viewMode === "week" ? 7 : 1}
               events={events}
-              calendarHasPrompt={!!(calendar?.calendar_prompt && calendar.calendar_prompt.trim())}
               onSlotClick={openCreate}
               onEventClick={openEdit}
               onEventOpenChat={(ev) => void handleEventOpenChat(ev)}
@@ -359,6 +371,14 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       )}
 
       {promptModal && <Modal {...promptModal} />}
+
+      {settingsOpen && calendar && (
+        <CalendarSettingsModal
+          calendar={calendar}
+          onSave={handleSettingsSave}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

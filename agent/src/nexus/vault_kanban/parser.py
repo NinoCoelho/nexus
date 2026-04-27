@@ -59,8 +59,50 @@ def _ensure_id(card: Card) -> str:
     return card.id
 
 
+_LIST_CARD = re.compile(r"^- (?:\[([ xX])\] )?(.*)$")
+
+
+def _apply_card_meta(card: Card, meta: dict[str, str]) -> None:
+    if "id" in meta:
+        card.id = meta["id"]
+    if "session" in meta:
+        card.session_id = meta["session"]
+    if "status" in meta and meta["status"] in CARD_STATUSES:
+        card.status = meta["status"]
+    if "due" in meta:
+        card.due = meta["due"]
+    if "priority" in meta and meta["priority"] in CARD_PRIORITIES:
+        card.priority = meta["priority"]
+    if "labels" in meta:
+        card.labels = [s.strip() for s in meta["labels"].split(",") if s.strip()]
+    if "assignees" in meta:
+        card.assignees = [s.strip() for s in meta["assignees"].split(",") if s.strip()]
+
+
 def parse(content: str) -> Board:
-    """Parse markdown content into a Board."""
+    """Parse markdown content into a Board.
+
+    Cards are recognized in two formats:
+
+    * **List-style** (preferred, matches the Obsidian Kanban plugin)::
+
+          - [ ] Title
+              <!-- nx:id=... -->
+              body line 1
+              body line 2
+
+      Body lines are indented with 4 spaces or a tab and de-indented on read.
+      Anything inside the indented block — sub-lists, ``###`` headings,
+      fenced code blocks, blockquotes — is preserved verbatim.
+
+    * **Header-style** (legacy, kept for compatibility with older boards)::
+
+          ### Title
+          <!-- nx:id=... -->
+          body line
+
+      The body extends until the next ``###``/``##``/``#`` heading at column 0.
+    """
     frontmatter: dict[str, Any] = {}
     body = content
     if content.startswith("---"):
@@ -78,65 +120,86 @@ def parse(content: str) -> Board:
     lane: Lane | None = None
     card: Card | None = None
     card_lines: list[str] = []
-    lane_uses_headers = False
+    card_style = ""  # "list" or "header" — only meaningful while card is open
 
     def flush_card() -> None:
-        nonlocal card, card_lines
+        nonlocal card, card_lines, card_style
         if card is None or lane is None:
             card_lines = []
+            card_style = ""
             return
         meta, cleaned = _extract_card_meta(card_lines)
         card.body = cleaned
-        if "id" in meta:
-            card.id = meta["id"]
-        if "session" in meta:
-            card.session_id = meta["session"]
-        if "status" in meta and meta["status"] in CARD_STATUSES:
-            card.status = meta["status"]
-        if "due" in meta:
-            card.due = meta["due"]
-        if "priority" in meta and meta["priority"] in CARD_PRIORITIES:
-            card.priority = meta["priority"]
-        if "labels" in meta:
-            card.labels = [s.strip() for s in meta["labels"].split(",") if s.strip()]
-        if "assignees" in meta:
-            card.assignees = [s.strip() for s in meta["assignees"].split(",") if s.strip()]
+        _apply_card_meta(card, meta)
         lane.cards.append(card)
         card = None
         card_lines = []
+        card_style = ""
 
-    for raw_line in body.split("\n"):
-        line = raw_line
-        stripped = line.strip()
+    for raw in body.split("\n"):
+        stripped = raw.strip()
         if stripped.startswith("%%"):
-            # Obsidian comment block — skip (we don't track toggle state since
-            # we treat any %% line as a no-op marker; good enough for parsing)
+            # Obsidian transient comment — drop entirely (no toggle state tracked).
             continue
-        if re.match(r"^# ", line):
-            board.title = line[2:].strip()
+
+        # If a card is open, decide whether this line continues its body or terminates it.
+        if card is not None:
+            if card_style == "list":
+                if raw.startswith("    "):
+                    card_lines.append(raw[4:])
+                    continue
+                if raw.startswith("\t"):
+                    card_lines.append(raw[1:])
+                    continue
+                if not stripped:
+                    card_lines.append("")
+                    continue
+                # Column-0 non-blank line ends the list-style card; fall through.
+                flush_card()
+            else:  # "header" — legacy: body extends until the next heading
+                if raw.startswith("### ") or raw.startswith("## ") or raw.startswith("# "):
+                    flush_card()
+                    # fall through to outer parsing
+                else:
+                    card_lines.append(raw)
+                    continue
+
+        # Board title
+        if raw.startswith("# "):
+            board.title = raw[2:].strip()
             continue
-        if line.startswith("## "):
-            flush_card()
+
+        # Lane header
+        if raw.startswith("## "):
             if lane is not None:
                 board.lanes.append(lane)
-            title = line[3:].strip()
+            title = raw[3:].strip()
             lane = Lane(id=_slug(title), title=title)
-            lane_uses_headers = False
             continue
+
         if lane is None:
             continue
-        if line.startswith("### "):
-            flush_card()
-            lane_uses_headers = True
-            card = Card(id="__pending__", title=line[4:].strip())
+
+        # List-style card (preferred)
+        m = _LIST_CARD.match(raw)
+        if m:
+            check_char = m.group(1) or " "
+            title = m.group(2).strip()
+            card = Card(
+                id="__pending__",
+                title=title,
+                checked=(check_char.lower() == "x"),
+            )
+            card_style = "list"
             continue
-        if re.match(r"^- ", line) and not lane_uses_headers and card is None:
-            flush_card()
-            title = re.sub(r"^- (\[[ xX]\] )?", "", line).strip()
-            card = Card(id="__pending__", title=title)
+
+        # Header-style card (legacy)
+        if raw.startswith("### "):
+            card = Card(id="__pending__", title=raw[4:].strip())
+            card_style = "header"
             continue
-        if card is not None:
-            card_lines.append(line)
+
+        # Anything else outside a card is ignored.
 
     flush_card()
     if lane is not None:
@@ -155,8 +218,23 @@ def parse(content: str) -> Board:
     return board
 
 
+def _check_char(card: Card) -> str:
+    return "x" if (card.checked or card.status == "done") else " "
+
+
+def _indent_body(body: str) -> list[str]:
+    """Indent each line with 4 spaces; preserve empty lines as truly empty."""
+    return [(("    " + ln) if ln else "") for ln in body.split("\n")]
+
+
 def serialize(board: Board) -> str:
-    """Serialize a Board back into markdown."""
+    """Serialize a Board back into Obsidian-Kanban-compatible markdown.
+
+    Cards are emitted as ``- [ ] Title`` (or ``- [x]`` if checked / status="done")
+    with all metadata comments and body content indented by 4 spaces, so any
+    markdown inside the body — including ``##`` headings, sub-lists and code
+    fences — round-trips losslessly.
+    """
     fm = dict(board.frontmatter)
     fm.setdefault(KANBAN_PLUGIN_KEY, "basic")
     lp = {ln.id: ln.prompt for ln in board.lanes if ln.prompt}
@@ -170,28 +248,28 @@ def serialize(board: Board) -> str:
     else:
         fm.pop("lane_models", None)
     fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False).rstrip()
-    out = [f"---\n{fm_text}\n---", "", f"# {board.title}", ""]
+    out: list[str] = [f"---\n{fm_text}\n---", "", f"# {board.title}", ""]
     for lane in board.lanes:
         out.append(f"## {lane.title}")
         out.append("")
         for card in lane.cards:
-            out.append(f"### {card.title}")
-            out.append(f"<!-- nx:id={_ensure_id(card)} -->")
+            out.append(f"- [{_check_char(card)}] {card.title}")
+            out.append(f"    <!-- nx:id={_ensure_id(card)} -->")
             if card.session_id:
-                out.append(f"<!-- nx:session={card.session_id} -->")
+                out.append(f"    <!-- nx:session={card.session_id} -->")
             if card.status:
-                out.append(f"<!-- nx:status={card.status} -->")
+                out.append(f"    <!-- nx:status={card.status} -->")
             if card.due:
-                out.append(f"<!-- nx:due={card.due} -->")
+                out.append(f"    <!-- nx:due={card.due} -->")
             if card.priority:
-                out.append(f"<!-- nx:priority={card.priority} -->")
+                out.append(f"    <!-- nx:priority={card.priority} -->")
             if card.labels:
-                out.append(f"<!-- nx:labels={','.join(card.labels)} -->")
+                out.append(f"    <!-- nx:labels={','.join(card.labels)} -->")
             if card.assignees:
-                out.append(f"<!-- nx:assignees={','.join(card.assignees)} -->")
+                out.append(f"    <!-- nx:assignees={','.join(card.assignees)} -->")
             body = (card.body or "").strip()
             if body:
                 out.append("")
-                out.append(body)
+                out.extend(_indent_body(body))
             out.append("")
     return "\n".join(out).rstrip() + "\n"

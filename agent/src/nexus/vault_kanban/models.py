@@ -20,6 +20,7 @@ class Card:
     body: str = ""
     session_id: str | None = None
     status: str | None = None  # None | "running" | "done" | "failed"
+    checked: bool = False  # GFM task checkbox state — independent of run-status
     # Metadata — all optional. Persisted as nx:<key>=value comments inside the
     # card body so hand-edited markdown round-trips cleanly.
     due: str | None = None        # ISO date "YYYY-MM-DD"
@@ -33,6 +34,8 @@ class Card:
             out["session_id"] = self.session_id
         if self.status:
             out["status"] = self.status
+        if self.checked:
+            out["checked"] = True
         if self.due:
             out["due"] = self.due
         if self.priority:

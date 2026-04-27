@@ -148,39 +148,26 @@ def test_default_bootstrap_idempotent():
     assert cal.title == "Default"
 
 
-def test_event_prompt_round_trip():
-    vault_calendar.create_empty("a.md")
-    multi = "Hello, agent!\nLine 2 with: special <chars> & quotes \"x\""
-    ev = vault_calendar.add_event(
-        "a.md",
-        title="X",
-        start="2026-04-27T13:00:00Z",
-        prompt=multi,
+def test_legacy_event_prompt_normalises_to_assignee_agent():
+    """Legacy events written with `<!-- nx:prompt=... -->` (and no explicit
+    assignee) opted into agent dispatch implicitly. After the field was
+    removed, the parser must still infer ``assignee=agent`` so they keep
+    firing; the legacy prompt value itself is discarded."""
+    legacy = (
+        "---\ncalendar-plugin: basic\n---\n\n"
+        "# Calendar\n\n"
+        "### Legacy\n"
+        "<!-- nx:id=legacy-1 -->\n"
+        "<!-- nx:start=2026-04-27T13:00:00Z -->\n"
+        "<!-- nx:status=scheduled -->\n"
+        "<!-- nx:prompt=do%20it -->\n"
     )
+    import nexus.vault as vault_module
+    (vault_module._VAULT_ROOT / "a.md").write_text(legacy)
     cal = vault_calendar.read_calendar("a.md")
-    assert cal.events[0].prompt == multi
-    # Update + clear
-    vault_calendar.update_event("a.md", ev.id, {"prompt": "  "})
-    cal = vault_calendar.read_calendar("a.md")
-    assert cal.events[0].prompt is None
-
-
-def test_effective_prompt_inherits_from_calendar():
-    vault_calendar.create_empty("a.md", prompt="Calendar-level prompt")
-    ev = vault_calendar.add_event("a.md", title="X", start="2026-04-27T13:00:00Z")
-    cal = vault_calendar.read_calendar("a.md")
-    assert vault_calendar.effective_prompt(cal.events[0], cal) == "Calendar-level prompt"
-    # Per-event overrides
-    vault_calendar.update_event("a.md", ev.id, {"prompt": "Per-event!"})
-    cal = vault_calendar.read_calendar("a.md")
-    assert vault_calendar.effective_prompt(cal.events[0], cal) == "Per-event!"
-
-
-def test_effective_prompt_none_when_both_empty():
-    vault_calendar.create_empty("a.md")
-    vault_calendar.add_event("a.md", title="X", start="2026-04-27T13:00:00Z")
-    cal = vault_calendar.read_calendar("a.md")
-    assert vault_calendar.effective_prompt(cal.events[0], cal) is None
+    assert cal.events[0].assignee == "agent"
+    # The field no longer exists on the dataclass.
+    assert not hasattr(cal.events[0], "prompt")
 
 
 def test_fire_window_round_trip():

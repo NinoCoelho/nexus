@@ -20,7 +20,6 @@ export interface EventDraft {
   trigger: EventTrigger | "";
   rrule: string;
   all_day: boolean;
-  prompt: string;
   fire_from: string | null;
   fire_to: string | null;
   fire_every_min: number | null;
@@ -56,7 +55,6 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
   const [trigger, setTrigger] = useState<EventTrigger | "">((ev?.trigger as EventTrigger) ?? "");
   const [rrule, setRrule] = useState(ev?.rrule ?? "");
   const [allDay, setAllDay] = useState(!!ev?.all_day);
-  const [prompt, setPrompt] = useState(ev?.prompt ?? "");
   const [fireFrom, setFireFrom] = useState(ev?.fire_from ?? "");
   const [fireTo, setFireTo] = useState(ev?.fire_to ?? "");
   const [fireEvery, setFireEvery] = useState<string>(
@@ -106,7 +104,6 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
       trigger: assignedToAgent ? trigger : "",
       rrule: rrule.trim(),
       all_day: allDay,
-      prompt: assignedToAgent ? prompt.trim() : "",
       fire_from: assignedToAgent && allDay && fireFrom ? fireFrom : null,
       fire_to: assignedToAgent && allDay && fireTo ? fireTo : null,
       fire_every_min: assignedToAgent && allDay && !Number.isNaN(fireEveryNum) ? fireEveryNum : null,
@@ -181,7 +178,7 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
               type="checkbox"
               checked={assignedToAgent}
               onChange={(e) => setAssignedToAgent(e.target.checked)}
-              title="When checked, the agent runs at fire time using the prompt below."
+              title="When checked, the agent runs at fire time with the notes below as context."
             />
           </span>
         </div>
@@ -218,19 +215,6 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
                 />
               )}
             </div>
-
-            <label className="cal-modal-notes">
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                Agent prompt
-                {prompt.trim() && <span title="Agent will run at fire time" style={{ color: "var(--accent, #4d7cff)" }}>⚡</span>}
-              </span>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Leave blank to inherit the calendar prompt, or notify only."
-                style={{ minHeight: 56 }}
-              />
-            </label>
 
             {allDay && (
               <>

@@ -17,19 +17,17 @@ import {
 interface Props {
   visible: Date;
   events: CalendarEvent[];
-  calendarHasPrompt: boolean;
   onCellClick: (day: Date) => void;
   onEventClick: (ev: CalendarEvent) => void;
   onEventOpenChat: (ev: CalendarEvent) => void;
   onEventFire: (ev: CalendarEvent) => void;
 }
 
-function hasEffectivePrompt(ev: CalendarEvent, calendarHasPrompt: boolean): boolean {
-  if (ev.prompt && ev.prompt.trim()) return true;
-  return calendarHasPrompt;
+function isAgentAssigned(ev: CalendarEvent): boolean {
+  return ev.assignee === "agent";
 }
 
-export default function MonthGrid({ visible, events, calendarHasPrompt, onCellClick, onEventClick, onEventOpenChat, onEventFire }: Props) {
+export default function MonthGrid({ visible, events, onCellClick, onEventClick, onEventOpenChat, onEventFire }: Props) {
   const { from } = monthGridWindow(visible);
   const today = new Date();
   const monthIdx = startOfMonth(visible).getMonth();
@@ -73,10 +71,10 @@ export default function MonthGrid({ visible, events, calendarHasPrompt, onCellCl
                     e.stopPropagation();
                     onEventClick(ev);
                   }}
-                  title={`${ev.title} — ${ev.status}${hasEffectivePrompt(ev, calendarHasPrompt) ? " (auto-runs agent)" : " (notify only)"}`}
+                  title={`${ev.title} — ${ev.status}${isAgentAssigned(ev) ? " (auto-runs agent)" : ""}`}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {hasEffectivePrompt(ev, calendarHasPrompt) && <span style={{ marginRight: 3 }}>⚡</span>}
+                    {isAgentAssigned(ev) && <span style={{ marginRight: 3 }}>⚡</span>}
                     {!ev.all_day && parseEventStart(ev.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}{" "}
                     {ev.title}
                   </span>

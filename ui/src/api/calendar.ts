@@ -27,7 +27,6 @@ export interface CalendarEvent {
   rrule?: string | null;
   session_id?: string | null;
   all_day?: boolean;
-  prompt?: string | null;
   fire_from?: string | null;
   fire_to?: string | null;
   fire_every_min?: number | null;
@@ -135,7 +134,6 @@ export async function addVaultCalendarEvent(
     rrule?: string;
     all_day?: boolean;
     status?: EventStatus;
-    prompt?: string;
     fire_from?: string;
     fire_to?: string;
     fire_every_min?: number;
@@ -167,7 +165,6 @@ export async function patchVaultCalendarEvent(
     rrule: string | null;
     all_day: boolean;
     session_id: string | null;
-    prompt: string | null;
     fire_from: string | null;
     fire_to: string | null;
     fire_every_min: number | null;

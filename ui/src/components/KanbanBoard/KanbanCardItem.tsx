@@ -1,5 +1,6 @@
 import type { KanbanCard } from "../../api";
-import { cardPreview, dueBadge, PRIORITY_CLASS } from "./utils";
+import MarkdownView from "../MarkdownView";
+import { dueBadge, PRIORITY_CLASS } from "./utils";
 
 interface Props {
   card: KanbanCard;
@@ -32,7 +33,6 @@ export default function KanbanCardItem({
   onDelete,
   onViewActivity,
 }: Props) {
-  const preview = cardPreview(card.body);
   const due = dueBadge(card.due);
   const isDragging = dragCardId === card.id;
 
@@ -71,7 +71,16 @@ export default function KanbanCardItem({
         )}
         <span>{card.title}</span>
       </div>
-      {preview && <div className="kanban-card-body">{preview}</div>}
+      {card.body && (
+        <div
+          className="kanban-card-body"
+          // Mousewheel scrolls the body without grabbing the card; clicks still
+          // propagate so the card opens the detail modal as before.
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <MarkdownView>{card.body}</MarkdownView>
+        </div>
+      )}
       {(due || (card.labels && card.labels.length > 0) || (card.assignees && card.assignees.length > 0)) && (
         <div className="kanban-card-meta">
           {due && <span className={due.cls}>{due.label}</span>}

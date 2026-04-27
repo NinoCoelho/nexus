@@ -18,6 +18,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Cap how many follow-up turns one card can chain through the same session
+# when the agent keeps moving it to lanes with prompts. Matches the cascade
+# limit used by the lane-change hook in app.py.
+MAX_FOLLOW_UP_DEPTH = 5
+
 
 async def run_background_agent_turn(
     *,
@@ -37,7 +42,17 @@ async def run_background_agent_turn(
     to ``"card"`` (kanban) for back-compat; pass ``"event"`` to dispatch a
     calendar event. ``card_path``/``card_id`` are the entity's vault path and
     id regardless of kind.
+
+    For kanban cards: when the agent moves the card during this turn into a
+    *different* lane that has a prompt configured, a follow-up turn is run on
+    the *same session* using that lane's prompt. This gives the agent's own
+    moves the same auto-run behavior as a UI drag-drop, but without losing the
+    conversation history. Bounded by ``MAX_FOLLOW_UP_DEPTH``.
     """
+    starting_lane_id: str | None = None
+    if entity_kind == "card":
+        starting_lane_id = _read_card_lane(card_path, card_id)
+
     token = CURRENT_SESSION_ID.set(session_id)
     # Record this card on the dispatch chain so any move_card the agent
     # performs during this turn is recognised by the lane-change hook
@@ -131,6 +146,104 @@ async def run_background_agent_turn(
                 vault_kanban.update_card(card_path, card_id, {"status": new_status})
         except Exception:
             log.exception("background dispatch: %s status update failed", entity_kind)
+
+        if entity_kind == "card" and starting_lane_id is not None:
+            try:
+                await _maybe_follow_up_after_move(
+                    session_id=session_id,
+                    card_path=card_path,
+                    card_id=card_id,
+                    starting_lane_id=starting_lane_id,
+                    agent_=agent_,
+                    store=store,
+                )
+            except Exception:
+                log.exception("background dispatch: follow-up turn failed")
     finally:
         CURRENT_SESSION_ID.reset(token)
         DISPATCH_CHAIN.reset(chain_token)
+
+
+def _read_card_lane(card_path: str, card_id: str) -> str | None:
+    """Return the id of the lane currently holding this card, or None."""
+    try:
+        from ... import vault_kanban
+        from ...vault_kanban.cards import _find_card
+
+        board = vault_kanban.read_board(card_path)
+        found = _find_card(board, card_id)
+        return found[0].id if found else None
+    except Exception:
+        log.exception("follow-up: could not snapshot card lane")
+        return None
+
+
+async def _maybe_follow_up_after_move(
+    *,
+    session_id: str,
+    card_path: str,
+    card_id: str,
+    starting_lane_id: str,
+    agent_: "Agent",
+    store: "SessionStore",
+) -> None:
+    """Run a follow-up turn on the same session when the card was moved into
+    a different lane that has its own prompt.
+
+    No-op if the card stayed put, was deleted, was moved to a lane without a
+    prompt, or the dispatch chain has reached ``MAX_FOLLOW_UP_DEPTH``.
+    """
+    chain = DISPATCH_CHAIN.get()
+    if len(chain) >= MAX_FOLLOW_UP_DEPTH:
+        log.info(
+            "follow-up: depth limit reached (%d) for card %s, chain=%s",
+            MAX_FOLLOW_UP_DEPTH, card_id, chain,
+        )
+        return
+
+    from ... import vault_kanban
+    from ...vault_kanban.cards import _find_card
+
+    board = vault_kanban.read_board(card_path)
+    found = _find_card(board, card_id)
+    if found is None:
+        return  # card was deleted during the turn
+    final_lane, card, _ = found
+    if final_lane.id == starting_lane_id or not final_lane.prompt:
+        return  # stayed put, or destination lane has no prompt
+
+    # Lazy import to avoid circular: vault_dispatch imports from us.
+    from .vault_dispatch import _compose_card_context_seed, _resolve_dispatch_model
+
+    log.info(
+        "follow-up: card %s moved %s -> %s during turn, running lane prompt on session %s",
+        card_id, starting_lane_id, final_lane.id, session_id,
+    )
+
+    seed = _compose_card_context_seed(
+        lane_prompt=final_lane.prompt,
+        path=card_path,
+        card_title=card.title,
+        card_id=card.id,
+        card_body=card.body,
+        current_lane_id=final_lane.id,
+        current_lane_title=final_lane.title,
+        lanes=[(ln.id, ln.title) for ln in board.lanes],
+    )
+    # Mark running again before recursing — status was just set to done/failed.
+    try:
+        vault_kanban.update_card(card_path, card_id, {"status": "running"})
+    except Exception:
+        log.exception("follow-up: could not mark card running")
+
+    follow_up_model = _resolve_dispatch_model(final_lane.model, agent_)
+    await run_background_agent_turn(
+        session_id=session_id,
+        seed_message=seed,
+        card_path=card_path,
+        card_id=card_id,
+        agent_=agent_,
+        store=store,
+        model_id=follow_up_model,
+        entity_kind="card",
+    )

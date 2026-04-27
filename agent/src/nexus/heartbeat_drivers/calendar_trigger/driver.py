@@ -1,12 +1,17 @@
 """Calendar trigger driver — scans the vault every minute and dispatches
 events whose start time has arrived.
 
+An event fires only when ``assignee == "agent"``; everything else is a plain
+calendar entry the driver ignores.
+
 Two firing modes:
 
 1. **Single-shot** (the default). The driver dispatches when the event's start
    arrives and the event transitions ``scheduled → triggered → done``.
-   Recurring events use iCal RRULE so the driver fires the next occurrence
-   each time the prior one finishes.
+   Recurring events use iCal RRULE: the ``status`` field reflects only the
+   *last* run, not the next occurrence's eligibility. Subsequent occurrences
+   re-fire regardless of status (only ``cancelled`` opts out). Per-occurrence
+   dedup is via ``fired_events`` (tracks the last fired due-time per event).
 
 2. **Intra-day fire window** (``all_day=true`` + ``fire_from`` + ``fire_to`` +
    ``fire_every_min``). The driver fires the event repeatedly during a local
@@ -50,13 +55,12 @@ class Driver(HeartbeatDriver):
     ) -> tuple[list[HeartbeatEvent], dict[str, Any]]:
         try:
             from nexus import vault_calendar
-            from nexus.calendar_runtime import get_dispatcher, get_notifier
+            from nexus.calendar_runtime import get_dispatcher
         except Exception:
             log.exception("calendar_trigger: import failed; skipping tick")
             return [], state
 
         dispatcher = get_dispatcher()
-        notifier = get_notifier()
         if dispatcher is None:
             return [], state
 
@@ -78,7 +82,14 @@ class Driver(HeartbeatDriver):
                 continue
 
             for ev in list(cal.events):
-                if ev.status != "scheduled":
+                # User-cancelled events never fire, recurring or not.
+                if ev.status == "cancelled":
+                    continue
+                # Recurring events are gated only by their RRULE — the status
+                # field reflects the *last* run, not whether the next
+                # occurrence should fire. Without this, a daily event would
+                # fire once and then sit at "done"/"failed"/"missed" forever.
+                if not ev.rrule and ev.status != "scheduled":
                     continue
                 if not ev.is_agent_assigned:
                     # Events without an agent assignee are plain calendar
@@ -90,7 +101,7 @@ class Driver(HeartbeatDriver):
                 if ev.has_fire_window:
                     await _handle_fire_window(
                         ev, cal, summary.path, now, fired_events, dispatcher,
-                        notifier, vault_calendar,
+                        vault_calendar,
                     )
                     continue
 
@@ -103,7 +114,22 @@ class Driver(HeartbeatDriver):
                 if due > now:
                     continue
 
+                # Recurring dedup: same occurrence can otherwise fire on
+                # consecutive ticks because ``status`` no longer gates it.
+                # ``fired_events`` records the last fired due-time per event.
+                if ev.rrule:
+                    last_fired = _parse_iso(fired_events.get(ev.id))
+                    if last_fired is not None and due <= last_fired:
+                        continue
+
                 if due < last_processed - _GRACE:
+                    # Past-due. For recurring events, just skip this stale
+                    # occurrence — the next tick will pick up the next
+                    # future one. ``sweep_missed`` (run on startup) handles
+                    # the genuinely-exhausted case. Marking the whole
+                    # recurring event "missed" here would freeze it forever.
+                    if ev.rrule:
+                        continue
                     try:
                         vault_calendar.update_event(
                             summary.path, ev.id, {"status": "missed"}
@@ -114,13 +140,9 @@ class Driver(HeartbeatDriver):
                         )
                     continue
 
-                # Branch on prompt: with prompt → run agent. Without → notify only.
-                if vault_calendar.effective_prompt(ev, cal):
-                    await _dispatch_with_prompt(
-                        summary.path, ev, dispatcher, vault_calendar,
-                    )
-                else:
-                    _notify_alert(summary.path, ev, cal, notifier, vault_calendar)
+                await _dispatch_event(summary.path, ev, dispatcher, vault_calendar)
+                if ev.rrule:
+                    fired_events[ev.id] = due.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Garbage-collect stale fired_events entries.
         cutoff = now - _FIRED_RETENTION
@@ -135,13 +157,13 @@ class Driver(HeartbeatDriver):
         }
 
 
-async def _dispatch_with_prompt(
+async def _dispatch_event(
     path: str,
     ev,  # noqa: ANN001
     dispatcher,  # noqa: ANN001
     vault_calendar,  # noqa: ANN001
 ) -> None:
-    """Dispatch the agent for an event with a configured (or inherited) prompt."""
+    """Dispatch the agent for an agent-assigned event."""
     try:
         result = await asyncio.wait_for(
             dispatcher(path=path, event_id=ev.id, mode="background"),
@@ -168,36 +190,6 @@ async def _dispatch_with_prompt(
             log.exception("calendar_trigger: also failed to mark %s as failed", ev.id)
 
 
-def _notify_alert(
-    path: str,
-    ev,  # noqa: ANN001
-    cal,  # noqa: ANN001
-    notifier,  # noqa: ANN001
-    vault_calendar,  # noqa: ANN001
-) -> None:
-    """Publish a calendar_alert notification (no agent dispatch) and mark
-    the event as ``done``."""
-    if notifier is not None:
-        try:
-            notifier({
-                "path": path,
-                "event_id": ev.id,
-                "title": ev.title,
-                "body": ev.body,
-                "start": ev.start,
-                "end": ev.end,
-                "calendar_title": cal.title,
-                "all_day": ev.all_day,
-            })
-            log.info("calendar_trigger: alerted for event %s (no prompt)", ev.id)
-        except Exception:
-            log.exception("calendar_trigger: notifier raised for %s", ev.id)
-    try:
-        vault_calendar.update_event(path, ev.id, {"status": "done"})
-    except Exception:
-        log.exception("calendar_trigger: failed to mark %s done after alert", ev.id)
-
-
 async def _handle_fire_window(
     ev,  # noqa: ANN001
     cal,  # noqa: ANN001
@@ -205,7 +197,6 @@ async def _handle_fire_window(
     now: datetime,
     fired_events: dict[str, str],
     dispatcher,  # noqa: ANN001
-    notifier,  # noqa: ANN001
     vault_calendar,  # noqa: ANN001
 ) -> None:
     """Fire a fire-windowed all-day event if today's window is active and
@@ -247,41 +238,23 @@ async def _handle_fire_window(
         if now < next_fire:
             return
 
-    # Branch on prompt: with prompt run agent, without just notify.
-    if vault_calendar.effective_prompt(ev, cal):
-        try:
-            result = await asyncio.wait_for(
-                dispatcher(path=path, event_id=ev.id, mode="background"),
-                timeout=_DISPATCH_TIMEOUT,
-            )
-            log.info(
-                "calendar_trigger: fired window event %s (session=%s)",
-                ev.id, result.get("session_id"),
-            )
-            fired_events[ev.id] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        except asyncio.TimeoutError:
-            log.error(
-                "calendar_trigger: window dispatch timed out after %.0fs for %s",
-                _DISPATCH_TIMEOUT, ev.id,
-            )
-        except Exception:
-            log.exception("calendar_trigger: window dispatch failed for %s", ev.id)
-    else:
-        if notifier is not None:
-            try:
-                notifier({
-                    "path": path,
-                    "event_id": ev.id,
-                    "title": ev.title,
-                    "body": ev.body,
-                    "start": ev.start,
-                    "end": ev.end,
-                    "calendar_title": cal.title,
-                    "all_day": ev.all_day,
-                })
-            except Exception:
-                log.exception("calendar_trigger: window notifier raised for %s", ev.id)
+    try:
+        result = await asyncio.wait_for(
+            dispatcher(path=path, event_id=ev.id, mode="background"),
+            timeout=_DISPATCH_TIMEOUT,
+        )
+        log.info(
+            "calendar_trigger: fired window event %s (session=%s)",
+            ev.id, result.get("session_id"),
+        )
         fired_events[ev.id] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except asyncio.TimeoutError:
+        log.error(
+            "calendar_trigger: window dispatch timed out after %.0fs for %s",
+            _DISPATCH_TIMEOUT, ev.id,
+        )
+    except Exception:
+        log.exception("calendar_trigger: window dispatch failed for %s", ev.id)
 
 
 def _parse_iso(value: Any) -> datetime | None:

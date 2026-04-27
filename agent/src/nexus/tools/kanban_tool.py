@@ -60,7 +60,14 @@ KANBAN_MANAGE_TOOL = ToolSpec(
             },
             "lane": {"type": "string", "description": "Lane id (move_card, add_card, delete_lane)."},
             "card_id": {"type": "string", "description": "Card id (move/update/delete)."},
-            "body": {"type": "string", "description": "Card body / notes markdown."},
+            "body": {
+                "type": "string",
+                "description": (
+                    "Card body in markdown. Headings, sub-lists, fenced code blocks "
+                    "and blockquotes are all supported and preserved verbatim — write "
+                    "rich markdown freely without escaping."
+                ),
+            },
             "position": {"type": "integer", "description": "Insert position within the lane (move_card)."},
             "due": {"type": "string", "description": "ISO date 'YYYY-MM-DD' for update_card. Empty string clears."},
             "priority": {

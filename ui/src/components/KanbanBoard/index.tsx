@@ -16,7 +16,6 @@ import CardDetailModal from "../CardDetailModal";
 import CardActivityModal from "../CardActivityModal";
 import LanePromptDialog from "../LanePromptDialog";
 import {
-  addVaultKanbanCard,
   addVaultKanbanLane,
   deleteVaultKanbanCard,
   deleteVaultKanbanLane,
@@ -51,6 +50,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const [dragOver, setDragOver] = useState<{ lane: string; index: number } | null>(null);
   const [modal, setModal] = useState<ModalProps | null>(null);
   const [detailCard, setDetailCard] = useState<KanbanCard | null>(null);
+  const [newCardLane, setNewCardLane] = useState<string | null>(null);
   const [activityCard, setActivityCard] = useState<KanbanCard | null>(null);
   const [editLane, setEditLane] = useState<KanbanLane | null>(null);
   const [filters, setFilters] = useState<BoardFilters>({ text: "", label: "", priority: "", assignee: "" });
@@ -168,18 +168,10 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   };
 
   const handleAddCard = (laneId: string) => {
-    setModal({
-      kind: "prompt",
-      title: "New card",
-      placeholder: "Card title",
-      confirmLabel: "Add",
-      onCancel: () => setModal(null),
-      onSubmit: async (title) => {
-        setModal(null);
-        try { await addVaultKanbanCard(path, { lane: laneId, title }); reload(); }
-        catch { /* ignore */ }
-      },
-    });
+    // Open the same detail modal used for editing, in create mode. Lane prompts
+    // often require context in the description, so we want users to fill the
+    // body (and any metadata) before the card lands on the board.
+    setNewCardLane(laneId);
   };
 
   const handleAddLane = () => {
@@ -304,6 +296,14 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           boardPath={path}
           onClose={() => setDetailCard(null)}
           onSaved={() => { setDetailCard(null); reload(); }}
+        />
+      )}
+      {newCardLane && (
+        <CardDetailModal
+          lane={newCardLane}
+          boardPath={path}
+          onClose={() => setNewCardLane(null)}
+          onSaved={() => { setNewCardLane(null); reload(); }}
         />
       )}
     </div>
