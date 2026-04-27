@@ -30,6 +30,41 @@ log = logging.getLogger(__name__)
 
 TraceCallback = Callable[[str, dict[str, Any]], None]
 
+# Assistant placeholders persisted by chat_stream.py when a turn ended with no
+# usable content. Keeping them in the LLM prompt on the next turn just bloats
+# context (and on retry, accelerates the very overflow that caused them).
+# They stay in the SQLite history so the UI can still render the partial-turn
+# banner — only the LLM ingress filters them out.
+_DROP_ASSISTANT_PLACEHOLDERS = (
+    "[empty_response]",
+    "[llm_error]",
+    "[upstream_timeout]",
+    "[crashed]",
+)
+
+
+def _is_dead_placeholder(msg: ChatMessage) -> bool:
+    """True when an assistant message carries only a no-signal status prefix
+    and no tool_calls — i.e. nothing the model can build on."""
+    if msg.role != Role.ASSISTANT:
+        return False
+    if msg.tool_calls:
+        return False
+    text = (msg.content or "").strip()
+    if not text:
+        return False
+    for prefix in _DROP_ASSISTANT_PLACEHOLDERS:
+        if text == prefix or text.startswith(prefix + " "):
+            return True
+    return False
+
+
+def _strip_dead_placeholders(history: list[ChatMessage]) -> list[ChatMessage]:
+    """Drop trailing-or-orphan assistant placeholders from history before
+    feeding it to the LLM. Preserves user/tool messages and any assistant
+    message with real content or tool_calls."""
+    return [m for m in history if not _is_dead_placeholder(m)]
+
 
 class Agent:
     """Nexus façade over loom.Agent.
@@ -175,7 +210,9 @@ class Agent:
         # Build loom message list
         loom_messages: list[lt.ChatMessage] = []
         if history:
-            loom_messages = [_to_loom_message(m) for m in history]
+            loom_messages = [
+                _to_loom_message(m) for m in _strip_dead_placeholders(history)
+            ]
 
         # Annotate terse yes/no using loom agent's pending question
         pending = self._loom._pending_question
@@ -234,7 +271,9 @@ class Agent:
 
         loom_messages: list[lt.ChatMessage] = []
         if history:
-            loom_messages = [_to_loom_message(m) for m in history]
+            loom_messages = [
+                _to_loom_message(m) for m in _strip_dead_placeholders(history)
+            ]
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
@@ -543,9 +582,30 @@ class Agent:
                     "name": tool_name,
                     "result_preview": preview,
                 }
+                # Loom now owns the intra-loop overflow check (it runs at
+                # the top of every iteration with full visibility into the
+                # system prompt that the wrapper never sees). The wrapper
+                # just listens for the resulting `context_overflow` event
+                # below and forwards it to the UI's existing banner path.
 
             elif etype == "limit_reached":
                 yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
+
+            elif etype == "context_overflow":
+                # Loom refused the next LLM call because the prompt would
+                # overflow the model's context window. Forward as a
+                # structured error so the UI renders the existing
+                # "Compact history / New session" affordance.
+                yield {
+                    "type": "error",
+                    "detail": ev.get("message", "context overflow"),
+                    "reason": "context_overflow",
+                    "retryable": False,
+                    "status_code": None,
+                    "estimated_input_tokens": ev.get("estimated_input_tokens", 0),
+                    "context_window": ev.get("context_window", 0),
+                    "actions": ["compact_history", "new_session"],
+                }
 
             elif etype == "error":
                 yield {

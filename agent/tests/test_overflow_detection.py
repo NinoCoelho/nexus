@@ -55,3 +55,40 @@ def test_check_overflow_respects_output_headroom() -> None:
     msg = _Msg("x" * (4 * 199_500))  # ≈ 199.5K tokens
     out = check_overflow([msg], context_window=200_000, output_headroom=2_000)
     assert out.overflowed is True
+
+
+def test_estimate_uses_denser_ratio_for_non_ascii() -> None:
+    """Portuguese / accented text emits more tokens per char than English.
+    The estimator must not under-count it (the bug that let z.ai sessions
+    silently overflow on 'pesquisa profunda' turns)."""
+    ascii_msg = _Msg("a" * 600)  # plain ASCII -> chars/4
+    pt_msg = _Msg("á" * 600)     # all non-ASCII -> chars/3
+    n_ascii = estimate_tokens([ascii_msg])
+    n_pt = estimate_tokens([pt_msg])
+    # Denser ratio means more tokens for the same char count.
+    assert n_pt > n_ascii
+    # Sanity: the gap should be ≈33% (600/3 vs 600/4 = 200 vs 150).
+    assert n_pt - n_ascii >= 40
+
+
+def test_estimate_uses_denser_ratio_for_json_payloads() -> None:
+    """Tool results are JSON-shaped — the estimator must use the dense
+    ratio even when the JSON happens to be ASCII-only."""
+    plain = _Msg("hello world " * 50)
+    json_blob = _Msg('[{"url": "https://example.com/a", "title": "T"}]' * 12)
+    # Roughly the same char count, different shape.
+    assert abs(len(plain.content) - len(json_blob.content)) < 200
+    n_plain = estimate_tokens([plain])
+    n_json = estimate_tokens([json_blob])
+    assert n_json > n_plain
+
+
+def test_tool_calls_payload_uses_dense_ratio() -> None:
+    """tool_calls are always JSON; their size estimate should not be
+    softened by the chars/4 ASCII default."""
+    tcs = [{"id": "a", "name": "web_scrape", "arguments": {"url": "https://x" * 200}}]
+    msg = _Msg("ok", tool_calls=tcs)
+    n = estimate_tokens([msg])
+    # Naive char/4 of the JSON would yield ~525 tokens; chars/3 ≈ 700.
+    # Just assert it's well above the chars/4 lower bound.
+    assert n > 600

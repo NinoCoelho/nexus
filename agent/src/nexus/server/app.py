@@ -47,13 +47,19 @@ TUNNEL_PROTECTED_PREFIXES = (
 def _is_proxied(request: Request) -> bool:
     """Heuristic: the request hopped through a reverse proxy (i.e. came via the tunnel).
 
-    ngrok, cloudflared, and most edge proxies set ``x-forwarded-for`` and
+    cloudflared, ngrok, and most edge proxies set ``x-forwarded-for`` and
     ``x-forwarded-proto``. Direct loopback connections do not. This is what lets
     us bypass auth for the bundled UI talking to its own server while still
     enforcing it for the same loopback IP when the connection traversed a tunnel.
     """
     h = request.headers
-    return bool(h.get("x-forwarded-for") or h.get("x-forwarded-host") or h.get("ngrok-trace-id"))
+    return bool(
+        h.get("x-forwarded-for")
+        or h.get("x-forwarded-host")
+        or h.get("cf-ray")              # cloudflared / Cloudflare edge
+        or h.get("cf-connecting-ip")    # cloudflared / Cloudflare edge
+        or h.get("ngrok-trace-id")      # legacy: still safe to honor
+    )
 
 
 def _tunnel_path_requires_auth(path: str) -> bool:
@@ -67,7 +73,7 @@ def _tunnel_path_requires_auth(path: str) -> bool:
     if path in TUNNEL_PUBLIC_PATHS:
         return False
     if path.startswith("/tunnel/"):
-        # /tunnel/start, /stop, /status, /authtoken — admin. Require a cookie
+        # /tunnel/start, /stop, /status, /install — admin. Require a cookie
         # so the request gets to the route, where _require_loopback will 403.
         return True
     return any(path.startswith(p) for p in TUNNEL_PROTECTED_PREFIXES)
@@ -81,7 +87,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
       * X-Content-Type-Options=nosniff blocks MIME-sniffing attacks.
       * X-Frame-Options=DENY prevents clickjacking via iframe embedding.
       * Referrer-Policy=same-origin keeps the tunnel URL from leaking via
-        outbound link clicks (the ngrok hostname itself is sensitive).
+        outbound link clicks (the trycloudflare hostname itself is sensitive).
       * Permissions-Policy disables sensors / payment / autoplay we never use.
 
     No CSP yet — adding one without breaking mermaid / katex / dynamic imports
@@ -493,7 +499,7 @@ def create_app(
     # Middleware is always installed: the legacy NEXUS_ACCESS_TOKEN path is
     # opt-in (empty string disables it for direct loopback), but the tunnel
     # auth path must remain reachable on every request so it can enforce the
-    # token on traffic that traversed the public ngrok proxy.
+    # token on traffic that traversed the public tunnel.
     _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
     app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
     app.add_middleware(SecurityHeadersMiddleware)
@@ -515,6 +521,7 @@ def create_app(
 
     # ── mount routers ──────────────────────────────────────────────────────────
     from .routes.chat import router as chat_router
+    from .routes.chat_slash import router as chat_slash_router
     from .routes.chat_stream import router as chat_stream_router
     from .routes.settings import router as settings_router
     from .routes.sessions import router as sessions_router
@@ -536,6 +543,7 @@ def create_app(
     from .routes.tunnel import router as tunnel_router
 
     app.include_router(chat_router)
+    app.include_router(chat_slash_router)
     app.include_router(chat_stream_router)
     app.include_router(settings_router)
     app.include_router(sessions_router)

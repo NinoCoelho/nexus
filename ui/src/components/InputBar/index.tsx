@@ -12,12 +12,14 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { transcribeAudio, uploadVaultFiles } from "../../api";
+import { transcribeAudio, uploadVaultFiles, type SlashCommand } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
+import SlashCommandPicker, { type SlashPickerHandle } from "../SlashCommandPicker";
 import "../InputBar.css";
 import { useAudioRecorder } from "./useAudioRecorder";
 import { useMentionPicker } from "./useMentionPicker";
+import { useSlashPicker } from "./useSlashPicker";
 import AttachmentsBar from "./AttachmentsBar";
 import ModelBadge from "./ModelBadge";
 import RecordingIndicator from "./RecordingIndicator";
@@ -58,6 +60,7 @@ export default function InputBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mentionRef = useRef<MentionPickerHandle>(null);
+  const slashRef = useRef<SlashPickerHandle>(null);
   const toast = useToast();
 
   const [uploading, setUploading] = useState(false);
@@ -66,6 +69,25 @@ export default function InputBar({
 
   const { recording, audio, setAudio, levels, seconds, startRecording, stopRecording, cancelRecording, clearAudio } = useAudioRecorder();
   const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(value, onChange);
+  const { slash, setSlash, commands: slashCommands } = useSlashPicker(value);
+
+  const insertSlashCommand = (cmd: SlashCommand) => {
+    // Replace the leading "/<query>" with "/<name>" and (if the command takes
+    // args) leave a trailing space so the user can type the args directly.
+    const trailing = cmd.args_hint ? " " : "";
+    const next = `/${cmd.name}${trailing}`;
+    onChange(next);
+    setSlash(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+      }
+    });
+  };
 
   const hasContent = value.trim().length > 0 || (attachments && attachments.length > 0) || !!audio;
 
@@ -110,6 +132,7 @@ export default function InputBar({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mention && mentionRef.current?.handleKey(e)) return;
+    if (slash && slashRef.current?.handleKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (disabled || transcribing) return;
@@ -182,6 +205,14 @@ export default function InputBar({
             loading={mentionLoading}
             onSelect={(node) => insertMention(node, textareaRef)}
             onClose={() => setMention(null)}
+          />
+        )}
+        {slash && !mention && (
+          <SlashCommandPicker
+            ref={slashRef}
+            results={slashCommands}
+            onSelect={insertSlashCommand}
+            onClose={() => setSlash(null)}
           />
         )}
         <div className="input-bar">

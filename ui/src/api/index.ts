@@ -7,6 +7,7 @@ export * from "./kanban";
 export * from "./datatable";
 export * from "./dispatch";
 export * from "./chat";
+export * from "./commands";
 export * from "./skills";
 export * from "./settings";
 export * from "./config";

@@ -6,9 +6,18 @@ agent layer, from a model that genuinely had nothing to say. This module
 estimates the request size up-front so the agent can refuse the turn with an
 actionable error instead of looping on `empty_response`.
 
-Token counting is intentionally cheap: chars/4 with a small overhead per
-message. Real tokenization belongs to the upstream — we only need to be
-roughly right (within ~30%) to flag obvious overflows.
+Token counting is intentionally cheap. Real tokenization belongs to the
+upstream — we only need to be roughly right (within ~30%) to flag obvious
+overflows. Heuristics:
+
+- Plain English text: ≈4 chars/token.
+- Non-ASCII-heavy text (Portuguese, Chinese, Cyrillic, …) and JSON tool
+  payloads (URL-rich, escape-rich): ≈3 chars/token. Tokenizers split runs of
+  punctuation, accents, and percent-encoded URLs much more aggressively than
+  English prose.
+
+The previous chars/4 default systematically under-counted Portuguese + JSON
+sessions and let real overflows slip past pre-flight.
 """
 
 from __future__ import annotations
@@ -18,15 +27,24 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-# Conservative chars-per-token. Mixed Portuguese/English/JSON averages closer
-# to 3.5; we round down to 4 to under-count and only flag clear overflows.
-_CHARS_PER_TOKEN = 4
 # Per-message overhead (role markers, separators, etc).
 _PER_MESSAGE_TOKENS = 4
-# Headroom kept for the model's own output and any system prompt the
-# provider injects. If the request alone fills the window, the model has
-# zero budget left for a reply.
-_OUTPUT_HEADROOM_TOKENS = 2048
+# Headroom kept for the model's own output and the system prompt the agent
+# loop injects (skills index, vault context, USER.md). Was 2048; bumped to
+# 4096 because Nexus's system prompt with a populated skills index easily
+# exceeds 2K tokens on its own, and z.ai gives no error when the combined
+# request overflows — it just returns empty content.
+_OUTPUT_HEADROOM_TOKENS = 4096
+
+# Tunable chars/token ratios.
+_CHARS_PER_TOKEN_ASCII = 4
+_CHARS_PER_TOKEN_DENSE = 3
+# Sample size for the per-message ratio decision. 512 chars is enough to
+# detect non-ASCII or JSON without paying O(n) per long tool result.
+_SAMPLE_LEN = 512
+# Above this fraction of non-ASCII chars in the sample, treat the text as
+# "dense" and use the lower chars/token ratio.
+_NON_ASCII_THRESHOLD = 0.05
 
 
 @dataclass
@@ -57,22 +75,47 @@ def _msg_text(msg: Any) -> str:
         return str(content)
 
 
+def _chars_per_token(text: str) -> int:
+    """Pick chars/token ratio for a text segment.
+
+    JSON-shaped (starts with `[` / `{`) and non-ASCII-heavy text gets the
+    denser ratio because tokenizers emit ~30% more tokens per char for those
+    inputs. Plain English keeps the looser ratio.
+    """
+    if not text:
+        return _CHARS_PER_TOKEN_ASCII
+    sample = text[:_SAMPLE_LEN]
+    stripped = sample.lstrip()
+    if stripped[:1] in ("[", "{"):
+        return _CHARS_PER_TOKEN_DENSE
+    non_ascii = sum(1 for c in sample if ord(c) > 127)
+    if non_ascii / max(1, len(sample)) > _NON_ASCII_THRESHOLD:
+        return _CHARS_PER_TOKEN_DENSE
+    return _CHARS_PER_TOKEN_ASCII
+
+
 def estimate_tokens(messages: Iterable[Any]) -> int:
-    """Rough chars/4 estimate, plus a flat per-message overhead."""
+    """Rough chars/token estimate with per-message ratio + flat overhead.
+
+    Tool-call payloads (always JSON) get the dense ratio unconditionally.
+    """
     total = 0
     n = 0
     for m in messages:
         text = _msg_text(m)
-        total += len(text)
+        if text:
+            total += len(text) // _chars_per_token(text)
         n += 1
-        # Tool-call payloads carried alongside content
-        tcs = getattr(m, "tool_calls", None) or (m.get("tool_calls") if isinstance(m, dict) else None)
+        tcs = getattr(m, "tool_calls", None) or (
+            m.get("tool_calls") if isinstance(m, dict) else None
+        )
         if tcs:
             try:
-                total += len(json.dumps(tcs, default=str, ensure_ascii=False))
+                tc_text = json.dumps(tcs, default=str, ensure_ascii=False)
             except (TypeError, ValueError):
-                total += sum(len(str(tc)) for tc in tcs)
-    return total // _CHARS_PER_TOKEN + n * _PER_MESSAGE_TOKENS
+                tc_text = " ".join(str(tc) for tc in tcs)
+            total += len(tc_text) // _CHARS_PER_TOKEN_DENSE
+    return total + n * _PER_MESSAGE_TOKENS
 
 
 def check_overflow(

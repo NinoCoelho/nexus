@@ -84,6 +84,29 @@ async def chat_stream_route(
         current = asyncio.current_task()
         if current is not None:
             _inflight_turns[session.id] = current
+
+        # Slash-command fast path: handle /compact, /clear, /title, /usage,
+        # /help (and any future commands in the SLASH_COMMANDS registry)
+        # without spinning up the agent loop. The handler streams its own
+        # delta + done events and replaces the session history.
+        from .chat_slash import is_slash_command, dispatch as _slash_dispatch
+        slash = is_slash_command(req.message)
+        handler = _slash_dispatch(slash) if slash else None
+        if handler is not None:
+            try:
+                async for chunk in handler(
+                    store=store,
+                    session_id=session.id,
+                    pre_turn_history=pre_turn_history,
+                    user_message=req.message,
+                ):
+                    yield chunk
+            finally:
+                CURRENT_SESSION_ID.reset(token)
+                if _inflight_turns.get(session.id) is current:
+                    _inflight_turns.pop(session.id, None)
+            return
+
         # Eagerly persist the user message so a crash between POST
         # and the first delta doesn't lose the prompt the user typed.
         try:

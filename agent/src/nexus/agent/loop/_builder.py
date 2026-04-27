@@ -93,6 +93,17 @@ def build_loom_agent(
         # Reset iter counter for next turn
         _iter_counter[0] = 0
 
+    # Per-model context window lookup: pulls from the same model registry
+    # the rest of Nexus uses. Returning 0 disables the check for unknown
+    # models — preserves backwards compat for ad-hoc model ids.
+    def _model_context_window(model_id: str) -> int:
+        if not nexus_cfg or not getattr(nexus_cfg, "models", None):
+            return 0
+        for entry in nexus_cfg.models:
+            if entry.id == model_id or entry.model_name == model_id:
+                return int(getattr(entry, "context_window", 0) or 0)
+        return 0
+
     loom_cfg = AgentConfig(
         max_iterations=max_iter,
         model=getattr(getattr(nexus_cfg, "agent", None), "default_model", None)
@@ -105,6 +116,12 @@ def build_loom_agent(
         limit_message_builder=_limit_msg,
         affirmatives=_AFFIRMATIVES,
         negatives=_NEGATIVES,
+        # Loom now owns the pre-LLM-call context-window check. Headroom
+        # covers the system prompt (skills index can be 5-10K tokens) plus
+        # the model output budget. Tighter than loom's default 4K because
+        # Nexus's system prompt is comparatively heavy.
+        context_window=_model_context_window,
+        overflow_output_headroom=8192,
     )
     graphrag_engine = None
     if nexus_cfg:

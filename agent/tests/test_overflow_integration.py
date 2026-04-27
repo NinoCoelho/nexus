@@ -157,3 +157,130 @@ async def test_preflight_skipped_when_window_unconfigured(tmp_path: Path) -> Non
     )
     assert overflow is None
     await agent.aclose()
+
+
+async def test_dead_placeholders_are_stripped_before_overflow_check(
+    agent_with_window,
+) -> None:
+    """Persisted ``[empty_response]`` rows must not count toward the next
+    turn's pre-flight estimate. Otherwise a single overflow snowballs across
+    every retry."""
+    agent, spy = agent_with_window
+    # Borderline-fitting history: filler that's just inside the window once
+    # the placeholder is stripped, but spills over if we double-count it.
+    filler = ChatMessage(role=Role.USER, content="x" * 600_000)
+    placeholder = ChatMessage(
+        role=Role.ASSISTANT, content="[empty_response] ", tool_calls=[]
+    )
+    history = [filler, placeholder]
+    events = []
+    async for ev in agent.run_turn_stream(
+        "retry",
+        history=history,
+        context=None,
+        session_id="s4",
+        model_id="test/model",
+    ):
+        events.append(ev)
+    # Provider was dialed because the placeholder was filtered out.
+    assert spy.stream_calls >= 1
+    err = next((e for e in events if e.get("type") == "error"), None)
+    # If the placeholder had leaked through, it would have triggered the
+    # pre-flight overflow with a context_overflow reason. It didn't.
+    if err is not None:
+        assert err.get("reason") != "context_overflow"
+    await agent.aclose()
+
+
+async def test_dead_placeholder_with_real_tool_calls_is_kept(
+    agent_with_window,
+) -> None:
+    """The strip is targeted: an assistant message that has tool_calls is
+    real conversation and must survive."""
+    from nexus.agent.loop.agent import _is_dead_placeholder
+    from nexus.agent.llm import ToolCall
+
+    real = ChatMessage(
+        role=Role.ASSISTANT,
+        content="[empty_response] ",
+        tool_calls=[ToolCall(id="1", name="x", arguments={})],
+    )
+    assert _is_dead_placeholder(real) is False
+
+    plain = ChatMessage(role=Role.ASSISTANT, content="hello", tool_calls=[])
+    assert _is_dead_placeholder(plain) is False
+
+    placeholder = ChatMessage(
+        role=Role.ASSISTANT, content="[empty_response] ", tool_calls=[]
+    )
+    assert _is_dead_placeholder(placeholder) is True
+
+
+async def test_wrapper_forwards_loom_context_overflow_event(
+    tmp_path: Path,
+) -> None:
+    """The intra-loop overflow guard now lives in loom (it has visibility
+    into the system prompt; the nexus wrapper does not). The wrapper's job
+    is to forward loom's ``context_overflow`` event to the UI banner path.
+
+    We mock loom emitting the event directly — the contract that matters is
+    the translation layer, not the underlying detection."""
+
+    cfg = _cfg_with_window(window=20_000)
+    spy = _SpyProvider()
+    agent = Agent(
+        provider=spy,
+        registry=SkillRegistry(tmp_path / "skills"),
+        nexus_cfg=cfg,
+    )
+
+    async def _fake_loom_stream(messages, *, model_id=None):  # type: ignore[no-untyped-def]
+        # Loom's overflow guard fired at iteration 1 after a tool result
+        # ballooned the prompt. It emits the typed event followed by Done.
+        yield {
+            "type": "context_overflow",
+            "message": "Conversation is too large for this model: ~250,000 input tokens vs. 20,000 window (1250% of capacity, no room for a reply). Compact the history or start a new session.",
+            "estimated_input_tokens": 250_000,
+            "context_window": 20_000,
+            "headroom": 1_000,
+            "iteration": 1,
+        }
+        yield {
+            "type": "done",
+            "stop_reason": "stop",
+            "context": {"messages": [], "context_overflow": True},
+            "model": "test/model",
+            "iterations": 1,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "tool_calls": 0,
+        }
+
+    agent._loom.run_turn_stream = _fake_loom_stream  # type: ignore[attr-defined]
+
+    out_events: list[dict] = []
+    async for ev in agent.run_turn_stream(
+        "anything",
+        history=None,
+        context=None,
+        session_id="s_intra",
+        model_id="test/model",
+    ):
+        out_events.append(ev)
+
+    # Wrapper translated the typed loom event into the structured error
+    # the UI's existing banner code already understands.
+    err = next(
+        (
+            e for e in out_events
+            if e.get("type") == "error" and e.get("reason") == "context_overflow"
+        ),
+        None,
+    )
+    assert err is not None, (
+        f"expected context_overflow error, got: {[e.get('type') for e in out_events]}"
+    )
+    assert err["context_window"] == 20_000
+    assert err["estimated_input_tokens"] == 250_000
+    assert "compact_history" in err.get("actions", [])
+    await agent.aclose()
