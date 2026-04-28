@@ -75,8 +75,13 @@ export interface AuthProbe {
 
 export async function probeTunnelAuth(): Promise<AuthProbe> {
   try {
+    // cache: "no-store" forces the request to bypass the browser's HTTP cache
+    // entirely. iOS Safari otherwise (occasionally, depending on SW state and
+    // history heuristics) serves a stale auth-status response, which would
+    // mask token rotations the server already knows about.
     const res = await fetch(`${BASE}/tunnel/auth-status`, {
       credentials: "include",
+      cache: "no-store",
     });
     if (!res.ok) {
       return { requiresRedeem: false, tunnelActive: false, proxied: false };
@@ -133,6 +138,7 @@ export async function redeemTunnelCode(code: string): Promise<void> {
   const res = await fetch(`${BASE}/tunnel/redeem`, {
     method: "POST",
     credentials: "include",
+    cache: "no-store",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code }),
   });

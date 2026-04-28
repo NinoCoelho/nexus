@@ -70,7 +70,8 @@ def test_start_produces_token_and_code() -> None:
         s = mgr.start(port=18989)
     assert s.active is True
     assert s.public_url == "https://abc-words-here.trycloudflare.com"
-    assert s.share_url == "https://abc-words-here.trycloudflare.com/"
+    assert s.share_url is not None
+    assert s.share_url.startswith("https://abc-words-here.trycloudflare.com/?v=")
     # Code is 8 chars + a dash, formatted XXXX-XXXX.
     assert s.code is not None
     assert len(s.code) == 9 and s.code[4] == "-"
@@ -125,6 +126,27 @@ def test_generated_code_uses_safe_alphabet() -> None:
     # No 0/O/1/I/L confusable characters.
     for ch in "01OIL":
         assert ch not in raw
+
+
+def test_share_url_includes_cache_buster_per_activation() -> None:
+    """Each activation produces a distinct share_url so iOS Safari can't reuse
+    a stale cached response under the same hostname+path."""
+    mgr = TunnelManager()
+    nonces: set[str] = set()
+    for _ in range(3):
+        with patch(
+            "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+            return_value=_fake_start_tunnel(),
+        ):
+            s = mgr.start(port=18989)
+        assert s.share_url is not None
+        # Path is "/" with a "?v=" query buster.
+        assert "/?v=" in s.share_url
+        # Pull the nonce out and confirm uniqueness across activations.
+        nonces.add(s.share_url.split("?v=", 1)[1])
+        with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+            mgr.stop()
+    assert len(nonces) == 3
 
 
 def test_quick_url_regex_matches_cloudflared_stderr() -> None:

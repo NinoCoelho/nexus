@@ -77,6 +77,11 @@ class TunnelManager:
         self._code: str | None = None
         self._started_at: float | None = None
         self._process: subprocess.Popen[bytes] | None = None
+        # Per-activation nonce baked into share_url. Forces a fresh HTTP cache
+        # key on the redeemer's device every time, so phones that hold a stale
+        # cached response from a previous session (iOS Safari is especially
+        # aggressive here) hit a clean URL and reload from network.
+        self._share_nonce: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -94,6 +99,7 @@ class TunnelManager:
 
             token = secrets.token_urlsafe(32)
             code = _generate_code()
+            nonce = secrets.token_urlsafe(6)
             proc, public_url = cloudflared_provider.start_tunnel(port=port)
 
             self._active = True
@@ -103,6 +109,7 @@ class TunnelManager:
             self._code = code
             self._started_at = time.time()
             self._process = proc
+            self._share_nonce = nonce
             log.info("tunnel started: %s", public_url)
             return self._status_locked()
 
@@ -118,6 +125,7 @@ class TunnelManager:
             self._code = None
             self._started_at = None
             self._process = None
+            self._share_nonce = None
             log.info("tunnel stopped")
             return self._status_locked()
 
@@ -156,11 +164,19 @@ class TunnelManager:
     # ── internals ─────────────────────────────────────────────────────────
 
     def _status_locked(self) -> TunnelStatus:
+        share_url = None
+        if self._active and self._public_url:
+            # `?v=<nonce>` is a cache buster, not a credential. The query is
+            # ignored by the SPA's React Router (which routes by pathname) and
+            # by the auth middleware (which switches on path + headers). It
+            # exists solely to make the device's HTTP cache treat each
+            # activation's URL as new, even on a recycled subdomain.
+            share_url = f"{self._public_url}/?v={self._share_nonce}"
         return TunnelStatus(
             active=self._active,
             provider=self._provider,
             public_url=self._public_url,
-            share_url=self._public_url + "/" if self._active and self._public_url else None,
+            share_url=share_url,
             code=self._code,
             started_at=self._started_at,
         )
