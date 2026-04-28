@@ -33,6 +33,10 @@ log = logging.getLogger(__name__)
 _engine: Any | None = None
 _home: Path | None = None
 _last_init_error: str | None = None
+# Tracks whether graphrag was enabled in config the last time initialize()
+# ran. Lets get_health() report "disabled" distinctly from "init failed",
+# so the UI can show an actionable message instead of a generic one.
+_last_enabled: bool = False
 # Independent of ``_last_init_error``: a non-fatal warning surfaced to the
 # UI when the configured embedder differs from the one used to build the
 # current vector store. The engine still initializes (so reads still work
@@ -67,6 +71,7 @@ def get_health() -> dict[str, Any]:
     """
     return {
         "ready": _engine is not None,
+        "enabled": _last_enabled,
         "error": _last_init_error,
         "stale_warning": _stale_warning,
     }
@@ -117,14 +122,31 @@ async def initialize(cfg: Any) -> None:
     does **not** propagate so the rest of the app keeps starting; the UI
     surfaces the failure via ``/graph/knowledge/health``.
     """
-    global _engine, _home, _last_init_error, _stale_warning
+    global _engine, _home, _last_init_error, _stale_warning, _last_enabled
 
     graphrag_cfg = getattr(cfg, "graphrag", None)
     if graphrag_cfg is None or not getattr(graphrag_cfg, "enabled", False):
         log.info("[graphrag] disabled in config")
         _last_init_error = None
         _stale_warning = None
+        _last_enabled = False
         return
+    _last_enabled = True
+
+    try:
+        await _initialize_engine(cfg, graphrag_cfg)
+    except Exception as exc:  # noqa: BLE001
+        # Catch-all so any import / model-load failure surfaces to the UI
+        # via /graph/knowledge/health instead of being lost in lifespan logs.
+        # _resolve_embedder's GraphRAGConfigError is already caught inside
+        # _initialize_engine; this picks up everything else.
+        _last_init_error = f"{type(exc).__name__}: {exc}"
+        log.exception("[graphrag] init failed")
+
+
+async def _initialize_engine(cfg: Any, graphrag_cfg: Any) -> None:
+    """Inner init body, separated so initialize() can blanket-catch failures."""
+    global _engine, _home, _last_init_error, _stale_warning
 
     if _engine is not None:
         try:

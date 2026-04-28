@@ -348,9 +348,21 @@ async def graphrag_reindex(
     from ...agent.graphrag_manager import get_engine, get_health, index_vault_streaming
     health = get_health()
     if not health.get("ready"):
+        # Differentiate "user disabled it" from "init blew up" so the UI can
+        # show an actionable message. Without this, both surface as the same
+        # generic "GraphRAG not ready" string.
+        if health.get("error"):
+            detail = health["error"]
+        elif not health.get("enabled"):
+            detail = (
+                "GraphRAG is disabled. Set `graphrag.enabled = true` in "
+                "~/.nexus/config.toml and restart Nexus."
+            )
+        else:
+            detail = "GraphRAG not ready"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=health.get("error") or "GraphRAG not ready",
+            detail=detail,
         )
     if get_engine() is None:
         raise HTTPException(

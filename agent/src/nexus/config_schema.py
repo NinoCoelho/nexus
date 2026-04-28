@@ -96,7 +96,12 @@ class GraphRAGOntologyConfig(BaseModel):
 
 
 class GraphRAGConfig(BaseModel):
-    enabled: bool = False
+    # Default to on: the .app bundle ships fastembed + spaCy pre-cached and
+    # `uv sync` pulls them in for dev, so the builtin embedder + extractor
+    # work offline with zero config. Keeping this False meant fresh installs
+    # showed "GraphRAG not ready" on first launch even though everything
+    # needed was already on disk.
+    enabled: bool = True
     embedding_model_id: str = ""
     extraction_model_id: str = ""
     embeddings: GraphRAGEmbeddingConfig = Field(default_factory=GraphRAGEmbeddingConfig)
