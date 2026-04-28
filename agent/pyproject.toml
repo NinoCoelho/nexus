@@ -55,6 +55,13 @@ pdf = [
     "Pillow>=10.0",
     "fpdf2>=2.7",
 ]
+# Bundled `markitdown` skill converts arbitrary docs (PDF/DOCX/PPTX/XLSX/…) to
+# Markdown so the agent and the vault FTS index can read them. The wrapper
+# script also pip-installs on first run if this extra wasn't preinstalled.
+# Install with: `uv sync --extra markitdown`
+markitdown = [
+    "markitdown[all]>=0.0.1",
+]
 
 [project.scripts]
 nexus = "nexus.cli:app"
