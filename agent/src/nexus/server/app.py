@@ -162,9 +162,20 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
                 # reopens then land on the pairing screen via AuthGate. XHR-style
                 # callers (Accept: application/json or */*) still get a 401 the
                 # SPA's fetch interceptor can react to.
+                #
+                # Cache-Control: no-store on both branches — iOS Safari otherwise
+                # caches 4xx and even 30x responses on the device, which means a
+                # phone that ever saw the old 401 (before this redirect existed)
+                # would keep serving it until the user manually cleared site data.
                 if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
-                    return RedirectResponse("/", status_code=307)
-                return JSONResponse({"detail": "unauthorized"}, status_code=401)
+                    r = RedirectResponse("/", status_code=307)
+                    r.headers["Cache-Control"] = "no-store"
+                    return r
+                return JSONResponse(
+                    {"detail": "unauthorized"},
+                    status_code=401,
+                    headers={"Cache-Control": "no-store"},
+                )
             return await call_next(request)
 
         if path in _AUTH_FREE_PATHS:
@@ -181,12 +192,20 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
                 # path; tunnel traffic should never carry secrets in the URL.
                 qp_token = request.query_params.get("token", "")
                 if qp_token != self._access_token:
-                    return JSONResponse({"detail": "unauthorized"}, status_code=401)
+                    return JSONResponse(
+                        {"detail": "unauthorized"},
+                        status_code=401,
+                        headers={"Cache-Control": "no-store"},
+                    )
             return await call_next(request)
 
         # Non-loopback request, tunnel inactive, no access token configured →
         # close it down rather than silently allowing it.
-        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return JSONResponse(
+            {"detail": "unauthorized"},
+            status_code=401,
+            headers={"Cache-Control": "no-store"},
+        )
 
 from ..agent.ask_user_tool import AskUserHandler
 from ..agent.context import CURRENT_SESSION_ID
