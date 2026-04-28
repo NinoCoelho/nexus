@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 
 _AUTH_FREE_PATHS = {"/health"}
@@ -157,6 +157,13 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
             if not _tunnel_path_requires_auth(path):
                 return await call_next(request)
             if not tunnel.validate_token(provided):
+                # Top-level browser navigation (Accept: text/html) sees the SPA
+                # shell instead of raw JSON: deep-link refreshes and stale-cookie
+                # reopens then land on the pairing screen via AuthGate. XHR-style
+                # callers (Accept: application/json or */*) still get a 401 the
+                # SPA's fetch interceptor can react to.
+                if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+                    return RedirectResponse("/", status_code=307)
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
             return await call_next(request)
 

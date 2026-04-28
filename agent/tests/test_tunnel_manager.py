@@ -287,6 +287,35 @@ def test_proxied_request_via_cf_ray_header_requires_cookie(_simulated_active: An
     assert r.status_code == 401
 
 
+def test_browser_navigation_to_protected_path_redirects_to_root(_simulated_active: Any) -> None:
+    """Phone refreshes a deep link / opens a stale URL → 307 to ``/`` so the SPA
+    can render the pairing screen, not a raw JSON 401."""
+    c = _fresh_client()
+    r = c.get(
+        "/sessions/abc",
+        headers={
+            "x-forwarded-for": "203.0.113.5",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 307
+    assert r.headers.get("location") == "/"
+
+
+def test_xhr_to_protected_path_still_returns_401(_simulated_active: Any) -> None:
+    """Fetch-style XHR callers still get a 401 the SPA's interceptor can react to."""
+    c = _fresh_client()
+    r = c.get(
+        "/sessions",
+        headers={
+            "x-forwarded-for": "203.0.113.5",
+            "accept": "application/json",
+        },
+    )
+    assert r.status_code == 401
+
+
 def test_auth_status_reports_proxied_true_via_tunnel(_simulated_active: Any) -> None:
     """Tunnel-side requests should be tagged proxied=true so the SPA hides admin UI."""
     c = _fresh_client()
