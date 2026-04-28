@@ -291,6 +291,14 @@ def main() -> int:
     if (ui_dist / "index.html").is_file():
         os.environ.setdefault("NEXUS_UI_DIST", str(ui_dist))
 
+    # Point the skill registry at the bundled skills tree. In a dev checkout
+    # the registry walks up from its own __file__ to find <repo>/skills, but
+    # in the bundle that path doesn't exist — without this, a fresh install
+    # starts with zero seeded builtin skills.
+    skills_dir = here / "skills"
+    if skills_dir.is_dir():
+        os.environ.setdefault("NEXUS_BUILTIN_SKILLS_DIR", str(skills_dir))
+
     llama_proc, llama_port, llama_model = _start_llama(here)
     if llama_proc is not None:
         atexit.register(_stop_proc, llama_proc)

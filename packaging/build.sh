@@ -90,16 +90,19 @@ PY="$STAGE/python/bin/python3"
 
 echo "==> Installing nexus + dependencies into bundled Python"
 "$PY" -m pip install --upgrade pip
-# Install loom first (PEP 660 editable would point outside the bundle, so do a
-# regular install from the local path — this copies it into site-packages).
-"$PY" -m pip install "$LOOM_DIR"
-# Install nexus without re-resolving loom (already satisfied).
-"$PY" -m pip install --no-deps "$REPO_ROOT/agent"
-# Install nexus's deps (loom-framework already satisfied; pip will skip it).
-"$PY" -m pip install \
-  "uvicorn[standard]>=0.29" "openai>=1.50" "anthropic>=0.40" tomli_w \
-  "psutil>=5.9" "python-multipart>=0.0.26" "fastembed>=0.4" "spacy>=3.8" \
-  "faster-whisper>=1.0"
+# Install the ddgs fork pinned in agent/pyproject.toml's [tool.uv.sources].
+# pip doesn't honor [tool.uv.sources], so without this we'd silently fall
+# back to upstream PyPI ddgs when loom's [search] extra is resolved below.
+"$PY" -m pip install "git+https://github.com/NinoCoelho/ddgs"
+# Install loom with the full set of extras nexus pulls in (matches
+# loom-framework[anthropic,acp,tui,graphrag,search,scrape] in agent/pyproject.toml).
+# PEP 660 editable would point outside the bundle, so do a regular install
+# — this copies loom into site-packages.
+"$PY" -m pip install "$LOOM_DIR[anthropic,acp,tui,graphrag,search,scrape]"
+# Install nexus with all declared deps. [pdf] adds Pillow + fpdf2 so the
+# bundled pdf-maker skill works offline. pip sees loom-framework already
+# satisfied and won't try to fetch it from PyPI.
+"$PY" -m pip install "$REPO_ROOT/agent[pdf]"
 
 # Move site-packages into the staged Resources layout expected by bootstrap.py.
 SITE_SRC="$(/usr/bin/find "$STAGE/python/lib" -maxdepth 2 -type d -name 'site-packages' | head -1)"
@@ -176,6 +179,18 @@ if [[ -n "$LLM_REPO" ]]; then
 EOF
 fi
 
+# Stage bundled skills so they ship with the .app and get seeded into
+# ~/.nexus/skills/ on first run (see SkillRegistry._seed_new_builtins).
+# Without this, the install on a fresh machine starts with zero skills.
+if [[ -d "$REPO_ROOT/skills" ]]; then
+  echo "==> Staging bundled skills"
+  mkdir -p "$STAGE/skills"
+  # rsync skips macOS metadata files (.DS_Store) and the format doc.
+  /usr/bin/rsync -a \
+    --exclude='.DS_Store' --exclude='SKILL_FORMAT.md' \
+    "$REPO_ROOT/skills/" "$STAGE/skills/"
+fi
+
 cp "$PACKAGING/bootstrap.py" "$STAGE/bootstrap.py"
 ( cd "$LOOM_DIR" && git rev-parse HEAD > "$STAGE/loom_version.txt" 2>/dev/null || true )
 
@@ -197,6 +212,7 @@ cp -R "$STAGE/site-packages"   "$RES/site-packages"
 cp -R "$STAGE/ui"              "$RES/ui"
 [[ -d "$STAGE/models" ]] && cp -R "$STAGE/models" "$RES/models"
 [[ -d "$STAGE/llama" ]]  && cp -R "$STAGE/llama"  "$RES/llama"
+[[ -d "$STAGE/skills" ]] && cp -R "$STAGE/skills" "$RES/skills"
 [[ -f "$STAGE/llm.json" ]] && cp "$STAGE/llm.json" "$RES/llm.json"
 cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
 [[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"

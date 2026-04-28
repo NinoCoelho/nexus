@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -16,8 +17,18 @@ from .types import Skill
 log = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+# Dev-checkout default: <repo>/skills, five levels up from this file.
+# The packaged .app overrides this via NEXUS_BUILTIN_SKILLS_DIR (set by
+# bootstrap.py) because the bundle layout doesn't match the repo layout.
 _BUNDLED_SKILLS_DIR = Path(__file__).parent.parent.parent.parent.parent / "skills"
 _SEEDED_MARKER = ".seeded-builtins.json"
+
+
+def _bundled_skills_dir() -> Path:
+    override = os.environ.get("NEXUS_BUILTIN_SKILLS_DIR")
+    if override:
+        return Path(override)
+    return _BUNDLED_SKILLS_DIR
 
 
 class SkillRegistry:
@@ -41,7 +52,7 @@ class SkillRegistry:
         that predate the marker are migrated by treating any currently
         installed skill as already-seeded.
         """
-        bundled = _BUNDLED_SKILLS_DIR
+        bundled = _bundled_skills_dir()
         if not bundled.is_dir():
             return
 
