@@ -3,14 +3,14 @@
 The `Agent` itself is session-agnostic — it runs a turn against any
 message with any history, and doesn't know which `/chat` session
 triggered the call. Tools that *do* need that routing information
-(currently `ask_user`, eventually `terminal` and HITL credential
-prompts) read it from a `ContextVar` that the server sets at the
-entry to each `/chat` call.
+(currently `ask_user`, `terminal`, and HITL credential prompts)
+read it from a `ContextVar` that the server sets at the entry to
+each `/chat` call.
 
-Using a ContextVar instead of plumbing `session_id` through every
-tool handler keeps the Agent surface clean and makes the coupling
-explicit: a tool that reads `CURRENT_SESSION_ID` is announcing that
-it needs the server context.
+``CURRENT_SESSION_ID`` is re-exported from :mod:`loom.hitl.broker`
+so that nexus and any loom-native tool (e.g. ``loom.tools.terminal``)
+share the same ContextVar object — setting it once in the chat
+handler is visible to both sides without double-set ceremony.
 
 Default is None: tests that call `run_turn` without going through
 the server don't set it and don't invoke HITL tools. Handlers that
@@ -22,8 +22,9 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
-CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
-    "CURRENT_SESSION_ID", default=None
+from loom.context import (  # noqa: F401 — re-export
+    CURRENT_SESSION_ID,
+    SUBAGENT_DEPTH,
 )
 
 # Tracks the chain of card_ids whose lane-prompts have been auto-dispatched
@@ -35,11 +36,3 @@ CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
 DISPATCH_CHAIN: ContextVar[tuple[str, ...]] = ContextVar(
     "DISPATCH_CHAIN", default=()
 )
-
-# Current sub-agent nesting depth. 0 in the parent (top-level chat) turn,
-# incremented each time spawn_subagents recurses. Read by the spawn_subagents
-# tool handler to decide whether further nesting is allowed (capped at
-# MAX_SUBAGENT_DEPTH in subagent_tool.py). ContextVars copy into asyncio
-# tasks, so the depth propagates through asyncio.gather without explicit
-# plumbing.
-SUBAGENT_DEPTH: ContextVar[int] = ContextVar("SUBAGENT_DEPTH", default=0)

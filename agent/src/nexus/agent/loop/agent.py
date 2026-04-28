@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 import loom.types as lt
 from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
 from ..llm import ChatMessage, LLMProvider, Role, StreamEvent
-from ..terminal_tool import TerminalHandler
 from ...skills.registry import SkillRegistry
 from ._builder import build_loom_agent
 from .helpers import (
@@ -174,9 +173,9 @@ class Agent:
     @_ask_user_handler.setter
     def _ask_user_handler(self, value: AskUserHandler | None) -> None:
         self._handlers.ask_user = value
-        # Also update terminal handler when ask_user changes
-        if value is not None and self._handlers.terminal is None:
-            self._handlers.terminal = TerminalHandler(ask_user_handler=value)
+        # Terminal tool is wired separately by app.py — it depends on the
+        # session_store's HitlBroker, not on AskUserHandler directly. No
+        # auto-wire here.
 
     @property
     def _terminal_handler(self) -> Any:

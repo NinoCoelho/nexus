@@ -93,9 +93,9 @@ def build_tool_registry(
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
     from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
     from nexus.tools.ontology_tool import ONTOLOGY_MANAGE_TOOL, make_ontology_handler
+    from loom.tools.subagent import SpawnSubagentsTool
+    from loom.tools.terminal import TERMINAL_TOOL_SPEC
     from nexus.agent.ask_user_tool import ASK_USER_TOOL
-    from nexus.agent.terminal_tool import TERMINAL_TOOL
-    from nexus.tools.subagent_tool import SPAWN_SUBAGENTS_TOOL, handle_spawn_subagents
 
     registry = ToolRegistry()
     state = StateToolHandler(skill_registry)
@@ -207,20 +207,14 @@ def build_tool_registry(
     registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
 
     # spawn_subagents — run N agent loops in parallel with fresh contexts.
-    # Reads parent session id and current nesting depth from contextvars set
-    # by the streaming chat handler (CURRENT_SESSION_ID) and the runner
-    # itself (SUBAGENT_DEPTH); the closure resolves ``handlers.subagent_runner``
-    # at dispatch time so app.py can late-bind without rebuilding the registry.
-    async def _spawn_subagents(args: dict) -> str:
-        from nexus.agent.context import CURRENT_SESSION_ID, SUBAGENT_DEPTH
-        return await handle_spawn_subagents(
-            args,
-            runner=handlers.subagent_runner,
-            parent_session_id=CURRENT_SESSION_ID.get(),
-            depth=SUBAGENT_DEPTH.get(),
-        )
-
-    registry.register(_SimpleToolHandler(SPAWN_SUBAGENTS_TOOL, _spawn_subagents))
+    # Loom's SpawnSubagentsTool reads CURRENT_SESSION_ID and SUBAGENT_DEPTH
+    # from loom.context contextvars (which nexus.agent.context re-exports)
+    # and resolves the runner at dispatch time via runner_getter — so
+    # app.py can late-bind handlers.subagent_runner without rebuilding
+    # the registry.
+    registry.register(
+        SpawnSubagentsTool(runner_getter=lambda: handlers.subagent_runner)
+    )
 
     # datatable_manage
     async def _datatable(args: dict) -> str:
@@ -269,10 +263,12 @@ def build_tool_registry(
         if h is None:
             return '{"ok": false, "error": "terminal unavailable: handler not wired"}'
         result = await h.invoke(args)
-        return result.to_text()
+        # ``h`` is loom.tools.terminal.TerminalTool which returns a loom
+        # ``ToolResult`` whose ``.text`` is already the canonical JSON envelope.
+        return result.text
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
-    registry.register(_SimpleToolHandler(TERMINAL_TOOL, _terminal))
+    registry.register(_SimpleToolHandler(TERMINAL_TOOL_SPEC, _terminal))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.

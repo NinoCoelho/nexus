@@ -265,10 +265,15 @@ def create_app(
     # Late-bind the handler onto the agent. Constructed-outside-the-app
     # callers (``main.py``) don't know about HITL; constructing the
     # handler here keeps all the server-side wiring in one place.
-    from ..agent.terminal_tool import TerminalHandler
+    # The terminal tool is loom-native (loom.tools.terminal.TerminalTool)
+    # and reads its session id from the shared CURRENT_SESSION_ID ContextVar.
+    from loom.tools.terminal import TerminalTool
 
     agent._ask_user_handler = ask_user_handler
-    agent._terminal_handler = TerminalHandler(ask_user_handler=ask_user_handler)
+    agent._terminal_handler = TerminalTool(
+        broker=sessions.broker,
+        yolo_getter=lambda: settings_store.get().yolo_mode,
+    )
     # Give the agent the SessionStore so the streaming loop can persist
     # parked HITL snapshots and the resume entry-point can rehydrate them.
     agent._sessions = sessions
