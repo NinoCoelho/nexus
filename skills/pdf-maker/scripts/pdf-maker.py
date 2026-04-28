@@ -175,6 +175,9 @@ def wrap_text(text, font, max_width, draw):
     return lines or [""]
 
 
+INTER_BLOCK_GAP = 0.55  # fraction of line height between distinct blocks
+
+
 def measure_blocks(blocks, max_w, draw, font_scale=1.0, spacing_mult=1.35):
     """Measure total height of rendered blocks. Returns (items, total_h)."""
     BASE_SIZES = {
@@ -186,7 +189,7 @@ def measure_blocks(blocks, max_w, draw, font_scale=1.0, spacing_mult=1.35):
     SPACING = {"tight": 1.2, "normal": 1.35, "loose": 1.5}
 
     rendered = []
-    for block in blocks:
+    for block_idx, block in enumerate(blocks):
         sp = SPACING.get(block.get("spacing", "normal"), 1.35)
         role = block.get("role", "body_regular")
         text = block.get("text", "")
@@ -203,12 +206,17 @@ def measure_blocks(blocks, max_w, draw, font_scale=1.0, spacing_mult=1.35):
         full_text = f"{prefix} {text}".strip() if prefix else text
 
         wrapped = wrap_text(full_text, font, max_w, draw)
-        for wl in wrapped:
+        for i, wl in enumerate(wrapped):
             bbox = draw.textbbox((0, 0), wl, font=font)
             h = bbox[3] - bbox[1]
-            rendered.append({"text": wl, "font": font, "block": block, "height": h, "spacing": sp})
+            is_block_end = (i == len(wrapped) - 1) and (block_idx < len(blocks) - 1)
+            rendered.append({"text": wl, "font": font, "block": block, "height": h, "spacing": sp, "is_block_end": is_block_end})
 
-    total_h = sum(int(r["height"] * r["spacing"]) for r in rendered)
+    total_h = 0
+    for r in rendered:
+        total_h += int(r["height"] * r["spacing"])
+        if r.get("is_block_end"):
+            total_h += int(r["height"] * INTER_BLOCK_GAP)
     return rendered, total_h
 
 
@@ -255,6 +263,8 @@ def draw_blocks(draw, blocks, palette, page_w, page_h, margin_x, margin_top, mar
 
         draw.text((x, y), text, fill=color, font=font)
         y += int(r["height"] * r["spacing"])
+        if r.get("is_block_end"):
+            y += int(r["height"] * INTER_BLOCK_GAP)
 
 
 # ─── BACKGROUNDS ───────────────────────────────────────────────
@@ -398,9 +408,11 @@ def blueprint_carousel(slides_data, theme="midnight"):
             elif line.startswith("**"):
                 blocks.append({"role": "title_bold", "text": line.replace("**", ""), "color": "text", "align": "center" if stype in ("HOOK", "CUT", "QUESTION") else "left"})
             elif line.startswith("→"):
-                blocks.append({"role": "body_semibold", "text": line.lstrip("→ "), "color": "accent", "align": "left", "prefix": "→"})
+                arrow_align = "center" if stype in ("HOOK", "CUT", "QUESTION") else "left"
+                blocks.append({"role": "body_semibold", "text": line.lstrip("→ "), "color": "accent", "align": arrow_align, "prefix": "→"})
             elif line.startswith("—"):
-                blocks.append({"role": "muted", "text": line.lstrip("— "), "color": "muted", "align": "left", "prefix": "—"})
+                dash_align = "center" if stype in ("HOOK", "CUT", "QUESTION") else "left"
+                blocks.append({"role": "muted", "text": line.lstrip("— "), "color": "muted", "align": dash_align, "prefix": "—"})
             else:
                 align = "center" if stype in ("HOOK", "CUT", "QUESTION") else "left"
                 blocks.append({"role": "body_regular", "text": line, "color": "text_secondary", "align": align})
