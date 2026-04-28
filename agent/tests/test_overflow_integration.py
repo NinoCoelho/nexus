@@ -192,28 +192,56 @@ async def test_dead_placeholders_are_stripped_before_overflow_check(
     await agent.aclose()
 
 
-async def test_dead_placeholder_with_real_tool_calls_is_kept(
-    agent_with_window,
-) -> None:
-    """The strip is targeted: an assistant message that has tool_calls is
-    real conversation and must survive."""
-    from nexus.agent.loop.agent import _is_dead_placeholder
+async def test_dead_placeholder_strip_semantics(agent_with_window) -> None:
+    """Placeholder assistants get stripped *regardless of tool_calls*.
+
+    Real-world failure mode: when an assistant emits tool_call deltas
+    and then the LLM returns empty (z.ai pattern), persistence stamps
+    ``[empty_response]`` onto the assistant *with* the orphan tool_calls
+    list. The tools never ran, so there's no following TOOL message —
+    feeding that to the next LLM call breaks the assistant→tool_call→
+    tool sequence the prompt template assumes, triggering more empty
+    responses. The strip must drop these too, plus any TOOL message
+    whose id matches an orphan call."""
+    from nexus.agent.loop.agent import (
+        _has_dead_placeholder_prefix,
+        _strip_dead_placeholders,
+    )
     from nexus.agent.llm import ToolCall
 
-    real = ChatMessage(
-        role=Role.ASSISTANT,
-        content="[empty_response] ",
-        tool_calls=[ToolCall(id="1", name="x", arguments={})],
-    )
-    assert _is_dead_placeholder(real) is False
-
     plain = ChatMessage(role=Role.ASSISTANT, content="hello", tool_calls=[])
-    assert _is_dead_placeholder(plain) is False
+    assert _has_dead_placeholder_prefix(plain) is False
 
-    placeholder = ChatMessage(
+    placeholder_no_tcs = ChatMessage(
         role=Role.ASSISTANT, content="[empty_response] ", tool_calls=[]
     )
-    assert _is_dead_placeholder(placeholder) is True
+    assert _has_dead_placeholder_prefix(placeholder_no_tcs) is True
+
+    placeholder_with_orphan_tcs = ChatMessage(
+        role=Role.ASSISTANT,
+        content="[empty_response] ",
+        tool_calls=[ToolCall(id="orphan-1", name="web_search", arguments={})],
+    )
+    assert _has_dead_placeholder_prefix(placeholder_with_orphan_tcs) is True
+
+    # End-to-end: a [empty_response] with orphan tool_calls AND a stray TOOL
+    # message tied to one of those ids both get dropped on the way to the LLM.
+    history = [
+        ChatMessage(role=Role.USER, content="hi"),
+        placeholder_with_orphan_tcs,
+        # Stray TOOL referring to the orphan id (rare but possible if the
+        # tool ran and result landed before the [empty_response] stamp).
+        ChatMessage(
+            role=Role.TOOL,
+            content="leftover",
+            tool_call_id="orphan-1",
+            name="web_search",
+        ),
+        ChatMessage(role=Role.USER, content="continue"),
+    ]
+    out = _strip_dead_placeholders(history)
+    assert [m.role for m in out] == [Role.USER, Role.USER]
+    assert [m.content for m in out] == ["hi", "continue"]
 
 
 async def test_wrapper_forwards_loom_context_overflow_event(

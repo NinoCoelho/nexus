@@ -35,20 +35,32 @@ TraceCallback = Callable[[str, dict[str, Any]], None]
 # context (and on retry, accelerates the very overflow that caused them).
 # They stay in the SQLite history so the UI can still render the partial-turn
 # banner — only the LLM ingress filters them out.
+#
+# ``[interrupted]`` is included because mid-stream interruptions persist with
+# an aspirational tool_calls list whose tools never actually ran — which
+# leaves the LLM staring at an assistant→tool_call→<no result>→user
+# sequence that confuses many providers (z.ai GLM among them) into another
+# empty response on the next turn. The tool_calls are noise without their
+# results; drop the whole message and any TOOL stragglers tied to those
+# orphan call ids.
 _DROP_ASSISTANT_PLACEHOLDERS = (
     "[empty_response]",
     "[llm_error]",
     "[upstream_timeout]",
     "[crashed]",
+    "[interrupted]",
+    "[cancelled]",
 )
 
 
-def _is_dead_placeholder(msg: ChatMessage) -> bool:
-    """True when an assistant message carries only a no-signal status prefix
-    and no tool_calls — i.e. nothing the model can build on."""
+def _has_dead_placeholder_prefix(msg: ChatMessage) -> bool:
+    """True when ``msg``'s content begins with a no-signal status prefix.
+    Tool_calls are deliberately ignored: an assistant that emitted a
+    placeholder produced no usable content for the model to build on,
+    and any tool_calls it carries were never executed (no TOOL message
+    follows them in history) — feeding them to the LLM corrupts the
+    assistant→tool_call→tool sequence the prompt template assumes."""
     if msg.role != Role.ASSISTANT:
-        return False
-    if msg.tool_calls:
         return False
     text = (msg.content or "").strip()
     if not text:
@@ -60,10 +72,33 @@ def _is_dead_placeholder(msg: ChatMessage) -> bool:
 
 
 def _strip_dead_placeholders(history: list[ChatMessage]) -> list[ChatMessage]:
-    """Drop trailing-or-orphan assistant placeholders from history before
-    feeding it to the LLM. Preserves user/tool messages and any assistant
-    message with real content or tool_calls."""
-    return [m for m in history if not _is_dead_placeholder(m)]
+    """Drop assistant placeholders + their orphan tool messages before
+    feeding history to the LLM.
+
+    Two-pass:
+      1. Collect the tool_call_ids on each dead-placeholder assistant.
+      2. Drop both those assistants and any TOOL message keyed to one of
+         the collected ids (catches the rare case where a tool DID run
+         but its parent assistant got marked partial after the fact).
+    """
+    orphan_tc_ids: set[str] = set()
+    for m in history:
+        if _has_dead_placeholder_prefix(m) and m.tool_calls:
+            for tc in m.tool_calls:
+                if tc.id:
+                    orphan_tc_ids.add(tc.id)
+    out: list[ChatMessage] = []
+    for m in history:
+        if _has_dead_placeholder_prefix(m):
+            continue
+        if (
+            m.role == Role.TOOL
+            and m.tool_call_id
+            and m.tool_call_id in orphan_tc_ids
+        ):
+            continue
+        out.append(m)
+    return out
 
 
 class Agent:
