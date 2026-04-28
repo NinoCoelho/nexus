@@ -72,7 +72,7 @@
      element directly. */
 }
 
-.ug-canvas > div { width: 100%; height: 100%; }
+.ug-canvas > div:first-child { width: 100%; height: 100%; }
 .ug-canvas canvas { display: block; }
 
 .ug-empty {
