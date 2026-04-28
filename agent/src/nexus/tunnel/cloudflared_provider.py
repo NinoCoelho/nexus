@@ -191,12 +191,59 @@ def _read_url_from_stderr(proc: subprocess.Popen[bytes], timeout: float) -> str:
     )
 
 
+def cleanup_orphans(*, exclude_pid: int | None = None) -> int:
+    """Terminate any cloudflared subprocess we previously spawned.
+
+    macOS does not reap subprocess descendants when the parent (the .app's
+    bootstrap.py / uvicorn) dies — they get re-parented to launchd and keep
+    running. Without this, Cmd+Q while sharing is active leaves an orphaned
+    tunnel still publishing the URL. The next app launch then boots with
+    ``TunnelManager.is_active() == False`` while traffic is still arriving
+    over the orphan, and the auth middleware's tunnel branch is bypassed.
+
+    Identification is by executable path (``~/.nexus/bin/cloudflared``), so
+    user- or homebrew-installed cloudflareds elsewhere on the system are not
+    touched. Best-effort: never raises.
+
+    Returns the number of processes terminated.
+    """
+    try:
+        import psutil  # local import — start path is rarely hot
+    except ImportError:
+        return 0
+    binary = str(_binary_path())
+    killed = 0
+    for p in psutil.process_iter(["pid", "exe"]):
+        try:
+            exe = p.info.get("exe") or ""
+            if exe != binary:
+                continue
+            if exclude_pid is not None and p.info.get("pid") == exclude_pid:
+                continue
+            try:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except psutil.TimeoutExpired:
+                    p.kill()
+                killed += 1
+                log.info("cleaned up orphan cloudflared pid=%d", p.info.get("pid"))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return killed
+
+
 def start_tunnel(*, port: int, timeout: float = 30.0) -> tuple[subprocess.Popen[bytes], str]:
     """Spawn cloudflared and return ``(process, public_url)``.
 
     Auto-installs the binary on first use. The caller owns the returned
     ``Popen`` handle and must pass it back to ``stop_tunnel`` to clean up.
+    Also reaps any orphaned cloudflared from a previous app run before
+    spawning a new one — see :func:`cleanup_orphans`.
     """
+    cleanup_orphans()
     install_binary()
     binary = _binary_path()
     cmd = [

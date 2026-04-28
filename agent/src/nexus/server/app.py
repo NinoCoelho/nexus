@@ -304,6 +304,19 @@ def create_app(
             event_bus.set_loop(asyncio.get_running_loop())
         except Exception:
             log.exception("event_bus setup failed")
+
+        # Reap orphaned cloudflared tunnels from a previous .app instance.
+        # Without this, the in-memory TunnelManager boots with active=False
+        # while a re-parented cloudflared keeps publishing the old URL — any
+        # phone hitting that URL then trips the no-active-tunnel 401 fallback,
+        # bypassing the redirect-to-/ branch.
+        try:
+            from ..tunnel import cloudflared_provider
+            killed = cloudflared_provider.cleanup_orphans()
+            if killed:
+                log.info("cleaned up %d orphan cloudflared process(es) on startup", killed)
+        except Exception:
+            log.exception("cloudflared orphan cleanup failed")
         # ``NEXUS_SKIP_LOCAL_LLM_RESTART=1`` skips both the orphan reap and
         # the model-restart path. Tests set it because:
         #   - reap_orphans() walks the host process table and kills any
