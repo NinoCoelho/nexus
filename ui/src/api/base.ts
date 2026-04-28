@@ -52,22 +52,25 @@ export const IS_CAPACITOR =
 /**
  * Tunnel auth bootstrap.
  *
- * The new flow keeps secrets out of URLs entirely. The phone navigates to a
- * plain URL like `https://abc.ngrok-free.app/`, the SPA loads (the middleware
- * lets static UI through), and then we probe `/tunnel/auth-status`. If the
- * server reports `requires_redeem`, the app renders a login form where the
- * user types the short access code shown on the desktop. The form POSTs to
- * `/tunnel/redeem`, which validates the code and seats an HttpOnly cookie —
+ * The flow keeps secrets out of URLs entirely. The phone navigates to a
+ * plain URL like `https://words-here.trycloudflare.com/`, the SPA loads (the
+ * middleware lets static UI through), and then we probe `/tunnel/auth-status`.
+ * If the server reports `requires_redeem`, the app renders a login form where
+ * the user types the short access code shown on the desktop. The form POSTs
+ * to `/tunnel/redeem`, which validates the code and seats an HttpOnly cookie —
  * everything from that point on works exactly like a same-origin install.
  *
- * Code never touches the URL bar, browser history, or the ngrok request log.
+ * Code never touches the URL bar, browser history, or the tunnel request log.
  */
 
 export interface AuthProbe {
   /** True only when the server says we're behind an active tunnel without a cookie. */
   requiresRedeem: boolean;
-  /** True when the server is currently exposing itself via ngrok. */
+  /** True when the server is currently exposing itself via the tunnel. */
   tunnelActive: boolean;
+  /** True when *this* request reached the server through the tunnel (i.e. we are the
+   * remote redeemer, not the loopback owner). UI uses this to hide admin-only surfaces. */
+  proxied: boolean;
 }
 
 export async function probeTunnelAuth(): Promise<AuthProbe> {
@@ -76,16 +79,54 @@ export async function probeTunnelAuth(): Promise<AuthProbe> {
       credentials: "include",
     });
     if (!res.ok) {
-      return { requiresRedeem: false, tunnelActive: false };
+      return { requiresRedeem: false, tunnelActive: false, proxied: false };
     }
     const data = await res.json();
     return {
       requiresRedeem: Boolean(data.requires_redeem),
       tunnelActive: Boolean(data.tunnel_active),
+      proxied: Boolean(data.proxied),
     };
   } catch {
-    return { requiresRedeem: false, tunnelActive: false };
+    return { requiresRedeem: false, tunnelActive: false, proxied: false };
   }
+}
+
+/**
+ * Custom event fired when any API call to BASE returns 401. AuthGate listens
+ * for this so a stale or invalidated cookie sends the user back to the pairing
+ * screen instead of leaving them with a broken UI full of "unauthorized" errors.
+ */
+export const AUTH_401_EVENT = "nexus:auth-401";
+
+// One-time global fetch interceptor. We watch every response that targeted our
+// API base URL; on 401 we dispatch AUTH_401_EVENT so AuthGate can re-probe.
+// /tunnel/redeem is exempt — its 401 means "wrong code", which the login form
+// already surfaces. Re-probing on it would be harmless but wasteful.
+if (typeof window !== "undefined" && !(window as any).__nexus401Patched) {
+  (window as any).__nexus401Patched = true;
+  const original = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const res = await original(input as any, init);
+    try {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : (input as Request).url;
+      if (
+        res.status === 401 &&
+        url.startsWith(BASE) &&
+        !url.startsWith(`${BASE}/tunnel/redeem`)
+      ) {
+        window.dispatchEvent(new CustomEvent(AUTH_401_EVENT));
+      }
+    } catch {
+      // never let the interceptor break the response chain
+    }
+    return res;
+  };
 }
 
 export async function redeemTunnelCode(code: string): Promise<void> {

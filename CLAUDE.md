@@ -25,7 +25,7 @@ Backend (from `agent/`, managed by `uv`):
 uv sync                                  # install deps (needs ../../loom sibling)
 uv run nexus serve --port 18989          # run FastAPI server in foreground (always 127.0.0.1)
 uv run nexus daemon start | status | stop | logs  # background daemon (PID + log in ~/.nexus/)
-uv run nexus tunnel start | stop | status # public ngrok tunnel with login-form auth
+uv run nexus tunnel start | stop | status # public Cloudflare Quick Tunnel with login-form auth
 uv run nexus chat                        # interactive TUI chat
 uv run nexus config init | show          # ~/.nexus/config.toml bootstrap
 uv run pytest                            # full test suite (asyncio_mode=auto)
@@ -87,10 +87,10 @@ Two channels on each session:
 
 The server **always** binds to `127.0.0.1`. There is no `--host` flag and no supported way to expose it on `0.0.0.0`. Remote access is only via a tunnel that runs as a local client connecting *to* the loopback bind:
 
-- `nexus tunnel start` (managed ngrok with built-in login flow), or
-- bring-your-own — cloudflared, tailscale, ssh `-L`, etc., all targeting `localhost:18989`.
+- `nexus tunnel start` (managed Cloudflare Quick Tunnel — auto-downloads `cloudflared` on first use, no signup required), or
+- bring-your-own — tailscale, ssh `-L`, etc., all targeting `localhost:18989`.
 
-The auth gate is `LoopbackOrTokenMiddleware` in [agent/src/nexus/server/app.py](agent/src/nexus/server/app.py). It splits requests on whether proxy headers (`x-forwarded-for` / `x-forwarded-host` / `ngrok-trace-id`) are present:
+The auth gate is `LoopbackOrTokenMiddleware` in [agent/src/nexus/server/app.py](agent/src/nexus/server/app.py). It splits requests on whether proxy headers (`x-forwarded-for` / `x-forwarded-host` / `cf-ray` / `cf-connecting-ip`) are present:
 
 - **No proxy headers + loopback IP** → bundled UI talking to its own server, bypass auth.
 - **Proxy headers present** → request came through a tunnel; require the cookie unless the path is in the explicit tunnel-public allowlist (`/tunnel/redeem`, `/tunnel/auth-status`, SPA shell + assets).
@@ -99,7 +99,7 @@ Sharing flow ([agent/src/nexus/tunnel/manager.py](agent/src/nexus/tunnel/manager
 1. **Long token** (32-byte urlsafe) — set as `HttpOnly Secure SameSite=Strict` cookie after redemption. Never appears in URLs.
 2. **Short access code** (8 base32 chars, formatted `XXXX-XXXX`, formatted-display only — confusable chars `0/O/1/I/L` excluded) — typed on the phone's `TunnelLoginScreen`. Travels only in the POST body of `/tunnel/redeem`. Per-IP rate-limited (8 wrong attempts / 10 min) on top of the already-large entropy.
 
-`/tunnel/start|stop|status|authtoken` are loopback-only at the route level (`_require_loopback`), so even a tunnel-authenticated client can't take over the tunnel admin surface. FastAPI's auto-`/docs`, `/redoc`, `/openapi.json` are disabled (single-user app, not a public API). Baseline browser-hardening response headers are set by `SecurityHeadersMiddleware`.
+`/tunnel/start|stop|status|install` are loopback-only at the route level (`_require_loopback`), so even a tunnel-authenticated client can't take over the tunnel admin surface. FastAPI's auto-`/docs`, `/redoc`, `/openapi.json` are disabled (single-user app, not a public API). Baseline browser-hardening response headers are set by `SecurityHeadersMiddleware`.
 
 ## Conventions
 

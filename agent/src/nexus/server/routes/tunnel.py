@@ -2,7 +2,7 @@
 
 Three groups of endpoints, with different auth surfaces:
 
-* **Admin** (``/tunnel/start|stop|status|authtoken``) — loopback-only. The user's
+* **Admin** (``/tunnel/start|stop|status|install``) — loopback-only. The user's
   desktop UI calls these to manage the tunnel; never reachable from the tunnel
   itself, even with a valid cookie.
 * **Public over tunnel** (``/tunnel/redeem``, ``/tunnel/auth-status``) — designed
@@ -24,10 +24,9 @@ import time
 from collections import deque
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from ...tunnel import get_manager
-from ..deps import get_app_state
 
 router = APIRouter()
 
@@ -64,13 +63,31 @@ def _record_failed_attempt(key: str) -> None:
         _rate_attempts.setdefault(key, deque()).append(time.monotonic())
 
 
+def _request_is_proxied(request: Request) -> bool:
+    """Did this request hop through the public tunnel?
+
+    Mirror of ``server.app._is_proxied`` (kept inlined to avoid importing app.py
+    from a routes module). Used by ``/tunnel/auth-status`` to tell the SPA whether
+    it's running on the loopback owner's machine or on a remote redeemer's
+    device — the UI hides admin-only surfaces in the latter case.
+    """
+    h = request.headers
+    return bool(
+        h.get("x-forwarded-for")
+        or h.get("x-forwarded-host")
+        or h.get("cf-ray")
+        or h.get("cf-connecting-ip")
+        or h.get("ngrok-trace-id")
+    )
+
+
 def _client_key(request: Request) -> str:
     """Best-available identifier for rate-limit bucketing.
 
-    ngrok forwards the original client IP in ``x-forwarded-for``; we honor it
-    when present (otherwise every tunnel request looks like 127.0.0.1 to us
-    and an attacker could share a global bucket). The first IP in the list is
-    the original client; intermediate hops follow.
+    The tunnel forwards the original client IP in ``x-forwarded-for``; we
+    honor it when present (otherwise every tunnel request looks like
+    127.0.0.1 to us and an attacker could share a global bucket). The first
+    IP in the list is the original client; intermediate hops follow.
     """
     fwd = request.headers.get("x-forwarded-for", "")
     if fwd:
@@ -89,18 +106,6 @@ def _require_loopback(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Tunnel admin is loopback-only")
 
 
-def _resolve_authtoken(cfg: Any) -> str:
-    """Pull the ngrok authtoken from secrets first, then env var."""
-    from ... import secrets as _secrets
-    saved = _secrets.get("ngrok_authtoken")
-    if saved:
-        return saved
-    env_name = "NGROK_AUTHTOKEN"
-    if cfg is not None and getattr(cfg, "tunnel", None) is not None:
-        env_name = cfg.tunnel.authtoken_env or "NGROK_AUTHTOKEN"
-    return os.environ.get(env_name, "").strip()
-
-
 def _server_port() -> int:
     """Pick the port the FastAPI server is listening on. Defaults to 18989."""
     raw = os.environ.get("NEXUS_PORT", "").strip()
@@ -111,7 +116,7 @@ def _server_port() -> int:
 
 def _admin_status_dict() -> dict[str, Any]:
     """Full status, including the short code. Returned only to loopback callers."""
-    from ...tunnel import ngrok_provider
+    from ...tunnel import cloudflared_provider
     s = get_manager().status()
     return {
         "active": s.active,
@@ -120,7 +125,7 @@ def _admin_status_dict() -> dict[str, Any]:
         "share_url": s.share_url,
         "code": s.code,  # short access code; never leave loopback with this
         "started_at": s.started_at,
-        "binary_installed": ngrok_provider.binary_installed(),
+        "binary_installed": cloudflared_provider.binary_installed(),
     }
 
 
@@ -134,33 +139,16 @@ async def tunnel_status(request: Request) -> dict[str, Any]:
 
 
 @router.post("/tunnel/start")
-async def tunnel_start(
-    request: Request,
-    app_state: dict[str, Any] = Depends(get_app_state),
-) -> dict[str, Any]:
+async def tunnel_start(request: Request) -> dict[str, Any]:
     _require_loopback(request)
-    cfg = app_state.get("cfg")
-    authtoken = _resolve_authtoken(cfg)
-    if not authtoken:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "ngrok authtoken not configured. Set it in Settings → Sharing, "
-                "or export NGROK_AUTHTOKEN in your shell."
-            ),
-        )
-    region = (
-        cfg.tunnel.region if cfg is not None and getattr(cfg, "tunnel", None) is not None
-        else "us"
-    )
-    # The first activation triggers a ~10MB binary download inside start_ngrok.
+    # The first activation triggers a ~30MB binary download inside start_tunnel.
     # Push the call onto a thread so the event loop stays responsive — without
     # this, SSE clients see the keepalive stream stall during install.
     import asyncio
     try:
         await asyncio.to_thread(
             get_manager().start,
-            port=_server_port(), provider="ngrok", authtoken=authtoken, region=region,
+            port=_server_port(), provider="cloudflare",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -174,46 +162,20 @@ async def tunnel_stop(request: Request) -> dict[str, Any]:
     return _admin_status_dict()
 
 
-@router.post("/tunnel/authtoken")
-async def tunnel_set_authtoken(request: Request, body: dict[str, Any]) -> dict[str, Any]:
-    """Save the ngrok authtoken into the secrets store (mode 0600)."""
-    _require_loopback(request)
-    token = (body or {}).get("authtoken", "")
-    if not isinstance(token, str):
-        raise HTTPException(status_code=400, detail="authtoken must be a string")
-    token = token.strip()
-    from ... import secrets as _secrets
-    if not token:
-        _secrets.delete("ngrok_authtoken")
-        return {"ok": True, "configured": False}
-    _secrets.set("ngrok_authtoken", token)
-    return {"ok": True, "configured": True}
-
-
-@router.get("/tunnel/authtoken")
-async def tunnel_get_authtoken(request: Request) -> dict[str, Any]:
-    """Report whether an authtoken has been saved (never returns the value)."""
-    _require_loopback(request)
-    from ... import secrets as _secrets
-    return {"configured": bool(_secrets.get("ngrok_authtoken"))}
-
-
 @router.post("/tunnel/install")
 async def tunnel_install_binary(request: Request) -> dict[str, Any]:
-    """Idempotently install the ngrok binary.
+    """Idempotently install the cloudflared binary.
 
     Loopback-only. Pre-flight step before activating sharing — lets the UI show
-    a "downloading ngrok…" state explicitly instead of having the user wait
-    silently inside ``POST /tunnel/start``. Safe to call when already installed
-    (no-op).
+    a "downloading…" state explicitly instead of having the user wait silently
+    inside ``POST /tunnel/start``. Safe to call when already installed (no-op).
     """
     _require_loopback(request)
     import asyncio
-    from ...tunnel import ngrok_provider
+    from ...tunnel import cloudflared_provider
     try:
-        # Run in a thread; the install does I/O that would block the event loop.
-        path = await asyncio.to_thread(ngrok_provider.install_binary)
-    except ngrok_provider.NgrokError as e:
+        path = await asyncio.to_thread(cloudflared_provider.install_binary)
+    except cloudflared_provider.CloudflaredError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return {"ok": True, "path": str(path), "installed": True}
 
@@ -265,15 +227,20 @@ async def tunnel_auth_status(request: Request) -> dict[str, Any]:
     Reachable from the tunnel without a cookie precisely so the SPA can probe
     auth on first load. Never echoes any secret back — only a yes/no.
     """
+    proxied = _request_is_proxied(request)
     mgr = get_manager()
     if not mgr.is_active():
         # No tunnel running. Either we're on loopback (and don't need auth) or
         # the request shouldn't have reached us at all — be permissive so dev /
         # local-network use keeps working.
-        return {"requires_redeem": False, "tunnel_active": False}
+        return {"requires_redeem": False, "tunnel_active": False, "proxied": proxied}
 
     cookie = request.cookies.get(TUNNEL_COOKIE, "")
     auth_header = request.headers.get("authorization", "")
     bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
     has_cookie = mgr.validate_token(cookie) or mgr.validate_token(bearer)
-    return {"requires_redeem": not has_cookie, "tunnel_active": True}
+    return {
+        "requires_redeem": not has_cookie,
+        "tunnel_active": True,
+        "proxied": proxied,
+    }

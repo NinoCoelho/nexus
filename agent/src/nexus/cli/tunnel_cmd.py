@@ -15,7 +15,10 @@ import urllib.request
 
 import typer
 
-tunnel_app = typer.Typer(help="Public sharing tunnel (ngrok)", no_args_is_help=True)
+tunnel_app = typer.Typer(
+    help="Public sharing tunnel (Cloudflare Quick Tunnel)",
+    no_args_is_help=True,
+)
 
 
 def _api_base() -> str:
@@ -32,7 +35,7 @@ def _request(method: str, path: str, body: dict | None = None) -> dict:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url=url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
         detail = ""
@@ -70,6 +73,8 @@ def _print_status(s: dict) -> None:
     typer.echo("Tunnel: active")
     typer.echo(f"  Public URL : {s.get('public_url')}")
     typer.echo(f"  Share link : {s.get('share_url')}")
+    if s.get("code"):
+        typer.echo(f"  Access code: {s.get('code')}")
     share_url = s.get("share_url") or ""
     if share_url:
         typer.echo("")
@@ -97,24 +102,14 @@ def tunnel_status() -> None:
     _print_status(s)
 
 
-@tunnel_app.command("set-token")
-def tunnel_set_token(
-    token: str = typer.Argument(..., help="ngrok authtoken (from dashboard.ngrok.com)"),
-) -> None:
-    """Save the ngrok authtoken to ``~/.nexus/secrets.toml`` (mode 0600)."""
-    _request("POST", "/tunnel/authtoken", {"authtoken": token})
-    typer.echo("ngrok authtoken saved.")
-
-
 @tunnel_app.command("install")
 def tunnel_install() -> None:
-    """Download + install the ngrok binary.
+    """Download + install the cloudflared binary.
 
-    Idempotent — safe to run repeatedly. The binary lands in pyngrok's default
-    cache (``~/.config/ngrok/ngrok`` on Linux, ``~/Library/.../ngrok`` on macOS).
+    Idempotent — safe to run repeatedly. The binary lands in ``~/.nexus/bin/``.
     Calling this ahead of ``nexus tunnel start`` lets you confirm the download
     works in isolation, but ``start`` also installs on demand if needed.
     """
-    typer.echo("Installing ngrok binary (this may take a moment)...")
+    typer.echo("Installing cloudflared binary (this may take a moment)...")
     res = _request("POST", "/tunnel/install")
-    typer.echo(f"ngrok installed at {res.get('path')}")
+    typer.echo(f"cloudflared installed at {res.get('path')}")

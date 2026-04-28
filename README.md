@@ -45,7 +45,7 @@
 
 Nexus is a self-evolving agentic platform with a Python FastAPI backend and a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime; manage a markdown knowledge vault with FTS + GraphRAG; operate Obsidian-compatible kanban boards, an iCal-style calendar, and DuckDB-backed datatables; trigger turns from calendar events; and interact with users through a human-in-the-loop approval system that streams via SSE and Web Push.
 
-The agentic loop is powered by **Loom** — a reusable framework that provides the tool-calling iteration engine, LLM provider abstractions, session persistence, HITL broker, heartbeat drivers, GraphRAG memory, and error classification. Nexus layers on domain tools (vault, kanban, calendar, datatables, skill management, ontology), a rich web UI, TOML-based config, optional local LLMs (llama.cpp), public tunneling (ngrok), and self-evolution.
+The agentic loop is powered by **Loom** — a reusable framework that provides the tool-calling iteration engine, LLM provider abstractions, session persistence, HITL broker, heartbeat drivers, GraphRAG memory, and error classification. Nexus layers on domain tools (vault, kanban, calendar, datatables, skill management, ontology), a rich web UI, TOML-based config, optional local LLMs (llama.cpp), public tunneling (Cloudflare Quick Tunnel, no account needed), and self-evolution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -65,7 +65,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 │      │         │         │         │            │          │    │
 │  ┌───▼───┐ ┌───▼────┐ ┌──▼─────┐ ┌─▼────┐ ┌─────▼────┐ ┌───▼──┐ │
 │  │ Vault │ │Kanban+ │ │Skills+ │ │HITL +│ │Local LLM │ │Tunnel│ │
-│  │GraphRAG│ │Calendar│ │ Guard │ │ Push │ │llama.cpp │ │ngrok │ │
+│  │GraphRAG│ │Calendar│ │ Guard │ │ Push │ │llama.cpp │ │tunnel│ │
 │  └───────┘ └────────┘ └───────┘ └──────┘ └──────────┘ └──────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -88,7 +88,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Ontology Tool** | Agent-managed entity/relation schema for GraphRAG over the vault |
 | **Human-in-the-Loop** | `ask_user` (confirm/choice/text) and `terminal` (shell) gated by SSE approval dialogs; YOLO mode for unattended runs |
 | **Web Push** | Background push notifications for HITL prompts when the tab is closed (VAPID) |
-| **Public Tunnel** | One-click ngrok exposure with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs |
+| **Public Tunnel** | One-click Cloudflare Quick Tunnel (no signup) with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs |
 | **Read-Only Share Links** | Publish a session as a read-only public link with a generated token |
 | **Audio Transcription** | Local or remote transcription with live waveform + cancel UI |
 | **Backup / Restore** | `nexus backup create` and `restore` for the entire `~/.nexus/` data directory |
@@ -121,7 +121,7 @@ graph TB
         SSE_T["SSE: /chat/stream (per-turn)"]
         SSE_E["SSE: /chat/{sid}/events (session)"]
         PUSH["Web Push (VAPID)"]
-        TUN["Tunnel Manager (ngrok)"]
+        TUN["Tunnel Manager (cloudflared)"]
     end
 
     subgraph "Agent Core"
@@ -501,9 +501,9 @@ Nexus can run an LLM entirely on the user's machine via llama.cpp:
 
 ### Public Tunnel (Sharing)
 
-`agent/src/nexus/tunnel/` wraps a tunnel provider (ngrok) so the local server can be exposed temporarily through a login-form flow:
+`agent/src/nexus/tunnel/` wraps a tunnel provider (Cloudflare Quick Tunnel via `cloudflared`) so the local server can be exposed temporarily through a login-form flow. The `cloudflared` binary is auto-downloaded on first activation — no signup or authtoken required.
 
-- `POST /tunnel/start` opens the ngrok tunnel and generates two secrets:
+- `POST /tunnel/start` opens the tunnel and generates two secrets:
   - **long token** (32 bytes) — set as an `HttpOnly Secure SameSite=Strict` cookie after redemption. Never appears in any URL.
   - **short access code** (8 chars from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, formatted `XXXX-XXXX`) — typed by the user on the phone's login form. Never appears in any URL either; only travels in the POST body of `/tunnel/redeem`.
 - `GET /tunnel/status` (loopback only) returns the URL **and** the access code so the desktop UI can display them.
@@ -515,9 +515,8 @@ Nexus can run an LLM entirely on the user's machine via llama.cpp:
 
 Nexus **always** binds to `127.0.0.1`. There is no `--host` flag and no way to expose the listener on `0.0.0.0` from the CLI. Remote access is exclusively via a tunnel that runs as a local client connecting *to* the loopback bind:
 
-- `nexus tunnel start` — managed ngrok tunnel with the auth flow described above.
-- `cloudflared tunnel --url http://localhost:18989` — same idea, bring-your-own.
-- Tailscale, ssh `-L`, etc. — same idea.
+- `nexus tunnel start` — managed Cloudflare Quick Tunnel with the auth flow described above (auto-downloads `cloudflared`, no signup).
+- Tailscale, ssh `-L`, etc. — same idea, bring-your-own.
 
 The middleware separates **direct loopback** (no proxy headers → bundled UI on the user's own machine, zero-config bypass) from **tunnel-proxied** (proxy headers present → cookie required). Tunnel-public surface is a strict allowlist:
 
@@ -525,7 +524,7 @@ The middleware separates **direct loopback** (no proxy headers → bundled UI on
 - Static SPA shell + `/assets`, `/icons`, `/manifest.json`, `/favicon.ico` — harmless, no secrets baked in.
 - Everything else (`/chat`, `/sessions`, `/vault`, …) requires the cookie.
 
-`/tunnel/start|stop|status|authtoken` are loopback-only at the route level; even with a valid cookie, a tunnel-proxied request to those returns 403.
+`/tunnel/start|stop|status|install` are loopback-only at the route level; even with a valid cookie, a tunnel-proxied request to those returns 403.
 
 FastAPI's auto-generated `/docs`, `/redoc`, `/openapi.json` are disabled — the API surface isn't part of the public contract. Standard browser-hardening response headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`) are set by `SecurityHeadersMiddleware`.
 
@@ -655,7 +654,7 @@ nexus/
 │       ├── usage_pricing.py
 │       ├── trajectory.py               # RL trajectory logger
 │       ├── push/                       # Web Push (VAPID)
-│       ├── tunnel/                     # ngrok tunnel manager
+│       ├── tunnel/                     # Cloudflare Quick Tunnel manager
 │       ├── local_llm/                  # llama.cpp lifecycle, HF search, downloads
 │       ├── heartbeat_drivers/
 │       │   └── calendar_trigger/       # Vault calendar event firing
@@ -826,16 +825,18 @@ nexus daemon install [--user|--system]
 nexus daemon uninstall [--user|--system]
 ```
 
-The listener always binds to `127.0.0.1`. To expose remotely, use `nexus tunnel start` (or any local-client tunnel like cloudflared / tailscale).
+The listener always binds to `127.0.0.1`. To expose remotely, use `nexus tunnel start` (or any local-client tunnel like tailscale / ssh `-L`).
 
 ### Tunnel (Public Sharing)
 
 ```bash
-nexus tunnel set-token <ngrok-authtoken>     # one-time setup
 nexus tunnel start                            # opens tunnel, prints URL + access code + QR
 nexus tunnel status
 nexus tunnel stop
+nexus tunnel install                          # (optional) pre-download cloudflared binary
 ```
+
+Uses Cloudflare Quick Tunnel (via the `cloudflared` binary, auto-downloaded on first use). No signup, no authtoken, no account.
 
 The phone navigates to the URL, the SPA detects the missing cookie, shows a login form. The user types the 8-character access code → server seats an HttpOnly cookie → app loads. The code is the credential; the URL alone is harmless.
 
@@ -947,8 +948,8 @@ nexus backup    create [--out <path>] | restore <path>
 
 | Route | Method | Description |
 |---|---|---|
-| `/tunnel/start` / `/stop` / `/status` | POST / GET | ngrok lifecycle |
-| `/tunnel/authtoken` | POST | Set ngrok auth token |
+| `/tunnel/start` / `/stop` / `/status` | POST / GET | Tunnel lifecycle |
+| `/tunnel/install` | POST | Pre-download cloudflared binary |
 | `/vapid-public-key` | GET | Web Push public key |
 | `/subscribe` | POST | Register push subscription |
 | `/notifications/events` / `/pending` / `/history` | GET | Push channel state |

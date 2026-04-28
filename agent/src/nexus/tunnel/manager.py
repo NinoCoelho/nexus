@@ -10,9 +10,9 @@ State machine: inactive → active → inactive. Activation generates two secret
                  Exchanged for the long token via ``POST /tunnel/redeem``.
 
 Splitting the secret in two means the share URL itself carries no credential:
-``https://abc.ngrok-free.app/`` is safe to put in browser history, screenshots,
-QR codes, ngrok dashboard logs, etc. The code is the only thing that needs to
-travel through a side channel (verbal, SMS, glance at the desktop).
+``https://abc-words.trycloudflare.com/`` is safe to put in browser history,
+screenshots, QR codes, dashboard logs, etc. The code is the only thing that
+needs to travel through a side channel (verbal, SMS, glance at the desktop).
 
 State is **in-memory only**; restarting the daemon resets the tunnel to off.
 The user's mental model is "I activated a session", not "permanent infrastructure".
@@ -25,17 +25,18 @@ from __future__ import annotations
 import hmac
 import logging
 import secrets
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from typing import Literal
 
-from . import ngrok_provider
+from . import cloudflared_provider
 
 log = logging.getLogger(__name__)
 
 
-Provider = Literal["ngrok"]
+Provider = Literal["cloudflare"]
 
 # Crockford-ish base32 minus easy-to-confuse characters (0/O, 1/I/L). Avoiding
 # vowels would also drop accidental words but isn't required for security —
@@ -75,6 +76,7 @@ class TunnelManager:
         self._token: str | None = None
         self._code: str | None = None
         self._started_at: float | None = None
+        self._process: subprocess.Popen[bytes] | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -82,24 +84,17 @@ class TunnelManager:
         self,
         *,
         port: int,
-        provider: Provider = "ngrok",
-        authtoken: str = "",
-        region: str = "us",
+        provider: Provider = "cloudflare",
     ) -> TunnelStatus:
         with self._lock:
             if self._active:
                 return self._status_locked()
-            if provider != "ngrok":
+            if provider != "cloudflare":
                 raise ValueError(f"Unsupported tunnel provider: {provider}")
 
             token = secrets.token_urlsafe(32)
             code = _generate_code()
-            try:
-                public_url = ngrok_provider.start_ngrok(
-                    authtoken=authtoken, port=port, region=region,
-                )
-            except ngrok_provider.NgrokError:
-                raise
+            proc, public_url = cloudflared_provider.start_tunnel(port=port)
 
             self._active = True
             self._provider = provider
@@ -107,6 +102,7 @@ class TunnelManager:
             self._token = token
             self._code = code
             self._started_at = time.time()
+            self._process = proc
             log.info("tunnel started: %s", public_url)
             return self._status_locked()
 
@@ -114,14 +110,14 @@ class TunnelManager:
         with self._lock:
             if not self._active:
                 return self._status_locked()
-            if self._provider == "ngrok":
-                ngrok_provider.stop_ngrok()
+            cloudflared_provider.stop_tunnel(self._process)
             self._active = False
             self._provider = None
             self._public_url = None
             self._token = None
             self._code = None
             self._started_at = None
+            self._process = None
             log.info("tunnel stopped")
             return self._status_locked()
 
@@ -145,7 +141,7 @@ class TunnelManager:
 
         Multi-use until tunnel stop, deliberately — the user's mental model is
         "I share the link with my phone and my tablet and a friend". Brute force
-        is gated by ngrok's per-tunnel request volume + the alphabet size.
+        is gated by per-IP rate limiting in the redeem route + the alphabet size.
         """
         if not self._active or not self._code or not self._token:
             return None

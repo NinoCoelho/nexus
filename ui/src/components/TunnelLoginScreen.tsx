@@ -80,7 +80,7 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
           }}
         >
           <strong style={{ color: "#ffb84d" }}>Heads up.</strong>{" "}
-          You're connecting to a Nexus session over an ngrok tunnel. Only enter
+          You're connecting to a Nexus session over a Cloudflare tunnel. Only enter
           the code if you trust this URL and you (or someone you trust) just
           activated the link from the desktop app. Whoever holds the code can
           read your vault, send agent messages, and trigger tools. If you

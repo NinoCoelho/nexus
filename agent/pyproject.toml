@@ -28,9 +28,9 @@ dependencies = [
     "python-dateutil>=2.9",
     "pywebpush>=2.0",
     "cryptography>=42.0",
-    # Public sharing tunnel (ngrok). pyngrok auto-downloads the ngrok binary
-    # on first use; qrcode renders a scannable code in the CLI's `tunnel start`.
-    "pyngrok>=7.0",
+    # qrcode renders a scannable code in the CLI's `tunnel start`. The tunnel
+    # itself uses Cloudflare Quick Tunnel via the `cloudflared` binary, which
+    # we auto-download on first use (see nexus.tunnel.cloudflared_provider).
     "qrcode>=7.4",
 ]
 

@@ -9,12 +9,8 @@ export interface TunnelStatus {
   /** Short access code shown on the desktop; only populated on loopback responses. */
   code: string | null;
   started_at: number | null;
-  /** Whether the ngrok CLI binary has been downloaded yet. */
+  /** Whether the cloudflared CLI binary has been downloaded yet. */
   binary_installed: boolean;
-}
-
-export interface AuthtokenStatus {
-  configured: boolean;
 }
 
 export interface InstallResult {
@@ -48,20 +44,6 @@ export async function stopTunnel(): Promise<TunnelStatus> {
   return _json(await fetch(`${BASE}/tunnel/stop`, { method: "POST" }));
 }
 
-export async function getAuthtokenStatus(): Promise<AuthtokenStatus> {
-  return _json(await fetch(`${BASE}/tunnel/authtoken`));
-}
-
-export async function setAuthtoken(authtoken: string): Promise<{ ok: true; configured: boolean }> {
-  return _json(
-    await fetch(`${BASE}/tunnel/authtoken`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ authtoken }),
-    }),
-  );
-}
-
-export async function installNgrokBinary(): Promise<InstallResult> {
+export async function installTunnelBinary(): Promise<InstallResult> {
   return _json(await fetch(`${BASE}/tunnel/install`, { method: "POST" }));
 }

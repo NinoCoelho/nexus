@@ -1,9 +1,10 @@
 """Unit + middleware tests for the tunnel auth flow.
 
-Covers the auth surface without spinning up a real ngrok process: we patch the
-provider so ``start()`` can pretend a tunnel is up, then probe the middleware
-through ``TestClient``. The real ngrok handshake is exercised manually (see
-the verification section of the plan); CI doesn't have an authtoken anyway.
+Covers the auth surface without spinning up a real cloudflared process: we
+patch the provider so ``start()`` can pretend a tunnel is up, then probe the
+middleware through ``TestClient``. The real cloudflared handshake is exercised
+manually (see the verification section of the plan); CI doesn't have network
+access to the Cloudflare edge anyway.
 
 Flow exercised:
   1. ``start()`` produces a long token (cookie carrier) and a short code.
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,6 +43,12 @@ def _reset_tunnel() -> Iterator[None]:
     mgr._public_url = None
     mgr._provider = None
     mgr._started_at = None
+    mgr._process = None
+
+
+def _fake_start_tunnel(url: str = "https://abc-words-here.trycloudflare.com"):
+    """Build a patch return value matching cloudflared_provider.start_tunnel signature."""
+    return MagicMock(), url
 
 
 # ── manager unit tests ────────────────────────────────────────────────────
@@ -57,42 +64,44 @@ def test_status_inactive_by_default() -> None:
 def test_start_produces_token_and_code() -> None:
     mgr = TunnelManager()
     with patch(
-        "nexus.tunnel.manager.ngrok_provider.start_ngrok",
-        return_value="https://abc.ngrok-free.app",
+        "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+        return_value=_fake_start_tunnel(),
     ):
-        s = mgr.start(port=18989, authtoken="dummy")
+        s = mgr.start(port=18989)
     assert s.active is True
-    assert s.public_url == "https://abc.ngrok-free.app"
-    assert s.share_url == "https://abc.ngrok-free.app/"
+    assert s.public_url == "https://abc-words-here.trycloudflare.com"
+    assert s.share_url == "https://abc-words-here.trycloudflare.com/"
     # Code is 8 chars + a dash, formatted XXXX-XXXX.
     assert s.code is not None
     assert len(s.code) == 9 and s.code[4] == "-"
-    mgr.stop()
+    with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+        mgr.stop()
 
 
 def test_consume_code_returns_long_token() -> None:
     mgr = TunnelManager()
     with patch(
-        "nexus.tunnel.manager.ngrok_provider.start_ngrok",
-        return_value="https://abc.ngrok-free.app",
+        "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+        return_value=_fake_start_tunnel(),
     ):
-        s = mgr.start(port=18989, authtoken="dummy")
+        s = mgr.start(port=18989)
     long_token = mgr.consume_code(s.code)
     assert long_token is not None and len(long_token) >= 32
     # Multi-use until tunnel.stop()
     assert mgr.consume_code(s.code) == long_token
     # Token is what validate_token expects.
     assert mgr.validate_token(long_token) is True
-    mgr.stop()
+    with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+        mgr.stop()
 
 
 def test_consume_code_normalizes_dashes_and_case() -> None:
     mgr = TunnelManager()
     with patch(
-        "nexus.tunnel.manager.ngrok_provider.start_ngrok",
-        return_value="https://abc.ngrok-free.app",
+        "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+        return_value=_fake_start_tunnel(),
     ):
-        s = mgr.start(port=18989, authtoken="dummy")
+        s = mgr.start(port=18989)
     raw = (s.code or "").replace("-", "").lower()
     # Lowercase, no dashes — still valid.
     assert mgr.consume_code(raw) is not None
@@ -100,7 +109,8 @@ def test_consume_code_normalizes_dashes_and_case() -> None:
     assert mgr.consume_code("AAAA-BBBB") is None
     assert mgr.consume_code("") is None
     assert mgr.consume_code(None) is None
-    mgr.stop()
+    with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+        mgr.stop()
 
 
 def test_normalize_code_strips_noise() -> None:
@@ -115,6 +125,27 @@ def test_generated_code_uses_safe_alphabet() -> None:
     # No 0/O/1/I/L confusable characters.
     for ch in "01OIL":
         assert ch not in raw
+
+
+def test_quick_url_regex_matches_cloudflared_stderr() -> None:
+    """The provider scans cloudflared's stderr for the trycloudflare URL.
+
+    Sample lines mirror the real format ('INF' log level, table-formatted
+    banner) so a future cloudflared upgrade that breaks the format will fail
+    here loudly instead of silently hanging on tunnel start.
+    """
+    from nexus.tunnel.cloudflared_provider import _QUICK_URL_RE
+
+    sample = (
+        "2026-04-27T12:34:56Z INF Requesting new quick Tunnel on trycloudflare.com...\n"
+        "2026-04-27T12:34:57Z INF +-----------------------------------------+\n"
+        "2026-04-27T12:34:57Z INF |  Your quick Tunnel has been created!    |\n"
+        "2026-04-27T12:34:57Z INF |  https://magical-beaver-1234.trycloudflare.com  |\n"
+        "2026-04-27T12:34:57Z INF +-----------------------------------------+\n"
+    )
+    m = _QUICK_URL_RE.search(sample)
+    assert m is not None
+    assert m.group(0) == "https://magical-beaver-1234.trycloudflare.com"
 
 
 # ── middleware policy tests ────────────────────────────────────────────────
@@ -157,7 +188,7 @@ def test_proxied_auth_status_reports_redeem_required(_simulated_active: Any) -> 
     r = c.get("/tunnel/auth-status", headers={"x-forwarded-for": "203.0.113.5"})
     assert r.status_code == 200
     body = r.json()
-    assert body == {"requires_redeem": True, "tunnel_active": True}
+    assert body == {"requires_redeem": True, "tunnel_active": True, "proxied": True}
 
 
 def test_redeem_with_valid_code_sets_cookie_and_unlocks_api(
@@ -190,7 +221,7 @@ def test_redeem_with_valid_code_sets_cookie_and_unlocks_api(
         headers={"x-forwarded-for": "203.0.113.5"},
         cookies={"nexus_tunnel_token": cookie},
     )
-    assert r.json() == {"requires_redeem": False, "tunnel_active": True}
+    assert r.json() == {"requires_redeem": False, "tunnel_active": True, "proxied": True}
 
 
 def test_redeem_with_wrong_code_is_401(_simulated_active: Any) -> None:
@@ -249,6 +280,38 @@ def test_admin_status_includes_code_on_loopback(_simulated_active: Any) -> None:
     assert r.json()["code"] is not None
 
 
+def test_proxied_request_via_cf_ray_header_requires_cookie(_simulated_active: Any) -> None:
+    """Cloudflare edge sets cf-ray (no x-forwarded-for in some configs)."""
+    c = _fresh_client()
+    r = c.get("/sessions", headers={"cf-ray": "abcdef1234567890-IAD"})
+    assert r.status_code == 401
+
+
+def test_auth_status_reports_proxied_true_via_tunnel(_simulated_active: Any) -> None:
+    """Tunnel-side requests should be tagged proxied=true so the SPA hides admin UI."""
+    c = _fresh_client()
+    r = c.get("/tunnel/auth-status", headers={"x-forwarded-for": "203.0.113.5"})
+    assert r.status_code == 200
+    assert r.json()["proxied"] is True
+
+
+def test_auth_status_reports_proxied_false_on_loopback(_simulated_active: Any) -> None:
+    """Direct loopback (no proxy headers) is the desktop owner's session."""
+    c = _fresh_client()
+    r = c.get("/tunnel/auth-status")
+    assert r.status_code == 200
+    assert r.json()["proxied"] is False
+
+
+def test_auth_status_proxied_field_present_when_tunnel_inactive() -> None:
+    """proxied flag is reported even when no tunnel is running, so the SPA's
+    initial probe always has the answer (no second request needed)."""
+    c = _fresh_client()
+    r = c.get("/tunnel/auth-status")
+    assert r.status_code == 200
+    assert r.json() == {"requires_redeem": False, "tunnel_active": False, "proxied": False}
+
+
 def test_security_headers_are_set() -> None:
     c = _fresh_client()
     r = c.get("/health")
@@ -281,13 +344,13 @@ def test_openapi_docs_are_disabled() -> None:
 
 @pytest.fixture
 def _simulated_active() -> Iterator[None]:
-    """Pretend ngrok is up so the middleware exercises the proxied branch."""
+    """Pretend the tunnel is up so the middleware exercises the proxied branch."""
     mgr = get_manager()
     mgr._active = True
     mgr._token = "test-long-token-aaaaaaaaaaaaaaaaaaaa"
     mgr._code = "TEST-CODE"
-    mgr._public_url = "https://abc.ngrok-free.app"
-    mgr._provider = "ngrok"
+    mgr._public_url = "https://abc-words.trycloudflare.com"
+    mgr._provider = "cloudflare"
     yield
     mgr._active = False
     mgr._token = None
@@ -304,8 +367,8 @@ def _simulated_active_with_code() -> Iterator[tuple[str, str]]:
     mgr._active = True
     mgr._token = long_token
     mgr._code = code
-    mgr._public_url = "https://abc.ngrok-free.app"
-    mgr._provider = "ngrok"
+    mgr._public_url = "https://abc-words.trycloudflare.com"
+    mgr._provider = "cloudflare"
     yield code, long_token
     mgr._active = False
     mgr._token = None

@@ -1,22 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  getAuthtokenStatus,
   getTunnelStatus,
-  installNgrokBinary,
-  setAuthtoken,
   startTunnel,
   stopTunnel,
   type TunnelStatus,
 } from "../../api/tunnel";
 import { useToast } from "../../toast/ToastProvider";
+import { useAuthState } from "../AuthGate";
 import Modal from "../Modal";
 import SettingsSection from "./SettingsSection";
 
 export default function SharingSection() {
+  const { proxied } = useAuthState();
   const toast = useToast();
   const [status, setStatus] = useState<TunnelStatus | null>(null);
-  const [hasToken, setHasToken] = useState(false);
-  const [tokenInput, setTokenInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,9 +21,8 @@ export default function SharingSection() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, a] = await Promise.all([getTunnelStatus(), getAuthtokenStatus()]);
+      const s = await getTunnelStatus();
       setStatus(s);
-      setHasToken(a.configured);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load tunnel status");
     }
@@ -59,66 +55,34 @@ export default function SharingSection() {
     };
   }, [status?.share_url]);
 
-  const handleSaveToken = async () => {
-    const value = tokenInput.trim();
-    if (!value) return;
-    setBusy(true);
-    try {
-      await setAuthtoken(value);
-      setTokenInput("");
-      setHasToken(true);
-      toast.success("ngrok authtoken saved");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save token");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleClearToken = async () => {
-    setBusy(true);
-    try {
-      await setAuthtoken("");
-      setHasToken(false);
-      toast.info("ngrok authtoken cleared");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to clear token");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleInstall = async () => {
-    setBusy(true);
-    setError(null);
-    const tid = toast.info("Downloading ngrok binary…", {
-      detail: "This is a one-time ~10 MB download.",
-      duration: 30000,
-    });
-    try {
-      await installNgrokBinary();
-      toast.update(tid, { message: "ngrok installed" });
-      await refresh();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "ngrok install failed";
-      setError(msg);
-      toast.update(tid, { message: msg });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleActivate = async () => {
     setConfirmOpen(false);
     setBusy(true);
     setError(null);
+
+    // First-time activation downloads cloudflared (~30 MB) before the tunnel
+    // comes up. Show a long-running progress toast so the user knows what's
+    // happening and isn't tempted to retry.
+    const firstRun = status?.binary_installed === false;
+    const tid = toast.info(
+      firstRun ? "Preparing your sharing link…" : "Opening sharing link…",
+      {
+        detail: firstRun
+          ? "First-time setup — this takes about a minute. Hang tight, no need to do anything."
+          : "Connecting…",
+        duration: 180_000,
+      },
+    );
+
     try {
       const s = await startTunnel();
       setStatus(s);
+      toast.dismiss(tid);
       toast.success("Sharing link is live");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to start tunnel";
       setError(msg);
+      toast.dismiss(tid);
       toast.error(msg);
     } finally {
       setBusy(false);
@@ -149,6 +113,11 @@ export default function SharingSection() {
 
   const active = status?.active === true;
 
+  // Sharing is administered only by the loopback owner. A redeemer reaching
+  // this UI through the tunnel must not see (or attempt to call) start/stop —
+  // those routes 403 anyway, but the panel itself would be confusing.
+  if (proxied) return null;
+
   return (
     <>
       <SettingsSection
@@ -160,11 +129,12 @@ export default function SharingSection() {
           title: "Sharing",
           body: (
             <>
-              Opens a public ngrok tunnel to this Nexus and gives you a URL plus
-              a short access code. Open the URL on your phone (or share it),
-              type the code on the phone's login screen, and the same UI as your
-              desktop loads. Stop sharing to revoke instantly. The code is the
-              credential — keep it private; the URL alone is harmless.
+              Opens a public Cloudflare Quick Tunnel to this Nexus and gives
+              you a URL plus a short access code. Open the URL on your phone
+              (or share it), type the code on the phone's login screen, and
+              the same UI as your desktop loads. Stop sharing to revoke
+              instantly. The code is the credential — keep it private; the
+              URL alone is harmless.
             </>
           ),
         }}
@@ -172,84 +142,27 @@ export default function SharingSection() {
         {error && <p className="settings-error">{error}</p>}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* ngrok authtoken setup */}
-          {!hasToken && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label style={{ fontSize: 13, opacity: 0.85 }}>
-                ngrok authtoken
-                <span style={{ opacity: 0.6, marginLeft: 6 }}>
-                  (free at{" "}
-                  <a
-                    href="https://dashboard.ngrok.com/get-started/your-authtoken"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    dashboard.ngrok.com
-                  </a>
-                  )
-                </span>
-              </label>
-              <div style={{ display: "flex", gap: 6 }}>
-                <input
-                  type="password"
-                  value={tokenInput}
-                  placeholder="paste your authtoken"
-                  onChange={(e) => setTokenInput(e.target.value)}
-                  className="settings-input"
-                  style={{ flex: 1 }}
-                  disabled={busy}
-                />
-                <button
-                  className="settings-btn settings-btn--primary"
-                  onClick={handleSaveToken}
-                  disabled={busy || !tokenInput.trim()}
-                >
-                  Save
-                </button>
+          {!active && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
+                Click below to get a private link you can open on your phone or
+                share with someone you trust. No account, no signup needed.
+                {status?.binary_installed === false && (
+                  <>
+                    {" "}
+                    <strong>The first time</strong> you activate, it takes about
+                    a minute to set up — feel free to step away while it
+                    prepares.
+                  </>
+                )}
               </div>
-            </div>
-          )}
-
-          {hasToken && !active && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {status && status.binary_installed === false && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    padding: "8px 10px",
-                    borderRadius: 6,
-                    background: "rgba(120, 160, 255, 0.08)",
-                    border: "1px solid rgba(120, 160, 255, 0.3)",
-                  }}
-                >
-                  The ngrok binary isn't installed yet (~10 MB download). The
-                  first activation will fetch it automatically, or you can do it
-                  now.{" "}
-                  <button
-                    className="settings-btn"
-                    style={{ marginLeft: 6 }}
-                    onClick={handleInstall}
-                    disabled={busy}
-                  >
-                    Install ngrok now
-                  </button>
-                </div>
-              )}
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button
                   className="settings-btn settings-btn--primary"
                   onClick={() => setConfirmOpen(true)}
                   disabled={busy}
                 >
-                  Activate sharing link
-                </button>
-                <button
-                  className="settings-btn"
-                  onClick={handleClearToken}
-                  disabled={busy}
-                  title="Forget the saved ngrok authtoken"
-                >
-                  Reset token
+                  {busy ? "Preparing…" : "Activate sharing link"}
                 </button>
               </div>
             </div>
@@ -278,10 +191,10 @@ export default function SharingSection() {
                 }}
               >
                 <strong style={{ color: "#ffb84d" }}>⚠ Public sharing is on.</strong>{" "}
-                Your Nexus is reachable on the internet via ngrok. Anyone who
-                knows <em>both</em> the URL and the access code below can read
-                and write your vault, run agent turns, send messages, and use
-                any tool the agent has — including web access and shell
+                Your Nexus is reachable on the internet via Cloudflare Tunnel.
+                Anyone who knows <em>both</em> the URL and the access code below
+                can read and write your vault, run agent turns, send messages,
+                and use any tool the agent has — including web access and shell
                 commands. Treat the code like a password. Stop sharing when
                 you're done.
               </div>
@@ -385,7 +298,7 @@ export default function SharingSection() {
           kind="confirm"
           title="Open public sharing link?"
           message={
-            "This exposes your Nexus to the internet through an ngrok tunnel. " +
+            "This exposes your Nexus to the internet through a Cloudflare Tunnel. " +
             "You'll get a URL plus a short code — anyone with both can use Nexus " +
             "as if they were on your desktop. Stop sharing to revoke."
           }
