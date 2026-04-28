@@ -314,6 +314,12 @@ def main() -> int:
     port = requested_port if requested_port else _pick_free_port()
     token = _ensure_access_token()
     os.environ["NEXUS_ACCESS_TOKEN"] = token
+    # Make the actual bound port visible to in-process consumers. The tunnel
+    # manager's start_tunnel() reads NEXUS_PORT to point cloudflared at the
+    # right local URL — without this, an auto-picked port (host.json set to
+    # 0, which is the default) would tunnel to the hard-coded default 18989,
+    # silently routing public traffic at the wrong daemon (or nowhere).
+    os.environ["NEXUS_PORT"] = str(port)
     port_file = Path(os.environ.get("NEXUS_PORT_FILE", here / ".port"))
     try:
         port_file.write_text(str(port))
