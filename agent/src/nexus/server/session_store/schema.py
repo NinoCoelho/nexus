@@ -141,6 +141,23 @@ def _ensure_feedback_pinned_column(db) -> None:
         db.commit()
 
 
+def _ensure_subagent_columns(db) -> None:
+    """Migrate older databases that pre-date the spawn_subagents columns.
+
+    Adds ``parent_session_id`` and ``hidden`` to the loom-owned ``sessions``
+    table so child sessions spawned by the spawn_subagents tool can be linked
+    back to the parent and hidden from the default sidebar listing.
+    """
+    cols = {r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()}
+    if not cols:
+        return
+    if "parent_session_id" not in cols:
+        db.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT")
+    if "hidden" not in cols:
+        db.execute("ALTER TABLE sessions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+    db.commit()
+
+
 def init_fts(loom_store: LoomSessionStore) -> None:
     """Create the FTS5 virtual table + sync triggers if missing."""
     db = loom_store._db
@@ -155,6 +172,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_HITL_PENDING_SCHEMA)
     db.executescript(_PUSH_SUBS_SCHEMA)
     _ensure_feedback_pinned_column(db)
+    _ensure_subagent_columns(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:
         msg_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]

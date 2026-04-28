@@ -35,3 +35,11 @@ CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
 DISPATCH_CHAIN: ContextVar[tuple[str, ...]] = ContextVar(
     "DISPATCH_CHAIN", default=()
 )
+
+# Current sub-agent nesting depth. 0 in the parent (top-level chat) turn,
+# incremented each time spawn_subagents recurses. Read by the spawn_subagents
+# tool handler to decide whether further nesting is allowed (capped at
+# MAX_SUBAGENT_DEPTH in subagent_tool.py). ContextVars copy into asyncio
+# tasks, so the depth propagates through asyncio.gather without explicit
+# plumbing.
+SUBAGENT_DEPTH: ContextVar[int] = ContextVar("SUBAGENT_DEPTH", default=0)

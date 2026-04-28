@@ -49,6 +49,7 @@ class AgentHandlers:
         ask_user: Any | None = None,
         terminal: Any | None = None,
         dispatcher: Any | None = None,
+        subagent_runner: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
@@ -56,6 +57,10 @@ class AgentHandlers:
         # with keys {session_id, seed_message?, path, card_id?, mode}.
         # Late-bound by app.py so tools can spawn sub-sessions.
         self.dispatcher = dispatcher
+        # Async callable: subagent_runner(tasks, parent_session_id, depth) ->
+        # list[{session_id, result, error}]. Late-bound by app.py; left None
+        # for sub-agent registries to disable recursive spawn_subagents.
+        self.subagent_runner = subagent_runner
 
 
 def build_tool_registry(
@@ -90,6 +95,7 @@ def build_tool_registry(
     from nexus.tools.ontology_tool import ONTOLOGY_MANAGE_TOOL, make_ontology_handler
     from nexus.agent.ask_user_tool import ASK_USER_TOOL
     from nexus.agent.terminal_tool import TERMINAL_TOOL
+    from nexus.tools.subagent_tool import SPAWN_SUBAGENTS_TOOL, handle_spawn_subagents
 
     registry = ToolRegistry()
     state = StateToolHandler(skill_registry)
@@ -199,6 +205,22 @@ def build_tool_registry(
         return await handle_dispatch_card_tool(args, handlers.dispatcher)
 
     registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
+
+    # spawn_subagents — run N agent loops in parallel with fresh contexts.
+    # Reads parent session id and current nesting depth from contextvars set
+    # by the streaming chat handler (CURRENT_SESSION_ID) and the runner
+    # itself (SUBAGENT_DEPTH); the closure resolves ``handlers.subagent_runner``
+    # at dispatch time so app.py can late-bind without rebuilding the registry.
+    async def _spawn_subagents(args: dict) -> str:
+        from nexus.agent.context import CURRENT_SESSION_ID, SUBAGENT_DEPTH
+        return await handle_spawn_subagents(
+            args,
+            runner=handlers.subagent_runner,
+            parent_session_id=CURRENT_SESSION_ID.get(),
+            depth=SUBAGENT_DEPTH.get(),
+        )
+
+    registry.register(_SimpleToolHandler(SPAWN_SUBAGENTS_TOOL, _spawn_subagents))
 
     # datatable_manage
     async def _datatable(args: dict) -> str:

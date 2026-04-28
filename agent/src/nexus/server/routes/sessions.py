@@ -64,9 +64,10 @@ def _session_markdown(session: Any, sessions: SessionStore, include_frontmatter:
 @router.get("/sessions")
 async def list_sessions(
     limit: int = 50,
+    include_hidden: bool = False,
     store: SessionStore = Depends(get_sessions),
 ) -> list[dict]:
-    summaries = store.list(limit=limit)
+    summaries = store.list(limit=limit, include_hidden=include_hidden)
     return [
         {
             "id": s.id,

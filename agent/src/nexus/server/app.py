@@ -613,6 +613,86 @@ def create_app(
 
     agent._dispatcher = _agent_dispatcher
 
+    # ── wire the spawn_subagents agent tool ───────────────────────────────────
+    # The runner spins up a fresh Agent for each task with HITL handlers
+    # nulled out (no ask_user / terminal / dispatcher / subagent_runner).
+    # Tool calls and intermediate deltas of the sub-agent are consumed
+    # internally so the parent's context only sees the final assistant text.
+    from ..agent.context import SUBAGENT_DEPTH
+
+    async def _run_one_subagent(
+        task: dict[str, Any],
+        *,
+        parent_session_id: str,
+        depth: int,
+    ) -> dict[str, Any]:
+        prompt = task.get("prompt") or ""
+        model_id = task.get("model_id") or None
+        # Build a fresh Agent that mirrors the parent's provider/registry/cfg
+        # but defaults all HITL + dispatch + subagent handlers to None. This
+        # is what restricts the sub-agent's tool surface without rebuilding
+        # a separate ToolRegistry.
+        sub = Agent(
+            provider=agent._nexus_provider,
+            registry=agent._registry,
+            provider_registry=agent._provider_registry,
+            nexus_cfg=agent._nexus_cfg,
+            home=agent._home,
+            permissions=agent._permissions,
+        )
+        sub._sessions = sessions
+        # Persist the child session row up front so cleanup queries can find
+        # it even if the run crashes mid-stream.
+        child = sessions.create_child(parent_session_id=parent_session_id, hidden=True)
+        child_id = child.id
+
+        depth_token = SUBAGENT_DEPTH.set(depth + 1)
+        sid_token = CURRENT_SESSION_ID.set(child_id)
+        final_text = ""
+        final_messages: Any = None
+        error: str | None = None
+        try:
+            try:
+                async for event in sub.run_turn_stream(
+                    prompt,
+                    history=[],
+                    session_id=child_id,
+                    model_id=model_id,
+                ):
+                    etype = event.get("type")
+                    if etype == "delta":
+                        final_text += event.get("text", "") or ""
+                    elif etype == "done":
+                        final_messages = event.get("messages")
+                    elif etype == "error":
+                        error = str(event.get("message") or "subagent error")
+            except Exception as exc:
+                log.exception("subagent run crashed (child=%s)", child_id)
+                error = f"subagent crashed: {exc!r}"
+        finally:
+            CURRENT_SESSION_ID.reset(sid_token)
+            SUBAGENT_DEPTH.reset(depth_token)
+            if final_messages is not None:
+                try:
+                    sessions.replace_history(child_id, final_messages)
+                except Exception:
+                    log.exception("subagent: persist final history failed (child=%s)", child_id)
+        return {"session_id": child_id, "result": final_text, "error": error}
+
+    async def _subagent_runner(
+        tasks: list[dict[str, Any]],
+        *,
+        parent_session_id: str,
+        depth: int,
+    ) -> list[dict[str, Any]]:
+        import asyncio as _asyncio
+        return await _asyncio.gather(*[
+            _run_one_subagent(t, parent_session_id=parent_session_id, depth=depth)
+            for t in tasks
+        ])
+
+    agent._handlers.subagent_runner = _subagent_runner
+
     # Lane-change hook: any cross-lane move (UI drag-drop via PATCH, agent
     # tool via kanban_manage, external API client) auto-dispatches the
     # destination lane's prompt if one is set. Cycle and depth guards via

@@ -79,6 +79,28 @@ class SessionStore(PubSubMixin, QueryMixin):
         d = self._loom.get_or_create(sid, title="New session", context=context)
         return Session(id=d["id"], title=d["title"] or "New session", context=context)
 
+    def create_child(
+        self,
+        *,
+        parent_session_id: str,
+        title: str | None = None,
+        hidden: bool = True,
+    ) -> Session:
+        """Create a new session linked to ``parent_session_id``.
+
+        Used by the spawn_subagents tool: the child runs a fresh agent loop
+        in isolation and its transcript is persisted under a real session
+        id. Hidden child sessions are excluded from ``list()`` by default.
+        """
+        sid = uuid.uuid4().hex
+        d = self._loom.get_or_create(sid, title=title or "Sub-agent", context=None)
+        self._loom._db.execute(
+            "UPDATE sessions SET parent_session_id = ?, hidden = ? WHERE id = ?",
+            (parent_session_id, 1 if hidden else 0, sid),
+        )
+        self._loom._db.commit()
+        return Session(id=d["id"], title=d["title"] or "Sub-agent", context=None)
+
     def get_or_create(self, session_id: str | None, context: str | None = None) -> Session:
         if session_id is None:
             return self.create(context=context)
@@ -131,13 +153,17 @@ class SessionStore(PubSubMixin, QueryMixin):
         sess._message_timestamps = timestamps  # type: ignore[attr-defined]
         return sess
 
-    def list(self, limit: int = 50) -> list[SessionSummary]:
+    def list(self, limit: int = 50, *, include_hidden: bool = False) -> list[SessionSummary]:
+        # ``hidden`` exists from the spawn_subagents migration; filter out
+        # child sessions by default so the sidebar doesn't surface them.
+        where = "" if include_hidden else "WHERE COALESCE(s.hidden, 0) = 0"
         rows = self._loom._db.execute(
-            """
+            f"""
             SELECT s.id, s.title, s.created_at, s.updated_at,
                    COUNT(m.seq) AS message_count
             FROM sessions s
             LEFT JOIN messages m ON m.session_id = s.id
+            {where}
             GROUP BY s.id
             ORDER BY s.updated_at DESC
             LIMIT ?
