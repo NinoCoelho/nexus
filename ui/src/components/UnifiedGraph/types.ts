@@ -51,4 +51,6 @@ export interface GraphCanvasHandle {
   zoomIn: () => void;
   zoomOut: () => void;
   flyTo: (nodeId: string) => void;
+  /** Pick the matched node nearest to the camera and rotate to center it. */
+  flyToNearestMatch: (nodeIds: string[]) => void;
 }

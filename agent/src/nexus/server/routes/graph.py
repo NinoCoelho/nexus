@@ -30,16 +30,6 @@ async def get_agent_graph(
     return build_agent_graph(registry, sessions)
 
 
-@router.get("/graph/knowledge")
-async def get_knowledge_graph() -> dict:
-    """Return the GraphRAG entity/relation graph for the Knowledge tab."""
-    from ...agent.graphrag_manager import get_engine
-    engine = get_engine()
-    if engine is None:
-        return {"nodes": [], "edges": [], "enabled": False}
-    return engine.export_graph()
-
-
 @router.post("/graph/knowledge/query")
 async def knowledge_query(body: dict) -> dict:
     """Semantic search over the knowledge graph. Returns evidence + trace + subgraph."""
@@ -125,19 +115,27 @@ async def knowledge_entity_detail(entity_id: int) -> dict:
         cd = engine._get_chunk(cid)
         if cd:
             chunks.append({"chunk_id": cid, "source_path": cd.get("source_path", ""), "heading": cd.get("heading", "")})
-    relations = []
+    # Dedupe by (other_entity, relation, direction) — triples are stored
+    # one row per chunk-mention, so the same logical relation appears
+    # multiple times. Show each fact once, with the highest strength.
+    rel_map: dict[tuple[int, str, str], dict] = {}
     for t in triples:
         other_id = t.tail_id if t.head_id == entity_id else t.head_id
-        other = graph.get_entity(other_id)
         direction = "outgoing" if t.head_id == entity_id else "incoming"
-        relations.append({
+        key = (other_id, t.relation, direction)
+        existing = rel_map.get(key)
+        if existing is not None and t.strength <= existing["strength"]:
+            continue
+        other = graph.get_entity(other_id)
+        rel_map[key] = {
             "entity_id": other_id,
             "entity_name": other.name if other else "?",
             "entity_type": other.type if other else "?",
             "relation": t.relation,
             "direction": direction,
             "strength": t.strength,
-        })
+        }
+    relations = list(rel_map.values())
     return {
         "enabled": True,
         "entity": {"id": entity.id, "name": entity.name, "type": entity.type, "description": entity.description},
@@ -148,22 +146,38 @@ async def knowledge_entity_detail(entity_id: int) -> dict:
 
 
 @router.get("/graph/knowledge/subgraph")
-async def knowledge_subgraph(seed: int, hops: int = 2) -> dict:
+async def knowledge_subgraph(seed: int, hops: int = 2, width: int = 50) -> dict:
+    """Return the seed's neighbourhood. ``width`` caps how many triples a
+    single hub contributes per visit — strongest first — so exploring a
+    high-degree node doesn't blow up response size."""
     from ...agent.graphrag_manager import get_engine
     engine = get_engine()
     if engine is None:
         return {"nodes": [], "edges": [], "enabled": False}
-    result = engine._entity_graph.subgraph(seed, max_hops=hops)
+    result = engine._entity_graph.subgraph(seed, max_hops=hops, max_neighbors_per_node=width)
+    # Dedupe (head, relation, tail) — the underlying triples table
+    # stores one row per chunk-mention for provenance, so the same
+    # logical edge can appear N times. Without dedup, the right panel
+    # shows duplicate "uses → AutoGen" entries and the visual link
+    # weight is misleading.
+    edge_map: dict[tuple[int, str, int], dict] = {}
+    for e in result["edges"]:
+        key = (e.head_id, e.relation, e.tail_id)
+        existing = edge_map.get(key)
+        if existing is None or e.strength > existing["strength"]:
+            edge_map[key] = {
+                "source": e.head_id,
+                "target": e.tail_id,
+                "relation": e.relation,
+                "strength": e.strength,
+            }
     return {
         "enabled": True,
         "nodes": [
             {"id": n.id, "name": n.name, "type": n.type, "degree": engine._entity_graph.entity_degree(n.id)}
             for n in result["nodes"]
         ],
-        "edges": [
-            {"source": e.head_id, "target": e.tail_id, "relation": e.relation, "strength": e.strength}
-            for e in result["edges"]
-        ],
+        "edges": list(edge_map.values()),
     }
 
 

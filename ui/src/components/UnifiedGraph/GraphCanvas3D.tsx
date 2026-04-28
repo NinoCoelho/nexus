@@ -23,7 +23,10 @@ import { makeGeometry, makeTextSprite, escapeHtml } from "./threeHelpers";
 interface Props {
   data: UnifiedGraphData;
   selectedId: string | null;
+  /** Highlight from the main "Search your knowledge" — soft white pulse. */
   search: string;
+  /** Highlight from the floating /-find widget — sharper cyan pulse. */
+  findQuery?: string;
   onSelect: (node: UnifiedNode | null) => void;
   onNodeRightClick?: (node: UnifiedNode, x: number, y: number) => void;
   contextMenu?: { node: UnifiedNode; items: ContextMenuItem[]; x: number; y: number } | null;
@@ -44,7 +47,7 @@ type FgInstance = {
 };
 
 export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function GraphCanvas3D(
-  { data, selectedId, search, onSelect, onNodeRightClick, contextMenu, onCloseContextMenu, emptyState },
+  { data, selectedId, search, findQuery, onSelect, onNodeRightClick, contextMenu, onCloseContextMenu, emptyState },
   ref,
 ) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -94,26 +97,58 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     );
   }, [data.nodes]);
 
+  // Pick the matched node closest to the current camera position, then
+  // rotate the camera so that node ends up centered. "Closest" is the
+  // intuitive notion: the user is staring at one side of the cloud; we
+  // center the match they're already nearest to instead of always going
+  // to the same node. Falls back to flyTo on any single match.
+  const flyToNearestMatch = useCallback((nodeIds: string[]) => {
+    const fg = fgRef.current;
+    if (!fg?.cameraPosition || nodeIds.length === 0) return;
+    if (nodeIds.length === 1) { flyTo(nodeIds[0]); return; }
+    const cam = fg.cameraPosition();
+    if (!cam) { flyTo(nodeIds[0]); return; }
+    const ids = new Set(nodeIds);
+    let best: { node: UnifiedNode & { x?: number; y?: number; z?: number }; dist: number } | null = null;
+    for (const raw of data.nodes) {
+      if (!ids.has(raw.id)) continue;
+      const n = raw as UnifiedNode & { x?: number; y?: number; z?: number };
+      if (n.x == null || n.y == null || n.z == null) continue;
+      const dx = n.x - cam.x, dy = n.y - cam.y, dz = n.z - cam.z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (!best || d < best.dist) best = { node: n, dist: d };
+    }
+    if (best) flyTo(best.node.id);
+  }, [data.nodes, flyTo]);
+
   useImperativeHandle(ref, () => ({
     fit: callFit,
     reheat: callReheat,
     zoomIn: () => callZoom(0.7),
     zoomOut: () => callZoom(1.3),
     flyTo,
-  }), [callFit, callReheat, callZoom, flyTo]);
+    flyToNearestMatch,
+  }), [callFit, callReheat, callZoom, flyTo, flyToNearestMatch]);
 
   // Tune d3 forces and OrbitControls behavior. screenSpacePanning makes
   // right-click drag pan the camera in screen space (rather than world
-  // space), which feels natural on 3D scatter plots.
+  // space), which feels natural on 3D scatter plots. Re-applied whenever
+  // the node count changes — ForceGraph3D rebuilds its simulation on
+  // graphData changes, dropping previously-applied force settings.
   useEffect(() => {
+    if (!data.nodes.length) return;
     let cancelled = false;
     const apply = () => {
       if (cancelled) return;
       const fg = fgRef.current;
       if (!fg) return;
       try {
-        fg.d3Force?.("link")?.distance?.(18);
-        fg.d3Force?.("charge")?.strength?.(-45);
+        const n = data.nodes.length;
+        const linkDist = Math.max(40, Math.min(80, 30 + Math.sqrt(n) * 3));
+        const charge = -Math.max(120, Math.min(400, 60 + Math.sqrt(n) * 18));
+        fg.d3Force?.("link")?.distance?.(linkDist);
+        fg.d3Force?.("charge")?.strength?.(charge);
+        fg.d3ReheatSimulation?.();
       } catch { /* ignore */ }
       try {
         const ctrl = fg.controls?.();
@@ -125,7 +160,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     };
     const id = setTimeout(apply, 0);
     return () => { cancelled = true; clearTimeout(id); };
-  }, []);
+  }, [data.nodes.length]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -174,19 +209,96 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     return new Set(data.nodes.filter((n) => n.label.toLowerCase().includes(term)).map((n) => n.id));
   }, [search, data.nodes]);
 
+  const findMatchedIds = useMemo(() => {
+    const term = (findQuery ?? "").trim().toLowerCase();
+    if (!term) return new Set<string>();
+    return new Set(data.nodes.filter((n) => n.label.toLowerCase().includes(term)).map((n) => n.id));
+  }, [findQuery, data.nodes]);
+
+  // Two pulse tracks. The main-search pulse is a soft base→white blink at
+  // 700ms cycle. The /-find pulse is a sharper, brighter cyan blink at
+  // ~450ms cycle so the two are visually distinct when both are active.
+  // (Find takes precedence in nodeThreeObject, so a node matching both
+  // shows the find pulse.)
+  const pulseRef = useRef<Map<string, { mat: THREE.MeshLambertMaterial; baseColor: THREE.Color; matchColor: THREE.Color }>>(new Map());
+  const pulseFindRef = useRef<Map<string, { mat: THREE.MeshLambertMaterial; baseColor: THREE.Color; matchColor: THREE.Color }>>(new Map());
+
+  useEffect(() => {
+    let rafId = 0;
+    const tick = () => {
+      const t = performance.now();
+      const wave = (Math.sin((t / 700) * Math.PI * 2) + 1) / 2;
+      const eased = Math.pow(wave, 0.6);
+      pulseRef.current.forEach((entry, id) => {
+        if (!matchedIds.has(id) || findMatchedIds.has(id)) return;
+        const r = entry.baseColor.r + (entry.matchColor.r - entry.baseColor.r) * eased;
+        const g = entry.baseColor.g + (entry.matchColor.g - entry.baseColor.g) * eased;
+        const b = entry.baseColor.b + (entry.matchColor.b - entry.baseColor.b) * eased;
+        entry.mat.color.setRGB(r, g, b);
+        entry.mat.emissive.setRGB(r, g, b);
+        entry.mat.emissiveIntensity = 0.3 + 0.8 * eased;
+      });
+      // Find pulse: faster (450ms), sharper (pow 0.4), brighter emissive.
+      const fwave = (Math.sin((t / 450) * Math.PI * 2) + 1) / 2;
+      const feased = Math.pow(fwave, 0.4);
+      pulseFindRef.current.forEach((entry, id) => {
+        if (!findMatchedIds.has(id)) return;
+        const r = entry.baseColor.r + (entry.matchColor.r - entry.baseColor.r) * feased;
+        const g = entry.baseColor.g + (entry.matchColor.g - entry.baseColor.g) * feased;
+        const b = entry.baseColor.b + (entry.matchColor.b - entry.baseColor.b) * feased;
+        entry.mat.color.setRGB(r, g, b);
+        entry.mat.emissive.setRGB(r, g, b);
+        entry.mat.emissiveIntensity = 0.5 + 1.4 * feased;
+      });
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [matchedIds, findMatchedIds]);
+
   const nodeThreeObject = useCallback((raw: object) => {
     const node = raw as UnifiedNode;
     const isMatch = matchedIds.size > 0 && matchedIds.has(node.id);
+    const isFindMatch = findMatchedIds.size > 0 && findMatchedIds.has(node.id);
     const isSelected = node.id === selectedId;
     const radius = (1.6 + Math.log(node.degree + 1) * 0.7) + (node.radiusBoost ?? 0);
     const baseColor = node.color ?? "#7a9e7e";
-    const color = isSelected ? "#ffd06a" : isMatch ? "#d4855c" : baseColor;
-    const emissiveIntensity = isSelected ? 0.9 : isMatch ? 0.6 : 0;
+    // Visual priority: selected → find-match → search-match → default.
+    const initial = isSelected
+      ? "#ffd06a"
+      : isFindMatch ? "#5cf0ff"
+      : isMatch ? "#ffffff"
+      : baseColor;
+    const emissiveIntensity = isSelected ? 0.9 : isFindMatch ? 1.2 : isMatch ? 0.7 : 0;
 
+    const material = new THREE.MeshLambertMaterial({
+      color: initial,
+      emissive: initial,
+      emissiveIntensity,
+    });
     const mesh = new THREE.Mesh(
-      makeGeometry(node.geometry, isSelected ? radius + 1 : radius),
-      new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity }),
+      makeGeometry(node.geometry, isSelected ? radius + 1 : isFindMatch ? radius + 0.5 : radius),
+      material,
     );
+
+    if (isFindMatch) {
+      pulseFindRef.current.set(node.id, {
+        mat: material,
+        baseColor: new THREE.Color(baseColor),
+        matchColor: new THREE.Color("#5cf0ff"),
+      });
+      pulseRef.current.delete(node.id);
+    } else if (isMatch) {
+      pulseRef.current.set(node.id, {
+        mat: material,
+        baseColor: new THREE.Color(baseColor),
+        matchColor: new THREE.Color("#ffffff"),
+      });
+      pulseFindRef.current.delete(node.id);
+    } else {
+      pulseRef.current.delete(node.id);
+      pulseFindRef.current.delete(node.id);
+    }
 
     const group = new THREE.Group();
     group.add(mesh);
@@ -200,11 +312,11 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     }
 
     const label = node.label.length > 28 ? node.label.slice(0, 27) + "…" : node.label;
-    const sprite = makeTextSprite(label, isMatch || isSelected);
+    const sprite = makeTextSprite(label, isMatch || isFindMatch || isSelected);
     sprite.position.set(0, (isSelected ? radius + 1 : radius) + 1.5, 0);
     group.add(sprite);
     return group;
-  }, [matchedIds, selectedId]);
+  }, [matchedIds, findMatchedIds, selectedId]);
 
   const linkColor = useCallback((raw: object) => {
     const l = raw as UnifiedLink;

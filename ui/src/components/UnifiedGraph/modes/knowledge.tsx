@@ -10,13 +10,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   knowledgeQuery,
   getKnowledgeStats,
-  getKnowledgeEntities,
   getKnowledgeEntity,
   getKnowledgeSubgraph,
   getKnowledgeFileSubgraph,
   getKnowledgeFolderSubgraph,
   type KnowledgeStats,
-  type KnowledgeEntity,
   type KnowledgeQueryResult,
   type EntityDetail,
   type SubgraphData,
@@ -45,7 +43,6 @@ interface KnowledgeModeOptions {
 export function useKnowledgeMode(opts: KnowledgeModeOptions) {
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [queryResult, setQueryResult] = useState<KnowledgeQueryResult | null>(null);
-  const [topEntities, setTopEntities] = useState<KnowledgeEntity[]>([]);
   const [selectedEntity, setSelectedEntity] = useState<EntityDetail | null>(null);
   const [pinnedEntities, setPinnedEntities] = useState<EntityDetail[]>([]);
   const [subgraphData, setSubgraphData] = useState<SubgraphData | null>(null);
@@ -61,12 +58,14 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
     try { return parseInt(sessionStorage.getItem("kv:hopDepth") ?? "2", 10) || 2; } catch { return 2; }
   });
   useEffect(() => { try { sessionStorage.setItem("kv:hopDepth", String(hopDepth)); } catch { /* ignore */ } }, [hopDepth]);
+  // Sidebar can be collapsed (hidden) without losing its content. Re-opens
+  // automatically when there is fresh content (new query, new entity).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(() => {
     getKnowledgeStats().then(setStats).catch(() => {});
-    getKnowledgeEntities({ limit: 200 }).then((r) => setTopEntities(r.entities)).catch(() => {});
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -204,16 +203,11 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
     };
   }, [subgraphData, typeFilter]);
 
-  const filteredQueryResult = useMemo((): KnowledgeQueryResult | null => {
-    if (!queryResult || !typeFilter) return queryResult;
-    const filtered = queryResult.results.filter(
-      (r) => !r.related_entities || r.related_entities.length === 0 ||
-        r.related_entities.some((name) =>
-          topEntities.some((e) => e.name === name && e.type === typeFilter),
-        ),
-    );
-    return { ...queryResult, results: filtered };
-  }, [queryResult, typeFilter, topEntities]);
+  // typeFilter scopes the visible subgraph nodes (see filteredSubgraphData).
+  // Chunk results aren't filtered by entity type any more — that filter
+  // depended on the now-removed topEntities catalog and was a weak proxy
+  // anyway (chunks can mention entities the catalog doesn't know about).
+  const filteredQueryResult = queryResult;
 
   const hasResults = !!filteredQueryResult && filteredQueryResult.results.length > 0;
 
@@ -281,24 +275,33 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
   const hasFloatingContent =
     loading || hasResults || !!selectedEntity || pinnedEntities.length > 0;
 
-  const closeAllFloating = () => {
-    setSelectedEntity(null);
-    setPinnedEntities([]);
-    setQueryResult(null);
-    setQueryText("");
-  };
+  // Auto-expand whenever new content arrives (so a collapsed panel doesn't
+  // hide the user's fresh search/selection result).
+  useEffect(() => {
+    if (hasFloatingContent) setSidebarCollapsed(false);
+  }, [queryResult, selectedEntity]);
 
   const sidebar = (
     <>
-      {hasFloatingContent && (
+      {hasFloatingContent && sidebarCollapsed && (
+        <button
+          className="ug-floating-reopen"
+          onClick={() => setSidebarCollapsed(false)}
+          title="Show results panel"
+          aria-label="Show results panel"
+        >
+          ‹
+        </button>
+      )}
+      {hasFloatingContent && !sidebarCollapsed && (
         <div className="ug-floating-detail">
           <button
             className="ug-floating-close"
-            onClick={closeAllFloating}
-            title="Close panel"
-            aria-label="Close panel"
+            onClick={() => setSidebarCollapsed(true)}
+            title="Collapse panel"
+            aria-label="Collapse panel"
           >
-            ×
+            ›
           </button>
           <div className="ug-floating-detail-body">
             {loading && <div className="kv-loading">Searching...</div>}
@@ -458,10 +461,9 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
     empty,
     onNodeClick,
     contextMenu,
-    // top entities popup data
-    topEntities,
     typeFilter,
-    onPickEntity: (id: number) => void selectEntityById(id),
+    // expose for canvas search-highlight + `/` shortcut
+    queryText,
     // hop selector
     hopDepth,
     setHopDepth,

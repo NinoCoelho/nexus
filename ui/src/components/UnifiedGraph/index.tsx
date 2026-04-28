@@ -16,7 +16,7 @@
  *   - `refresh?`                       — re-fetch button handler
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "../KnowledgeView.css";
 import "../GraphView.css";
 import "../AgentGraphView.css";
@@ -25,7 +25,6 @@ import { GraphCanvas3D } from "./GraphCanvas3D";
 import { useKnowledgeMode } from "./modes/knowledge";
 import { useVaultMode } from "./modes/vault";
 import { useAgentMode } from "./modes/agent";
-import { TopEntitiesPopup } from "./widgets/TopEntitiesPopup";
 import { WebGLBoundary, WebGLFallback, probeWebGL } from "./WebGLBoundary";
 import type { ContextMenuItem, GraphCanvasHandle, ModeId, UnifiedNode } from "./types";
 
@@ -55,11 +54,12 @@ export default function UnifiedGraph({
   onSpawnSession,
 }: Props) {
   const [mode, setMode] = useState<ModeId>("knowledge");
-  const [graphSearch, setGraphSearch] = useState("");
+  const [graphSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ node: UnifiedNode; items: ContextMenuItem[]; x: number; y: number } | null>(null);
-  const [showTopEntities, setShowTopEntities] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
 
   const canvasRef = useRef<GraphCanvasHandle | null>(null);
   // Probe once on mount. If the host can't give us a WebGL context, render
@@ -97,15 +97,112 @@ export default function UnifiedGraph({
     links: active.data.links.length,
   }), [active.data]);
 
-  // No mode renders a permanent left sidebar — entity detail / vault detail
-  // / agent error all float over the canvas. The user can close them to
-  // reclaim the canvas area entirely.
-  const showSearch = mode === "knowledge";
   const showHopSelector = mode === "knowledge";
-  const showTopEntitiesBtn = mode === "knowledge";
   const showRefresh = true;
 
   const refresh = mode === "vault" ? vault.refresh : mode === "agent" ? agent.refresh : undefined;
+
+  // The "search" we feed to the canvas (for highlight + pulse) mirrors the
+  // semantic-search input in knowledge mode, so a single text box drives
+  // both the GraphRAG query AND the visual highlight. Vault/agent modes
+  // fall back to the local graphSearch state.
+  const canvasSearch = mode === "knowledge" ? (knowledge.queryText ?? "") : graphSearch;
+
+  // `/` opens the in-graph find widget. Esc closes it (or exits fullscreen
+  // if the widget is already closed). The main "Search your knowledge"
+  // input keeps its own behavior (typing it pulses matches softly white).
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && tag !== "INPUT" && tag !== "TEXTAREA") {
+        e.preventDefault();
+        setFindOpen(true);
+        // Focus runs after render; tiny timeout lets the input mount.
+        setTimeout(() => findInputRef.current?.focus(), 0);
+      } else if (e.key === "Escape") {
+        if (findOpen) {
+          setFindOpen(false);
+          setFindQuery("");
+        } else if (fullscreen) {
+          setFullscreen(false);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [fullscreen, findOpen]);
+
+  // When findQuery changes, debounce-fly to the nearest match so the user
+  // sees their target rotate into view. Skips if zero matches.
+  useEffect(() => {
+    if (!findOpen) return;
+    const term = findQuery.trim().toLowerCase();
+    if (!term) return;
+    const handle = setTimeout(() => {
+      const matches = active.data.nodes
+        .filter((n) => n.label.toLowerCase().includes(term))
+        .map((n) => n.id);
+      if (matches.length > 0) canvasRef.current?.flyToNearestMatch(matches);
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [findQuery, findOpen, active.data.nodes]);
+
+  const findMatchCount = useMemo(() => {
+    const term = findQuery.trim().toLowerCase();
+    if (!term) return 0;
+    return active.data.nodes.filter((n) => n.label.toLowerCase().includes(term)).length;
+  }, [findQuery, active.data.nodes]);
+
+  // Toolbar — always rendered (even in fullscreen) so the user can always
+  // exit. Lives in the top-right of .ug-root and stays visible across modes.
+  const toolbar = (
+    <div className="ug-toolbar">
+      {showHopSelector && mode === "knowledge" && (
+        <div className="kv-hop-selector">
+          {[1, 2, 3].map((h) => (
+            <button
+              key={h}
+              className={`kv-hop-btn${knowledge.hopDepth === h ? " kv-hop-btn--active" : ""}`}
+              onClick={() => knowledge.setHopDepth(h)}
+              title={`${h}-hop neighborhood`}
+            >
+              {h}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <span className="ug-stat">{stats.nodes}n</span>
+      <span className="ug-stat">{stats.links}e</span>
+
+      <button
+        className={`ug-tool-btn${findOpen ? " ug-tool-btn--active" : ""}`}
+        onClick={() => {
+          setFindOpen((v) => !v);
+          if (!findOpen) setTimeout(() => findInputRef.current?.focus(), 0);
+        }}
+        title="Find in graph (/)"
+      >
+        🔍
+      </button>
+      <button className="ug-tool-btn ug-tool-btn--hint" title="Drag = rotate · Right-drag = pan · Scroll = zoom · / = find in graph · Esc = close find / exit full view">?</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)">↻</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomIn()} title="Zoom in">+</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomOut()} title="Zoom out">−</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.fit()} title="Fit to view (f)">⛶</button>
+      {showRefresh && refresh && (
+        <button className="ug-tool-btn" onClick={refresh} title="Refresh data">⟳</button>
+      )}
+      <button
+        className={`ug-tool-btn${fullscreen ? " ug-tool-btn--active" : ""}`}
+        onClick={() => setFullscreen((v) => !v)}
+        title={fullscreen ? "Exit full view (Esc)" : "Full view"}
+      >
+        {fullscreen ? "✕" : "▢"}
+      </button>
+    </div>
+  );
 
   return (
     <div className={`ug-root${fullscreen ? " ug--fullscreen" : ""}`}>
@@ -114,7 +211,7 @@ export default function UnifiedGraph({
           <button
             key={t.id}
             className={`ug-tab${mode === t.id ? " ug-tab--active" : ""}`}
-            onClick={() => { setMode(t.id); setSelectedId(null); setContextMenu(null); setShowTopEntities(false); }}
+            onClick={() => { setMode(t.id); setSelectedId(null); setContextMenu(null); }}
           >
             {t.label}
           </button>
@@ -122,7 +219,44 @@ export default function UnifiedGraph({
       </div>
 
       {!fullscreen && active.filtersBar && (
-        <div className="ug-filters-bar">{active.filtersBar}</div>
+        <div className="ug-filters-bar">
+          {active.filtersBar}
+        </div>
+      )}
+
+      {toolbar}
+
+      {findOpen && (
+        <div className="ug-find-widget" role="dialog" aria-label="Find in graph">
+          <span className="ug-find-icon">/</span>
+          <input
+            ref={findInputRef}
+            className="ug-find-input"
+            type="text"
+            placeholder="Find in graph…"
+            value={findQuery}
+            onChange={(e) => setFindQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const term = findQuery.trim().toLowerCase();
+                if (!term) return;
+                const matches = active.data.nodes
+                  .filter((n) => n.label.toLowerCase().includes(term))
+                  .map((n) => n.id);
+                if (matches.length > 0) canvasRef.current?.flyToNearestMatch(matches);
+              }
+            }}
+          />
+          <span className="ug-find-count">{findMatchCount}</span>
+          <button
+            className="ug-find-close"
+            onClick={() => { setFindOpen(false); setFindQuery(""); }}
+            title="Close (Esc)"
+            aria-label="Close find widget"
+          >
+            ×
+          </button>
+        </div>
       )}
 
       <div className="ug-main">
@@ -142,7 +276,8 @@ export default function UnifiedGraph({
                 ref={canvasRef}
                 data={active.data}
                 selectedId={selectedId}
-                search={graphSearch}
+                search={canvasSearch}
+                findQuery={findOpen ? findQuery : ""}
                 onSelect={handleNodeClick}
                 onNodeRightClick={handleNodeRightClick}
                 contextMenu={contextMenu}
@@ -156,78 +291,6 @@ export default function UnifiedGraph({
               nodeCount={stats.nodes}
               edgeCount={stats.links}
               onRetry={() => setWebglProbe(probeWebGL())}
-            />
-          )}
-
-          {/* Floating toolbar */}
-          <div className="ug-toolbar">
-            {showSearch && (
-              <div className="ug-search">
-                <input
-                  type="text"
-                  className="kv-graph-search-input"
-                  placeholder="Find…"
-                  value={graphSearch}
-                  onChange={(e) => setGraphSearch(e.target.value)}
-                />
-                {graphSearch && (
-                  <button className="kv-graph-search-clear" onClick={() => setGraphSearch("")}>&times;</button>
-                )}
-              </div>
-            )}
-
-            {showHopSelector && mode === "knowledge" && (
-              <div className="kv-hop-selector">
-                {[1, 2, 3].map((h) => (
-                  <button
-                    key={h}
-                    className={`kv-hop-btn${knowledge.hopDepth === h ? " kv-hop-btn--active" : ""}`}
-                    onClick={() => knowledge.setHopDepth(h)}
-                    title={`${h}-hop neighborhood`}
-                  >
-                    {h}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {showTopEntitiesBtn && (
-              <button
-                className={`ug-tool-btn${showTopEntities ? " ug-tool-btn--active" : ""}`}
-                onClick={() => setShowTopEntities((v) => !v)}
-                title="Top entities"
-              >
-                Top entities
-              </button>
-            )}
-
-            <span className="ug-stat">{stats.nodes} nodes</span>
-            <span className="ug-stat">{stats.links} edges</span>
-
-            <button
-              className="ug-tool-btn ug-tool-btn--hint"
-              title="Drag = rotate · Right-drag = pan · Scroll = zoom"
-            >
-              ?
-            </button>
-            <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)">↻</button>
-            <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomIn()} title="Zoom in">+</button>
-            <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomOut()} title="Zoom out">−</button>
-            <button className="ug-tool-btn" onClick={() => canvasRef.current?.fit()} title="Fit to view (f)">⛶</button>
-            {showRefresh && refresh && (
-              <button className="ug-tool-btn" onClick={refresh} title="Refresh data">⟳</button>
-            )}
-            <button className="ug-tool-btn" onClick={() => setFullscreen((v) => !v)} title={fullscreen ? "Exit full view" : "Full view"}>
-              {fullscreen ? "▣" : "▢"}
-            </button>
-          </div>
-
-          {showTopEntities && mode === "knowledge" && (
-            <TopEntitiesPopup
-              entities={knowledge.topEntities}
-              typeFilter={knowledge.typeFilter}
-              onPick={knowledge.onPickEntity}
-              onClose={() => setShowTopEntities(false)}
             />
           )}
 

@@ -5,25 +5,29 @@
   height: 100%;
   background: var(--bg);
   overflow: hidden;
+  position: relative;
 }
 
 .ug-tabs {
   display: flex;
   gap: 4px;
-  padding: 8px 12px;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
   flex-shrink: 0;
+  /* Reserve room on the right for the absolute-positioned toolbar so the
+     tabs and toolbar share a tight band. */
+  padding-right: max(8px, calc(60% - 4px));
 }
 
 .ug-tab {
-  padding: 5px 14px;
+  padding: 3px 10px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg-dim);
   cursor: pointer;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: 5px;
+  font-size: 11px;
 }
 
 .ug-tab--active {
@@ -35,8 +39,15 @@
 .ug-filters-bar {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
-  padding: 6px 10px;
+  padding: 4px 8px 2px;
+  /* Reserve space at top-right for the toolbar (which is positioned on
+     .ug-root, not .ug-filters-bar). */
+  padding-right: max(8px, calc(60% - 4px));
   background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
 }
 
 .ug-main {
@@ -78,21 +89,36 @@
 
 .ug-empty > * { pointer-events: auto; }
 
+/* Toolbar — top-right of .ug-root, sharing the tabs row. ALWAYS visible
+   (including fullscreen) so the user can always exit fullscreen. */
 .ug-toolbar {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 4px;
+  right: 8px;
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
-  padding: 6px 10px;
+  padding: 2px 4px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  backdrop-filter: blur(8px);
-  z-index: 10;
-  flex-wrap: wrap;
-  max-width: calc(100% - 24px);
+  border-radius: 6px;
+  z-index: 50;
+  flex-wrap: nowrap;
+  max-width: calc(60% - 12px);
+  height: 26px;
+  box-sizing: border-box;
+}
+
+.ug-toolbar .ug-tool-btn,
+.ug-toolbar .kv-hop-btn {
+  height: 20px;
+  min-width: 20px;
+  width: auto;
+  padding: 0 5px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ug-tool-btn {
@@ -169,6 +195,32 @@
   color: var(--fg);
 }
 
+/* Tab-style button on the right edge to reopen a collapsed sidebar. */
+.ug-floating-reopen {
+  position: absolute;
+  top: 64px;
+  right: 0;
+  width: 18px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  color: var(--fg-dim);
+  font-size: 14px;
+  cursor: pointer;
+  z-index: 14;
+  padding: 0;
+  line-height: 1;
+}
+.ug-floating-reopen:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
 .ug-top-entities-popup {
   position: absolute;
   top: 56px;
@@ -197,6 +249,78 @@
 .ug--fullscreen .ug-tabs { display: none; }
 .ug--fullscreen .ug-filters-bar { display: none; }
 .ug--fullscreen .ug-floating-detail { display: none; }
+/* Toolbar must remain visible so the user can exit fullscreen. */
+.ug--fullscreen .ug-toolbar { top: 8px; right: 8px; }
+
+/* Floating find-in-graph widget — distinct from the main search input. */
+.ug-find-widget {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 8px;
+  background: var(--bg-panel);
+  border: 1px solid color-mix(in srgb, #5cf0ff 40%, var(--border));
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35), 0 0 8px rgba(92, 240, 255, 0.15);
+  z-index: 60;
+  min-width: 280px;
+}
+
+.ug-find-icon {
+  color: #5cf0ff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  font-family: ui-monospace, SF Mono, Menlo, monospace;
+}
+
+.ug-find-input {
+  flex: 1;
+  height: 22px;
+  padding: 0 6px;
+  background: var(--bg-inset);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+
+.ug-find-input:focus {
+  border-color: #5cf0ff;
+}
+
+.ug-find-count {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+  min-width: 18px;
+  text-align: right;
+}
+
+.ug-find-close {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ug-find-close:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* Keep the widget reachable in fullscreen too. */
+.ug--fullscreen .ug-find-widget { top: 40px; }
 
 .ug-webgl-fallback {
   position: absolute;
