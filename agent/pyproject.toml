@@ -39,12 +39,11 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# Expects the loom repo to sit next to the nexus repo:
-#   /some/path/loom
-#   /some/path/nexus
-# Clone both side-by-side and `uv sync` will pick loom up as an editable
-# local install. Adjust if your layout differs.
-loom-framework = { path = "../../loom", editable = true }
+# Loom (the agentic-core framework) is pulled straight from GitHub so the
+# one-line installer works on a fresh host. For local development against a
+# sibling checkout, override this with a `[tool.uv.sources]` block in a
+# user-level `uv.toml` (or `uv pip install -e ../../loom` after `uv sync`).
+loom-framework = { git = "https://github.com/NinoCoelho/loom.git", branch = "main" }
 ddgs = { git = "https://github.com/NinoCoelho/ddgs", branch = "main" }
 
 [project.optional-dependencies]

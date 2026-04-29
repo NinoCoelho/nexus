@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 log = logging.getLogger(__name__)
 
 _KEYS_PATH = Path("~/.nexus/push.json").expanduser()
-_DEFAULT_SUBJECT = "mailto:admin@nexus.local"
+_DEFAULT_SUBJECT = "mailto:admin@example.com"
 
 
 @dataclass(frozen=True)
