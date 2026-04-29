@@ -1,0 +1,100 @@
+.kanban-list-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 8px 0;
+  gap: 6px;
+}
+
+.kanban-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.kanban-list-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.kanban-list-refresh {
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.kanban-list-refresh:hover { color: var(--fg); background: var(--bg-soft); }
+.kanban-list-refresh:disabled { opacity: 0.4; cursor: default; }
+
+.kanban-list-error {
+  font-size: 12px;
+  color: var(--danger, #d33);
+  padding: 4px 6px;
+}
+
+.kanban-list-empty {
+  font-size: 12px;
+  color: var(--fg-faint);
+  padding: 12px 6px;
+  line-height: 1.4;
+}
+.kanban-list-empty code {
+  font-size: 11px;
+  background: var(--bg-soft);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.kanban-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.kanban-list-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.kanban-list-item:hover { background: var(--bg-soft); }
+.kanban-list-item--active {
+  background: var(--accent-lo);
+  border-color: var(--accent-lo);
+}
+
+.kanban-list-item-title {
+  font-size: 13px;
+  line-height: 1.2;
+}
+.kanban-list-item-path {
+  font-size: 11px;
+  color: var(--fg-faint);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}

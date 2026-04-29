@@ -30,6 +30,41 @@ def create_empty(path: str, title: str | None = None, columns: list[str] | None 
     return board
 
 
+def list_boards() -> list[dict[str, Any]]:
+    """Return ``[{path, title}]`` for every kanban board in the vault.
+
+    Title resolution: parsed board title (frontmatter ``title`` → first H1 →
+    parser default "Kanban") with a final fallback to the filename stem when
+    the parser could not improve on the literal default. Sorted by lower-cased
+    title for stable rendering.
+    """
+    out: list[dict[str, Any]] = []
+    for entry in vault.list_tree():
+        if entry.type != "file":
+            continue
+        path = entry.path
+        if not path.endswith(".md"):
+            continue
+        try:
+            file = vault.read_file(path)
+        except (FileNotFoundError, OSError):
+            continue
+        if not is_kanban_file(file["content"]):
+            continue
+        try:
+            board = parse(file["content"])
+        except Exception:
+            continue
+        title = board.title
+        if title == "Kanban":
+            stem = path.rsplit("/", 1)[-1].removesuffix(".md")
+            if stem:
+                title = stem
+        out.append({"path": path, "title": title})
+    out.sort(key=lambda b: b["title"].lower())
+    return out
+
+
 def query_boards(
     *,
     text: str | None = None,

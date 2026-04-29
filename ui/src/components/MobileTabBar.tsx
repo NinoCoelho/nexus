@@ -3,9 +3,9 @@
  * Mirrors the Sidebar's view buttons in a touch-first layout.
  */
 import type { ComponentType } from "react";
-import { IconChat, IconCalendar, IconVault, IconGraph, IconInsights } from "./Sidebar/icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights } from "./Sidebar/icons";
 
-type View = "chat" | "calendar" | "vault" | "graph" | "insights";
+type View = "chat" | "calendar" | "vault" | "kanban" | "graph" | "insights";
 
 interface Props {
   view: View;
@@ -17,6 +17,7 @@ const TABS: ReadonlyArray<{ id: View; label: string; Icon: ComponentType }> = [
   { id: "chat", label: "Chat", Icon: IconChat },
   { id: "calendar", label: "Calendar", Icon: IconCalendar },
   { id: "vault", label: "Vault", Icon: IconVault },
+  { id: "kanban", label: "Kanban", Icon: IconKanban },
   { id: "graph", label: "Graph", Icon: IconGraph },
   { id: "insights", label: "Insights", Icon: IconInsights },
 ];

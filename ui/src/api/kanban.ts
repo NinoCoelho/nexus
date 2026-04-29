@@ -36,6 +36,22 @@ export interface KanbanBoard {
   lanes: KanbanLane[];
 }
 
+export interface KanbanBoardSummary {
+  path: string;
+  title: string;
+}
+
+/**
+ * List every Kanban board in the vault as `{path, title}` pairs.
+ * Boards are detected by `kanban-plugin:` frontmatter and may live anywhere
+ * in the vault folder structure.
+ */
+export async function listKanbanBoards(): Promise<{ boards: KanbanBoardSummary[]; count: number }> {
+  const res = await fetch(`${BASE}/vault/kanban/boards`);
+  if (!res.ok) throw new Error(`Kanban list error: ${res.status}`);
+  return res.json();
+}
+
 export interface KanbanQueryHit {
   path: string;
   board_title: string;

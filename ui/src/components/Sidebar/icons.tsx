@@ -40,6 +40,16 @@ export function IconInsights() {
   );
 }
 
+export function IconKanban() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="14" height="14" rx="2" />
+      <line x1="8" y1="3" x2="8" y2="17" />
+      <line x1="13" y1="3" x2="13" y2="17" />
+    </svg>
+  );
+}
+
 export function IconCalendar() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

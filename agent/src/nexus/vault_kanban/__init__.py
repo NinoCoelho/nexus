@@ -49,7 +49,7 @@ Re-exports all public symbols so ``from nexus import vault_kanban`` and
 attribute access like ``vault_kanban.parse(...)`` keep working.
 """
 
-from .boards import create_empty, query_boards, read_board, write_board
+from .boards import create_empty, list_boards, query_boards, read_board, write_board
 from .cards import add_card, delete_card, move_card, update_card
 from .hooks import LaneChangeHook, _lane_change_hook, set_lane_change_hook
 from .lanes import add_lane, delete_lane, update_lane
@@ -80,6 +80,7 @@ __all__ = [
     "read_board",
     "write_board",
     "create_empty",
+    "list_boards",
     "query_boards",
     # cards
     "add_card",

@@ -63,6 +63,8 @@ export default function App() {
   const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(initial.vaultPath);
   /** Currently selected calendar (.md path) inside the Calendar view. Lifted here so view switches preserve it. */
   const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
+  /** Currently selected kanban board path inside the Kanban view. */
+  const [kanbanSelectedPath, setKanbanSelectedPath] = useState<string | null>(null);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -87,7 +89,7 @@ export default function App() {
   }, [view]);
   useEffect(() => {
     const onHash = () => {
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|graph|insights)$/);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|graph|insights)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();
@@ -374,6 +376,8 @@ export default function App() {
         onVaultOpenPathHandled={() => setVaultOpenPath(null)}
         onDispatchToChat={handleDispatchToChat}
         onViewEntityGraph={handleViewEntityGraph}
+        kanbanSelectedPath={kanbanSelectedPath}
+        onKanbanOpen={(path) => { setKanbanSelectedPath(path); setView("kanban"); }}
       />
 
       <div className="app-main">
@@ -506,6 +510,21 @@ export default function App() {
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
             />
+          </div>
+          <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
+            {kanbanSelectedPath ? (
+              <VaultView
+                selectedPath={kanbanSelectedPath}
+                onDispatchToChat={handleDispatchToChat}
+                onOpenInChat={handleOpenInChat}
+                onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
+                onOpenCalendar={handleOpenCalendar}
+              />
+            ) : (
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
+                Pick a board on the left.
+              </div>
+            )}
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
             <UnifiedGraphView

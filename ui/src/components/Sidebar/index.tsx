@@ -10,7 +10,8 @@ import {
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
-import { IconChat, IconCalendar, IconVault, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
+import KanbanListPanel from "../KanbanListPanel";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -19,7 +20,7 @@ import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "graph" | "insights";
+type View = "chat" | "calendar" | "vault" | "kanban" | "graph" | "insights";
 
 interface Props {
   view: View;
@@ -36,6 +37,8 @@ interface Props {
   onVaultOpenPathHandled?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+  kanbanSelectedPath: string | null;
+  onKanbanOpen: (path: string) => void;
   /** Mobile drawer open state. When true, sidebar slides in from the left. */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -45,6 +48,7 @@ const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
   { id: "chat",     label: "Chat",      Icon: IconChat },
   { id: "calendar", label: "Calendar",  Icon: IconCalendar },
   { id: "vault",    label: "Vault",     Icon: IconVault },
+  { id: "kanban",   label: "Kanban",    Icon: IconKanban },
   { id: "graph",    label: "Knowledge", Icon: IconGraph },
   { id: "insights", label: "Insights",  Icon: IconInsights },
 ];
@@ -53,6 +57,7 @@ export default function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
   sessionsRevision, onSessionsRevisionBump, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
+  kanbanSelectedPath, onKanbanOpen,
   mobileOpen = false, onMobileClose,
 }: Props) {
   const toast = useToast();
@@ -264,8 +269,18 @@ export default function Sidebar({
         </div>
       )}
 
+      {/* Kanban list — only in Kanban view */}
+      {view === "kanban" && !collapsed && (
+        <div className="sidebar-section sidebar-vault-section">
+          <KanbanListPanel
+            selectedPath={kanbanSelectedPath}
+            onOpen={onKanbanOpen}
+          />
+        </div>
+      )}
+
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && (
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}
 

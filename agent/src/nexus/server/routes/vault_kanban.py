@@ -84,6 +84,14 @@ async def vault_kanban_delete_card(card_id: str, path: str) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
 
+@router.get("/vault/kanban/boards")
+async def vault_kanban_boards() -> dict:
+    """List every kanban board in the vault as ``[{path, title}]``."""
+    from ... import vault_kanban
+    boards = vault_kanban.list_boards()
+    return {"boards": boards, "count": len(boards)}
+
+
 @router.post("/vault/kanban/query")
 async def vault_kanban_query(body: dict) -> dict:
     """Cross-board card search. Body keys (all optional):
