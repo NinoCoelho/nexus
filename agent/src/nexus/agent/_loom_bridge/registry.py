@@ -89,6 +89,7 @@ def build_tool_registry(
     from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
+    from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
     from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
@@ -248,6 +249,15 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(MEMORY_READ_TOOL, _mem_read))
     registry.register(_SimpleToolHandler(MEMORY_WRITE_TOOL, _mem_write))
+
+    # nexus_kb_search — BM25 retrieval over the bundled `nexus` skill's
+    # knowledge.md. The `nexus` skill calls this to answer meta-questions
+    # about Nexus configuration without paying for the full KB in the
+    # system prompt.
+    async def _nexus_kb_search(args: dict) -> str:
+        return json.dumps(handle_nexus_kb_search(args))
+
+    registry.register(_SimpleToolHandler(NEXUS_KB_TOOL, _nexus_kb_search))
 
     # HITL tools — always registered; handlers resolved at dispatch time.
     # This lets app.py late-bind handlers without rebuilding the registry.

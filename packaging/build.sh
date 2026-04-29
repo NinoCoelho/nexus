@@ -15,6 +15,18 @@
 #                                                 instead of OpenAI tool_calls
 #                                                 — Nexus's loop won't see them)
 #
+# Optional: ship a pre-configured remote model so a fresh install starts
+# with chat working out of the box. All three values are required together;
+# pass via flags or DEMO_LLM_BASE_URL / DEMO_LLM_API_KEY / DEMO_LLM_MODEL
+# env vars (env vars are preferred so the key never lands in shell history).
+# bootstrap.py only seeds the model when ~/.nexus/config.toml is absent
+# (true fresh install), so existing users are never overwritten.
+#
+#   packaging/build.sh \
+#       --demo-url   https://llm.knowspace.app/v1 \
+#       --demo-key   sk-... \
+#       --demo-model nexus
+#
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -35,14 +47,32 @@ PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$
 SKIP_MODELS=0
 SKIP_SIGN=0
 BUNDLE_LLM="none"
+# Demo-model flags fall back to env vars so the key can stay out of shell history.
+DEMO_URL="${DEMO_LLM_BASE_URL:-}"
+DEMO_KEY="${DEMO_LLM_API_KEY:-}"
+DEMO_MODEL="${DEMO_LLM_MODEL:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-models) SKIP_MODELS=1; shift ;;
     --skip-sign)   SKIP_SIGN=1; shift ;;
     --bundle-llm)  BUNDLE_LLM="${2:-}"; shift 2 ;;
+    --demo-url)    DEMO_URL="${2:-}"; shift 2 ;;
+    --demo-key)    DEMO_KEY="${2:-}"; shift 2 ;;
+    --demo-model)  DEMO_MODEL="${2:-}"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+# Demo-model triple must be all-or-nothing — partial config silently
+# producing a half-broken provider is worse than no provider at all.
+DEMO_SET_COUNT=0
+[[ -n "$DEMO_URL"   ]] && DEMO_SET_COUNT=$((DEMO_SET_COUNT + 1))
+[[ -n "$DEMO_KEY"   ]] && DEMO_SET_COUNT=$((DEMO_SET_COUNT + 1))
+[[ -n "$DEMO_MODEL" ]] && DEMO_SET_COUNT=$((DEMO_SET_COUNT + 1))
+if [[ "$DEMO_SET_COUNT" -ne 0 && "$DEMO_SET_COUNT" -ne 3 ]]; then
+  echo "error: --demo-url, --demo-key, --demo-model must all be set together (or all unset)" >&2
+  exit 2
+fi
 
 LLAMA_TAG="b8929"
 LLAMA_DIST="llama-${LLAMA_TAG}-bin-macos-arm64.tar.gz"
@@ -191,6 +221,31 @@ if [[ -d "$REPO_ROOT/skills" ]]; then
     "$REPO_ROOT/skills/" "$STAGE/skills/"
 fi
 
+# Stage demo_llm.json when --demo-* / DEMO_LLM_* are set. bootstrap.py reads
+# this on launch and seeds ~/.nexus/config.toml ONLY when that file doesn't
+# yet exist (true fresh install). Anyone with the .app can read this manifest;
+# rely on server-side per-key rate limits + budget caps for abuse protection.
+if [[ -n "$DEMO_URL" && -n "$DEMO_KEY" && -n "$DEMO_MODEL" ]]; then
+  echo "==> Staging demo_llm.json (model: $DEMO_MODEL)"
+  # Build via python -c with env vars to keep the key out of any argv/log,
+  # and to get proper JSON escaping for arbitrary key characters.
+  DEMO_LLM_BASE_URL="$DEMO_URL" \
+  DEMO_LLM_API_KEY="$DEMO_KEY" \
+  DEMO_LLM_MODEL="$DEMO_MODEL" \
+  DEMO_OUT="$STAGE/demo_llm.json" \
+    /usr/bin/env python3 -c '
+import json, os
+out = {
+    "base_url":   os.environ["DEMO_LLM_BASE_URL"],
+    "api_key":    os.environ["DEMO_LLM_API_KEY"],
+    "model_name": os.environ["DEMO_LLM_MODEL"],
+}
+with open(os.environ["DEMO_OUT"], "w") as f:
+    json.dump(out, f)
+'
+  chmod 0600 "$STAGE/demo_llm.json"
+fi
+
 cp "$PACKAGING/bootstrap.py" "$STAGE/bootstrap.py"
 ( cd "$LOOM_DIR" && git rev-parse HEAD > "$STAGE/loom_version.txt" 2>/dev/null || true )
 
@@ -214,6 +269,7 @@ cp -R "$STAGE/ui"              "$RES/ui"
 [[ -d "$STAGE/llama" ]]  && cp -R "$STAGE/llama"  "$RES/llama"
 [[ -d "$STAGE/skills" ]] && cp -R "$STAGE/skills" "$RES/skills"
 [[ -f "$STAGE/llm.json" ]] && cp "$STAGE/llm.json" "$RES/llm.json"
+[[ -f "$STAGE/demo_llm.json" ]] && { cp "$STAGE/demo_llm.json" "$RES/demo_llm.json"; chmod 0600 "$RES/demo_llm.json"; }
 cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
 [[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"
 

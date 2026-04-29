@@ -32,6 +32,10 @@ dependencies = [
     # itself uses Cloudflare Quick Tunnel via the `cloudflared` binary, which
     # we auto-download on first use (see nexus.tunnel.cloudflared_provider).
     "qrcode>=7.4",
+    # Tiny pure-Python BM25 implementation. Used by the bundled `nexus` skill
+    # (`nexus_kb_search` tool) to retrieve sections from the in-app knowledge
+    # base without inflating the system prompt.
+    "rank_bm25>=0.2.2",
 ]
 
 [tool.uv.sources]

@@ -260,6 +260,94 @@ def _strip_local_llm_config() -> None:
             tomli_w.dump(raw, f)
 
 
+def _seed_demo_llm_if_fresh_install(here: Path) -> None:
+    """Seed a remote demo provider/model on a brand-new install only.
+
+    Triggered when ``~/.nexus/config.toml`` does not exist *and* the bundle
+    ships a ``demo_llm.json`` (written by packaging/build.sh when the maintainer
+    passes ``--demo-url/--demo-key/--demo-model``). Writes config.toml with the
+    demo provider + model and stores the API key in secrets.toml. Never
+    overwrites an existing config — existing users are untouched on upgrade.
+    """
+    cfg_path = Path.home() / ".nexus" / "config.toml"
+    if cfg_path.is_file():
+        return  # not a fresh install — respect what the user has.
+    manifest = here / "demo_llm.json"
+    if not manifest.is_file():
+        return  # build had no demo flags.
+
+    try:
+        creds = json.loads(manifest.read_text())
+    except (OSError, ValueError):
+        log.warning("[bootstrap] demo_llm.json present but unreadable")
+        return
+
+    base_url = creds.get("base_url")
+    api_key = creds.get("api_key")
+    model_name = creds.get("model_name")
+    if not (base_url and api_key and model_name):
+        log.warning("[bootstrap] demo_llm.json missing base_url/api_key/model_name")
+        return
+
+    import tomli_w
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Stash the API key in ~/.nexus/secrets.toml under the provider name
+    # ``demo`` — the registry resolves use_inline_key=True via secrets.get(name).
+    secrets_path = Path.home() / ".nexus" / "secrets.toml"
+    existing: dict = {}
+    if secrets_path.is_file():
+        try:
+            try:
+                import tomllib
+            except ImportError:  # pragma: no cover
+                import tomli as tomllib  # type: ignore
+            with open(secrets_path, "rb") as f:
+                existing = tomllib.load(f)
+        except (OSError, ValueError):
+            existing = {}
+    keys = dict(existing.get("keys", {}))
+    keys["demo"] = api_key
+    existing["keys"] = keys
+    with open(secrets_path, "wb") as f:
+        tomli_w.dump(existing, f)
+    try:
+        os.chmod(secrets_path, 0o600)
+    except OSError:
+        pass
+
+    # Provider ``demo`` + a single model entry ``demo/<model_name>`` set as
+    # the default. Tag the model "demo" so the UI / future banner work can
+    # tell it apart at a glance without a dedicated schema field.
+    raw = {
+        "providers": {
+            "demo": {
+                "base_url": base_url,
+                "api_key_env": "",
+                "use_inline_key": True,
+                "type": "openai_compat",
+            },
+        },
+        "models": [
+            {
+                "id": f"demo/{model_name}",
+                "provider": "demo",
+                "model_name": model_name,
+                "tags": ["demo"],
+                "tier": "balanced",
+                "notes": (
+                    "Seeded at packaging time. Replace via Settings → Models "
+                    "with your own provider for production use."
+                ),
+            },
+        ],
+        "agent": {"default_model": f"demo/{model_name}"},
+    }
+    with open(cfg_path, "wb") as f:
+        tomli_w.dump(raw, f)
+
+
 def _stop_proc(proc: subprocess.Popen | None) -> None:
     if proc is None or proc.poll() is not None:
         return
@@ -279,6 +367,14 @@ def main() -> int:
     site = here / "site-packages"
     if site.is_dir():
         sys.path.insert(0, str(site))
+
+    # Seed bundled demo model on fresh install. Runs after site-packages is on
+    # sys.path (needs tomli_w) but before the FastAPI app loads config.toml.
+    # No-op when config.toml already exists — existing users are untouched.
+    try:
+        _seed_demo_llm_if_fresh_install(here)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[bootstrap] could not seed demo LLM: %s", e)
 
     models_dir = here / "models"
     if models_dir.is_dir():
