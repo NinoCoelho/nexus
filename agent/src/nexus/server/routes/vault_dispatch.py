@@ -206,6 +206,7 @@ async def _run_background_agent_turn(
     store: SessionStore,
     model_id: str | None = None,
     entity_kind: str = "card",
+    occurrence_start: str | None = None,
 ) -> None:
     """Run one agent turn to completion, publishing events via the trace bus
     and updating the entity's status (done/failed) when finished."""
@@ -219,6 +220,7 @@ async def _run_background_agent_turn(
         store=store,
         model_id=model_id,
         entity_kind=entity_kind,
+        occurrence_start=occurrence_start,
     )
 
 
@@ -230,6 +232,7 @@ async def _dispatch_impl(
     a: "Agent",
     store: "SessionStore",
     event_id: str | None = None,
+    occurrence_start: str | None = None,
 ) -> dict:
     """Shared implementation for /vault/dispatch and the dispatch_card tool.
 
@@ -370,7 +373,16 @@ async def _dispatch_impl(
         ev_updates: dict[str, Any] = {"session_id": session.id}
         # Fire-window events stay "scheduled" forever — next intra-day slot
         # will fire them again. Don't overwrite status here.
-        if mode == "background" and not is_fire_window_event:
+        # Recurring events also stay "scheduled" because per-occurrence
+        # completion is tracked in ``completed_occurrences`` (set by the
+        # background turn helper on success); flipping the parent's status
+        # to "triggered" would propagate through every expanded occurrence
+        # in the UI.
+        if (
+            mode == "background"
+            and not is_fire_window_event
+            and not event_rrule
+        ):
             ev_updates["status"] = "triggered"
         try:
             vault_calendar.update_event(path, event_id, ev_updates)
@@ -392,6 +404,7 @@ async def _dispatch_impl(
                 store=store,
                 model_id=resolved_model,
                 entity_kind=entity_kind,
+                occurrence_start=occurrence_start if entity_kind == "event" else None,
             )
         )
         return {

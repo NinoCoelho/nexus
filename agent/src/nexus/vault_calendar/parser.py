@@ -116,6 +116,11 @@ def parse(content: str) -> Calendar:
             # write normalises the file. The legacy ``prompt`` value itself
             # is dropped — body now carries the agent context.
             event.assignee = "agent"
+        if "completed" in meta:
+            raw = meta["completed"] or ""
+            event.completed_occurrences = [
+                token for token in (t.strip() for t in raw.split(",")) if token
+            ]
         cal.events.append(event)
         event = None
         event_lines = []
@@ -169,6 +174,10 @@ def serialize(cal: Calendar) -> str:
             out.append(f"<!-- nx:model={event.model} -->")
         if event.assignee:
             out.append(f"<!-- nx:assignee={event.assignee} -->")
+        if event.completed_occurrences:
+            out.append(
+                f"<!-- nx:completed={','.join(event.completed_occurrences)} -->"
+            )
         body = (event.body or "").strip()
         if body:
             out.append("")

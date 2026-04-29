@@ -34,6 +34,10 @@ export interface CalendarEvent {
   model?: string | null;
   /** ``"agent"`` opts the event into auto-firing; anything else is a plain entry. */
   assignee?: string | null;
+  /** UTC ISO occurrence_starts that have been marked done individually for a
+   * recurring event. Each is treated as a per-instance ``status="done"`` in
+   * the grid; the parent record's ``status`` stays "scheduled". */
+  completed_occurrences?: string[];
   /** Present in range queries — UTC ISO of the resolved (recurring) occurrence. */
   occurrence_start?: string;
   /** Present in range queries — vault-relative file path. */
@@ -170,6 +174,13 @@ export async function patchVaultCalendarEvent(
     fire_every_min: number | null;
     model: string | null;
     assignee: string | null;
+    completed_occurrences: string[];
+    /** Append one ISO occurrence_start to the parent's completed list. Use
+     * this (instead of `status: "done"`) for a single instance of a recurring
+     * event so the rest of the series stays "scheduled". */
+    complete_occurrence: string;
+    /** Remove one ISO occurrence_start from the parent's completed list. */
+    uncomplete_occurrence: string;
   }>,
 ): Promise<CalendarEvent> {
   const res = await fetch(

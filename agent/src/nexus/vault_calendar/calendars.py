@@ -162,11 +162,15 @@ def query_events(
             else:
                 parsed = _parse_iso(ev.start)
                 occurrences = [parsed] if parsed else []
+            completed = set(ev.completed_occurrences)
             for occ in occurrences:
                 hit = ev.to_dict()
                 hit["path"] = path
                 hit["calendar_title"] = cal.title
-                hit["occurrence_start"] = occ.strftime("%Y-%m-%dT%H:%M:%SZ")
+                occ_iso = occ.strftime("%Y-%m-%dT%H:%M:%SZ")
+                hit["occurrence_start"] = occ_iso
+                if occ_iso in completed:
+                    hit["status"] = "done"
                 hits.append(hit)
                 if len(hits) >= limit:
                     return hits

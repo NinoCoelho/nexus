@@ -154,12 +154,19 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           assignee: draft.assignee ?? undefined,
         });
       } else {
-        await patchVaultCalendarEvent(selectedPath, modal.event.id, {
+        const ev = modal.event;
+        const occStart = ev.occurrence_start ?? null;
+        const isRecurringInstance = !!ev.rrule && !!occStart;
+        const occCompleted =
+          isRecurringInstance &&
+          Array.isArray(ev.completed_occurrences) &&
+          ev.completed_occurrences.includes(occStart!);
+
+        const updates: Parameters<typeof patchVaultCalendarEvent>[2] = {
           title: draft.title,
           body: draft.body,
           start: draft.startIso,
           end: draft.endIso,
-          status: draft.status,
           trigger: draft.trigger,
           rrule: draft.rrule || null,
           all_day: draft.all_day,
@@ -168,7 +175,28 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_every_min: draft.fire_every_min,
           model: draft.model,
           assignee: draft.assignee,
-        });
+        };
+
+        // For a single occurrence of a recurring event, route "done" through
+        // ``complete_occurrence`` so the rest of the series stays scheduled.
+        // Non-"done" status changes still target the parent (e.g. cancelled).
+        if (isRecurringInstance) {
+          if (draft.status === "done" && !occCompleted) {
+            updates.complete_occurrence = occStart!;
+          } else if (draft.status !== "done" && occCompleted) {
+            updates.uncomplete_occurrence = occStart!;
+            if (draft.status !== "scheduled") {
+              updates.status = draft.status;
+            }
+          } else if (draft.status !== "done") {
+            updates.status = draft.status;
+          }
+          // else: still "done" with no change → don't propagate status.
+        } else {
+          updates.status = draft.status;
+        }
+
+        await patchVaultCalendarEvent(selectedPath, ev.id, updates);
       }
       setModal(null);
       void reload();

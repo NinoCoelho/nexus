@@ -464,10 +464,17 @@ def create_app(
             # here (not at module-load time) so it sees the live agent + store.
             from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
 
-            async def _calendar_dispatcher(*, path: str, event_id: str, mode: str = "background") -> dict:
+            async def _calendar_dispatcher(
+                *,
+                path: str,
+                event_id: str,
+                mode: str = "background",
+                occurrence_start: str | None = None,
+            ) -> dict:
                 return await _cal_dispatch(
                     path=path, card_id=None, event_id=event_id,
                     mode=mode, a=agent, store=sessions,
+                    occurrence_start=occurrence_start,
                 )
             _set_cal_dispatcher(_calendar_dispatcher)
 

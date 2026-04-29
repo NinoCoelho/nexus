@@ -52,6 +52,13 @@ class Event:
     # entry that never fires. Free-form values are reserved for future
     # human-attendee tracking.
     assignee: str | None = None
+    # Per-occurrence completion log for recurring events. Stores UTC ISO
+    # ``occurrence_start`` strings. Lets one instance of a recurring event
+    # be marked done without flipping the parent ``status`` (which would
+    # cascade to every other expanded occurrence). Also gates the driver:
+    # an entry here means "skip this occurrence." Always empty for
+    # non-recurring events.
+    completed_occurrences: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -81,6 +88,8 @@ class Event:
             out["model"] = self.model
         if self.assignee:
             out["assignee"] = self.assignee
+        if self.completed_occurrences:
+            out["completed_occurrences"] = list(self.completed_occurrences)
         return out
 
     @property
