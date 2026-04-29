@@ -6,8 +6,12 @@ Repository: `git@github.com:NinoCoelho/nexus.git` (branch: `main`).
 
 ## Repo layout
 
-Nexus depends on **Loom** (the agentic-core framework) as a local editable
-path — `../../loom` from `nexus/agent/`. Clone both repos side-by-side:
+Nexus depends on **Loom** (the agentic-core framework). By default `uv sync`
+pulls it straight from GitHub (`NinoCoelho/loom`, `main` branch) via the
+`[tool.uv.sources]` override in `agent/pyproject.toml` — the one-line
+installer works on a fresh host with no second clone.
+
+For local development against a sibling checkout, clone loom next to nexus:
 
 ```
 <parent>/
@@ -15,7 +19,8 @@ path — `../../loom` from `nexus/agent/`. Clone both repos side-by-side:
   nexus/   # this repo
 ```
 
-`uv sync` resolves `loom` via `[tool.uv.sources]` in `agent/pyproject.toml`.
+…then after `uv sync`, run `uv pip install -e ../../loom` from
+`nexus/agent/` to swap in the editable local copy.
 
 ## Commands
 
