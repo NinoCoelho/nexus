@@ -32,6 +32,16 @@ export default function SharingSection() {
     refresh();
   }, [refresh]);
 
+  // While a tunnel is up but nobody's redeemed the code yet, poll status so
+  // the panel can flip to the "code burned" state within a few seconds of the
+  // pairing happening on the phone. We stop polling once redemption flips
+  // (steady state) or the tunnel goes inactive.
+  useEffect(() => {
+    if (!status?.active || status?.redeemed) return;
+    const id = window.setInterval(refresh, 4000);
+    return () => window.clearInterval(id);
+  }, [status?.active, status?.redeemed, refresh]);
+
   // Render the QR code into a canvas whenever the share URL changes. The QR
   // encodes the *plain* URL only — never the access code. The phone scans the
   // URL, opens it, and sees the login form; the user types the code there.
@@ -132,9 +142,11 @@ export default function SharingSection() {
               Opens a public Cloudflare Quick Tunnel to this Nexus and gives
               you a URL plus a short access code. Open the URL on your phone
               (or share it), type the code on the phone's login screen, and
-              the same UI as your desktop loads. Stop sharing to revoke
-              instantly. The code is the credential — keep it private; the
-              URL alone is harmless.
+              the same UI as your desktop loads. The code is burned the moment
+              a device redeems it; to let another device in, stop and restart
+              sharing for a fresh code. Stop sharing to revoke instantly. The
+              code is the credential — keep it private; the URL alone is
+              harmless.
             </>
           ),
         }}
@@ -235,7 +247,7 @@ export default function SharingSection() {
                     </code>
                   </div>
 
-                  {status.code && (
+                  {status.code ? (
                     <div>
                       <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 3 }}>
                         2. Type this access code on the phone:
@@ -255,7 +267,23 @@ export default function SharingSection() {
                         {status.code}
                       </div>
                     </div>
-                  )}
+                  ) : status.redeemed ? (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        padding: "8px 12px",
+                        borderRadius: 6,
+                        background: "rgba(80, 200, 120, 0.08)",
+                        border: "1px solid rgba(80, 200, 120, 0.35)",
+                      }}
+                    >
+                      <strong style={{ color: "#5fd38a" }}>✓ Paired.</strong>{" "}
+                      A device redeemed the code, so it's been burned for
+                      safety. Stop and restart sharing to issue a new code for
+                      another device.
+                    </div>
+                  ) : null}
 
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button

@@ -44,6 +44,7 @@ def _reset_tunnel() -> Iterator[None]:
     mgr._provider = None
     mgr._started_at = None
     mgr._process = None
+    mgr._redeemed = False
 
 
 def _fake_start_tunnel(url: str = "https://abc-words-here.trycloudflare.com"):
@@ -88,10 +89,48 @@ def test_consume_code_returns_long_token() -> None:
         s = mgr.start(port=18989)
     long_token = mgr.consume_code(s.code)
     assert long_token is not None and len(long_token) >= 32
-    # Multi-use until tunnel.stop()
-    assert mgr.consume_code(s.code) == long_token
-    # Token is what validate_token expects.
+    # Single-use; the second redemption with the same code is rejected.
+    assert mgr.consume_code(s.code) is None
+    # The original token is still valid for the device that already paired.
     assert mgr.validate_token(long_token) is True
+    with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+        mgr.stop()
+
+
+def test_status_clears_code_after_redemption() -> None:
+    mgr = TunnelManager()
+    with patch(
+        "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+        return_value=_fake_start_tunnel(),
+    ):
+        s = mgr.start(port=18989)
+    assert s.code is not None and s.redeemed is False
+    assert mgr.consume_code(s.code) is not None
+    after = mgr.status()
+    assert after.code is None
+    assert after.redeemed is True
+    with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+        mgr.stop()
+
+
+def test_start_resets_redeemed_flag() -> None:
+    mgr = TunnelManager()
+    with patch(
+        "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+        return_value=_fake_start_tunnel(),
+    ):
+        s1 = mgr.start(port=18989)
+    assert mgr.consume_code(s1.code) is not None
+    assert mgr.status().redeemed is True
+    with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
+        mgr.stop()
+    with patch(
+        "nexus.tunnel.manager.cloudflared_provider.start_tunnel",
+        return_value=_fake_start_tunnel(),
+    ):
+        s2 = mgr.start(port=18989)
+    assert s2.redeemed is False
+    assert s2.code is not None and s2.code != s1.code
     with patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel"):
         mgr.stop()
 
@@ -244,6 +283,36 @@ def test_redeem_with_valid_code_sets_cookie_and_unlocks_api(
         cookies={"nexus_tunnel_token": cookie},
     )
     assert r.json() == {"requires_redeem": False, "tunnel_active": True, "proxied": True}
+
+
+def test_redeem_route_rejects_second_use(
+    _simulated_active_with_code: tuple[str, str],
+) -> None:
+    """First redemption succeeds; the same code presented again is 401."""
+    code, _ = _simulated_active_with_code
+    c = _fresh_client()
+    headers = {"x-forwarded-for": "203.0.113.99"}
+    r1 = c.post("/tunnel/redeem", json={"code": code}, headers=headers)
+    assert r1.status_code == 200
+    r2 = c.post("/tunnel/redeem", json={"code": code}, headers=headers)
+    assert r2.status_code == 401
+
+
+def test_admin_status_omits_code_after_redemption(
+    _simulated_active_with_code: tuple[str, str],
+) -> None:
+    """Once a device redeems, /tunnel/status hides the code from loopback too."""
+    code, _ = _simulated_active_with_code
+    c = _fresh_client()
+    r = c.post(
+        "/tunnel/redeem",
+        json={"code": code},
+        headers={"x-forwarded-for": "203.0.113.5"},
+    )
+    assert r.status_code == 200
+    status = c.get("/tunnel/status").json()
+    assert status["code"] is None
+    assert status["redeemed"] is True
 
 
 def test_redeem_with_wrong_code_is_401(_simulated_active: Any) -> None:
@@ -406,12 +475,14 @@ def _simulated_active() -> Iterator[None]:
     mgr._code = "TEST-CODE"
     mgr._public_url = "https://abc-words.trycloudflare.com"
     mgr._provider = "cloudflare"
+    mgr._redeemed = False
     yield
     mgr._active = False
     mgr._token = None
     mgr._code = None
     mgr._public_url = None
     mgr._provider = None
+    mgr._redeemed = False
 
 
 @pytest.fixture
@@ -424,9 +495,11 @@ def _simulated_active_with_code() -> Iterator[tuple[str, str]]:
     mgr._code = code
     mgr._public_url = "https://abc-words.trycloudflare.com"
     mgr._provider = "cloudflare"
+    mgr._redeemed = False
     yield code, long_token
     mgr._active = False
     mgr._token = None
     mgr._code = None
     mgr._public_url = None
     mgr._provider = None
+    mgr._redeemed = False

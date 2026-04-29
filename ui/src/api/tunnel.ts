@@ -9,6 +9,8 @@ export interface TunnelStatus {
   /** Short access code shown on the desktop; only populated on loopback responses. */
   code: string | null;
   started_at: number | null;
+  /** True once a device has redeemed the code; the code is then burned and `code` will be null. */
+  redeemed: boolean;
   /** Whether the cloudflared CLI binary has been downloaded yet. */
   binary_installed: boolean;
 }

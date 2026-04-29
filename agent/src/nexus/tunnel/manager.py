@@ -65,6 +65,7 @@ class TunnelStatus:
     share_url: str | None  # plain URL, no secret. Phone navigates here.
     code: str | None       # short code for the login form. Loopback-only display.
     started_at: float | None  # unix epoch seconds
+    redeemed: bool         # True once a device has consumed the code; code is then nulled out
 
 
 class TunnelManager:
@@ -82,6 +83,10 @@ class TunnelManager:
         # cached response from a previous session (iOS Safari is especially
         # aggressive here) hit a clean URL and reload from network.
         self._share_nonce: str | None = None
+        # Single-use latch: flipped on the first successful consume_code() and
+        # reset on stop()/start(). While set, the code is hidden from status
+        # responses and further redemption attempts are rejected.
+        self._redeemed: bool = False
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -110,6 +115,7 @@ class TunnelManager:
             self._started_at = time.time()
             self._process = proc
             self._share_nonce = nonce
+            self._redeemed = False
             log.info("tunnel started: %s", public_url)
             return self._status_locked()
 
@@ -126,6 +132,7 @@ class TunnelManager:
             self._started_at = None
             self._process = None
             self._share_nonce = None
+            self._redeemed = False
             log.info("tunnel stopped")
             return self._status_locked()
 
@@ -147,17 +154,22 @@ class TunnelManager:
     def consume_code(self, candidate: str | None) -> str | None:
         """Validate the short access code; on success return the long token to seat in a cookie.
 
-        Multi-use until tunnel stop, deliberately — the user's mental model is
-        "I share the link with my phone and my tablet and a friend". Brute force
-        is gated by per-IP rate limiting in the redeem route + the alphabet size.
+        Single-use per activation. The first successful redemption burns the
+        code: the latch flips, ``status()`` stops echoing it, and further calls
+        return ``None`` until ``stop()`` + ``start()`` mints a new one. The
+        user's mental model is "I paired my phone, done"; reconnecting another
+        device requires explicitly restarting sharing.
         """
         if not self._active or not self._code or not self._token:
+            return None
+        if self._redeemed:
             return None
         normalized = _normalize_code(candidate)
         expected = _normalize_code(self._code)
         if not normalized or len(normalized) != len(expected):
             return None
         if hmac.compare_digest(normalized, expected):
+            self._redeemed = True
             return self._token
         return None
 
@@ -172,13 +184,18 @@ class TunnelManager:
             # exists solely to make the device's HTTP cache treat each
             # activation's URL as new, even on a recycled subdomain.
             share_url = f"{self._public_url}/?v={self._share_nonce}"
+        # Once redeemed, the code is burned: don't echo it back even to the
+        # loopback admin caller. Anyone glancing at the desktop after pairing
+        # shouldn't be able to read the code off-screen.
+        code_out = None if self._redeemed else self._code
         return TunnelStatus(
             active=self._active,
             provider=self._provider,
             public_url=self._public_url,
             share_url=share_url,
-            code=self._code,
+            code=code_out,
             started_at=self._started_at,
+            redeemed=self._redeemed,
         )
 
 
