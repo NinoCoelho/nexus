@@ -572,7 +572,14 @@ async def chat_hitl_answer(
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("persist_partial_turn (resume) failed")
-            CURRENT_SESSION_ID.reset(token)
+            # When the SSE consumer disconnects mid-stream Starlette cancels
+            # the generator from a different async context; CURRENT_SESSION_ID
+            # then refuses the reset with a ValueError that masks the real
+            # cause and aborts the rest of cleanup. Best-effort here.
+            try:
+                CURRENT_SESSION_ID.reset(token)
+            except ValueError:
+                log.debug("CURRENT_SESSION_ID reset across contexts (resume)")
             if _inflight_turns.get(session_id) is current:
                 _inflight_turns.pop(session_id, None)
 

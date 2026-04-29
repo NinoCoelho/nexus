@@ -99,7 +99,7 @@ def build_tool_registry(
     from nexus.tools.ontology_tool import ONTOLOGY_MANAGE_TOOL, make_ontology_handler
     from loom.tools.subagent import SpawnSubagentsTool
     from loom.tools.terminal import TERMINAL_TOOL_SPEC
-    from nexus.agent.ask_user_tool import ASK_USER_TOOL
+    from nexus.agent.ask_user_tool import ASK_USER_TOOL, parse_parked_sentinel
 
     registry = ToolRegistry()
     state = StateToolHandler(skill_registry)
@@ -269,6 +269,14 @@ def build_tool_registry(
         if h is None:
             return '{"ok": false, "error": "ask_user unavailable: handler not wired"}'
         result = await h.invoke(args)
+        # When the request parked, return the bare sentinel so the agent
+        # loop's tool_exec_result handler (parse_parked_sentinel) can detect
+        # it and end the turn cleanly. Wrapping it in the JSON envelope
+        # would hide the prefix and let loom feed it to the LLM as if it
+        # were a normal answer — the original cause of the petshop session
+        # form-loss bug.
+        if isinstance(result.answer, str) and parse_parked_sentinel(result.answer):
+            return result.answer
         return result.to_text()
 
     async def _terminal(args: dict) -> str:

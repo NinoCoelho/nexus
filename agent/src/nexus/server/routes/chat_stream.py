@@ -295,7 +295,14 @@ async def chat_stream_route(
                 accumulated_tools=accumulated_tools,
                 partial_status=partial_status,
             )
-            CURRENT_SESSION_ID.reset(token)
+            # SSE consumer disconnects mid-stream cancel the generator
+            # from a different async context; CURRENT_SESSION_ID then
+            # refuses the reset with a ValueError that aborts the rest
+            # of cleanup. Best-effort here.
+            try:
+                CURRENT_SESSION_ID.reset(token)
+            except ValueError:
+                log.debug("CURRENT_SESSION_ID reset across contexts")
             if _inflight_turns.get(session.id) is current:
                 _inflight_turns.pop(session.id, None)
 

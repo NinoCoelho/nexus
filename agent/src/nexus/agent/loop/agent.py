@@ -778,6 +778,18 @@ class Agent:
                 f"corrupt parked snapshot for {request_id!r}"
             ) from exc
 
+        # Refuse to resume from an empty snapshot. Without preceding context
+        # (at minimum the assistant message with the tool_call) loom would
+        # be handed a bare TOOL message — most providers reject that, and
+        # the few that don't can't produce a coherent continuation. Empty
+        # snapshots historically meant the parking-sentinel detection in
+        # the agent loop was bypassed; surfacing the error early gives the
+        # caller a chance to recover instead of silently losing the answer.
+        if not raw_snapshot:
+            raise RuntimeError(
+                f"parked snapshot for {request_id!r} is empty — cannot resume"
+            )
+
         loom_messages: list[lt.ChatMessage] = []
         for m in raw_snapshot:
             try:
