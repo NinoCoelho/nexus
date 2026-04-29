@@ -25,6 +25,7 @@
   - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
   - [Web Push Notifications](#web-push-notifications)
   - [Skill System & Self-Evolution](#skill-system--self-evolution)
+  - [Identity & User Profile](#identity--user-profile)
   - [Ontology Management](#ontology-management)
   - [Local LLMs](#local-llms)
   - [Public Tunnel (Sharing)](#public-tunnel-sharing)
@@ -76,8 +77,12 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 |---------|-------------|
 | **Self-Evolving Agent** | Creates/edits/patches/deletes its own skills at runtime via `skill_manage`, with regex security guard + rollback |
 | **Progressive Disclosure** | System prompt carries only skill names + descriptions; full bodies load on demand to keep tokens lean |
+| **Sub-Agent Fan-Out** | `spawn_subagents` runs N agent loops in parallel with fresh contexts; recursion is bounded |
+| **Persistent User Identity** | Loom `USER.md` is injected into the system prompt every turn; agent-edited via the `edit_profile` tool (permission-gated) |
+| **Chat Slash Commands** | `/compact`, `/clear`, `/title`, `/usage`, `/help` — local-only fast paths handled before the LLM call |
+| **Output Token Caps** | Per-model `max_output_tokens` with `[agent].default_max_output_tokens` fallback |
 | **Multi-Provider LLMs** | Any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, Groq, vLLM) plus native Anthropic and local Ollama / llama.cpp |
-| **Bundled Local LLM** | Ship-and-run Qwen2.5-3B-Instruct via llama.cpp; UI for searching / downloading / activating Hugging Face GGUFs |
+| **Bundled Local LLM** | Ship-and-run Qwen2.5-3B-Instruct via llama.cpp; UI for searching / downloading / activating Hugging Face GGUFs. Fresh installs (and the macOS `.app`) auto-seed a default demo model so the agent works out of the box |
 | **Reasoning Stream** | Streams `thinking` events from reasoning-capable models into a collapsible block above each assistant turn |
 | **Vault Knowledge Base** | Markdown files + FTS5 search + tag index + backlinks graph + GraphRAG semantic recall |
 | **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions) |
@@ -88,7 +93,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Ontology Tool** | Agent-managed entity/relation schema for GraphRAG over the vault |
 | **Human-in-the-Loop** | `ask_user` (confirm/choice/text) and `terminal` (shell) gated by SSE approval dialogs; YOLO mode for unattended runs |
 | **Web Push** | Background push notifications for HITL prompts when the tab is closed (VAPID) |
-| **Public Tunnel** | One-click Cloudflare Quick Tunnel (no signup) with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs |
+| **Public Tunnel** | One-click Cloudflare Quick Tunnel (no signup) with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs; access code is single-use per activation (burned after first device redeems) |
 | **Read-Only Share Links** | Publish a session as a read-only public link with a generated token |
 | **Audio Transcription** | Local or remote transcription with live waveform + cancel UI |
 | **Backup / Restore** | `nexus backup create` and `restore` for the entire `~/.nexus/` data directory |
@@ -299,10 +304,12 @@ graph TB
         VIS["visualize_table"]
     end
 
-    subgraph "Skills"
+    subgraph "Skills & Identity"
         SL["skills_list"]
         SV["skill_view"]
         SM["skill_manage (create/edit/patch/delete)"]
+        NKB["nexus_kb_search (BM25 over self-docs)"]
+        EP["edit_profile (USER.md, permission-gated)"]
     end
 
     subgraph "Memory"
@@ -310,9 +317,14 @@ graph TB
         MW["memory_write"]
     end
 
+    subgraph "Orchestration"
+        SUB["spawn_subagents (parallel fan-out)"]
+    end
+
     subgraph "External"
         HTTP["http_call"]
         WEB["web_search (DDGS / Brave / Tavily)"]
+        SCR["web_scrape (Playwright + cookie store, optional)"]
         ACP["acp_call (optional)"]
     end
 
@@ -324,15 +336,18 @@ graph TB
     REG --> VL & VSEM & ONT
     REG --> KM & KQ & DC & CAL
     REG --> DT & CSV & VIS
-    REG --> SL & SV & SM
+    REG --> SL & SV & SM & NKB & EP
     REG --> MR & MW
-    REG --> HTTP & WEB & ACP
+    REG --> SUB
+    REG --> HTTP & WEB & SCR & ACP
     REG --> ASK & TERM
 
     style REG fill:#1a1a2e,color:#fff
 ```
 
-Each tool is wrapped in a `_SimpleToolHandler` that adapts sync/async callables to Loom's `ToolHandler` ABC. HITL tools use late-binding via a mutable `AgentHandlers` container so the server can wire them after construction. `acp_call` is registered only when an ACP gateway is configured. `web_search` is registered only when at least one provider is enabled in config.
+Each tool is wrapped in a `_SimpleToolHandler` that adapts sync/async callables to Loom's `ToolHandler` ABC. HITL tools use late-binding via a mutable `AgentHandlers` container so the server can wire them after construction. `acp_call` is registered only when an ACP gateway is configured. `web_search` is registered only when at least one provider is enabled in config; `web_scrape` only when `[scrape].enabled` is true. `spawn_subagents` resolves its runner through the same late-binding mechanism, and recursion is bounded by `SUBAGENT_DEPTH` so spawned children cannot themselves spawn.
+
+A small dispatch wrapper auto-redirects tool calls whose name matches a known skill (with hyphen/underscore tolerance) into `skill_view` — smaller models routinely emit a tool call to a skill name as if it were a tool, and this stops the turn from being wasted on `Unknown tool`.
 
 ### Vault & Knowledge Graph
 
@@ -483,6 +498,12 @@ graph LR
 - **Dangerous** (block): credential exfil (`curl $TOKEN`, `.ssh/`, `.aws/`, `base64 + env`), destructive shell (`rm -rf /`, `dd`, `mkfs`), prompt injection.
 - **Caution** (allow + log): persistence (`cron`, `launchd`, `systemd`, `.bashrc`).
 
+### Identity & User Profile
+
+Loom owns a per-user `USER.md` (under the Loom data home) that captures stable facts about the user — name, communication preferences, recurring projects, working hours. On every turn the prompt builder injects this profile into the system prompt so the agent doesn't have to relearn it from each conversation.
+
+The agent updates the profile through the `edit_profile` tool. Writes are gated by Loom `AgentPermissions`: by default only `USER.md` is editable from the agent loop; the deeper `SOUL.md` / `IDENTITY.md` files return `permission_denied` unless the user explicitly raises permissions.
+
 ### Ontology Management
 
 `ontology_tool` (and the matching `ontology_manage` system prompt) lets the agent maintain an entity/relation schema for GraphRAG:
@@ -508,7 +529,7 @@ Nexus can run an LLM entirely on the user's machine via llama.cpp:
   - **short access code** (8 chars from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, formatted `XXXX-XXXX`) — typed by the user on the phone's login form. Never appears in any URL either; only travels in the POST body of `/tunnel/redeem`.
 - `GET /tunnel/status` (loopback only) returns the URL **and** the access code so the desktop UI can display them.
 - `POST /tunnel/stop` tears the tunnel down — both secrets are cleared, any in-flight cookies become 401.
-- `POST /tunnel/redeem` (reachable through the tunnel without a cookie) takes `{code: ...}`, validates it timing-safely (`hmac.compare_digest`, normalized for case + dashes), and seats the cookie on success. Per-IP rate-limited (8 wrong attempts / 10 min) on top of the 32^8 ≈ 1.1e12 entropy.
+- `POST /tunnel/redeem` (reachable through the tunnel without a cookie) takes `{code: ...}`, validates it timing-safely (`hmac.compare_digest`, normalized for case + dashes), and seats the cookie on success. Per-IP rate-limited (8 wrong attempts / 10 min) on top of the 32^8 ≈ 1.1e12 entropy. **The code is single-use per activation** — after the first successful redemption it is burned (subsequent redeem attempts fail and `/tunnel/status` no longer echoes it). To onboard another device, stop and restart the tunnel.
 - `GET /tunnel/auth-status` (also reachable through the tunnel) tells the SPA whether to render the login form.
 
 #### Network model
@@ -809,7 +830,9 @@ The UI reads its API base from `VITE_NEXUS_API` (default `http://localhost:18989
 uv run nexus chat
 ```
 
-Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`.
+Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`. The bundled set includes `nexus` (self-docs, queried via `nexus_kb_search`), `markitdown` (doc → markdown ingestion), `pdf-maker`, `web-scrape`, `deep-research`, `parallel-research`, `summarize-file`, `vault-curator`, `ontology-curator`, `code-review-local`, `daily-standup`, and `brainstorm`.
+
+If no model is configured (fresh install or the macOS `.app`), the local-LLM manager auto-seeds a small bundled demo model and points `[agent].default_model` at it, so the agent answers immediately without requiring an API key.
 
 ---
 
@@ -867,6 +890,18 @@ nexus kanban    boards | list [--board default]
 nexus insights  [--days 30] [--json]
 nexus backup    create [--out <path>] | restore <path>
 ```
+
+### Chat Slash Commands
+
+A user message that starts with `/` is intercepted before the LLM call and handled locally — no tokens spent. The registry lives in [agent/src/nexus/server/routes/chat_slash.py](agent/src/nexus/server/routes/chat_slash.py).
+
+| Command | Description |
+|---|---|
+| `/compact [aggressive]` | LLM-summarize older turns. `aggressive` lowers the per-message threshold to catch medium-sized tool results. |
+| `/clear` | Wipe session history (with confirmation prompt). |
+| `/title <new title>` | Rename the session. Empty arg echoes the current title. |
+| `/usage` | Token + cost breakdown for the session. |
+| `/help` | List all available slash commands. |
 
 ---
 
@@ -987,6 +1022,9 @@ The canonical config lives at `~/.nexus/config.toml`:
 [agent]
 default_model = "gpt-4o"
 max_iterations = 32
+# Global per-call output cap. `0` defers to Loom's AgentConfig default.
+# Per-model `max_output_tokens` (below) wins when > 0.
+default_max_output_tokens = 0
 
 [providers.openai]
 type = "openai_compat"
@@ -1007,12 +1045,40 @@ id = "gpt-4o"
 provider = "openai"
 model_name = "gpt-4o"
 tags = ["fast", "capable"]
+# Optional: override `[agent].default_max_output_tokens` for this model only.
+max_output_tokens = 4096
 
 [[models]]
 id = "claude-sonnet"
 provider = "anthropic"
 model_name = "claude-sonnet-4-20250514"
 tags = ["reasoning", "coding"]
+
+# GraphRAG over the vault. Enabled by default — set `enabled = false` to skip.
+[graphrag]
+enabled = true
+
+# Web search tool. Provider list is iterated in order; DDGS needs no key.
+[search]
+enabled = true
+strategy = "concurrent"  # or "sequential" / "first-success"
+[[search.providers]]
+type = "ddgs"
+[[search.providers]]
+type = "brave"
+key_env = "BRAVE_API_KEY"
+[[search.providers]]
+type = "tavily"
+key_env = "TAVILY_API_KEY"
+
+# Web scrape tool (Playwright + cookie store at ~/.nexus/cookies/).
+# Disabled by default — flip to true and run `uv run scrapling install` for browsers.
+[scrape]
+enabled = false
+mode = "auto"        # "static" | "playwright" | "stealthy" | "auto"
+headless = true
+timeout = 30
+max_content_bytes = 102400
 ```
 
 ### Environment Variable Override
