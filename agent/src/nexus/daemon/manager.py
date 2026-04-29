@@ -235,9 +235,13 @@ finally:
         subprocess.run([npm, "install"], cwd=str(frontend_dir), check=True, capture_output=True)
 
         log_fh = open(self.ui_log_file, 'a')
+        # stdin=DEVNULL so Vite's readline-based keyboard-shortcut handler
+        # ("press h + enter") sees a non-TTY and stays disabled — otherwise it
+        # crashes with `read EIO` when the launching terminal closes.
         fp = subprocess.Popen(
             [npm, "run", "dev"],
             cwd=str(frontend_dir),
+            stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
         )
