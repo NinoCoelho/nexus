@@ -3,9 +3,49 @@
 </p>
 
 <p align="center">
-  <strong>A self-evolving single-agent platform.</strong><br/>
-  Runtime skill authoring, a tool-calling loop powered by <a href="https://github.com/NinoCoelho/loom">Loom</a>, a vault-native knowledge base with kanban + calendar + datatables, a 3D knowledge graph, human-in-the-loop approvals, and a full React 19 web UI — desktop, browser, and packaged macOS app.
+  <strong>A self-evolving single-agent platform — writes its own skills, manages a vault-native knowledge base, and runs entirely on your machine.</strong>
 </p>
+
+---
+
+## Why Nexus?
+
+- **Self-evolving skills** — the agent creates, edits, and deletes its own skills at runtime, guarded by a static security scanner that blocks credential exfil and destructive shell patterns.
+- **Vault + kanban + graph** — a markdown knowledge base with FTS5 search, Obsidian-compatible kanban boards, an iCal calendar, DuckDB datatables, and a 3D backlink graph, all stored as plain `.md` files.
+- **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
+- **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
+- **Packaged Mac app** — ships as `Nexus.app` with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh Mac. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
+
+---
+
+## Quick Start
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NinoCoelho/nexus/main/install.sh | bash
+```
+
+Clones into `~/nexus`, installs [uv](https://docs.astral.sh/uv/) if missing, runs `uv sync` + `npm install`, and writes a default `~/.nexus/config.toml`.
+
+Then:
+
+```bash
+nexus daemon start          # start the background server on port 18989
+nexus chat                  # interactive TUI chat
+```
+
+Or open the web UI:
+
+```bash
+cd ~/nexus/ui && npm run dev   # http://localhost:1890
+```
+
+**API key**: set `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY`, or any OpenAI-compatible key) before starting the daemon.
+
+---
+
+## Mac App
+
+Download `Nexus.app` from the [Releases page](https://github.com/NinoCoelho/nexus/releases). The app bundles the backend, web UI, and menu bar controls — no terminal required. You'll still need to set an API key (or rebuild from source with `--bundle-llm qwen-3b` to include a local model).
 
 ---
 
@@ -14,25 +54,6 @@
 - [Overview](#overview)
 - [Key Features](#key-features)
 - [Architecture](#architecture)
-  - [High-Level System Diagram](#high-level-system-diagram)
-  - [Loom Integration](#loom-integration)
-  - [Agent Loop](#agent-loop)
-  - [Progressive Disclosure](#progressive-disclosure)
-  - [Tool System](#tool-system)
-  - [Vault & Knowledge Graph](#vault--knowledge-graph)
-  - [Kanban, Calendar, DataTables, CSV](#kanban-calendar-datatables-csv)
-  - [Calendar Triggers (Heartbeat)](#calendar-triggers-heartbeat)
-  - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
-  - [Web Push Notifications](#web-push-notifications)
-  - [Skill System & Self-Evolution](#skill-system--self-evolution)
-  - [Identity & User Profile](#identity--user-profile)
-  - [Ontology Management](#ontology-management)
-  - [Local LLMs](#local-llms)
-  - [Public Tunnel (Sharing)](#public-tunnel-sharing)
-  - [Audio Transcription](#audio-transcription)
-  - [Session Persistence & Sharing](#session-persistence--sharing)
-  - [Daemon & Process Management](#daemon--process-management)
-  - [Frontend Architecture](#frontend-architecture)
 - [Project Layout](#project-layout)
 - [Getting Started](#getting-started)
 - [CLI Reference](#cli-reference)
