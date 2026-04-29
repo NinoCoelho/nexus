@@ -1,0 +1,46 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.venv
+agent/.venv
+
+# Node / Vite (UI is built fresh inside the image)
+**/node_modules
+ui/dist
+**/.vite
+
+# Native packaging — irrelevant for the Linux container image
+packaging/macos/.build
+packaging/macos/.swiftpm
+ui/ios
+
+# Editor / tooling state
+.idea
+.vscode
+.claude
+
+# Local secrets / env files — must never be baked into the image
+.env
+.env.local
+.env.*.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Build artifacts at the repo root (e.g. dist/ from older bundling experiments)
+dist
+build
+
+# Logs and ephemeral notes
+*.log
+tasks

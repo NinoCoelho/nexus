@@ -1,0 +1,39 @@
+# Nexus — single-container compose recipe.
+#
+#   docker compose up -d            # build + start
+#   docker compose logs -f          # follow logs
+#   docker compose down             # stop (data persists in the named volume)
+#   docker compose down -v          # also wipe the data volume
+#
+# Provide an LLM API key via a `.env` file in the same directory or by exporting
+# it before running compose. Nexus picks the first one that's set.
+
+services:
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nexus:latest
+    container_name: nexus
+    restart: unless-stopped
+    # Bound to 127.0.0.1 on the host so the published port never lands on a
+    # public interface by accident. To share remotely, run `nexus tunnel start`
+    # *inside* the container (`docker exec -it nexus nexus tunnel start`) — the
+    # Cloudflare Quick Tunnel still works and preserves the access-code flow.
+    ports:
+      - "127.0.0.1:18989:18989"
+    environment:
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Any other OpenAI-compatible env you set in the shell or .env will be
+      # picked up by the provider registry the same way.
+      NEXUS_LLM_BASE_URL: "${NEXUS_LLM_BASE_URL:-}"
+      NEXUS_LLM_API_KEY: "${NEXUS_LLM_API_KEY:-}"
+      NEXUS_LLM_MODEL: "${NEXUS_LLM_MODEL:-}"
+    volumes:
+      # Persist sessions, vault, skills, secrets, and the Cloudflare binary
+      # across container restarts and image rebuilds.
+      - nexus-data:/home/nexus/.nexus
+
+volumes:
+  nexus-data:

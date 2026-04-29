@@ -49,6 +49,49 @@ Download `Nexus.app` from the [Releases page](https://github.com/NinoCoelho/nexu
 
 ---
 
+## Docker
+
+Run the whole stack — backend + bundled UI — in a single container, with persistent state on a named volume.
+
+```bash
+# Build and start (uses your shell env for API keys, or a .env in this dir)
+OPENAI_API_KEY=sk-... docker compose up -d --build
+
+# Open the UI
+open http://localhost:18989
+
+# Tail logs
+docker compose logs -f
+
+# Stop (data persists)
+docker compose down
+```
+
+The compose recipe binds the published port to **127.0.0.1 only** — the container is reachable from the host, never the LAN. To share remotely, start the Cloudflare Quick Tunnel from inside the container:
+
+```bash
+docker exec -it nexus nexus tunnel start
+```
+
+#### How auth works in Docker
+
+Nexus's auth middleware bypasses authentication only for loopback clients. Inside a container, requests reaching the published port have a docker-bridge source IP, not loopback — so the image runs `uvicorn` on `127.0.0.1` inside the container and uses a small `socat` proxy to forward the published port to it. The Python server only ever sees loopback clients, and the existing security model works unchanged. No code modification, no access tokens to juggle.
+
+#### Plain `docker run`
+
+```bash
+docker build -t nexus .
+docker run -d --name nexus \
+  -p 127.0.0.1:18989:18989 \
+  -v nexus-data:/home/nexus/.nexus \
+  -e OPENAI_API_KEY=sk-... \
+  nexus
+```
+
+The named volume holds `~/.nexus/` — sessions, vault, skills, secrets, and the auto-downloaded `cloudflared` binary — so upgrading the image (`docker compose up -d --build`) preserves all state.
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -124,6 +167,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Desktop App** | Packaged `Nexus.app` macOS bundle with menu bar autostart and prefs (loopback-only bind; remote access via `nexus tunnel`) |
 | **Mobile-Friendly** | Capacitor-friendly responsive layout; iOS Xcode project scaffolding included |
 | **One-Line Install** | `curl … | bash` clones, installs uv + deps, and writes a default config |
+| **Docker Image** | Single multi-stage `Dockerfile` + `docker-compose.yml` — backend + bundled UI on one port, persistent state on a named volume, loopback auth model preserved via an internal `socat` proxy |
 | **Skills From Git** | `nexus skills install <git-url-or-path>` |
 | **ACP Bridge** | Optional Agent Communication Protocol over WebSocket with Ed25519 device auth |
 
@@ -756,6 +800,10 @@ nexus/
 ├── skills/                             # Bundled skills (seeded on first run)
 ├── packaging/macos/                    # Nexus.app scaffolding
 ├── install.sh                          # One-line installer
+├── Dockerfile                          # Multi-stage container image (UI + backend)
+├── docker-compose.yml                  # Single-service compose recipe
+├── docker/entrypoint.sh                # socat → loopback uvicorn launcher
+├── .dockerignore
 ├── CLAUDE.md
 └── LICENSE                             # Apache 2.0
 ```
@@ -773,6 +821,107 @@ curl -fsSL https://raw.githubusercontent.com/NinoCoelho/nexus/main/install.sh | 
 Clones into `~/nexus` (override with `NEXUS_DIR=…`), installs [uv](https://docs.astral.sh/uv/) if missing, runs `uv sync` + `npm install`, writes a default `~/.nexus/config.toml`, and drops a `nexus` launcher into `~/.local/bin/`.
 
 Env overrides: `NEXUS_DIR`, `NEXUS_REF`, `NEXUS_NO_UI=1`, `NEXUS_NO_INIT=1`.
+
+### Docker Install
+
+Run the whole stack — backend + bundled UI — in a single container, with all state on a named volume.
+
+```bash
+git clone git@github.com:NinoCoelho/nexus.git
+cd nexus
+
+# .env file or shell exports — at least one LLM key
+echo "OPENAI_API_KEY=sk-..." > .env
+
+docker compose up -d --build
+open http://localhost:18989
+```
+
+Or with plain `docker run`:
+
+```bash
+docker build -t nexus .
+docker run -d --name nexus \
+  -p 127.0.0.1:18989:18989 \
+  -v nexus-data:/home/nexus/.nexus \
+  -e OPENAI_API_KEY=sk-... \
+  nexus
+```
+
+#### What's in the image
+
+| Stage          | Base                              | Output                             |
+|----------------|-----------------------------------|------------------------------------|
+| `ui-builder`   | `node:20-alpine`                  | `npm ci && npm run build` → UI dist |
+| `backend-builder` | `python:3.12-slim-bookworm` + `uv` | populated `.venv` from `uv sync`   |
+| `runtime`      | `python:3.12-slim-bookworm`       | `socat` + `dumb-init` + the above  |
+
+The runtime stage runs as a non-root `nexus` user (uid 1000), exposes `18989`, and mounts `/home/nexus/.nexus` as a volume — the same directory layout described under [Data Directory Layout](#configuration-guide), persisted across rebuilds.
+
+#### How auth works in the container
+
+Nexus's auth middleware grants automatic bypass only to loopback clients (`127.0.0.1`, `::1`). Inside a container, requests reaching the published port have the docker-bridge source IP, not loopback, so a bare bind to `0.0.0.0` would 401 every request.
+
+The image keeps `uvicorn` on `127.0.0.1:18988` (internal) and runs a small `socat` proxy that forwards the published `0.0.0.0:18989` to it. From the Python server's perspective every request comes from `127.0.0.1` — the existing auth model holds, no application code changes, no access tokens to juggle.
+
+```
+host:18989  ──►  container:18989 (socat, 0.0.0.0)  ──►  127.0.0.1:18988 (uvicorn)
+                                                              │
+                                                              ▼
+                                                 LoopbackOrTokenMiddleware
+                                                 → bypass (loopback client)
+```
+
+The compose file binds the host port to `127.0.0.1:18989` only, so the container is reachable from the host — never the LAN — by default.
+
+#### Sharing publicly from the container
+
+`nexus tunnel start` works inside the container exactly like on the host. The `cloudflared` binary is auto-downloaded into `~/.nexus/bin/` (i.e. on the volume), so the second tunnel start is instant.
+
+```bash
+docker exec -it nexus nexus tunnel start
+docker exec -it nexus nexus tunnel status      # URL + access code + QR
+docker exec -it nexus nexus tunnel stop
+```
+
+#### Configuration & runtime env
+
+| Variable                    | Default                | Purpose                                                |
+|-----------------------------|------------------------|--------------------------------------------------------|
+| `NEXUS_PORT`                | `18989`                | Externally-visible container port (what `socat` binds) |
+| `NEXUS_INTERNAL_PORT`       | `18988`                | Loopback port `uvicorn` actually listens on            |
+| `NEXUS_UI_DIST`             | `/app/ui/dist`         | Pre-built SPA served bundled by the backend            |
+| `NEXUS_BUILTIN_SKILLS_DIR`  | `/app/skills`          | Bundled skills source for first-run seeding            |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `NEXUS_LLM_*` | — | Provider credentials, picked up at startup |
+| `NEXUS_UID` / `NEXUS_GID`   | `1000` (build args)    | Non-root user/group inside the image                   |
+
+Persisted state on the `nexus-data` volume:
+
+```
+/home/nexus/.nexus/
+├── config.toml          (auto-initialized on first boot)
+├── secrets.toml
+├── sessions.sqlite
+├── vault/  vault_index.sqlite  vault_meta.sqlite
+├── graphrag/
+├── skills/              (bundled skills seeded on first run)
+├── local_llm/
+├── push/
+└── bin/                 (auto-downloaded cloudflared)
+```
+
+#### Day-to-day commands
+
+```bash
+docker compose logs -f                          # tail logs
+docker compose restart nexus                    # restart
+docker compose exec nexus nexus chat            # TUI chat inside the container
+docker compose exec nexus nexus skills list     # any CLI subcommand works
+docker compose down                             # stop (volume keeps data)
+docker compose down -v                          # nuke everything (data included)
+```
+
+To upgrade: `git pull && docker compose up -d --build` — the named volume keeps your sessions, vault, skills, and tunnel binary across image rebuilds.
 
 ### Manual Install
 
