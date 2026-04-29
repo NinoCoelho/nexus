@@ -69,12 +69,22 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
             1 of {queueLength} pending
           </div>
         )}
-        <p className="approval-prompt">{request.prompt}</p>
-        {request.kind === "form" && request.form_description && (
-          <p className="approval-prompt" style={{ color: "var(--fg-faint)", fontSize: "12px" }}>
-            {request.form_description}
-          </p>
-        )}
+        <div className="approval-body">
+          <p className="approval-prompt">{request.prompt}</p>
+          {request.kind === "form" && request.form_description && (
+            <p className="approval-prompt" style={{ color: "var(--fg-faint)", fontSize: "12px" }}>
+              {request.form_description}
+            </p>
+          )}
+
+          {request.kind === "form" && request.fields && (
+            <FormRenderer
+              fields={request.fields}
+              onSubmit={(values) => onSubmit(values)}
+              submitLabel="Submit"
+            />
+          )}
+        </div>
 
         {request.kind === "confirm" && (
           <div className="approval-buttons">
@@ -131,14 +141,6 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
               Send
             </button>
           </form>
-        )}
-
-        {request.kind === "form" && request.fields && (
-          <FormRenderer
-            fields={request.fields}
-            onSubmit={(values) => onSubmit(values)}
-            submitLabel="Submit"
-          />
         )}
       </div>
     </div>
