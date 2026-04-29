@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from loom.tools.base import ToolHandler, ToolResult
 from loom.tools.registry import ToolRegistry
 
 from nexus.agent.llm import ToolSpec
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -342,4 +345,33 @@ def build_tool_registry(
             )
         )
 
+    _install_skill_redirect(registry, skill_registry)
+
     return registry
+
+
+def _install_skill_redirect(registry: ToolRegistry, skill_registry: Any) -> None:
+    """Auto-redirect tool calls to a known skill name into ``skill_view``.
+
+    Smaller models (e.g. local Gemma) routinely emit a tool call to a
+    skill name as if it were a tool — and they tend to convert hyphens
+    to underscores. Without this wrapper the loom dispatcher returns
+    ``Unknown tool: deep_research`` and the turn is wasted. We resolve
+    the requested name against the skill registry (trying both hyphen
+    and underscore variants) and, when it matches, route the call to
+    ``skill_view`` instead.
+    """
+    original_dispatch = registry.dispatch
+
+    async def dispatch(name: str, args: dict) -> ToolResult:
+        if name not in registry._handlers:
+            for candidate in (name, name.replace("_", "-"), name.replace("-", "_")):
+                if candidate in skill_registry:
+                    log.info(
+                        "skill-name tool call %r redirected to skill_view(%r)",
+                        name, candidate,
+                    )
+                    return await original_dispatch("skill_view", {"name": candidate})
+        return await original_dispatch(name, args)
+
+    registry.dispatch = dispatch  # type: ignore[method-assign]

@@ -256,6 +256,13 @@ def build_system_prompt(
     if descs:
         parts.append("## Available skills")
         parts.append("")
+        parts.append(
+            "These are procedures, not tools. To use one, call "
+            "`skill_view(name=\"<skill-name>\")` to load its body, then follow "
+            "its steps. Skill names use hyphens (e.g. `deep-research`); never "
+            "call a skill name as a tool."
+        )
+        parts.append("")
         for name, desc in descs:
             parts.append(f"- **{name}** — {desc}")
     else:
