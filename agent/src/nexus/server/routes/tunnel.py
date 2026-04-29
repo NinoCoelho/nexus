@@ -125,6 +125,7 @@ def _admin_status_dict() -> dict[str, Any]:
         "share_url": s.share_url,
         "code": s.code,  # short access code; never leave loopback with this
         "started_at": s.started_at,
+        "redeemed": s.redeemed,
         "binary_installed": cloudflared_provider.binary_installed(),
     }
 
