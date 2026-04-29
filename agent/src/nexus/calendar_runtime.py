@@ -13,7 +13,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-# Signature: (path, event_id, mode) -> dict (with at least "session_id")
+# Signature: (*, path, event_id, mode, occurrence_start=None) -> dict (with at
+# least "session_id"). ``occurrence_start`` is the UTC ISO of the resolved
+# occurrence the driver is firing — passed through to the background turn so
+# the helper can record per-occurrence completion on success without touching
+# the parent event's ``status`` field.
 Dispatcher = Callable[..., Awaitable[dict[str, Any]]]
 # Signature: (payload) -> None. Publishes a calendar_alert notification on
 # the cross-session channel so the UI can show a toast.

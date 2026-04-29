@@ -155,6 +155,24 @@ def update_event(path: str, event_id: str, updates: dict[str, Any]) -> Event:
     if "assignee" in updates:
         v = updates["assignee"]
         ev.assignee = str(v).strip() if v and str(v).strip() else None
+    if "completed_occurrences" in updates:
+        v = updates["completed_occurrences"]
+        if not isinstance(v, list):
+            raise ValueError("completed_occurrences must be a list of ISO strings")
+        ev.completed_occurrences = [str(x) for x in v if x]
+    if "complete_occurrence" in updates:
+        v = updates["complete_occurrence"]
+        if v:
+            iso = str(v).strip()
+            if iso and iso not in ev.completed_occurrences:
+                ev.completed_occurrences.append(iso)
+    if "uncomplete_occurrence" in updates:
+        v = updates["uncomplete_occurrence"]
+        if v:
+            iso = str(v).strip()
+            ev.completed_occurrences = [
+                x for x in ev.completed_occurrences if x != iso
+            ]
     write_calendar(path, cal)
     return ev
 

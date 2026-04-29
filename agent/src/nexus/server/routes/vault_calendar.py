@@ -123,7 +123,11 @@ async def vault_calendar_add_event(body: dict, path: str) -> dict:
 @router.patch("/vault/calendar/events/{event_id}")
 async def vault_calendar_patch_event(event_id: str, body: dict, path: str) -> dict:
     """Update event fields or reschedule. Body keys: title, body, start, end,
-    status, trigger, rrule, all_day, session_id."""
+    status, trigger, rrule, all_day, session_id, completed_occurrences (full
+    list replace), complete_occurrence (append one occurrence_start to the
+    completed list — used by the UI to mark a single instance of a recurring
+    event done without touching the parent ``status``), uncomplete_occurrence
+    (remove one)."""
     from ... import vault_calendar
     try:
         if "start" in body and len(body) <= 2 and ("end" in body or len(body) == 1):

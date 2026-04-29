@@ -105,11 +105,28 @@ class Driver(HeartbeatDriver):
                     )
                     continue
 
-                # Single-shot path
+                # Single-shot path. Walk forward past any occurrences that
+                # are already in ``completed_occurrences`` (manually marked
+                # done in the UI, or recorded by a previous successful run)
+                # so a stale completed occurrence doesn't block the next
+                # uncompleted one from firing.
                 due = vault_calendar.next_occurrence_after(
                     ev, last_processed - timedelta(seconds=1), tz=cal.timezone
                 )
-                if due is None:
+                completed_set = set(ev.completed_occurrences)
+                due_iso: str | None = None
+                for _ in range(366):  # bound: ~1y of daily occurrences
+                    if due is None:
+                        break
+                    candidate = due.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if candidate not in completed_set:
+                        due_iso = candidate
+                        break
+                    # Already done — advance past it.
+                    due = vault_calendar.next_occurrence_after(
+                        ev, due, tz=cal.timezone
+                    )
+                if due is None or due_iso is None:
                     continue
                 if due > now:
                     continue
@@ -140,9 +157,12 @@ class Driver(HeartbeatDriver):
                         )
                     continue
 
-                await _dispatch_event(summary.path, ev, dispatcher, vault_calendar)
+                await _dispatch_event(
+                    summary.path, ev, dispatcher, vault_calendar,
+                    occurrence_start=due_iso,
+                )
                 if ev.rrule:
-                    fired_events[ev.id] = due.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    fired_events[ev.id] = due_iso
 
         # Garbage-collect stale fired_events entries.
         cutoff = now - _FIRED_RETENTION
@@ -162,11 +182,16 @@ async def _dispatch_event(
     ev,  # noqa: ANN001
     dispatcher,  # noqa: ANN001
     vault_calendar,  # noqa: ANN001
+    *,
+    occurrence_start: str | None = None,
 ) -> None:
     """Dispatch the agent for an agent-assigned event."""
     try:
         result = await asyncio.wait_for(
-            dispatcher(path=path, event_id=ev.id, mode="background"),
+            dispatcher(
+                path=path, event_id=ev.id, mode="background",
+                occurrence_start=occurrence_start,
+            ),
             timeout=_DISPATCH_TIMEOUT,
         )
         log.info(
@@ -239,8 +264,13 @@ async def _handle_fire_window(
             return
 
     try:
+        # Fire-window events stay status="scheduled" forever; they don't
+        # use per-occurrence completion so don't pass occurrence_start.
         result = await asyncio.wait_for(
-            dispatcher(path=path, event_id=ev.id, mode="background"),
+            dispatcher(
+                path=path, event_id=ev.id, mode="background",
+                occurrence_start=None,
+            ),
             timeout=_DISPATCH_TIMEOUT,
         )
         log.info(

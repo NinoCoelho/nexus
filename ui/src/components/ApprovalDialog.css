@@ -17,6 +17,7 @@
 
 .approval-dialog {
   width: min(520px, 92vw);
+  max-height: min(90vh, 720px);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -26,6 +27,20 @@
   flex-direction: column;
   gap: 12px;
   color: var(--fg);
+  /* Allow inner body to shrink below content size so it can scroll. */
+  min-height: 0;
+}
+
+.approval-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* Soft inset gutter so the scrollbar doesn't crowd the text. */
+  padding-right: 4px;
+  margin-right: -4px;
 }
 
 .approval-header {
@@ -34,6 +49,7 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--border-soft);
   padding-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .approval-title {
@@ -69,6 +85,7 @@
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .approval-buttons-choice {
@@ -124,6 +141,7 @@
 .approval-text-row {
   display: flex;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .approval-text-input {

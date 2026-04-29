@@ -29,8 +29,20 @@ class _FakeDispatcher:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def __call__(self, *, path: str, event_id: str, mode: str) -> dict:
-        self.calls.append({"path": path, "event_id": event_id, "mode": mode})
+    async def __call__(
+        self,
+        *,
+        path: str,
+        event_id: str,
+        mode: str,
+        occurrence_start: str | None = None,
+    ) -> dict:
+        self.calls.append({
+            "path": path,
+            "event_id": event_id,
+            "mode": mode,
+            "occurrence_start": occurrence_start,
+        })
         return {"session_id": f"sid-{len(self.calls)}"}
 
 
@@ -186,6 +198,54 @@ async def test_recurring_past_due_not_marked_missed(fake_dispatcher):
 
     cal = vault_calendar.read_calendar("cal.md")
     assert cal.events[0].status == "scheduled", "must not be flagged missed"
+
+
+async def test_completed_occurrence_skipped(fake_dispatcher):
+    """A daily event with day-1 already in completed_occurrences must skip
+    day-1's fire but still fire on day-2."""
+    vault_calendar.create_empty("cal.md", prompt="x")
+    ev = vault_calendar.add_event(
+        "cal.md",
+        title="Daily",
+        start="2026-04-27T12:00:00Z",
+        rrule="FREQ=DAILY",
+        trigger="on_start",
+        assignee="agent",
+    )
+    vault_calendar.update_event(
+        "cal.md", ev.id,
+        {"complete_occurrence": "2026-04-27T12:00:00Z"},
+    )
+
+    driver = Driver()
+    state: dict = {}
+    day1 = datetime(2026, 4, 27, 12, 0, 0, tzinfo=UTC)
+    state = await _tick(driver, state, day1)
+    assert fake_dispatcher.calls == [], "day 1 must be skipped (already completed)"
+
+    day2 = day1 + timedelta(days=1)
+    state = await _tick(driver, state, day2)
+    assert len(fake_dispatcher.calls) == 1, "day 2 must still fire"
+    assert fake_dispatcher.calls[0]["occurrence_start"] == "2026-04-28T12:00:00Z"
+
+
+async def test_dispatcher_receives_occurrence_start(fake_dispatcher):
+    """The driver must pass the resolved occurrence_start to the dispatcher
+    so the background turn can record per-occurrence completion."""
+    vault_calendar.create_empty("cal.md", prompt="x")
+    vault_calendar.add_event(
+        "cal.md",
+        title="Daily",
+        start="2026-04-27T12:00:00Z",
+        rrule="FREQ=DAILY",
+        trigger="on_start",
+        assignee="agent",
+    )
+    driver = Driver()
+    day1 = datetime(2026, 4, 27, 12, 0, 0, tzinfo=UTC)
+    await _tick(driver, {}, day1)
+    assert len(fake_dispatcher.calls) == 1
+    assert fake_dispatcher.calls[0]["occurrence_start"] == "2026-04-27T12:00:00Z"
 
 
 async def test_unassigned_event_never_fires(fake_dispatcher):

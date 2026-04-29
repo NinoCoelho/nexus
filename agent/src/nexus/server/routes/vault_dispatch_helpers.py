@@ -34,6 +34,7 @@ async def run_background_agent_turn(
     store: "SessionStore",
     model_id: str | None = None,
     entity_kind: str = "card",
+    occurrence_start: str | None = None,
 ) -> None:
     """Run one agent turn to completion, publishing events via the trace bus
     and updating the entity's status (done/failed) when finished.
@@ -139,6 +140,21 @@ async def run_background_agent_turn(
                     # Fire-window events keep status="scheduled" so the next
                     # intra-day slot can fire them. Don't overwrite.
                     pass
+                elif (
+                    found
+                    and found[0].rrule
+                    and occurrence_start
+                    and new_status == "done"
+                ):
+                    # Recurring event success: log the completed occurrence
+                    # without flipping the parent's status. Mutating
+                    # ``status`` would propagate "done" to every other
+                    # expanded occurrence in the UI and re-trigger the
+                    # original "marks all done" bug.
+                    vault_calendar.update_event(
+                        card_path, card_id,
+                        {"complete_occurrence": occurrence_start},
+                    )
                 else:
                     vault_calendar.update_event(card_path, card_id, {"status": new_status})
             else:

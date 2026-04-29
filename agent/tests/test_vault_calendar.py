@@ -228,6 +228,80 @@ def test_fire_window_via_tool():
     assert res["event"]["fire_every_min"] == 60
 
 
+def test_completed_occurrences_round_trip():
+    """Per-occurrence completion list survives parse + serialize."""
+    vault_calendar.create_empty("a.md")
+    ev = vault_calendar.add_event(
+        "a.md", title="Daily",
+        start="2026-04-27T12:00:00Z", rrule="FREQ=DAILY",
+    )
+    vault_calendar.update_event(
+        "a.md", ev.id,
+        {"complete_occurrence": "2026-04-27T12:00:00Z"},
+    )
+    vault_calendar.update_event(
+        "a.md", ev.id,
+        {"complete_occurrence": "2026-04-28T12:00:00Z"},
+    )
+    cal = vault_calendar.read_calendar("a.md")
+    assert cal.events[0].completed_occurrences == [
+        "2026-04-27T12:00:00Z",
+        "2026-04-28T12:00:00Z",
+    ]
+    # Idempotent — same iso again is a no-op.
+    vault_calendar.update_event(
+        "a.md", ev.id,
+        {"complete_occurrence": "2026-04-27T12:00:00Z"},
+    )
+    assert vault_calendar.read_calendar("a.md").events[0].completed_occurrences == [
+        "2026-04-27T12:00:00Z",
+        "2026-04-28T12:00:00Z",
+    ]
+    # Status remains scheduled — completion does not flip parent status.
+    assert vault_calendar.read_calendar("a.md").events[0].status == "scheduled"
+
+
+def test_uncomplete_occurrence_removes():
+    vault_calendar.create_empty("a.md")
+    ev = vault_calendar.add_event(
+        "a.md", title="Daily",
+        start="2026-04-27T12:00:00Z", rrule="FREQ=DAILY",
+    )
+    vault_calendar.update_event(
+        "a.md", ev.id,
+        {"completed_occurrences": [
+            "2026-04-27T12:00:00Z", "2026-04-28T12:00:00Z",
+        ]},
+    )
+    vault_calendar.update_event(
+        "a.md", ev.id,
+        {"uncomplete_occurrence": "2026-04-27T12:00:00Z"},
+    )
+    cal = vault_calendar.read_calendar("a.md")
+    assert cal.events[0].completed_occurrences == ["2026-04-28T12:00:00Z"]
+
+
+def test_query_events_overrides_status_for_completed():
+    """An expanded hit whose occurrence_start is in completed_occurrences
+    must report status="done" even though parent.status is "scheduled"."""
+    vault_calendar.create_empty("a.md", timezone="UTC")
+    ev = vault_calendar.add_event(
+        "a.md", title="Daily",
+        start="2026-04-27T12:00:00Z", rrule="FREQ=DAILY",
+    )
+    vault_calendar.update_event(
+        "a.md", ev.id,
+        {"complete_occurrence": "2026-04-27T12:00:00Z"},
+    )
+    hits = vault_calendar.query_events(
+        from_utc="2026-04-27T00:00:00Z",
+        to_utc="2026-04-29T00:00:00Z",
+    )
+    by_occ = {h["occurrence_start"]: h for h in hits}
+    assert by_occ["2026-04-27T12:00:00Z"]["status"] == "done"
+    assert by_occ["2026-04-28T12:00:00Z"]["status"] == "scheduled"
+
+
 def test_sweep_missed_flags_old_scheduled_events():
     vault_calendar.create_empty("a.md")
     vault_calendar.add_event(
