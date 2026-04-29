@@ -11,16 +11,18 @@ import {
 import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
+import DatabaseListPanel from "../DatabaseListPanel";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
+import BrightnessKnob from "../BrightnessKnob";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "graph" | "insights";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights";
 
 interface Props {
   view: View;
@@ -37,8 +39,14 @@ interface Props {
   onVaultOpenPathHandled?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+  onVisualizeFolderGraph?: (path: string) => void;
   kanbanSelectedPath: string | null;
   onKanbanOpen: (path: string) => void;
+  databaseSelectedPath: string | null;
+  databaseSelectedFolder: string | null;
+  onDatabaseOpen: (path: string) => void;
+  onDatabaseSelectFolder: (folder: string) => void;
+  onDatabaseOpenDiagram?: (folder: string) => void;
   /** Mobile drawer open state. When true, sidebar slides in from the left. */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -49,6 +57,7 @@ const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
   { id: "calendar", label: "Calendar",  Icon: IconCalendar },
   { id: "vault",    label: "Vault",     Icon: IconVault },
   { id: "kanban",   label: "Kanban",    Icon: IconKanban },
+  { id: "data",     label: "Data",      Icon: IconDatabase },
   { id: "graph",    label: "Knowledge", Icon: IconGraph },
   { id: "insights", label: "Insights",  Icon: IconInsights },
 ];
@@ -57,7 +66,10 @@ export default function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
   sessionsRevision, onSessionsRevisionBump, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
+  onVisualizeFolderGraph,
   kanbanSelectedPath, onKanbanOpen,
+  databaseSelectedPath, databaseSelectedFolder,
+  onDatabaseOpen, onDatabaseSelectFolder, onDatabaseOpenDiagram,
   mobileOpen = false, onMobileClose,
 }: Props) {
   const toast = useToast();
@@ -265,6 +277,7 @@ export default function Sidebar({
             onOpenPathHandled={onVaultOpenPathHandled}
             onDispatchToChat={onDispatchToChat}
             onViewEntityGraph={onViewEntityGraph}
+            onVisualizeFolderGraph={onVisualizeFolderGraph}
           />
         </div>
       )}
@@ -279,17 +292,31 @@ export default function Sidebar({
         </div>
       )}
 
+      {/* Data list — only in Data view */}
+      {view === "data" && !collapsed && (
+        <div className="sidebar-section sidebar-vault-section">
+          <DatabaseListPanel
+            selectedPath={databaseSelectedPath}
+            selectedDatabase={databaseSelectedFolder}
+            onOpen={onDatabaseOpen}
+            onSelectDatabase={onDatabaseSelectFolder}
+            onOpenDiagram={onDatabaseOpenDiagram}
+          />
+        </div>
+      )}
+
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && (
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && !(view === "data" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}
 
-      {/* Settings */}
+      {/* Settings + always-accessible brightness knob */}
       <div className="sidebar-bottom">
         <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? "Settings" : undefined}>
           <span className="sidebar-nav-icon"><IconGear /></span>
           {!collapsed && <span className="sidebar-nav-label">Settings</span>}
         </button>
+        <BrightnessKnob collapsed={collapsed} />
       </div>
 
       {/* Floating context menu — position:fixed so it escapes the row's

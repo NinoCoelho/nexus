@@ -349,6 +349,278 @@ async def graphrag_index_file_status(path: str) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Per-folder ontology-isolated knowledge graphs
+#
+# Distinct from the global GraphRAG above: each tab here is scoped to a
+# specific vault folder, has its own ontology snapshot, and its index lives
+# inside the folder itself (`<folder>/.nexus-graph/`). See
+# `agent/src/nexus/agent/folder_graph/` for the implementation.
+# ---------------------------------------------------------------------------
+
+# In-flight indexing tasks per folder, mirrors `_graphrag_index_tasks` shape.
+_folder_index_tasks: dict[str, dict[str, Any]] = {}
+
+
+def _resolve_vault_folder(path: str) -> str:
+    """Map a vault-relative folder path → absolute path on disk.
+
+    The UI passes vault-relative paths (e.g. ``Projects/Alpha``); this resolver
+    rejects absolute paths and any traversal outside the vault root.
+    """
+    from pathlib import Path
+    from ...agent.graphrag_manager import get_home
+
+    if not path or not path.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="`path` is required")
+    rel = path.strip().strip("/")
+    if rel.startswith("/") or ".." in rel.split("/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="path must be vault-relative")
+    vault_root = (get_home() / "vault").resolve()
+    abs_p = (vault_root / rel).resolve()
+    try:
+        abs_p.relative_to(vault_root)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="path escapes vault root")
+    if not abs_p.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="folder not found")
+    return str(abs_p)
+
+
+@router.post("/graph/folder/open")
+async def folder_open(body: dict) -> dict:
+    """Open or describe a folder graph. Does NOT trigger indexing."""
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(body.get("path", ""))
+    meta = fg.load_meta(abs_path)
+    return {
+        "path": body.get("path", "").strip().strip("/"),
+        "abs_path": abs_path,
+        "exists": bool(meta),
+        "ontology": meta.get("ontology") if meta else None,
+        "ontology_hash": meta.get("ontology_hash") if meta else None,
+        "embedder_id": meta.get("embedder_id") if meta else None,
+        "extractor_id": meta.get("extractor_id") if meta else None,
+        "file_count": meta.get("file_count") if meta else 0,
+        "last_indexed_at": meta.get("last_indexed_at") if meta else None,
+    }
+
+
+@router.get("/graph/folder/stale")
+async def folder_stale(path: str) -> dict:
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(path)
+    return fg.stale_files(abs_path)
+
+
+@router.get("/graph/folder/ontology")
+async def folder_get_ontology(path: str) -> dict:
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(path)
+    meta = fg.load_meta(abs_path)
+    return {
+        "ontology": meta.get("ontology") if meta else None,
+        "ontology_hash": meta.get("ontology_hash") if meta else None,
+        "exists": bool(meta),
+    }
+
+
+@router.put("/graph/folder/ontology")
+async def folder_put_ontology(body: dict) -> dict:
+    """Persist a new ontology snapshot. Does NOT trigger reindex —
+    the UI prompts the user separately."""
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(body.get("path", ""))
+    ontology = body.get("ontology") or {}
+    if not isinstance(ontology, dict):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="`ontology` must be an object")
+    fg.save_meta(abs_path, ontology=ontology)
+    meta = fg.load_meta(abs_path)
+    return {"saved": True, "ontology_hash": meta.get("ontology_hash")}
+
+
+@router.post("/graph/folder/index")
+async def folder_index(
+    body: dict,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> StreamingResponse:
+    """Index a folder. SSE stream emits phase / file / stats / done events."""
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(body.get("path", ""))
+    full = bool(body.get("full", False))
+    cfg = app_state.get("cfg")
+
+    meta = fg.load_meta(abs_path)
+    ontology = meta.get("ontology") or body.get("ontology")
+    if not ontology:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="folder has no ontology — call PUT /graph/folder/ontology first",
+        )
+
+    async def _gen():
+        # Track this task so cancel can hit it. Re-entrant calls share the slot.
+        _folder_index_tasks[abs_path] = {"status": "indexing"}
+        try:
+            async for frame in fg.index_folder_streaming(
+                abs_path, cfg=cfg, ontology=ontology, full=full
+            ):
+                yield frame
+        finally:
+            _folder_index_tasks.pop(abs_path, None)
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/graph/folder/index-cancel")
+async def folder_index_cancel(body: dict) -> dict:
+    abs_path = _resolve_vault_folder(body.get("path", ""))
+    info = _folder_index_tasks.get(abs_path)
+    if not info:
+        return {"cancelled": False, "reason": "no active job"}
+    info["cancelled"] = True
+    return {"cancelled": True, "path": body.get("path", "")}
+
+
+@router.get("/graph/folder/full-subgraph")
+async def folder_full_subgraph(
+    path: str,
+    max_nodes: int = 500,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> dict:
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(path)
+    meta = fg.load_meta(abs_path)
+    if not meta or not meta.get("ontology"):
+        return {"nodes": [], "edges": [], "exists": False}
+    cfg = app_state.get("cfg")
+    try:
+        entry = fg.open_folder_engine(abs_path, meta["ontology"], cfg)
+    except Exception as exc:
+        log.exception("[folder_graph] open failed for %s", abs_path)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=str(exc))
+    sg = fg.full_subgraph(entry["engine"], max_nodes=max_nodes)
+    sg["exists"] = True
+    return sg
+
+
+@router.get("/graph/folder/subgraph")
+async def folder_subgraph(
+    path: str,
+    seed: int,
+    hops: int = 2,
+    width: int = 50,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> dict:
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(path)
+    meta = fg.load_meta(abs_path)
+    if not meta or not meta.get("ontology"):
+        return {"nodes": [], "edges": []}
+    cfg = app_state.get("cfg")
+    entry = fg.open_folder_engine(abs_path, meta["ontology"], cfg)
+    return fg.subgraph_for_seed(entry["engine"], seed, hops=hops, width=width)
+
+
+@router.post("/graph/folder/query")
+async def folder_query(
+    body: dict,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> dict:
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(body.get("path", ""))
+    q = (body.get("query") or "").strip()
+    limit = min(int(body.get("limit", 10)), 50)
+    if not q:
+        return {"results": [], "subgraph": {"nodes": [], "edges": []}}
+    meta = fg.load_meta(abs_path)
+    if not meta or not meta.get("ontology"):
+        return {"results": [], "subgraph": {"nodes": [], "edges": []}}
+    cfg = app_state.get("cfg")
+    entry = fg.open_folder_engine(abs_path, meta["ontology"], cfg)
+    return await fg.query(entry["engine"], q, limit=limit)
+
+
+@router.post("/graph/folder/ontology-wizard/start")
+async def folder_wizard_start(
+    body: dict,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> StreamingResponse:
+    from ...agent import folder_graph as fg
+
+    abs_path = _resolve_vault_folder(body.get("path", ""))
+    cfg = app_state.get("cfg")
+
+    async def _gen():
+        async for frame in fg.start_wizard(abs_path, cfg):
+            yield frame
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/graph/folder/ontology-wizard/answer")
+async def folder_wizard_answer(body: dict) -> dict:
+    from ...agent import folder_graph as fg
+
+    wizard_id = (body.get("wizard_id") or "").strip()
+    answer = body.get("answer") or ""
+    if not wizard_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="`wizard_id` required")
+    accepted = fg.answer_wizard(wizard_id, str(answer))
+    if not accepted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="wizard session not found or already finished")
+    return {"accepted": True}
+
+
+@router.get("/graph/folder/tabs")
+async def folder_tabs_get() -> dict:
+    from ...agent import folder_graph as fg
+    return {"tabs": fg.list_tabs()}
+
+
+@router.put("/graph/folder/tabs")
+async def folder_tabs_put(body: dict) -> dict:
+    from ...agent import folder_graph as fg
+    tabs = body.get("tabs") or []
+    if not isinstance(tabs, list):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="`tabs` must be a list")
+    return {"tabs": fg.set_tabs(tabs)}
+
+
+@router.delete("/graph/folder")
+async def folder_delete(path: str) -> dict:
+    from ...agent import folder_graph as fg
+    abs_path = _resolve_vault_folder(path)
+    removed = fg.delete_folder_index(abs_path)
+    fg.remove_tab(abs_path)
+    return {"removed": removed}
+
+
 @router.post("/graphrag/reindex")
 async def graphrag_reindex(
     full: bool = False,

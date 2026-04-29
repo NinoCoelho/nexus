@@ -13,6 +13,9 @@ import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
+import DatabaseSchemaView from "./components/DatabaseSchemaView";
+import DataDashboardView from "./components/DataDashboardView";
+import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
   cancelHitlRequest,
@@ -65,6 +68,12 @@ export default function App() {
   const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
   /** Currently selected kanban board path inside the Kanban view. */
   const [kanbanSelectedPath, setKanbanSelectedPath] = useState<string | null>(null);
+  /** Currently selected data-table path inside the Data view (when drilling into a single table). */
+  const [dataSelectedPath, setDataSelectedPath] = useState<string | null>(null);
+  /** Folder for which to render an ER diagram inside the Data view. */
+  const [dataDiagramFolder, setDataDiagramFolder] = useState<string | null>(null);
+  /** Currently selected database (folder) — drives the dashboard view. */
+  const [dataSelectedDatabase, setDataSelectedDatabase] = useState<string | null>(null);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -89,7 +98,11 @@ export default function App() {
   }, [view]);
   useEffect(() => {
     const onHash = () => {
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|graph|insights)$/);
+      // Migrate legacy #/database deep links to the renamed #/data view.
+      if (window.location.hash === "#/database") {
+        window.history.replaceState(null, "", "#/data");
+      }
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();
@@ -196,6 +209,12 @@ export default function App() {
 
   const handleViewEntityGraph = useCallback((mode: "file" | "folder", path: string) => {
     setGraphSourceFilter({ mode, path });
+    setView("graph");
+  }, []);
+
+  const [pendingFolderGraph, setPendingFolderGraph] = useState<string | null>(null);
+  const handleVisualizeFolderGraph = useCallback((path: string) => {
+    setPendingFolderGraph(path);
     setView("graph");
   }, []);
 
@@ -376,8 +395,32 @@ export default function App() {
         onVaultOpenPathHandled={() => setVaultOpenPath(null)}
         onDispatchToChat={handleDispatchToChat}
         onViewEntityGraph={handleViewEntityGraph}
+        onVisualizeFolderGraph={handleVisualizeFolderGraph}
         kanbanSelectedPath={kanbanSelectedPath}
         onKanbanOpen={(path) => { setKanbanSelectedPath(path); setView("kanban"); }}
+        databaseSelectedPath={dataSelectedPath}
+        databaseSelectedFolder={dataSelectedDatabase}
+        onDatabaseOpen={(path) => {
+          setDataSelectedPath(path);
+          setDataDiagramFolder(null);
+          // Pin the parent folder as the active database so navigating back
+          // (clearing the path) lands on the correct dashboard.
+          const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+          setDataSelectedDatabase(parent);
+          setView("data");
+        }}
+        onDatabaseSelectFolder={(folder) => {
+          setDataSelectedDatabase(folder);
+          setDataSelectedPath(null);
+          setDataDiagramFolder(null);
+          setView("data");
+        }}
+        onDatabaseOpenDiagram={(folder) => {
+          setDataDiagramFolder(folder);
+          setDataSelectedPath(null);
+          setDataSelectedDatabase(folder);
+          setView("data");
+        }}
       />
 
       <div className="app-main">
@@ -509,6 +552,7 @@ export default function App() {
               onOpenInChat={handleOpenInChat}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
+              onOpenTable={(p) => { setDataSelectedPath(p); setDataDiagramFolder(null); setView("data"); }}
             />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
@@ -519,10 +563,56 @@ export default function App() {
                 onOpenInChat={handleOpenInChat}
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
+                onOpenTable={(p) => { setDataSelectedPath(p); setDataDiagramFolder(null); setView("data"); }}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
                 Pick a board on the left.
+              </div>
+            )}
+          </div>
+          <div className="view-pane" style={{ display: view === "data" ? "flex" : "none" }}>
+            {dataDiagramFolder !== null ? (
+              <DatabaseSchemaView
+                folder={dataDiagramFolder}
+                onClose={() => setDataDiagramFolder(null)}
+              />
+            ) : dataSelectedPath ? (
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+                {dataSelectedDatabase !== null && (
+                  <div style={{ padding: "6px 16px", borderBottom: "1px solid var(--bg-soft)", fontSize: 12 }}>
+                    <button
+                      className="dt-action-btn"
+                      onClick={() => setDataSelectedPath(null)}
+                      title="Back to dashboard"
+                    >
+                      ← Back to dashboard
+                    </button>
+                  </div>
+                )}
+                <VaultView
+                  selectedPath={dataSelectedPath}
+                  onDispatchToChat={handleDispatchToChat}
+                  onOpenInChat={handleOpenInChat}
+                  onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
+                  onOpenCalendar={handleOpenCalendar}
+                  onOpenTable={(p) => setDataSelectedPath(p)}
+                />
+              </div>
+            ) : dataSelectedDatabase !== null ? (
+              <DataDashboardView
+                folder={dataSelectedDatabase}
+                onOpenTable={(p) => setDataSelectedPath(p)}
+                onOpenDiagram={(f) => { setDataDiagramFolder(f); setDataSelectedPath(null); }}
+                onAfterDelete={() => {
+                  setDataSelectedDatabase(null);
+                  setDataSelectedPath(null);
+                  setDataDiagramFolder(null);
+                }}
+              />
+            ) : (
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
+                Pick a database on the left to open its dashboard.
               </div>
             )}
           </div>
@@ -532,6 +622,8 @@ export default function App() {
               onSelectSession={handleSessionSelect}
               graphSourceFilter={graphSourceFilter}
               onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
+              pendingFolderGraph={pendingFolderGraph}
+              onPendingFolderGraphHandled={() => setPendingFolderGraph(null)}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onStartGraphIndex={handleStartGraphIndex}
               onSpawnSession={handleSpawnSessionFromEntity}

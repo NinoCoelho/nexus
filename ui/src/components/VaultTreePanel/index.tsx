@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Modal, { type ModalProps } from "../Modal";
 import "../VaultView.css";
 import {
+  getVaultHistoryStatus,
   getVaultTag,
   getVaultTags,
   getVaultTree,
@@ -44,6 +45,7 @@ interface VaultTreePanelProps {
   onTreeChange?: () => void;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+  onVisualizeFolderGraph?: (path: string) => void;
 }
 
 export default function VaultTreePanel({
@@ -54,6 +56,7 @@ export default function VaultTreePanel({
   onTreeChange,
   onDispatchToChat,
   onViewEntityGraph,
+  onVisualizeFolderGraph,
 }: VaultTreePanelProps) {
   const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
@@ -103,6 +106,18 @@ export default function VaultTreePanel({
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const [modal, setModal] = useState<ModalProps | null>(null);
+  const [historyEnabled, setHistoryEnabled] = useState(false);
+
+  // Refresh history-enabled flag whenever the context menu is about to open
+  // — cheap, and keeps the "Undo" item in sync with the settings toggle.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    let cancelled = false;
+    getVaultHistoryStatus()
+      .then((s) => { if (!cancelled) setHistoryEnabled(s.enabled); })
+      .catch(() => { if (!cancelled) setHistoryEnabled(false); });
+    return () => { cancelled = true; };
+  }, [ctxMenu]);
 
   const refreshTree = useCallback(() => {
     setTreeError(false);
@@ -294,7 +309,9 @@ export default function VaultTreePanel({
           onNewKanban={(p) => void actions.handleNewKanban(p)}
           onDispatchFile={(p) => void actions.handleDispatchFile(p)}
           onDelete={actions.handleDelete}
+          onUndo={historyEnabled ? actions.handleUndo : undefined}
           onViewEntityGraph={onViewEntityGraph}
+          onVisualizeFolderGraph={onVisualizeFolderGraph}
           onClose={() => setCtxMenu(null)}
         />
       )}

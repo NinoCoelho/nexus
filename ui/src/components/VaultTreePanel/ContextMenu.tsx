@@ -13,7 +13,10 @@ interface ContextMenuProps {
   onNewKanban: (dirPath: string) => void;
   onDispatchFile: (filePath: string) => void;
   onDelete: (node: TreeNode) => void;
+  /** Only present when vault history is enabled. */
+  onUndo?: (node: TreeNode) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
+  onVisualizeFolderGraph?: (path: string) => void;
   onClose: () => void;
 }
 
@@ -28,7 +31,9 @@ export function ContextMenu({
   onNewKanban,
   onDispatchFile,
   onDelete,
+  onUndo,
   onViewEntityGraph,
+  onVisualizeFolderGraph,
   onClose,
 }: ContextMenuProps) {
   return (
@@ -49,6 +54,11 @@ export function ContextMenu({
               Entity graph for folder
             </button>
           )}
+          {onVisualizeFolderGraph && (
+            <button className="vault-ctx-item" onClick={() => { onVisualizeFolderGraph(node.path); onClose(); }}>
+              Visualize as graph
+            </button>
+          )}
         </>
       )}
       {node.type === "file" && node.path.endsWith(".md") && (
@@ -62,6 +72,11 @@ export function ContextMenu({
             </button>
           )}
         </>
+      )}
+      {onUndo && (
+        <button className="vault-ctx-item" onClick={() => onUndo(node)}>
+          Undo last change
+        </button>
       )}
       <button className="vault-ctx-item vault-ctx-item--danger" onClick={() => onDelete(node)}>Delete</button>
     </div>

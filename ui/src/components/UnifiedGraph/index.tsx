@@ -25,14 +25,26 @@ import { GraphCanvas3D } from "./GraphCanvas3D";
 import { useKnowledgeMode } from "./modes/knowledge";
 import { useVaultMode } from "./modes/vault";
 import { useAgentMode } from "./modes/agent";
+import { useFolderKnowledgeMode } from "./modes/folderKnowledge";
+import { FolderGraphTab } from "../FolderGraph/FolderGraphTab";
+import {
+  getFolderTabs,
+  setFolderTabs,
+  type FolderTab,
+} from "../../api/folderGraph";
 import { WebGLBoundary, WebGLFallback, probeWebGL } from "./WebGLBoundary";
 import type { ContextMenuItem, GraphCanvasHandle, ModeId, UnifiedNode } from "./types";
+
+/** "vault" = the global GraphRAG knowledge graph. Anything else = a folder path. */
+type KnowledgeTab = "vault" | string;
 
 interface Props {
   onOpenSkill: (name: string) => void;
   onSelectSession: (id: string) => void;
   graphSourceFilter?: { mode: "file" | "folder"; path: string } | null;
   onGraphSourceFilterHandled?: () => void;
+  pendingFolderGraph?: string | null;
+  onPendingFolderGraphHandled?: () => void;
   onViewEntityGraph?: (path: string) => void;
   onStartGraphIndex?: (path: string) => void;
   onSpawnSession?: (entityId: number, entityName: string) => void;
@@ -49,11 +61,21 @@ export default function UnifiedGraph({
   onSelectSession,
   graphSourceFilter,
   onGraphSourceFilterHandled,
+  pendingFolderGraph,
+  onPendingFolderGraphHandled,
   onViewEntityGraph,
   onStartGraphIndex,
   onSpawnSession,
 }: Props) {
   const [mode, setMode] = useState<ModeId>("knowledge");
+  const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("vault");
+  const [folderTabs, setFolderTabsState] = useState<FolderTab[]>([]);
+  // Bumped to force the per-folder hook to refetch after a reindex completes.
+  const [folderRefreshKey, setFolderRefreshKey] = useState(0);
+  // Bumped to forward toolbar Edit/Reindex actions to the active FolderGraphTab.
+  const [folderEditTrigger, setFolderEditTrigger] = useState(0);
+  const [folderReindexTrigger, setFolderReindexTrigger] = useState(0);
+
   const [graphSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ node: UnifiedNode; items: ContextMenuItem[]; x: number; y: number } | null>(null);
@@ -66,11 +88,33 @@ export default function UnifiedGraph({
   // the fallback instead of letting react-force-graph-3d crash the tree.
   const [webglProbe, setWebglProbe] = useState(() => probeWebGL());
 
+  // Restore persisted folder tabs on mount.
+  useEffect(() => {
+    getFolderTabs().then(setFolderTabsState).catch(() => {});
+  }, []);
+
+  // Handle a "Visualize as graph" click coming from the vault tree:
+  // ensure the folder tab exists, switch to it, and bring this view forward.
+  useEffect(() => {
+    if (!pendingFolderGraph) return;
+    const path = pendingFolderGraph;
+    setMode("knowledge");
+    setKnowledgeTab(path);
+    setFolderTabsState((prev) => {
+      if (prev.some((t) => t.path === path)) return prev;
+      const label = path.split("/").pop() || path;
+      const next = [...prev, { path, label }];
+      setFolderTabs(next).catch(() => {});
+      return next;
+    });
+    onPendingFolderGraphHandled?.();
+  }, [pendingFolderGraph, onPendingFolderGraphHandled]);
+
   // All three mode hooks are always mounted so their data is fresh, but only
   // the active mode's data drives the canvas. (The hooks are cheap; each
   // does its own fetch on first mount and caches.)
   const knowledge = useKnowledgeMode({
-    initialSourceFilter: mode === "knowledge" ? graphSourceFilter : null,
+    initialSourceFilter: mode === "knowledge" && knowledgeTab === "vault" ? graphSourceFilter : null,
     onSourceFilterHandled: onGraphSourceFilterHandled,
     onViewEntityGraph,
     onStartGraphIndex,
@@ -79,7 +123,21 @@ export default function UnifiedGraph({
   const vault = useVaultMode({ onViewEntityGraph });
   const agent = useAgentMode({ onOpenSkill, onSelectSession });
 
-  const active = mode === "knowledge" ? knowledge : mode === "vault" ? vault : agent;
+  // The folder-knowledge hook is keyed on the active folder path; we only
+  // mount it when the inner Knowledge sub-tab is a folder. A `key=` keeps the
+  // hook state isolated per-folder so switching tabs swaps data cleanly.
+  const folderActive = mode === "knowledge" && knowledgeTab !== "vault";
+  const folderKnowledge = useFolderKnowledgeMode({
+    path: folderActive ? knowledgeTab : "",
+    refreshKey: folderRefreshKey,
+  });
+
+  const active =
+    mode === "knowledge"
+      ? (folderActive ? folderKnowledge : knowledge)
+      : mode === "vault"
+      ? vault
+      : agent;
 
   const handleNodeClick = useCallback((node: UnifiedNode | null) => {
     setSelectedId(node?.id ?? null);
@@ -97,16 +155,33 @@ export default function UnifiedGraph({
     links: active.data.links.length,
   }), [active.data]);
 
-  const showHopSelector = mode === "knowledge";
+  const showHopSelector = mode === "knowledge" && !folderActive;
   const showRefresh = true;
 
-  const refresh = mode === "vault" ? vault.refresh : mode === "agent" ? agent.refresh : undefined;
+  const refresh =
+    mode === "vault"
+      ? vault.refresh
+      : mode === "agent"
+      ? agent.refresh
+      : folderActive
+      ? folderKnowledge.refresh
+      : undefined;
 
   // The "search" we feed to the canvas (for highlight + pulse) mirrors the
   // semantic-search input in knowledge mode, so a single text box drives
   // both the GraphRAG query AND the visual highlight. Vault/agent modes
-  // fall back to the local graphSearch state.
-  const canvasSearch = mode === "knowledge" ? (knowledge.queryText ?? "") : graphSearch;
+  // fall back to the local graphSearch state. Folder tabs have no search yet.
+  const canvasSearch =
+    mode === "knowledge" && !folderActive ? (knowledge.queryText ?? "") : graphSearch;
+
+  function closeFolderTab(path: string) {
+    setFolderTabsState((prev) => {
+      const next = prev.filter((t) => t.path !== path);
+      setFolderTabs(next).catch(() => {});
+      return next;
+    });
+    if (knowledgeTab === path) setKnowledgeTab("vault");
+  }
 
   // `/` opens the in-graph find widget. Esc closes it (or exits fullscreen
   // if the widget is already closed). The main "Search your knowledge"
@@ -176,6 +251,25 @@ export default function UnifiedGraph({
       <span className="ug-stat">{stats.nodes}n</span>
       <span className="ug-stat">{stats.links}e</span>
 
+      {folderActive && (
+        <>
+          <button
+            className="ug-tool-btn"
+            onClick={() => setFolderEditTrigger((v) => v + 1)}
+            title="Edit ontology"
+          >
+            ⚙
+          </button>
+          <button
+            className="ug-tool-btn"
+            onClick={() => setFolderReindexTrigger((v) => v + 1)}
+            title="Reindex this folder"
+          >
+            ⟳⟳
+          </button>
+        </>
+      )}
+
       <button
         className={`ug-tool-btn${findOpen ? " ug-tool-btn--active" : ""}`}
         onClick={() => {
@@ -217,6 +311,38 @@ export default function UnifiedGraph({
           </button>
         ))}
       </div>
+
+      {mode === "knowledge" && (folderTabs.length > 0 || folderActive) && (
+        <div className="ug-subtabs">
+          <button
+            key="vault"
+            className={`ug-subtab${knowledgeTab === "vault" ? " ug-subtab--active" : ""}`}
+            onClick={() => { setKnowledgeTab("vault"); setSelectedId(null); setContextMenu(null); }}
+            title="Global vault knowledge graph"
+          >
+            Vault
+          </button>
+          {folderTabs.map((t) => (
+            <span key={t.path} className={`ug-subtab-wrap${knowledgeTab === t.path ? " ug-subtab-wrap--active" : ""}`}>
+              <button
+                className={`ug-subtab${knowledgeTab === t.path ? " ug-subtab--active" : ""}`}
+                onClick={() => { setKnowledgeTab(t.path); setSelectedId(null); setContextMenu(null); }}
+                title={t.path}
+              >
+                {t.label}
+              </button>
+              <button
+                className="ug-subtab-close"
+                onClick={(e) => { e.stopPropagation(); closeFolderTab(t.path); }}
+                title="Close tab (keeps the .nexus-graph index on disk)"
+                aria-label={`Close ${t.label}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {!fullscreen && active.filtersBar && (
         <div className="ug-filters-bar">
@@ -295,6 +421,21 @@ export default function UnifiedGraph({
           )}
 
           {active.sidebar}
+
+          {folderActive && (
+            <FolderGraphTab
+              key={knowledgeTab}
+              folderPath={knowledgeTab}
+              folderLabel={
+                folderTabs.find((t) => t.path === knowledgeTab)?.label
+                ?? knowledgeTab.split("/").pop()
+                ?? knowledgeTab
+              }
+              onReindexComplete={() => setFolderRefreshKey((v) => v + 1)}
+              externalEditOntology={folderEditTrigger}
+              externalReindex={folderReindexTrigger}
+            />
+          )}
         </div>
       </div>
     </div>

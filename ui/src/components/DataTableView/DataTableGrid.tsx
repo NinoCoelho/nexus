@@ -5,14 +5,16 @@
  * current page) and delegates all state logic to the parent via callbacks.
  */
 
+import { useState } from "react";
 import type { FieldSchema } from "../../types/form";
 import InlineEditor from "./InlineEditor";
 import { renderCell } from "./utils";
+import { RefPreviewPopup } from "./RefPreviewPopup";
 
 type RowRecord = Record<string, unknown>;
 
 const INLINE_EDITABLE: ReadonlySet<string> = new Set([
-  "text", "number", "date", "select", "boolean", "vault-link",
+  "text", "number", "date", "select", "boolean", "vault-link", "ref",
 ]);
 
 const PAGE_SIZE = 25;
@@ -28,6 +30,7 @@ interface Props {
   cellDraft: unknown;
   safePage: number;
   pageCount: number;
+  hostPath?: string;
   onToggleSort: (name: string) => void;
   onStartEdit: (rowId: string, field: FieldSchema, value: unknown) => void;
   onCellDraftChange: (v: unknown) => void;
@@ -66,10 +69,12 @@ interface Props {
  */
 export default function DataTableGrid({
   visibleFields, pageRows, sorted, rows, fields, sort,
-  editingCell, cellDraft, safePage, pageCount,
+  editingCell, cellDraft, safePage, pageCount, hostPath,
   onToggleSort, onStartEdit, onCellDraftChange, onCommitEdit, onCancelEdit,
   onEditRow, onDeleteRow, onPageChange,
 }: Props) {
+  const [refPreview, setRefPreview] = useState<{ target: string; id: string } | null>(null);
+  const handleRefClick = (target: string, id: string) => setRefPreview({ target, id });
   if (fields.length === 0) {
     return (
       <div className="dt-empty">
@@ -130,12 +135,13 @@ export default function DataTableGrid({
                           <InlineEditor
                             field={f}
                             value={cellDraft}
+                            hostPath={hostPath}
                             onChange={onCellDraftChange}
                             onCommit={() => void onCommitEdit()}
                             onCancel={onCancelEdit}
                           />
                         ) : (
-                          renderCell(row[f.name], f)
+                          renderCell(row[f.name], f, { onRefClick: handleRefClick, hostPath })
                         )}
                       </td>
                     );
@@ -183,6 +189,14 @@ export default function DataTableGrid({
             Next →
           </button>
         </div>
+      )}
+
+      {refPreview && (
+        <RefPreviewPopup
+          targetPath={refPreview.target}
+          refId={refPreview.id}
+          onClose={() => setRefPreview(null)}
+        />
       )}
     </>
   );

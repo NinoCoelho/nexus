@@ -12,6 +12,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -254,15 +255,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     }
   }, [toasts, startTimer]);
 
-  // Stable API via ref so callers don't re-render on toast list change
-  const api: ToastAPI = {
-    success: useCallback((m, o) => show("success", m, o), [show]),
-    error:   useCallback((m, o) => show("error",   m, o), [show]),
-    info:    useCallback((m, o) => show("info",    m, o), [show]),
-    warning: useCallback((m, o) => show("warning", m, o), [show]),
-    update,
-    dismiss,
-  };
+  // Stable API: each method is already useCallback-memoized, but the
+  // wrapping object literal must also be memoized — otherwise consumers
+  // that put `toast` in a useEffect/useCallback deps array re-run on
+  // every toast add/remove, which can spiral into render loops.
+  const success = useCallback((m: string, o?: ToastOptions) => show("success", m, o), [show]);
+  const error   = useCallback((m: string, o?: ToastOptions) => show("error",   m, o), [show]);
+  const info    = useCallback((m: string, o?: ToastOptions) => show("info",    m, o), [show]);
+  const warning = useCallback((m: string, o?: ToastOptions) => show("warning", m, o), [show]);
+  const api = useMemo<ToastAPI>(() => ({
+    success, error, info, warning, update, dismiss,
+  }), [success, error, info, warning, update, dismiss]);
 
   return (
     <ToastContext.Provider value={api}>
