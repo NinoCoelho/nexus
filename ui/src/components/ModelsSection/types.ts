@@ -16,6 +16,8 @@ export interface ModelForm {
   // Empty string = use server default (0 in toml). Stored as string so the
   // input can be cleared without a NaN flash; coerced on save.
   context_window: string;
+  // Empty / 0 = inherit AgentConfig.default_max_output_tokens.
+  max_output_tokens: string;
 }
 
 export interface DiscoveryState {
@@ -37,4 +39,5 @@ export const emptyForm: ModelForm = {
   tier_source: "default",
   is_embedding_capable: false,
   context_window: "",
+  max_output_tokens: "",
 };

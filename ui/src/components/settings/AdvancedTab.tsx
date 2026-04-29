@@ -223,6 +223,36 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
                 onCommit={(v) => void patchAgent({ anti_repeat_threshold: v })}
               />
             </SettingsField>
+
+            <SettingsField
+              label="Max output tokens (default)"
+              hint="Cap on tokens generated per LLM call. 0 = unlimited (provider default); Anthropic falls back to 4096 since its API requires the field. Per-model overrides win when set."
+              help={{
+                title: "Max output tokens",
+                body: (
+                  <>
+                    Forwarded to the LLM as <code>max_tokens</code>. Resolution
+                    order is per-model override (set on a Model entry) → this
+                    global default → provider fallback. Set to a higher value
+                    (e.g. 16384, 32768) to let long-form models stretch out;
+                    set lower to cap cost/latency. 0 means "don't pass the
+                    field" — the OpenAI-compat path leaves it out entirely;
+                    Anthropic uses its legacy 4096 because its API requires
+                    the field.
+                  </>
+                ),
+              }}
+              layout="row"
+            >
+              <NumberFieldWithDefault
+                value={agent.default_max_output_tokens ?? AGENT_DEFAULTS.default_max_output_tokens}
+                defaultValue={AGENT_DEFAULTS.default_max_output_tokens}
+                min={0}
+                max={200000}
+                step={1024}
+                onCommit={(v) => void patchAgent({ default_max_output_tokens: v })}
+              />
+            </SettingsField>
           </>
         )}
       </SettingsSection>

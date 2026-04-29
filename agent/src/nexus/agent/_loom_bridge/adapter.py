@@ -30,10 +30,15 @@ class LoomProviderAdapter(LoomLLMProvider):
         *,
         provider_registry: Any | None = None,
         default_model: str | None = None,
+        max_tokens_for: Callable[[str | None], int] | None = None,
     ) -> None:
         self._nexus = provider
         self._registry = provider_registry
         self._default_model = default_model
+        # Resolves the per-call max_tokens (per-model > global default > 0).
+        # 0 means "don't pass max_tokens" — providers handle that as either
+        # omitting the field (OpenAI-compat) or a legacy fallback (Anthropic).
+        self._max_tokens_for = max_tokens_for
         # Optional side-channel for thinking-model chain-of-thought. The Nexus
         # Agent sets this per-turn; the adapter funnels reasoning chunks here
         # instead of yielding them to loom (loom's ContentDeltaEvent path
@@ -61,7 +66,11 @@ class LoomProviderAdapter(LoomLLMProvider):
     ) -> lt.ChatResponse:
         nexus_messages = [_loom_to_nexus_message(m) for m in messages]
         provider, upstream = self._resolve(model)
-        nexus_resp = await provider.chat(nexus_messages, tools=tools, model=upstream)
+        max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
+        nexus_resp = await provider.chat(
+            nexus_messages, tools=tools, model=upstream,
+            max_tokens=max_toks or None,
+        )
 
         # Build a loom ChatMessage from the flat Nexus response
         loom_tcs: list[lt.ToolCall] | None = None
@@ -96,7 +105,11 @@ class LoomProviderAdapter(LoomLLMProvider):
         tool_parts: dict[str, dict[str, Any]] = {}
 
         provider, upstream = self._resolve(model)
-        async for ev in provider.chat_stream(nexus_messages, tools=tools, model=upstream):
+        max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
+        async for ev in provider.chat_stream(
+            nexus_messages, tools=tools, model=upstream,
+            max_tokens=max_toks or None,
+        ):
             etype = ev.get("type")
 
             if etype == "thinking_delta":

@@ -99,6 +99,7 @@ class AnthropicProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
@@ -113,7 +114,7 @@ class AnthropicProvider(LLMProvider):
 
         kwargs: dict[str, Any] = {
             "model": resolved_model,
-            "max_tokens": 4096,
+            "max_tokens": int(max_tokens) if max_tokens else 4096,
             "messages": filtered,
             "temperature": self._temperature,
         }
@@ -131,6 +132,7 @@ class AnthropicProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         resolved_model = model or self._model
         if not resolved_model:
@@ -145,7 +147,7 @@ class AnthropicProvider(LLMProvider):
 
         kwargs: dict[str, Any] = {
             "model": resolved_model,
-            "max_tokens": 4096,
+            "max_tokens": int(max_tokens) if max_tokens else 4096,
             "messages": filtered,
             "temperature": self._temperature,
         }

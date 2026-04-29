@@ -39,12 +39,29 @@ def build_loom_agent(
     """
     from .._loom_bridge import LoomProviderAdapter, build_tool_registry
 
+    # Per-call output cap: per-model override > AgentConfig.default_max_output_tokens
+    # > 0 (provider-specific fallback). Resolved at call time so config edits
+    # don't require a registry rebuild.
+    def _model_max_output_tokens(model_id: str | None) -> int:
+        if not nexus_cfg:
+            return 0
+        if model_id:
+            for entry in getattr(nexus_cfg, "models", None) or []:
+                if entry.id == model_id or entry.model_name == model_id:
+                    v = int(getattr(entry, "max_output_tokens", 0) or 0)
+                    if v > 0:
+                        return v
+        return int(getattr(
+            getattr(nexus_cfg, "agent", None), "default_max_output_tokens", 0
+        ) or 0)
+
     adapter = LoomProviderAdapter(
         nexus_provider,
         provider_registry=provider_registry,
         default_model=getattr(
             getattr(nexus_cfg, "agent", None), "default_model", None
         ) if nexus_cfg else None,
+        max_tokens_for=_model_max_output_tokens,
     )
     tool_reg = build_tool_registry(
         skill_registry=registry,

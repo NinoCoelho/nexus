@@ -58,7 +58,7 @@ async def patch_model(
         if m.id == model_id:
             # id and provider are immutable after creation — avoid cascading
             # breakage (role assignments, last_used_model references).
-            updates = {k: v for k, v in body.items() if k in {"model_name", "tags", "tier", "notes", "is_embedding_capable", "context_window"}}
+            updates = {k: v for k, v in body.items() if k in {"model_name", "tags", "tier", "notes", "is_embedding_capable", "context_window", "max_output_tokens"}}
             if "tier" in updates and updates["tier"] not in ("fast", "balanced", "heavy"):
                 raise HTTPException(400, "tier must be fast|balanced|heavy")
             if "context_window" in updates:
@@ -69,6 +69,14 @@ async def patch_model(
                 if cw < 0:
                     raise HTTPException(400, "context_window must be >= 0 (0 = use server default)")
                 updates["context_window"] = cw
+            if "max_output_tokens" in updates:
+                try:
+                    mt = int(updates["max_output_tokens"])
+                except (TypeError, ValueError):
+                    raise HTTPException(400, "max_output_tokens must be an integer")
+                if mt < 0:
+                    raise HTTPException(400, "max_output_tokens must be >= 0 (0 = use global default)")
+                updates["max_output_tokens"] = mt
             cfg.models[i] = m.model_copy(update=updates)
             save_cfg(cfg)
             _rebuild_registry(cfg, app_state, a)

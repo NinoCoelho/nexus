@@ -122,6 +122,8 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         }
         if m.context_window:
             md["context_window"] = m.context_window
+        if m.max_output_tokens:
+            md["max_output_tokens"] = m.max_output_tokens
         if m.is_embedding_capable:
             md["is_embedding_capable"] = True
         d["models"].append(md)

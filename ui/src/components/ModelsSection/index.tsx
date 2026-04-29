@@ -189,6 +189,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       tier_source: "manual",
       is_embedding_capable: !!m.is_embedding_capable,
       context_window: m.context_window && m.context_window > 0 ? String(m.context_window) : "",
+      max_output_tokens: m.max_output_tokens && m.max_output_tokens > 0 ? String(m.max_output_tokens) : "",
     });
   }
 
@@ -205,6 +206,11 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       toast.error("Context size must be a non-negative integer");
       return;
     }
+    const maxOutParsed = form.max_output_tokens.trim() === "" ? 0 : Number(form.max_output_tokens);
+    if (Number.isNaN(maxOutParsed) || maxOutParsed < 0) {
+      toast.error("Max output tokens must be a non-negative integer");
+      return;
+    }
     if (editingId) {
       try {
         await patchModel(editingId, {
@@ -214,6 +220,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
           notes: form.notes,
           is_embedding_capable: form.is_embedding_capable,
           context_window: ctxParsed,
+          max_output_tokens: maxOutParsed,
         });
         toast.success(`Updated ${editingId}`);
         cancelForm();
@@ -234,6 +241,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
         notes: form.notes,
         is_embedding_capable: form.is_embedding_capable,
         context_window: ctxParsed > 0 ? ctxParsed : undefined,
+        max_output_tokens: maxOutParsed > 0 ? maxOutParsed : undefined,
       });
       const id = form.id.trim();
       toast.success(`Added model ${id}`);

@@ -178,6 +178,7 @@ class BuiltinExtractor:
         *,
         tools: list[Any] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> Any:
         await self._ensure_loaded()
 

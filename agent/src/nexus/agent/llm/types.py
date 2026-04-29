@@ -125,6 +125,7 @@ class LLMProvider(ABC):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse: ...
 
     async def chat_stream(
@@ -133,9 +134,10 @@ class LLMProvider(ABC):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         # Default fallback: call non-streaming chat and synthesize events.
-        resp = await self.chat(messages, tools=tools, model=model)
+        resp = await self.chat(messages, tools=tools, model=model, max_tokens=max_tokens)
         if resp.content:
             yield {"type": "delta", "text": resp.content}
         finish_reason = resp.stop_reason.value

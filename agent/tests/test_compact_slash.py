@@ -43,6 +43,7 @@ class _AssertNeverProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         raise AssertionError("LLM must not be called for /compact")
 
@@ -52,6 +53,7 @@ class _AssertNeverProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         raise AssertionError("LLM stream must not be called for /compact")
         yield  # pragma: no cover — generator type discipline only

@@ -172,6 +172,7 @@ class OpenAIProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
@@ -185,6 +186,8 @@ class OpenAIProvider(LLMProvider):
             payload["frequency_penalty"] = self._frequency_penalty
         if self._presence_penalty:
             payload["presence_penalty"] = self._presence_penalty
+        if max_tokens:
+            payload["max_tokens"] = int(max_tokens)
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
@@ -227,6 +230,7 @@ class OpenAIProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
         resolved_model = model or self._model
         if not resolved_model:
@@ -241,6 +245,8 @@ class OpenAIProvider(LLMProvider):
             payload["frequency_penalty"] = self._frequency_penalty
         if self._presence_penalty:
             payload["presence_penalty"] = self._presence_penalty
+        if max_tokens:
+            payload["max_tokens"] = int(max_tokens)
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"

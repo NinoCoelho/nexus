@@ -9,6 +9,7 @@ export interface AgentConfig {
   frequency_penalty?: number;
   presence_penalty?: number;
   anti_repeat_threshold?: number;
+  default_max_output_tokens?: number;
 }
 
 export const AGENT_DEFAULTS = {
@@ -17,6 +18,7 @@ export const AGENT_DEFAULTS = {
   frequency_penalty: 0.3,
   presence_penalty: 0.0,
   anti_repeat_threshold: 200,
+  default_max_output_tokens: 0,
 } as const;
 
 export interface TranscriptionConfig {

@@ -19,7 +19,7 @@ from nexus.skills.registry import SkillRegistry
 
 class _NoopProvider(LLMProvider):
     async def chat(
-        self, messages: list[ChatMessage], *, tools: list[ToolSpec] | None = None, model: str | None = None
+        self, messages: list[ChatMessage], *, tools: list[ToolSpec] | None = None, model: str | None = None, max_tokens: int | None = None,
     ) -> ChatResponse:
         return ChatResponse(content="", stop_reason=StopReason.STOP)
 

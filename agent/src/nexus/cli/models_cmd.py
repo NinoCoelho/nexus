@@ -78,6 +78,7 @@ def models_update(
     tier: str = typer.Option(None, "--tier", help="fast|balanced|heavy"),
     notes: str = typer.Option(None, "--notes"),
     context_window: int = typer.Option(None, "--context-window"),
+    max_output_tokens: int = typer.Option(None, "--max-output-tokens"),
 ) -> None:
     """Update fields on an existing model entry. id and provider are immutable."""
     from ..config_file import load, save
@@ -99,6 +100,10 @@ def models_update(
             updates["notes"] = notes
         if context_window is not None:
             updates["context_window"] = context_window
+        if max_output_tokens is not None:
+            if max_output_tokens < 0:
+                raise typer.BadParameter("--max-output-tokens must be >= 0")
+            updates["max_output_tokens"] = max_output_tokens
         if not updates:
             typer.echo("Nothing to update.")
             return

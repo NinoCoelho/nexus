@@ -31,11 +31,13 @@ class _SpyProvider(LLMProvider):
         self.chat_calls = 0
         self.stream_calls = 0
 
-    async def chat(self, messages, *, tools=None, model=None) -> ChatResponse:
+    async def chat(self, messages, *, tools=None, model=None, max_tokens=None) -> ChatResponse:
         self.chat_calls += 1
         return ChatResponse(content="ignored", stop_reason=StopReason.STOP)
 
-    async def chat_stream(self, messages, *, tools=None, model=None) -> AsyncIterator[StreamEvent]:
+    async def chat_stream(
+        self, messages, *, tools=None, model=None, max_tokens=None,
+    ) -> AsyncIterator[StreamEvent]:
         self.stream_calls += 1
         # Echo a tiny content delta + finish so a non-overflowing call still
         # completes a turn cleanly.

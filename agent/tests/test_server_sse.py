@@ -55,6 +55,7 @@ class FakeProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         if self._i >= len(self._responses):
             # Unscripted call — return a benign stop so the loop exits

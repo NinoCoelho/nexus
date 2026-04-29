@@ -26,6 +26,9 @@ class ModelEntry(BaseModel):
     # GGUF models also passed to llama-server as ``--ctx-size`` at start
     # (Stop/Start to apply changes). 0 = unknown / use server default.
     context_window: int = 0
+    # Per-model output cap forwarded as ``max_tokens`` on the LLM request.
+    # 0 = fall through to ``AgentConfig.default_max_output_tokens``.
+    max_output_tokens: int = 0
     # User-asserted: this model serves embeddings (e.g. all-MiniLM, bge).
     # Gates which models the UI offers for the embedding role; chat-only
     # models (gpt-4o, glm-4.7, etc.) should leave this false.
@@ -57,6 +60,11 @@ class AgentConfig(BaseModel):
     # this many characters, abort the stream with finish_reason=stop. Set 0
     # to disable.
     anti_repeat_threshold: int = 200
+    # Global per-call output cap forwarded as ``max_tokens`` to the LLM.
+    # 0 = unset (OpenAI-compat omits the field; Anthropic falls back to its
+    # legacy 4096 since its API requires the field). Per-model overrides on
+    # ``ModelEntry.max_output_tokens`` win when > 0.
+    default_max_output_tokens: int = 0
 
 
 class GraphRAGEmbeddingConfig(BaseModel):

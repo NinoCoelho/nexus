@@ -31,6 +31,7 @@ class _NoopProvider(LLMProvider):
         *,
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatResponse:
         return ChatResponse(content="", stop_reason=StopReason.STOP)
 

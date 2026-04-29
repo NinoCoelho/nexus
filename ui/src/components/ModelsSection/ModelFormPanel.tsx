@@ -227,6 +227,22 @@ export default function ModelFormPanel({
               (smaller contexts cause extraction failures).
             </span>
           </div>
+          <div className="settings-field">
+            <label className="settings-field-label">Max output tokens</label>
+            <input
+              className="settings-input"
+              type="number"
+              min={0}
+              step={1024}
+              value={form.max_output_tokens}
+              onChange={(e) => onFormChange({ max_output_tokens: e.target.value })}
+              placeholder="0 = use global default"
+            />
+            <span className="settings-field-hint">
+              Per-call output cap forwarded as <code>max_tokens</code>. Overrides the
+              global default in Advanced settings. 0 inherits the global value.
+            </span>
+          </div>
         </>
       )}
 
