@@ -310,14 +310,91 @@ def find_inbound_refs(table_path: str) -> list[dict[str, Any]]:
     return results
 
 
-def _row_matches_ref(row: dict[str, Any], field_name: str, row_id: str) -> bool:
-    """True if ``row[field_name]`` references ``row_id`` (single value or array)."""
+def _norm_ref_value(v: Any) -> str:
+    """Coerce a stored ref value to a normalized string for comparison.
+
+    Whitespace is trimmed; case is preserved (IDs like ``C002`` are case-
+    meaningful). ``None`` becomes the empty string so callers can filter it.
+    """
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _row_matches_ref(
+    row: dict[str, Any], field_name: str, expected_ids: set[str],
+) -> bool:
+    """True if ``row[field_name]`` references any value in ``expected_ids``.
+
+    Stored values are whitespace-trimmed and stringified before comparison;
+    list-valued cells (cardinality "many") match by membership.
+    """
     val = row.get(field_name)
     if val is None:
         return False
     if isinstance(val, list):
-        return any(str(v) == row_id for v in val)
-    return str(val) == row_id
+        return any(_norm_ref_value(v) in expected_ids for v in val)
+    return _norm_ref_value(val) in expected_ids
+
+
+def _expected_ref_ids(table_path: str, row_id: str) -> set[str]:
+    """The set of stored values that should be considered matches for this row.
+
+    Always contains the trimmed ``row_id`` the caller passed (typically the
+    user-facing primary key like ``"C002"``). When the host table has an
+    explicit ``table.primary_key`` declared, the row's auto-generated ``_id``
+    is also accepted — this keeps legacy/imported refs that stored the hash
+    joined even after a custom primary_key was added.
+    """
+    expected: set[str] = {row_id.strip()}
+    try:
+        host = read_table(table_path)
+    except Exception:
+        return expected
+    schema = host.get("schema") or {}
+    table_meta = schema.get("table") if isinstance(schema, dict) else None
+    pk_name = (
+        table_meta.get("primary_key")
+        if isinstance(table_meta, dict) and table_meta.get("primary_key")
+        else None
+    )
+    if not pk_name:
+        return expected
+    target = row_id.strip()
+    for r in host.get("rows", []):
+        if _norm_ref_value(r.get(pk_name)) == target:
+            _id = r.get("_id")
+            if _id is not None:
+                expected.add(_norm_ref_value(_id))
+            break
+    return expected
+
+
+def _collect_unmatched_sample(
+    rows: list[dict[str, Any]], field_name: str, limit: int = 3,
+) -> list[str]:
+    """Up to ``limit`` distinct non-empty stored values for ``field_name``.
+
+    Used as a diagnostic when the matched row count is zero so the UI can
+    surface "this column actually contains values like X, Y, Z" instead of a
+    silent empty list.
+    """
+    seen: list[str] = []
+    seen_set: set[str] = set()
+    for r in rows:
+        v = r.get(field_name)
+        if v is None:
+            continue
+        candidates = v if isinstance(v, list) else [v]
+        for c in candidates:
+            s = _norm_ref_value(c)
+            if not s or s in seen_set:
+                continue
+            seen.append(s)
+            seen_set.add(s)
+            if len(seen) >= limit:
+                return seen
+    return seen
 
 
 def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
@@ -325,15 +402,21 @@ def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
 
     Returns:
         ``{
-            "one_to_many": [{from_table, from_title, field_name, rows: [...]}],
+            "one_to_many": [{from_table, from_title, field_name, rows,
+                             unmatched_sample}],
             "many_to_many": [{junction_table, junction_title, target_table,
-                              target_title, rows: [...]}]
+                              target_title, rows, unmatched_sample}]
           }``
 
     Junction tables (auto or explicit) are collapsed: instead of surfacing the
     junction rows themselves, we resolve through them to the rows on the other
     side. Non-junction inbound refs (any cardinality) appear under one_to_many.
+
+    ``unmatched_sample`` is populated only when no rows matched — it lists up
+    to 3 distinct stored values from the inbound field so the UI can show why
+    the join came back empty (typo, drifted PK, deleted target).
     """
+    expected_ids = _expected_ref_ids(table_path, row_id)
     one_to_many: list[dict[str, Any]] = []
     many_to_many: list[dict[str, Any]] = []
     for ref in find_inbound_refs(table_path):
@@ -343,7 +426,7 @@ def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
             continue
         matches = [
             r for r in from_tbl["rows"]
-            if _row_matches_ref(r, ref["field_name"], row_id)
+            if _row_matches_ref(r, ref["field_name"], expected_ids)
         ]
         if ref["is_junction"] and ref["other_ref"]:
             other = ref["other_ref"]
@@ -366,12 +449,16 @@ def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
                 v = jrow.get(other_field)
                 if isinstance(v, list):
                     for x in v:
-                        wanted_ids.add(str(x))
-                elif v is not None:
-                    wanted_ids.add(str(v))
+                        s = _norm_ref_value(x)
+                        if s:
+                            wanted_ids.add(s)
+                else:
+                    s = _norm_ref_value(v)
+                    if s:
+                        wanted_ids.add(s)
             target_rows = [
                 r for r in target_tbl["rows"]
-                if str(r.get(target_pk, r.get("_id", ""))) in wanted_ids
+                if _norm_ref_value(r.get(target_pk, r.get("_id"))) in wanted_ids
             ]
             target_title = (
                 target_tbl["schema"].get("title")
@@ -379,6 +466,18 @@ def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
                 and isinstance(target_tbl["schema"].get("title"), str)
                 else target.rsplit("/", 1)[-1].removesuffix(".md")
             )
+            # Diagnostic: when no target rows resolved, sample whichever leg
+            # broke. If matches is empty, the junction has nothing for this
+            # row → sample inbound field. If matches exist but the second-leg
+            # ids didn't resolve, sample those instead.
+            if target_rows:
+                unmatched_sample: list[str] = []
+            elif not matches:
+                unmatched_sample = _collect_unmatched_sample(
+                    from_tbl["rows"], ref["field_name"],
+                )
+            else:
+                unmatched_sample = sorted(wanted_ids)[:3]
             many_to_many.append({
                 "junction_table": ref["from_table"],
                 "junction_title": ref["from_title"],
@@ -386,6 +485,7 @@ def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
                 "target_title": target_title,
                 "rows": target_rows,
                 "count": len(target_rows),
+                "unmatched_sample": unmatched_sample,
             })
         else:
             one_to_many.append({
@@ -395,6 +495,11 @@ def related_rows(table_path: str, row_id: str) -> dict[str, Any]:
                 "cardinality": ref["cardinality"],
                 "rows": matches,
                 "count": len(matches),
+                "unmatched_sample": (
+                    [] if matches else _collect_unmatched_sample(
+                        from_tbl["rows"], ref["field_name"],
+                    )
+                ),
             })
     return {"one_to_many": one_to_many, "many_to_many": many_to_many}
 

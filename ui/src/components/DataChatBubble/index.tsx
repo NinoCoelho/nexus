@@ -18,6 +18,7 @@ import {
   type BubbleMessage,
 } from "../../hooks/useDatabaseChatSession";
 import MarkdownView from "../MarkdownView";
+import { useVaultLinkPreview } from "../vaultLink";
 import "./DataChatBubble.css";
 
 const SIZE_KEY = "nexus.dataBubbleSize";
@@ -59,6 +60,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
 
   // Persisted resize. The panel is anchored bottom-right of the viewport,
   // so the user grabs the top-left corner — increasing width/height grows
@@ -196,7 +198,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
           <div key={i} className={`data-bubble-msg data-bubble-msg--${m.role}`}>
             {m.role === "assistant" ? (
               m.content
-                ? <MarkdownView>{m.content}</MarkdownView>
+                ? <MarkdownView onVaultLinkPreview={onVaultPreview} linkifyVaultPaths>{m.content}</MarkdownView>
                 : (m.pending && <span className="data-bubble-spin" aria-label="thinking" />)
             ) : (
               m.content
@@ -232,6 +234,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
           ↑
         </button>
       </form>
+      {vaultPreviewModal}
     </div>
   );
 });

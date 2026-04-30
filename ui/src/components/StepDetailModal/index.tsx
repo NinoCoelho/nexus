@@ -15,6 +15,7 @@ import React, { useEffect, useRef } from "react";
 import type { TraceEvent } from "../../api";
 import type { CoalescedStep } from "../ActivityTimeline";
 import MarkdownView from "../MarkdownView";
+import { useVaultLinkPreview, VaultLinkPreviewProvider } from "../vaultLink";
 import ToolIcon from "./ToolIcon";
 import ToolArgsSummary from "./ToolArgsSummary";
 import { FormattedResult } from "./ResultRenderers";
@@ -41,6 +42,7 @@ interface Props {
 
 export default function StepDetailModal({ group, trace, onClose }: Props) {
   const backdropRef = useRef<HTMLDivElement>(null);
+  const { onPreview, modal } = useVaultLinkPreview();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -57,6 +59,7 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
   let toolStepIdx = 0;
 
   return (
+    <VaultLinkPreviewProvider onPreview={onPreview}>
     <div className="sdm-backdrop" ref={backdropRef} onClick={handleBackdropClick}>
       <div className="sdm-modal">
         <div className="sdm-header">
@@ -116,13 +119,15 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
               {(() => {
                 const text = group.steps.map((s) => s.text ?? "").join("").trim();
                 return text
-                  ? <MarkdownView>{text}</MarkdownView>
+                  ? <MarkdownView onVaultLinkPreview={onPreview} linkifyVaultPaths>{text}</MarkdownView>
                   : <span className="sdm-empty">(empty)</span>;
               })()}
             </div>
           )}
         </div>
       </div>
+      {modal}
     </div>
+    </VaultLinkPreviewProvider>
   );
 }

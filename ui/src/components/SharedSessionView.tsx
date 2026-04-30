@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSharedSession, type SharedSession } from "../api";
 import MarkdownView from "./MarkdownView";
+import { useVaultLinkPreview } from "./vaultLink";
 import "./SharedSessionView.css";
 
 function fmtTime(iso: string | null): string {
@@ -19,6 +20,7 @@ interface Props {
 export default function SharedSessionView({ token }: Props) {
   const [data, setData] = useState<SharedSession | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { onPreview, modal } = useVaultLinkPreview();
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +61,9 @@ export default function SharedSessionView({ token }: Props) {
               <span className="share-msg-time">{fmtTime(m.created_at)}</span>
             </header>
             {m.role === "assistant" ? (
-              <MarkdownView>{m.content}</MarkdownView>
+              <MarkdownView onVaultLinkPreview={onPreview} linkifyVaultPaths>
+                {m.content}
+              </MarkdownView>
             ) : (
               <p className="share-user-bubble">{m.content}</p>
             )}
@@ -69,6 +73,7 @@ export default function SharedSessionView({ token }: Props) {
       <footer className="share-footer">
         <span>Powered by <strong>Nexus</strong></span>
       </footer>
+      {modal}
     </div>
   );
 }

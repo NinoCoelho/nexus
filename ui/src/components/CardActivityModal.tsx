@@ -8,6 +8,7 @@ import {
 import ActivityTimeline from "./ActivityTimeline";
 import type { TimelineStep } from "./ChatView";
 import MarkdownView from "./MarkdownView";
+import { useVaultLinkPreview } from "./vaultLink";
 import "./CardActivityModal.css";
 import "./Modal.css";
 
@@ -30,6 +31,7 @@ export default function CardActivityModal({ sessionId, cardTitle, status, onClos
   const [loading, setLoading] = useState(true);
   const stepCounter = useRef(0);
   const streaming = status === "running";
+  const { onPreview, modal } = useVaultLinkPreview();
 
   // Seed from persisted history.
   useEffect(() => {
@@ -220,13 +222,16 @@ export default function CardActivityModal({ sessionId, cardTitle, status, onClos
               </div>
               {displayReply.trim() && (
                 <div className="card-activity-reply">
-                  <MarkdownView>{displayReply}</MarkdownView>
+                  <MarkdownView onVaultLinkPreview={onPreview} linkifyVaultPaths>
+                    {displayReply}
+                  </MarkdownView>
                 </div>
               )}
             </>
           )}
         </div>
       </div>
+      {modal}
     </div>
   );
 }

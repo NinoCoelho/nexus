@@ -594,6 +594,13 @@ export default function App() {
                   onOpenInChat={handleOpenInChat}
                   onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                   onOpenCalendar={handleOpenCalendar}
+                  onOpenTable={(p) => {
+                    setDataSelectedPath(p);
+                    setDataDiagramFolder(null);
+                    // Pin the parent folder so "Back to dashboard" still works.
+                    const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+                    setDataSelectedDatabase(parent);
+                  }}
                 />
               </div>
             ) : dataSelectedDatabase !== null ? (

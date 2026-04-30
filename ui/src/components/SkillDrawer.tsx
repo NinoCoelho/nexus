@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import MarkdownView from "./MarkdownView";
+import { useVaultLinkPreview } from "./vaultLink";
 import { getSkill, updateSkill, type SkillDetail } from "../api";
 import "./SkillDrawer.css";
 
@@ -26,6 +27,7 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const { onPreview, modal } = useVaultLinkPreview();
 
   useEffect(() => {
     if (!skillName) return;
@@ -101,7 +103,7 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
         <div className="drawer-body">
           {loading && <p className="drawer-loading">Loading…</p>}
           {!loading && detail && !editing && (
-            <MarkdownView>{detail.body}</MarkdownView>
+            <MarkdownView onVaultLinkPreview={onPreview}>{detail.body}</MarkdownView>
           )}
           {!loading && detail && editing && (
             <>
@@ -120,6 +122,7 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
           )}
         </div>
       </div>
+      {modal}
     </>
   );
 }

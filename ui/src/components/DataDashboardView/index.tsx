@@ -32,6 +32,7 @@ import {
 import { useToast } from "../../toast/ToastProvider";
 import Modal from "../Modal";
 import FormRenderer from "../FormRenderer";
+import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
 import OperationChips from "./OperationChips";
 import AddOperationModal from "./AddOperationModal";
 import DataChatBubble, { type DataChatBubbleHandle } from "../DataChatBubble";
@@ -259,21 +260,34 @@ export default function DataDashboardView({
         />
       )}
 
-      {formOp && (
-        <div className="dt-modal-overlay" onClick={() => setFormOp(null)}>
-          <div className="dt-modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: 420 }}>
-            <div className="dt-modal-title">{formOp.op.label}</div>
-            <FormRenderer
-              hostPath={formOp.op.table!}
-              fields={formOp.table.schema.fields.filter((f) => f.kind !== "formula")}
-              initialValues={formOp.op.prefill}
-              onSubmit={(v) => void handleFormSubmit(v)}
-              onCancel={() => setFormOp(null)}
-              submitLabel="Add"
-            />
+      {formOp && (() => {
+        // Auto-suggest the next primary-key value for the target table, so
+        // Quick-add and form-kind operations don't make the user type C005,
+        // P009, etc. by hand. Op-defined `prefill` values still win — the
+        // op author may have intentionally set a specific id.
+        const meta = formOp.table.schema.table ?? null;
+        const { pkName } = deriveLabelInfo(formOp.table.schema.fields, meta);
+        const suggested = suggestNextPk(formOp.table.rows, pkName);
+        const initialValues: Record<string, unknown> = {
+          ...(suggested ? { [pkName]: suggested } : {}),
+          ...(formOp.op.prefill ?? {}),
+        };
+        return (
+          <div className="dt-modal-overlay" onClick={() => setFormOp(null)}>
+            <div className="dt-modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: 420 }}>
+              <div className="dt-modal-title">{formOp.op.label}</div>
+              <FormRenderer
+                hostPath={formOp.op.table!}
+                fields={formOp.table.schema.fields.filter((f) => f.kind !== "formula")}
+                initialValues={initialValues}
+                onSubmit={(v) => void handleFormSubmit(v)}
+                onCancel={() => setFormOp(null)}
+                submitLabel="Add"
+              />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {confirmDelete && !typeToConfirm && (
         <Modal

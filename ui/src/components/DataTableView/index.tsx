@@ -19,8 +19,9 @@ import { getVaultDataTable } from "../../api";
 import DataTableToolbar from "./DataTableToolbar";
 import DataTableGrid from "./DataTableGrid";
 import RelatedRowsPanel from "./RelatedRowsPanel";
-import { deriveLabelInfo } from "../datatable/refOptions";
+import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
 import { useDataTableActions } from "./useDataTableActions";
+import { useVaultLinkPreview, VaultLinkPreviewProvider } from "../vaultLink";
 import "../DataTableView.css";
 
 interface Props {
@@ -39,6 +40,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showSchemaEditor, setShowSchemaEditor] = useState(false);
   const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
+  const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
 
   // toolbar state
   const [search, setSearch] = useState("");
@@ -84,6 +86,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
     : undefined;
 
   return (
+    <VaultLinkPreviewProvider onPreview={onVaultPreview}>
     <div className="dt-container">
       {confirmModal && <Modal {...confirmModal} />}
       {showSchemaEditor && (
@@ -119,18 +122,27 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         onAddRow={() => { setShowAddForm(true); setEditingRow(null); }}
       />
 
-      {showAddForm && (
-        <div className="dt-form-panel">
-          <div className="dt-form-heading">New Row</div>
-          <FormRenderer
-            hostPath={path}
-            fields={fields.filter((f) => f.kind !== "formula")}
-            onSubmit={(v) => void actions.handleAdd(v)}
-            onCancel={() => setShowAddForm(false)}
-            submitLabel="Add"
-          />
-        </div>
-      )}
+      {showAddForm && (() => {
+        // Pre-fill the primary-key column with a suggested next id (e.g.
+        // following C001 C002 C003 with C004) so the user doesn't have to
+        // type it. Only applied on Add — Edit never overwrites existing PKs.
+        const { pkName } = deriveLabelInfo(fields, table.schema.table);
+        const next = suggestNextPk(actions.rows, pkName);
+        const initialValues = next ? { [pkName]: next } : undefined;
+        return (
+          <div className="dt-form-panel">
+            <div className="dt-form-heading">New Row</div>
+            <FormRenderer
+              hostPath={path}
+              fields={fields.filter((f) => f.kind !== "formula")}
+              initialValues={initialValues}
+              onSubmit={(v) => void actions.handleAdd(v)}
+              onCancel={() => setShowAddForm(false)}
+              submitLabel="Add"
+            />
+          </div>
+        );
+      })()}
 
       {editingRow && (() => {
         // Resolve the row's "natural" id the same way the picker + popup do —
@@ -187,6 +199,8 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         onDeleteRow={actions.handleDelete}
         onPageChange={setPage}
       />
+      {vaultPreviewModal}
     </div>
+    </VaultLinkPreviewProvider>
   );
 }

@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
+import { useVaultLinkPreview } from "./vaultLink";
 import MermaidSnippets from "./MermaidSnippets";
 import KanbanBoard from "./KanbanBoard";
 import DataTableView from "./DataTableView";
@@ -75,6 +76,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   const [fileError, setFileError] = useState<string | null>(null);
   const [historyEnabled, setHistoryEnabled] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -295,7 +297,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                 className="vault-markdown-editor vault-split-editor"
               />
               <div className="vault-split-preview">
-                <MarkdownView>{previewBody}</MarkdownView>
+                <MarkdownView onVaultLinkPreview={onVaultPreview}>{previewBody}</MarkdownView>
               </div>
             </div>
           ) : editMode && canEdit ? (
@@ -323,6 +325,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
           onUndone={() => loadFile()}
         />
       )}
+      {vaultPreviewModal}
     </div>
   );
 }

@@ -567,6 +567,184 @@ def test_er_diagram_empty_folder():
     assert vault_datatable_index.er_diagram("nope") == "erDiagram"
 
 
+def test_related_rows_trims_whitespace_in_stored_value():
+    """A stored ref with trailing/leading whitespace still matches its row."""
+    vault_datatable.create_table(
+        "shop/customers.md",
+        {"fields": [{"name": "id", "kind": "text"}], "table": {"primary_key": "id"}},
+    )
+    vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    # Stored value has trailing whitespace — typical of CSV-imported data.
+    vault_datatable.add_row(
+        "shop/orders.md", {"id": "O-1", "customer_id": " C-1 "},
+    )
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    assert rel["one_to_many"][0]["count"] == 1
+    assert rel["one_to_many"][0]["rows"][0]["id"] == "O-1"
+
+
+def test_related_rows_falls_back_to_id_when_pk_declared():
+    """When the host has explicit primary_key, refs storing the auto _id still match."""
+    vault_datatable.create_table(
+        "shop/customers.md",
+        {"fields": [{"name": "id", "kind": "text"}], "table": {"primary_key": "id"}},
+    )
+    customer = vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    # Order references the auto _id (legacy/imported), not the user-facing pk.
+    vault_datatable.add_row(
+        "shop/orders.md", {"id": "O-1", "customer_id": customer["_id"]},
+    )
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    assert rel["one_to_many"][0]["count"] == 1
+    assert rel["one_to_many"][0]["rows"][0]["id"] == "O-1"
+
+
+def test_related_rows_no_id_fallback_without_explicit_pk():
+    """Without table.primary_key, an _id-storing ref does NOT match the natural key."""
+    vault_datatable.create_table(
+        "shop/customers.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    customer = vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    vault_datatable.add_row(
+        "shop/orders.md", {"id": "O-1", "customer_id": customer["_id"]},
+    )
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    # No fallback when PK isn't explicitly declared — keeps strict semantics
+    # for tables that genuinely use the natural key everywhere.
+    assert rel["one_to_many"][0]["count"] == 0
+
+
+def test_related_rows_unmatched_sample_when_empty():
+    """Empty match list surfaces a small sample of stored values for debugging."""
+    vault_datatable.create_table(
+        "shop/customers.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    vault_datatable.add_row("shop/orders.md", {"id": "O-1", "customer_id": "C-2"})
+    vault_datatable.add_row("shop/orders.md", {"id": "O-2", "customer_id": "C-3"})
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    entry = rel["one_to_many"][0]
+    assert entry["count"] == 0
+    assert set(entry["unmatched_sample"]) == {"C-2", "C-3"}
+
+
+def test_related_rows_no_sample_when_match_succeeds():
+    """unmatched_sample stays empty when the join produced rows."""
+    vault_datatable.create_table(
+        "shop/customers.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    vault_datatable.add_row("shop/orders.md", {"id": "O-1", "customer_id": "C-1"})
+    vault_datatable.add_row("shop/orders.md", {"id": "O-2", "customer_id": "C-9"})
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    assert rel["one_to_many"][0]["count"] == 1
+    assert rel["one_to_many"][0]["unmatched_sample"] == []
+
+
+def test_related_rows_case_sensitive():
+    """Case differences in IDs are preserved — c-1 does not match C-1."""
+    vault_datatable.create_table(
+        "shop/customers.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    vault_datatable.add_row("shop/orders.md", {"id": "O-1", "customer_id": "c-1"})
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    assert rel["one_to_many"][0]["count"] == 0
+
+
 def test_related_rows_cardinality_many_array_match():
     """A field with cardinality=many storing a list still matches by membership."""
     vault_datatable.create_table(

@@ -2,6 +2,7 @@
 
 import React from "react";
 import type { FieldSchema } from "../../types/form";
+import { VaultLink } from "../vaultLink";
 
 export interface RenderCellOptions {
   /** When provided, ref cells render as buttons that invoke this with
@@ -32,7 +33,7 @@ export function renderCell(
   if (kind === "boolean") return value ? "✓" : "";
   if (kind === "vault-link") {
     const v = String(value);
-    return <a href={`vault://${v}`}>{v}</a>;
+    return <VaultLink path={v}>{v}</VaultLink>;
   }
   if (kind === "ref") {
     const target = resolveTargetPath(opts.hostPath, field.target_table ?? "");

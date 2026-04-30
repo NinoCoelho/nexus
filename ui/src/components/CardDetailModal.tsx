@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import MarkdownView from "./MarkdownView";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
+import { useVaultLinkPreview } from "./vaultLink";
 import {
   addVaultKanbanCard,
   patchVaultKanbanCard,
@@ -47,6 +48,7 @@ export default function CardDetailModal({ card, lane, boardPath, onClose, onSave
   const [editAssignees, setEditAssignees] = useState((card?.assignees ?? []).join(", "));
   const [saving, setSaving] = useState(false);
   const editorRef = useRef<MarkdownEditorHandle>(null);
+  const { onPreview, modal } = useVaultLinkPreview();
 
   const splitCSV = (s: string): string[] =>
     s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -156,7 +158,7 @@ export default function CardDetailModal({ card, lane, boardPath, onClose, onSave
             )}
             <div className="card-detail-body">
               {card.body ? (
-                <MarkdownView>{card.body}</MarkdownView>
+                <MarkdownView onVaultLinkPreview={onPreview}>{card.body}</MarkdownView>
               ) : (
                 <p className="card-detail-empty">No description yet. Click Edit to add one.</p>
               )}
@@ -257,6 +259,7 @@ export default function CardDetailModal({ card, lane, boardPath, onClose, onSave
           </>
         )}
       </div>
+      {modal}
     </div>
   );
 }

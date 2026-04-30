@@ -5,13 +5,23 @@
  * strikethrough, task lists). Code blocks with language "mermaid" are
  * lazy-loaded and rendered as SVG diagrams via the mermaid library.
  *
- * Vault links (vault://path) are intercepted and rendered as clickable
- * links that trigger onOpenInVault in the parent component.
+ * Vault links (vault://path, plus markdown paths ending in .md) are detected
+ * via asVaultPath and rendered with the shared VaultLink primitive when an
+ * `onVaultLinkPreview` callback is provided. This is the central place that
+ * turns vault references into clickable preview affordances — keep it here
+ * instead of duplicating across surfaces.
  */
 
-import { lazy, Suspense, useEffect, useRef, useState, type ComponentProps } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  VaultLink,
+  asVaultPath,
+  linkifyVaultPaths as linkifyVaultPathsFn,
+  useVaultLinkPreviewFromContext,
+  vaultUrlTransform,
+} from "./vaultLink";
 
 // ChartBlock lazy-loaded on first nexus-chart fence.
 const LazyChartBlock = lazy(() => import("./ChartBlock"));
@@ -71,13 +81,33 @@ type Props = {
   children: string;
   components?: ComponentProps<typeof ReactMarkdown>["components"];
   urlTransform?: ComponentProps<typeof ReactMarkdown>["urlTransform"];
+  /** When set, vault links route to this preview handler instead of opening
+   *  in a new tab. Without it, vault links still render as a styled link but
+   *  the preview button is disabled. */
+  onVaultLinkPreview?: (path: string) => void;
+  /** Auto-wrap bare vault paths like `notes/foo.md` as proper markdown links
+   *  before rendering. Off by default — useful for chat/agent output where
+   *  unwrapped paths are common, off for generic markdown bodies. */
+  linkifyVaultPaths?: boolean;
 };
 
-export default function MarkdownView({ children, components, urlTransform }: Props) {
+export default function MarkdownView({
+  children,
+  components,
+  urlTransform,
+  onVaultLinkPreview,
+  linkifyVaultPaths,
+}: Props) {
+  const ctxPreview = useVaultLinkPreviewFromContext();
+  const previewHandler = onVaultLinkPreview ?? ctxPreview ?? undefined;
+  const processed = useMemo(
+    () => (linkifyVaultPaths ? linkifyVaultPathsFn(children) : children),
+    [children, linkifyVaultPaths],
+  );
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      urlTransform={urlTransform}
+      urlTransform={urlTransform ?? vaultUrlTransform}
       components={{
         code: ({ className, children: codeChildren, ...rest }) => {
           const match = /language-([\w-]+)/.exec(className || "");
@@ -95,15 +125,28 @@ export default function MarkdownView({ children, components, urlTransform }: Pro
           }
           return <code className={className} {...rest}>{codeChildren}</code>;
         },
-        a: ({ href, children: linkChildren, ...rest }) => (
-          <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
-            {linkChildren}
-          </a>
-        ),
+        a: ({ href, children: linkChildren, ...rest }) => {
+          const vaultPath = asVaultPath(href ?? "");
+          if (vaultPath) {
+            return (
+              <VaultLink path={vaultPath} onPreview={previewHandler}>
+                {linkChildren}
+              </VaultLink>
+            );
+          }
+          if (!href) {
+            return <span {...rest}>{linkChildren}</span>;
+          }
+          return (
+            <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+              {linkChildren}
+            </a>
+          );
+        },
         ...components,
       }}
     >
-      {children}
+      {processed}
     </ReactMarkdown>
   );
 }

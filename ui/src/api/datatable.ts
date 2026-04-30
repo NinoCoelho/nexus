@@ -55,6 +55,8 @@ export interface OneToManyGroup {
   cardinality: "one" | "many";
   rows: Record<string, unknown>[];
   count: number;
+  /** Up to 3 distinct stored values when count===0; helps explain empty joins. */
+  unmatched_sample?: string[];
 }
 
 export interface ManyToManyGroup {
@@ -64,6 +66,7 @@ export interface ManyToManyGroup {
   target_title: string;
   rows: Record<string, unknown>[];
   count: number;
+  unmatched_sample?: string[];
 }
 
 export interface RelatedRows {

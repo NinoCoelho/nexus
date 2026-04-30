@@ -76,6 +76,67 @@ export function summarizeRow(
 }
 
 /**
+ * Suggest the next primary-key value based on existing rows.
+ *
+ * Detects the dominant ``<prefix><digits>`` pattern across existing values
+ * (e.g. rows ``C001 C002 C003`` → suggest ``C004``; rows ``ORD-0001 ORD-0002``
+ * → ``ORD-0003`` with the same zero-pad width). When values don't follow a
+ * numeric-suffix pattern, returns ``undefined`` so the form leaves the field
+ * empty for the user to fill in.
+ *
+ * Mixed-prefix tables fall back to the most common prefix; outlier values are
+ * ignored. Empty tables return ``undefined`` (no precedent to extrapolate).
+ */
+export function suggestNextPk(
+  rows: Record<string, unknown>[],
+  pkName: string,
+): string | undefined {
+  const values = rows
+    .map((r) => r[pkName])
+    .filter((v): v is string | number => v !== undefined && v !== null && v !== "")
+    .map(String);
+  if (values.length === 0) return undefined;
+
+  // Group by prefix (everything before the trailing digit run).
+  const groups = new Map<string, { width: number; max: number; count: number }>();
+  for (const v of values) {
+    const m = v.match(/^(.*?)(\d+)$/);
+    if (!m) continue;
+    const prefix = m[1];
+    const num = parseInt(m[2], 10);
+    const width = m[2].length;
+    const existing = groups.get(prefix);
+    if (!existing) {
+      groups.set(prefix, { width, max: num, count: 1 });
+    } else {
+      existing.max = Math.max(existing.max, num);
+      existing.width = Math.max(existing.width, width);
+      existing.count += 1;
+    }
+  }
+  if (groups.size === 0) return undefined;
+
+  // Pick the most-common prefix; ties resolve to the prefix with the higher
+  // max so we always advance the dominant numbering scheme.
+  let best: { prefix: string; width: number; max: number; count: number } | null = null;
+  for (const [prefix, info] of groups) {
+    if (
+      !best ||
+      info.count > best.count ||
+      (info.count === best.count && info.max > best.max)
+    ) {
+      best = { prefix, ...info };
+    }
+  }
+  if (!best) return undefined;
+
+  const nextNum = best.max + 1;
+  const padded = String(nextNum).padStart(best.width, "0");
+  return `${best.prefix}${padded}`;
+}
+
+
+/**
  * Module-level cache of in-flight + completed ``getVaultDataTable`` promises,
  * keyed by absolute vault path. The recursive ref-drill popup may resolve the
  * same target table multiple times within a single session (sibling fields
