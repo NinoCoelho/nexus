@@ -252,6 +252,11 @@ def build_system_prompt(
         parts.append(f"## Session context\n\n{context}")
         parts.append("")
 
+    creds_block = _credentials_block()
+    if creds_block:
+        parts.append(creds_block)
+        parts.append("")
+
     descs = registry.descriptions()
     if descs:
         parts.append("## Available skills")
@@ -276,3 +281,55 @@ def build_system_prompt(
         parts.append(mem)
 
     return "\n".join(parts)
+
+
+def _credentials_block() -> str:
+    """Tell the agent which credentials are available and how to use them.
+
+    Without this, the model has no idea the credential store exists and
+    falls back to its trained "ask the user to export this env var" pattern
+    even when we already stored the value. Listing the *names* (never the
+    values — substitution at the tool boundary is the security boundary)
+    is enough for the agent to confidently use ``$NAME`` placeholders.
+    """
+    try:
+        from .. import secrets
+
+        entries = secrets.list_all()
+    except Exception:
+        return ""
+    if not entries:
+        return ""
+
+    lines = ["## Stored credentials", ""]
+    lines.append(
+        "These credentials are stored at `~/.nexus/secrets.toml` (file mode "
+        "0600). Reference them as `$NAME` placeholders in `http_call` args "
+        "(headers, body, or URL) — the server substitutes the real value at "
+        "the tool boundary, just before the request goes out. The raw value "
+        "is never sent to you."
+    )
+    lines.append("")
+    lines.append("**Hard rules:**")
+    lines.append(
+        "- Do NOT ask the user for a value listed here — it is already "
+        "stored. Just use the placeholder."
+    )
+    lines.append(
+        "- Do NOT run `echo $NAME` / `printenv` via `terminal` to check a "
+        "stored credential. The shell does not see secrets-store values; it "
+        "will report the var as empty even when the credential is present."
+    )
+    lines.append(
+        "- Do NOT include the literal value of any credential in your "
+        "messages. If you need to confirm a credential is present, say so "
+        "by name (e.g. \"`$GITHUB_TOKEN` is configured\") — the user can see "
+        "the masked value in Settings → Credentials."
+    )
+    lines.append("")
+    lines.append("**Available:**")
+    for entry in entries:
+        skill = entry.get("skill")
+        suffix = f" (used by skill `{skill}`)" if skill else ""
+        lines.append(f"- `${entry['name']}`{suffix}")
+    return "\n".join(lines)

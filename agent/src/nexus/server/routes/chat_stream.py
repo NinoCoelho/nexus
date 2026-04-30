@@ -14,7 +14,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from ..deps import get_agent, get_sessions
@@ -22,6 +22,7 @@ from ..schemas import ChatRequest
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
+from ...redact import redact_sensitive_text
 from ..session_store import SessionStore
 
 # Shared with chat.py — the cancel endpoint in chat.py mutates these same dicts
@@ -36,10 +37,29 @@ router = APIRouter()
 @router.post("/chat/stream")
 async def chat_stream_route(
     req: ChatRequest,
+    request: Request,
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
 ) -> StreamingResponse:
     from fastapi import HTTPException, status as _status
+
+    # Server-side secret backstop. The UI's pre-send modal is the primary
+    # control; this catches messages that bypass the UI (curl, scripts) or
+    # API-key-shaped strings the UI's narrower regex set missed. We never
+    # 422 — false positives are real, and refusing the message would lose
+    # the user's intent. Instead we mask, log, and continue. The UI sets
+    # `X-Bypass-Secret-Guard: 1` when the user explicitly chose "Send anyway".
+    bypass = request.headers.get("x-bypass-secret-guard") == "1"
+    if not bypass:
+        original = req.message
+        redacted = redact_sensitive_text(original)
+        if redacted != original:
+            log.warning(
+                "secret-shaped string detected in chat input "
+                "(session=%s); persisting redacted form",
+                req.session_id or "<new>",
+            )
+            req.message = redacted
 
     session = store.get_or_create(req.session_id, context=req.context)
 
@@ -117,6 +137,25 @@ async def chat_stream_route(
             )
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("pre-turn user message persist failed")
+
+        # Schedule LLM autotitle **concurrent** with the agent loop on the
+        # first user turn. Real provider calls have independent state, so
+        # this doesn't disturb the agent's own LLM session — by the time the
+        # agent emits `done` (typically 2–10 s) the small ≤32-token title
+        # call has usually completed and the renamed title is in the DB,
+        # ready for the UI's post-`done` sidebar refresh. We gate on
+        # `provider_registry` so test stubs (FakeProvider with a scripted
+        # queue and no registry) skip the call and aren't disrupted.
+        if not pre_turn_history and getattr(a, "_provider_registry", None) is not None:
+            from .chat_stream_helpers import maybe_autotitle_via_llm
+            asyncio.create_task(
+                maybe_autotitle_via_llm(
+                    store=store,
+                    agent=a,
+                    session_id=session.id,
+                    user_message=req.message,
+                )
+            )
         try:
             async for event in a.run_turn_stream(
                 req.message,

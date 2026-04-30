@@ -588,6 +588,7 @@ def create_app(
     from .routes.vault_history import router as vault_history_router
     from .routes.config import router as config_router
     from .routes.providers import router as providers_router
+    from .routes.credentials import router as credentials_router
     from .routes.models import router as models_router
     from .routes.share import router as share_router
     from .routes.local_llm import router as local_llm_router
@@ -612,6 +613,7 @@ def create_app(
     app.include_router(vault_history_router)
     app.include_router(config_router)
     app.include_router(providers_router)
+    app.include_router(credentials_router)
     app.include_router(models_router)
     app.include_router(share_router)
     app.include_router(local_llm_router)

@@ -64,12 +64,23 @@ class AskUserResult:
     kind: str
     timed_out: bool
     error: str | None = None
+    # Names of form fields that were declared ``secret: true``. The raw
+    # value stays in ``answer`` so server-side callers (e.g. the skill
+    # credential prompt) can read it; ``to_text`` — which produces the
+    # JSON the LLM sees — replaces those values with ``"[redacted]"``.
+    secret_fields: tuple[str, ...] = ()
 
     def to_text(self) -> str:
+        answer_for_llm: str | dict | None = self.answer
+        if self.secret_fields and isinstance(answer_for_llm, dict):
+            answer_for_llm = {
+                k: ("[redacted]" if k in self.secret_fields else v)
+                for k, v in answer_for_llm.items()
+            }
         return json.dumps(
             {
                 "ok": self.ok,
-                "answer": self.answer,
+                "answer": answer_for_llm,
                 "kind": self.kind,
                 "timed_out": self.timed_out,
                 "error": self.error,
@@ -187,6 +198,12 @@ class AskUserHandler:
             kind in ("text", "choice") and parkable_opt_in
         )
 
+        secret_field_names: tuple[str, ...] = ()
+        if kind == "form" and fields:
+            secret_field_names = tuple(
+                f.get("name", "") for f in fields if f.get("secret")
+            )
+
         if is_parkable:
             return await self._ask_parkable(
                 session_id=session_id,
@@ -198,6 +215,7 @@ class AskUserHandler:
                 form_description=args.get("description") if kind == "form" else None,
                 default=default,
                 timeout_seconds=int(timeout),
+                secret_field_names=secret_field_names,
             )
 
         # Delegate to loom.hitl.HitlBroker — it handles YOLO short-circuit
@@ -233,6 +251,7 @@ class AskUserHandler:
         form_description: str | None,
         default: str | None,
         timeout_seconds: int,
+        secret_field_names: tuple[str, ...] = (),
     ) -> AskUserResult:
         """Park-after-threshold HITL.
 
@@ -341,11 +360,16 @@ class AskUserHandler:
                 answer=parked_sentinel(request_id),
                 kind=kind,
                 timed_out=False,
+                secret_fields=secret_field_names,
             )
         except asyncio.CancelledError:
             self._form_extras.pop(request_id, None)
             return AskUserResult(
-                ok=True, answer=TIMEOUT_SENTINEL, kind=kind, timed_out=True,
+                ok=True,
+                answer=TIMEOUT_SENTINEL,
+                kind=kind,
+                timed_out=True,
+                secret_fields=secret_field_names,
             )
 
         # Answered within the threshold — clean up and decode.
@@ -355,7 +379,13 @@ class AskUserHandler:
             decoded = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             pass
-        return AskUserResult(ok=True, answer=decoded, kind=kind, timed_out=False)
+        return AskUserResult(
+            ok=True,
+            answer=decoded,
+            kind=kind,
+            timed_out=False,
+            secret_fields=secret_field_names,
+        )
 
 
 def _error(*, kind: str, message: str) -> AskUserResult:

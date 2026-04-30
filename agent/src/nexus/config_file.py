@@ -48,6 +48,9 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "base_url": v.base_url,
                 "api_key_env": v.api_key_env,
                 "use_inline_key": v.use_inline_key,
+                # Only emit credential_ref when set so existing configs round-trip
+                # without sprouting an empty `credential_ref = ""` line.
+                **({"credential_ref": v.credential_ref} if v.credential_ref else {}),
                 "type": v.type,
             }
             for k, v in cfg.providers.items()

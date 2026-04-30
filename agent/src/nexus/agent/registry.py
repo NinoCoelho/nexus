@@ -60,10 +60,18 @@ def _is_provider_functional(pcfg: Any, name: str) -> bool:
     # Anonymous providers — always functional
     if provider_type == "ollama":
         return True
+
+    # credential_ref takes priority and disqualifies anonymous fallback —
+    # the user explicitly chose a credential; if it doesn't resolve we
+    # should report unfunctional rather than silently treating the
+    # provider as a local anonymous server.
+    if getattr(pcfg, "credential_ref", None):
+        return bool(_secrets.resolve(pcfg.credential_ref))
+
     if provider_type == "openai_compat" and not pcfg.api_key_env and not pcfg.use_inline_key:
         return True  # local server, no auth needed
 
-    # Key-based providers — check if key is actually available
+    # Legacy paths.
     if pcfg.use_inline_key:
         return bool(_secrets.get(name))
     if pcfg.api_key_env:
@@ -99,7 +107,18 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
 
         api_key = ""
 
-        if pcfg.use_inline_key:
+        # Resolution order: credential_ref > use_inline_key > api_key_env.
+        # credential_ref is the new unified path; the others stay for
+        # backward compatibility with existing configs.
+        cred_ref = getattr(pcfg, "credential_ref", None)
+        if cred_ref:
+            api_key = _secrets.resolve(cred_ref) or ""
+            if api_key:
+                log.info("[provider] %s: key loaded (credential: %s)", name, cred_ref)
+            else:
+                log.warning("[provider] %s: credential %s not found — skipping", name, cred_ref)
+                continue
+        elif pcfg.use_inline_key:
             api_key = _secrets.get(name) or ""
             if api_key:
                 log.info("[provider] %s: key loaded (inline)", name)

@@ -107,12 +107,18 @@ def build_tool_registry(
     manager = SkillManager(skill_registry)
     http = HttpCallHandler()
 
-    # skills_list / skill_view
+    # skills_list / skill_view — late-bind the AskUserHandler so the
+    # skill_view credential prompt has somewhere to send its form. The
+    # ``handlers`` proxy resolves at dispatch time, mirroring the
+    # ``_ask_user`` / ``_terminal`` wrappers below.
     for spec in STATE_TOOLS:
         _spec = spec
 
         async def _state_invoke(args: dict, *, _spec=_spec) -> str:
-            return state.invoke(_spec.name, args).to_text()
+            if state._ask_user is None and handlers.ask_user is not None:
+                state.set_ask_user(handlers.ask_user)
+            result = await state.invoke(_spec.name, args)
+            return result.to_text()
 
         registry.register(_SimpleToolHandler(_spec, _state_invoke))
 

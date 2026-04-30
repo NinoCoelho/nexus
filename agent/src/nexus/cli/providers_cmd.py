@@ -99,7 +99,7 @@ def providers_set_key(name: str = typer.Argument(...)) -> None:
     if not key.strip():
         typer.echo("No key entered — aborted.")
         raise typer.Exit(1)
-    _secrets.set(name, key.strip())
+    _secrets.set(name, key.strip(), kind="provider")
     cfg.providers[name].use_inline_key = True
     save(cfg)
     typer.echo(f"Key stored for '{name}'. Run 'nexus serve' to pick it up.")

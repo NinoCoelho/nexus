@@ -94,7 +94,7 @@ interface Props {
   onSearchClose?: () => void;
   input: string;
   onInputChange: (v: string) => void;
-  onSend: (overrideText?: string) => void;
+  onSend: (override?: string | { text?: string; inPlace?: boolean; bypassSecretGuard?: boolean }) => void;
   onStop?: () => void;
   onContinue?: () => void;
   onDismissLimit?: () => void;

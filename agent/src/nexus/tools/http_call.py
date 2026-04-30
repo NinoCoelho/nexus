@@ -45,6 +45,12 @@ class HttpCallHandler:
         self._client = httpx.AsyncClient(timeout=30.0)
 
     async def invoke(self, args: dict[str, Any]) -> HttpResult:
+        # Tool-boundary substitution: ``$NAME`` placeholders in url, headers,
+        # or body are resolved against env vars / secrets.toml right before
+        # the request goes out. The LLM never sees the raw values.
+        from ..secrets_substitute import resolve as _resolve_secrets
+
+        args = _resolve_secrets(args)
         method = args.get("method", "GET").upper()
         url = args.get("url", "")
         headers = args.get("headers") or {}

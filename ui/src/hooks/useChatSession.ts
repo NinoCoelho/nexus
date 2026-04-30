@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, HIDDEN_SEED_MARKER } from "../api";
+import { chatStream, truncateSession, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
 import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
@@ -48,6 +48,9 @@ export function useChatSession(
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [sessionsRevision, setSessionsRevision] = useState(0);
   const [pendingSessionId, setPendingSessionId] = useState<string>(() => freshSessionId());
+  // Optimistic placeholder for the session being created on first send.
+  // Cleared once the backend's session list confirms it (or on a fresh /new).
+  const [pendingNewSession, setPendingNewSession] = useState<SessionSummary | null>(null);
 
   // AbortController for the in-flight /chat/stream fetch, per session key.
   // Used by the Stop button to tear down the request client-side; the
@@ -96,6 +99,7 @@ export function useChatSession(
     setActiveSession(null);
     setChatStates((prev) => { const next = new Map(prev); next.set(NEW_KEY, { ...emptyState(), selectedModel: computeSeedModel() }); return next; });
     setPendingSessionId(freshSessionId());
+    setPendingNewSession(null);
   }, [computeSeedModel, freshSessionId]);
 
   const handleInputChange = useCallback((v: string) => patchState(activeKey, { input: v }), [activeKey, patchState]);
@@ -126,16 +130,20 @@ export function useChatSession(
   const send = useCallback(async (override?: unknown) => {
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
-    // ``override`` can be a plain string OR ``{ text, inPlace }``.
+    // ``override`` can be a plain string OR ``{ text, inPlace, bypassSecretGuard }``.
     // ``inPlace`` resumes a partial assistant: no new user bubble,
     // no new placeholder — deltas stream into the existing last assistant.
+    // ``bypassSecretGuard`` is set by the input bar when the user explicitly
+    // chose "Send anyway" on the secret-detected modal.
     let overrideText: string | undefined;
     let inPlace = false;
+    let bypassSecretGuard = false;
     if (typeof override === "string") { overrideText = override; }
     else if (override && typeof override === "object") {
-      const o = override as { text?: unknown; inPlace?: unknown };
+      const o = override as { text?: unknown; inPlace?: unknown; bypassSecretGuard?: unknown };
       if (typeof o.text === "string") overrideText = o.text;
       if (typeof o.inPlace === "boolean") inPlace = o.inPlace;
+      if (typeof o.bypassSecretGuard === "boolean") bypassSecretGuard = o.bypassSecretGuard;
     }
     const rawText = (overrideText ?? state.input).trim();
     const hasAttachments = state.attachments.length > 0;
@@ -168,6 +176,29 @@ export function useChatSession(
     const sendModel = state.selectedModel && state.selectedModel !== "auto" ? state.selectedModel : "";
     let sawDone = false;
 
+    // First-message optimistic UX: show the new chat in the sidebar
+    // immediately, without waiting for the round-trip / `done` event.
+    // The hidden-seed turn (vault dispatch / kanban) is intentionally
+    // excluded — those flows already manage their own session listing.
+    // We deliberately *don't* promote activeSession here so the existing
+    // NEW_KEY-keyed streaming pipeline (delta/tool/done handlers) keeps
+    // working unchanged; the sidebar treats `pendingSessionId` as the
+    // highlighted row via the placeholder.
+    if (!activeSession && !isHidden) {
+      const visibleText = (rawText || "Untitled").trim();
+      const titleSnippet = visibleText.length > 60
+        ? `${visibleText.slice(0, 57).trimEnd()}…`
+        : visibleText || "New session";
+      const nowSec = Math.floor(Date.now() / 1000);
+      setPendingNewSession({
+        id: sidForPost,
+        title: titleSnippet,
+        created_at: nowSec,
+        updated_at: nowSec,
+        message_count: 1,
+      });
+    }
+
     try {
       await chatStream(text, sidForPost, (event) => {
         if (event.type === "delta") {
@@ -184,7 +215,7 @@ export function useChatSession(
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail);
         }
-      }, abortController.signal, sendModel);
+      }, abortController.signal, sendModel, { bypassSecretGuard });
 
       if (!sawDone && !abortController.signal.aborted) {
         // Server closed the stream without a terminal `done`. Pull persisted
@@ -223,6 +254,19 @@ export function useChatSession(
     pendingAutoSend.current = null;
     void send(pending.seed);
   }, [activeSession, send]);
+
+  // Drop the optimistic placeholder once `applyDoneEvent` has promoted
+  // the real session id — the backend's session list now owns that row.
+  // Also kick off a delayed second sidebar refresh: the LLM autotitle
+  // task runs concurrently with the agent and *usually* finishes first,
+  // but on a very short turn it may land just after `done`, so we
+  // re-fetch ~2.5s later to pick up the LLM-generated title.
+  useEffect(() => {
+    if (!pendingNewSession || activeSession !== pendingNewSession.id) return;
+    setPendingNewSession(null);
+    const t = setTimeout(() => setSessionsRevision((r) => r + 1), 2500);
+    return () => clearTimeout(t);
+  }, [activeSession, pendingNewSession]);
 
   const handleStop = useCallback(() => {
     const key = activeKey;
@@ -301,6 +345,7 @@ export function useChatSession(
   return {
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,
     pendingSessionId, setPendingSessionId, sessionsRevision, setSessionsRevision,
+    pendingNewSession,
     pendingAutoSend, send, handleStop, handleRollback, handleContinue,
     handleContinuePartial, handleRetryPartial, handleInputChange,
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
