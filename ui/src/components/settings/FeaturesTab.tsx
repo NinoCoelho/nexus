@@ -3,6 +3,7 @@ import { type KnowledgeStats } from "../../api";
 import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
+import VaultHistorySection from "../VaultHistorySection";
 import SettingsSection from "./SettingsSection";
 import SharingSection from "./SharingSection";
 
@@ -19,7 +20,6 @@ export default function FeaturesTab({ graphStats }: Props) {
         title="Voice transcription"
         icon="🎙"
         collapsible
-        defaultOpen
         help={{
           title: "Transcription",
           body: (
@@ -96,6 +96,26 @@ export default function FeaturesTab({ graphStats }: Props) {
           </div>
         </SettingsSection>
       )}
+
+      <SettingsSection
+        title="Vault history"
+        icon="↶"
+        collapsible
+        defaultOpen={false}
+        help={{
+          title: "Vault history",
+          body: (
+            <>
+              Opt-in: when enabled, every vault save is committed to a
+              private git repo at <code>~/.nexus/.vault-history</code>.
+              Right-click any file or folder in the tree to undo the most
+              recent change. Disabling preserves the existing history.
+            </>
+          ),
+        }}
+      >
+        <VaultHistorySection />
+      </SettingsSection>
 
       <SharingSection />
 

@@ -9,6 +9,7 @@ import {
   postVaultFolder,
   postVaultMove,
   putVaultFile,
+  undoVaultPath,
   uploadVaultFiles,
 } from "../../api";
 import type { TreeNode } from "./types";
@@ -240,6 +241,36 @@ export function useVaultActions({
     });
   }, [descendantCounts, toast, setModal, setCtxMenu, doDelete]);
 
+  const handleUndo = useCallback(async (node: TreeNode) => {
+    setCtxMenu(null);
+    setModal({
+      kind: "confirm",
+      title: "Undo last change",
+      message: `Step "${node.path}" back one revision in history?`,
+      confirmLabel: "Undo",
+      onCancel: () => setModal(null),
+      onSubmit: async () => {
+        setModal(null);
+        try {
+          const r = await undoVaultPath(node.path);
+          if (!r.undone) {
+            toast.error(
+              r.reason === "no_history"
+                ? "Nothing to undo for this path"
+                : `Undo failed: ${r.reason ?? "unknown"}`,
+            );
+            return;
+          }
+          refreshTree();
+          onTreeChange?.();
+          toast.success(`Undone (${r.paths.length} file${r.paths.length === 1 ? "" : "s"} touched)`);
+        } catch (e) {
+          toast.error("Undo failed", { detail: e instanceof Error ? e.message : undefined });
+        }
+      },
+    });
+  }, [refreshTree, onTreeChange, toast, setModal, setCtxMenu]);
+
   const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>, overrideDir?: string) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
@@ -270,6 +301,7 @@ export function useVaultActions({
     handleNewKanban,
     handleDispatchFile,
     handleDelete,
+    handleUndo,
     handleUpload,
   };
 }

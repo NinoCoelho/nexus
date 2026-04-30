@@ -206,6 +206,22 @@ def write_file(rel_path: str, content: str) -> None:
         except OSError:
             pass
         raise
+    _post_write_hooks(rel_path, content)
+    try:
+        from . import vault_history
+        vault_history.record([rel_path], f"write: {rel_path}")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_history: record failed", exc_info=True)
+
+
+def _post_write_hooks(rel_path: str, content: str) -> None:
+    """Run search/index/graph hooks for a successful text write of rel_path.
+
+    Extracted from write_file() so other code paths (vault_history.undo)
+    can re-run indexing after restoring an older revision without duplicating
+    the long catalog of best-effort calls.
+    """
     try:
         from . import vault_search
         vault_search.index_path(rel_path, content)
@@ -237,26 +253,9 @@ def write_file(rel_path: str, content: str) -> None:
         logging.getLogger(__name__).warning("graphrag: schedule_index failed", exc_info=True)
 
 
-def delete(rel_path: str, recursive: bool = False) -> None:
-    import shutil
-    root = _vault_root()
-    full = _safe_resolve(rel_path, root)
-    removed_rel: list[str] = []
-    if full.is_file():
-        full.unlink()
-        removed_rel.append(rel_path)
-    elif full.is_dir():
-        if recursive:
-            root_real = Path(os.path.realpath(root))
-            for sub in full.rglob("*"):
-                if sub.is_file():
-                    removed_rel.append(str(sub.relative_to(root_real)))
-            shutil.rmtree(full)
-        else:
-            full.rmdir()  # raises if non-empty
-    else:
-        raise FileNotFoundError(f"no such file or directory: {rel_path!r}")
-    for rel in removed_rel or [rel_path]:
+def _post_remove_hooks(rel_paths: list[str]) -> None:
+    """Run search/index/graph hooks for one or more removed paths."""
+    for rel in rel_paths:
         try:
             from . import vault_search
             vault_search.remove_path(rel)
@@ -285,6 +284,36 @@ def delete(rel_path: str, recursive: bool = False) -> None:
         vault_graph.invalidate_cache()
     except Exception:
         pass
+
+
+def delete(rel_path: str, recursive: bool = False) -> None:
+    import shutil
+    root = _vault_root()
+    full = _safe_resolve(rel_path, root)
+    removed_rel: list[str] = []
+    if full.is_file():
+        full.unlink()
+        removed_rel.append(rel_path)
+    elif full.is_dir():
+        if recursive:
+            root_real = Path(os.path.realpath(root))
+            for sub in full.rglob("*"):
+                if sub.is_file():
+                    removed_rel.append(str(sub.relative_to(root_real)))
+            shutil.rmtree(full)
+        else:
+            full.rmdir()  # raises if non-empty
+    else:
+        raise FileNotFoundError(f"no such file or directory: {rel_path!r}")
+    _post_remove_hooks(removed_rel or [rel_path])
+    try:
+        from . import vault_history
+        # delete may have removed a folder + many files; staging -A captures
+        # the whole change set in one commit.
+        vault_history.record([], f"delete: {rel_path}")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_history: record failed", exc_info=True)
 
 
 def move(from_path: str, to_path: str) -> None:
@@ -329,6 +358,12 @@ def move(from_path: str, to_path: str) -> None:
         publish({"type": "vault.indexed", "path": to_path})
     except Exception:
         pass
+    try:
+        from . import vault_history
+        vault_history.record([], f"move: {from_path} -> {to_path}")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_history: record failed", exc_info=True)
 
 
 def write_file_bytes(rel_path: str, data: bytes) -> None:
@@ -353,6 +388,12 @@ def write_file_bytes(rel_path: str, data: bytes) -> None:
         vault_graph.invalidate_cache()
     except Exception:
         pass
+    try:
+        from . import vault_history
+        vault_history.record([rel_path], f"write: {rel_path}")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("vault_history: record failed", exc_info=True)
 
 
 def create_folder(rel_path: str) -> None:

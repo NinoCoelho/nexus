@@ -3,6 +3,7 @@ export * from "./base";
 export * from "./sessions";
 export * from "./vault";
 export * from "./vault-graph";
+export * from "./vaultHistory";
 export * from "./kanban";
 export * from "./datatable";
 export * from "./dispatch";

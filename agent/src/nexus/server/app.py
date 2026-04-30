@@ -584,6 +584,7 @@ def create_app(
     from .routes.vault_calendar import router as vault_calendar_router
     from .routes.vault_datatable import router as vault_datatable_router
     from .routes.vault_dispatch import router as vault_dispatch_router
+    from .routes.vault_history import router as vault_history_router
     from .routes.config import router as config_router
     from .routes.providers import router as providers_router
     from .routes.models import router as models_router
@@ -606,6 +607,7 @@ def create_app(
     app.include_router(vault_calendar_router)
     app.include_router(vault_datatable_router)
     app.include_router(vault_dispatch_router)
+    app.include_router(vault_history_router)
     app.include_router(config_router)
     app.include_router(providers_router)
     app.include_router(models_router)

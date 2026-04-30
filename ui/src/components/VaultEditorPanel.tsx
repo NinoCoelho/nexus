@@ -19,7 +19,8 @@ import KanbanBoard from "./KanbanBoard";
 import DataTableView from "./DataTableView";
 import CsvEditorView from "./CsvEditorView";
 import FilePreview from "./FilePreview";
-import { getVaultFile, putVaultFile, vaultRawUrl } from "../api";
+import VaultHistoryPanel from "./VaultHistoryPanel";
+import { getVaultFile, getVaultHistoryStatus, putVaultFile, vaultRawUrl } from "../api";
 import { useVaultEvents } from "../hooks/useVaultEvents";
 import { classify } from "../fileTypes";
 import "./VaultView.css";
@@ -70,6 +71,8 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   const [previewContent, setPreviewContent] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [fileError, setFileError] = useState<string | null>(null);
+  const [historyEnabled, setHistoryEnabled] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -120,6 +123,18 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
     setFileSize(undefined);
     loadFile();
   }, [selectedPath, loadFile]);
+
+  // Poll history status when a path is selected so the History button can
+  // hide itself when the feature is disabled. Status is cheap and rarely
+  // changes; refresh once per opened file is plenty.
+  useEffect(() => {
+    if (!selectedPath) return;
+    let cancelled = false;
+    getVaultHistoryStatus()
+      .then((s) => { if (!cancelled) setHistoryEnabled(s.enabled); })
+      .catch(() => { if (!cancelled) setHistoryEnabled(false); });
+    return () => { cancelled = true; };
+  }, [selectedPath]);
 
   // Auto-refresh when the file changes on disk (e.g. the agent wrote it). We
   // skip while the user is editing so we don't clobber their unsaved buffer,
@@ -214,6 +229,15 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   Graph
                 </button>
               )}
+              {historyEnabled && selectedPath && (
+                <button
+                  className="vault-pill"
+                  onClick={() => setHistoryOpen(true)}
+                  title="View history and undo"
+                >
+                  History
+                </button>
+              )}
               {editMode && canEdit && isMarkdown && (
                 <MermaidSnippets onInsert={insertSnippet} />
               )}
@@ -289,6 +313,13 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
             </div>
           )}
         </>
+      )}
+      {historyOpen && selectedPath && (
+        <VaultHistoryPanel
+          path={selectedPath}
+          onClose={() => setHistoryOpen(false)}
+          onUndone={() => loadFile()}
+        />
       )}
     </div>
   );

@@ -29,6 +29,8 @@ from .config_schema import (  # noqa: F401
     ScrapeConfig,
     RemoteTranscriptionConfig,
     TranscriptionConfig,
+    VaultHistoryConfig,
+    VaultConfig,
     NexusConfig,
     default_config,
 )
@@ -108,6 +110,11 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "base_url": cfg.transcription.remote.base_url,
                 "api_key_env": cfg.transcription.remote.api_key_env,
                 "model": cfg.transcription.remote.model,
+            },
+        },
+        "vault": {
+            "history": {
+                "enabled": cfg.vault.history.enabled,
             },
         },
     }
@@ -209,10 +216,13 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     if isinstance(t_raw.get("language"), str) and not t_raw["language"].strip():
         t_raw["language"] = None
     transcription = TranscriptionConfig(**t_raw)
+    vault_raw = dict(raw.get("vault", {}))
+    history_raw = dict(vault_raw.get("history", {}))
+    vault = VaultConfig(history=VaultHistoryConfig(**history_raw))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
-        transcription=transcription,
+        transcription=transcription, vault=vault,
     )
 
 

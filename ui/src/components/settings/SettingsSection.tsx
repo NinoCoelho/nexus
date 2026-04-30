@@ -17,7 +17,12 @@ export default function SettingsSection({
   description,
   help,
   collapsible = false,
-  defaultOpen = true,
+  // Collapsible sections start closed by default; pass `defaultOpen` to
+  // override per-section when a panel deserves to be expanded on first
+  // render (e.g. Quick start has no collapsible sections at all, so this
+  // never bites it). Non-collapsible sections are always open regardless
+  // of this flag — see ``isOpen`` below.
+  defaultOpen = false,
   children,
 }: Props) {
   const [open, setOpen] = useState(defaultOpen);

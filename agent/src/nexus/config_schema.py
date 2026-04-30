@@ -158,6 +158,17 @@ class TranscriptionConfig(BaseModel):
     remote: RemoteTranscriptionConfig = Field(default_factory=RemoteTranscriptionConfig)
 
 
+class VaultHistoryConfig(BaseModel):
+    # When enabled, every vault mutation (write/delete/move) produces a git
+    # commit in a separate work-tree at ~/.nexus/.vault-history. Disabled by
+    # default — most users won't need it. See vault_history.py.
+    enabled: bool = False
+
+
+class VaultConfig(BaseModel):
+    history: VaultHistoryConfig = Field(default_factory=VaultHistoryConfig)
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -166,6 +177,7 @@ class NexusConfig(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    vault: VaultConfig = Field(default_factory=VaultConfig)
 
 
 # Fresh install starts with providers configured but NO models.

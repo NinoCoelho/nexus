@@ -18,7 +18,6 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
         title="Cloud providers"
         icon="☁"
         collapsible
-        defaultOpen
         help={{
           title: "What is a provider?",
           body: (
@@ -56,7 +55,6 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
         title="Manage models"
         icon="📋"
         collapsible
-        defaultOpen
         help={{
           title: "Registered models",
           body: (
