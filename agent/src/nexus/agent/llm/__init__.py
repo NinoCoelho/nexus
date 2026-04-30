@@ -5,6 +5,7 @@ working after the module was split into a package.
 """
 
 from .anthropic import AnthropicProvider
+from .auth import AuthStrategy, StaticBearerAuth
 from .openai import OpenAIProvider
 from .types import (
     ChatMessage,
@@ -23,7 +24,9 @@ from loom.types import Role, ToolSpec, Usage
 
 __all__ = [
     "AnthropicProvider",
+    "AuthStrategy",
     "OpenAIProvider",
+    "StaticBearerAuth",
     "ChatMessage",
     "ChatResponse",
     "LLMError",

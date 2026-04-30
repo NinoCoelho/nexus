@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -12,6 +13,8 @@ from loom.llm.base import LLMProvider as LoomLLMProvider
 from nexus.agent.llm import LLMProvider as NexusLLMProvider
 
 from .message import _loom_to_nexus_message, _nexus_stop_to_loom
+
+log = logging.getLogger(__name__)
 
 
 class LoomProviderAdapter(LoomLLMProvider):
@@ -46,13 +49,32 @@ class LoomProviderAdapter(LoomLLMProvider):
         self._thinking_sink: Callable[[str], None] | None = None
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
-        """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name)."""
+        """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name).
+
+        Falls back to ``self._nexus`` (the agent's default provider) when
+        the registry doesn't know the id — so a typo in the model picker
+        doesn't immediately crash the turn. We log loudly when that
+        happens because routing a slash-prefixed Nexus id to a raw
+        upstream provider almost always returns nothing useful (the
+        upstream rejects the unknown model name, and depending on the
+        provider may answer 200-with-empty-content rather than 404).
+        """
         resolved = model_id or self._default_model
         if self._registry and resolved:
             try:
                 return self._registry.get_for_model(resolved)
-            except KeyError:
-                pass
+            except KeyError as exc:
+                known = []
+                try:
+                    known = list(self._registry.available_model_ids())[:10]
+                except Exception:  # noqa: BLE001
+                    pass
+                log.warning(
+                    "LoomAdapter: model %r not in registry (%s) — falling back "
+                    "to default provider with the same id, which usually means "
+                    "the upstream returns nothing. Known ids (first 10): %s",
+                    resolved, exc, known,
+                )
         if not resolved:
             resolved = getattr(self._nexus, "_model", None) or None
         return self._nexus, resolved
@@ -67,6 +89,11 @@ class LoomProviderAdapter(LoomLLMProvider):
         nexus_messages = [_loom_to_nexus_message(m) for m in messages]
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
+        log.warning(
+            "LoomAdapter.chat → provider=%s upstream=%s msgs=%d tools=%d max_toks=%s",
+            type(provider).__name__, upstream, len(nexus_messages),
+            len(tools or []), max_toks or None,
+        )
         nexus_resp = await provider.chat(
             nexus_messages, tools=tools, model=upstream,
             max_tokens=max_toks or None,
@@ -106,11 +133,26 @@ class LoomProviderAdapter(LoomLLMProvider):
 
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
+        log.warning(
+            "LoomAdapter.chat_stream → provider=%s upstream=%s msgs=%d tools=%d",
+            type(provider).__name__, upstream, len(nexus_messages), len(tools or []),
+        )
+        provider_event_count = 0
         async for ev in provider.chat_stream(
             nexus_messages, tools=tools, model=upstream,
             max_tokens=max_toks or None,
         ):
+            provider_event_count += 1
             etype = ev.get("type")
+            # First handful of events get logged so we can prove the
+            # upstream stream actually yields. Beyond that we'd flood
+            # the log with delta events; the count is preserved for the
+            # post-loop trace below.
+            if provider_event_count <= 3:
+                log.warning(
+                    "LoomAdapter: provider event #%d type=%s",
+                    provider_event_count, etype,
+                )
 
             if etype == "thinking_delta":
                 sink = self._thinking_sink
@@ -191,6 +233,16 @@ class LoomProviderAdapter(LoomLLMProvider):
                 except ValueError:
                     loom_stop = lt.StopReason.UNKNOWN
                 yield lt.StopEvent(stop_reason=loom_stop)
+
+        # Post-iteration summary — fires whether the provider yielded
+        # one event or zero. A zero-event stream means the upstream
+        # provider returned 200 with no SSE frames at all, which for
+        # Anthropic OAuth tokens usually means the token shape was
+        # accepted at TLS but rejected at handshake time silently.
+        log.warning(
+            "LoomAdapter.chat_stream: provider yielded %d events total",
+            provider_event_count,
+        )
 
     async def aclose(self) -> None:
         await self._nexus.aclose()

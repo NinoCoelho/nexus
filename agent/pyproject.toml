@@ -58,6 +58,14 @@ pdf = [
     "Pillow>=10.0",
     "fpdf2>=2.7",
 ]
+# AWS Bedrock support. Install with: `uv sync --extra bedrock` (or
+# `uv tool install nexus[bedrock]`). Pulls in boto3 for SigV4 signing
+# + the InvokeModel/Converse APIs. The catalog tile is visible without
+# this extra; the wizard's connection test surfaces a clear "install
+# nexus[bedrock]" hint when boto3 isn't importable.
+bedrock = [
+    "boto3>=1.34",
+]
 # Bundled `markitdown` skill converts arbitrary docs (PDF/DOCX/PPTX/XLSX/…) to
 # Markdown so the agent and the vault FTS index can read them. The wrapper
 # script also pip-installs on first run if this extra wasn't preinstalled.

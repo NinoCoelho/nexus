@@ -11,6 +11,7 @@ import VaultView from "./components/VaultView";
 import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
+import { WizardModal } from "./components/ProviderWizard";
 import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import DatabaseSchemaView from "./components/DatabaseSchemaView";
@@ -685,6 +686,15 @@ export default function App() {
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false); bumpSettingsRevision(); }}
       />
+      {hasModel === false && (
+        <WizardModal
+          mode="first-run"
+          configuredNames={[]}
+          onClose={(result) => {
+            if (result.saved) bumpSettingsRevision();
+          }}
+        />
+      )}
       {pendingRequest && (
         <ApprovalDialog
           request={pendingRequest}

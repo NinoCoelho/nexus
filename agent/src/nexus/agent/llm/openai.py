@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from loom.types import ToolSpec, Usage
 
+from .auth import AuthStrategy
 from .types import (
     ChatMessage,
     ChatResponse,
@@ -134,11 +135,21 @@ def _usage_from_openai(raw: dict[str, Any]) -> Usage:
 class OpenAIProvider(LLMProvider):
     """OpenAI-compatible HTTP adapter (no vendor SDK)."""
 
+    # Hostnames whose OpenAI-compat endpoint REJECTS unknown fields with
+    # HTTP 400 INVALID_ARGUMENT instead of silently ignoring them. We
+    # know about Google's Gemini compat layer (strict proto-validated);
+    # any other provider that surfaces "Unknown name" 400s should be
+    # added here. Detection by hostname is hacky but the alternative
+    # (a per-provider quirks field on the catalog) is more plumbing.
+    _STRICT_COMPAT_HOSTS = (
+        "generativelanguage.googleapis.com",  # Gemini /v1beta/openai
+    )
+
     def __init__(
         self,
         *,
         base_url: str,
-        api_key: str,
+        auth: AuthStrategy,
         model: str = "",
         read_timeout: float | None = None,
         temperature: float = 0.0,
@@ -152,9 +163,13 @@ class OpenAIProvider(LLMProvider):
         self._frequency_penalty = float(frequency_penalty or 0.0)
         self._presence_penalty = float(presence_penalty or 0.0)
         self._anti_repeat_threshold = int(anti_repeat_threshold or 0)
-        self._headers: dict[str, str] = {"Content-Type": "application/json"}
-        if api_key:
-            self._headers["Authorization"] = f"Bearer {api_key}"
+        self._auth = auth
+        self._base_headers: dict[str, str] = {"Content-Type": "application/json"}
+        # When the upstream rejects unknown fields (Gemini), strip
+        # OpenAI-extensions from the payload before sending. Other
+        # providers (OpenAI, Groq, Together, …) silently ignore unknown
+        # fields, so leaving them on the wire is fine.
+        self._strict_compat = any(h in self._base_url for h in self._STRICT_COMPAT_HOSTS)
         # Local reasoning models (GLM-4.7-flash, DeepSeek-R1, Qwen-QwQ, …) can
         # spend many minutes on the chain-of-thought before emitting any
         # `delta.content`. A 120s read timeout truncates them mid-thought; we
@@ -182,10 +197,14 @@ class OpenAIProvider(LLMProvider):
             "messages": [_encode_msg(m) for m in messages],
             "temperature": self._temperature,
         }
-        if self._frequency_penalty:
-            payload["frequency_penalty"] = self._frequency_penalty
-        if self._presence_penalty:
-            payload["presence_penalty"] = self._presence_penalty
+        # OpenAI-extensions: silently ignored by most compat providers
+        # but rejected outright by some (Gemini's strict proto-validated
+        # compat endpoint). _strict_compat omits them entirely.
+        if not self._strict_compat:
+            if self._frequency_penalty:
+                payload["frequency_penalty"] = self._frequency_penalty
+            if self._presence_penalty:
+                payload["presence_penalty"] = self._presence_penalty
         if max_tokens:
             payload["max_tokens"] = int(max_tokens)
         if tools:
@@ -196,7 +215,7 @@ class OpenAIProvider(LLMProvider):
             resp = await self._client.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
-                headers=self._headers,
+                headers={**self._base_headers, **(await self._auth.headers())},
             )
         except httpx.HTTPError as exc:
             # Transport-layer failure — no status code / body to attach.
@@ -241,10 +260,12 @@ class OpenAIProvider(LLMProvider):
             "temperature": self._temperature,
             "stream": True,
         }
-        if self._frequency_penalty:
-            payload["frequency_penalty"] = self._frequency_penalty
-        if self._presence_penalty:
-            payload["presence_penalty"] = self._presence_penalty
+        # See chat() — same strict-compat gate.
+        if not self._strict_compat:
+            if self._frequency_penalty:
+                payload["frequency_penalty"] = self._frequency_penalty
+            if self._presence_penalty:
+                payload["presence_penalty"] = self._presence_penalty
         if max_tokens:
             payload["max_tokens"] = int(max_tokens)
         if tools:
@@ -256,7 +277,7 @@ class OpenAIProvider(LLMProvider):
                 "POST",
                 f"{self._base_url}/chat/completions",
                 json=payload,
-                headers=self._headers,
+                headers={**self._base_headers, **(await self._auth.headers())},
             ) as resp:
                 if resp.status_code >= 400:
                     raw = await resp.aread()
@@ -387,3 +408,4 @@ class OpenAIProvider(LLMProvider):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        await self._auth.aclose()

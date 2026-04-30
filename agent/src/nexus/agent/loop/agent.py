@@ -359,6 +359,14 @@ class Agent:
         # loom yields serialized dicts (via serialize_event=model_dump) but the
         # event structure differs from what app.py expects.  We translate here.
         full_text = ""
+        # Tracks whether loom emitted a structured ErrorEvent earlier in this
+        # turn. When it did (e.g. upstream auth failure → classify_api_error
+        # → ErrorEvent → DoneEvent(iterations=0)), the subsequent done frame
+        # would otherwise hit our empty_reply check and synthesize a generic
+        # "empty_response" error that overwrites the real one in the UI.
+        # Setting this flag on the error branch lets the done branch skip
+        # the synthetic emission.
+        _saw_loom_error = False
         # Snapshot inbound history so we can rebuild the persisted message list
         # for app.py's `store.replace_history`. loom's streaming DoneEvent does
         # not carry the assembled message list.
@@ -421,6 +429,19 @@ class Agent:
         if had_sink_attr:
             adapter._thinking_sink = thinking_q.put_nowait  # type: ignore[attr-defined]
 
+        # Trace what we're handing to loom — pinpoints "iters=0" cases
+        # (loom never calls the LLM) versus genuine empty-content cases
+        # (LLM was called but returned ""). model_id here is what the
+        # registry lookup is keyed on.
+        log.warning(
+            "Agent.run_turn_stream → loom: model_id=%s msgs=%d (system=%d, user=%d, assistant=%d, tool=%d) ctx_window=%d",
+            model_id, len(loom_messages),
+            sum(1 for m in loom_messages if m.role == lt.Role.SYSTEM),
+            sum(1 for m in loom_messages if m.role == lt.Role.USER),
+            sum(1 for m in loom_messages if m.role == lt.Role.ASSISTANT),
+            sum(1 for m in loom_messages if m.role == lt.Role.TOOL),
+            ctx_window,
+        )
         loom_iter = self._loom.run_turn_stream(loom_messages, model_id=model_id).__aiter__()
         loom_task: asyncio.Task[Any] | None = asyncio.ensure_future(loom_iter.__anext__())
         q_task: asyncio.Task[str] = asyncio.ensure_future(thinking_q.get())
@@ -449,6 +470,37 @@ class Agent:
                 ev = raw
             else:
                 ev = raw.model_dump()
+
+            # Trace every loom event so we can pinpoint silent-completion
+            # bugs (e.g. provider stream yields nothing, loom emits done
+            # with iters=0). Emit at WARNING because Python's default
+            # logger gates at WARNING and we don't configure basicConfig.
+            if etype == "error":
+                # For errors, log the full classified payload — message +
+                # reason + status_code is exactly what we need to diagnose
+                # silent failures.
+                log.warning(
+                    "loom event: type=error reason=%r status=%r retryable=%r message=%r",
+                    ev.get("reason"),
+                    ev.get("status_code"),
+                    ev.get("retryable"),
+                    (ev.get("message") or "")[:300],
+                )
+            elif etype == "done":
+                log.warning(
+                    "loom event: type=done iters=%s model=%s in_tokens=%s out_tokens=%s stop_reason=%s",
+                    ev.get("iterations"),
+                    ev.get("model"),
+                    ev.get("input_tokens"),
+                    ev.get("output_tokens"),
+                    ev.get("stop_reason"),
+                )
+            else:
+                log.warning(
+                    "loom event: type=%s keys=%s",
+                    etype,
+                    sorted(ev.keys())[:8] if isinstance(ev, dict) else "?",
+                )
 
             if etype == "content_delta":
                 delta = ev.get("delta", "")
@@ -642,6 +694,11 @@ class Agent:
                 }
 
             elif etype == "error":
+                # loom already classified this. Forward verbatim AND mark
+                # the turn as having seen an error so the done branch's
+                # empty-reply synthesis doesn't run and overwrite it in
+                # the UI's applyErrorEvent (last error wins there).
+                _saw_loom_error = True
                 yield {
                     "type": "error",
                     "detail": ev.get("message", ""),
@@ -660,9 +717,12 @@ class Agent:
                 # Surface truncation + empty response as a retryable error
                 # BEFORE the done frame so the UI renders an actionable banner.
                 if stop_reason == "length":
-                    log.info(
-                        "turn ended truncated (stop_reason=length, reply_len=%d)",
-                        len(reply_text),
+                    # WARNING (not INFO) so this surfaces in the daemon log
+                    # under default Python logging — Nexus doesn't configure
+                    # a level, so INFO is swallowed by the root WARNING gate.
+                    log.warning(
+                        "turn ended truncated (model=%s, stop_reason=length, reply_len=%d)",
+                        model_used, len(reply_text),
                     )
                     yield {
                         "type": "error",
@@ -671,9 +731,25 @@ class Agent:
                         "retryable": True,
                         "status_code": None,
                     }
-                elif not reply_text and stop_reason not in ("tool_use",):
-                    log.info(
-                        "turn ended with empty reply (stop_reason=%s)", stop_reason,
+                elif not reply_text and stop_reason not in ("tool_use",) and not _saw_loom_error:
+                    # WARNING so this lands in the daemon log under default
+                    # Python logging (no basicConfig is set anywhere, so the
+                    # root logger gates at WARNING). Include model + iteration
+                    # count + token usage so debugging "why did the model
+                    # return nothing" doesn't require code-side prints.
+                    #
+                    # The ``_saw_loom_error`` guard skips synthesis when
+                    # loom already emitted an ErrorEvent earlier — its
+                    # classified message (auth, transport, rate-limit, …)
+                    # is the truth and we shouldn't paper over it with a
+                    # generic "empty response" banner.
+                    usage_in = ev.get("input_tokens") or 0
+                    usage_out = ev.get("output_tokens") or 0
+                    log.warning(
+                        "turn ended with empty reply "
+                        "(model=%s, stop_reason=%s, iters=%s, in_tokens=%s, out_tokens=%s)",
+                        model_used, stop_reason, ev.get("iterations"),
+                        usage_in, usage_out,
                     )
                     # Heuristic: if the request was already large, the most
                     # likely cause of a 200-with-empty-content is upstream

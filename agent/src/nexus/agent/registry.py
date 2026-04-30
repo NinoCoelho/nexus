@@ -6,7 +6,7 @@ import logging
 from typing import Any
 import os
 
-from .llm import AnthropicProvider, LLMProvider, OpenAIProvider
+from .llm import AnthropicProvider, LLMProvider, OpenAIProvider, StaticBearerAuth
 from ..config_file import NexusConfig
 from .. import secrets as _secrets
 
@@ -93,16 +93,96 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
     }
 
     for name, pcfg in cfg.providers.items():
-        provider_type = getattr(pcfg, "type", None) or ("anthropic" if name == "anthropic" else "openai_compat")
+        # ``runtime_kind`` is the wizard-era discriminator; ``type`` is the
+        # legacy alias kept for back-compat (filled in by the migration in
+        # config_file._parse). New code should read runtime_kind first.
+        provider_type = (
+            getattr(pcfg, "runtime_kind", "")
+            or getattr(pcfg, "type", "")
+            or ("anthropic" if name == "anthropic" else "openai_compat")
+        )
 
         # Ollama is anonymous — register without any key
         if provider_type == "ollama":
             base = (pcfg.base_url or "http://localhost:11434").rstrip("/")
             provider = OpenAIProvider(
-                base_url=f"{base}/v1", api_key="ollama", model="", **sampling_kwargs
+                base_url=f"{base}/v1",
+                auth=StaticBearerAuth("ollama"),
+                model="",
+                **sampling_kwargs,
             )
             reg.register_provider(name, provider)
             log.info("[provider] %s initialized (anonymous)", name)
+            continue
+
+        # Anthropic with auth_kind="oauth" — load the bundle from the
+        # secret store and pass its access token via the SDK's
+        # auth_token path (Bearer + beta header). When the bundle is
+        # missing the provider is skipped just like a missing API key.
+        oauth_ref = getattr(pcfg, "oauth_token_ref", None)
+        if (
+            getattr(pcfg, "auth_kind", "api") == "oauth"
+            and provider_type == "anthropic"
+            and oauth_ref
+        ):
+            bundle = _secrets.get_oauth(oauth_ref)
+            if bundle is None or not bundle.access:
+                log.warning(
+                    "[provider] %s: OAuth bundle %r missing or empty — skipping",
+                    name, oauth_ref,
+                )
+                continue
+            # When the bundle was lifted from the Claude Code keychain,
+            # Anthropic enforces the Pro/Max rate-limit allocation only
+            # for requests that look like Claude Code. The naming
+            # convention from local_creds.py is "ANTHROPIC_CLAUDE_CODE";
+            # detect that and ask the provider to send Claude Code
+            # identity headers. See AnthropicProvider for the ToS note.
+            impersonate = oauth_ref == "ANTHROPIC_CLAUDE_CODE"
+            provider = AnthropicProvider(
+                oauth_access_token=bundle.access,
+                model="",
+                temperature=cfg.agent.temperature,
+                impersonate_claude_code=impersonate,
+            )
+            reg.register_provider(name, provider)
+            log.info(
+                "[provider] %s initialized (oauth via %s, expires_at=%s, impersonate=%s)",
+                name, oauth_ref, bundle.expires_at, impersonate,
+            )
+            continue
+
+        # AWS Bedrock — auth_kind="iam" with iam_profile + iam_region.
+        # Skipped (with a friendly install hint) when boto3 isn't on the
+        # path so users without the bedrock extra don't see a stack
+        # trace, just an empty provider list.
+        if provider_type == "bedrock":
+            try:
+                from .llm.bedrock import BedrockProvider  # type: ignore[import-not-found]
+            except ImportError:
+                log.warning(
+                    "[provider] %s: bedrock requires the 'bedrock' extra "
+                    "(`uv pip install 'nexus[bedrock]'`) — skipping",
+                    name,
+                )
+                continue
+            iam_region = getattr(pcfg, "iam_region", "") or "us-east-1"
+            iam_profile = getattr(pcfg, "iam_profile", "") or ""
+            try:
+                provider = BedrockProvider(
+                    region=iam_region,
+                    profile=iam_profile,
+                    model="",
+                    temperature=cfg.agent.temperature,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("[provider] %s: bedrock init failed: %s — skipping", name, exc)
+                continue
+            reg.register_provider(name, provider)
+            log.info(
+                "[provider] %s initialized (bedrock region=%s profile=%s)",
+                name, iam_region, iam_profile or "default",
+            )
             continue
 
         api_key = ""
@@ -148,7 +228,10 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             )
         elif pcfg.base_url:
             provider = OpenAIProvider(
-                base_url=pcfg.base_url, api_key=api_key, model="", **sampling_kwargs
+                base_url=pcfg.base_url,
+                auth=StaticBearerAuth(api_key),
+                model="",
+                **sampling_kwargs,
             )
         else:
             log.warning("[provider] %s: openai_compat requires base_url — skipping", name)

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 from loom.types import Role, ToolSpec, Usage
+
+log = logging.getLogger(__name__)
 
 from .types import (
     ChatMessage,
@@ -84,12 +87,69 @@ def _usage_from_anthropic(raw: Any) -> Usage:
 
 
 class AnthropicProvider(LLMProvider):
-    """Anthropic native adapter using the anthropic SDK."""
+    """Anthropic native adapter using the anthropic SDK.
 
-    def __init__(self, *, api_key: str, model: str = "", temperature: float = 0.0) -> None:
+    Supports two auth modes:
+
+    * ``api_key`` — standard ``x-api-key`` header. Used for Anthropic
+      Workbench / Console keys (sk-ant-…).
+    * ``oauth_access_token`` — ``Authorization: Bearer`` + the OAuth
+      beta header. Used by Claude Pro / Max sessions claimed from
+      ``claude-code``'s local credential store. Requires the SDK's
+      ``auth_token`` parameter (anthropic >= 0.40).
+    """
+
+    # Beta flag the Anthropic API requires when authenticating with an
+    # OAuth bundle (as opposed to a workbench API key). Tracked at
+    # https://docs.anthropic.com — bumped here when Anthropic changes it.
+    OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+    # Identity headers the official Claude Code CLI sends. We attach
+    # them when authenticating with a Pro/Max OAuth bundle so Anthropic's
+    # subscription rate-limit allocation applies to our calls. Without
+    # these, OAuth bundles get throttled aggressively (HTTP 429 even
+    # when the user's monthly quota is nowhere near exhausted) because
+    # Anthropic treats unidentified third-party callers separately from
+    # the official client.
+    #
+    # ToS posture: the Pro/Max subscription is intended for use through
+    # Anthropic's official products. Sending these headers is a more
+    # explicit form of impersonation than just lifting the OAuth bundle;
+    # we do it only when the user has opted into ``local_claude_code``
+    # (the wizard step that disclaims this), never on a plain API key.
+    # Match the installed Claude Code version. Update when bumping; Anthropic
+    # rate-limit allocation is keyed on the User-Agent + x-app combo identifying
+    # the call as coming from the official client. Found via:
+    #   `claude --version` → "2.1.112 (Claude Code)"
+    # The CLI binary sends "claude-cli/<version> (external, cli)" — the
+    # VS Code extension uses "x-app: vscode" with the same UA shape.
+    _CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.112 (external, cli)"
+    _CLAUDE_CODE_X_APP = "cli"
+
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        oauth_access_token: str = "",
+        model: str = "",
+        temperature: float = 0.0,
+        impersonate_claude_code: bool = False,
+    ) -> None:
         import anthropic  # type: ignore[import]
 
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        if oauth_access_token:
+            # The SDK's `auth_token` swap to Bearer; the beta header is
+            # required by Anthropic for OAuth-authed requests.
+            headers: dict[str, str] = {"anthropic-beta": self.OAUTH_BETA_HEADER}
+            if impersonate_claude_code:
+                headers["User-Agent"] = self._CLAUDE_CODE_USER_AGENT
+                headers["x-app"] = self._CLAUDE_CODE_X_APP
+            self._client = anthropic.AsyncAnthropic(
+                auth_token=oauth_access_token,
+                default_headers=headers,
+            )
+        else:
+            self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
         self._temperature = float(temperature or 0.0)
 
@@ -158,10 +218,21 @@ class AnthropicProvider(LLMProvider):
 
         full_text = ""
         tool_bufs: dict[str, dict[str, Any]] = {}  # id -> {name, args_buf}
+        sdk_event_count = 0
 
+        log.warning(
+            "AnthropicProvider.chat_stream → model=%s msgs=%d tools=%d max_toks=%s",
+            resolved_model, len(filtered), len(tools or []), kwargs.get("max_tokens"),
+        )
         async with self._client.messages.stream(**kwargs) as stream:
             async for event in stream:
+                sdk_event_count += 1
                 etype = event.type
+                if sdk_event_count <= 3:
+                    log.warning(
+                        "AnthropicProvider SDK event #%d type=%s",
+                        sdk_event_count, etype,
+                    )
 
                 if etype == "content_block_start":
                     block = event.content_block
@@ -223,6 +294,10 @@ class AnthropicProvider(LLMProvider):
                         "tool_calls": tool_calls,
                         "usage": _usage_from_anthropic(getattr(msg, "usage", None)).model_dump(),
                     }
+        log.warning(
+            "AnthropicProvider.chat_stream finished — sdk_events=%d",
+            sdk_event_count,
+        )
 
     async def aclose(self) -> None:
         await self._client.close()

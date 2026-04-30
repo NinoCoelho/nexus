@@ -39,8 +39,9 @@ TUNNEL_PUBLIC_PATHS = frozenset({
 # below carry all the actual session state.
 TUNNEL_PROTECTED_PREFIXES = (
     "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
-    "/models", "/routing", "/graph", "/graphrag", "/insights", "/share",
-    "/local", "/notifications", "/push", "/transcribe", "/audio", "/health",
+    "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
+    "/insights", "/share", "/local", "/notifications", "/push",
+    "/transcribe", "/audio", "/health",
 )
 
 
@@ -587,6 +588,9 @@ def create_app(
     from .routes.vault_dispatch import router as vault_dispatch_router
     from .routes.vault_history import router as vault_history_router
     from .routes.config import router as config_router
+    from .routes.catalog import router as catalog_router
+    from .routes.local_creds import router as local_creds_router
+    from .routes.oauth import router as oauth_router
     from .routes.providers import router as providers_router
     from .routes.credentials import router as credentials_router
     from .routes.models import router as models_router
@@ -594,6 +598,7 @@ def create_app(
     from .routes.local_llm import router as local_llm_router
     from .routes.notifications import router as notifications_router
     from .routes.push import router as push_router
+    from .routes.skill_wizard import router as skill_wizard_router
     from .routes.tunnel import router as tunnel_router
 
     app.include_router(chat_router)
@@ -612,6 +617,9 @@ def create_app(
     app.include_router(vault_dispatch_router)
     app.include_router(vault_history_router)
     app.include_router(config_router)
+    app.include_router(catalog_router)
+    app.include_router(oauth_router)
+    app.include_router(local_creds_router)
     app.include_router(providers_router)
     app.include_router(credentials_router)
     app.include_router(models_router)
@@ -619,6 +627,7 @@ def create_app(
     app.include_router(local_llm_router)
     app.include_router(notifications_router)
     app.include_router(push_router)
+    app.include_router(skill_wizard_router)
     app.include_router(tunnel_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────

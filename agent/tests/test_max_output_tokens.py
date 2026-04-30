@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
+from nexus.agent.llm.auth import StaticBearerAuth
 from nexus.agent.llm.openai import OpenAIProvider
 from nexus.agent.llm.types import ChatMessage, Role
 
@@ -40,7 +41,7 @@ def _capture_handler(captured: list[dict[str, Any]]):
 
 
 async def _provider_with_transport(transport: httpx.MockTransport) -> OpenAIProvider:
-    p = OpenAIProvider(base_url="http://fake/v1", api_key="k", model="m")
+    p = OpenAIProvider(base_url="http://fake/v1", auth=StaticBearerAuth("k"), model="m")
     p._client = httpx.AsyncClient(transport=transport)  # type: ignore[attr-defined]
     return p
 
@@ -58,6 +59,52 @@ async def test_openai_forwards_max_tokens_when_set() -> None:
     p = await _provider_with_transport(httpx.MockTransport(_capture_handler(captured)))
     await p.chat([ChatMessage(role=Role.USER, content="hi")], max_tokens=8000)
     assert captured[0].get("max_tokens") == 8000
+
+
+async def test_openai_strict_compat_strips_penalties_for_gemini() -> None:
+    """Gemini's OpenAI-compat endpoint is proto-validated and rejects
+    unknown fields (frequency_penalty, presence_penalty) with HTTP 400
+    INVALID_ARGUMENT. We detect the host and omit those fields.
+
+    Other compat providers silently ignore the fields, so leaving them
+    in for openai.com / groq.com / etc. is harmless and keeps the
+    nexus.agent anti-degeneration tuning live."""
+    captured: list[dict[str, Any]] = []
+    transport = httpx.MockTransport(_capture_handler(captured))
+    # Gemini's compat endpoint hostname triggers strict mode.
+    p = OpenAIProvider(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        auth=StaticBearerAuth("k"),
+        model="gemini-2.5-flash",
+        frequency_penalty=0.3,
+        presence_penalty=0.2,
+    )
+    p._client = httpx.AsyncClient(transport=transport)  # type: ignore[attr-defined]
+    await p.chat([ChatMessage(role=Role.USER, content="hi")])
+    sent = captured[0]
+    assert "frequency_penalty" not in sent
+    assert "presence_penalty" not in sent
+
+
+async def test_openai_non_strict_keeps_penalties_for_openai() -> None:
+    """For openai.com (and most compat providers) the fields are
+    forwarded as before — the strict-compat gate must NOT regress them."""
+    captured: list[dict[str, Any]] = []
+    transport = httpx.MockTransport(_capture_handler(captured))
+    p = OpenAIProvider(
+        base_url="https://api.openai.com/v1",
+        auth=StaticBearerAuth("k"),
+        model="gpt-4o-mini",
+        frequency_penalty=0.3,
+        presence_penalty=0.0,
+    )
+    p._client = httpx.AsyncClient(transport=transport)  # type: ignore[attr-defined]
+    await p.chat([ChatMessage(role=Role.USER, content="hi")])
+    sent = captured[0]
+    assert sent.get("frequency_penalty") == 0.3
+    # presence_penalty stays omitted because it was 0.0 (existing
+    # "only emit non-zero" behavior).
+    assert "presence_penalty" not in sent
 
 
 async def test_anthropic_falls_back_to_4096(monkeypatch: pytest.MonkeyPatch) -> None:

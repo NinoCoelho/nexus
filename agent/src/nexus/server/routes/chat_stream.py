@@ -257,8 +257,22 @@ async def chat_stream_route(
                     # the detail string — and stamp partial_status so the
                     # persisted assistant prefix matches the banner.
                     reason = event.get("reason")
-                    if reason in ("length", "empty_response", "upstream_timeout", "context_overflow"):
+                    # Keep partial_status in sync with classified reasons
+                    # so the persisted assistant prefix reflects the real
+                    # failure (was previously a tight allowlist that let
+                    # rate_limit / auth_error / transport / bad_request
+                    # fall through as "no status" — and the UI's done
+                    # handler then dropped the banner entirely).
+                    if reason and reason not in ("interrupted", "cancelled"):
                         partial_status = reason
+                    # Log the forwarded payload so daemon-side debugging
+                    # has the exact text the UI's banner is rendering.
+                    log.warning(
+                        "chat_stream forwarding error to UI: reason=%r status=%r detail=%r",
+                        reason,
+                        event.get("status_code"),
+                        (event.get("detail") or "")[:300],
+                    )
                     err_payload = {
                         "detail": event.get("detail", ""),
                         "reason": reason,
@@ -285,6 +299,15 @@ async def chat_stream_route(
                     partial_status = "upstream_timeout"
             except Exception:  # noqa: BLE001
                 pass
+            # Surface the upstream failure in the daemon log so the user
+            # can see WHICH provider call failed. Without this, a 401/404
+            # from OpenAI just disappears — the SSE error event reaches
+            # the UI but the daemon log is silent, making remote debug
+            # extremely painful.
+            log.warning(
+                "chat_stream LLM call failed: %s (status=%s)",
+                exc, getattr(exc, "status_code", None),
+            )
             # Classify so the client gets a readable summary on top of
             # the raw detail (e.g. "Provider rate limit — retrying with
             # backoff." vs. the raw "HTTP 429: ..." body).
@@ -308,6 +331,17 @@ async def chat_stream_route(
                 "status_code": status_code,
             }
             yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+            # Critical: emit a terminator `done` so the UI marks the turn
+            # as finished. Without this the SSE stream just closes, the
+            # client treats it as "interrupted", and its recovery path
+            # reloads session history from the DB — wiping the partial
+            # banner we just rendered. The cancelled / catch-all branches
+            # below already do this; this branch was missing it.
+            yield (
+                f"event: done\ndata: "
+                f"{json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}"
+                f"\n\n"
+            )
         except asyncio.CancelledError:
             partial_status = "cancelled" if session.id in _user_cancelled else "interrupted"
             _user_cancelled.discard(session.id)

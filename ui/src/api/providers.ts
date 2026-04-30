@@ -42,6 +42,22 @@ export async function clearProviderKey(name: string): Promise<void> {
   if (!res.ok) throw new Error(`Clear key error: ${res.status}`);
 }
 
+/** Remove a provider + its model entries. Stored credentials are kept. */
+export async function deleteProvider(name: string): Promise<void> {
+  const res = await fetch(`${BASE}/providers/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.json())?.detail ?? "";
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || `Delete provider error: ${res.status}`);
+  }
+}
+
 /**
  * Point a provider at a named credential in the store, or clear the link.
  * Pass ``null`` to fall back to legacy inline / env-var paths.

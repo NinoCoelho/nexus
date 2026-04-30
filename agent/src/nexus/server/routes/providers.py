@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +13,39 @@ from ..deps import get_agent, get_app_state, get_locale
 from .config import _rebuild_registry
 
 router = APIRouter()
+
+# Provider names: lowercase + digits + hyphen/underscore. Hyphens for
+# catalog ids ("google-gemini"), underscores for legacy/custom names.
+_PROVIDER_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+# Credential names: UPPER_SNAKE_CASE, same constraint as the existing
+# /credentials route.
+_CREDENTIAL_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+# Auth methods that PR 2 supports. ``oauth_*`` arrives in PR 4, ``iam_*``
+# in PR 5; until then the wizard endpoint refuses them with 422 so the UI
+# can show a clear "not yet supported" message.
+_SUPPORTED_AUTH_METHODS_PR2 = {"api", "anonymous"}
+
+# OAuth-bundle methods: the upstream produces a refresh+access pair we
+# store via ``secrets.set_oauth`` and reference through ``oauth_token_ref``.
+# Includes Claude Code's local bundle since that file already carries
+# refresh tokens.
+_OAUTH_AUTH_METHODS = {
+    "oauth_device",
+    "oauth_redirect",
+    "local_claude_code",
+}
+
+# Local-credential adoption methods that yield a plain API key (not an
+# OAuth bundle). Behaves like the ``api`` auth path for storage purposes
+# but the wizard step is different (no prompt, just claim from disk).
+_LOCAL_API_AUTH_METHODS = {"local_codex"}
+
+# IAM auth (cloud-provider native auth — AWS profiles, GCP service
+# accounts, Azure resources). The wizard collects iam_profile + iam_region
+# (+ iam_extra) and the runtime resolves credentials via the cloud SDK's
+# default chain. Bedrock ships in PR 5; Vertex + Azure are stubs.
+_IAM_AUTH_METHODS = {"iam_aws", "iam_gcp", "iam_azure"}
 
 
 @router.get("/providers")
@@ -227,3 +261,394 @@ async def set_provider_credential(
         p.api_key_env = ""
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
+
+
+@router.delete("/providers/{name}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider(
+    name: str,
+    app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
+    locale: str = Depends(get_locale),
+) -> None:
+    """Remove a provider + its model entries from the config.
+
+    Stored credentials are NOT deleted — they may be reused by another
+    provider or skill, and a name like ``OPENAI_API_KEY`` outlives any
+    one provider row. Use ``DELETE /credentials/{name}`` to drop the
+    credential itself.
+    """
+    from ...config_file import load as load_cfg, save as save_cfg
+
+    cfg = app_state["cfg"] or load_cfg()
+    if name not in cfg.providers:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("errors.providers.not_found", locale, name=name),
+        )
+    del cfg.providers[name]
+    cfg.models = [m for m in cfg.models if m.provider != name]
+    if cfg.agent.default_model and not any(m.id == cfg.agent.default_model for m in cfg.models):
+        cfg.agent.default_model = ""
+    save_cfg(cfg)
+    _rebuild_registry(cfg, app_state, a)
+
+
+# ── wizard: atomic create-or-update + connection test ───────────────────────
+
+
+def _snapshot_secrets(names: list[str]) -> dict[str, tuple[str, dict[str, Any]] | None]:
+    """Capture current value + meta for each name so a wizard rollback
+    can restore exactly what was there. ``None`` = name was unset.
+    """
+    from ... import secrets as _secrets
+
+    snap: dict[str, tuple[str, dict[str, Any]] | None] = {}
+    raw = _secrets._load_raw()
+    for n in names:
+        cur = raw["keys"].get(n)
+        meta = raw["meta"].get(n)
+        if cur is None:
+            snap[n] = None
+        else:
+            snap[n] = (cur, dict(meta) if meta else {})
+    return snap
+
+
+def _restore_secrets(snap: dict[str, tuple[str, dict[str, Any]] | None]) -> None:
+    from ... import secrets as _secrets
+
+    for name, prev in snap.items():
+        if prev is None:
+            _secrets.delete(name)
+        else:
+            value, meta = prev
+            kind = (meta.get("kind") if meta else None) or "generic"
+            skill = meta.get("skill") if meta else None
+            _secrets.set(name, value, kind=kind, skill=skill)
+
+
+def _wizard_apply_provider_changes(
+    *,
+    cfg: Any,
+    name: str,
+    catalog_id: str | None,
+    auth_method_id: str,
+    runtime_kind: str,
+    auth_kind: str,
+    base_url: str,
+    credential_ref: str | None,
+    oauth_token_ref: str | None,
+    iam_profile: str,
+    iam_region: str,
+    iam_extra: dict[str, str],
+    type_for_legacy: str,
+) -> None:
+    """Mutate ``cfg.providers[name]`` in place — create when absent, edit
+    when present. Mirrors the field set the wizard sends."""
+    from ...config_file import ProviderConfig
+
+    existing = cfg.providers.get(name)
+    if existing is None:
+        cfg.providers[name] = ProviderConfig(
+            base_url=base_url,
+            type=type_for_legacy,
+            runtime_kind=runtime_kind,
+            auth_kind=auth_kind,
+            credential_ref=credential_ref,
+            oauth_token_ref=oauth_token_ref,
+            catalog_id=catalog_id,
+            iam_profile=iam_profile,
+            iam_region=iam_region,
+            iam_extra=dict(iam_extra),
+            api_key_env="",
+            use_inline_key=False,
+        )
+        return
+    existing.base_url = base_url
+    existing.type = type_for_legacy
+    existing.runtime_kind = runtime_kind
+    existing.auth_kind = auth_kind
+    existing.credential_ref = credential_ref
+    existing.oauth_token_ref = oauth_token_ref
+    existing.catalog_id = catalog_id
+    existing.iam_profile = iam_profile
+    existing.iam_region = iam_region
+    existing.iam_extra = dict(iam_extra)
+    # When the wizard binds any credential (api or oauth), drop the legacy
+    # paths so a later cleanup doesn't silently fall back to a stale env
+    # var or inline key.
+    if credential_ref or oauth_token_ref:
+        existing.api_key_env = ""
+        existing.use_inline_key = False
+
+
+def _wizard_apply_models(cfg: Any, provider_name: str, models: list[str]) -> None:
+    """Replace the model list for ``provider_name`` with ``models``.
+
+    Existing entries whose ``provider != provider_name`` are kept. We
+    intentionally do a full replace rather than merge so the wizard's
+    chip selections are authoritative.
+    """
+    from ...config_file import ModelEntry
+
+    cfg.models = [m for m in cfg.models if m.provider != provider_name]
+    seen: set[str] = set()
+    for model_name in models:
+        model_name = (model_name or "").strip()
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        model_id = f"{provider_name}/{model_name}"
+        cfg.models.append(
+            ModelEntry(id=model_id, provider=provider_name, model_name=model_name)
+        )
+    # If the agent has no default yet and we just added a model, adopt it
+    # so the chat view becomes immediately usable. Mirrors POST /models.
+    if not cfg.agent.default_model and cfg.models:
+        cfg.agent.default_model = cfg.models[0].id
+
+
+@router.post("/providers/wizard")
+async def wizard_apply(
+    body: dict[str, Any],
+    app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
+    locale: str = Depends(get_locale),
+) -> dict[str, Any]:
+    """Atomic create-or-update of a provider + its credentials + its models.
+
+    Body shape (PR 2 — api / anonymous only)::
+
+        {
+          "name": "openai",                  # provider name (key in cfg.providers)
+          "catalog_id": "openai" | null,     # optional pointer back to catalog entry
+          "auth_method_id": "api",           # "api" | "anonymous" (PR 2)
+          "runtime_kind": "openai_compat",   # "openai_compat" | "anthropic" | "ollama"
+          "base_url": "https://...",
+          "credential_ref": "OPENAI_API_KEY" | null,
+          "credentials": { "OPENAI_API_KEY": "sk-..." },  # values to write
+          "iam_profile": "", "iam_region": "", "iam_extra": {},
+          "models": ["gpt-4o", "gpt-4o-mini"]
+        }
+
+    Atomicity: secrets are written first, then the config + registry are
+    updated. If the config save raises, the secrets snapshot is restored
+    so the user is never left with orphan credentials.
+    """
+    from ...config_file import load as load_cfg, save as save_cfg
+    from ... import secrets as _secrets
+
+    name = (body.get("name") or "").strip()
+    if not _PROVIDER_NAME_RE.match(name):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid provider name {name!r}",
+        )
+
+    auth_method_id = body.get("auth_method_id") or ""
+    if (
+        auth_method_id not in _SUPPORTED_AUTH_METHODS_PR2
+        and auth_method_id not in _OAUTH_AUTH_METHODS
+        and auth_method_id not in _LOCAL_API_AUTH_METHODS
+        and auth_method_id not in _IAM_AUTH_METHODS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"auth method {auth_method_id!r} not yet supported",
+        )
+
+    # PR 5: only iam_aws is implemented at runtime so far.
+    if auth_method_id in _IAM_AUTH_METHODS and auth_method_id != "iam_aws":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"IAM method {auth_method_id!r} ships in a later release "
+            "(only iam_aws is wired so far)",
+        )
+
+    runtime_kind = (body.get("runtime_kind") or "openai_compat").strip()
+    if runtime_kind not in {"openai_compat", "anthropic", "ollama"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unsupported runtime_kind {runtime_kind!r}",
+        )
+    base_url = (body.get("base_url") or "").strip()
+    catalog_id = body.get("catalog_id") or None
+
+    credentials_in = body.get("credentials") or {}
+    if not isinstance(credentials_in, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="credentials must be an object",
+        )
+    for cred_name, cred_value in credentials_in.items():
+        if not isinstance(cred_name, str) or not _CREDENTIAL_NAME_RE.match(cred_name):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"invalid credential name {cred_name!r} (must be UPPER_SNAKE_CASE)",
+            )
+        if not isinstance(cred_value, str) or not cred_value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"credential {cred_name!r} requires a non-empty string value",
+            )
+
+    credential_ref_in = body.get("credential_ref")
+    if credential_ref_in is not None:
+        if not isinstance(credential_ref_in, str) or not credential_ref_in:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="credential_ref must be a non-empty string or null",
+            )
+
+    if auth_method_id == "api" or auth_method_id in _LOCAL_API_AUTH_METHODS:
+        # API auth requires a credential to bind. Either it's pre-existing
+        # in the secret store (the local_* path always lands here, since
+        # the claim endpoint wrote the key before the wizard submitted)
+        # or it's being written this turn.
+        if not credential_ref_in:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="api auth requires credential_ref",
+            )
+        if credential_ref_in not in credentials_in and not _secrets.exists(credential_ref_in):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"credential_ref {credential_ref_in!r} is not provided in credentials and not already stored",
+            )
+        if not base_url and runtime_kind == "openai_compat":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="base_url is required for openai_compat providers",
+            )
+
+    if auth_method_id == "anonymous":
+        if credential_ref_in:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="anonymous auth must not specify credential_ref",
+            )
+        if not base_url and runtime_kind != "ollama":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="base_url is required for anonymous providers",
+            )
+
+    if auth_method_id in _OAUTH_AUTH_METHODS:
+        # Wizard ran the flow via /auth/oauth/* and is submitting with the
+        # credential name returned by the poll. The bundle is already in
+        # secrets.toml; we just bind the provider to it.
+        if not credential_ref_in:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="OAuth auth requires credential_ref (returned by /auth/oauth/poll)",
+            )
+        if not _secrets.get_oauth(credential_ref_in):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"OAuth bundle {credential_ref_in!r} not found in secrets store",
+            )
+
+    if auth_method_id == "anonymous":
+        auth_kind = "anonymous"
+    elif auth_method_id in _OAUTH_AUTH_METHODS:
+        auth_kind = "oauth"
+    elif auth_method_id in _IAM_AUTH_METHODS:
+        auth_kind = "iam"
+    else:
+        # ``api`` and ``_LOCAL_API_AUTH_METHODS`` (e.g. local_codex)
+        # both end with a plain API key bound via credential_ref.
+        auth_kind = "api"
+    iam_profile = (body.get("iam_profile") or "").strip()
+    iam_region = (body.get("iam_region") or "").strip()
+    iam_extra = body.get("iam_extra") or {}
+    if not isinstance(iam_extra, dict):
+        iam_extra = {}
+    models = body.get("models") or []
+    if not isinstance(models, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="models must be an array of strings",
+        )
+
+    # 1. Snapshot secrets we're about to overwrite, then write the new values.
+    snap = _snapshot_secrets(list(credentials_in.keys()))
+    try:
+        for cred_name, cred_value in credentials_in.items():
+            _secrets.set(cred_name, cred_value, kind="provider")
+
+        # 2. Apply config changes (load fresh to avoid stomping concurrent edits).
+        cfg = load_cfg()
+        _wizard_apply_provider_changes(
+            cfg=cfg,
+            name=name,
+            catalog_id=catalog_id,
+            auth_method_id=auth_method_id,
+            runtime_kind=runtime_kind,
+            auth_kind=auth_kind,
+            base_url=base_url,
+            credential_ref=credential_ref_in if auth_kind == "api" else None,
+            oauth_token_ref=credential_ref_in if auth_kind == "oauth" else None,
+            iam_profile=iam_profile,
+            iam_region=iam_region,
+            iam_extra=iam_extra,
+            type_for_legacy=runtime_kind,
+        )
+        _wizard_apply_models(cfg, name, [str(m) for m in models])
+
+        save_cfg(cfg)
+    except HTTPException:
+        # Validation failure surfaces unchanged; we already wrote secrets,
+        # so revert them.
+        _restore_secrets(snap)
+        raise
+    except Exception as exc:
+        _restore_secrets(snap)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"wizard apply failed: {exc!s}",
+        ) from exc
+
+    # 3. Rebuild registry so the new provider is usable on the next request.
+    _rebuild_registry(cfg, app_state, a)
+
+    p = cfg.providers[name]
+    return {
+        "name": name,
+        "catalog_id": p.catalog_id,
+        "runtime_kind": p.runtime_kind,
+        "auth_kind": p.auth_kind,
+        "base_url": p.base_url,
+        "credential_ref": p.credential_ref,
+        "oauth_token_ref": p.oauth_token_ref,
+        "models": [m.model_name for m in cfg.models if m.provider == name],
+    }
+
+
+@router.post("/providers/{name}/test")
+async def test_provider_connection(
+    name: str,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> dict[str, Any]:
+    """Live round-trip against the provider's model-list endpoint.
+
+    A green response from this endpoint means the configured credential
+    successfully authenticates. Returns ``{ok, error, latency_ms}``.
+
+    Reuses the discovery code in ``list_provider_models`` rather than
+    duplicating per-runtime probing — anything that lets us list models
+    is sufficient evidence the provider is reachable + authenticated.
+    """
+    import time
+
+    cfg = app_state.get("cfg")
+    if not cfg or name not in cfg.providers:
+        return {"ok": False, "error": f"provider {name!r} not found", "latency_ms": 0}
+
+    t0 = time.monotonic()
+    res = await list_provider_models(name, app_state=app_state)
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    return {
+        "ok": bool(res.get("ok")),
+        "error": res.get("error"),
+        "latency_ms": latency_ms,
+    }

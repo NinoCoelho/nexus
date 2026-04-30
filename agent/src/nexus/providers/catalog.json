@@ -1,0 +1,884 @@
+[
+  {
+    "id": "openai",
+    "display_name": "OpenAI",
+    "category": "frontier",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.openai.com/v1",
+    "env_var_names": ["OPENAI_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "local_codex",
+        "label": "Use Codex sign-in",
+        "priority": 30,
+        "prompts": []
+      },
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "OPENAI_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "placeholder": "sk-...",
+            "help": "Get a key at platform.openai.com/api-keys.",
+            "help_url": "https://platform.openai.com/api-keys",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      {"id": "gpt-4o", "capabilities": ["chat", "tools", "vision"]},
+      {"id": "gpt-4o-mini", "capabilities": ["chat", "tools", "vision"]},
+      {"id": "o1-mini", "capabilities": ["chat", "reasoning"]},
+      {"id": "o3-mini", "capabilities": ["chat", "tools", "reasoning"]},
+      {"id": "gpt-4-turbo", "capabilities": ["chat", "tools", "vision"]}
+    ],
+    "docs_url": "https://platform.openai.com/docs"
+  },
+  {
+    "id": "anthropic",
+    "display_name": "Anthropic",
+    "category": "frontier",
+    "runtime_kind": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "env_var_names": ["ANTHROPIC_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "local_claude_code",
+        "label": "Use Claude Code sign-in",
+        "priority": 30,
+        "prompts": []
+      },
+      {
+        "id": "oauth_device",
+        "label": "Sign in with Claude Pro / Max",
+        "priority": 50,
+        "oauth": {
+          "flavor": "device",
+          "client_id": "",
+          "auth_url": "https://claude.ai/oauth/authorize",
+          "token_url": "https://claude.ai/oauth/token",
+          "device_url": "https://claude.ai/oauth/device/code",
+          "scopes": ["org:create_api_key", "user:profile", "user:inference"],
+          "pkce": true
+        }
+      },
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "ANTHROPIC_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "placeholder": "sk-ant-...",
+            "help": "Get a key at console.anthropic.com/settings/keys.",
+            "help_url": "https://console.anthropic.com/settings/keys",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      {"id": "claude-opus-4-7", "capabilities": ["chat", "tools", "vision", "reasoning"]},
+      {"id": "claude-sonnet-4-6", "capabilities": ["chat", "tools", "vision"]},
+      {"id": "claude-haiku-4-5-20251001", "capabilities": ["chat", "tools", "vision"]}
+    ],
+    "docs_url": "https://docs.anthropic.com"
+  },
+  {
+    "id": "google-gemini",
+    "display_name": "Google Gemini",
+    "category": "frontier",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "env_var_names": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "GEMINI_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "placeholder": "AIza...",
+            "help": "Get a key at aistudio.google.com/apikey.",
+            "help_url": "https://aistudio.google.com/apikey",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      {"id": "gemini-2.5-pro", "capabilities": ["chat", "tools", "vision", "reasoning"]},
+      {"id": "gemini-2.5-flash", "capabilities": ["chat", "tools", "vision"]},
+      {"id": "gemini-2.5-flash-lite", "capabilities": ["chat", "tools"]}
+    ],
+    "docs_url": "https://ai.google.dev/gemini-api/docs"
+  },
+  {
+    "id": "xai",
+    "display_name": "xAI",
+    "category": "frontier",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.x.ai/v1",
+    "env_var_names": ["XAI_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "XAI_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "placeholder": "xai-...",
+            "help_url": "https://console.x.ai",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      {"id": "grok-4", "capabilities": ["chat", "tools", "vision", "reasoning"]},
+      {"id": "grok-3", "capabilities": ["chat", "tools"]},
+      {"id": "grok-3-mini", "capabilities": ["chat", "tools"]}
+    ],
+    "docs_url": "https://docs.x.ai"
+  },
+  {
+    "id": "mistral",
+    "display_name": "Mistral",
+    "category": "frontier",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.mistral.ai/v1",
+    "env_var_names": ["MISTRAL_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "MISTRAL_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://console.mistral.ai/api-keys"
+          }
+        ]
+      }
+    ],
+    "default_models": ["mistral-large-latest", "mistral-small-latest", "codestral-latest"],
+    "docs_url": "https://docs.mistral.ai"
+  },
+  {
+    "id": "groq",
+    "display_name": "Groq",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.groq.com/openai/v1",
+    "env_var_names": ["GROQ_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "GROQ_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://console.groq.com/keys"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
+      "qwen/qwen3-32b"
+    ],
+    "docs_url": "https://console.groq.com/docs"
+  },
+  {
+    "id": "openrouter",
+    "display_name": "OpenRouter",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://openrouter.ai/api/v1",
+    "env_var_names": ["OPENROUTER_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "OPENROUTER_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://openrouter.ai/keys"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "anthropic/claude-sonnet-4.5",
+      "openai/gpt-4o-mini",
+      "google/gemini-2.5-flash",
+      "meta-llama/llama-3.3-70b-instruct"
+    ],
+    "docs_url": "https://openrouter.ai/docs"
+  },
+  {
+    "id": "deepinfra",
+    "display_name": "DeepInfra",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.deepinfra.com/v1/openai",
+    "env_var_names": ["DEEPINFRA_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "DEEPINFRA_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://deepinfra.com/dash/api_keys"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "meta-llama/Meta-Llama-3.1-70B-Instruct",
+      "Qwen/Qwen2.5-Coder-32B-Instruct"
+    ],
+    "docs_url": "https://deepinfra.com/docs"
+  },
+  {
+    "id": "fireworks",
+    "display_name": "Fireworks AI",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "env_var_names": ["FIREWORKS_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "FIREWORKS_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://fireworks.ai/account/api-keys"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "accounts/fireworks/models/llama-v3p3-70b-instruct",
+      "accounts/fireworks/models/qwen2p5-coder-32b-instruct"
+    ],
+    "docs_url": "https://docs.fireworks.ai"
+  },
+  {
+    "id": "together",
+    "display_name": "Together AI",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.together.xyz/v1",
+    "env_var_names": ["TOGETHER_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "TOGETHER_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://api.together.ai/settings/api-keys"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "Qwen/Qwen2.5-Coder-32B-Instruct"
+    ],
+    "docs_url": "https://docs.together.ai"
+  },
+  {
+    "id": "perplexity",
+    "display_name": "Perplexity",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.perplexity.ai",
+    "env_var_names": ["PERPLEXITY_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "PERPLEXITY_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://www.perplexity.ai/settings/api"
+          }
+        ]
+      }
+    ],
+    "default_models": ["sonar", "sonar-pro", "sonar-reasoning"],
+    "docs_url": "https://docs.perplexity.ai"
+  },
+  {
+    "id": "deepseek",
+    "display_name": "DeepSeek",
+    "category": "open",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.deepseek.com",
+    "env_var_names": ["DEEPSEEK_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "DEEPSEEK_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://platform.deepseek.com/api_keys"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      {"id": "deepseek-chat", "capabilities": ["chat", "tools"]},
+      {"id": "deepseek-reasoner", "capabilities": ["chat", "reasoning"]}
+    ],
+    "docs_url": "https://api-docs.deepseek.com"
+  },
+  {
+    "id": "moonshot",
+    "display_name": "Moonshot (Kimi)",
+    "category": "open",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.moonshot.ai/v1",
+    "env_var_names": ["MOONSHOT_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "MOONSHOT_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://platform.moonshot.ai"
+          }
+        ]
+      }
+    ],
+    "default_models": ["kimi-k2-0711-preview", "moonshot-v1-128k"],
+    "docs_url": "https://platform.moonshot.ai/docs"
+  },
+  {
+    "id": "cerebras",
+    "display_name": "Cerebras",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.cerebras.ai/v1",
+    "env_var_names": ["CEREBRAS_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "CEREBRAS_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://cloud.cerebras.ai"
+          }
+        ]
+      }
+    ],
+    "default_models": ["llama3.3-70b", "llama3.1-8b", "qwen-3-32b"],
+    "docs_url": "https://inference-docs.cerebras.ai"
+  },
+  {
+    "id": "sambanova",
+    "display_name": "SambaNova",
+    "category": "aggregator",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.sambanova.ai/v1",
+    "env_var_names": ["SAMBANOVA_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "SAMBANOVA_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://cloud.sambanova.ai/apis"
+          }
+        ]
+      }
+    ],
+    "default_models": ["Meta-Llama-3.3-70B-Instruct", "Llama-3.1-Tulu-3-405B"],
+    "docs_url": "https://docs.sambanova.ai/cloud"
+  },
+  {
+    "id": "cohere",
+    "display_name": "Cohere",
+    "category": "open",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.cohere.com/compatibility/v1",
+    "env_var_names": ["COHERE_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "COHERE_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://dashboard.cohere.com/api-keys"
+          }
+        ]
+      }
+    ],
+    "default_models": ["command-a-03-2025", "command-r-plus-08-2024"],
+    "docs_url": "https://docs.cohere.com"
+  },
+  {
+    "id": "bedrock",
+    "display_name": "AWS Bedrock",
+    "category": "cloud",
+    "runtime_kind": "bedrock",
+    "base_url_template": "https://bedrock-runtime.{region}.amazonaws.com",
+    "env_var_names": ["AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK"],
+    "auth_methods": [
+      {
+        "id": "iam_aws",
+        "label": "AWS profile / IAM",
+        "priority": 100,
+        "requires_extra": "bedrock",
+        "prompts": [
+          {
+            "name": "iam_profile",
+            "label": "AWS profile",
+            "kind": "text",
+            "placeholder": "default",
+            "help": "Named profile from ~/.aws/credentials. Leave empty to use the default credential chain.",
+            "required": false
+          },
+          {
+            "name": "iam_region",
+            "label": "Region",
+            "kind": "select",
+            "choices": [
+              "us-east-1",
+              "us-east-2",
+              "us-west-2",
+              "eu-west-1",
+              "eu-central-1",
+              "ap-northeast-1",
+              "ap-south-1"
+            ],
+            "default": "us-east-1",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "anthropic.claude-opus-4-1-20250805-v1:0",
+      "anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "anthropic.claude-3-5-haiku-20241022-v1:0"
+    ],
+    "docs_url": "https://docs.aws.amazon.com/bedrock"
+  },
+  {
+    "id": "vertex-ai",
+    "display_name": "Google Vertex AI",
+    "category": "cloud",
+    "runtime_kind": "vertex",
+    "base_url_template": "https://{region}-aiplatform.googleapis.com",
+    "env_var_names": ["GOOGLE_APPLICATION_CREDENTIALS"],
+    "auth_methods": [
+      {
+        "id": "iam_gcp",
+        "label": "Service account",
+        "priority": 100,
+        "requires_extra": "vertex",
+        "prompts": [
+          {
+            "name": "iam_profile",
+            "label": "Service-account JSON path",
+            "kind": "text",
+            "placeholder": "/Users/me/keys/vertex-sa.json",
+            "help": "Absolute path to a downloaded service-account JSON file. Leave empty to use Application Default Credentials.",
+            "required": false
+          },
+          {
+            "name": "iam_extra.project",
+            "label": "GCP project ID",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "iam_region",
+            "label": "Region",
+            "kind": "text",
+            "default": "us-central1",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "claude-sonnet-4-5@20250929",
+      "claude-opus-4-1@20250805",
+      "gemini-2.5-pro"
+    ],
+    "docs_url": "https://cloud.google.com/vertex-ai/docs"
+  },
+  {
+    "id": "azure-openai",
+    "display_name": "Azure OpenAI",
+    "category": "cloud",
+    "runtime_kind": "azure_openai",
+    "base_url_template": "https://{resource}.openai.azure.com/openai/deployments/{deployment}",
+    "env_var_names": ["AZURE_OPENAI_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "iam_azure",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "AZURE_OPENAI_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true
+          },
+          {
+            "name": "iam_extra.resource",
+            "label": "Resource name",
+            "kind": "text",
+            "placeholder": "my-aoai",
+            "help": "The {resource} portion of https://{resource}.openai.azure.com.",
+            "required": true
+          },
+          {
+            "name": "iam_extra.deployment",
+            "label": "Deployment name",
+            "kind": "text",
+            "placeholder": "gpt-4o",
+            "required": true
+          },
+          {
+            "name": "iam_extra.api_version",
+            "label": "API version",
+            "kind": "text",
+            "default": "2024-10-21",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": ["gpt-4o", "gpt-4o-mini", "o1-mini"],
+    "docs_url": "https://learn.microsoft.com/azure/ai-services/openai"
+  },
+  {
+    "id": "ollama",
+    "display_name": "Ollama",
+    "category": "local",
+    "runtime_kind": "ollama",
+    "base_url": "http://localhost:11434",
+    "env_var_names": [],
+    "auth_methods": [
+      {
+        "id": "anonymous",
+        "label": "No auth (local)",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "default": "http://localhost:11434",
+            "help": "Where the Ollama server is reachable. Default works for a local install.",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [],
+    "docs_url": "https://ollama.com"
+  },
+  {
+    "id": "lmstudio",
+    "display_name": "LM Studio",
+    "category": "local",
+    "runtime_kind": "openai_compat",
+    "base_url": "http://localhost:1234/v1",
+    "env_var_names": [],
+    "auth_methods": [
+      {
+        "id": "anonymous",
+        "label": "No auth (local)",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "default": "http://localhost:1234/v1",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [],
+    "docs_url": "https://lmstudio.ai/docs"
+  },
+  {
+    "id": "vllm",
+    "display_name": "vLLM",
+    "category": "local",
+    "runtime_kind": "openai_compat",
+    "base_url": "http://localhost:8000/v1",
+    "env_var_names": ["VLLM_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "anonymous",
+        "label": "No auth",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "default": "http://localhost:8000/v1",
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 110,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "default": "http://localhost:8000/v1",
+            "required": true
+          },
+          {
+            "name": "VLLM_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [],
+    "docs_url": "https://docs.vllm.ai"
+  },
+  {
+    "id": "llamacpp",
+    "display_name": "llama.cpp server",
+    "category": "local",
+    "runtime_kind": "openai_compat",
+    "base_url": "http://localhost:8080/v1",
+    "env_var_names": [],
+    "auth_methods": [
+      {
+        "id": "anonymous",
+        "label": "No auth (local)",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "default": "http://localhost:8080/v1",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [],
+    "docs_url": "https://github.com/ggerganov/llama.cpp"
+  },
+  {
+    "id": "openai-compat-generic",
+    "display_name": "Other (OpenAI-compatible)",
+    "category": "other",
+    "runtime_kind": "openai_compat",
+    "base_url": "",
+    "env_var_names": [],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "placeholder": "https://api.example.com/v1",
+            "required": true
+          },
+          {
+            "name": "credential_name",
+            "label": "Credential name",
+            "kind": "text",
+            "placeholder": "EXAMPLE_API_KEY",
+            "help": "Name to store the key under in the credential vault. Use UPPER_SNAKE_CASE.",
+            "required": true
+          },
+          {
+            "name": "credential_value",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "anonymous",
+        "label": "No auth",
+        "priority": 110,
+        "prompts": [
+          {
+            "name": "base_url",
+            "label": "Base URL",
+            "kind": "text",
+            "placeholder": "http://localhost:8000/v1",
+            "required": true
+          }
+        ]
+      }
+    ],
+    "default_models": [],
+    "docs_url": ""
+  },
+  {
+    "id": "github-copilot",
+    "display_name": "GitHub Copilot",
+    "category": "cloud",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.githubcopilot.com",
+    "env_var_names": [],
+    "auth_methods": [
+      {
+        "id": "oauth_device",
+        "label": "Sign in with GitHub",
+        "priority": 100,
+        "oauth": {
+          "flavor": "device",
+          "client_id": "Iv1.b507a08c87ecfe98",
+          "auth_url": "https://github.com/login/oauth/authorize",
+          "token_url": "https://github.com/login/oauth/access_token",
+          "device_url": "https://github.com/login/device/code",
+          "scopes": ["read:user"],
+          "pkce": false
+        }
+      }
+    ],
+    "default_models": ["gpt-4o", "claude-3.5-sonnet", "o1-mini"],
+    "docs_url": "https://docs.github.com/en/copilot"
+  },
+  {
+    "id": "nvidia-nim",
+    "display_name": "NVIDIA NIM",
+    "category": "cloud",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "env_var_names": ["NVIDIA_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "NVIDIA_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help_url": "https://build.nvidia.com"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      "meta/llama-3.3-70b-instruct",
+      "nvidia/llama-3.1-nemotron-70b-instruct"
+    ],
+    "docs_url": "https://docs.nvidia.com/nim"
+  }
+]

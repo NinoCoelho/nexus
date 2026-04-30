@@ -17,6 +17,7 @@ import tomli_w
 # Re-export all schema symbols so existing imports from config_file keep working.
 from .config_schema import (  # noqa: F401
     Tier,
+    AuthKind,
     ModelEntry,
     ProviderConfig,
     AgentConfig,
@@ -41,19 +42,43 @@ log = logging.getLogger(__name__)
 CONFIG_PATH = Path.home() / ".nexus" / "config.toml"
 
 
+def _provider_to_dict(v: ProviderConfig) -> dict[str, Any]:
+    """Serialize a ProviderConfig, omitting wizard fields at their defaults.
+
+    Only emit ``catalog_id`` / ``runtime_kind`` / ``auth_kind`` / IAM /
+    OAuth fields when they carry non-default values, so existing configs
+    untouched by the wizard round-trip identically.
+    """
+    out: dict[str, Any] = {
+        "base_url": v.base_url,
+        "api_key_env": v.api_key_env,
+        "use_inline_key": v.use_inline_key,
+        "type": v.type,
+    }
+    if v.credential_ref:
+        out["credential_ref"] = v.credential_ref
+    if v.catalog_id:
+        out["catalog_id"] = v.catalog_id
+    if v.runtime_kind and v.runtime_kind != v.type:
+        out["runtime_kind"] = v.runtime_kind
+    if v.auth_kind != "api":
+        out["auth_kind"] = v.auth_kind
+    if v.oauth_token_ref:
+        out["oauth_token_ref"] = v.oauth_token_ref
+    if v.iam_profile:
+        out["iam_profile"] = v.iam_profile
+    if v.iam_region:
+        out["iam_region"] = v.iam_region
+    if v.iam_extra:
+        out["iam_extra"] = dict(v.iam_extra)
+    return out
+
+
 def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
     d: dict[str, Any] = {
         "agent": cfg.agent.model_dump(),
         "providers": {
-            k: {
-                "base_url": v.base_url,
-                "api_key_env": v.api_key_env,
-                "use_inline_key": v.use_inline_key,
-                # Only emit credential_ref when set so existing configs round-trip
-                # without sprouting an empty `credential_ref = ""` line.
-                **({"credential_ref": v.credential_ref} if v.credential_ref else {}),
-                "type": v.type,
-            }
+            k: _provider_to_dict(v)
             for k, v in cfg.providers.items()
         },
         "models": [],
@@ -185,6 +210,39 @@ def _migrate_legacy_embedder(graphrag_raw: dict[str, Any]) -> None:
         )
 
 
+def _migrate_provider_in_memory(name: str, p: ProviderConfig) -> None:
+    """Populate the wizard-era fields on a legacy ProviderConfig.
+
+    Runs every time a config is parsed; idempotent — only fills in
+    fields that are still at their default. No file write is triggered;
+    the migrated values are persisted on the next user-driven save.
+
+    Why: introducing ``runtime_kind`` / ``auth_kind`` / ``catalog_id`` on
+    ProviderConfig means existing configs (which don't carry those keys)
+    would otherwise show ``runtime_kind=""`` and ``auth_kind="api"`` — fine
+    for OpenAI/Anthropic, but wrong for ollama (anonymous) and gives the
+    wizard no way to recognize a row as an existing catalog provider.
+    """
+    if not p.runtime_kind:
+        p.runtime_kind = p.type or "openai_compat"
+    # Anonymous for Ollama; everything else defaults to api unless the
+    # user has stored an OAuth bundle (oauth_token_ref) themselves.
+    if p.auth_kind == "api" and p.runtime_kind == "ollama":
+        p.auth_kind = "anonymous"
+    if p.catalog_id is None:
+        # Only adopt a catalog_id when the provider name matches a
+        # known catalog entry — otherwise we'd label a custom provider
+        # named e.g. "openai-test" as the official "openai" catalog row.
+        try:
+            from .providers import find as _find_catalog_entry
+
+            if _find_catalog_entry(name) is not None:
+                p.catalog_id = name
+        except Exception:
+            # Catalog load failure must not break config parsing.
+            pass
+
+
 def _tier_from_legacy_strengths(s: dict[str, Any]) -> Tier:
     reasoning = int(s.get("reasoning", 5) or 5)
     if reasoning <= 4:
@@ -202,10 +260,12 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     agent = AgentConfig(**agent_raw)
     providers: dict[str, ProviderConfig] = {}
     for name, pdata in raw.get("providers", {}).items():
+        pdata = dict(pdata)
         if "type" not in pdata and name in ("anthropic", "ollama"):
-            pdata = dict(pdata)
             pdata["type"] = name
-        providers[name] = ProviderConfig(**pdata)
+        provider = ProviderConfig(**pdata)
+        _migrate_provider_in_memory(name, provider)
+        providers[name] = provider
     models: list[ModelEntry] = []
     for mdata in raw.get("models", []):
         mdata = dict(mdata)

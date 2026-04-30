@@ -1,0 +1,196 @@
+/* ProvidersList — uses Nexus design tokens (tokens.css) so the card
+   layout follows the active theme + brightness. */
+
+.providers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.providers-list-empty {
+  color: var(--fg-dim);
+  font-style: italic;
+  margin: 8px 0;
+}
+
+.providers-list-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  position: relative;
+  /* No `overflow: hidden` — the [+] popover anchors inside the card and
+   * needs to extend below the card's bottom edge. The header below
+   * applies its own border-radius so its background respects the card's
+   * rounded top corners. */
+}
+
+.providers-list-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-hover);
+  border-radius: 10px 10px 0 0;
+}
+
+.providers-list-card__name {
+  font-weight: 600;
+}
+
+.providers-list-card__status {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.providers-list-card__spacer {
+  flex: 1;
+}
+
+.providers-list-card__action {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.providers-list-card__action:hover {
+  background: var(--bg-inset);
+  border-color: var(--accent);
+}
+.providers-list-card__action--danger {
+  border-color: transparent;
+  padding: 4px 8px;
+  color: var(--bad);
+}
+.providers-list-card__action--danger:hover {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  border-color: transparent;
+}
+
+.providers-list-card__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 14px;
+  align-items: center;
+}
+
+.providers-list-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.providers-list-dot--ok { background: var(--ok); }
+.providers-list-dot--bad { background: var(--bad); }
+.providers-list-dot--anon { background: var(--warn); }
+
+.providers-list-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  font-size: 12px;
+}
+.providers-list-chip__x {
+  background: transparent;
+  border: 0;
+  color: var(--fg-dim);
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 50%;
+  font-size: 11px;
+}
+.providers-list-chip__x:hover {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+
+.providers-list-add-wrap {
+  position: relative;
+}
+
+.providers-list-add-chip {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--fg-dim);
+  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.providers-list-add-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.providers-list-popover {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 50;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  min-width: 280px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.providers-list-popover__title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.providers-list-popover__section {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 4px;
+}
+
+.providers-list-popover__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.providers-list-popover__discover {
+  align-self: flex-start;
+}
+
+.providers-list-popover__custom {
+  display: flex;
+  gap: 6px;
+}
+.providers-list-popover__custom .form-input {
+  flex: 1;
+}
+
+.providers-list-add-provider {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--fg);
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.providers-list-add-provider:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}

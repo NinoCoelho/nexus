@@ -131,14 +131,20 @@ export function applyDoneEvent(
       const preservedTimeline = lastMsg?.timeline?.map((s) =>
         s.type === "tool" && s.status === "pending" ? { ...s, status: "done" as const } : s,
       );
+      // Preserve any partial banner the preceding ``error`` SSE event
+      // installed. SSE order on a failed turn is: error → done; before
+      // this preservation, the done event wiped the partial and the
+      // user saw the banner flash for one frame.
+      const preservedPartial = lastMsg?.partial;
       const finalAsst: Message = {
         role: "assistant",
-        content: event.reply,
+        content: event.reply || lastMsg?.content || "",
         trace: event.trace?.length ? event.trace : undefined,
         timeline: preservedTimeline,
         timestamp: new Date(),
         streaming: false,
         model: routedModel,
+        ...(preservedPartial ? { partial: preservedPartial } : {}),
       };
       const msgs = fresh.messages.slice(0, -1).concat(finalAsst);
       next.set(event.session_id, { messages: msgs, thinking: false, input: "", historyLoaded: true, attachments: [], selectedModel: fresh.selectedModel });
@@ -158,7 +164,21 @@ export function applyDoneEvent(
         const preservedTimeline = lastMsg?.timeline?.map((s) =>
           s.type === "tool" && s.status === "pending" ? { ...s, status: "done" as const } : s,
         );
-        msgs[lastIdx] = { role: "assistant", content: event.reply, trace: event.trace?.length ? event.trace : undefined, timeline: preservedTimeline, timestamp: new Date(), streaming: false, model: routedModel };
+        // Preserve the partial banner installed by the preceding error
+        // SSE event. Also keep the streamed content when reply is empty
+        // (the error path emits done with reply="" so an empty reply
+        // means "no successful turn", not "user wanted empty assistant").
+        const preservedPartial = lastMsg?.partial;
+        msgs[lastIdx] = {
+          role: "assistant",
+          content: event.reply || lastMsg.content || "",
+          trace: event.trace?.length ? event.trace : undefined,
+          timeline: preservedTimeline,
+          timestamp: new Date(),
+          streaming: false,
+          model: routedModel,
+          ...(preservedPartial ? { partial: preservedPartial } : {}),
+        };
       }
       next.set(key, { ...cur, messages: msgs, thinking: false });
       return next;
@@ -210,9 +230,9 @@ export function applyErrorEvent(
     // Attach partial to the existing (possibly streaming) assistant
     // placeholder so its partial content + badges stay visible.
     if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, partial: { status: mapped, detail: prettifyStreamError(detail) } };
+      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, partial: { status: mapped, detail: prettifyStreamError(detail, reason) } };
     } else {
-      msgs.push({ role: "assistant", content: "", timestamp: new Date(), partial: { status: mapped, detail: prettifyStreamError(detail) } });
+      msgs.push({ role: "assistant", content: "", timestamp: new Date(), partial: { status: mapped, detail: prettifyStreamError(detail, reason) } });
     }
     next.set(key, { ...cur, messages: msgs, thinking: false });
     return next;

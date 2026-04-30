@@ -1,0 +1,383 @@
+/* Provider wizard styles. Uses Nexus design tokens (tokens.css) so the
+   modal adapts to every theme + brightness setting — critically,
+   --fg-on-accent is the only correct text color for buttons painted with
+   --accent (the accent is bright lime in dark mode, deep teal in light;
+   white text on lime fails contrast). */
+
+.provider-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 24px;
+}
+
+.provider-wizard-panel {
+  background: var(--bg-panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(720px, 96vw);
+  max-height: min(86vh, 800px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.provider-wizard-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.provider-wizard-title {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+}
+
+.provider-wizard-step-counter {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.provider-wizard-close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.provider-wizard-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.provider-wizard-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.provider-wizard-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.provider-wizard-primary-btn {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border: 0;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.provider-wizard-primary-btn:hover:not(:disabled) {
+  background: var(--accent-hi);
+}
+.provider-wizard-primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-wizard-secondary-btn {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.provider-wizard-secondary-btn:hover:not(:disabled) {
+  background: var(--bg-inset);
+  border-color: var(--accent);
+}
+.provider-wizard-secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.provider-wizard-loading,
+.provider-wizard-error,
+.provider-wizard-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-dim);
+}
+
+.provider-wizard-error {
+  color: var(--bad);
+}
+
+/* ── step 1: provider grid ───────────────────────────────────────────── */
+
+.provider-wizard-search {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.provider-wizard-group {
+  margin-bottom: 18px;
+}
+
+.provider-wizard-group__title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  margin: 0 0 8px 4px;
+}
+
+.provider-wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.provider-wizard-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+  color: inherit;
+}
+.provider-wizard-tile:hover {
+  border-color: var(--accent);
+  background: var(--bg-inset);
+}
+
+.provider-wizard-tile__name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.provider-wizard-tile__meta {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.provider-wizard-tile__configured {
+  color: var(--ok);
+}
+
+/* ── step 2: auth methods ────────────────────────────────────────────── */
+
+.provider-wizard-step__title {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.provider-wizard-step__subtitle {
+  margin: -8px 0 16px 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+
+.provider-wizard-auth-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-wizard-auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+  color: inherit;
+  position: relative;
+}
+.provider-wizard-auth-card:hover {
+  border-color: var(--accent);
+}
+.provider-wizard-auth-card--soon {
+  opacity: 0.65;
+}
+.provider-wizard-auth-card__title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.provider-wizard-auth-card__blurb {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.provider-wizard-auth-card__hint {
+  font-size: 11px;
+  color: var(--warn);
+  margin-top: 4px;
+}
+.provider-wizard-auth-card__badge {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--fg-dim);
+}
+
+/* ── step 3: credentials ─────────────────────────────────────────────── */
+
+.provider-wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.provider-wizard-field__label {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.provider-wizard-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+.provider-wizard-test-btn {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: inherit;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.provider-wizard-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.provider-wizard-test-status {
+  font-size: 12px;
+}
+.provider-wizard-test-status--ok {
+  color: var(--ok);
+}
+.provider-wizard-test-status--err {
+  color: var(--bad);
+}
+
+/* ── step 4: models ──────────────────────────────────────────────────── */
+
+.provider-wizard-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.provider-wizard-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.provider-wizard-filter-hint {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-left: auto;
+}
+
+.provider-wizard-oauth-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  margin: 12px 0;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.provider-wizard-oauth-link {
+  color: var(--accent);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.provider-wizard-oauth-code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.provider-wizard-oauth-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 22px;
+  letter-spacing: 0.18em;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: var(--fg);
+  user-select: all;
+}
+
+.provider-wizard-oauth-status {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin: 0;
+  font-style: italic;
+}
+
+.provider-wizard-chip {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.provider-wizard-chip:hover {
+  border-color: var(--accent);
+}
+.provider-wizard-chip--on {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+}
+
+.provider-wizard-models-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-wizard-custom-row {
+  display: flex;
+  gap: 8px;
+}
+.provider-wizard-custom-row .form-input {
+  flex: 1;
+}

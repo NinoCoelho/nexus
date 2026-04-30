@@ -11,7 +11,7 @@ from loom.permissions import AgentPermissions
 
 from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, PORT, SKILLS_DIR
 from .config_file import load as load_config, apply_env_overlay
-from .agent.llm import OpenAIProvider
+from .agent.llm import OpenAIProvider, StaticBearerAuth
 from .agent.loop import Agent
 from .agent.registry import build_registry
 from .redact import install_redaction
@@ -88,7 +88,11 @@ def build_app():
                 "falling back to env-var provider.",
                 cfg.agent.default_model,
             )
-            default_provider = OpenAIProvider(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, model=LLM_MODEL)
+            default_provider = OpenAIProvider(
+                base_url=LLM_BASE_URL,
+                auth=StaticBearerAuth(LLM_API_KEY),
+                model=LLM_MODEL,
+            )
             provider_registry = None
 
     home, permissions = _build_agent_home()

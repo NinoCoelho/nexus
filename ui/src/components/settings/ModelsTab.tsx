@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import type { Model, Provider, RoutingConfig } from "../../api";
 import LocalModels from "../LocalModels";
 import ModelsSection from "../ModelsSection";
-import ProvidersSection from "../ProvidersSection";
+import ProvidersList from "./ProvidersList";
 import SettingsSection from "./SettingsSection";
 
 interface Props {
@@ -31,7 +31,7 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
           ),
         }}
       >
-        <ProvidersSection providers={providers} onRefresh={onRefresh} />
+        <ProvidersList providers={providers} models={models} onRefresh={onRefresh} />
       </SettingsSection>
 
       <SettingsSection

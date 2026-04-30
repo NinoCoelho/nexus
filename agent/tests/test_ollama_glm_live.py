@@ -23,6 +23,7 @@ import httpx
 import pytest
 from loom.types import ToolSpec
 
+from nexus.agent.llm.auth import StaticBearerAuth
 from nexus.agent.llm.openai import OpenAIProvider
 from nexus.agent.llm.types import ChatMessage, Role
 
@@ -50,7 +51,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 async def provider() -> OpenAIProvider:
-    p = OpenAIProvider(base_url=f"{OLLAMA_URL}/v1", api_key="ollama", model=GLM_MODEL)
+    p = OpenAIProvider(base_url=f"{OLLAMA_URL}/v1", auth=StaticBearerAuth("ollama"), model=GLM_MODEL)
     try:
         yield p
     finally:

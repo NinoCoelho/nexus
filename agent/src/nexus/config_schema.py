@@ -35,6 +35,9 @@ class ModelEntry(BaseModel):
     is_embedding_capable: bool = False
 
 
+AuthKind = Literal["api", "oauth", "iam", "anonymous"]
+
+
 class ProviderConfig(BaseModel):
     base_url: str = ""
     api_key_env: str = ""
@@ -45,7 +48,24 @@ class ProviderConfig(BaseModel):
     # ``secrets.resolve(credential_ref)`` (env-first, store fallback). Older
     # configs without this field keep working unchanged.
     credential_ref: str | None = None
-    type: str = "openai_compat"  # "openai_compat" | "anthropic" | "ollama"
+    type: str = "openai_compat"  # legacy free-form; superseded by ``runtime_kind``
+
+    # Provider-wizard fields (PR 1 of the wizard refactor). These are
+    # populated by the wizard or by the lazy migration in
+    # ``config_file._parse``; older configs load with safe defaults so
+    # behavior is unchanged until the user re-saves.
+    catalog_id: str | None = None
+    # Picks the LLM client class. Falls back to ``type`` when empty.
+    runtime_kind: str = ""
+    auth_kind: AuthKind = "api"
+    # Points into ``secrets.toml`` at a JSON-encoded OAuth bundle written
+    # by ``secrets.set_oauth``. Only used when ``auth_kind == "oauth"``.
+    oauth_token_ref: str | None = None
+    # IAM-flavored config (auth_kind == "iam"). Reused across AWS / GCP /
+    # Azure with vendor-specific keys in ``iam_extra``.
+    iam_profile: str = ""
+    iam_region: str = ""
+    iam_extra: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentConfig(BaseModel):

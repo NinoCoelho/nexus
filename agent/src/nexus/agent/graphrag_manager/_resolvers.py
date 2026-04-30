@@ -139,6 +139,7 @@ def _bounded_extraction_provider(cfg: Any, model_id: str, upstream_name: str | N
     if p_type not in ("ollama", "openai_compat"):
         return None
 
+    from nexus.agent.llm.auth import StaticBearerAuth
     from nexus.agent.llm.openai import OpenAIProvider
 
     base = (getattr(p_cfg, "base_url", "") or "").rstrip("/")
@@ -162,7 +163,7 @@ def _bounded_extraction_provider(cfg: Any, model_id: str, upstream_name: str | N
 
     return OpenAIProvider(
         base_url=base,
-        api_key=api_key,
+        auth=StaticBearerAuth(api_key),
         model=upstream_name or "",
         read_timeout=_EXTRACTION_READ_TIMEOUT,
     )
