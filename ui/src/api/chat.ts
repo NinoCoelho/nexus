@@ -51,10 +51,15 @@ export async function chatStream(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   model?: string,
+  options?: { bypassSecretGuard?: boolean },
 ): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (options?.bypassSecretGuard) {
+    headers["X-Bypass-Secret-Guard"] = "1";
+  }
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message, session_id, model }),
     signal,
   });
@@ -211,7 +216,10 @@ export type SessionEvent =
   | { kind: "user_request"; data: UserRequestPayload }
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
-  | { kind: "calendar_alert"; data: CalendarAlertPayload };
+  | { kind: "calendar_alert"; data: CalendarAlertPayload }
+  // Terminal signal for ephemeral runs (e.g. dashboard operations) so the
+  // caller can flip its UI state without inspecting persisted history.
+  | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */
 export interface SessionSubscription {
@@ -246,6 +254,7 @@ export function subscribeSessionEvents(
     "user_request",
     "user_request_auto",
     "user_request_cancelled",
+    "op_done",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {

@@ -15,19 +15,25 @@ interface Props {
   fields: FieldSchema[];
   initialValues?: Record<string, unknown>;
   onSubmit: (values: Record<string, unknown>) => void;
+  /** Optional: fires after every field change with the latest values. */
+  onChange?: (values: Record<string, unknown>) => void;
   onCancel?: () => void;
   submitLabel?: string;
   /** Vault path of the host file. Required for kind="ref" target_table resolution. */
   hostPath?: string;
+  /** Hide the form-actions row (Cancel / Submit). The parent owns those. */
+  hideActions?: boolean;
 }
 
 export default function FormRenderer({
   fields,
   initialValues = {},
   onSubmit,
+  onChange,
   onCancel,
   submitLabel = "Submit",
   hostPath = "",
+  hideActions = false,
 }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const init: Record<string, unknown> = {};
@@ -49,7 +55,14 @@ export default function FormRenderer({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   function set(name: string, value: unknown) {
-    setValues((v) => ({ ...v, [name]: value }));
+    setValues((v) => {
+      const next = { ...v, [name]: value };
+      // Fire onChange synchronously with the freshest snapshot so callers
+      // that need live values (e.g. AddOperationModal's prefill capture)
+      // don't drift one keystroke behind.
+      onChange?.(next);
+      return next;
+    });
     setErrors((e) => {
       const next = { ...e };
       delete next[name];
@@ -89,21 +102,35 @@ export default function FormRenderer({
             {f.label ?? f.name}
             {f.required && <span className="form-required"> *</span>}
           </label>
-          {f.help && <p className="form-help">{f.help}</p>}
+          {(f.help || f.help_url) && (
+            <p className="form-help">
+              {f.help}
+              {f.help_url && (
+                <>
+                  {f.help ? " " : ""}
+                  <a href={f.help_url} target="_blank" rel="noreferrer">
+                    Get it here →
+                  </a>
+                </>
+              )}
+            </p>
+          )}
           <FieldInput field={f} value={values[f.name]} onChange={(v) => set(f.name, v)} hostPath={hostPath} />
           {errors[f.name] && <p className="form-error">{errors[f.name]}</p>}
         </div>
       ))}
-      <div className="form-actions">
-        {onCancel && (
-          <button type="button" className="approval-btn" onClick={onCancel}>
-            Cancel
+      {!hideActions && (
+        <div className="form-actions">
+          {onCancel && (
+            <button type="button" className="approval-btn" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+          <button type="submit" className="approval-btn approval-btn-allow">
+            {submitLabel}
           </button>
-        )}
-        <button type="submit" className="approval-btn approval-btn-allow">
-          {submitLabel}
-        </button>
-      </div>
+        </div>
+      )}
     </form>
   );
 }
@@ -164,6 +191,22 @@ function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
 
   if (kind === "ref") {
     return <RefFieldInput field={field} value={value} onChange={onChange} hostPath={hostPath} />;
+  }
+
+  // Masked secret field — short-circuits before kind-specific branches so a
+  // `secret: true` text field always renders as type=password.
+  if (field.secret) {
+    return (
+      <input
+        type="password"
+        className="form-input"
+        value={String(value ?? "")}
+        placeholder={field.placeholder ?? ""}
+        autoComplete="new-password"
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
   }
 
   if (kind === "boolean") {

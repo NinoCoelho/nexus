@@ -41,8 +41,10 @@ async def run_background_agent_turn(
 
     ``entity_kind`` selects which vault module owns the linked entity. Defaults
     to ``"card"`` (kanban) for back-compat; pass ``"event"`` to dispatch a
-    calendar event. ``card_path``/``card_id`` are the entity's vault path and
-    id regardless of kind.
+    calendar event, or ``"none"`` for ephemeral runs (e.g. dashboard
+    operations) that have no on-disk entity to status-stamp.
+    ``card_path``/``card_id`` are the entity's vault path and id regardless of
+    kind (ignored when ``entity_kind="none"``).
 
     For kanban cards: when the agent moves the card during this turn into a
     *different* lane that has a prompt configured, a follow-up turn is run on
@@ -132,7 +134,12 @@ async def run_background_agent_turn(
                 except Exception:
                     log.exception("background dispatch: partial persist failed")
         try:
-            if entity_kind == "event":
+            if entity_kind == "none":
+                # Ephemeral run (e.g. a dashboard operation) — there's no
+                # vault entity to flip status on. The session itself carries
+                # the run state via its persisted history.
+                pass
+            elif entity_kind == "event":
                 from ... import vault_calendar
                 cal = vault_calendar.read_calendar(card_path)
                 found = vault_calendar.find_event(cal, card_id)

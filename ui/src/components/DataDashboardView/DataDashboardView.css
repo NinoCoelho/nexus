@@ -154,6 +154,85 @@
 .data-dash-chip:hover .data-dash-chip-remove { opacity: 1; }
 .data-dash-chip-remove:hover { color: var(--danger, #d33); }
 
+/* ── Inline run-status indicator ───────────────────────────────────────
+   Surfaces last-run state for chat-kind operations: spinner during the
+   ephemeral hidden session, a brief check on success (auto-fades after
+   ~4s), a persistent warning on failure that stays until the user clicks
+   it open in CardActivityModal. */
+.data-dash-chip-status {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  line-height: 1;
+}
+.data-dash-chip-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.data-dash-chip-status--running .kanban-card-spin {
+  width: 11px;
+  height: 11px;
+}
+.data-dash-chip-status--done .data-dash-chip-status-icon {
+  color: var(--good, #2a9d4a);
+  background: color-mix(in srgb, var(--good, #2a9d4a) 16%, transparent);
+}
+.data-dash-chip-status--failed .data-dash-chip-status-icon {
+  color: var(--bad, #d84f4f);
+  background: color-mix(in srgb, var(--bad, #d84f4f) 18%, transparent);
+}
+.data-dash-chip-status--failed {
+  /* Slow pulse to draw the eye to a failed chip without being obnoxious. */
+  animation: data-dash-chip-pulse 1.6s ease-in-out infinite;
+}
+@keyframes data-dash-chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.data-dash-chip-btn:disabled {
+  cursor: progress;
+  opacity: 0.85;
+}
+
+/* ── AddOperationModal: prefill capture ────────────────────────────────── */
+.dt-prefill-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dt-prefill-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dt-prefill-hint {
+  font-size: 12px;
+  color: var(--fg-faint);
+  margin: 0;
+  line-height: 1.4;
+}
+.dt-prefill-form {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-soft);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
 .data-dash-chip--add {
   background: transparent;
   border: 1px dashed var(--fg-faint);

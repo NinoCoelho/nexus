@@ -194,6 +194,43 @@ class SessionStore(PubSubMixin, QueryMixin):
             for r in rows
         ]
 
+    def list_hidden_by_context_prefix(
+        self, prefix: str, *, limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return hidden sessions whose ``context`` starts with ``prefix``.
+
+        Used by the dashboard run-history feature: ephemeral action runs are
+        tagged with ``context = "Dashboard op: <folder>#<op_id>"`` and stay
+        hidden so the sidebar doesn't surface them. Querying by context lets
+        the dashboard rehydrate per-op last-run state on mount without a
+        separate index.
+
+        Returns dicts with ``id``, ``title``, ``context``, ``created_at``,
+        ``updated_at`` (timestamps as ISO strings, matching the underlying
+        SQLite columns). Ordered newest-first.
+        """
+        rows = self._loom._db.execute(
+            """
+            SELECT s.id, s.title, s.context, s.created_at, s.updated_at
+            FROM sessions s
+            WHERE COALESCE(s.hidden, 0) = 1
+              AND s.context LIKE ? || '%'
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            """,
+            (prefix, limit),
+        ).fetchall()
+        return [
+            {
+                "id": r[0],
+                "title": r[1],
+                "context": r[2],
+                "created_at": r[3],
+                "updated_at": r[4],
+            }
+            for r in rows
+        ]
+
     def persist_partial_turn(
         self,
         session_id: str,

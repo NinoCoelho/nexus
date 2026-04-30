@@ -64,6 +64,67 @@ export async function addOperation(
   return res.json();
 }
 
+export interface RunOperationResult {
+  session_id: string;
+  folder: string;
+  op_id: string;
+  status: "running";
+}
+
+export interface OperationRun {
+  op_id: string;
+  session_id: string;
+  status: "done" | "failed";
+  error: string | null;
+  at: string | null;
+}
+
+export interface RunHistory {
+  folder: string;
+  runs: OperationRun[];
+}
+
+/**
+ * Fetch the most recent persisted run per dashboard operation.
+ *
+ * Used on dashboard mount to rehydrate per-chip last-run state — failures
+ * stay visible (warning chip) until the user clicks the popup to acknowledge,
+ * at which point the UI deletes the session. Successful runs returned here
+ * are stale (the run completed but the UI never shipped the success tick) —
+ * the UI deletes them straight away as part of its mount cleanup.
+ */
+export async function fetchRunHistory(folder: string): Promise<RunHistory> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/run-history?folder=${encodeURIComponent(folder)}`,
+  );
+  if (!res.ok) throw new Error(`Run-history error: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Kick a chat-kind dashboard operation as an ephemeral hidden session.
+ *
+ * The session is created server-side, marked hidden (so it stays out of
+ * the sidebar), and the agent loop runs in the background. The UI tracks
+ * progress via `subscribeSessionEvents(session_id)` and opens the result
+ * in `CardActivityModal` on demand.
+ */
+export async function runOperation(
+  folder: string,
+  opId: string,
+): Promise<RunOperationResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/run-operation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, op_id: opId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Run operation error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteOperation(folder: string, opId: string): Promise<Dashboard> {
   const res = await fetch(
     `${BASE}/vault/dashboard/operations/${encodeURIComponent(opId)}?folder=${encodeURIComponent(folder)}`,

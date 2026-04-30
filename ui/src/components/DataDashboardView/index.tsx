@@ -4,13 +4,16 @@
  * Renders database title, action chips (operations), an "ER diagram" button,
  * a table-card grid, and a "Delete database" affordance. Clicking a table
  * card opens it in DataTableView (via onOpenTable). Clicking a `chat`
- * operation chip fires the operation's prompt — for now via the parent's
- * `onRunOperation` callback, which Phase 3 wires to the floating bubble.
+ * operation chip kicks an ephemeral *hidden* agent session (server marks
+ * the session hidden, so it never lands in the sidebar). The chip itself
+ * shows live status — spinner while running, brief check on success, a
+ * persistent warning on failure. Clicking the status icon opens the run's
+ * transcript in `CardActivityModal` for inspection.
  *
  * Note: drill-down "Open in chat" buttons (e.g. on the related-rows panel
- * inside a table view) intentionally bypass this dashboard's bubble session
- * and land in the main ChatView. Bubble = scoped advisor for *this database*;
- * row-level dispatches branch into the full chat surface.
+ * inside a table view) intentionally bypass this flow and land in the
+ * main ChatView. The bubble is the database's free-form advisor and is
+ * still available for the user — actions just no longer feed into it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -19,9 +22,12 @@ import {
   addOperation,
   deleteOperation,
   deleteDatabase,
+  runOperation,
+  fetchRunHistory,
   type Dashboard,
   type DashboardOperation,
 } from "../../api/dashboard";
+import { deleteSession } from "../../api/sessions";
 import {
   listDatabaseTables,
   getVaultDataTable,
@@ -29,13 +35,15 @@ import {
   type DatabaseTableSummary,
   type DataTable,
 } from "../../api/datatable";
+import { subscribeSessionEvents } from "../../api/chat";
 import { useToast } from "../../toast/ToastProvider";
 import Modal from "../Modal";
 import FormRenderer from "../FormRenderer";
 import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
-import OperationChips from "./OperationChips";
+import OperationChips, { type OpRunState } from "./OperationChips";
 import AddOperationModal from "./AddOperationModal";
 import DataChatBubble, { type DataChatBubbleHandle } from "../DataChatBubble";
+import CardActivityModal from "../CardActivityModal";
 import "./DataDashboardView.css";
 
 interface Props {
@@ -61,6 +69,26 @@ export default function DataDashboardView({
   const [typeToConfirm, setTypeToConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const bubbleRef = useRef<DataChatBubbleHandle>(null);
+  // Per-op last-run state. In-memory only — resets when the user navigates
+  // away from this database. Persistence into `_data.md` would just clutter
+  // the file with ephemeral run history.
+  const [runState, setRunState] = useState<Record<string, OpRunState>>({});
+  // The op whose run the user just clicked open (CardActivityModal).
+  const [openRun, setOpenRun] = useState<{ op: DashboardOperation; state: OpRunState } | null>(null);
+  // The op the user just clicked × on — held until they confirm or cancel.
+  // Without this, an accidental click silently destroys the action and any
+  // pre-fill defaults (or prompt) the user took the time to author.
+  const [pendingRemoval, setPendingRemoval] = useState<DashboardOperation | null>(null);
+  // Auto-clear the green "done" tick after a few seconds so the chip goes
+  // back to its quiet resting state on success — failures stick.
+  const fadeTimers = useRef<Record<string, number>>({});
+  // SSE subscriptions for in-flight runs, keyed by op id. Closed on unmount
+  // and when a new run replaces an older one for the same op.
+  const runSubs = useRef<Record<string, { close: () => void }>>({});
+  useEffect(() => () => {
+    Object.values(fadeTimers.current).forEach((id) => window.clearTimeout(id));
+    Object.values(runSubs.current).forEach((s) => s.close());
+  }, []);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -78,13 +106,121 @@ export default function DataDashboardView({
 
   useEffect(() => { void reload(); }, [reload]);
 
+  // Hydrate per-op runState from persisted hidden sessions on mount /
+  // folder switch. Failures seed visible warning chips (so the user notices
+  // an action that broke earlier even after a reload); orphaned successes
+  // (run finished after the user navigated away) get GC'd straight away —
+  // the success tick is purely a live-feedback affordance.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const history = await fetchRunHistory(folder);
+        if (cancelled) return;
+        const next: Record<string, OpRunState> = {};
+        for (const r of history.runs) {
+          if (r.status === "failed") {
+            next[r.op_id] = {
+              sessionId: r.session_id,
+              status: "failed",
+              error: r.error ?? undefined,
+            };
+          } else {
+            // Stale success — discard the session so it doesn't pile up.
+            void deleteSession(r.session_id).catch(() => {
+              /* benign — likely already gone */
+            });
+          }
+        }
+        setRunState((prev) => {
+          // Don't clobber any in-flight runs the user kicked while we were
+          // fetching — those win over hydrated state.
+          const merged: Record<string, OpRunState> = { ...next };
+          for (const [opId, state] of Object.entries(prev)) {
+            if (state.status === "running") merged[opId] = state;
+          }
+          return merged;
+        });
+      } catch {
+        // Hydration is best-effort: a network blip shouldn't block the UI.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [folder]);
+
   const handleRunOperation = useCallback(async (op: DashboardOperation) => {
     if (op.kind === "chat") {
-      // Route chat-kind ops into the floating bubble (per-database session).
-      // Drill-down "Open in chat" buttons on related-rows panels still go to
-      // the main ChatView — the bubble is intentionally scoped to general
-      // database operations, not branch conversations.
-      bubbleRef.current?.runOperation(op.prompt || op.label);
+      // Kick an ephemeral *hidden* session — never appears in the sidebar.
+      // The chip surfaces status via `runState`; the user can click the
+      // status icon to open the run in CardActivityModal.
+      try {
+        const result = await runOperation(folder, op.id);
+        const sessionId = result.session_id;
+        // Cancel any prior fade timer / subscription for this op.
+        const prevTimer = fadeTimers.current[op.id];
+        if (prevTimer) {
+          window.clearTimeout(prevTimer);
+          delete fadeTimers.current[op.id];
+        }
+        const prevSub = runSubs.current[op.id];
+        if (prevSub) {
+          prevSub.close();
+          delete runSubs.current[op.id];
+        }
+        setRunState((s) => ({ ...s, [op.id]: { sessionId, status: "running" } }));
+        // Wait for the explicit `op_done` terminal event the server
+        // publishes from /vault/dashboard/run-operation. The persisted
+        // history is finalized before that event fires, so CardActivityModal
+        // can read it back via getSession() when the user clicks through.
+        const sub = subscribeSessionEvents(sessionId, (event) => {
+          if (event.kind !== "op_done") return;
+          const ok = event.data.status === "done";
+          setRunState((s) =>
+            s[op.id]?.sessionId === sessionId
+              ? {
+                  ...s,
+                  [op.id]: {
+                    sessionId,
+                    status: ok ? "done" : "failed",
+                    error: ok ? undefined : event.data.error ?? undefined,
+                  },
+                }
+              : s,
+          );
+          if (ok) {
+            // Auto-fade success after a few seconds; failures stay warned
+            // until the user opens them. The session itself is also GC'd
+            // here — successful runs aren't worth persisting.
+            const t = window.setTimeout(() => {
+              setRunState((s) => {
+                if (s[op.id]?.sessionId !== sessionId) return s;
+                if (s[op.id]?.status !== "done") return s;
+                const { [op.id]: _gone, ...rest } = s;
+                void _gone;
+                return rest;
+              });
+              delete fadeTimers.current[op.id];
+              void deleteSession(sessionId).catch(() => { /* benign */ });
+            }, 4000);
+            fadeTimers.current[op.id] = t;
+          }
+          const current = runSubs.current[op.id];
+          if (current) {
+            current.close();
+            delete runSubs.current[op.id];
+          }
+        });
+        runSubs.current[op.id] = sub;
+      } catch (e) {
+        toast.error("Couldn't start action.", { detail: (e as Error).message });
+        setRunState((s) => {
+          const { [op.id]: _gone, ...rest } = s;
+          void _gone;
+          return rest;
+        });
+      }
       return;
     }
     // Form kind: load the target table's schema and pop a pre-filled form.
@@ -98,7 +234,13 @@ export default function DataDashboardView({
     } catch (e) {
       toast.error("Couldn't load the target table.", { detail: (e as Error).message });
     }
-  }, [toast]);
+  }, [folder, toast]);
+
+  const handleOpenRun = useCallback((op: DashboardOperation) => {
+    const state = runState[op.id];
+    if (!state) return;
+    setOpenRun({ op, state });
+  }, [runState]);
 
   const handleAddOperation = useCallback(async (op: DashboardOperation) => {
     try {
@@ -204,9 +346,14 @@ export default function DataDashboardView({
         <h2 className="data-dash-section-title">Quick actions</h2>
         <OperationChips
           operations={dashboard.operations}
+          runState={runState}
           onRunOperation={(op) => void handleRunOperation(op)}
+          onOpenRun={handleOpenRun}
           onAddOperation={() => setShowAddOp(true)}
-          onRemoveOperation={(id) => void handleRemoveOperation(id)}
+          onRemoveOperation={(id) => {
+            const op = dashboard.operations.find((o) => o.id === id);
+            if (op) setPendingRemoval(op);
+          }}
         />
         {dashboard.operations.length === 0 && (
           <div className="data-dash-hint">
@@ -289,6 +436,22 @@ export default function DataDashboardView({
         );
       })()}
 
+      {pendingRemoval && (
+        <Modal
+          kind="confirm"
+          title={`Remove "${pendingRemoval.label}"?`}
+          message="This deletes the action from the dashboard. You can re-create it from + Operation."
+          confirmLabel="Remove"
+          danger
+          onSubmit={() => {
+            const op = pendingRemoval;
+            setPendingRemoval(null);
+            void handleRemoveOperation(op.id);
+          }}
+          onCancel={() => setPendingRemoval(null)}
+        />
+      )}
+
       {confirmDelete && !typeToConfirm && (
         <Modal
           kind="confirm"
@@ -318,6 +481,31 @@ export default function DataDashboardView({
       )}
 
       <DataChatBubble ref={bubbleRef} folder={folder} databaseTitle={dashboard.title} />
+
+      {openRun && (
+        <CardActivityModal
+          sessionId={openRun.state.sessionId}
+          cardTitle={openRun.op.label}
+          status={openRun.state.status}
+          onClose={() => {
+            // Closing the popup is the user's "I saw it" — drop the chip
+            // warning and GC the underlying hidden session. Skip while the
+            // run is still in flight (user opened the live spinner): closing
+            // mid-run shouldn't cancel the run or its state.
+            const closed = openRun;
+            setOpenRun(null);
+            if (closed.state.status !== "running") {
+              setRunState((s) => {
+                if (s[closed.op.id]?.sessionId !== closed.state.sessionId) return s;
+                const { [closed.op.id]: _gone, ...rest } = s;
+                void _gone;
+                return rest;
+              });
+              void deleteSession(closed.state.sessionId).catch(() => { /* benign */ });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
