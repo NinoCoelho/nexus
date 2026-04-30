@@ -10,8 +10,89 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..session_store import SessionStore
+    from ...agent.loop import Agent
 
 log = logging.getLogger(__name__)
+
+
+_FALLBACK_TITLE_PREFIXES = ("New session", "Sub-agent")
+_TITLE_MAX_WORDS = 5
+_TITLE_PROMPT = (
+    "Summarize the user's request below as a short chat title. "
+    "Strict rules: at most 5 words, Title Case, no quotes, no trailing "
+    "punctuation, no preamble. Reply with ONLY the title.\n\n"
+    "User request:\n"
+)
+
+
+async def maybe_autotitle_via_llm(
+    *,
+    store: "SessionStore",
+    agent: "Agent",
+    session_id: str,
+    user_message: str,
+) -> None:
+    """Replace the placeholder title with an LLM-generated short summary.
+
+    Best-effort: bails silently on provider errors, missing models, or empty
+    output. Skips when the session already has a meaningful title (i.e. it's
+    not the bootstrap "New session" / 40-char fallback). Designed to be
+    invoked as a background task so it doesn't delay the streaming response.
+    """
+    from ...agent.llm import ChatMessage, Role
+
+    try:
+        snippet = (user_message or "").strip()
+        if not snippet:
+            return
+        # Don't overwrite a user-set title.
+        row = store._loom._db.execute(
+            "SELECT title FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if not row:
+            return
+        current = (row[0] or "").strip()
+        first_msg_fallback = snippet[:40]
+        if current and current not in _FALLBACK_TITLE_PREFIXES and current != first_msg_fallback:
+            return
+
+        # Resolve a *concrete* upstream model name. The agent's
+        # `_nexus_provider` is built with `model=""` because the registry
+        # tracks model names separately, so passing `model=None` to
+        # provider.chat() would raise "No model specified". Pull the
+        # configured default and resolve it through the registry to get the
+        # real upstream id (e.g. "claude-haiku-4-5-20251001").
+        cfg = getattr(agent, "_nexus_cfg", None)
+        default_model_id = (
+            getattr(getattr(cfg, "agent", None), "default_model", None) or ""
+        )
+        provider, upstream_model = agent._resolve_provider(default_model_id)
+        if provider is None:
+            return
+        prompt = _TITLE_PROMPT + snippet[:300]
+        messages = [ChatMessage(role=Role.USER, content=prompt)]
+        try:
+            resp = await provider.chat(messages, model=upstream_model, max_tokens=32)
+        except Exception:  # noqa: BLE001 — best-effort, never break the turn
+            log.warning("autotitle LLM call failed", exc_info=True)
+            return
+        raw = (resp.content or "").strip()
+        if not raw:
+            return
+        # Single-line, strip surrounding quotes / trailing punctuation, then
+        # enforce the 5-word cap ourselves — providers don't always honour it.
+        first_line = raw.splitlines()[0] if raw else ""
+        title = first_line.strip().strip('"').strip("'").rstrip(".!?").strip()
+        if not title:
+            return
+        words = title.split()
+        if len(words) > _TITLE_MAX_WORDS:
+            title = " ".join(words[:_TITLE_MAX_WORDS])
+        if len(title) > 60:
+            title = title[:60].rstrip()
+        store.rename(session_id, title)
+    except Exception:  # noqa: BLE001 — never let titling crash the request
+        log.exception("autotitle via LLM failed")
 
 
 def persist_stream_turn(

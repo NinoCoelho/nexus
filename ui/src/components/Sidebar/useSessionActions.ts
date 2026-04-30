@@ -33,6 +33,10 @@ interface SessionActionsOptions {
   setToVaultBusy: React.Dispatch<React.SetStateAction<Set<string>>>;
   onSessionsRevisionBump: () => void;
   onSessionSelect: (id: string) => void;
+  /** Currently active session — used so deleting it can blank the canvas. */
+  activeSessionId: string | null;
+  /** Fired when the deleted session was the active one. The host clears the chat surface. */
+  onActiveSessionDeleted: () => void;
   toast: ToastAPI;
 }
 
@@ -46,6 +50,8 @@ export function useSessionActions({
   setToVaultBusy,
   onSessionsRevisionBump,
   onSessionSelect,
+  activeSessionId,
+  onActiveSessionDeleted,
   toast,
 }: SessionActionsOptions) {
   const handleRename = async (id: string) => {
@@ -63,6 +69,7 @@ export function useSessionActions({
     try {
       await deleteSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (id === activeSessionId) onActiveSessionDeleted();
     } catch { /* ignore */ }
     setMenuNull();
   };

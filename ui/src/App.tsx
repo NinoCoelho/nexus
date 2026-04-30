@@ -138,7 +138,7 @@ export default function App() {
   const {
     activeState, activeSession, setActiveSession, setChatStates,
     sessionsRevision, setSessionsRevision,
-    pendingAutoSend,
+    pendingAutoSend, pendingNewSession,
     send, handleStop, handleRollback, handleContinue,
     handleContinuePartial, handleRetryPartial, dismissLimitBanner,
     handleInputChange, handleAttachmentsChange, handleModelChange,
@@ -184,9 +184,18 @@ export default function App() {
   }, [notificationCenter.pendingFocusRequestId, focusRequest, notificationCenter]);
 
   const handleSessionSelect = useCallback((id: string) => {
+    // The optimistic placeholder shown while the first turn is in flight
+    // shares its id with `pendingSessionId`; clicking it must NOT call into
+    // _handleSessionSelect, which would try to load history for a session
+    // that doesn't exist yet on the server (and would re-key chat state away
+    // from NEW_KEY mid-stream).
+    if (pendingNewSession && id === pendingNewSession.id) {
+      setView("chat");
+      return;
+    }
     _handleSessionSelect(id);
     setView("chat");
-  }, [_handleSessionSelect]);
+  }, [_handleSessionSelect, pendingNewSession]);
 
   const handleNewChat = useCallback(() => {
     _handleNewChat();
@@ -383,12 +392,14 @@ export default function App() {
         onViewChange={(v) => { setView(v); setMobileDrawerOpen(false); }}
         mobileOpen={mobileDrawerOpen}
         onMobileClose={() => setMobileDrawerOpen(false)}
-        activeSessionId={activeSession}
+        activeSessionId={activeSession ?? pendingNewSession?.id ?? null}
         onSessionSelect={handleSessionSelect}
         onNewChat={handleNewChat}
         onOpenSettings={() => setSettingsOpen(true)}
         sessionsRevision={sessionsRevision}
         onSessionsRevisionBump={() => setSessionsRevision((r) => r + 1)}
+        pendingNewSession={pendingNewSession}
+        onActiveSessionDeleted={handleNewChat}
         vaultSelectedPath={vaultSelectedPath}
         onVaultSelectPath={setVaultSelectedPath}
         vaultOpenPath={vaultOpenPath}

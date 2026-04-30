@@ -33,6 +33,11 @@ interface Props {
   onOpenSettings: () => void;
   sessionsRevision: number;
   onSessionsRevisionBump: () => void;
+  /** Optimistic placeholder shown above fetched sessions while the first
+   * turn is in flight — lets the user see their new chat immediately. */
+  pendingNewSession?: SessionSummary | null;
+  /** Called after the *active* session is deleted — host clears the chat surface. */
+  onActiveSessionDeleted?: () => void;
   vaultSelectedPath: string | null;
   onVaultSelectPath: (path: string | null) => void;
   vaultOpenPath?: string | null;
@@ -64,7 +69,7 @@ const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
 
 export default function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
-  sessionsRevision, onSessionsRevisionBump, vaultSelectedPath, onVaultSelectPath,
+  sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
   onVisualizeFolderGraph,
   kanbanSelectedPath, onKanbanOpen,
@@ -165,8 +170,17 @@ export default function Sidebar({
     setToVaultBusy,
     onSessionsRevisionBump,
     onSessionSelect,
+    activeSessionId,
+    onActiveSessionDeleted: onActiveSessionDeleted ?? (() => {}),
     toast,
   });
+
+  // Merge the optimistic placeholder above fetched sessions, but only while
+  // the real entry hasn't arrived yet — once the backend lists it, the real
+  // row takes over.
+  const displaySessions = pendingNewSession && !sessions.some((s) => s.id === pendingNewSession.id)
+    ? [pendingNewSession, ...sessions]
+    : sessions;
 
   return (
     <>
@@ -243,7 +257,7 @@ export default function Sidebar({
       )}
       {view === "chat" && !collapsed && (
         <SessionsPanel
-          sessions={sessions}
+          sessions={displaySessions}
           sessionsError={sessionsError}
           activeSessionId={activeSessionId}
           searchQuery={searchQuery}
