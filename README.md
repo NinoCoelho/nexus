@@ -11,7 +11,9 @@
 ## Why Nexus?
 
 - **Self-evolving skills** — the agent creates, edits, and deletes its own skills at runtime, guarded by a static security scanner that blocks credential exfil and destructive shell patterns.
-- **Vault + kanban + graph** — a markdown knowledge base with FTS5 search, Obsidian-compatible kanban boards, an iCal calendar, DuckDB datatables, and a 3D backlink graph, all stored as plain `.md` files.
+- **Vault + kanban + graph** — a markdown knowledge base with FTS5 search, Obsidian-compatible kanban boards (with a vault-wide board picker in the sidebar), an iCal calendar, DuckDB datatables with cross-table refs, and a 3D backlink graph, all stored as plain `.md` files.
+- **Per-folder knowledge graphs** — right-click any vault folder → "Visualize as graph" defines a folder-local ontology (with an optional LLM wizard) and indexes that subtree into a portable `.nexus-graph/` next to the data, isolated from the global GraphRAG.
+- **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
 - **Packaged Mac app** — ships as `Nexus.app` with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh Mac. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
@@ -150,11 +152,13 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Reasoning Stream** | Streams `thinking` events from reasoning-capable models into a collapsible block above each assistant turn |
 | **Vault Knowledge Base** | Markdown files + FTS5 search + tag index + backlinks graph + GraphRAG semantic recall |
 | **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions) |
-| **Kanban Boards** | Vault-native (`kanban-plugin: basic`) — boards are markdown files; cards can dispatch chat sessions |
+| **Kanban Boards** | Vault-native (`kanban-plugin: basic`) — boards are markdown files; cards can dispatch chat sessions. Top-level **Kanban** view in the sidebar lists every board across the vault for fast switching |
 | **Calendar** | Vault-native iCal-style events with RRULE recurrence, MonthGrid + WeekGrid views, RepeatPicker |
 | **Calendar Triggers** | Heartbeat driver fires events on schedule into agent turns; supports single-shot and intra-day fire windows |
-| **DataTables + CSV** | DuckDB-backed analytics tools and a CSV editor for tabular vault content |
+| **DataTables + CSV** | DuckDB-backed analytics tools and a CSV editor for tabular vault content. Ref columns infer a natural primary key when unset and open a popup preview of the referenced row on click |
 | **Ontology Tool** | Agent-managed entity/relation schema for GraphRAG over the vault |
+| **Per-Folder Knowledge Graphs** | Right-click a vault folder → "Visualize as graph" to define a folder-local ontology (optional LLM wizard samples files + asks disambiguation questions). Each open folder becomes a sub-tab in Knowledge mode with Reindex / Edit-ontology controls and a stale-files banner; the index lives in a hidden `.nexus-graph/` inside the folder so it travels with the data |
+| **Vault History (opt-in)** | When enabled, every vault mutation (write/delete/move) commits into a private git work-tree at `~/.nexus/.vault-history`. Right-click → "Undo last change" steps a single file or whole folder back one commit; a per-path cursor keeps consecutive undos walking backwards |
 | **Human-in-the-Loop** | `ask_user` (confirm/choice/text) and `terminal` (shell) gated by SSE approval dialogs; YOLO mode for unattended runs |
 | **Web Push** | Background push notifications for HITL prompts when the tab is closed (VAPID) |
 | **Public Tunnel** | One-click Cloudflare Quick Tunnel (no signup) with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs; access code is single-use per activation (burned after first device redeems) |
@@ -444,6 +448,7 @@ graph TB
 - Tag extraction from frontmatter `tags:` and body `#hashtags` (code blocks excluded).
 - Backlink extraction from markdown links and bare path mentions.
 - 3D / 2D unified graph view with scoped subgraphs (file / folder / agent / session).
+- Per-folder graphs live alongside the global GraphRAG: each opened folder gets its own ontology + index inside a hidden `.nexus-graph/` next to the data, so a folder is portable and can be re-indexed in isolation. The Knowledge view exposes one sub-tab per open folder with Reindex / Edit-ontology controls and a stale-files banner driven by mtime drift.
 
 ### Kanban, Calendar, DataTables, CSV
 
@@ -685,19 +690,20 @@ graph TB
 
     MAIN --> APP
 
-    SIDEBAR["Sidebar (views, sessions, vault tree, pins)"]
+    SIDEBAR["Sidebar (views, sessions, vault tree, kanban boards, pins)"]
     HEADER["Header (model + tokens + cost + YOLO badge)"]
     CONTENT["Content Area"]
 
     APP --> SIDEBAR & HEADER & CONTENT
 
     CHAT["ChatView (messages + reasoning + InputBar + search)"]
-    VAULT["VaultView → VaultEditorPanel (preview / edit / kanban / calendar / csv / datatable)"]
-    GRAPH["GraphView (Canvas2D + 3D)"]
+    VAULT["VaultView → VaultEditorPanel (preview / edit / calendar / csv / datatable)"]
+    KANBAN["KanbanListPanel (vault-wide board picker → KanbanBoard)"]
+    GRAPH["GraphView (Canvas2D + 3D, vault + per-folder sub-tabs)"]
     INSIGHTS["InsightsView"]
     AGENTG["AgentGraphView (lazy)"]
 
-    CONTENT --> CHAT & VAULT & GRAPH & INSIGHTS & AGENTG
+    CONTENT --> CHAT & VAULT & KANBAN & GRAPH & INSIGHTS & AGENTG
 
     SKILLD["SkillDrawer"]
     SETTD["SettingsDrawer (providers / models / advanced)"]
@@ -1124,8 +1130,20 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/vault/dispatch` | POST | Spawn session from file/card |
 | `/vault/calendar*` | GET / POST / PATCH / DELETE | Calendar events + RRULE + manual fire |
 | `/vault/csv*` | GET / POST / PATCH / DELETE | CSV editor |
+| `/vault/history/status` | GET | Git-backed history enabled? |
+| `/vault/history/enable` / `/disable` | POST | Toggle history layer (initializes `~/.nexus/.vault-history`) |
+| `/vault/history` | GET | List commits touching a path |
+| `/vault/history/undo` | POST | Step a path back one real commit (per-path cursor) |
+| `/vault/history/purge` | POST | Drop the history work-tree |
 | `/graphrag/reindex` | POST | Rebuild GraphRAG store |
-| `/graph/knowledge*` | GET / POST | GraphRAG entities, subgraphs, queries, indexing status |
+| `/graph/knowledge*` | GET / POST | Vault-wide GraphRAG entities, subgraphs, queries, indexing status |
+| `/graph/folder/open` | POST | Open a folder as a knowledge sub-tab |
+| `/graph/folder/ontology` | GET / PUT | Read or replace the folder-local ontology |
+| `/graph/folder/index` / `/index-cancel` | POST | Index (or cancel) a folder into its `.nexus-graph/` |
+| `/graph/folder/stale` | GET | Files whose mtime drifted from the folder index |
+| `/graph/folder/subgraph` / `/full-subgraph` | GET | Folder-scoped graph slices |
+| `/graph/folder/query` | POST | Folder-scoped GraphRAG query |
+| `/graph/folder/ontology-wizard/start` / `/answer` | POST | LLM-driven ontology bootstrap |
 
 ### Kanban
 
@@ -1249,6 +1267,12 @@ mode = "auto"        # "static" | "playwright" | "stealthy" | "auto"
 headless = true
 timeout = 30
 max_content_bytes = 102400
+
+# Git-backed vault history. Disabled by default; can also be toggled from
+# Settings → Features. When enabled, every vault write/delete/move commits
+# into a private git work-tree at ~/.nexus/.vault-history.
+[vault.history]
+enabled = false
 ```
 
 ### Environment Variable Override
@@ -1270,9 +1294,11 @@ export NEXUS_LLM_MODEL="gpt-4o"
 ├── settings.json        # UI preferences (YOLO mode, theme)
 ├── sessions.sqlite      # Sessions + messages + FTS + pins + feedback + share tokens
 ├── vault/               # Markdown knowledge base
+│   └── <folder>/.nexus-graph/   # Per-folder ontology-isolated graph (when opened)
 ├── vault_index.sqlite   # FTS5 search index
 ├── vault_meta.sqlite    # Tag + backlink index
-├── graphrag/            # GraphRAG store (entities + relations + embeddings)
+├── .vault-history/      # Git work-tree of vault mutations (only if [vault.history] enabled)
+├── graphrag/            # Vault-wide GraphRAG store (entities + relations + embeddings)
 ├── skills/              # Agent skills
 ├── local_llm/           # Downloaded GGUFs
 ├── push/                # VAPID keys + subscriptions
