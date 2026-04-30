@@ -24,6 +24,8 @@ interface PromptProps extends BaseProps {
   placeholder?: string;
   confirmLabel?: string;
   allowEmpty?: boolean;
+  /** Render the input as a masked password field (no echo, no autocomplete). */
+  secret?: boolean;
   onSubmit: (value: string) => void;
 }
 
@@ -43,8 +45,8 @@ export default function Modal(props: ModalProps) {
   );
 
   useEffect(() => {
-    if (props.kind === "prompt") inputRef.current?.select();
-  }, [props.kind]);
+    if (props.kind === "prompt" && !props.secret) inputRef.current?.select();
+  }, [props.kind, props.kind === "prompt" ? props.secret : false]);
 
   const handleKey = useCallback(
     (e: React.KeyboardEvent) => {
@@ -71,10 +73,12 @@ export default function Modal(props: ModalProps) {
           <input
             ref={inputRef}
             className="modal-input"
-            type="text"
+            type={props.secret ? "password" : "text"}
             value={value}
             placeholder={props.placeholder}
             autoFocus
+            autoComplete={props.secret ? "new-password" : undefined}
+            spellCheck={props.secret ? false : undefined}
             onChange={(e) => setValue(e.target.value)}
           />
         )}

@@ -6,7 +6,11 @@ export interface Provider {
   base_url?: string;
   has_key: boolean;
   key_env?: string;
-  key_source: "inline" | "env" | "anonymous" | null;
+  /** When set, the provider resolves its API key via the named credential
+   *  store entry (env-first → secrets.toml). Takes precedence over
+   *  ``key_env`` and inline storage. */
+  credential_ref?: string | null;
+  key_source: "inline" | "env" | "anonymous" | "credential" | null;
   type?: "openai_compat" | "anthropic" | "ollama";
 }
 
@@ -36,4 +40,35 @@ export async function clearProviderKey(name: string): Promise<void> {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`Clear key error: ${res.status}`);
+}
+
+/**
+ * Point a provider at a named credential in the store, or clear the link.
+ * Pass ``null`` to fall back to legacy inline / env-var paths.
+ *
+ * Setting a non-null ref also clears ``use_inline_key`` and ``api_key_env``
+ * server-side so configuration can't silently drift back to a stale
+ * inline key the user thought they replaced.
+ */
+export async function setProviderCredential(
+  name: string,
+  credentialRef: string | null,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/providers/${encodeURIComponent(name)}/credential`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential_ref: credentialRef }),
+    },
+  );
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.json())?.detail ?? "";
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || `Set provider credential error: ${res.status}`);
+  }
 }

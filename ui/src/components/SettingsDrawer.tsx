@@ -27,6 +27,7 @@ import {
   type RoutingConfig,
 } from "../api";
 import AdvancedTab from "./settings/AdvancedTab";
+import CredentialsTab from "./settings/CredentialsTab";
 import DefaultModelStrip from "./settings/DefaultModelStrip";
 import FeaturesTab from "./settings/FeaturesTab";
 import ModelsTab from "./settings/ModelsTab";
@@ -40,11 +41,12 @@ interface Props {
   onClose: () => void;
 }
 
-type TabId = "quick" | "models" | "features" | "advanced";
+type TabId = "quick" | "models" | "credentials" | "features" | "advanced";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "quick", label: "Quick start" },
   { id: "models", label: "Models" },
+  { id: "credentials", label: "Credentials" },
   { id: "features", label: "Features" },
   { id: "advanced", label: "Advanced" },
 ];
@@ -141,6 +143,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               onRefresh={refresh}
             />
           )}
+          {active === "credentials" && <CredentialsTab />}
           {active === "features" && <FeaturesTab graphStats={graphStats} />}
           {active === "advanced" && (
             <AdvancedTab hitl={hitl} onHitlChanged={setHitl} />

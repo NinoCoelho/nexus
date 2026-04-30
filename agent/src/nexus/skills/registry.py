@@ -12,11 +12,12 @@ from typing import Any
 
 import frontmatter  # type: ignore[import]
 
-from .types import Skill
+from .types import KeyRequirement, Skill
 
 log = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_KEY_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # Dev-checkout default: <repo>/skills, five levels up from this file.
 # The packaged .app overrides this via NEXUS_BUILTIN_SKILLS_DIR (set by
 # bootstrap.py) because the bundle layout doesn't match the repo layout.
@@ -134,6 +135,7 @@ def _load_skill(skill_dir: Path) -> Skill:
         raise ValueError("missing description in frontmatter")
     if not _NAME_RE.match(name):
         raise ValueError(f"invalid skill name: {name!r}")
+    requires_keys = _parse_requires_keys(post.metadata.get("requires_keys"))
     trust = _read_meta(skill_dir).get("trust", "user")
     return Skill(
         name=name,
@@ -141,7 +143,43 @@ def _load_skill(skill_dir: Path) -> Skill:
         body=post.content,
         source_dir=skill_dir,
         trust=trust,
+        requires_keys=requires_keys,
     )
+
+
+def _parse_requires_keys(raw: Any) -> tuple[KeyRequirement, ...]:
+    """Accept either ``[STRING]`` or ``[{name, help?, url?}]``.
+
+    Raises ValueError on malformed entries so the registry can skip the
+    skill with a clear log line rather than silently dropping the
+    requirement.
+    """
+    if raw is None or raw == "":
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("requires_keys must be a list")
+    out: list[KeyRequirement] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            key_name = entry
+            req = KeyRequirement(name=key_name)
+        elif isinstance(entry, dict):
+            key_name = entry.get("name") or ""
+            req = KeyRequirement(
+                name=key_name,
+                help=entry.get("help"),
+                url=entry.get("url"),
+            )
+        else:
+            raise ValueError(
+                f"requires_keys entries must be strings or objects, got {type(entry).__name__}"
+            )
+        if not _KEY_NAME_RE.match(req.name):
+            raise ValueError(
+                f"requires_keys[].name must match ^[A-Z][A-Z0-9_]*$, got {req.name!r}"
+            )
+        out.append(req)
+    return tuple(out)
 
 
 def _read_meta(skill_dir: Path) -> dict[str, Any]:

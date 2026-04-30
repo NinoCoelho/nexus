@@ -18,6 +18,12 @@ class FieldSchema(BaseModel):
     choices: list[str] | None = Field(default=None)
     placeholder: str | None = None
     help: str | None = None
+    # Optional URL displayed alongside ``help`` (e.g. "Get your token here →").
+    help_url: str | None = None
+    # When true, render as a masked password input. The submitted value is
+    # redacted in the persisted chat transcript (see ask_user_tool resolution
+    # path) and the YOLO short-circuit refuses to auto-answer such forms.
+    secret: bool = False
 
 
 class FormSchema(BaseModel):

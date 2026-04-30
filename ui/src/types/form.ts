@@ -27,6 +27,10 @@ export interface FieldSchema {
   target_table?: string;
   /** For kind="ref": "one" (FK to a single row) or "many" (multi-select / N:N). */
   cardinality?: FieldCardinality;
+  /** Optional URL rendered next to `help` (e.g. "Get your token here →"). */
+  help_url?: string;
+  /** When true, render as a masked password input; the value is redacted from the chat transcript. */
+  secret?: boolean;
 }
 
 export interface FormSchema {

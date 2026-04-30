@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { transcribeAudio, uploadVaultFiles, type SlashCommand } from "../../api";
+import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
 import SlashCommandPicker, { type SlashPickerHandle } from "../SlashCommandPicker";
@@ -23,16 +24,23 @@ import { useSlashPicker } from "./useSlashPicker";
 import AttachmentsBar from "./AttachmentsBar";
 import ModelBadge from "./ModelBadge";
 import RecordingIndicator from "./RecordingIndicator";
+import SecretDetectedDialog from "./SecretDetectedDialog";
 
 interface AttachedFile {
   name: string;
   vaultPath: string;
 }
 
+interface SendOptions {
+  text?: string;
+  inPlace?: boolean;
+  bypassSecretGuard?: boolean;
+}
+
 interface Props {
   value: string;
   onChange: (v: string) => void;
-  onSend: (overrideText?: string) => void;
+  onSend: (override?: string | SendOptions) => void;
   disabled: boolean;
   busy?: boolean;
   onStop?: () => void;
@@ -66,6 +74,25 @@ export default function InputBar({
   const [uploading, setUploading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  // ``pendingSecret`` parks a send while the user decides what to do with a
+  // secret-shaped substring. ``pendingSendText`` carries the exact text we
+  // were about to send so "Send anyway" doesn't lose attachments or
+  // transcribed audio merged in by the caller.
+  const [pendingSecret, setPendingSecret] = useState<SecretMatch | null>(null);
+  const [pendingSendText, setPendingSendText] = useState<string>("");
+
+  // Intercepts onSend with the secret guard. Returns true when send proceeded
+  // (or was queued); false when it was blocked pending the modal.
+  const guardedSend = (textToCheck: string, doSend: () => void): boolean => {
+    const matches = findSecrets(textToCheck);
+    if (matches.length === 0) {
+      doSend();
+      return true;
+    }
+    setPendingSecret(matches[0]);
+    setPendingSendText(textToCheck);
+    return false;
+  };
 
   const { recording, audio, setAudio, levels, seconds, startRecording, stopRecording, cancelRecording, clearAudio } = useAudioRecorder();
   const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(value, onChange);
@@ -98,6 +125,12 @@ export default function InputBar({
     el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
   };
 
+  // Re-fit the textarea whenever the controlled value changes — this is
+  // what shrinks the box back to a single row after a successful send
+  // (the parent clears `value` to "" but keeps the imperative height
+  // we set on the last keystroke).
+  useEffect(() => { adjust(); }, [value]);
+
   const handleTextChange = (text: string) => {
     onChange(text);
     adjust();
@@ -119,10 +152,15 @@ export default function InputBar({
       const typed = value.trim();
       const combined = typed ? `${text.trim()}\n\n${typed}` : text.trim();
       if (!combined) { toast.error("Transcription returned no text"); return; }
-      URL.revokeObjectURL(audio.url);
-      setAudio(null);
-      onChange("");
-      onSend(combined);
+      const proceed = () => {
+        if (audio) {
+          URL.revokeObjectURL(audio.url);
+          setAudio(null);
+        }
+        onChange("");
+        onSend(combined);
+      };
+      guardedSend(combined, proceed);
     } catch (err) {
       toast.error("Transcription failed", { detail: err instanceof Error ? err.message : undefined });
     } finally {
@@ -137,7 +175,7 @@ export default function InputBar({
       e.preventDefault();
       if (disabled || transcribing) return;
       if (audio) { void runTranscribeAndSend(); return; }
-      if (hasContent) onSend();
+      if (hasContent) guardedSend(value, () => onSend());
     }
   };
 
@@ -181,7 +219,7 @@ export default function InputBar({
     if (recording) { stopRecording(); return; }
     if (transcribing) return;
     if (audio) { void runTranscribeAndSend(); return; }
-    if (hasContent) { onSend(); return; }
+    if (hasContent) { guardedSend(value, () => onSend()); return; }
     void startRecording();
   };
 
@@ -295,6 +333,45 @@ export default function InputBar({
         style={{ display: "none" }}
         onChange={(e) => void handleFileSelect(e)}
       />
+      {pendingSecret && (
+        <SecretDetectedDialog
+          detected={pendingSecret.value}
+          onCancel={() => {
+            setPendingSecret(null);
+            setPendingSendText("");
+            textareaRef.current?.focus();
+          }}
+          onSendAnyway={() => {
+            const textToSend = pendingSendText;
+            setPendingSecret(null);
+            setPendingSendText("");
+            // If the parked send was a transcription/attachment-merged
+            // payload that the parent didn't yet have in state, pass it
+            // back as an override; otherwise the textarea content is the
+            // source of truth.
+            const sameAsValue = textToSend === value;
+            onChange("");
+            onSend(sameAsValue
+              ? { bypassSecretGuard: true }
+              : { text: textToSend, bypassSecretGuard: true }
+            );
+          }}
+          onSaveAsCredential={(name) => {
+            // Replace every occurrence of the matched secret in the
+            // textarea with the placeholder, then close the modal.
+            const replaced = pendingSendText.replaceAll(
+              pendingSecret.value,
+              `$${name}`,
+            );
+            setPendingSecret(null);
+            setPendingSendText("");
+            onChange(replaced);
+            // Don't auto-send — the user might want to review the message
+            // with the placeholder in place before pressing send again.
+            textareaRef.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 }

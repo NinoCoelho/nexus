@@ -13,6 +13,7 @@ export * from "./skills";
 export * from "./settings";
 export * from "./config";
 export * from "./providers";
+export * from "./credentials";
 export * from "./models";
 export * from "./routing";
 export * from "./insights";

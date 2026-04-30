@@ -1,5 +1,6 @@
 // Sub-component for ProvidersSection: form for adding a new LLM provider.
 
+import CredentialPicker from "../settings/CredentialPicker";
 import type { AddState } from "./types";
 
 // Derive the conventional env var name for a provider.
@@ -92,29 +93,33 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
       {!isOllama && (
         <>
           <div className="settings-field">
-            <label className="settings-field-label">Key env var</label>
+            <label className="settings-field-label">Credential</label>
+            <CredentialPicker
+              value={addForm.credential_ref}
+              onChange={(ref) => onAddFormChange((f) => ({ ...f, credential_ref: ref }))}
+              defaultNameSuggestion={defaultKeyEnv(addForm.name || "provider", addForm.type)}
+            />
+            <span className="settings-field-hint">
+              Pick an existing stored credential or click "+ Create new" to
+              save one now. Leave as <em>(none)</em> to use the legacy env-var
+              path below.
+            </span>
+          </div>
+          <div className="settings-field">
+            <label className="settings-field-label">
+              Key env var <span style={{opacity:0.7,fontWeight:400}}>(legacy fallback)</span>
+            </label>
             <input
               className="settings-input"
               value={addForm.key_env}
               onChange={(e) => onAddFormChange((f) => ({ ...f, key_env: e.target.value, key_env_touched: true }))}
               placeholder={defaultKeyEnv(addForm.name || "provider", addForm.type)}
+              disabled={!!addForm.credential_ref}
             />
             <span className="settings-field-hint">
-              Auto-filled from the provider name. Export this variable in your shell so Nexus can read the key.
-            </span>
-          </div>
-          <div className="settings-field">
-            <label className="settings-field-label">API key <span style={{opacity:0.7,fontWeight:400}}>(override)</span></label>
-            <input
-              className="settings-input"
-              type="password"
-              value={addForm.api_key}
-              onChange={(e) => onAddFormChange((f) => ({ ...f, api_key: e.target.value }))}
-              placeholder="sk-…  (leave blank to use env var)"
-              autoComplete="off"
-            />
-            <span className="settings-field-hint">
-              Optional — overrides the env var above. Stored at ~/.nexus/secrets.toml (0600).
+              {addForm.credential_ref
+                ? "Disabled — a credential is bound."
+                : "Auto-filled from the provider name. Export this variable in your shell so Nexus can read the key."}
             </span>
           </div>
         </>

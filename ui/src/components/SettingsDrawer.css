@@ -152,6 +152,56 @@
 .settings-btn--ghost {
   background: transparent;
 }
+.settings-btn--danger {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.settings-btn--danger:hover:not(:disabled) {
+  background: var(--bad);
+  color: var(--bg);
+}
+
+/* ── Credentials tab ──────────────────────────────────────────────────── */
+
+.creds-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.creds-add-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.creds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.creds-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fg-dim);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.creds-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+.creds-table tr:last-child td {
+  border-bottom: none;
+}
+.creds-table__masked {
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+}
+.creds-table__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
 
 .settings-card {
   background: var(--bg-inset);

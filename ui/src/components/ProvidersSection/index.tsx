@@ -12,7 +12,14 @@
  */
 
 import { useState } from "react";
-import { patchConfig, setProviderKey, clearProviderKey, type Provider } from "../../api";
+import {
+  patchConfig,
+  setProviderKey,
+  clearProviderKey,
+  setProviderCredential,
+  type Provider,
+} from "../../api";
+import CredentialPicker from "../settings/CredentialPicker";
 import { useToast } from "../../toast/ToastProvider";
 import { AddProviderForm } from "./AddProviderForm";
 import type { EditState, AddState } from "./types";
@@ -29,9 +36,18 @@ function badgeClass(p: Provider) {
 
 function badgeText(p: Provider) {
   if (p.key_source === "anonymous") return "anonymous";
-  if (p.has_key && p.key_source === "inline") return "configured (inline)";
-  if (p.has_key && p.key_source === "env") return "configured (env)";
+  if (p.has_key && p.key_source === "credential") return `via $${p.credential_ref}`;
+  if (p.has_key && p.key_source === "inline") return "inline (legacy)";
+  if (p.has_key && p.key_source === "env") return `env: ${p.key_env}`;
   return "not configured";
+}
+
+/** Default credential name for the picker's "Create new" modal. Prefer the
+ *  configured env var when present (it's already the user's canonical
+ *  identifier for this provider); otherwise synthesize ``<NAME>_API_KEY``. */
+function defaultCredentialName(p: Provider): string {
+  if (p.key_env) return p.key_env;
+  return `${p.name.toUpperCase()}_API_KEY`;
 }
 
 export default function ProvidersSection({ providers, onRefresh }: Props) {
@@ -39,7 +55,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditState>({ name: "", base_url: "", key_env: "", api_key: "" });
   const [adding, setAdding] = useState(false);
-  const [addForm, setAddForm] = useState<AddState>({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", type: "openai_compat" });
+  const [addForm, setAddForm] = useState<AddState>({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", credential_ref: null, type: "openai_compat" });
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [confirmClearKey, setConfirmClearKey] = useState<string | null>(null);
 
@@ -50,6 +66,9 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
   }
 
   async function saveEdit() {
+    // The credential picker mutates state on its own (via PUT
+    // /providers/{name}/credential); this save handles the non-credential
+    // edit fields (base_url, key_env legacy fallback) only.
     try {
       await patchConfig({
         providers: {
@@ -60,14 +79,25 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
           },
         },
       });
-      if (editForm.api_key.trim()) {
-        await setProviderKey(editForm.name, editForm.api_key.trim());
-      }
       setEditing(null);
       toast.success(`Saved ${editForm.name}`);
       onRefresh();
     } catch (e) {
       toast.error("Save failed", { detail: e instanceof Error ? e.message : undefined });
+    }
+  }
+
+  async function handleCredentialChange(p: Provider, ref: string | null) {
+    try {
+      await setProviderCredential(p.name, ref);
+      toast.success(
+        ref ? `${p.name} → $${ref}` : `Cleared credential for ${p.name}`,
+      );
+      onRefresh();
+    } catch (e) {
+      toast.error("Failed to bind credential", {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     }
   }
 
@@ -95,10 +125,11 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
 
   async function addProvider() {
     if (!addForm.name.trim()) return;
+    const name = addForm.name.trim();
     try {
       await patchConfig({
         providers: {
-          [addForm.name.trim()]: {
+          [name]: {
             base_url: addForm.base_url || undefined,
             key_env: addForm.key_env || undefined,
             has_key: false,
@@ -107,12 +138,18 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
           },
         },
       });
-      if (addForm.api_key.trim()) {
-        await setProviderKey(addForm.name.trim(), addForm.api_key.trim());
+      // After the provider is registered, bind it to the chosen credential
+      // (if any). The PUT endpoint also clears use_inline_key/api_key_env on
+      // the server side so the legacy paths can't shadow the user's choice.
+      if (addForm.credential_ref) {
+        await setProviderCredential(name, addForm.credential_ref);
+      } else if (addForm.api_key.trim()) {
+        // Legacy "paste key directly" support — kept for the rare user who
+        // skips the picker and types into the inline field.
+        await setProviderKey(name, addForm.api_key.trim());
       }
-      const name = addForm.name.trim();
       setAdding(false);
-      setAddForm({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", type: "openai_compat" });
+      setAddForm({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", credential_ref: null, type: "openai_compat" });
       toast.success(`Added ${name}`);
       onRefresh();
     } catch (e) {
@@ -136,29 +173,35 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                 />
               </div>
               <div className="settings-field">
-                <label className="settings-field-label">Key env var</label>
+                <label className="settings-field-label">Credential</label>
+                <CredentialPicker
+                  value={p.credential_ref ?? null}
+                  onChange={(ref) => void handleCredentialChange(p, ref)}
+                  defaultNameSuggestion={defaultCredentialName(p)}
+                />
+                <span className="settings-field-hint">
+                  Pick a stored credential or create a new one. Takes
+                  precedence over the legacy env-var / inline key paths.
+                </span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label">
+                  Key env var <span style={{opacity:0.7,fontWeight:400}}>(legacy fallback)</span>
+                </label>
                 <input
                   className="settings-input"
                   value={editForm.key_env}
                   onChange={(e) => setEditForm((f) => ({ ...f, key_env: e.target.value }))}
                   placeholder="MY_PROVIDER_API_KEY"
-                />
-              </div>
-              <div className="settings-field">
-                <label className="settings-field-label">API key <span style={{opacity:0.7,fontWeight:400}}>(override)</span></label>
-                <input
-                  className="settings-input"
-                  type="password"
-                  value={editForm.api_key}
-                  onChange={(e) => setEditForm((f) => ({ ...f, api_key: e.target.value }))}
-                  placeholder="sk-…  (leave blank to use env var)"
-                  autoComplete="off"
+                  disabled={!!p.credential_ref}
                 />
                 <span className="settings-field-hint">
-                  Optional — overrides the env var above. Stored at ~/.nexus/secrets.toml (0600).
+                  {p.credential_ref
+                    ? "Disabled while a credential is bound."
+                    : "Used only when no credential is bound."}
                 </span>
               </div>
-              {p.key_source === "inline" && (
+              {p.key_source === "inline" && !p.credential_ref && (
                 <div className="settings-row">
                   {confirmClearKey === p.name ? (
                     <>
@@ -171,7 +214,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                     </>
                   ) : (
                     <button className="settings-clear-key-btn" onClick={() => setConfirmClearKey(p.name)}>
-                      Clear key
+                      Clear legacy inline key
                     </button>
                   )}
                 </div>

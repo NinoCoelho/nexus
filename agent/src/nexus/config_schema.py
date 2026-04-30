@@ -39,6 +39,12 @@ class ProviderConfig(BaseModel):
     base_url: str = ""
     api_key_env: str = ""
     use_inline_key: bool = False
+    # Name of an entry in the credential store (~/.nexus/secrets.toml) to use
+    # for this provider's API key. When set, takes precedence over the legacy
+    # ``use_inline_key`` and ``api_key_env`` paths — the resolver consults
+    # ``secrets.resolve(credential_ref)`` (env-first, store fallback). Older
+    # configs without this field keep working unchanged.
+    credential_ref: str | None = None
     type: str = "openai_compat"  # "openai_compat" | "anthropic" | "ollama"
 
 

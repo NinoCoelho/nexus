@@ -15,15 +15,18 @@ router = APIRouter()
 
 @router.get("/providers")
 async def list_providers(app_state: dict[str, Any] = Depends(get_app_state)) -> list[dict[str, Any]]:
-    from ...secrets import get as secrets_get
+    from ...secrets import get as secrets_get, resolve as secrets_resolve
     cfg = app_state["cfg"]
     if not cfg:
         return []
     result = []
     for name, p in cfg.providers.items():
         key_source: str | None = None
+        cred_ref = getattr(p, "credential_ref", None)
         if p.type == "ollama":
             key_source = "anonymous"
+        elif cred_ref and secrets_resolve(cred_ref):
+            key_source = "credential"
         elif p.use_inline_key and secrets_get(name):
             key_source = "inline"
         elif p.api_key_env and os.environ.get(p.api_key_env):
@@ -34,6 +37,7 @@ async def list_providers(app_state: dict[str, Any] = Depends(get_app_state)) -> 
             "has_key": key_source is not None,
             "key_source": key_source,
             "key_env": p.api_key_env,
+            "credential_ref": cred_ref,
             "type": p.type,
         })
     return result
@@ -80,9 +84,14 @@ async def list_provider_models(
                     return {"models": [], "ok": False, "error": f"connection refused — is Ollama running? ({exc})"}
 
             elif provider_type == "anthropic":
-                # Resolve key
+                # Resolve key — credential_ref > inline > env, mirroring the
+                # provider registry resolver.
+                from ...secrets import resolve as secrets_resolve
                 api_key = ""
-                if p.use_inline_key:
+                cred_ref = getattr(p, "credential_ref", None)
+                if cred_ref:
+                    api_key = secrets_resolve(cred_ref) or ""
+                if not api_key and p.use_inline_key:
                     api_key = secrets_get(name) or ""
                 if not api_key and p.api_key_env:
                     api_key = os.environ.get(p.api_key_env, "")
@@ -102,8 +111,12 @@ async def list_provider_models(
                 # openai_compat
                 if not p.base_url:
                     return {"models": [], "ok": False, "error": "base_url not configured for this provider"}
+                from ...secrets import resolve as secrets_resolve
                 api_key = ""
-                if p.use_inline_key:
+                cred_ref = getattr(p, "credential_ref", None)
+                if cred_ref:
+                    api_key = secrets_resolve(cred_ref) or ""
+                if not api_key and p.use_inline_key:
                     api_key = secrets_get(name) or ""
                 if not api_key and p.api_key_env:
                     api_key = os.environ.get(p.api_key_env, "")
@@ -139,7 +152,7 @@ async def set_provider_key(
     cfg = app_state["cfg"] or load_cfg()
     if name not in cfg.providers:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"provider {name!r} not found")
-    _secrets.set(name, api_key)
+    _secrets.set(name, api_key, kind="provider")
     cfg.providers[name].use_inline_key = True
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
@@ -158,5 +171,46 @@ async def clear_provider_key(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"provider {name!r} not found")
     _secrets.delete(name)
     cfg.providers[name].use_inline_key = False
+    save_cfg(cfg)
+    _rebuild_registry(cfg, app_state, a)
+
+
+@router.put("/providers/{name}/credential", status_code=status.HTTP_204_NO_CONTENT)
+async def set_provider_credential(
+    name: str,
+    body: dict[str, Any],
+    app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
+) -> None:
+    """Point a provider at a named entry in the credential store.
+
+    Body: ``{"credential_ref": "<NAME>" | null}``. Passing ``null`` clears
+    the link; the provider falls back to legacy inline/env paths.
+
+    When a non-null ``credential_ref`` is set we also clear ``use_inline_key``
+    and ``api_key_env`` — the user explicitly chose the credential path, and
+    leaving the legacy fields populated would silently mask configuration
+    drift (e.g. an unset env var hiding behind a credential ref the user
+    later deletes).
+    """
+    from ...config_file import load as load_cfg, save as save_cfg
+
+    cfg = app_state["cfg"] or load_cfg()
+    if name not in cfg.providers:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"provider {name!r} not found",
+        )
+    raw_ref = body.get("credential_ref")
+    if raw_ref is not None and (not isinstance(raw_ref, str) or not raw_ref):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="credential_ref must be a non-empty string or null",
+        )
+    p = cfg.providers[name]
+    p.credential_ref = raw_ref or None
+    if raw_ref:
+        p.use_inline_key = False
+        p.api_key_env = ""
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
