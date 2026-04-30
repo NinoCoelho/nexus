@@ -19,7 +19,7 @@ interface Props {
 
 const KINDS: FieldKind[] = [
   "text", "textarea", "number", "boolean",
-  "select", "multiselect", "date", "vault-link", "formula",
+  "select", "multiselect", "date", "vault-link", "formula", "ref",
 ];
 
 export default function SchemaEditor({ initialTitle, initialFields, onSave, onCancel }: Props) {
@@ -80,7 +80,7 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
             <span>Name</span>
             <span>Label</span>
             <span>Kind</span>
-            <span>Choices / Formula</span>
+            <span>Choices / Formula / Ref target</span>
             <span>Req</span>
             <span></span>
           </div>
@@ -121,6 +121,27 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
                   })}
                   placeholder="a,b,c"
                 />
+              ) : f.kind === "ref" ? (
+                <div style={{ display: "flex", gap: 4 }}>
+                  <input
+                    className="form-input"
+                    style={{ flex: 2 }}
+                    value={f.target_table ?? ""}
+                    onChange={(e) => update(i, { target_table: e.target.value })}
+                    placeholder="path/to/table.md"
+                    title="Vault-relative path to the target data-table file"
+                  />
+                  <select
+                    className="form-input"
+                    style={{ flex: 1 }}
+                    value={f.cardinality ?? "one"}
+                    onChange={(e) => update(i, { cardinality: e.target.value as "one" | "many" })}
+                    title="one = FK to a single row; many = N:N"
+                  >
+                    <option value="one">one</option>
+                    <option value="many">many</option>
+                  </select>
+                </div>
               ) : (
                 <input className="form-input" disabled value="" />
               )}

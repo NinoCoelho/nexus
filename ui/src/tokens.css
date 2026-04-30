@@ -61,9 +61,10 @@
   --accent-subtle:  color-mix(in srgb, var(--accent) 22%, transparent);
 
   /* Foreground for text/icons sitting on an `--accent` fill.
-     Every theme's --accent lands in the mid-to-light lightness band
-     (HSL L 40%–80%), so a near-black on-color clears WCAG AA (≥4.5:1)
-     across both modes — Material 3 'onPrimary' pattern. */
+     Default near-black; each theme overrides this with a per-theme
+     dk/lt pair interpolated by --brightness so dark-mode accents
+     (which are light) get dark text and light-mode accents (which can
+     be dark, e.g. neon olive, biophilic clay) get white text. */
   --fg-on-accent:   hsl(0, 0%, 8%);
 
   /* Foreground for text on saturated status fills (--bad / --warn / --ok).
@@ -162,6 +163,9 @@
   --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
   --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
 
+  /* mermaidcore: accent stays light-to-mid teal in both modes; dark text works. */
+  --fg-on-accent: hsl(0, 0%, 8%);
+
   --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
   --danger: var(--bad); --warning: var(--warn);
   --copper: var(--accent); --error: var(--bad);
@@ -241,6 +245,9 @@
   --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
   --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
 
+  /* neutrals: accent is mid-sand (50–62% L); dark text reads cleanly in both modes. */
+  --fg-on-accent: hsl(30, 18%, 8%);
+
   --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
   --danger: var(--bad); --warning: var(--warn);
   --copper: var(--accent); --error: var(--bad);
@@ -263,9 +270,9 @@
   --fg-dim_dk: hsl(0, 0%, 60%);    --fg-dim_lt: hsl(0, 0%, 42%);
   --fg-faint_dk: hsl(0, 0%, 38%);  --fg-faint_lt: hsl(0, 0%, 60%);
 
-  --accent_dk: hsl(81, 100%, 62%); --accent_lt: hsl(81, 90%, 40%);
-  --accent-hi_dk: hsl(81, 100%, 72%); --accent-hi_lt: hsl(81, 95%, 50%);
-  --accent-lo_dk: hsl(81, 90%, 48%); --accent-lo_lt: hsl(81, 80%, 30%);
+  --accent_dk: hsl(81, 100%, 62%); --accent_lt: hsl(81, 78%, 55%);
+  --accent-hi_dk: hsl(81, 100%, 72%); --accent-hi_lt: hsl(81, 85%, 65%);
+  --accent-lo_dk: hsl(81, 90%, 48%); --accent-lo_lt: hsl(81, 70%, 38%);
 
   --ok_dk: hsl(140, 35%, 52%);     --ok_lt: hsl(140, 28%, 42%);
   --warn_dk: hsl(45, 60%, 55%);    --warn_lt: hsl(45, 55%, 45%);
@@ -320,6 +327,11 @@
   --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
   --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
 
+  /* neon: lime accent is bright in dark mode (62% L);
+     light-mode accent now sits at 55% L (lifted from 40%) so near-black
+     text clears WCAG AA at both extremes without an interpolated flip. */
+  --fg-on-accent: hsl(0, 0%, 6%);
+
   --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
   --danger: var(--bad); --warning: var(--warn);
   --copper: var(--accent); --error: var(--bad);
@@ -342,9 +354,9 @@
   --fg-dim_dk: hsl(40, 8%, 58%);    --fg-dim_lt: hsl(40, 6%, 38%);
   --fg-faint_dk: hsl(40, 6%, 38%);  --fg-faint_lt: hsl(40, 5%, 56%);
 
-  --accent_dk: hsl(30, 46%, 59%);   --accent_lt: hsl(30, 35%, 44%);
-  --accent-hi_dk: hsl(30, 52%, 68%); --accent-hi_lt: hsl(30, 42%, 54%);
-  --accent-lo_dk: hsl(30, 38%, 46%); --accent-lo_lt: hsl(30, 28%, 34%);
+  --accent_dk: hsl(30, 46%, 59%);   --accent_lt: hsl(30, 38%, 52%);
+  --accent-hi_dk: hsl(30, 52%, 68%); --accent-hi_lt: hsl(30, 44%, 60%);
+  --accent-lo_dk: hsl(30, 38%, 46%); --accent-lo_lt: hsl(30, 32%, 38%);
 
   --ok_dk: hsl(153, 13%, 39%);      --ok_lt: hsl(153, 13%, 34%);
   --warn_dk: hsl(40, 40%, 50%);     --warn_lt: hsl(40, 40%, 42%);
@@ -398,6 +410,9 @@
   --shadow: 0 2px 8px var(--shadow-color);
   --bg-blur: color-mix(in srgb, var(--bg) 85%, transparent);
   --backdrop: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+
+  /* biophilic: clay accent stays mid-light (52–59% L); near-black reads cleanly. */
+  --fg-on-accent: hsl(30, 18%, 8%);
 
   --sage: var(--ok); --amber: var(--warn); --rust: var(--bad);
   --danger: var(--bad); --warning: var(--warn);

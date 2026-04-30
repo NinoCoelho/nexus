@@ -152,7 +152,7 @@
   padding: 3px 8px;
   font-size: 11px;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -977,12 +977,12 @@
 .kv-hop-btn--active {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
 }
 
 .kv-hop-btn--active:hover {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
 }
 
 .kv-hop-btn:disabled {

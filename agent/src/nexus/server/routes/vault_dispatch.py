@@ -318,6 +318,16 @@ async def _dispatch_impl(
         context_str += f" (event {event_id})"
     session = store.create(context=context_str)
 
+    # ``chat-hidden`` sessions back the database chat bubble. The bubble owns
+    # its own persistent session id (in _data.md), and the bubble UX is the
+    # only intended way for the user to reach it — exposing it in the main
+    # sidebar list would break the "single session per database" feel.
+    if mode == "chat-hidden":
+        try:
+            store.mark_hidden(session.id)
+        except Exception:
+            log.exception("dispatch: chat-hidden mark hidden failed")
+
     try:
         store.rename(session.id, (seed_title or title).strip()[:60])
     except Exception:
@@ -422,15 +432,74 @@ async def _dispatch_impl(
     }
 
 
+def _compose_database_context_seed(folder: str) -> str:
+    """Compose a `chat-hidden` seed describing the database for the bubble.
+
+    Lists tables (with row counts) and any operations the user has saved on
+    the dashboard. The agent uses this as the always-present "current
+    database context" for the floating data-chat bubble.
+    """
+    from ... import vault_datatable_index, vault_dashboard
+    folder = (folder or "").strip("/")
+    title = folder.rsplit("/", 1)[-1] if folder else "(root)"
+    try:
+        tables = vault_datatable_index.list_tables_in_folder(folder)
+    except Exception:
+        tables = []
+    try:
+        dashboard = vault_dashboard.read_dashboard(folder)
+    except Exception:
+        dashboard = {"operations": []}
+
+    parts: list[str] = [HIDDEN_SEED_MARKER.rstrip()]
+    parts.append(
+        f"You are the data assistant for the **{dashboard.get('title') or title}** database "
+        f"(vault folder `{folder or '/'}`). Use `datatable_manage` and `dashboard_manage` "
+        f"to read or change tables and operations."
+    )
+    if tables:
+        parts.append("")
+        parts.append("**Tables in this database:**")
+        for t in tables:
+            parts.append(
+                f"- `{t['path']}` — {t['title']} ({t['row_count']} row(s), {t['field_count']} col(s))"
+            )
+    else:
+        parts.append("")
+        parts.append("This database has no tables yet.")
+    operations = dashboard.get("operations") or []
+    if operations:
+        parts.append("")
+        parts.append("**Configured operations:**")
+        for op in operations:
+            parts.append(
+                f"- {op.get('label')} ({op.get('kind')}): `{op.get('id')}`"
+                + (f" → {op.get('table')}" if op.get("table") else "")
+            )
+    parts.append("")
+    parts.append(
+        "If the user asks for a quick action that fits a known operation, use it. "
+        "If they describe a new recurring action, propose adding it as an operation "
+        "via `dashboard_manage.add_operation`."
+    )
+    return "\n".join(parts)
+
+
 @router.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)
 async def vault_dispatch(
     body: dict,
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
 ) -> dict:
-    """Create a chat session seeded from a vault file or kanban card.
+    """Create a chat session seeded from a vault file, kanban card, or database folder.
 
-    Body: ``{path, card_id?, mode?}`` where ``mode`` is one of:
+    Body: ``{path?, folder?, card_id?, event_id?, mode?}``.
+
+    When ``folder`` is provided (without ``path``) and ``mode`` is "chat-hidden",
+    the seed describes the database for the floating chat bubble. Otherwise
+    the existing path-based flow runs (kanban card / calendar event / vault file).
+
+    Modes:
       - ``"chat"`` (default): returns a seed the UI prefills into its input.
       - ``"background"``: starts the agent server-side; UI doesn't navigate.
         Stamps ``status=running`` on the card and updates to ``done``/``failed``
@@ -441,9 +510,36 @@ async def vault_dispatch(
         filters out of the displayed message list.
     """
     path = body.get("path", "")
+    folder = body.get("folder")
     card_id = body.get("card_id")
     event_id = body.get("event_id")
     mode = body.get("mode") or "chat"
+
+    # Folder-only dispatch: seeds the per-database chat bubble session.
+    if folder is not None and not path and not card_id and not event_id:
+        if mode != "chat-hidden":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="folder dispatch requires mode='chat-hidden'",
+            )
+        seed = _compose_database_context_seed(folder)
+        title = (folder or "").strip("/").rsplit("/", 1)[-1] or "(root)"
+        session = store.create(context=f"Data bubble: {folder}")
+        try:
+            store.mark_hidden(session.id)
+        except Exception:
+            log.exception("dispatch: chat-hidden mark hidden failed (folder)")
+        try:
+            store.rename(session.id, f"Data — {title}"[:60])
+        except Exception:
+            log.exception("dispatch: title rename failed for folder seed")
+        return {
+            "session_id": session.id,
+            "seed_message": seed,
+            "folder": folder,
+            "mode": mode,
+        }
+
     try:
         return await _dispatch_impl(
             path=path, card_id=card_id, event_id=event_id,

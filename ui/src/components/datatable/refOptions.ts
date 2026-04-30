@@ -1,8 +1,11 @@
-// Shared helpers for kind: "ref" UI: target-path resolution and options loading.
+// Shared helpers for kind: "ref" UI: target-path resolution, label inference,
+// and options loading. The label-inference logic is also used by the recursive
+// RefPreviewPopup drill-down so the same "id — name" summary appears in both
+// the picker and the popup.
 
 import { useEffect, useState } from "react";
 import type { FieldSchema } from "../../types/form";
-import { getVaultDataTable } from "../../api/datatable";
+import { getVaultDataTable, type DataTable } from "../../api/datatable";
 
 export interface RefOption {
   id: string;
@@ -23,7 +26,81 @@ export function resolveRefPath(hostPath: string, target: string): string {
 }
 
 /**
- * Load picker options from the target table's primary-key + first text column.
+ * Pick the row's identifier column and a friendly label column.
+ *
+ * - Primary key: the schema's explicit ``table.primary_key`` if present;
+ *   otherwise the first ``required: true`` text/number field (the natural
+ *   key); otherwise ``_id`` (the auto-assigned hash).
+ * - Label field: the first column whose name hints at being a display name
+ *   (``name``/``title``/``label``/``full_name``); otherwise the first text
+ *   field that isn't the primary key. Returns ``null`` if no good label
+ *   column exists — caller falls back to id-only summaries.
+ */
+export function deriveLabelInfo(
+  fields: FieldSchema[],
+  tableMeta: { primary_key?: string } | null | undefined,
+): { pkName: string; labelField: FieldSchema | null } {
+  let pk = tableMeta?.primary_key;
+  if (!pk) {
+    const naturalPk = fields.find(
+      (f) => f.required === true && (f.kind === "text" || f.kind === "number"),
+    );
+    pk = naturalPk?.name ?? "_id";
+  }
+  const NAME_HINTS = new Set(["name", "title", "label", "full_name"]);
+  let labelField = fields.find(
+    (f) => f.name !== pk && NAME_HINTS.has(f.name.toLowerCase()),
+  );
+  if (!labelField) {
+    labelField = fields.find(
+      (f) => f.name !== pk && (f.kind ?? "text") === "text",
+    );
+  }
+  return { pkName: pk, labelField: labelField ?? null };
+}
+
+/**
+ * Format a row as ``"<id> — <label-value>"``, or just ``"<id>"`` when the
+ * label is missing or empty. Mirrors the picker's existing format so all
+ * ref UI shows the same summaries.
+ */
+export function summarizeRow(
+  row: Record<string, unknown>,
+  pkName: string,
+  labelField: FieldSchema | null,
+): string {
+  const id = String(row[pkName] ?? row._id ?? "");
+  if (!labelField) return id;
+  const labelVal = String(row[labelField.name] ?? "").trim();
+  return labelVal ? `${id} — ${labelVal}` : id;
+}
+
+/**
+ * Module-level cache of in-flight + completed ``getVaultDataTable`` promises,
+ * keyed by absolute vault path. The recursive ref-drill popup may resolve the
+ * same target table multiple times within a single session (sibling fields
+ * on the same row, or repeated drill-downs into the same entity). Sharing a
+ * promise per path means the second resolver awaits the same fetch instead
+ * of re-hitting the server.
+ */
+const _tableCache = new Map<string, Promise<DataTable>>();
+
+export function fetchTableCached(absPath: string): Promise<DataTable> {
+  let p = _tableCache.get(absPath);
+  if (!p) {
+    p = getVaultDataTable(absPath).catch((err) => {
+      // Drop failed entries so the next call retries instead of returning
+      // the stale rejection forever.
+      _tableCache.delete(absPath);
+      throw err;
+    });
+    _tableCache.set(absPath, p);
+  }
+  return p;
+}
+
+/**
+ * Load picker options from the target table's primary-key + label column.
  * Returns `null` while loading; `[]` when target is unset or load fails.
  */
 export function useRefOptions(field: FieldSchema, hostPath: string): {
@@ -45,43 +122,12 @@ export function useRefOptions(field: FieldSchema, hostPath: string): {
     setState({ options: null, error: null });
     (async () => {
       try {
-        const tbl = await getVaultDataTable(target);
+        const tbl = await fetchTableCached(target);
         if (cancelled) return;
-        const tableMeta = (tbl.schema as { table?: { primary_key?: string } }).table ?? {};
-        // Prefer the schema-declared primary_key. When absent, infer the
-        // natural key: first `required: true` text/number field — that's
-        // the user-facing identifier (e.g. "order_id" / "service_id").
-        // Falling back to "_id" (the auto-assigned hash) makes the picker
-        // offer values that don't match any existing ref data.
-        const fields = tbl.schema.fields;
-        let pk = tableMeta.primary_key;
-        if (!pk) {
-          const naturalPk = fields.find(
-            (f) =>
-              f.required === true &&
-              (f.kind === "text" || f.kind === "number"),
-          );
-          pk = naturalPk?.name ?? "_id";
-        }
-        // Pick a labelField that's distinct from the pk and looks human-friendly.
-        // Prefer a "name"/"title"/"label" field if any; otherwise the first
-        // text field that isn't the pk.
-        const NAME_HINTS = new Set(["name", "title", "label", "full_name"]);
-        let labelField = fields.find(
-          (f) => f.name !== pk && NAME_HINTS.has(f.name.toLowerCase()),
-        );
-        if (!labelField) {
-          labelField = fields.find(
-            (f) => f.name !== pk && (f.kind ?? "text") === "text",
-          );
-        }
+        const tableMeta = (tbl.schema as { table?: { primary_key?: string } }).table ?? null;
+        const { pkName, labelField } = deriveLabelInfo(tbl.schema.fields, tableMeta);
         const opts = tbl.rows
-          .map((r) => {
-            const id = String(r[pk] ?? r._id ?? "");
-            const labelVal = labelField ? String(r[labelField.name] ?? "").trim() : "";
-            const label = labelVal ? `${id} — ${labelVal}` : id;
-            return { id, label };
-          })
+          .map((r) => ({ id: String(r[pkName] ?? r._id ?? ""), label: summarizeRow(r, pkName, labelField) }))
           .filter((o) => o.id);
         setState({ options: opts, error: null });
       } catch (e) {

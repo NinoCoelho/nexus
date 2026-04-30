@@ -33,7 +33,7 @@
 .csv-btn-primary {
   background: var(--accent, #3a6ea5);
   border-color: var(--accent, #3a6ea5);
-  color: #fff;
+  color: var(--fg-on-accent, #fff);
 }
 
 .csv-table-wrap {

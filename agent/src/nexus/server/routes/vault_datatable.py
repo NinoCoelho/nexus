@@ -7,6 +7,41 @@ from fastapi import APIRouter, HTTPException, status
 router = APIRouter()
 
 
+@router.get("/vault/datatable/databases")
+async def vault_datatable_databases() -> dict:
+    """List every "database" (folder containing ≥1 data-table file)."""
+    from ... import vault_datatable_index
+    databases = vault_datatable_index.list_databases()
+    return {"databases": databases, "count": len(databases)}
+
+
+@router.get("/vault/datatable/list")
+async def vault_datatable_list(folder: str = "") -> dict:
+    """List the data-tables inside a single folder."""
+    from ... import vault_datatable_index
+    tables = vault_datatable_index.list_tables_in_folder(folder)
+    return {"folder": folder, "tables": tables, "count": len(tables)}
+
+
+@router.get("/vault/datatable/erdiagram")
+async def vault_datatable_erdiagram(folder: str = "") -> dict:
+    """Generate a mermaid erDiagram for a database (folder of data-tables)."""
+    from ... import vault_datatable_index
+    return {"folder": folder, "mermaid": vault_datatable_index.er_diagram(folder)}
+
+
+@router.get("/vault/datatable/related")
+async def vault_datatable_related(path: str, row_id: str) -> dict:
+    """Return rows from other tables that reference ``(path, row_id)``."""
+    from ... import vault_datatable
+    try:
+        # Validate the host table exists.
+        vault_datatable.read_table(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+    return {"path": path, "row_id": row_id, **vault_datatable.related_rows(path, row_id)}
+
+
 @router.get("/vault/datatable")
 async def vault_datatable_get(path: str) -> dict:
     from ... import vault_datatable

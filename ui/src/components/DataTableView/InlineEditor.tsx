@@ -1,21 +1,35 @@
 // DataTableView — inline cell editor rendered in place of the cell value.
 
 import type { FieldSchema } from "../../types/form";
+import RefEditor from "./RefEditor";
 
 interface Props {
   field: FieldSchema;
   value: unknown;
+  hostPath?: string;
   onChange: (v: unknown) => void;
   onCommit: () => void;
   onCancel: () => void;
 }
 
-export default function InlineEditor({ field, value, onChange, onCommit, onCancel }: Props) {
+export default function InlineEditor({ field, value, hostPath, onChange, onCommit, onCancel }: Props) {
   const kind = field.kind ?? "text";
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") { e.preventDefault(); onCommit(); }
     else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
   };
+  if (kind === "ref") {
+    return (
+      <RefEditor
+        field={field}
+        hostPath={hostPath ?? ""}
+        value={value}
+        onChange={onChange}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    );
+  }
   if (kind === "boolean") {
     return (
       <input

@@ -117,7 +117,7 @@
 
 .approval-btn-allow {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   border-color: var(--accent);
   font-weight: 600;
 }

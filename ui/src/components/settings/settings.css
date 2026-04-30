@@ -299,7 +299,7 @@
   flex-shrink: 0;
   background: var(--accent);
   border: none;
-  color: var(--bg);
+  color: var(--fg-on-accent);
   font-size: 12px;
   font-weight: 600;
   padding: 6px 12px;

@@ -60,9 +60,11 @@ interface VaultEditorPanelProps {
   onViewEntityGraph?: (path: string) => void;
   /** Called when the user opens a `.md` file with `calendar-plugin:` frontmatter. */
   onOpenCalendar?: (path: string) => void;
+  /** Open another data-table (drill-down from related-rows panel). */
+  onOpenTable?: (path: string) => void;
 }
 
-export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar }: VaultEditorPanelProps) {
+export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar, onOpenTable }: VaultEditorPanelProps) {
   const [content, setContent] = useState("");
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
   const [isBinary, setIsBinary] = useState(false);
@@ -281,7 +283,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
           ) : isKanban && !editMode ? (
             <KanbanBoard path={selectedPath!} onOpenInChat={onOpenInChat} />
           ) : isDataTable && !editMode ? (
-            <DataTableView path={selectedPath!} />
+            <DataTableView path={selectedPath!} onOpenTable={onOpenTable} />
           ) : isCsv ? (
             <CsvEditorView path={selectedPath!} />
           ) : editMode && canEdit && splitMode && isMarkdown ? (

@@ -86,6 +86,7 @@ def build_tool_registry(
     from nexus.tools.acp_call import ACP_CALL_TOOL, acp_call
     from nexus.tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
     from nexus.tools.csv_tool import CSV_TOOL, handle_csv_tool
+    from nexus.tools.dashboard_tool import DASHBOARD_MANAGE_TOOL, handle_dashboard_tool
     from nexus.tools.datatable_tool import DATATABLE_MANAGE_TOOL, handle_datatable_tool
     from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
@@ -225,6 +226,12 @@ def build_tool_registry(
         return handle_datatable_tool(args)
 
     registry.register(_SimpleToolHandler(DATATABLE_MANAGE_TOOL, _datatable))
+
+    # dashboard_manage — per-database `_data.md` operations + chat session id.
+    async def _dashboard(args: dict) -> str:
+        return handle_dashboard_tool(args)
+
+    registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
 
     # vault_csv — DuckDB analytics over CSV/TSV files
     async def _csv(args: dict) -> str:

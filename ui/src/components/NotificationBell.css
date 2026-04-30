@@ -16,7 +16,7 @@
   padding: 0 4px;
   border-radius: 999px;
   background: var(--bad);
-  color: #fff;
+  color: var(--fg-on-status);
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;
@@ -54,7 +54,7 @@
 .nx-bell-pending-pill {
   font-size: 11px;
   font-weight: 700;
-  color: #fff;
+  color: var(--fg-on-status);
   background: var(--bad);
   padding: 2px 8px;
   border-radius: 999px;
@@ -149,12 +149,12 @@
 
 .nx-bell-status--pending {
   background: var(--bad);
-  color: #fff;
+  color: var(--fg-on-status);
 }
 
 .nx-bell-status--answered {
   background: var(--sage, #5e8b6c);
-  color: #fff;
+  color: var(--fg-on-status);
 }
 
 .nx-bell-status--auto_answered {
@@ -200,7 +200,7 @@
 
 .nx-bell-mode--live {
   background: var(--bad);
-  color: #fff;
+  color: var(--fg-on-status);
 }
 
 .nx-bell-mode--parked {

@@ -50,6 +50,16 @@ export function IconKanban() {
   );
 }
 
+export function IconDatabase() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <ellipse cx="10" cy="5" rx="6" ry="2" />
+      <path d="M4 5v5c0 1.1 2.7 2 6 2s6-0.9 6-2V5" />
+      <path d="M4 10v5c0 1.1 2.7 2 6 2s6-0.9 6-2v-5" />
+    </svg>
+  );
+}
+
 export function IconCalendar() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

@@ -8,6 +8,7 @@
 
 import { FormEvent, useState } from "react";
 import type { FieldSchema } from "../types/form";
+import { useRefOptions } from "./datatable/refOptions";
 import "./FormRenderer.css";
 
 interface Props {
@@ -16,6 +17,8 @@ interface Props {
   onSubmit: (values: Record<string, unknown>) => void;
   onCancel?: () => void;
   submitLabel?: string;
+  /** Vault path of the host file. Required for kind="ref" target_table resolution. */
+  hostPath?: string;
 }
 
 export default function FormRenderer({
@@ -24,6 +27,7 @@ export default function FormRenderer({
   onSubmit,
   onCancel,
   submitLabel = "Submit",
+  hostPath = "",
 }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const init: Record<string, unknown> = {};
@@ -86,7 +90,7 @@ export default function FormRenderer({
             {f.required && <span className="form-required"> *</span>}
           </label>
           {f.help && <p className="form-help">{f.help}</p>}
-          <FieldInput field={f} value={values[f.name]} onChange={(v) => set(f.name, v)} />
+          <FieldInput field={f} value={values[f.name]} onChange={(v) => set(f.name, v)} hostPath={hostPath} />
           {errors[f.name] && <p className="form-error">{errors[f.name]}</p>}
         </div>
       ))}
@@ -108,10 +112,59 @@ interface FieldInputProps {
   field: FieldSchema;
   value: unknown;
   onChange: (v: unknown) => void;
+  hostPath?: string;
 }
 
-function FieldInput({ field, value, onChange }: FieldInputProps) {
+function RefFieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
+  const cardinality = field.cardinality ?? "one";
+  const { options, error } = useRefOptions(field, hostPath ?? "");
+  if (cardinality === "many") {
+    const arr = Array.isArray(value) ? (value as unknown[]) : value ? [value] : [];
+    return (
+      <input
+        type="text"
+        className="form-input"
+        value={arr.map(String).join(", ")}
+        onChange={(e) =>
+          onChange(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))
+        }
+        placeholder="comma-separated IDs"
+      />
+    );
+  }
+  if (options === null) {
+    return <input className="form-input" disabled value="loading…" />;
+  }
+  if (error) {
+    return (
+      <input
+        type="text"
+        className="form-input"
+        value={String(value ?? "")}
+        onChange={(e) => onChange(e.target.value)}
+        title={`target load failed: ${error}`}
+        placeholder="paste target row id"
+      />
+    );
+  }
+  return (
+    <select
+      className="form-input"
+      value={String(value ?? "")}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">—</option>
+      {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+    </select>
+  );
+}
+
+function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
   const kind = field.kind ?? "text";
+
+  if (kind === "ref") {
+    return <RefFieldInput field={field} value={value} onChange={onChange} hostPath={hostPath} />;
+  }
 
   if (kind === "boolean") {
     return (

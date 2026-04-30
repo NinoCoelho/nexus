@@ -267,7 +267,7 @@
   background: var(--accent);
   border: none;
   border-radius: 50%;
-  color: var(--bg);
+  color: var(--fg-on-accent);
   cursor: pointer;
   transition: background 150ms ease, opacity 150ms ease;
 }

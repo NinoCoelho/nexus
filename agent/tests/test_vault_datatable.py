@@ -169,6 +169,439 @@ def test_round_trip_preserves_special_chars():
     assert "line1" in tbl["rows"][0]["note"]
 
 
+# ── kind: ref relations ──────────────────────────────────────────────────────
+
+
+def test_kind_ref_round_trip():
+    """Schema fields with kind: ref preserve target_table + cardinality."""
+    schema = {
+        "fields": [
+            {"name": "id", "kind": "text"},
+            {
+                "name": "project",
+                "kind": "ref",
+                "target_table": "../projects/projects.md",
+                "cardinality": "one",
+            },
+            {
+                "name": "tags",
+                "kind": "ref",
+                "target_table": "tags.md",
+                "cardinality": "many",
+            },
+        ],
+    }
+    vault_datatable.create_table("data/tasks.md", schema)
+    vault_datatable.add_row(
+        "data/tasks.md",
+        {"id": "T-1", "project": "P-42", "tags": ["urgent", "bug"]},
+    )
+    tbl = vault_datatable.read_table("data/tasks.md")
+    fields = tbl["schema"]["fields"]
+    project_field = next(f for f in fields if f["name"] == "project")
+    assert project_field["kind"] == "ref"
+    assert project_field["target_table"] == "../projects/projects.md"
+    assert project_field["cardinality"] == "one"
+    tags_field = next(f for f in fields if f["name"] == "tags")
+    assert tags_field["cardinality"] == "many"
+    assert tbl["rows"][0]["project"] == "P-42"
+    assert tbl["rows"][0]["tags"] == ["urgent", "bug"]
+
+
+def test_resolve_ref_relative():
+    """Relative target_table anchors at the host file's directory."""
+    assert (
+        vault_datatable.resolve_ref("data/tasks/tasks.md", "../projects/projects.md")
+        == "data/projects/projects.md"
+    )
+    assert (
+        vault_datatable.resolve_ref("data/tasks.md", "./tags.md")
+        == "data/tags.md"
+    )
+
+
+def test_resolve_ref_absolute_passthrough():
+    """Non-relative target_table is treated as vault-absolute."""
+    assert (
+        vault_datatable.resolve_ref("data/tasks.md", "people/people.md")
+        == "people/people.md"
+    )
+
+
+def test_resolve_ref_empty():
+    assert vault_datatable.resolve_ref("anywhere.md", "") == ""
+
+
+def test_is_junction_auto_detect():
+    """Two ref fields and no other content fields → junction."""
+    schema = {
+        "fields": [
+            {"name": "order_id", "kind": "ref", "target_table": "orders.md"},
+            {"name": "product_id", "kind": "ref", "target_table": "products.md"},
+        ],
+    }
+    assert vault_datatable.is_junction(schema) is True
+
+
+def test_is_junction_extra_payload_not_auto():
+    """A junction-shaped table with extra payload columns is NOT auto-detected."""
+    schema = {
+        "fields": [
+            {"name": "order_id", "kind": "ref", "target_table": "orders.md"},
+            {"name": "product_id", "kind": "ref", "target_table": "products.md"},
+            {"name": "qty", "kind": "number"},
+        ],
+    }
+    assert vault_datatable.is_junction(schema) is False
+
+
+def test_is_junction_explicit_override_true():
+    """Explicit table.is_junction: true wins even with payload columns."""
+    schema = {
+        "table": {"is_junction": True},
+        "fields": [
+            {"name": "a", "kind": "ref", "target_table": "x.md"},
+            {"name": "b", "kind": "ref", "target_table": "y.md"},
+            {"name": "qty", "kind": "number"},
+        ],
+    }
+    assert vault_datatable.is_junction(schema) is True
+
+
+def test_is_junction_explicit_override_false():
+    """Explicit is_junction: false suppresses auto-detection."""
+    schema = {
+        "table": {"is_junction": False},
+        "fields": [
+            {"name": "a", "kind": "ref", "target_table": "x.md"},
+            {"name": "b", "kind": "ref", "target_table": "y.md"},
+        ],
+    }
+    assert vault_datatable.is_junction(schema) is False
+
+
+def test_is_junction_single_ref():
+    """A table with only one ref field is not a junction."""
+    schema = {
+        "fields": [
+            {"name": "a", "kind": "ref", "target_table": "x.md"},
+            {"name": "name", "kind": "text"},
+        ],
+    }
+    assert vault_datatable.is_junction(schema) is False
+
+
+def test_validate_schema_ref_missing_target():
+    schema = {"fields": [{"name": "p", "kind": "ref"}]}
+    warnings = vault_datatable.validate_schema(schema)
+    assert any("target_table" in w for w in warnings)
+
+
+def test_validate_schema_ref_invalid_cardinality():
+    schema = {
+        "fields": [
+            {"name": "p", "kind": "ref", "target_table": "x.md", "cardinality": "wat"},
+        ],
+    }
+    warnings = vault_datatable.validate_schema(schema)
+    assert any("cardinality" in w for w in warnings)
+
+
+def test_validate_schema_ref_clean():
+    schema = {
+        "fields": [
+            {"name": "p", "kind": "ref", "target_table": "x.md", "cardinality": "one"},
+        ],
+    }
+    assert vault_datatable.validate_schema(schema) == []
+
+
+# ── vault_datatable_index: databases discovery ────────────────────────────────
+
+
+def test_list_databases_groups_by_folder():
+    """Folders containing ≥1 data-table file appear as databases."""
+    from nexus import vault_datatable_index
+
+    vault_datatable.create_table(
+        "shop/customers.md", {"title": "Customers", "fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "shop/orders.md", {"title": "Orders", "fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "people/contacts.md", {"title": "Contacts", "fields": [{"name": "id", "kind": "text"}]},
+    )
+
+    dbs = vault_datatable_index.list_databases()
+    by_folder = {db["folder"]: db for db in dbs}
+    assert "shop" in by_folder
+    assert by_folder["shop"]["table_count"] == 2
+    assert by_folder["shop"]["title"] == "shop"
+    assert "people" in by_folder
+    assert by_folder["people"]["table_count"] == 1
+
+
+def test_list_tables_in_folder():
+    from nexus import vault_datatable_index
+
+    vault_datatable.create_table(
+        "shop/customers.md", {"title": "Customers", "fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+    vault_datatable.add_row("shop/customers.md", {"id": "C-2"})
+    vault_datatable.create_table(
+        "shop/orders.md", {"title": "Orders", "fields": [{"name": "id", "kind": "text"}]},
+    )
+
+    tables = vault_datatable_index.list_tables_in_folder("shop")
+    assert len(tables) == 2
+    by_path = {t["path"]: t for t in tables}
+    assert by_path["shop/customers.md"]["row_count"] == 2
+    assert by_path["shop/customers.md"]["title"] == "Customers"
+    assert by_path["shop/orders.md"]["row_count"] == 0
+
+
+def test_list_databases_excludes_non_table_md():
+    """Plain markdown files don't make a folder into a database."""
+    from nexus import vault_datatable_index
+    from nexus import vault as vault_mod
+
+    vault_mod.write_file("notes/diary.md", "# Just a note\n")
+    vault_datatable.create_table(
+        "notes/contacts.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+
+    dbs = vault_datatable_index.list_databases()
+    notes = [d for d in dbs if d["folder"] == "notes"]
+    assert len(notes) == 1
+    assert notes[0]["table_count"] == 1
+
+
+# ── Inbound refs / related rows ───────────────────────────────────────────────
+
+
+def test_find_inbound_refs_one_to_many():
+    """A ref from orders → customers shows up as inbound on customers."""
+    vault_datatable.create_table(
+        "shop/customers.md",
+        {"title": "Customers", "fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "title": "Orders",
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    refs = vault_datatable.find_inbound_refs("shop/customers.md")
+    assert len(refs) == 1
+    assert refs[0]["from_table"] == "shop/orders.md"
+    assert refs[0]["field_name"] == "customer_id"
+    assert refs[0]["is_junction"] is False
+
+
+def test_find_inbound_refs_resolves_relative_targets():
+    """Relative ../folder/file.md targets resolve to the same path as absolute."""
+    vault_datatable.create_table(
+        "data/projects/projects.md",
+        {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "data/tasks/tasks.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "project",
+                    "kind": "ref",
+                    "target_table": "../projects/projects.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    refs = vault_datatable.find_inbound_refs("data/projects/projects.md")
+    assert len(refs) == 1
+    assert refs[0]["from_table"] == "data/tasks/tasks.md"
+
+
+def test_related_rows_one_to_many():
+    """Customer C-1 sees its orders as inbound 1:N rows."""
+    vault_datatable.create_table(
+        "shop/customers.md",
+        {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.add_row("shop/customers.md", {"id": "C-1"})
+    vault_datatable.add_row("shop/customers.md", {"id": "C-2"})
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    vault_datatable.add_row("shop/orders.md", {"id": "O-1", "customer_id": "C-1"})
+    vault_datatable.add_row("shop/orders.md", {"id": "O-2", "customer_id": "C-1"})
+    vault_datatable.add_row("shop/orders.md", {"id": "O-3", "customer_id": "C-2"})
+
+    rel = vault_datatable.related_rows("shop/customers.md", "C-1")
+    assert len(rel["one_to_many"]) == 1
+    assert rel["one_to_many"][0]["count"] == 2
+    assert rel["many_to_many"] == []
+    assert {r["id"] for r in rel["one_to_many"][0]["rows"]} == {"O-1", "O-2"}
+
+
+def test_related_rows_many_to_many_via_junction():
+    """N:N: orders ↔ items via order_items junction surfaces items on order, not junction rows."""
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {"fields": [{"name": "id", "kind": "text"}], "table": {"primary_key": "id"}},
+    )
+    vault_datatable.add_row("shop/orders.md", {"id": "O-1"})
+
+    vault_datatable.create_table(
+        "shop/items.md",
+        {"fields": [{"name": "sku", "kind": "text"}, {"name": "name", "kind": "text"}],
+         "table": {"primary_key": "sku"}},
+    )
+    vault_datatable.add_row("shop/items.md", {"sku": "WIDGET-1", "name": "Widget"})
+    vault_datatable.add_row("shop/items.md", {"sku": "GIZMO-9", "name": "Gizmo"})
+    vault_datatable.add_row("shop/items.md", {"sku": "OTHER", "name": "Other"})
+
+    vault_datatable.create_table(
+        "shop/order_items.md",
+        {
+            "fields": [
+                {"name": "order_id", "kind": "ref", "target_table": "./orders.md"},
+                {"name": "sku", "kind": "ref", "target_table": "./items.md"},
+            ],
+        },
+    )
+    vault_datatable.add_row(
+        "shop/order_items.md", {"order_id": "O-1", "sku": "WIDGET-1"},
+    )
+    vault_datatable.add_row(
+        "shop/order_items.md", {"order_id": "O-1", "sku": "GIZMO-9"},
+    )
+
+    rel = vault_datatable.related_rows("shop/orders.md", "O-1")
+    assert rel["one_to_many"] == []
+    assert len(rel["many_to_many"]) == 1
+    m2m = rel["many_to_many"][0]
+    assert m2m["target_table"] == "shop/items.md"
+    assert m2m["count"] == 2
+    skus = {r["sku"] for r in m2m["rows"]}
+    assert skus == {"WIDGET-1", "GIZMO-9"}
+
+
+def test_er_diagram_one_to_many():
+    """Customers ↔ orders renders with the }o--|| cardinality marker."""
+    from nexus import vault_datatable_index
+    vault_datatable.create_table(
+        "shop/customers.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "shop/orders.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    )
+    erd = vault_datatable_index.er_diagram("shop")
+    assert erd.startswith("erDiagram")
+    assert "customers {" in erd
+    assert "orders {" in erd
+    assert "}o--||" in erd
+    assert '"customer_id"' in erd
+
+
+def test_er_diagram_junction_collapses():
+    """Two-ref junction without payload renders as a single }o--o{ line."""
+    from nexus import vault_datatable_index
+    vault_datatable.create_table(
+        "shop/orders.md", {"fields": [{"name": "id", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "shop/items.md", {"fields": [{"name": "sku", "kind": "text"}]},
+    )
+    vault_datatable.create_table(
+        "shop/order_items.md",
+        {
+            "fields": [
+                {"name": "order_id", "kind": "ref", "target_table": "./orders.md"},
+                {"name": "sku", "kind": "ref", "target_table": "./items.md"},
+            ],
+        },
+    )
+    erd = vault_datatable_index.er_diagram("shop")
+    assert "}o--o{" in erd
+    # The junction edge should not generate a separate node-level }o--|| line.
+    assert erd.count("}o--||") == 0
+
+
+def test_er_diagram_empty_folder():
+    from nexus import vault_datatable_index
+    assert vault_datatable_index.er_diagram("nope") == "erDiagram"
+
+
+def test_related_rows_cardinality_many_array_match():
+    """A field with cardinality=many storing a list still matches by membership."""
+    vault_datatable.create_table(
+        "tags.md", {"fields": [{"name": "name", "kind": "text"}]},
+    )
+    vault_datatable.add_row("tags.md", {"name": "urgent"})
+    vault_datatable.create_table(
+        "tasks.md",
+        {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "tags",
+                    "kind": "ref",
+                    "target_table": "tags.md",
+                    "cardinality": "many",
+                },
+                {"name": "label", "kind": "text"},
+            ],
+        },
+    )
+    vault_datatable.add_row(
+        "tasks.md", {"id": "T-1", "tags": ["urgent", "bug"], "label": "do it"},
+    )
+    vault_datatable.add_row(
+        "tasks.md", {"id": "T-2", "tags": ["nice-to-have"], "label": "later"},
+    )
+
+    rel = vault_datatable.related_rows("tags.md", "urgent")
+    # tasks.md has a non-ref column ("label"), so it's NOT a junction → 1:N.
+    assert len(rel["one_to_many"]) == 1
+    assert rel["one_to_many"][0]["count"] == 1
+    assert rel["one_to_many"][0]["rows"][0]["id"] == "T-1"
+
+
 # ── datatable_tool ─────────────────────────────────────────────────────────────
 
 
@@ -252,6 +685,173 @@ def test_tool_missing_path():
 def test_tool_unknown_action():
     result = json.loads(handle_datatable_tool({"action": "explode", "path": "x.md"}))
     assert result["ok"] is False
+
+
+def test_tool_add_field():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "f.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}]},
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "add_field",
+        "path": "f.md",
+        "field": {"name": "qty", "kind": "number"},
+    }))
+    assert result["ok"] is True
+    assert any(f["name"] == "qty" for f in result["table"]["schema"]["fields"])
+
+
+def test_tool_rename_field_migrates_rows():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "rn.md",
+        "schema": {"fields": [{"name": "old_name", "kind": "text"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_row",
+        "path": "rn.md",
+        "row": {"old_name": "hi"},
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "rename_field",
+        "path": "rn.md",
+        "field_name": "old_name",
+        "new_name": "new_name",
+    }))
+    assert result["ok"] is True
+    assert result["table"]["rows"][0].get("new_name") == "hi"
+    assert "old_name" not in result["table"]["rows"][0]
+
+
+def test_tool_create_relation():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/customers.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}]},
+    })
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/orders.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}]},
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "create_relation",
+        "path": "shop/orders.md",
+        "field_name": "customer_id",
+        "target_table": "./customers.md",
+        "cardinality": "one",
+    }))
+    assert result["ok"] is True
+    fields = result["table"]["schema"]["fields"]
+    customer_field = next(f for f in fields if f["name"] == "customer_id")
+    assert customer_field["kind"] == "ref"
+    assert customer_field["target_table"] == "./customers.md"
+
+
+def test_tool_create_junction():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/orders.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}]},
+    })
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/items.md",
+        "schema": {"fields": [{"name": "sku", "kind": "text"}]},
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "create_junction",
+        "path": "shop/order_items.md",
+        "table_a": "./orders.md",
+        "table_b": "./items.md",
+    }))
+    assert result["ok"] is True
+    fields = result["table"]["schema"]["fields"]
+    assert len(fields) == 2
+    assert all(f["kind"] == "ref" for f in fields)
+
+
+def test_tool_er_diagram():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "db/a.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}]},
+    })
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "db/b.md",
+        "schema": {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "a_id",
+                    "kind": "ref",
+                    "target_table": "./a.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "er_diagram",
+        "folder": "db",
+    }))
+    assert result["ok"] is True
+    assert result["mermaid"].startswith("erDiagram")
+    assert "}o--||" in result["mermaid"]
+
+
+def test_tool_list_databases():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/customers.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}]},
+    })
+    result = json.loads(handle_datatable_tool({"action": "list_databases"}))
+    assert result["ok"] is True
+    assert any(db["folder"] == "shop" for db in result["databases"])
+
+
+def test_tool_related_rows():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/customers.md",
+        "schema": {"fields": [{"name": "id", "kind": "text"}], "table": {"primary_key": "id"}},
+    })
+    handle_datatable_tool({
+        "action": "add_row",
+        "path": "shop/customers.md",
+        "row": {"id": "C-1"},
+    })
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "shop/orders.md",
+        "schema": {
+            "fields": [
+                {"name": "id", "kind": "text"},
+                {
+                    "name": "customer_id",
+                    "kind": "ref",
+                    "target_table": "./customers.md",
+                    "cardinality": "one",
+                },
+            ],
+        },
+    })
+    handle_datatable_tool({
+        "action": "add_row",
+        "path": "shop/orders.md",
+        "row": {"id": "O-1", "customer_id": "C-1"},
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "related_rows",
+        "path": "shop/customers.md",
+        "row_id": "C-1",
+    }))
+    assert result["ok"] is True
+    assert len(result["one_to_many"]) == 1
+    assert result["one_to_many"][0]["count"] == 1
 
 
 # ── ask_user form-kind validation ─────────────────────────────────────────────

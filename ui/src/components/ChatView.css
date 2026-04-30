@@ -221,7 +221,7 @@
 .limit-banner-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
 }
 
 .limit-banner-btn-primary:hover {

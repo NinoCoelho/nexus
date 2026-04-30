@@ -18,17 +18,21 @@ import SchemaEditor from "../datatable/SchemaEditor";
 import { getVaultDataTable } from "../../api";
 import DataTableToolbar from "./DataTableToolbar";
 import DataTableGrid from "./DataTableGrid";
+import RelatedRowsPanel from "./RelatedRowsPanel";
+import { deriveLabelInfo } from "../datatable/refOptions";
 import { useDataTableActions } from "./useDataTableActions";
 import "../DataTableView.css";
 
 interface Props {
   path: string;
+  /** When set, related-row "Open table" buttons call this with another path. */
+  onOpenTable?: (path: string) => void;
 }
 
 type RowRecord = Record<string, unknown>;
 const PAGE_SIZE = 25;
 
-export default function DataTableView({ path }: Props) {
+export default function DataTableView({ path, onOpenTable }: Props) {
   const [table, setTable] = useState<import("../../api").DataTable | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingRow, setEditingRow] = useState<RowRecord | null>(null);
@@ -119,6 +123,7 @@ export default function DataTableView({ path }: Props) {
         <div className="dt-form-panel">
           <div className="dt-form-heading">New Row</div>
           <FormRenderer
+            hostPath={path}
             fields={fields.filter((f) => f.kind !== "formula")}
             onSubmit={(v) => void actions.handleAdd(v)}
             onCancel={() => setShowAddForm(false)}
@@ -127,18 +132,35 @@ export default function DataTableView({ path }: Props) {
         </div>
       )}
 
-      {editingRow && (
-        <div className="dt-form-panel">
-          <div className="dt-form-heading">Edit Row</div>
-          <FormRenderer
-            fields={fields.filter((f) => f.kind !== "formula")}
-            initialValues={editingValues}
-            onSubmit={(v) => void actions.handleUpdate(editingRow, v)}
-            onCancel={() => setEditingRow(null)}
-            submitLabel="Save"
-          />
-        </div>
-      )}
+      {editingRow && (() => {
+        // Resolve the row's "natural" id the same way the picker + popup do —
+        // explicit primary_key wins, otherwise infer from the first
+        // required text/number field. Falling back to `_id` (the auto-hash)
+        // would mean inbound refs never match because they store the
+        // user-facing key (e.g. "C002"), not the hash.
+        const { pkName } = deriveLabelInfo(fields, table.schema.table);
+        const editingRowId = editingRow[pkName] ?? editingRow._id;
+        return (
+          <div className="dt-form-panel">
+            <div className="dt-form-heading">Edit Row</div>
+            <FormRenderer
+              hostPath={path}
+              fields={fields.filter((f) => f.kind !== "formula")}
+              initialValues={editingValues}
+              onSubmit={(v) => void actions.handleUpdate(editingRow, v)}
+              onCancel={() => setEditingRow(null)}
+              submitLabel="Save"
+            />
+            {editingRowId !== undefined && editingRowId !== "" && (
+              <RelatedRowsPanel
+                path={path}
+                rowId={String(editingRowId)}
+                onOpenTable={onOpenTable}
+              />
+            )}
+          </div>
+        );
+      })()}
 
       <DataTableGrid
         visibleFields={visibleFields}
@@ -151,6 +173,7 @@ export default function DataTableView({ path }: Props) {
         cellDraft={cellDraft}
         safePage={safePage}
         pageCount={pageCount}
+        hostPath={path}
         onToggleSort={(name) => setSort((s) => {
           if (!s || s.field !== name) return { field: name, dir: "asc" };
           if (s.dir === "asc") return { field: name, dir: "desc" };

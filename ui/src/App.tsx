@@ -552,7 +552,6 @@ export default function App() {
               onOpenInChat={handleOpenInChat}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
-              onOpenTable={(p) => { setDataSelectedPath(p); setDataDiagramFolder(null); setView("data"); }}
             />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
@@ -563,7 +562,6 @@ export default function App() {
                 onOpenInChat={handleOpenInChat}
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
-                onOpenTable={(p) => { setDataSelectedPath(p); setDataDiagramFolder(null); setView("data"); }}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
@@ -596,7 +594,6 @@ export default function App() {
                   onOpenInChat={handleOpenInChat}
                   onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                   onOpenCalendar={handleOpenCalendar}
-                  onOpenTable={(p) => setDataSelectedPath(p)}
                 />
               </div>
             ) : dataSelectedDatabase !== null ? (

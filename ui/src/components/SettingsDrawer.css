@@ -92,7 +92,7 @@
 }
 .seg-btn--active {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   font-weight: 500;
 }
 
@@ -142,7 +142,7 @@
 .settings-btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   font-weight: 500;
 }
 .settings-btn--primary:hover:not(:disabled) {
@@ -582,7 +582,7 @@
 .model-role-badge--active {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   cursor: default;
   font-weight: 600;
 }
@@ -625,7 +625,7 @@
 
 .model-tier-chip--active {
   background: var(--accent, #4c8bf5);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   border-color: var(--accent, #4c8bf5);
 }
 

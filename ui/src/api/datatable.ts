@@ -10,9 +10,75 @@ export interface DataTableView {
 
 export interface DataTable {
   path: string;
-  schema: { title?: string; fields: import("../types/form").FieldSchema[] };
+  schema: {
+    title?: string;
+    fields: import("../types/form").FieldSchema[];
+    table?: { primary_key?: string; is_junction?: boolean };
+  };
   rows: Record<string, unknown>[];
   views?: DataTableView[];
+}
+
+export interface DatabaseSummary {
+  folder: string;
+  title: string;
+  table_count: number;
+}
+
+export interface DatabaseTableSummary {
+  path: string;
+  title: string;
+  row_count: number;
+  field_count: number;
+}
+
+export async function listDatabases(): Promise<{ databases: DatabaseSummary[]; count: number }> {
+  const res = await fetch(`${BASE}/vault/datatable/databases`);
+  if (!res.ok) throw new Error(`Databases list error: ${res.status}`);
+  return res.json();
+}
+
+export async function listDatabaseTables(folder: string): Promise<{
+  folder: string;
+  tables: DatabaseTableSummary[];
+  count: number;
+}> {
+  const res = await fetch(`${BASE}/vault/datatable/list?folder=${encodeURIComponent(folder)}`);
+  if (!res.ok) throw new Error(`Database tables list error: ${res.status}`);
+  return res.json();
+}
+
+export interface OneToManyGroup {
+  from_table: string;
+  from_title: string;
+  field_name: string;
+  cardinality: "one" | "many";
+  rows: Record<string, unknown>[];
+  count: number;
+}
+
+export interface ManyToManyGroup {
+  junction_table: string;
+  junction_title: string;
+  target_table: string;
+  target_title: string;
+  rows: Record<string, unknown>[];
+  count: number;
+}
+
+export interface RelatedRows {
+  path: string;
+  row_id: string;
+  one_to_many: OneToManyGroup[];
+  many_to_many: ManyToManyGroup[];
+}
+
+export async function getRelatedRows(path: string, rowId: string): Promise<RelatedRows> {
+  const res = await fetch(
+    `${BASE}/vault/datatable/related?path=${encodeURIComponent(path)}&row_id=${encodeURIComponent(rowId)}`,
+  );
+  if (!res.ok) throw new Error(`Related rows error: ${res.status}`);
+  return res.json();
 }
 
 export async function getVaultDataTable(path: string): Promise<DataTable> {

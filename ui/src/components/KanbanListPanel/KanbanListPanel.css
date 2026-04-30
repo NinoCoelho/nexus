@@ -81,8 +81,8 @@
 }
 .kanban-list-item:hover { background: var(--bg-soft); }
 .kanban-list-item--active {
-  background: var(--accent-lo);
-  border-color: var(--accent-lo);
+  background: var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .kanban-list-item-title {

@@ -127,7 +127,7 @@
 
 .graph-tag-chip.active {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   border-color: var(--accent);
 }
 
@@ -234,14 +234,14 @@
 
 .graph-detail-tag:hover {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
 }
 
 .graph-detail-action {
   padding: 4px 10px;
   font-size: 11px;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--fg-on-accent);
   border: none;
   border-radius: 5px;
   cursor: pointer;

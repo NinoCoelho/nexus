@@ -583,6 +583,7 @@ def create_app(
     from .routes.vault_kanban import router as vault_kanban_router
     from .routes.vault_calendar import router as vault_calendar_router
     from .routes.vault_datatable import router as vault_datatable_router
+    from .routes.vault_dashboard import router as vault_dashboard_router
     from .routes.vault_dispatch import router as vault_dispatch_router
     from .routes.vault_history import router as vault_history_router
     from .routes.config import router as config_router
@@ -606,6 +607,7 @@ def create_app(
     app.include_router(vault_kanban_router)
     app.include_router(vault_calendar_router)
     app.include_router(vault_datatable_router)
+    app.include_router(vault_dashboard_router)
     app.include_router(vault_dispatch_router)
     app.include_router(vault_history_router)
     app.include_router(config_router)

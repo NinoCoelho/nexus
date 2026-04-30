@@ -7,7 +7,10 @@ export type FieldKind =
   | "multiselect"
   | "date"
   | "vault-link"
-  | "formula";
+  | "formula"
+  | "ref";
+
+export type FieldCardinality = "one" | "many";
 
 export interface FieldSchema {
   name: string;
@@ -20,6 +23,10 @@ export interface FieldSchema {
   help?: string;
   /** For kind="formula": expression evaluated against other row fields (e.g. "price * qty"). */
   formula?: string;
+  /** For kind="ref": vault-relative path to another data-table file. */
+  target_table?: string;
+  /** For kind="ref": "one" (FK to a single row) or "many" (multi-select / N:N). */
+  cardinality?: FieldCardinality;
 }
 
 export interface FormSchema {

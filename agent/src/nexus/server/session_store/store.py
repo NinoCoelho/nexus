@@ -79,6 +79,19 @@ class SessionStore(PubSubMixin, QueryMixin):
         d = self._loom.get_or_create(sid, title="New session", context=context)
         return Session(id=d["id"], title=d["title"] or "New session", context=context)
 
+    def mark_hidden(self, session_id: str, hidden: bool = True) -> None:
+        """Toggle the ``hidden`` flag on a session.
+
+        Used by the chat-hidden vault dispatch so database-bubble sessions
+        don't surface in the main sidebar — the bubble is the only intended
+        entrypoint.
+        """
+        self._loom._db.execute(
+            "UPDATE sessions SET hidden = ? WHERE id = ?",
+            (1 if hidden else 0, session_id),
+        )
+        self._loom._db.commit()
+
     def create_child(
         self,
         *,

@@ -161,12 +161,12 @@
   align-items: center;
   gap: 4px;
 }
-.cal-event--missed { background: #d97706; color: #fff; }
-.cal-event--done { background: #059669; color: #fff; opacity: 0.75; text-decoration: line-through; }
-.cal-event--cancelled { background: #6b7280; color: #fff; opacity: 0.7; text-decoration: line-through; }
-.cal-event--failed { background: #dc2626; color: #fff; }
-.cal-event--triggered { background: #7c3aed; color: #fff; }
-.cal-event--in_progress { background: #7c3aed; color: #fff; }
+.cal-event--missed { background: #d97706; color: var(--fg-on-status); }
+.cal-event--done { background: #059669; color: var(--fg-on-status); opacity: 0.75; text-decoration: line-through; }
+.cal-event--cancelled { background: #6b7280; color: var(--fg-on-status); opacity: 0.7; text-decoration: line-through; }
+.cal-event--failed { background: #dc2626; color: var(--fg-on-status); }
+.cal-event--triggered { background: #7c3aed; color: var(--fg-on-status); }
+.cal-event--in_progress { background: #7c3aed; color: var(--fg-on-status); }
 .cal-event-chat-btn {
   background: rgba(255, 255, 255, 0.18);
   border: none;
