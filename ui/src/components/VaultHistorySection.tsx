@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   disableVaultHistory,
   enableVaultHistory,
@@ -24,6 +25,7 @@ function formatRelative(unixSec: number): string {
 }
 
 export default function VaultHistorySection() {
+  const { t } = useTranslation("vault");
   const toast = useToast();
   const [status, setStatus] = useState<VaultHistoryStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,10 +46,10 @@ export default function VaultHistorySection() {
     try {
       const next = status.enabled ? await disableVaultHistory() : await enableVaultHistory();
       setStatus(next);
-      toast.success(next.enabled ? "History enabled" : "History disabled");
+      toast.success(next.enabled ? t("vault:historySection.toast.enabled") : t("vault:historySection.toast.disabled"));
     } catch (e) {
       toast.error(
-        status.enabled ? "Couldn't disable history" : "Couldn't enable history",
+        status.enabled ? t("vault:historySection.toast.disableFailed") : t("vault:historySection.toast.enableFailed"),
         { detail: e instanceof Error ? e.message : undefined },
       );
     } finally {
@@ -61,54 +63,50 @@ export default function VaultHistorySection() {
     try {
       const r = await purgeVaultHistory();
       if (r.ok) {
-        toast.success("History purged");
+        toast.success(t("vault:historySection.toast.purged"));
         await refresh();
       } else {
-        toast.error(`Purge failed: ${r.reason ?? "unknown"}`);
+        toast.error(t("vault:historySection.toast.purgeFailed", { reason: r.reason ?? "unknown" }));
       }
     } catch (e) {
-      toast.error("Purge failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("vault:historySection.toast.purgeFailed", { reason: e instanceof Error ? e.message : "unknown" }));
     } finally {
       setBusy(false);
     }
   }, [status, busy, toast, refresh]);
 
-  if (!status) return <p className="settings-info">Loading…</p>;
+  if (!status) return <p className="settings-info">{t("vault:history.loading")}</p>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div className="hitl-row">
         <div className="hitl-row-text">
-          <span className="hitl-row-label">Enabled</span>
-          <p className="hitl-row-desc">
-            When on, every vault save commits to a private git work-tree at{" "}
-            <code>~/.nexus/.vault-history</code>. Right-click a file or folder
-            to undo the most recent change.
-          </p>
+          <span className="hitl-row-label">{t("vault:historySection.enabled")}</span>
+          <p className="hitl-row-desc">{t("vault:historySection.enabledDescription")}</p>
         </div>
         <button
           className={`hitl-switch${status.enabled ? " on" : ""}`}
           onClick={() => void toggle()}
           disabled={busy || !status.git_available}
           aria-pressed={status.enabled}
-          title={!status.git_available ? "git is not on PATH" : undefined}
+          title={!status.git_available ? t("vault:historySection.gitNotOnPath") : undefined}
         >
           <span className="hitl-switch-knob" />
         </button>
       </div>
       {!status.git_available && (
         <p className="settings-error">
-          <code>git</code> is not on PATH — install it to enable history.
+          {t("vault:historySection.gitNotAvailable")}
         </p>
       )}
       {status.enabled && (
         <>
           <div className="settings-row">
-            <span className="settings-row-name">{status.commit_count} commits</span>
+            <span className="settings-row-name">{t("vault:historySection.commits", { count: status.commit_count })}</span>
             <span style={{ color: "var(--fg-faint)", fontSize: 12 }}>
               {status.last_commit
-                ? `last: ${status.last_commit.action} · ${formatRelative(status.last_commit.timestamp)}`
-                : "no activity yet"}
+                ? t("vault:historySection.lastActivity", { action: status.last_commit.action, when: formatRelative(status.last_commit.timestamp) })
+                : t("vault:historySection.noActivity")}
             </span>
           </div>
           <button
@@ -116,9 +114,9 @@ export default function VaultHistorySection() {
             style={{ alignSelf: "flex-start" }}
             onClick={() => void purge()}
             disabled={busy}
-            title="Run git gc to reclaim storage space (does not change history visibility)"
+            title={t("vault:historySection.purgeTitle")}
           >
-            Purge unreachable objects
+            {t("vault:historySection.purge")}
           </button>
         </>
       )}

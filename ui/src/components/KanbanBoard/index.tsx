@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import Modal, { type ModalProps } from "../Modal";
 import CardDetailModal from "../CardDetailModal";
 import CardActivityModal from "../CardActivityModal";
@@ -44,6 +45,7 @@ interface Props {
 }
 
 export default function KanbanBoard({ path, onOpenInChat }: Props) {
+  const { t } = useTranslation("kanban");
   const [board, setBoard] = useState<BoardT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragCard, setDragCard] = useState<string | null>(null);
@@ -72,7 +74,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
     setError(null);
     getVaultKanban(path)
       .then(setBoard)
-      .catch((e) => setError(e instanceof Error ? e.message : "Load failed"));
+      .catch((e) => setError(e instanceof Error ? e.message : t("kanban:board.loading")));
   }, [path]);
 
   useEffect(() => { reload(); }, [reload]);
@@ -111,7 +113,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   useVaultEvents((ev) => {
     if (ev.path !== path) return;
     if (ev.type === "vault.removed") {
-      setError("Board file was deleted");
+      setError(t("kanban:board.boardDeleted"));
       setBoard(null);
       return;
     }
@@ -130,8 +132,8 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
     };
   }, []);
 
-  if (error) return <div className="kanban-error">Couldn't load board: {error}</div>;
-  if (!board) return <div className="kanban-loading">Loading…</div>;
+  if (error) return <div className="kanban-error">{t("kanban:board.loadError", { error })}</div>;
+  if (!board) return <div className="kanban-loading">{t("kanban:board.loading")}</div>;
 
   const findCard = (id: string): { lane: KanbanLane; card: KanbanCard } | null => {
     for (const l of board.lanes) {
@@ -177,9 +179,9 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const handleAddLane = () => {
     setModal({
       kind: "prompt",
-      title: "New lane",
-      placeholder: "Lane title",
-      confirmLabel: "Add",
+      title: t("kanban:lane.newLaneTitle"),
+      placeholder: t("kanban:lane.newLanePlaceholder"),
+      confirmLabel: t("kanban:lane.newLaneConfirm"),
       onCancel: () => setModal(null),
       onSubmit: async (title) => {
         setModal(null);
@@ -192,9 +194,9 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
   const handleDeleteCard = (cardId: string) => {
     setModal({
       kind: "confirm",
-      title: "Delete card",
-      message: "This card will be removed from the board.",
-      confirmLabel: "Delete",
+      title: t("kanban:card.deleteTitle"),
+      message: t("kanban:card.deleteMessage"),
+      confirmLabel: t("kanban:card.deleteConfirm"),
       danger: true,
       onCancel: () => setModal(null),
       onSubmit: async () => {
@@ -210,11 +212,11 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
     const count = lane?.cards.length ?? 0;
     setModal({
       kind: "confirm",
-      title: "Delete lane",
+      title: t("kanban:lane.deleteLaneTitle"),
       message: count > 0
-        ? `"${lane?.title}" contains ${count} card${count === 1 ? "" : "s"}. All will be removed.`
-        : `Delete empty lane "${lane?.title}"?`,
-      confirmLabel: "Delete",
+        ? t("kanban:lane.deleteLaneWithCards", { title: lane?.title, count })
+        : t("kanban:lane.deleteLaneEmpty", { title: lane?.title }),
+      confirmLabel: t("kanban:lane.deleteLaneConfirm"),
       danger: true,
       onCancel: () => setModal(null),
       onSubmit: async () => {
@@ -235,12 +237,12 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           <button
             className="kanban-pill"
             onClick={() => setShowFilters((v) => !v)}
-            title="Filter cards"
+            title={t("kanban:board.filterToggle")}
           >
-            {showFilters ? "Hide filters" : "Filters"}
-            {hasActiveFilters && " •"}
+            {showFilters ? t("kanban:board.hideFilters") : t("kanban:board.filters")}
+            {hasActiveFilters && t("kanban:board.activeFilterIndicator")}
           </button>
-          <button className="kanban-pill" onClick={() => void handleAddLane()}>+ Lane</button>
+          <button className="kanban-pill" onClick={() => void handleAddLane()}>{t("kanban:board.addLane")}</button>
         </div>
       </div>
       {showFilters && <KanbanFilterBar filters={filters} onFiltersChange={setFilters} />}

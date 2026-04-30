@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   AGENT_DEFAULTS,
   getConfig,
@@ -26,6 +27,7 @@ interface Props {
 }
 
 export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
+  const { t } = useTranslation("settings");
   const toast = useToast();
   const { muted: soundMuted, setMuted: setSoundMuted } = useSoundMute();
   const { volumes: soundVolumes, setVolume: setSoundVolume } = useSoundVolumes();
@@ -41,7 +43,7 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
         if (!cancelled) setAgent(c.agent);
       })
       .catch((e) => {
-        toast.error("Failed to load advanced settings", {
+        toast.error(t("settings:advanced.toast.loadFailed"), {
           detail: e instanceof Error ? e.message : undefined,
         });
       })
@@ -56,9 +58,9 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
     try {
       const next = await patchAgentConfig(patch);
       setAgent(next.agent);
-      toast.success("Settings saved");
+      toast.success(t("settings:advanced.toast.saved"));
     } catch (e) {
-      toast.error("Failed to save", {
+      toast.error(t("settings:advanced.toast.saveFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     }
@@ -71,9 +73,9 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
     try {
       const updated = await setHitlSettings({ yolo_mode: next });
       onHitlChanged(updated);
-      toast.success(next ? "Auto-approval enabled" : "Auto-approval disabled");
+      toast.success(next ? t("settings:advanced.toast.yoloEnabled") : t("settings:advanced.toast.yoloDisabled"));
     } catch (e) {
-      toast.error("Failed to save", {
+      toast.error(t("settings:advanced.toast.saveFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     } finally {
@@ -84,18 +86,18 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
   return (
     <>
       <SettingsSection
-        title="Agent behavior"
-        icon="⚙"
-        description="Generation fine-tuning. The defaults work well in most cases."
+        title={t("settings:advanced.agentBehaviorTitle")}
+        icon={t("settings:advanced.agentBehaviorIcon")}
+        description={t("settings:advanced.agentBehaviorDescription")}
       >
-        {loading && <p className="s-field__hint">Loading…</p>}
+        {loading && <p className="s-field__hint">{t("settings:advanced.loading")}</p>}
         {agent && (
           <>
             <SettingsField
-              label="Max steps per turn"
-              hint="Cap on tool-loop iterations before the agent stops. High values allow complex tasks; low values guard against loops."
+              label={t("settings:advanced.maxStepsLabel")}
+              hint={t("settings:advanced.maxStepsHint")}
               help={{
-                title: "Max steps per turn",
+                title: t("settings:advanced.maxStepsHelpTitle"),
                 body: (
                   <>
                     Each agent turn can involve multiple round-trips: call a tool,
@@ -118,10 +120,10 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </SettingsField>
 
             <SettingsField
-              label="Temperature"
-              hint="0 = deterministic (recommended for tool-calling). Higher values raise creativity at the cost of unstable output."
+              label={t("settings:advanced.temperatureLabel")}
+              hint={t("settings:advanced.temperatureHint")}
               help={{
-                title: "Temperature",
+                title: t("settings:advanced.temperatureHelpTitle"),
                 body: (
                   <>
                     Controls model randomness. At <b>0</b>, the model always
@@ -145,10 +147,10 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </SettingsField>
 
             <SettingsField
-              label="Frequency penalty"
-              hint="Lowers the chance of already-used tokens reappearing. Useful against local models that get stuck in loops."
+              label={t("settings:advanced.frequencyPenaltyLabel")}
+              hint={t("settings:advanced.frequencyPenaltyHint")}
               help={{
-                title: "Frequency penalty",
+                title: t("settings:advanced.frequencyPenaltyHelpTitle"),
                 body: (
                   <>
                     Local models (deepseek-coder, some llama variants) can fall
@@ -171,10 +173,10 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </SettingsField>
 
             <SettingsField
-              label="Presence penalty"
-              hint="Nudges the model toward new topics. Default 0 (no effect)."
+              label={t("settings:advanced.presencePenaltyLabel")}
+              hint={t("settings:advanced.presencePenaltyHint")}
               help={{
-                title: "Presence penalty",
+                title: t("settings:advanced.presencePenaltyHelpTitle"),
                 body: (
                   <>
                     Unlike frequency penalty (which looks at how many times a
@@ -197,10 +199,10 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </SettingsField>
 
             <SettingsField
-              label="Infinite-loop detector"
-              hint="Aborts the stream if the output keeps repeating the same pattern for N characters. 0 disables."
+              label={t("settings:advanced.antiRepeatLabel")}
+              hint={t("settings:advanced.antiRepeatHint")}
               help={{
-                title: "Infinite-loop detector",
+                title: t("settings:advanced.antiRepeatHelpTitle"),
                 body: (
                   <>
                     Safeguard against models that loop by emitting the same
@@ -225,10 +227,10 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </SettingsField>
 
             <SettingsField
-              label="Max output tokens (default)"
-              hint="Cap on tokens generated per LLM call. 0 = unlimited (provider default); Anthropic falls back to 4096 since its API requires the field. Per-model overrides win when set."
+              label={t("settings:advanced.maxOutputLabel")}
+              hint={t("settings:advanced.maxOutputHint")}
               help={{
-                title: "Max output tokens",
+                title: t("settings:advanced.maxOutputHelpTitle"),
                 body: (
                   <>
                     Forwarded to the LLM as <code>max_tokens</code>. Resolution
@@ -258,16 +260,16 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
       </SettingsSection>
 
       <SettingsSection
-        title="Auto-approval"
-        icon="🤖"
-        description="When a dangerous tool asks for confirmation before running, the agent normally opens a dialog. With auto-approval enabled, yes/no questions are answered automatically."
+        title={t("settings:advanced.autoApprovalTitle")}
+        icon={t("settings:advanced.autoApprovalIcon")}
+        description={t("settings:advanced.autoApprovalDescription")}
       >
         {hitl && (
           <SettingsField
-            label="Auto-approve yes/no questions"
-            hint="Doesn't affect open-ended text or multiple-choice questions — you'll still need to answer those."
+            label={t("settings:advanced.autoApproveLabel")}
+            hint={t("settings:advanced.autoApproveHint")}
             help={{
-              title: "Auto-approval (YOLO)",
+              title: t("settings:advanced.autoApproveHelpTitle"),
               body: (
                 <>
                   The agent asks before running potentially dangerous commands
@@ -295,15 +297,15 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
       </SettingsSection>
 
       <SettingsSection
-        title="Sounds"
-        icon="🔔"
-        description="Subtle tones for final response, notifications, popups and agent steps. Sounds are synthesized locally — no audio is downloaded."
+        title={t("settings:advanced.soundsTitle")}
+        icon={t("settings:advanced.soundsIcon")}
+        description={t("settings:advanced.soundsDescription")}
       >
         <SettingsField
-          label="Silent mode"
-          hint="When on, all sound effects are suppressed."
+          label={t("settings:advanced.silentModeLabel")}
+          hint={t("settings:advanced.silentModeHint")}
           help={{
-            title: "Silent mode",
+            title: t("settings:advanced.silentModeHelpTitle"),
             body: (
               <>
                 Turns off every UI sound: final-response chime, notification
@@ -332,7 +334,7 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             <SettingsField
               key={key}
               label={SOUND_LABELS[key]}
-              hint={`${tones === 2 ? "2 tones" : "1 tone"} • ${Math.round(value * 100)}%`}
+              hint={`${t("settings:advanced.toneCount", { count: tones })} • ${Math.round(value * 100)}%`}
               layout="row"
             >
               <div className="sound-row">
@@ -352,9 +354,9 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
                   className="settings-btn"
                   disabled={soundMuted}
                   onClick={() => sounds[key]()}
-                  title="Play this sound"
+                  title={t("settings:advanced.playTitle")}
                 >
-                  Play
+                  {t("settings:advanced.playButton")}
                 </button>
               </div>
             </SettingsField>

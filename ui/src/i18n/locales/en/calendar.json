@@ -1,0 +1,47 @@
+{
+  "header": {
+    "noneCalendar": "(none)",
+    "addNew": "+ New",
+    "prev": "◀",
+    "today": "Today",
+    "next": "▶",
+    "dayView": "Day",
+    "weekView": "Week",
+    "monthView": "Month",
+    "autoFire": "Auto-fire",
+    "settingsTitle": "Calendar settings"
+  },
+  "empty": {
+    "noCalendar": "No calendar selected. Click + New to create one."
+  },
+  "create": {
+    "title": "New calendar",
+    "message": "Choose a name for your new calendar.",
+    "defaultValue": "My Calendar",
+    "placeholder": "Calendar name",
+    "confirm": "Create"
+  },
+  "error": {
+    "dismiss": "×",
+    "listFailed": "Failed to list calendars",
+    "loadFailed": "Failed to load calendar",
+    "saveFailed": "Failed to save event",
+    "deleteFailed": "Failed to delete event",
+    "chatFailed": "Failed to open chat",
+    "fireFailed": "Failed to fire event",
+    "calendarUpdateFailed": "Failed to update calendar",
+    "createFailed": "Failed to create calendar"
+  },
+  "event": {
+    "titlePlaceholder": "Event title",
+    "startLabel": "Start",
+    "endLabel": "End",
+    "allDayLabel": "All day",
+    "statusLabel": "Status",
+    "bodyPlaceholder": "Description…",
+    "repeatLabel": "Repeat",
+    "deleteButton": "Delete event",
+    "saveButton": "Save",
+    "cancelButton": "Cancel"
+  }
+}

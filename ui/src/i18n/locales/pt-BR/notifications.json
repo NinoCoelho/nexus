@@ -1,0 +1,8 @@
+{
+  "push": {
+    "enableBanner": "Ativar notificações do navegador →",
+    "blockedNote": "Notificações bloqueadas — ative-as nas configurações do site no navegador para receber avisos quando nenhuma aba do Nexus estiver aberta.",
+    "permissionGranted": "Notificações ativadas",
+    "permissionDenied": "Permissão de notificação negada"
+  }
+}

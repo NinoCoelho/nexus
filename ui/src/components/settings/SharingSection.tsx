@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getTunnelStatus,
   startTunnel,
@@ -11,6 +12,7 @@ import Modal from "../Modal";
 import SettingsSection from "./SettingsSection";
 
 export default function SharingSection() {
+  const { t } = useTranslation("tunnel");
   const { proxied } = useAuthState();
   const toast = useToast();
   const [status, setStatus] = useState<TunnelStatus | null>(null);
@@ -24,7 +26,7 @@ export default function SharingSection() {
       const s = await getTunnelStatus();
       setStatus(s);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load tunnel status");
+      setError(e instanceof Error ? e.message : t("tunnel:sharing.toast.stopFailed"));
     }
   }, []);
 
@@ -75,11 +77,11 @@ export default function SharingSection() {
     // happening and isn't tempted to retry.
     const firstRun = status?.binary_installed === false;
     const tid = toast.info(
-      firstRun ? "Preparing your sharing link…" : "Opening sharing link…",
+      firstRun ? t("tunnel:sharing.toast.preparingFirst") : t("tunnel:sharing.toast.preparing"),
       {
         detail: firstRun
-          ? "First-time setup — this takes about a minute. Hang tight, no need to do anything."
-          : "Connecting…",
+          ? t("tunnel:sharing.toast.preparingFirstDetail")
+          : t("tunnel:sharing.toast.preparingDetail"),
         duration: 180_000,
       },
     );
@@ -88,9 +90,9 @@ export default function SharingSection() {
       const s = await startTunnel();
       setStatus(s);
       toast.dismiss(tid);
-      toast.success("Sharing link is live");
+      toast.success(t("tunnel:sharing.toast.live"));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to start tunnel";
+      const msg = e instanceof Error ? e.message : t("tunnel:sharing.toast.stopFailed");
       setError(msg);
       toast.dismiss(tid);
       toast.error(msg);
@@ -104,20 +106,20 @@ export default function SharingSection() {
     try {
       const s = await stopTunnel();
       setStatus(s);
-      toast.info("Sharing link revoked");
+      toast.info(t("tunnel:sharing.toast.revoked"));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to stop tunnel");
+      toast.error(e instanceof Error ? e.message : t("tunnel:sharing.toast.stopFailed"));
     } finally {
       setBusy(false);
     }
   };
 
-  const copy = async (text: string, label: string) => {
+  const copy = async (text: string, kind: "url" | "code") => {
     try {
       await navigator.clipboard.writeText(text);
-      toast.success(`${label} copied`);
+      toast.success(kind === "url" ? t("tunnel:sharing.toast.urlCopied") : t("tunnel:sharing.toast.codeCopied"));
     } catch {
-      toast.error("Could not copy. Long-press the value above.");
+      toast.error(t("tunnel:sharing.toast.copyFailed"));
     }
   };
 
@@ -131,12 +133,12 @@ export default function SharingSection() {
   return (
     <>
       <SettingsSection
-        title="Remote access (sharing)"
+        title={t("tunnel:sharing.sectionTitle")}
         icon="🔗"
         collapsible
         defaultOpen={false}
         help={{
-          title: "Sharing",
+          title: t("tunnel:sharing.helpTitle"),
           body: (
             <>
               Opens a public Cloudflare Quick Tunnel to this Nexus and gives
@@ -157,14 +159,11 @@ export default function SharingSection() {
           {!active && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-                Click below to get a private link you can open on your phone or
-                share with someone you trust. No account, no signup needed.
+                {t("tunnel:sharing.inactive.description")}
                 {status?.binary_installed === false && (
                   <>
                     {" "}
-                    <strong>The first time</strong> you activate, it takes about
-                    a minute to set up — feel free to step away while it
-                    prepares.
+                    <strong>{t("tunnel:sharing.inactive.firstTimeNote")}</strong>
                   </>
                 )}
               </div>
@@ -174,7 +173,7 @@ export default function SharingSection() {
                   onClick={() => setConfirmOpen(true)}
                   disabled={busy}
                 >
-                  {busy ? "Preparing…" : "Activate sharing link"}
+                  {busy ? t("tunnel:sharing.inactive.preparingButton") : t("tunnel:sharing.inactive.activateButton")}
                 </button>
               </div>
             </div>
@@ -202,13 +201,8 @@ export default function SharingSection() {
                   lineHeight: 1.5,
                 }}
               >
-                <strong style={{ color: "#ffb84d" }}>⚠ Public sharing is on.</strong>{" "}
-                Your Nexus is reachable on the internet via Cloudflare Tunnel.
-                Anyone who knows <em>both</em> the URL and the access code below
-                can read and write your vault, run agent turns, send messages,
-                and use any tool the agent has — including web access and shell
-                commands. Treat the code like a password. Stop sharing when
-                you're done.
+                <strong style={{ color: "#ffb84d" }}>⚠ {t("tunnel:sharing.active.warning")}</strong>{" "}
+                {t("tunnel:sharing.active.warningBody")}
               </div>
               <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
                 <canvas
@@ -230,7 +224,7 @@ export default function SharingSection() {
                 >
                   <div>
                     <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 3 }}>
-                      1. Open this URL on your phone:
+                      {t("tunnel:sharing.active.openUrl")}
                     </div>
                     <code
                       style={{
@@ -250,7 +244,7 @@ export default function SharingSection() {
                   {status.code ? (
                     <div>
                       <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 3 }}>
-                        2. Type this access code on the phone:
+                        {t("tunnel:sharing.active.typeCode")}
                       </div>
                       <div
                         style={{
@@ -278,28 +272,26 @@ export default function SharingSection() {
                         border: "1px solid rgba(80, 200, 120, 0.35)",
                       }}
                     >
-                      <strong style={{ color: "#5fd38a" }}>✓ Paired.</strong>{" "}
-                      A device redeemed the code, so it's been burned for
-                      safety. Stop and restart sharing to issue a new code for
-                      another device.
+                      <strong style={{ color: "#5fd38a" }}>✓ {t("tunnel:sharing.active.paired")}</strong>{" "}
+                      {t("tunnel:sharing.active.pairedBody")}
                     </div>
                   ) : null}
 
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button
                       className="settings-btn"
-                      onClick={() => status.share_url && copy(status.share_url, "URL")}
+                      onClick={() => status.share_url && copy(status.share_url, "url")}
                       disabled={busy}
                     >
-                      Copy URL
+                      {t("tunnel:sharing.active.copyUrl")}
                     </button>
                     {status.code && (
                       <button
                         className="settings-btn"
-                        onClick={() => copy(status.code!, "Code")}
+                        onClick={() => copy(status.code!, "code")}
                         disabled={busy}
                       >
-                        Copy code
+                        {t("tunnel:sharing.active.copyCode")}
                       </button>
                     )}
                     <button
@@ -307,14 +299,13 @@ export default function SharingSection() {
                       onClick={handleStop}
                       disabled={busy}
                     >
-                      Stop sharing
+                      {t("tunnel:sharing.active.stopSharing")}
                     </button>
                   </div>
                 </div>
               </div>
               <div style={{ fontSize: 11, opacity: 0.6 }}>
-                The URL is safe to share — only people who also know the code
-                can open Nexus. Stopping sharing revokes both immediately.
+                {t("tunnel:sharing.active.urlSafeNote")}
               </div>
             </div>
           )}
@@ -324,13 +315,9 @@ export default function SharingSection() {
       {confirmOpen && (
         <Modal
           kind="confirm"
-          title="Open public sharing link?"
-          message={
-            "This exposes your Nexus to the internet through a Cloudflare Tunnel. " +
-            "You'll get a URL plus a short code — anyone with both can use Nexus " +
-            "as if they were on your desktop. Stop sharing to revoke."
-          }
-          confirmLabel="Open tunnel"
+          title={t("tunnel:sharing.confirm.title")}
+          message={t("tunnel:sharing.confirm.message")}
+          confirmLabel={t("tunnel:sharing.confirm.confirmLabel")}
           danger
           onCancel={() => setConfirmOpen(false)}
           onSubmit={handleActivate}

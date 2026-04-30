@@ -12,7 +12,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from ...i18n import t
+from ..deps import get_locale
 
 router = APIRouter()
 
@@ -27,26 +30,30 @@ async def list_credentials() -> list[dict[str, Any]]:
 
 
 @router.put("/credentials/{name}", status_code=status.HTTP_204_NO_CONTENT)
-async def set_credential(name: str, body: dict[str, Any]) -> None:
+async def set_credential(
+    name: str,
+    body: dict[str, Any],
+    locale: str = Depends(get_locale),
+) -> None:
     from ... import secrets as _secrets
 
     if not _NAME_RE.match(name):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="name must match ^[A-Z][A-Z0-9_]*$",
+            detail=t("errors.credentials.bad_name", locale),
         )
     value = body.get("value")
     if not isinstance(value, str) or not value:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="value (non-empty string) is required",
+            detail=t("errors.credentials.value_required", locale),
         )
     kind = body.get("kind") or "generic"
     skill = body.get("skill")
     if kind not in ("generic", "skill", "provider"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="kind must be one of: generic, skill, provider",
+            detail=t("errors.credentials.bad_kind", locale),
         )
     _secrets.set(name, value, kind=kind, skill=skill)
 

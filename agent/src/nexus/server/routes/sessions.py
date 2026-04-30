@@ -10,10 +10,11 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from ..deps import get_sessions
+from ...i18n import t
+from ..deps import get_locale, get_sessions
 from ..schemas import CompactRequest, TruncateRequest
 from ..session_store import SessionStore
 
@@ -101,10 +102,14 @@ async def search_sessions(
 async def get_session(
     session_id: str,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> dict:
     session = store.get(session_id)
     if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"session {session_id!r} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("errors.sessions.not_found_named", locale, session_id=session_id),
+        )
     ts_list = getattr(session, "_message_timestamps", []) or []
     from datetime import datetime, timezone
     def _iso(ts: int | None) -> str | None:
@@ -158,10 +163,11 @@ async def set_message_pin(
     seq: int,
     body: dict,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> None:
     """Set or clear the pinned flag for a message. Body: ``{"pinned": bool}``."""
     if store.get(session_id) is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     pinned = bool(body.get("pinned", False))
     store.set_pinned(session_id, seq, pinned)
 
@@ -180,6 +186,7 @@ async def get_session_trajectories(
     session_id: str,
     limit: int = 50,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> dict:
     """Return Atropos trajectory records for this session.
 
@@ -191,7 +198,7 @@ async def get_session_trajectories(
     from .chat import _trajectory_logger
 
     if store.get(session_id) is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     if _trajectory_logger is None:
         return {"enabled": False, "records": []}
     records = _trajectory_logger.find_for_session(session_id, limit=max(1, min(limit, 200)))
@@ -202,6 +209,7 @@ async def get_session_trajectories(
 async def get_session_usage(
     session_id: str,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> dict:
     """Return token/tool/cost totals for a single session.
 
@@ -215,7 +223,7 @@ async def get_session_usage(
         (session_id,),
     ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
 
     from ...usage_pricing import estimate_cost
 
@@ -242,16 +250,17 @@ async def set_message_feedback(
     seq: int,
     body: dict,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> None:
     """Set or clear thumbs feedback for a single assistant message.
 
     Body: ``{"value": "up" | "down" | null}``. ``null`` clears the entry.
     """
     if store.get(session_id) is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     raw_value = body.get("value")
     if raw_value is not None and raw_value not in ("up", "down"):
-        raise HTTPException(status_code=422, detail="value must be 'up', 'down', or null")
+        raise HTTPException(status_code=422, detail=t("errors.sessions.bad_feedback", locale))
     try:
         store.set_feedback(session_id, seq, raw_value)
     except ValueError as exc:
@@ -263,10 +272,11 @@ async def truncate_session(
     session_id: str,
     body: TruncateRequest,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> None:
     session = store.get(session_id)
     if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     truncated = session.history[: body.before_seq]
     store.replace_history(session_id, truncated)
 
@@ -276,6 +286,7 @@ async def compact_session(
     session_id: str,
     body: CompactRequest | None = None,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> dict:
     """Compact oversized tool results in a session's history.
 
@@ -287,7 +298,7 @@ async def compact_session(
 
     session = store.get(session_id)
     if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     body = body or CompactRequest()
     new_history, report = compact_history(
         session.history,
@@ -311,13 +322,17 @@ async def compact_session(
 async def export_session(
     session_id: str,
     store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
 ) -> StreamingResponse:
     from datetime import datetime, timezone
     import re
 
     session = store.get(session_id)
     if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"session {session_id!r} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("errors.sessions.not_found_named", locale, session_id=session_id),
+        )
 
     # Gather session-level timestamps from the store.
     created_at_ts, updated_at_ts = store.get_session_timestamps(session_id)

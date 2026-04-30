@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getHitlSettings,
   getKnowledgeStats,
@@ -43,15 +44,17 @@ interface Props {
 
 type TabId = "quick" | "models" | "credentials" | "features" | "advanced";
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: "quick", label: "Quick start" },
-  { id: "models", label: "Models" },
-  { id: "credentials", label: "Credentials" },
-  { id: "features", label: "Features" },
-  { id: "advanced", label: "Advanced" },
-];
-
 export default function SettingsDrawer({ open, onClose }: Props) {
+  const { t } = useTranslation("settings");
+
+  const TABS: { id: TabId; label: string }[] = [
+    { id: "quick", label: t("settings:tabs.quick") },
+    { id: "models", label: t("settings:tabs.models") },
+    { id: "credentials", label: t("settings:tabs.credentials") },
+    { id: "features", label: t("settings:tabs.features") },
+    { id: "advanced", label: t("settings:tabs.advanced") },
+  ];
+
   const [routing, setRouting] = useState<RoutingConfig | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [models, setModels] = useState<Model[]>([]);
@@ -78,7 +81,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setHitl(h);
       setGraphStats(ks);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load settings");
+      setError(e instanceof Error ? e.message : t("settings:drawer.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -104,8 +107,8 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       <div className="drawer-backdrop" onClick={onClose} />
       <div className="settings-drawer">
         <div className="drawer-header">
-          <span className="drawer-title">Settings</span>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">
+          <span className="drawer-title">{t("settings:drawer.title")}</span>
+          <button className="drawer-close" onClick={onClose} aria-label={t("settings:drawer.closeAria")}>
             ✕
           </button>
         </div>

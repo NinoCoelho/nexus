@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
@@ -100,6 +101,7 @@ function fmt(d: Date) {
 }
 
 export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking }: Props) {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
@@ -151,9 +153,9 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
     <div className="asst-msg">
       <div className="asst-header">
         <div className="asst-avatar" aria-hidden="true" />
-        <span className="asst-name">Nexus</span>
+        <span className="asst-name">{t("chat:assistant.name")}</span>
         {model && (
-          <span className="asst-model-badge">via {model.split("/").pop()}</span>
+          <span className="asst-model-badge">{t("chat:assistant.via", { model: model.split("/").pop() })}</span>
         )}
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>
@@ -165,8 +167,8 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
             onToggle={(e) => setThinkingOpen((e.target as HTMLDetailsElement).open)}
           >
             <summary>
-              {streaming ? "Thinking…" : "Thinking"}
-              <span className="asst-thinking-count"> ({thinking.length} chars)</span>
+              {streaming ? t("chat:assistant.thinkingStreaming") : t("chat:assistant.thinking")}
+              <span className="asst-thinking-count"> {t("chat:assistant.thinkingCount", { count: thinking.length })}</span>
             </summary>
             <pre className="asst-thinking-body">{thinking}</pre>
           </details>
@@ -222,8 +224,8 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
               <button
                 className={`bubble-action-btn${localPinned ? " is-active" : ""}`}
                 onClick={handlePin}
-                title={localPinned ? "Unpin" : "Pin this turn"}
-                aria-label="Pin message"
+                title={localPinned ? t("chat:assistant.unpin") : t("chat:assistant.pin")}
+                aria-label={t("chat:assistant.pinAria")}
                 aria-pressed={localPinned}
               >
                 <svg width="13" height="13" viewBox="0 0 16 16" fill={localPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -234,8 +236,8 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
               <button
                 className={`bubble-action-btn${localFeedback === "up" ? " is-active" : ""}`}
                 onClick={() => handleFeedback("up")}
-                title={localFeedback === "up" ? "Remove thumbs up" : "Helpful"}
-                aria-label="Mark helpful"
+                title={localFeedback === "up" ? t("chat:assistant.removeThumbsUp") : t("chat:assistant.helpful")}
+                aria-label={t("chat:assistant.markHelpfulAria")}
                 aria-pressed={localFeedback === "up"}
               >
                 <svg width="13" height="13" viewBox="0 0 16 16" fill={localFeedback === "up" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -246,8 +248,8 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
               <button
                 className={`bubble-action-btn${localFeedback === "down" ? " is-active" : ""}`}
                 onClick={() => handleFeedback("down")}
-                title={localFeedback === "down" ? "Remove thumbs down" : "Not helpful"}
-                aria-label="Mark not helpful"
+                title={localFeedback === "down" ? t("chat:assistant.removeThumbsDown") : t("chat:assistant.notHelpful")}
+                aria-label={t("chat:assistant.markNotHelpfulAria")}
                 aria-pressed={localFeedback === "down"}
               >
                 <svg width="13" height="13" viewBox="0 0 16 16" fill={localFeedback === "down" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -260,15 +262,15 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
           <button
             className="bubble-action-btn"
             onClick={handleCopy}
-            title={copied ? "Copied" : "Copy markdown"}
-            aria-label="Copy markdown"
+            title={copied ? t("chat:assistant.copied") : t("chat:assistant.copyMarkdown")}
+            aria-label={t("chat:assistant.copyMarkdownAria")}
           >
             {copied ? (
               <>
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="3 8 7 12 13 4" />
                 </svg>
-                <span>Copied</span>
+                <span>{t("chat:assistant.copied")}</span>
               </>
             ) : (
               <>
@@ -276,7 +278,7 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
                   <rect x="5" y="5" width="8" height="9" rx="1.5" />
                   <path d="M3 10V3a1 1 0 0 1 1-1h7" />
                 </svg>
-                <span>Copy</span>
+                <span>{t("chat:assistant.copy")}</span>
               </>
             )}
           </button>

@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { transcribeAudio, uploadVaultFiles, type SlashCommand } from "../../api";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { useToast } from "../../toast/ToastProvider";
@@ -64,6 +65,7 @@ export default function InputBar({
   selectedModel,
   onModelChange,
 }: Props) {
+  const { t } = useTranslation("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -151,7 +153,7 @@ export default function InputBar({
       const { text } = await transcribeAudio(audio.blob);
       const typed = value.trim();
       const combined = typed ? `${text.trim()}\n\n${typed}` : text.trim();
-      if (!combined) { toast.error("Transcription returned no text"); return; }
+      if (!combined) { toast.error(t("chat:input.transcriptionNoText")); return; }
       const proceed = () => {
         if (audio) {
           URL.revokeObjectURL(audio.url);
@@ -162,7 +164,7 @@ export default function InputBar({
       };
       guardedSend(combined, proceed);
     } catch (err) {
-      toast.error("Transcription failed", { detail: err instanceof Error ? err.message : undefined });
+      toast.error(t("chat:input.transcriptionFailed"), { detail: err instanceof Error ? err.message : undefined });
     } finally {
       setTranscribing(false);
     }
@@ -191,7 +193,7 @@ export default function InputBar({
       }));
       onAttachmentsChange?.([...(attachments ?? []), ...newAttachments]);
     } catch (err) {
-      toast.error("Upload failed", { detail: err instanceof Error ? err.message : undefined });
+      toast.error(t("chat:input.uploadFailed"), { detail: err instanceof Error ? err.message : undefined });
     } finally {
       setUploading(false);
     }
@@ -259,8 +261,8 @@ export default function InputBar({
               className="input-icon-btn"
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || uploading}
-              aria-label="Upload file"
-              title="Upload file"
+              aria-label={t("chat:input.uploadFileAria")}
+              title={t("chat:input.uploadFile")}
             >
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 14v3a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3" />
@@ -280,7 +282,7 @@ export default function InputBar({
               ref={textareaRef}
               className="input-textarea"
               rows={1}
-              placeholder="Message Nexus…"
+              placeholder={t("chat:input.placeholder")}
               value={value}
               onChange={(e) => handleTextChange(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -304,7 +306,7 @@ export default function InputBar({
             className={`input-send-btn${isStop ? " input-stop-btn" : ""}${!hasContent && !isStop ? " input-send-btn--mic" : ""}`}
             onClick={handleActionClick}
             disabled={disabled && !busy}
-            aria-label={isStop ? "Stop" : hasContent ? "Send" : "Voice message"}
+            aria-label={isStop ? t("chat:input.stop") : hasContent ? t("chat:input.send") : t("chat:input.voiceMessage")}
           >
             {isStop ? (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" stroke="none">

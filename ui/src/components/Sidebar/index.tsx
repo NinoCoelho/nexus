@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getSessions, searchSessions,
   type SessionSearchResult, type SessionSummary,
@@ -57,16 +58,6 @@ interface Props {
   onMobileClose?: () => void;
 }
 
-const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
-  { id: "chat",     label: "Chat",      Icon: IconChat },
-  { id: "calendar", label: "Calendar",  Icon: IconCalendar },
-  { id: "vault",    label: "Vault",     Icon: IconVault },
-  { id: "kanban",   label: "Kanban",    Icon: IconKanban },
-  { id: "data",     label: "Data",      Icon: IconDatabase },
-  { id: "graph",    label: "Knowledge", Icon: IconGraph },
-  { id: "insights", label: "Insights",  Icon: IconInsights },
-];
-
 export default function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
   sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
@@ -77,6 +68,16 @@ export default function Sidebar({
   onDatabaseOpen, onDatabaseSelectFolder, onDatabaseOpenDiagram,
   mobileOpen = false, onMobileClose,
 }: Props) {
+  const { t } = useTranslation("sidebar");
+  const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
+    { id: "chat",     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
+    { id: "calendar", label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+    { id: "vault",    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
+    { id: "kanban",   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
+    { id: "data",     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
+    { id: "graph",    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
+    { id: "insights", label: t("sidebar:viewNames.insights"), Icon: IconInsights },
+  ];
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; }
@@ -205,8 +206,8 @@ export default function Sidebar({
         <button
           className="sidebar-collapse-btn"
           onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? t("sidebar:expand") : t("sidebar:collapse")}
+          aria-label={collapsed ? t("sidebar:expand") : t("sidebar:collapse")}
         >
           <IconCollapse collapsed={collapsed} />
         </button>
@@ -220,12 +221,12 @@ export default function Sidebar({
               <line x1="10" y1="4" x2="10" y2="16" />
               <line x1="4" y1="10" x2="16" y2="10" />
             </svg>
-            {!collapsed && <span>New chat</span>}
+            {!collapsed && <span>{t("sidebar:newChat")}</span>}
           </button>
           {!collapsed && (
             <>
-              <button className="sidebar-import-btn" title="Import session from .md file" onClick={() => importInputRef.current?.click()}>
-                ↑ Import
+              <button className="sidebar-import-btn" title={t("sidebar:importSession")} onClick={() => importInputRef.current?.click()}>
+                {t("sidebar:importLabel")}
               </button>
               <input ref={importInputRef} type="file" accept=".md,text/markdown" style={{ display: "none" }} onChange={(e) => void sessionActions.handleImportFile(e)} />
             </>
@@ -235,7 +236,7 @@ export default function Sidebar({
 
       {/* View switcher */}
       <div className="sidebar-section">
-        {!collapsed && <div className="sidebar-section-label">Views</div>}
+        {!collapsed && <div className="sidebar-section-label">{t("sidebar:views")}</div>}
         <nav className="sidebar-nav">
           {VIEWS.map(({ id, label, Icon }) => (
             <button
@@ -326,9 +327,9 @@ export default function Sidebar({
 
       {/* Settings + always-accessible brightness knob */}
       <div className="sidebar-bottom">
-        <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? "Settings" : undefined}>
+        <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? t("sidebar:settings") : undefined}>
           <span className="sidebar-nav-icon"><IconGear /></span>
-          {!collapsed && <span className="sidebar-nav-label">Settings</span>}
+          {!collapsed && <span className="sidebar-nav-label">{t("sidebar:settings")}</span>}
         </button>
         <BrightnessKnob collapsed={collapsed} />
       </div>
@@ -362,8 +363,8 @@ export default function Sidebar({
           onMouseDown={handleResizeStart}
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize sidebar"
-          title="Drag to resize"
+          aria-label={t("sidebar:resize")}
+          title={t("sidebar:resizeDrag")}
         />
       )}
     </aside>

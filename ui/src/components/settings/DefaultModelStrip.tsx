@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { putRouting, type Model, type RoutingConfig } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 
@@ -10,6 +11,7 @@ interface Props {
 
 export default function DefaultModelStrip({ routing, models, onChanged }: Props) {
   const toast = useToast();
+  const { t } = useTranslation(["settings", "common"]);
   const [picking, setPicking] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -20,11 +22,15 @@ export default function DefaultModelStrip({ routing, models, onChanged }: Props)
     setSaving(true);
     try {
       await putRouting({ default_model: id });
-      toast.success(id ? `Modelo padrão: ${id}` : "Modelo padrão removido");
+      toast.success(
+        id
+          ? t("settings:defaultModel.toast.set", { id })
+          : t("settings:defaultModel.toast.cleared"),
+      );
       setPicking(false);
       onChanged();
     } catch (e) {
-      toast.error("Falha ao salvar modelo padrão", {
+      toast.error(t("settings:defaultModel.toast.saveFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     } finally {
@@ -36,7 +42,7 @@ export default function DefaultModelStrip({ routing, models, onChanged }: Props)
     <div className="s-default-strip">
       <span className="s-default-strip__icon" aria-hidden>★</span>
       <div className="s-default-strip__text">
-        <span className="s-default-strip__label">Modelo padrão</span>
+        <span className="s-default-strip__label">{t("settings:defaultModel.label")}</span>
         {picking ? (
           <select
             className="s-select"
@@ -46,7 +52,7 @@ export default function DefaultModelStrip({ routing, models, onChanged }: Props)
             onChange={(e) => void setDefault(e.target.value)}
             onBlur={() => setPicking(false)}
           >
-            <option value="">— nenhum —</option>
+            <option value="">{t("common:common.none")}</option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id}
@@ -65,7 +71,7 @@ export default function DefaultModelStrip({ routing, models, onChanged }: Props)
           </span>
         ) : (
           <span className="s-default-strip__value s-default-strip__value--empty">
-            nenhum modelo escolhido
+            {t("settings:defaultModel.noModelSelected")}
           </span>
         )}
       </div>
@@ -75,9 +81,13 @@ export default function DefaultModelStrip({ routing, models, onChanged }: Props)
           className="s-default-strip__btn"
           onClick={() => setPicking(true)}
           disabled={saving || models.length === 0}
-          title={models.length === 0 ? "Adicione um modelo primeiro" : "Trocar modelo padrão"}
+          title={
+            models.length === 0
+              ? t("settings:defaultModel.addModelFirst")
+              : t("settings:defaultModel.changeTooltip")
+          }
         >
-          Trocar
+          {t("common:buttons.change")}
         </button>
       )}
     </div>

@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import "./Modal.css";
 
 interface BaseProps {
@@ -39,6 +40,7 @@ interface ConfirmProps extends BaseProps {
 export type ModalProps = PromptProps | ConfirmProps;
 
 export default function Modal(props: ModalProps) {
+  const { t } = useTranslation("common");
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(
     props.kind === "prompt" ? (props.defaultValue ?? "") : "",
@@ -84,7 +86,7 @@ export default function Modal(props: ModalProps) {
         )}
         <div className="modal-actions">
           <button className="modal-btn" onClick={props.onCancel}>
-            Cancel
+            {t("common:buttons.cancel")}
           </button>
           <button
             className={`modal-btn modal-btn--primary${
@@ -101,8 +103,8 @@ export default function Modal(props: ModalProps) {
             disabled={props.kind === "prompt" && !props.allowEmpty && !value.trim()}
           >
             {props.kind === "prompt"
-              ? (props.confirmLabel ?? "OK")
-              : (props.confirmLabel ?? "Confirm")}
+              ? (props.confirmLabel ?? t("common:buttons.ok"))
+              : (props.confirmLabel ?? t("common:buttons.confirm"))}
           </button>
         </div>
       </div>

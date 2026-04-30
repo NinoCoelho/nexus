@@ -41,3 +41,19 @@ def get_app_state(request: Request) -> dict[str, Any]:
 
 def get_graphrag_cfg(request: Request) -> Any:
     return request.app.state.graphrag_cfg
+
+
+def get_locale(request: Request) -> str:
+    """Resolve the request's preferred language.
+
+    Order: X-Locale request header → ``cfg.ui.language`` → ``"en"``. Coerced
+    to a supported language by ``i18n.normalize`` so a stray header value
+    can't propagate further.
+    """
+    from ..i18n import normalize
+
+    header = request.headers.get("x-locale") or request.headers.get("X-Locale")
+    if header:
+        return normalize(header)
+    cfg = request.app.state.mutable_state.get("cfg") if hasattr(request.app.state, "mutable_state") else None
+    return normalize(getattr(getattr(cfg, "ui", None), "language", None))

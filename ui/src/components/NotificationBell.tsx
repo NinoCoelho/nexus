@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { HitlEventRow, HitlEventStatus } from "../api";
 import type { PushPermission } from "../hooks/usePushSubscription";
 import "./NotificationBell.css";
@@ -36,6 +37,7 @@ export default function NotificationBell({
   onCancel,
   onAnswer,
 }: Props) {
+  const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -66,8 +68,8 @@ export default function NotificationBell({
         type="button"
         className="header-btn nx-bell-btn"
         onClick={() => setOpen((v) => !v)}
-        title={pendingCount > 0 ? `${pendingCount} pending` : "Notifications"}
-        aria-label="Notifications"
+        title={pendingCount > 0 ? t("chat:notifications.pendingTitle", { count: pendingCount }) : t("chat:notifications.title")}
+        aria-label={t("chat:notifications.notificationsAria")}
       >
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
           <path d="M4.5 8.5a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5h-14s1.5-1.5 1.5-5.5z" />
@@ -81,12 +83,12 @@ export default function NotificationBell({
       </button>
 
       {open && (
-        <div className="nx-bell-panel" role="dialog" aria-label="Notifications">
+        <div className="nx-bell-panel" role="dialog" aria-label={t("chat:notifications.notificationsAria")}>
           <div className="nx-bell-head">
-            <span>Notifications</span>
+            <span>{t("chat:notifications.title")}</span>
             {pendingCount > 0 && (
               <span className="nx-bell-pending-pill">
-                {pendingCount} pending
+                {t("chat:notifications.pendingPill", { count: pendingCount })}
               </span>
             )}
           </div>
@@ -97,17 +99,17 @@ export default function NotificationBell({
               className="nx-bell-enable"
               onClick={onRequestPushPermission}
             >
-              Enable browser notifications →
+              {t("chat:notifications.enableBrowser")}
             </button>
           )}
           {pushPermission === "denied" && (
             <div className="nx-bell-note">
-              Notifications blocked — enable them in your browser's site settings to receive prompts when no Nexus tab is open.
+              {t("chat:notifications.blocked")}
             </div>
           )}
 
           {history.length === 0 ? (
-            <div className="nx-bell-empty">No HITL events yet.</div>
+            <div className="nx-bell-empty">{t("chat:notifications.empty")}</div>
           ) : (
             <ul className="nx-bell-list">
               {history.map((row) => {
@@ -173,7 +175,7 @@ export default function NotificationBell({
                   >
                     <div className="nx-bell-item-row">
                       <span className={`nx-bell-status nx-bell-status--${row.status}`}>
-                        {statusLabel(row.status)}
+                        {t(`chat:notifications.status.${row.status}`, statusLabel(row.status))}
                       </span>
                       {isPending && (
                         <span
@@ -183,8 +185,8 @@ export default function NotificationBell({
                           }
                           title={
                             row.parked
-                              ? "Parked: agent's turn ended; resume any time."
-                              : "Live: agent's turn is blocked waiting on this answer."
+                              ? t("chat:notifications.parkedTitle")
+                              : t("chat:notifications.liveTitle")
                           }
                         >
                           {row.parked ? "PARKED" : "LIVE"}
@@ -200,8 +202,8 @@ export default function NotificationBell({
                           className="nx-bell-x"
                           onClick={handleCancel}
                           disabled={isBusy}
-                          title="Cancel this request"
-                          aria-label="Cancel request"
+                          title={t("chat:notifications.cancelRequestTitle")}
+                          aria-label={t("chat:notifications.cancelRequestAria")}
                         >
                           ×
                         </button>
@@ -213,9 +215,9 @@ export default function NotificationBell({
                         type="button"
                         className="nx-bell-jump"
                         onClick={handleJump}
-                        title="Open the chat that produced this request"
+                        title={t("chat:notifications.openChatTitle")}
                       >
-                        ↳ {row.session_title || "Open chat"}
+                        ↳ {row.session_title || t("chat:notifications.openChat")}
                       </button>
                     )}
 
@@ -232,7 +234,7 @@ export default function NotificationBell({
                           onClick={(e) => handleAnswer(e, "no")}
                           disabled={isBusy}
                         >
-                          Deny
+                          {t("chat:approval.deny")}
                         </button>
                         <button
                           type="button"
@@ -240,7 +242,7 @@ export default function NotificationBell({
                           onClick={(e) => handleAnswer(e, "yes")}
                           disabled={isBusy}
                         >
-                          Allow
+                          {t("chat:approval.allow")}
                         </button>
                       </div>
                     )}
@@ -255,6 +257,7 @@ export default function NotificationBell({
   );
 }
 
+// statusLabel now uses the status directly — it's mapped to i18n keys in the JSX via t()
 function statusLabel(s: HitlEventStatus): string {
   switch (s) {
     case "pending": return "Waiting";

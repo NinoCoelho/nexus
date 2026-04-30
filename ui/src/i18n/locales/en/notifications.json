@@ -1,0 +1,8 @@
+{
+  "push": {
+    "enableBanner": "Enable browser notifications →",
+    "blockedNote": "Notifications blocked — enable them in your browser's site settings to receive prompts when no Nexus tab is open.",
+    "permissionGranted": "Notifications enabled",
+    "permissionDenied": "Notification permission denied"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "header": {
+    "noneCalendar": "(nenhum)",
+    "addNew": "+ Novo",
+    "prev": "◀",
+    "today": "Hoje",
+    "next": "▶",
+    "dayView": "Dia",
+    "weekView": "Semana",
+    "monthView": "Mês",
+    "autoFire": "Disparo automático",
+    "settingsTitle": "Configurações do calendário"
+  },
+  "empty": {
+    "noCalendar": "Nenhum calendário selecionado. Clique em + Novo para criar um."
+  },
+  "create": {
+    "title": "Novo calendário",
+    "message": "Escolha um nome para o seu novo calendário.",
+    "defaultValue": "Meu Calendário",
+    "placeholder": "Nome do calendário",
+    "confirm": "Criar"
+  },
+  "error": {
+    "dismiss": "×",
+    "listFailed": "Falha ao listar calendários",
+    "loadFailed": "Falha ao carregar calendário",
+    "saveFailed": "Falha ao salvar evento",
+    "deleteFailed": "Falha ao excluir evento",
+    "chatFailed": "Falha ao abrir conversa",
+    "fireFailed": "Falha ao disparar evento",
+    "calendarUpdateFailed": "Falha ao atualizar calendário",
+    "createFailed": "Falha ao criar calendário"
+  },
+  "event": {
+    "titlePlaceholder": "Título do evento",
+    "startLabel": "Início",
+    "endLabel": "Fim",
+    "allDayLabel": "Dia inteiro",
+    "statusLabel": "Status",
+    "bodyPlaceholder": "Descrição…",
+    "repeatLabel": "Repetir",
+    "deleteButton": "Excluir evento",
+    "saveButton": "Salvar",
+    "cancelButton": "Cancelar"
+  }
+}

@@ -172,7 +172,7 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
             ))}
           </select>
 
-          <span className="cal-modal-grid-label">Atribuir agente</span>
+          <span className="cal-modal-grid-label">Assign agent</span>
           <span>
             <input
               type="checkbox"

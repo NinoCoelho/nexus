@@ -1,0 +1,27 @@
+{
+  "buttons": {
+    "cancel": "Cancel",
+    "ok": "OK",
+    "save": "Save",
+    "saving": "Saving…",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "add": "Add",
+    "remove": "Remove",
+    "confirm": "Confirm",
+    "change": "Change"
+  },
+  "toast": {
+    "saved": "Saved",
+    "savingFailed": "Failed to save",
+    "copied": "Copied",
+    "copyFailed": "Failed to copy",
+    "loadFailed": "Failed to load",
+    "deleteFailed": "Failed to delete"
+  },
+  "common": {
+    "none": "— none —",
+    "loading": "Loading…"
+  }
+}

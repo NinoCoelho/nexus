@@ -4,6 +4,57 @@
   gap: 14px;
 }
 
+/* ── Language ────────────────────────────────────────────────────────────── */
+
+.appearance-language-row {
+  display: grid;
+  grid-template-columns: minmax(80px, max-content) 1fr;
+  grid-template-areas:
+    "label options"
+    "hint  hint";
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.appearance-language-label {
+  grid-area: label;
+  font-size: 13px;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.appearance-language-options {
+  grid-area: options;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.appearance-language-btn {
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.appearance-language-btn:hover {
+  background: var(--bg-elev);
+}
+
+.appearance-language-btn.active {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+}
+
+.appearance-language-hint {
+  grid-area: hint;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
 /* ── Theme grid ──────────────────────────────────────────────────────────── */
 
 .appearance-theme-grid {

@@ -1,5 +1,6 @@
 // Sub-component for VaultTreePanel: right-click context menu.
 
+import { useTranslation } from "react-i18next";
 import type { TreeNode } from "./types";
 
 interface ContextMenuProps {
@@ -36,27 +37,28 @@ export function ContextMenu({
   onVisualizeFolderGraph,
   onClose,
 }: ContextMenuProps) {
+  const { t } = useTranslation("vault");
   return (
     <div
       className="vault-context-menu"
       style={{ left: x, top: y }}
       onClick={(e) => e.stopPropagation()}
     >
-      <button className="vault-ctx-item" onClick={() => onRename(node)}>Rename</button>
+      <button className="vault-ctx-item" onClick={() => onRename(node)}>{t("vault:contextMenu.rename")}</button>
       {node.type === "dir" && (
         <>
-          <button className="vault-ctx-item" onClick={() => onCtxUpload(node.path)}>Upload files here</button>
-          <button className="vault-ctx-item" onClick={() => onNewFile(node.path)}>New file</button>
-          <button className="vault-ctx-item" onClick={() => onNewFolder(node.path)}>New folder</button>
-          <button className="vault-ctx-item" onClick={() => onNewKanban(node.path)}>New kanban</button>
+          <button className="vault-ctx-item" onClick={() => onCtxUpload(node.path)}>{t("vault:contextMenu.uploadHere")}</button>
+          <button className="vault-ctx-item" onClick={() => onNewFile(node.path)}>{t("vault:contextMenu.newFile")}</button>
+          <button className="vault-ctx-item" onClick={() => onNewFolder(node.path)}>{t("vault:contextMenu.newFolder")}</button>
+          <button className="vault-ctx-item" onClick={() => onNewKanban(node.path)}>{t("vault:contextMenu.newKanban")}</button>
           {onViewEntityGraph && (
             <button className="vault-ctx-item" onClick={() => { onViewEntityGraph("folder", node.path); onClose(); }}>
-              Entity graph for folder
+              {t("vault:contextMenu.entityGraphFolder")}
             </button>
           )}
           {onVisualizeFolderGraph && (
             <button className="vault-ctx-item" onClick={() => { onVisualizeFolderGraph(node.path); onClose(); }}>
-              Visualize as graph
+              {t("vault:contextMenu.visualizeAsGraph")}
             </button>
           )}
         </>
@@ -64,21 +66,21 @@ export function ContextMenu({
       {node.type === "file" && node.path.endsWith(".md") && (
         <>
           <button className="vault-ctx-item" onClick={() => onDispatchFile(node.path)}>
-            Start chat with this file
+            {t("vault:contextMenu.startChatWithFile")}
           </button>
           {onViewEntityGraph && (
             <button className="vault-ctx-item" onClick={() => { onViewEntityGraph("file", node.path); onClose(); }}>
-              Entity graph for file
+              {t("vault:contextMenu.entityGraphFile")}
             </button>
           )}
         </>
       )}
       {onUndo && (
         <button className="vault-ctx-item" onClick={() => onUndo(node)}>
-          Undo last change
+          {t("vault:contextMenu.undoLastChange")}
         </button>
       )}
-      <button className="vault-ctx-item vault-ctx-item--danger" onClick={() => onDelete(node)}>Delete</button>
+      <button className="vault-ctx-item vault-ctx-item--danger" onClick={() => onDelete(node)}>{t("vault:contextMenu.delete")}</button>
     </div>
   );
 }

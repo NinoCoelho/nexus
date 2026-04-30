@@ -5,7 +5,11 @@
  * Selection is stored in localStorage and applied via ThemeProvider.
  */
 
+import { useTranslation } from "react-i18next";
 import { useTheme, type ThemeName } from "../theme/ThemeContext";
+import { patchConfig } from "../api";
+import { SUPPORTED_LANGUAGES, type SupportedLanguage } from "../i18n";
+import { useToast } from "../toast/ToastProvider";
 import "./AppearanceSection.css";
 
 const THEMES: { id: ThemeName; label: string; desc: string; colors: [string, string, string] }[] = [
@@ -37,9 +41,50 @@ const THEMES: { id: ThemeName; label: string; desc: string; colors: [string, str
 
 export default function AppearanceSection() {
   const { theme, brightness, setTheme, setBrightness } = useTheme();
+  const { t, i18n } = useTranslation(["settings", "common"]);
+  const toast = useToast();
+  const currentLang = (SUPPORTED_LANGUAGES as readonly string[]).includes(i18n.language)
+    ? (i18n.language as SupportedLanguage)
+    : "en";
+
+  async function changeLanguage(next: SupportedLanguage) {
+    if (next === currentLang) return;
+    try {
+      await patchConfig({ ui: { language: next } });
+      // Mirror the persisted choice into i18next + the fetch-interceptor cache
+      // so the active turn picks up X-Locale and labels swap immediately.
+      (window as any).__nexusLanguage = next;
+      try { localStorage.setItem("nexus-language", next); } catch { /* private mode */ }
+      await i18n.changeLanguage(next);
+      toast.success(t("common:toast.saved"));
+    } catch (e) {
+      toast.error(t("common:toast.savingFailed"), {
+        detail: e instanceof Error ? e.message : undefined,
+      });
+    }
+  }
 
   return (
     <div className="appearance-section">
+      <div className="appearance-language-row" role="radiogroup" aria-label={t("settings:appearance.language")}>
+        <span className="appearance-language-label">{t("settings:appearance.language")}</span>
+        <div className="appearance-language-options">
+          {SUPPORTED_LANGUAGES.map((lng) => (
+            <button
+              key={lng}
+              type="button"
+              role="radio"
+              aria-checked={currentLang === lng}
+              className={`appearance-language-btn ${currentLang === lng ? "active" : ""}`}
+              onClick={() => void changeLanguage(lng)}
+            >
+              {t(`settings:languages.${lng}`)}
+            </button>
+          ))}
+        </div>
+        <span className="appearance-language-hint">{t("settings:appearance.languageHint")}</span>
+      </div>
+
       <div className="appearance-theme-grid">
         {THEMES.map((t) => (
           <button

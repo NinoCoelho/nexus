@@ -7,6 +7,7 @@
  */
 
 import { FormEvent, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { FieldSchema } from "../types/form";
 import { useRefOptions } from "./datatable/refOptions";
 import "./FormRenderer.css";
@@ -35,6 +36,7 @@ export default function FormRenderer({
   hostPath = "",
   hideActions = false,
 }: Props) {
+  const { t } = useTranslation("forms");
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const init: Record<string, unknown> = {};
     for (const f of fields) {
@@ -81,7 +83,7 @@ export default function FormRenderer({
         val === "" ||
         (Array.isArray(val) && val.length === 0)
       ) {
-        errs[f.name] = `${f.label ?? f.name} is required`;
+        errs[f.name] = t("forms:fieldRequired", { field: f.label ?? f.name });
       }
     }
     setErrors(errs);
@@ -109,7 +111,7 @@ export default function FormRenderer({
                 <>
                   {f.help ? " " : ""}
                   <a href={f.help_url} target="_blank" rel="noreferrer">
-                    Get it here →
+                    {t("forms:getItHere")}
                   </a>
                 </>
               )}
@@ -123,7 +125,7 @@ export default function FormRenderer({
         <div className="form-actions">
           {onCancel && (
             <button type="button" className="approval-btn" onClick={onCancel}>
-              Cancel
+              {t("forms:modal.cancel")}
             </button>
           )}
           <button type="submit" className="approval-btn approval-btn-allow">
@@ -143,6 +145,7 @@ interface FieldInputProps {
 }
 
 function RefFieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
+  const { t } = useTranslation("forms");
   const cardinality = field.cardinality ?? "one";
   const { options, error } = useRefOptions(field, hostPath ?? "");
   if (cardinality === "many") {
@@ -155,12 +158,12 @@ function RefFieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
         onChange={(e) =>
           onChange(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))
         }
-        placeholder="comma-separated IDs"
+        placeholder={t("forms:commaSeparatedIds")}
       />
     );
   }
   if (options === null) {
-    return <input className="form-input" disabled value="loading…" />;
+    return <input className="form-input" disabled value={t("forms:refLoading")} />;
   }
   if (error) {
     return (
@@ -169,8 +172,8 @@ function RefFieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
         className="form-input"
         value={String(value ?? "")}
         onChange={(e) => onChange(e.target.value)}
-        title={`target load failed: ${error}`}
-        placeholder="paste target row id"
+        title={t("forms:refLoadFailed", { error })}
+        placeholder={t("forms:refIdPlaceholder")}
       />
     );
   }
@@ -180,13 +183,14 @@ function RefFieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
       value={String(value ?? "")}
       onChange={(e) => onChange(e.target.value)}
     >
-      <option value="">—</option>
+      <option value="">{t("forms:refEmptyOption")}</option>
       {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
     </select>
   );
 }
 
 function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
+  const { t } = useTranslation("forms");
   const kind = field.kind ?? "text";
 
   if (kind === "ref") {
@@ -229,7 +233,7 @@ function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
         value={String(value ?? "")}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="">{field.placeholder ?? "Select…"}</option>
+        <option value="">{field.placeholder ?? t("forms:selectPlaceholder")}</option>
         {field.choices.map((c) => (
           <option key={c} value={c}>
             {c}
@@ -307,8 +311,8 @@ function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
         className="form-input"
         value={String(value ?? "")}
         readOnly
-        placeholder={field.formula ? `= ${field.formula}` : "(computed)"}
-        title="Formula field — value computed from other fields"
+        placeholder={field.formula ? `= ${field.formula}` : t("forms:formulaComputed")}
+        title={t("forms:formulaTitle")}
       />
     );
   }
@@ -319,7 +323,7 @@ function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
         type="text"
         className="form-input"
         value={String(value ?? "")}
-        placeholder={field.placeholder ?? "vault path (e.g. notes/foo.md)"}
+        placeholder={field.placeholder ?? t("forms:vaultLinkPlaceholder")}
         onChange={(e) => onChange(e.target.value)}
       />
     );

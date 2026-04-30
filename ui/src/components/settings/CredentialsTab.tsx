@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   deleteCredential,
   listCredentials,
@@ -21,6 +22,7 @@ import SettingsSection from "./SettingsSection";
 const NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 export default function CredentialsTab() {
+  const { t } = useTranslation("settings");
   const toast = useToast();
   const [items, setItems] = useState<Credential[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,7 +37,7 @@ export default function CredentialsTab() {
     try {
       setItems(await listCredentials());
     } catch (e) {
-      toast.error("Failed to load credentials", {
+      toast.error(t("settings:credentials.toast.loadFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     } finally {
@@ -51,13 +53,13 @@ export default function CredentialsTab() {
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!NAME_RE.test(newName)) {
-      toast.error("Name must be UPPER_SNAKE_CASE", {
-        detail: "Pattern: ^[A-Z][A-Z0-9_]*$ (matches the env-var convention)",
+      toast.error(t("settings:credentials.toast.nameInvalid"), {
+        detail: t("settings:credentials.toast.nameInvalidDetail"),
       });
       return;
     }
     if (!newValue) {
-      toast.error("Value cannot be empty");
+      toast.error(t("settings:credentials.toast.valueEmpty"));
       return;
     }
     try {
@@ -65,13 +67,13 @@ export default function CredentialsTab() {
         kind: newSkill ? "skill" : "generic",
         skill: newSkill || undefined,
       });
-      toast.success(`Saved ${newName}`);
+      toast.success(t("settings:credentials.toast.saved", { name: newName }));
       setNewName("");
       setNewValue("");
       setNewSkill("");
       await refresh();
     } catch (e) {
-      toast.error("Failed to save", {
+      toast.error(t("settings:credentials.toast.saveFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     }
@@ -85,10 +87,10 @@ export default function CredentialsTab() {
         kind: existing?.kind ?? "generic",
         skill: existing?.skill ?? undefined,
       });
-      toast.success(`Updated ${name}`);
+      toast.success(t("settings:credentials.toast.updated", { name }));
       await refresh();
     } catch (e) {
-      toast.error("Failed to update", {
+      toast.error(t("settings:credentials.toast.updateFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     }
@@ -98,10 +100,10 @@ export default function CredentialsTab() {
     setConfirmDelete(null);
     try {
       await deleteCredential(name);
-      toast.success(`Deleted ${name}`);
+      toast.success(t("settings:credentials.toast.deleted", { name }));
       await refresh();
     } catch (e) {
-      toast.error("Failed to delete", {
+      toast.error(t("settings:credentials.toast.deleteFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     }
@@ -110,31 +112,23 @@ export default function CredentialsTab() {
   return (
     <>
       <SettingsSection
-        title="Credentials"
-        icon="🔑"
-        description={
-          <>
-            API keys and tokens stored at <code>~/.nexus/secrets.toml</code>{" "}
-            (file mode 0600). Use them in skills as{" "}
-            <code>$NAME</code> placeholders — the server substitutes the value
-            at the tool boundary, the LLM never sees the raw key. Environment
-            variables of the same name take precedence and are not listed here.
-          </>
-        }
+        title={t("settings:credentials.sectionTitle")}
+        icon={t("settings:credentials.sectionIcon")}
+        description={t("settings:credentials.sectionDescription")}
       >
         <form onSubmit={handleAdd} className="creds-add-form">
-          <SettingsField label="Name" hint="UPPER_SNAKE_CASE, e.g. GITHUB_TOKEN" layout="row">
+          <SettingsField label={t("settings:credentials.nameLabel")} hint={t("settings:credentials.nameHint")} layout="row">
             <input
               type="text"
               className="settings-input"
               value={newName}
-              placeholder="GITHUB_TOKEN"
+              placeholder={t("settings:credentials.namePlaceholder")}
               autoCapitalize="characters"
               spellCheck={false}
               onChange={(e) => setNewName(e.target.value.toUpperCase())}
             />
           </SettingsField>
-          <SettingsField label="Value" hint="Stored locally; never sent to the LLM." layout="row">
+          <SettingsField label={t("settings:credentials.valueLabel")} hint={t("settings:credentials.valueHint")} layout="row">
             <input
               type="password"
               className="settings-input"
@@ -145,39 +139,39 @@ export default function CredentialsTab() {
             />
           </SettingsField>
           <SettingsField
-            label="Skill (optional)"
-            hint="Tag the credential as belonging to a specific skill, for your own reference."
+            label={t("settings:credentials.skillLabel")}
+            hint={t("settings:credentials.skillHint")}
             layout="row"
           >
             <input
               type="text"
               className="settings-input"
               value={newSkill}
-              placeholder="github_issues"
+              placeholder={t("settings:credentials.skillPlaceholder")}
               onChange={(e) => setNewSkill(e.target.value)}
             />
           </SettingsField>
           <div className="creds-add-actions">
             <button type="submit" className="settings-btn settings-btn--primary">
-              Save credential
+              {t("settings:credentials.saveButton")}
             </button>
           </div>
         </form>
       </SettingsSection>
 
-      <SettingsSection title="Stored credentials" icon="📋">
-        {loading && !items && <p className="s-field__hint">Loading…</p>}
+      <SettingsSection title={t("settings:credentials.storedTitle")} icon={t("settings:credentials.storedIcon")}>
+        {loading && !items && <p className="s-field__hint">{t("settings:credentials.loading")}</p>}
         {items && items.length === 0 && (
-          <p className="s-field__hint">No credentials stored yet.</p>
+          <p className="s-field__hint">{t("settings:credentials.empty")}</p>
         )}
         {items && items.length > 0 && (
           <table className="creds-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Kind</th>
-                <th>Skill</th>
-                <th>Value</th>
+                <th>{t("settings:credentials.tableColName")}</th>
+                <th>{t("settings:credentials.tableColKind")}</th>
+                <th>{t("settings:credentials.tableColSkill")}</th>
+                <th>{t("settings:credentials.tableColValue")}</th>
                 <th></th>
               </tr>
             </thead>
@@ -196,14 +190,14 @@ export default function CredentialsTab() {
                       className="settings-btn"
                       onClick={() => setEditing(c.name)}
                     >
-                      Update
+                      {t("settings:credentials.updateButton")}
                     </button>
                     <button
                       type="button"
                       className="settings-btn settings-btn--danger"
                       onClick={() => setConfirmDelete(c.name)}
                     >
-                      Delete
+                      {t("settings:credentials.deleteButton")}
                     </button>
                   </td>
                 </tr>
@@ -217,10 +211,10 @@ export default function CredentialsTab() {
         <Modal
           kind="prompt"
           secret
-          title={`Update ${editing}`}
-          message="Enter the new value. The current value is replaced; nothing else changes."
-          placeholder="new value"
-          confirmLabel="Save"
+          title={t("settings:credentials.editModalTitle", { name: editing })}
+          message={t("settings:credentials.editModalMessage")}
+          placeholder={t("settings:credentials.editModalPlaceholder")}
+          confirmLabel={t("settings:credentials.editModalSave")}
           onCancel={() => setEditing(null)}
           onSubmit={(v) => void handleEditSubmit(editing, v)}
         />
@@ -230,9 +224,9 @@ export default function CredentialsTab() {
         <Modal
           kind="confirm"
           danger
-          title={`Delete ${confirmDelete}?`}
-          message="This removes the value from ~/.nexus/secrets.toml. Skills that depend on it will be re-prompted on next use."
-          confirmLabel="Delete"
+          title={t("settings:credentials.deleteModalTitle", { name: confirmDelete })}
+          message={t("settings:credentials.deleteModalMessage")}
+          confirmLabel={t("settings:credentials.deleteModalCta")}
           onCancel={() => setConfirmDelete(null)}
           onSubmit={() => void handleDeleteConfirmed(confirmDelete)}
         />

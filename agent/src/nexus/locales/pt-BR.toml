@@ -1,0 +1,25 @@
+# Catálogo pt-BR para mensagens de erro HTTP do backend.
+# Mantém a mesma estrutura de chaves do en.toml. Chaves ausentes caem de
+# volta para o inglês automaticamente.
+
+[errors.providers]
+api_key_required = "api_key obrigatório"
+not_found = "provedor {name!r} não encontrado"
+credential_ref_invalid = "credential_ref deve ser uma string não-vazia ou null"
+
+[errors.credentials]
+bad_name = "nome deve corresponder a ^[A-Z][A-Z0-9_]*$"
+value_required = "value (string não-vazia) é obrigatório"
+bad_kind = "kind deve ser um de: generic, skill, provider"
+
+[errors.sessions]
+not_found_named = "sessão {session_id!r} não encontrada"
+not_found = "Sessão não encontrada"
+bad_feedback = "value deve ser 'up', 'down' ou null"
+
+[errors.vault_datatable]
+file_not_found = "arquivo não encontrado"
+row_must_be_object = "`row` deve ser um objeto"
+rows_must_be_list = "`rows` deve ser uma lista"
+schema_must_be_object = "`schema` deve ser um objeto"
+views_must_be_list = "`views` deve ser uma lista"

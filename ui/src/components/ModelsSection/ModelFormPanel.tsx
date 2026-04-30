@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { Provider } from "../../api";
 import { TIERS, type ModelForm } from "./types";
 
@@ -36,18 +37,19 @@ export default function ModelFormPanel({
   onCancel,
   onSave,
 }: Props) {
+  const { t } = useTranslation("models");
   return (
     <div className="settings-card settings-inline-form">
       {!editingId && (
         <>
           <div className="settings-field">
-            <label className="settings-field-label">1. Provider</label>
+            <label className="settings-field-label">{t("models:form.providerLabel")}</label>
             <select
               className="settings-select"
               value={form.provider}
               onChange={(e) => onProviderChange(e.target.value)}
             >
-              <option value="">Select provider…</option>
+              <option value="">{t("models:form.providerPlaceholder")}</option>
               {providers.map((p) => (
                 <option key={p.name} value={p.name}>
                   {p.name}{p.type ? ` (${p.type})` : ""}
@@ -58,7 +60,7 @@ export default function ModelFormPanel({
 
           {form.provider && (
             <div className="settings-field">
-              <label className="settings-field-label">2. Pick a model</label>
+              <label className="settings-field-label">{t("models:form.pickModelLabel")}</label>
               <div className="model-discover-toolbar">
                 <button
                   className="settings-btn"
@@ -67,15 +69,15 @@ export default function ModelFormPanel({
                   onClick={() => onFetchModels(form.provider, true)}
                 >
                   {fetching
-                    ? "Fetching…"
+                    ? t("models:form.fetchingModels")
                     : fetchedModels.length > 0
-                      ? `↻ Refresh (${fetchedModels.length})`
-                      : "List available models"}
+                      ? t("models:form.refreshModels", { count: fetchedModels.length })
+                      : t("models:form.listModels")}
                 </button>
                 {fetchedModels.length > 0 && (
                   <input
                     className="settings-input model-filter-input"
-                    placeholder="Filter…"
+                    placeholder={t("models:form.filterPlaceholder")}
                     value={filter}
                     onChange={(e) => onFilterChange(e.target.value)}
                   />
@@ -83,13 +85,13 @@ export default function ModelFormPanel({
               </div>
 
               {discoveryError && (
-                <p className="settings-error">Could not list models: {discoveryError}</p>
+                <p className="settings-error">{t("models:form.fetchError", { error: discoveryError })}</p>
               )}
 
               {fetchedModels.length > 0 && (
                 <div className="model-list">
                   {visibleFetched.length === 0 ? (
-                    <div className="model-list-empty">No models match "{filter}"</div>
+                    <div className="model-list-empty">{t("models:form.noMatch", { filter })}</div>
                   ) : (
                     visibleFetched.map((m) => {
                       const picked = form.model_name === m;
@@ -101,7 +103,7 @@ export default function ModelFormPanel({
                           onClick={() => onPickModel(m)}
                         >
                           <span className="model-list-row-name">{m}</span>
-                          {picked && <span className="model-list-row-picked">✓ selected</span>}
+                          {picked && <span className="model-list-row-picked">{t("models:form.selected")}</span>}
                         </button>
                       );
                     })
@@ -110,7 +112,7 @@ export default function ModelFormPanel({
               )}
 
               <details className="model-custom-details">
-                <summary>Or enter a custom model name</summary>
+                <summary>{t("models:form.customModelSummary")}</summary>
                 <input
                   className="settings-input"
                   style={{ marginTop: 6 }}
@@ -119,7 +121,7 @@ export default function ModelFormPanel({
                     model_name: e.target.value,
                     id: form.id_touched ? form.id : (form.provider ? `${form.provider}/${e.target.value}` : form.id),
                   })}
-                  placeholder="e.g. gpt-4o-2024-08-06"
+                  placeholder={t("models:form.customModelPlaceholder")}
                 />
               </details>
             </div>
@@ -131,7 +133,7 @@ export default function ModelFormPanel({
         <>
           {!editingId && (
             <div className="settings-field">
-              <label className="settings-field-label">3. Model id (internal)</label>
+              <label className="settings-field-label">{t("models:form.idLabel")}</label>
               <input
                 className="settings-input"
                 value={form.id}
@@ -139,13 +141,13 @@ export default function ModelFormPanel({
                 placeholder={`${form.provider}/${form.model_name}`}
               />
               <span className="settings-field-hint">
-                Used internally as the model identifier. Locked after creation.
+                {t("models:form.idHint")}
               </span>
             </div>
           )}
           {editingId && (
             <div className="settings-field">
-              <label className="settings-field-label">Model name</label>
+              <label className="settings-field-label">{t("models:form.modelNameLabel")}</label>
               <input
                 className="settings-input"
                 value={form.model_name}
@@ -154,46 +156,46 @@ export default function ModelFormPanel({
             </div>
           )}
           <div className="settings-field">
-            <label className="settings-field-label">Tier</label>
+            <label className="settings-field-label">{t("models:form.tierLabel")}</label>
             <div style={{ display: "flex", gap: 6 }}>
-              {TIERS.map((t) => (
+              {TIERS.map((tier) => (
                 <button
-                  key={t}
+                  key={tier}
                   type="button"
-                  className={`model-tier-chip model-tier-chip--${t}${form.tier === t ? " model-tier-chip--active" : ""}`}
-                  onClick={() => onFormChange({ tier: t, tier_source: "manual" })}
+                  className={`model-tier-chip model-tier-chip--${tier}${form.tier === tier ? " model-tier-chip--active" : ""}`}
+                  onClick={() => onFormChange({ tier, tier_source: "manual" })}
                 >
-                  {t}
+                  {tier}
                 </button>
               ))}
             </div>
             <span className="settings-field-hint">
               {form.tier_source === "heuristic"
-                ? "Suggested from the model name — adjust if needed."
+                ? t("models:form.tierHintHeuristic")
                 : form.tier_source === "default"
-                  ? "Unknown model — defaulting to balanced. Edit if needed."
-                  : "Used by the auto-router to balance cost vs capability."}
+                  ? t("models:form.tierHintDefault")
+                  : t("models:form.tierHintManual")}
             </span>
           </div>
           <div className="settings-field">
-            <label className="settings-field-label">Notes (optional)</label>
+            <label className="settings-field-label">{t("models:form.notesLabel")}</label>
             <input
               className="settings-input"
               value={form.notes}
               onChange={(e) => onFormChange({ notes: e.target.value })}
-              placeholder="e.g. no tool use, Portuguese-fluent, image input"
+              placeholder={t("models:form.notesPlaceholder")}
             />
             <span className="settings-field-hint">
-              Free text shown to the auto-router — list limitations or strengths.
+              {t("models:form.notesHint")}
             </span>
           </div>
           <div className="settings-field">
-            <label className="settings-field-label">Tags (comma separated)</label>
+            <label className="settings-field-label">{t("models:form.tagsLabel")}</label>
             <input
               className="settings-input"
               value={form.tags}
               onChange={(e) => onFormChange({ tags: e.target.value })}
-              placeholder="fast, cheap"
+              placeholder={t("models:form.tagsPlaceholder")}
             />
           </div>
           <div className="settings-field">
@@ -203,15 +205,14 @@ export default function ModelFormPanel({
                 checked={form.is_embedding_capable}
                 onChange={(e) => onFormChange({ is_embedding_capable: e.target.checked })}
               />
-              Embedding capable
+              {t("models:form.embeddingLabel")}
             </label>
             <span className="settings-field-hint">
-              Mark this model as an embedding model (e.g. all-MiniLM, bge, nomic-embed).
-              Only models with this enabled can be assigned the Embedding role.
+              {t("models:form.embeddingHint")}
             </span>
           </div>
           <div className="settings-field">
-            <label className="settings-field-label">Context size (n_ctx)</label>
+            <label className="settings-field-label">{t("models:form.contextWindowLabel")}</label>
             <input
               className="settings-input"
               type="number"
@@ -219,16 +220,14 @@ export default function ModelFormPanel({
               step={1024}
               value={form.context_window}
               onChange={(e) => onFormChange({ context_window: e.target.value })}
-              placeholder="0 = server default"
+              placeholder={t("models:form.contextWindowPlaceholder")}
             />
             <span className="settings-field-hint">
-              For local GGUF models, passed to llama-server as <code>--ctx-size</code> at start.
-              Stop/Start the model to apply changes. Use ≥4096 if assigning to GraphRAG extraction
-              (smaller contexts cause extraction failures).
+              {t("models:form.contextWindowHint")}
             </span>
           </div>
           <div className="settings-field">
-            <label className="settings-field-label">Max output tokens</label>
+            <label className="settings-field-label">{t("models:form.maxOutputLabel")}</label>
             <input
               className="settings-input"
               type="number"
@@ -236,11 +235,10 @@ export default function ModelFormPanel({
               step={1024}
               value={form.max_output_tokens}
               onChange={(e) => onFormChange({ max_output_tokens: e.target.value })}
-              placeholder="0 = use global default"
+              placeholder={t("models:form.maxOutputPlaceholder")}
             />
             <span className="settings-field-hint">
-              Per-call output cap forwarded as <code>max_tokens</code>. Overrides the
-              global default in Advanced settings. 0 inherits the global value.
+              {t("models:form.maxOutputHint")}
             </span>
           </div>
         </>
@@ -248,14 +246,14 @@ export default function ModelFormPanel({
 
       <div className="settings-row settings-row--end">
         <button className="settings-btn settings-btn--ghost" onClick={onCancel}>
-          Cancel
+          {t("models:form.cancel")}
         </button>
         <button
           className="settings-btn settings-btn--primary"
           onClick={onSave}
           disabled={!editingId && (!form.id.trim() || !form.provider || !form.model_name.trim())}
         >
-          {editingId ? "Save" : "Add model"}
+          {editingId ? t("models:form.save") : t("models:form.update")}
         </button>
       </div>
     </div>

@@ -1,0 +1,55 @@
+{
+  "login": {
+    "title": "Nexus",
+    "subtitle": "Digite o código de acesso exibido no seu computador.",
+    "warning": {
+      "headsUp": "Atenção.",
+      "body": "Você está se conectando a uma sessão do Nexus via túnel Cloudflare. Digite o código apenas se confiar nesta URL e você (ou alguém de sua confiança) tiver ativado o link no aplicativo desktop agora. Quem tiver o código pode ler seu vault, enviar mensagens ao agente e acionar ferramentas. Se não esperava isso, feche a aba."
+    },
+    "codePlaceholder": "ABCD-EFGH",
+    "verifying": "Verificando…",
+    "submit": "Abrir Nexus",
+    "footer": "Abra o Nexus no seu computador → Configurações → Acesso remoto. O código de 8 caracteres é exibido lá.",
+    "invalidCode": "Código inválido"
+  },
+  "sharing": {
+    "sectionTitle": "Acesso remoto (compartilhamento)",
+    "helpTitle": "Compartilhamento",
+    "helpBody": "Abre um túnel público Cloudflare Quick Tunnel para este Nexus e fornece uma URL mais um código de acesso curto. Abra a URL no seu celular (ou compartilhe-a), digite o código na tela de login do celular e a mesma interface do desktop será carregada. O código é consumido no momento em que um dispositivo o resgata; para permitir outro dispositivo, pare e reinicie o compartilhamento para obter um novo código. Pare de compartilhar para revogar imediatamente. O código é a credencial — mantenha-o privado; apenas a URL é inofensiva.",
+    "inactive": {
+      "description": "Clique abaixo para obter um link privado que você pode abrir no seu celular ou compartilhar com alguém de confiança. Sem conta, sem cadastro.",
+      "firstTimeNote": "Na primeira vez que ativar, leva cerca de um minuto para configurar — fique à vontade para se afastar enquanto prepara.",
+      "preparingButton": "Preparando…",
+      "activateButton": "Ativar link de compartilhamento"
+    },
+    "active": {
+      "warning": "Compartilhamento público está ativo.",
+      "warningBody": "Seu Nexus está acessível na internet via Cloudflare Tunnel. Qualquer pessoa que saiba tanto a URL quanto o código de acesso abaixo pode ler e escrever no seu vault, executar turnos de agente, enviar mensagens e usar qualquer ferramenta que o agente tenha — incluindo acesso à web e comandos de shell. Trate o código como uma senha. Pare de compartilhar quando terminar.",
+      "openUrl": "1. Abra esta URL no seu celular:",
+      "typeCode": "2. Digite este código de acesso no celular:",
+      "paired": "Pareado.",
+      "pairedBody": "Um dispositivo resgatou o código, portanto ele foi consumido por segurança. Pare e reinicie o compartilhamento para emitir um novo código para outro dispositivo.",
+      "copyUrl": "Copiar URL",
+      "copyCode": "Copiar código",
+      "stopSharing": "Parar compartilhamento",
+      "urlSafeNote": "A URL é segura para compartilhar — apenas quem também sabe o código pode abrir o Nexus. Parar o compartilhamento revoga ambos imediatamente."
+    },
+    "confirm": {
+      "title": "Abrir link de compartilhamento público?",
+      "message": "Isso expõe seu Nexus à internet através de um Cloudflare Tunnel. Você receberá uma URL mais um código curto — quem tiver os dois pode usar o Nexus como se estivesse no seu desktop. Pare o compartilhamento para revogar.",
+      "confirmLabel": "Abrir túnel"
+    },
+    "toast": {
+      "preparingFirst": "Preparando seu link de compartilhamento…",
+      "preparingFirstDetail": "Configuração inicial — isso leva cerca de um minuto. Aguarde, não é necessário fazer nada.",
+      "preparing": "Abrindo link de compartilhamento…",
+      "preparingDetail": "Conectando…",
+      "live": "Link de compartilhamento ativo",
+      "revoked": "Link de compartilhamento revogado",
+      "urlCopied": "URL copiada",
+      "codeCopied": "Código copiado",
+      "copyFailed": "Não foi possível copiar. Mantenha pressionado o valor acima.",
+      "stopFailed": "Falha ao parar o túnel"
+    }
+  }
+}

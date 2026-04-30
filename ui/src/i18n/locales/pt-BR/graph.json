@@ -1,0 +1,44 @@
+{
+  "toolbar": {
+    "scopes": {
+      "all": "Todos",
+      "file": "Arquivo",
+      "folder": "Pasta",
+      "tag": "Tag",
+      "search": "Busca",
+      "entity": "Entidade"
+    },
+    "seedPlaceholders": {
+      "file": "caminho/para/arquivo.md",
+      "folder": "pasta/",
+      "tag": "nome-da-tag",
+      "search": "consulta de busca…",
+      "entity": "ID da entidade"
+    },
+    "hops": {
+      "one": "1 salto",
+      "two": "2 saltos",
+      "three": "3 saltos"
+    },
+    "edgeTypes": {
+      "links": "Links",
+      "linksAndTags": "Links + Tags",
+      "linksAndEntities": "Links + Entidades",
+      "all": "Todos"
+    },
+    "tagsButton": "Tags",
+    "fitButton": "Ajustar",
+    "goButton": "Ir",
+    "loadingButton": "…",
+    "nodes_one": "{{count}} nó",
+    "nodes_other": "{{count}} nós",
+    "edges_one": "{{count}} aresta",
+    "edges_other": "{{count}} arestas",
+    "entities_one": "{{count}} entidade",
+    "entities_other": "{{count}} entidades",
+    "clearTags": "limpar"
+  },
+  "error": {
+    "loadFailed": "Falha ao carregar o grafo"
+  }
+}

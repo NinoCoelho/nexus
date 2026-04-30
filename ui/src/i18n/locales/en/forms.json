@@ -1,0 +1,19 @@
+{
+  "required": " *",
+  "refLoading": "loading…",
+  "refLoadFailed": "target load failed: {{error}}",
+  "refIdPlaceholder": "paste target row id",
+  "refEmptyOption": "—",
+  "commaSeparatedIds": "comma-separated IDs",
+  "selectPlaceholder": "Select…",
+  "formulaComputed": "(computed)",
+  "formulaTitle": "Formula field — value computed from other fields",
+  "vaultLinkPlaceholder": "vault path (e.g. notes/foo.md)",
+  "getItHere": "Get it here →",
+  "fieldRequired": "{{field}} is required",
+  "modal": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "ok": "OK"
+  }
+}

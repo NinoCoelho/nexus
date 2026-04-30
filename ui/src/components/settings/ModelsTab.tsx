@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { Model, Provider, RoutingConfig } from "../../api";
 import LocalModels from "../LocalModels";
 import ModelsSection from "../ModelsSection";
@@ -12,14 +13,15 @@ interface Props {
 }
 
 export default function ModelsTab({ routing, providers, models, onRefresh }: Props) {
+  const { t } = useTranslation("settings");
   return (
     <>
       <SettingsSection
-        title="Cloud providers"
-        icon="☁"
+        title={t("settings:modelsTab.cloudProvidersTitle")}
+        icon={t("settings:modelsTab.cloudProvidersIcon")}
         collapsible
         help={{
-          title: "What is a provider?",
+          title: t("settings:modelsTab.cloudProvidersHelpTitle"),
           body: (
             <>
               A provider is a service (OpenAI, Anthropic, Ollama, etc.) that
@@ -33,12 +35,12 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
       </SettingsSection>
 
       <SettingsSection
-        title="On-device models"
-        icon="💻"
+        title={t("settings:modelsTab.localModelsTitle")}
+        icon={t("settings:modelsTab.localModelsIcon")}
         collapsible
         defaultOpen={false}
         help={{
-          title: "On-device models",
+          title: t("settings:modelsTab.localModelsHelpTitle"),
           body: (
             <>
               Models running locally via llama.cpp or Ollama. They work
@@ -52,11 +54,11 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
       </SettingsSection>
 
       <SettingsSection
-        title="Manage models"
-        icon="📋"
+        title={t("settings:modelsTab.manageModelsTitle")}
+        icon={t("settings:modelsTab.manageModelsIcon")}
         collapsible
         help={{
-          title: "Registered models",
+          title: t("settings:modelsTab.manageModelsHelpTitle"),
           body: (
             <>
               List of models available to the agent. Each model points to a

@@ -1,0 +1,63 @@
+{
+  "toolbar": {
+    "defaultTitle": "Data Table",
+    "searchPlaceholder": "Search…",
+    "allRows": "All rows",
+    "saveView": "Save view",
+    "saveViewTitle": "Save current filter/sort as a view",
+    "deleteView": "Del view",
+    "deleteViewTitle": "Delete the active view",
+    "exportButton": "Export",
+    "exportTitle": "Download as CSV",
+    "importButton": "Import",
+    "importTitle": "Import rows from CSV",
+    "schemaButton": "Schema",
+    "schemaTitle": "Edit schema",
+    "addRow": "+ Add Row"
+  },
+  "grid": {
+    "noRows": "No rows",
+    "noMatch": "No rows match the current filter.",
+    "deleteRowTitle": "Delete this row",
+    "editRowTitle": "Edit this row"
+  },
+  "columns": {
+    "menuTitle": "Columns",
+    "showAll": "Show all",
+    "hideAll": "Hide all"
+  },
+  "modal": {
+    "addRowTitle": "Add Row",
+    "editRowTitle": "Edit Row",
+    "deleteRowTitle": "Delete row?",
+    "deleteRowMessage": "This row will be permanently removed.",
+    "deleteRowConfirm": "Delete",
+    "saveViewTitle": "Save view",
+    "saveViewPlaceholder": "View name…",
+    "saveViewConfirm": "Save"
+  },
+  "schema": {
+    "title": "Schema editor"
+  },
+  "pagination": {
+    "prev": "◀",
+    "next": "▶",
+    "info": "{{from}}–{{to}} of {{total}}"
+  },
+  "toast": {
+    "rowAdded": "Row added",
+    "rowUpdated": "Row updated",
+    "rowDeleted": "Row deleted",
+    "rowFailed": "Failed to save row",
+    "deleteFailed": "Failed to delete row",
+    "viewSaved": "View saved: {{name}}",
+    "viewSaveFailed": "Failed to save view",
+    "viewDeleted": "View deleted",
+    "viewDeleteFailed": "Failed to delete view",
+    "imported": "Imported {{count}} rows",
+    "importFailed": "Import failed",
+    "exportFailed": "Export failed",
+    "schemaFailed": "Failed to update schema",
+    "loadFailed": "Failed to load table"
+  }
+}

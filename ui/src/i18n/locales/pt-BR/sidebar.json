@@ -1,0 +1,34 @@
+{
+  "newChat": "Nova conversa",
+  "expand": "Expandir barra lateral",
+  "collapse": "Recolher barra lateral",
+  "resize": "Redimensionar barra lateral",
+  "resizeDrag": "Arraste para redimensionar",
+  "importSession": "Importar sessão de arquivo .md",
+  "importLabel": "↑ Importar",
+  "views": "Visualizações",
+  "settings": "Configurações",
+  "viewNames": {
+    "chat": "Conversa",
+    "calendar": "Calendário",
+    "vault": "Vault",
+    "kanban": "Kanban",
+    "data": "Dados",
+    "graph": "Conhecimento",
+    "insights": "Insights"
+  },
+  "session": {
+    "downloadedFile": "{{filename}} baixado",
+    "downloadFailed": "Falha ao baixar",
+    "summarizing": "Resumindo sessão…",
+    "savedRaw": "Salvo no vault (raw)",
+    "summarySaved": "Resumo salvo no vault",
+    "saveRawFailed": "Não foi possível salvar no vault",
+    "summarizeFailed": "Falha ao resumir",
+    "shareCopied": "Link de compartilhamento copiado",
+    "shareCopiedDetail": "Qualquer pessoa com o link pode visualizar (somente leitura).",
+    "shareReady": "Link de compartilhamento pronto",
+    "shareCopyLabel": "Copiar",
+    "shareFailed": "Não foi possível criar o link de compartilhamento"
+  }
+}

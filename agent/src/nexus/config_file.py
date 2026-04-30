@@ -31,6 +31,7 @@ from .config_schema import (  # noqa: F401
     TranscriptionConfig,
     VaultHistoryConfig,
     VaultConfig,
+    UIConfig,
     NexusConfig,
     default_config,
 )
@@ -119,6 +120,9 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "history": {
                 "enabled": cfg.vault.history.enabled,
             },
+        },
+        "ui": {
+            "language": cfg.ui.language,
         },
     }
     for m in cfg.models:
@@ -222,10 +226,16 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     vault_raw = dict(raw.get("vault", {}))
     history_raw = dict(vault_raw.get("history", {}))
     vault = VaultConfig(history=VaultHistoryConfig(**history_raw))
+    ui_raw = dict(raw.get("ui", {}))
+    # Older configs without [ui] fall back to defaults; an unknown language
+    # value (e.g. user typed "fr") is coerced to "en" rather than raising.
+    if ui_raw.get("language") not in ("en", "pt-BR"):
+        ui_raw.pop("language", None)
+    ui = UIConfig(**ui_raw)
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
-        transcription=transcription, vault=vault,
+        transcription=transcription, vault=vault, ui=ui,
     )
 
 

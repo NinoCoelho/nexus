@@ -175,6 +175,14 @@ class VaultConfig(BaseModel):
     history: VaultHistoryConfig = Field(default_factory=VaultHistoryConfig)
 
 
+class UIConfig(BaseModel):
+    # Preferred display language for UI labels, HTTP error messages, and the
+    # LLM's user-facing replies. The agent receives this via the system prompt
+    # so chat replies and ask_user form labels come back in the right language
+    # without us having to translate model output. Defaults to English.
+    language: Literal["en", "pt-BR"] = "en"
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -184,6 +192,7 @@ class NexusConfig(BaseModel):
     scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     vault: VaultConfig = Field(default_factory=VaultConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
 
 
 # Fresh install starts with providers configured but NO models.

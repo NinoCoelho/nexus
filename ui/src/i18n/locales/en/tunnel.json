@@ -1,0 +1,55 @@
+{
+  "login": {
+    "title": "Nexus",
+    "subtitle": "Enter the access code shown on your desktop.",
+    "warning": {
+      "headsUp": "Heads up.",
+      "body": "You're connecting to a Nexus session over a Cloudflare tunnel. Only enter the code if you trust this URL and you (or someone you trust) just activated the link from the desktop app. Whoever holds the code can read your vault, send agent messages, and trigger tools. If you didn't expect this, close the tab."
+    },
+    "codePlaceholder": "ABCD-EFGH",
+    "verifying": "Verifying…",
+    "submit": "Open Nexus",
+    "footer": "Open Nexus on your computer → Settings → Remote access. The 8-character code is shown there.",
+    "invalidCode": "Invalid code"
+  },
+  "sharing": {
+    "sectionTitle": "Remote access (sharing)",
+    "helpTitle": "Sharing",
+    "helpBody": "Opens a public Cloudflare Quick Tunnel to this Nexus and gives you a URL plus a short access code. Open the URL on your phone (or share it), type the code on the phone's login screen, and the same UI as your desktop loads. The code is burned the moment a device redeems it; to let another device in, stop and restart sharing for a fresh code. Stop sharing to revoke instantly. The code is the credential — keep it private; the URL alone is harmless.",
+    "inactive": {
+      "description": "Click below to get a private link you can open on your phone or share with someone you trust. No account, no signup needed.",
+      "firstTimeNote": "The first time you activate, it takes about a minute to set up — feel free to step away while it prepares.",
+      "preparingButton": "Preparing…",
+      "activateButton": "Activate sharing link"
+    },
+    "active": {
+      "warning": "Public sharing is on.",
+      "warningBody": "Your Nexus is reachable on the internet via Cloudflare Tunnel. Anyone who knows both the URL and the access code below can read and write your vault, run agent turns, send messages, and use any tool the agent has — including web access and shell commands. Treat the code like a password. Stop sharing when you're done.",
+      "openUrl": "1. Open this URL on your phone:",
+      "typeCode": "2. Type this access code on the phone:",
+      "paired": "Paired.",
+      "pairedBody": "A device redeemed the code, so it's been burned for safety. Stop and restart sharing to issue a new code for another device.",
+      "copyUrl": "Copy URL",
+      "copyCode": "Copy code",
+      "stopSharing": "Stop sharing",
+      "urlSafeNote": "The URL is safe to share — only people who also know the code can open Nexus. Stopping sharing revokes both immediately."
+    },
+    "confirm": {
+      "title": "Open public sharing link?",
+      "message": "This exposes your Nexus to the internet through a Cloudflare Tunnel. You'll get a URL plus a short code — anyone with both can use Nexus as if they were on your desktop. Stop sharing to revoke.",
+      "confirmLabel": "Open tunnel"
+    },
+    "toast": {
+      "preparingFirst": "Preparing your sharing link…",
+      "preparingFirstDetail": "First-time setup — this takes about a minute. Hang tight, no need to do anything.",
+      "preparing": "Opening sharing link…",
+      "preparingDetail": "Connecting…",
+      "live": "Sharing link is live",
+      "revoked": "Sharing link revoked",
+      "urlCopied": "URL copied",
+      "codeCopied": "Code copied",
+      "copyFailed": "Could not copy. Long-press the value above.",
+      "stopFailed": "Failed to stop tunnel"
+    }
+  }
+}

@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { redeemTunnelCode } from "../api/base";
 
 interface Props {
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export default function TunnelLoginScreen({ onSuccess }: Props) {
+  const { t } = useTranslation("tunnel");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +35,7 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
       await redeemTunnelCode(code.trim());
       onSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid code");
+      setError(err instanceof Error ? err.message : t("tunnel:login.invalidCode"));
       setBusy(false);
     }
   };
@@ -62,9 +64,9 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
         }}
       >
         <div style={{ textAlign: "center", marginBottom: 12 }}>
-          <h1 style={{ fontSize: 22, margin: "0 0 6px 0" }}>Nexus</h1>
+          <h1 style={{ fontSize: 22, margin: "0 0 6px 0" }}>{t("tunnel:login.title")}</h1>
           <div style={{ fontSize: 13, opacity: 0.7 }}>
-            Enter the access code shown on your desktop.
+            {t("tunnel:login.subtitle")}
           </div>
         </div>
 
@@ -79,12 +81,8 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
             lineHeight: 1.5,
           }}
         >
-          <strong style={{ color: "#ffb84d" }}>Heads up.</strong>{" "}
-          You're connecting to a Nexus session over a Cloudflare tunnel. Only enter
-          the code if you trust this URL and you (or someone you trust) just
-          activated the link from the desktop app. Whoever holds the code can
-          read your vault, send agent messages, and trigger tools. If you
-          didn't expect this, close the tab.
+          <strong style={{ color: "#ffb84d" }}>{t("tunnel:login.warning.headsUp")}</strong>{" "}
+          {t("tunnel:login.warning.body")}
         </div>
 
         <input
@@ -95,7 +93,7 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
           autoCapitalize="characters"
           autoCorrect="off"
           spellCheck={false}
-          placeholder="ABCD-EFGH"
+          placeholder={t("tunnel:login.codePlaceholder")}
           value={code}
           onChange={(e) => setCode(e.target.value)}
           disabled={busy}
@@ -138,12 +136,11 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
             cursor: busy ? "default" : "pointer",
           }}
         >
-          {busy ? "Verifying…" : "Open Nexus"}
+          {busy ? t("tunnel:login.verifying") : t("tunnel:login.submit")}
         </button>
 
         <div style={{ fontSize: 11, opacity: 0.5, textAlign: "center", marginTop: 8 }}>
-          Open Nexus on your computer → Settings → Remote access. The 8-character
-          code is shown there.
+          {t("tunnel:login.footer")}
         </div>
       </form>
     </div>

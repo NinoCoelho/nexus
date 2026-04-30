@@ -1,5 +1,6 @@
 // Sub-component for ProvidersSection: form for adding a new LLM provider.
 
+import { useTranslation } from "react-i18next";
 import CredentialPicker from "../settings/CredentialPicker";
 import type { AddState } from "./types";
 
@@ -18,12 +19,13 @@ interface Props {
 }
 
 export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }: Props) {
+  const { t } = useTranslation("providers");
   const isOllama = addForm.type === "ollama";
 
   return (
     <div className="settings-card settings-inline-form">
       <div className="settings-field">
-        <label className="settings-field-label">Name</label>
+        <label className="settings-field-label">{t("providers:add.nameLabel")}</label>
         <input
           className="settings-input"
           value={addForm.name}
@@ -35,12 +37,12 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
               key_env: f.key_env_touched ? f.key_env : defaultKeyEnv(name, f.type),
             }));
           }}
-          placeholder="my-provider"
+          placeholder={t("providers:add.namePlaceholder")}
           autoFocus
         />
       </div>
       <div className="settings-field">
-        <label className="settings-field-label">Type</label>
+        <label className="settings-field-label">{t("providers:add.typeLabel")}</label>
         <div className="seg-control">
           <button
             className={`seg-btn${addForm.type === "openai_compat" ? " seg-btn--active" : ""}`}
@@ -52,7 +54,7 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
             }))}
             type="button"
           >
-            OpenAI-compatible
+            {t("providers:add.typeOpenAI")}
           </button>
           <button
             className={`seg-btn${addForm.type === "anthropic" ? " seg-btn--active" : ""}`}
@@ -64,7 +66,7 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
             }))}
             type="button"
           >
-            Anthropic
+            {t("providers:add.typeAnthropic")}
           </button>
           <button
             className={`seg-btn${addForm.type === "ollama" ? " seg-btn--active" : ""}`}
@@ -77,12 +79,12 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
             }))}
             type="button"
           >
-            Ollama
+            {t("providers:add.typeOllama")}
           </button>
         </div>
       </div>
       <div className="settings-field">
-        <label className="settings-field-label">Base URL{isOllama ? "" : " (optional)"}</label>
+        <label className="settings-field-label">{t("providers:add.baseUrlLabel")}{isOllama ? "" : t("providers:add.baseUrlOptional")}</label>
         <input
           className="settings-input"
           value={addForm.base_url}
@@ -93,21 +95,19 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
       {!isOllama && (
         <>
           <div className="settings-field">
-            <label className="settings-field-label">Credential</label>
+            <label className="settings-field-label">{t("providers:add.credentialLabel")}</label>
             <CredentialPicker
               value={addForm.credential_ref}
               onChange={(ref) => onAddFormChange((f) => ({ ...f, credential_ref: ref }))}
               defaultNameSuggestion={defaultKeyEnv(addForm.name || "provider", addForm.type)}
             />
             <span className="settings-field-hint">
-              Pick an existing stored credential or click "+ Create new" to
-              save one now. Leave as <em>(none)</em> to use the legacy env-var
-              path below.
+              {t("providers:add.credentialHint")}
             </span>
           </div>
           <div className="settings-field">
             <label className="settings-field-label">
-              Key env var <span style={{opacity:0.7,fontWeight:400}}>(legacy fallback)</span>
+              {t("providers:add.keyEnvLabel")} <span style={{opacity:0.7,fontWeight:400}}>{t("providers:add.keyEnvLegacy")}</span>
             </label>
             <input
               className="settings-input"
@@ -118,23 +118,23 @@ export function AddProviderForm({ addForm, onAddFormChange, onCancel, onSubmit }
             />
             <span className="settings-field-hint">
               {addForm.credential_ref
-                ? "Disabled — a credential is bound."
-                : "Auto-filled from the provider name. Export this variable in your shell so Nexus can read the key."}
+                ? t("providers:add.keyEnvDisabledHint")
+                : t("providers:add.keyEnvAutoHint")}
             </span>
           </div>
         </>
       )}
       {isOllama && (
         <span className="settings-field-hint">
-          Ollama runs locally and requires no API key.
+          {t("providers:add.ollamaNote")}
         </span>
       )}
       <div className="settings-row settings-row--end">
         <button className="settings-btn settings-btn--ghost" onClick={onCancel}>
-          Cancel
+          {t("providers:add.cancel")}
         </button>
         <button className="settings-btn settings-btn--primary" onClick={onSubmit} disabled={!addForm.name.trim()}>
-          Add
+          {t("providers:add.add")}
         </button>
       </div>
     </div>

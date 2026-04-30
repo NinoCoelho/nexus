@@ -12,6 +12,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   patchConfig,
   setProviderKey,
@@ -34,12 +35,12 @@ function badgeClass(p: Provider) {
   return `settings-badge${p.has_key ? " settings-badge--ok" : " settings-badge--bad"}`;
 }
 
-function badgeText(p: Provider) {
-  if (p.key_source === "anonymous") return "anonymous";
-  if (p.has_key && p.key_source === "credential") return `via $${p.credential_ref}`;
-  if (p.has_key && p.key_source === "inline") return "inline (legacy)";
-  if (p.has_key && p.key_source === "env") return `env: ${p.key_env}`;
-  return "not configured";
+function badgeText(p: Provider, t: (key: string, opts?: Record<string, unknown>) => string) {
+  if (p.key_source === "anonymous") return t("providers:badge.anonymous");
+  if (p.has_key && p.key_source === "credential") return t("providers:badge.viaCredential", { ref: p.credential_ref });
+  if (p.has_key && p.key_source === "inline") return t("providers:badge.inlineLegacy");
+  if (p.has_key && p.key_source === "env") return t("providers:badge.env", { env: p.key_env });
+  return t("providers:badge.notConfigured");
 }
 
 /** Default credential name for the picker's "Create new" modal. Prefer the
@@ -51,6 +52,7 @@ function defaultCredentialName(p: Provider): string {
 }
 
 export default function ProvidersSection({ providers, onRefresh }: Props) {
+  const { t } = useTranslation("providers");
   const toast = useToast();
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditState>({ name: "", base_url: "", key_env: "", api_key: "" });
@@ -80,10 +82,10 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
         },
       });
       setEditing(null);
-      toast.success(`Saved ${editForm.name}`);
+      toast.success(t("providers:toast.saved", { name: editForm.name }));
       onRefresh();
     } catch (e) {
-      toast.error("Save failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("providers:toast.saveFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -91,11 +93,11 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
     try {
       await setProviderCredential(p.name, ref);
       toast.success(
-        ref ? `${p.name} → $${ref}` : `Cleared credential for ${p.name}`,
+        ref ? t("providers:toast.credentialBound", { name: p.name, ref }) : t("providers:toast.credentialCleared", { name: p.name }),
       );
       onRefresh();
     } catch (e) {
-      toast.error("Failed to bind credential", {
+      toast.error(t("providers:toast.credentialBindFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     }
@@ -105,10 +107,10 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
     try {
       await patchConfig({ providers: { [name]: { has_key: false } } });
       setConfirmRemove(null);
-      toast.success(`Removed ${name}`);
+      toast.success(t("providers:toast.removed", { name }));
       onRefresh();
     } catch (e) {
-      toast.error("Remove failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("providers:toast.removeFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -116,10 +118,10 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
     try {
       await clearProviderKey(name);
       setConfirmClearKey(null);
-      toast.success(`Cleared key for ${name}`);
+      toast.success(t("providers:toast.keyCleared", { name }));
       onRefresh();
     } catch (e) {
-      toast.error("Clear key failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("providers:toast.clearKeyFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -150,10 +152,10 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
       }
       setAdding(false);
       setAddForm({ name: "", base_url: "", key_env: "", key_env_touched: false, api_key: "", credential_ref: null, type: "openai_compat" });
-      toast.success(`Added ${name}`);
+      toast.success(t("providers:toast.added", { name }));
       onRefresh();
     } catch (e) {
-      toast.error("Add failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("providers:toast.addFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -164,7 +166,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
           {editing === p.name ? (
             <div className="settings-inline-form">
               <div className="settings-field">
-                <label className="settings-field-label">Base URL</label>
+                <label className="settings-field-label">{t("providers:edit.baseUrlLabel")}</label>
                 <input
                   className="settings-input"
                   value={editForm.base_url}
@@ -173,32 +175,31 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                 />
               </div>
               <div className="settings-field">
-                <label className="settings-field-label">Credential</label>
+                <label className="settings-field-label">{t("providers:edit.credentialLabel")}</label>
                 <CredentialPicker
                   value={p.credential_ref ?? null}
                   onChange={(ref) => void handleCredentialChange(p, ref)}
                   defaultNameSuggestion={defaultCredentialName(p)}
                 />
                 <span className="settings-field-hint">
-                  Pick a stored credential or create a new one. Takes
-                  precedence over the legacy env-var / inline key paths.
+                  {t("providers:edit.credentialHint")}
                 </span>
               </div>
               <div className="settings-field">
                 <label className="settings-field-label">
-                  Key env var <span style={{opacity:0.7,fontWeight:400}}>(legacy fallback)</span>
+                  {t("providers:edit.keyEnvLabel")} <span style={{opacity:0.7,fontWeight:400}}>{t("providers:edit.keyEnvLegacy")}</span>
                 </label>
                 <input
                   className="settings-input"
                   value={editForm.key_env}
                   onChange={(e) => setEditForm((f) => ({ ...f, key_env: e.target.value }))}
-                  placeholder="MY_PROVIDER_API_KEY"
+                  placeholder={t("providers:edit.keyEnvPlaceholder")}
                   disabled={!!p.credential_ref}
                 />
                 <span className="settings-field-hint">
                   {p.credential_ref
-                    ? "Disabled while a credential is bound."
-                    : "Used only when no credential is bound."}
+                    ? t("providers:edit.keyEnvDisabledHint")
+                    : t("providers:edit.keyEnvFallbackHint")}
                 </span>
               </div>
               {p.key_source === "inline" && !p.credential_ref && (
@@ -206,25 +207,25 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                   {confirmClearKey === p.name ? (
                     <>
                       <button className="settings-icon-btn settings-icon-btn--bad" onClick={() => doClearKey(p.name)}>
-                        Confirm clear
+                        {t("providers:edit.confirmClear")}
                       </button>
                       <button className="settings-icon-btn" onClick={() => setConfirmClearKey(null)}>
-                        Cancel
+                        {t("providers:edit.cancel")}
                       </button>
                     </>
                   ) : (
                     <button className="settings-clear-key-btn" onClick={() => setConfirmClearKey(p.name)}>
-                      Clear legacy inline key
+                      {t("providers:edit.clearInlineKey")}
                     </button>
                   )}
                 </div>
               )}
               <div className="settings-row settings-row--end">
                 <button className="settings-btn settings-btn--ghost" onClick={() => setEditing(null)}>
-                  Cancel
+                  {t("providers:edit.cancel")}
                 </button>
                 <button className="settings-btn settings-btn--primary" onClick={saveEdit}>
-                  Save
+                  {t("providers:edit.save")}
                 </button>
               </div>
             </div>
@@ -237,8 +238,8 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                 )}
               </div>
               <div className="settings-card-actions">
-                <span className={badgeClass(p)}>{badgeText(p)}</span>
-                <button className="settings-icon-btn" title="Edit" onClick={() => startEdit(p)}>
+                <span className={badgeClass(p)}>{badgeText(p, t)}</span>
+                <button className="settings-icon-btn" title={t("providers:edit.editTitle")} onClick={() => startEdit(p)}>
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5z" />
                   </svg>
@@ -246,14 +247,14 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                 {confirmRemove === p.name ? (
                   <>
                     <button className="settings-icon-btn settings-icon-btn--bad" onClick={() => removeProvider(p.name)}>
-                      Confirm
+                      {t("providers:remove.confirm")}
                     </button>
                     <button className="settings-icon-btn" onClick={() => setConfirmRemove(null)}>
-                      Cancel
+                      {t("providers:remove.cancel")}
                     </button>
                   </>
                 ) : (
-                  <button className="settings-icon-btn settings-icon-btn--bad" title="Remove" onClick={() => setConfirmRemove(p.name)}>
+                  <button className="settings-icon-btn settings-icon-btn--bad" title={t("providers:remove.removeTitle")} onClick={() => setConfirmRemove(p.name)}>
                     ✕
                   </button>
                 )}
@@ -272,7 +273,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
         />
       ) : (
         <button className="settings-add-btn" onClick={() => setAdding(true)}>
-          + Add provider
+          {t("providers:section.addProvider")}
         </button>
       )}
     </div>

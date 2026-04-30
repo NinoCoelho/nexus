@@ -1,0 +1,44 @@
+{
+  "toolbar": {
+    "scopes": {
+      "all": "All",
+      "file": "File",
+      "folder": "Folder",
+      "tag": "Tag",
+      "search": "Search",
+      "entity": "Entity"
+    },
+    "seedPlaceholders": {
+      "file": "path/to/file.md",
+      "folder": "folder/",
+      "tag": "tag-name",
+      "search": "search query…",
+      "entity": "entity ID"
+    },
+    "hops": {
+      "one": "1 hop",
+      "two": "2 hops",
+      "three": "3 hops"
+    },
+    "edgeTypes": {
+      "links": "Links",
+      "linksAndTags": "Links + Tags",
+      "linksAndEntities": "Links + Entities",
+      "all": "All"
+    },
+    "tagsButton": "Tags",
+    "fitButton": "Fit",
+    "goButton": "Go",
+    "loadingButton": "…",
+    "nodes_one": "{{count}} node",
+    "nodes_other": "{{count}} nodes",
+    "edges_one": "{{count}} edge",
+    "edges_other": "{{count}} edges",
+    "entities_one": "{{count}} entity",
+    "entities_other": "{{count}} entities",
+    "clearTags": "clear"
+  },
+  "error": {
+    "loadFailed": "Failed to load graph"
+  }
+}

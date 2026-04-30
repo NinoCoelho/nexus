@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   type Calendar as CalendarFile,
   type CalendarEvent,
@@ -49,6 +50,7 @@ interface Props {
 }
 
 export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat }: Props) {
+  const { t } = useTranslation("calendar");
   const [calendars, setCalendars] = useState<CalendarSummary[]>([]);
   const [calendar, setCalendar] = useState<CalendarFile | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -74,7 +76,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
         onSelectPath(res.calendars[0].path);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to list calendars");
+      setError(e instanceof Error ? e.message : t("calendar:error.listFailed"));
     }
   }, [selectedPath, onSelectPath]);
 
@@ -97,7 +99,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       });
       setEvents(q.events);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load calendar");
+      setError(e instanceof Error ? e.message : t("calendar:error.loadFailed"));
     }
   }, [selectedPath, window_]);
 
@@ -201,7 +203,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       setModal(null);
       void reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save event");
+      setError(e instanceof Error ? e.message : t("calendar:error.saveFailed"));
     }
   }, [selectedPath, modal, reload]);
 
@@ -212,7 +214,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       setModal(null);
       void reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete event");
+      setError(e instanceof Error ? e.message : t("calendar:error.deleteFailed"));
     }
   }, [selectedPath, modal, reload]);
 
@@ -230,7 +232,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
         ev.title,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to open chat");
+      setError(e instanceof Error ? e.message : t("calendar:error.chatFailed"));
     }
   }, [selectedPath, onOpenInChat]);
 
@@ -240,7 +242,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       await fireVaultCalendarEvent(selectedPath, ev.id);
       void reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fire event");
+      setError(e instanceof Error ? e.message : t("calendar:error.fireFailed"));
     }
   }, [selectedPath, reload]);
 
@@ -250,7 +252,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       await patchVaultCalendar(selectedPath, { auto_trigger: !calendar.auto_trigger });
       void reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update calendar");
+      setError(e instanceof Error ? e.message : t("calendar:error.calendarUpdateFailed"));
     }
   }, [selectedPath, calendar, reload]);
 
@@ -261,18 +263,18 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
       setSettingsOpen(false);
       void reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to update calendar");
+      setError(e instanceof Error ? e.message : t("calendar:error.calendarUpdateFailed"));
     }
   }, [selectedPath, reload]);
 
   const handleCreateNew = useCallback(() => {
     setPromptModal({
       kind: "prompt",
-      title: "New calendar",
-      message: "Choose a name for your new calendar.",
-      defaultValue: "My Calendar",
-      placeholder: "Calendar name",
-      confirmLabel: "Create",
+      title: t("calendar:create.title"),
+      message: t("calendar:create.message"),
+      defaultValue: t("calendar:create.defaultValue"),
+      placeholder: t("calendar:create.placeholder"),
+      confirmLabel: t("calendar:create.confirm"),
       onCancel: () => setPromptModal(null),
       onSubmit: async (name) => {
         setPromptModal(null);
@@ -285,7 +287,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           await reloadList();
           onSelectPath(path);
         } catch (e) {
-          setError(e instanceof Error ? e.message : "Failed to create calendar");
+          setError(e instanceof Error ? e.message : t("calendar:error.createFailed"));
         }
       },
     });
@@ -303,25 +305,25 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           value={selectedPath ?? ""}
           onChange={(e) => onSelectPath(e.target.value || null)}
         >
-          {calendars.length === 0 && <option value="">(none)</option>}
+          {calendars.length === 0 && <option value="">{t("calendar:header.noneCalendar")}</option>}
           {calendars.map((c) => (
             <option key={c.path} value={c.path}>{c.title}</option>
           ))}
         </select>
-        <button onClick={handleCreateNew}>+ New</button>
+        <button onClick={handleCreateNew}>{t("calendar:header.addNew")}</button>
 
         <div className="cal-header-spacer" />
 
-        <button onClick={onPrev}>◀</button>
-        <button onClick={onToday}>Today</button>
-        <button onClick={onNext}>▶</button>
+        <button onClick={onPrev}>{t("calendar:header.prev")}</button>
+        <button onClick={onToday}>{t("calendar:header.today")}</button>
+        <button onClick={onNext}>{t("calendar:header.next")}</button>
         <span className="cal-current-label">{headerLabel}</span>
 
         <div className="cal-header-spacer" />
 
-        <button className={viewMode === "day" ? "active" : ""} onClick={() => setViewMode("day")}>Day</button>
-        <button className={viewMode === "week" ? "active" : ""} onClick={() => setViewMode("week")}>Week</button>
-        <button className={viewMode === "month" ? "active" : ""} onClick={() => setViewMode("month")}>Month</button>
+        <button className={viewMode === "day" ? "active" : ""} onClick={() => setViewMode("day")}>{t("calendar:header.dayView")}</button>
+        <button className={viewMode === "week" ? "active" : ""} onClick={() => setViewMode("week")}>{t("calendar:header.weekView")}</button>
+        <button className={viewMode === "month" ? "active" : ""} onClick={() => setViewMode("month")}>{t("calendar:header.monthView")}</button>
 
         {calendar && (
           <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
@@ -330,11 +332,11 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
               checked={!!calendar.auto_trigger}
               onChange={() => void handleAutoTriggerToggle()}
             />
-            Auto-fire
+            {t("calendar:header.autoFire")}
           </label>
         )}
         {calendar && (
-          <button title="Calendar settings" onClick={() => setSettingsOpen(true)}>⚙</button>
+          <button title={t("calendar:header.settingsTitle")} onClick={() => setSettingsOpen(true)}>⚙</button>
         )}
       </div>
 
@@ -344,7 +346,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           <button
             onClick={() => setError(null)}
             style={{ marginLeft: 12, background: "transparent", border: "1px solid white", color: "white", borderRadius: 3, padding: "0 6px", cursor: "pointer" }}
-          >×</button>
+          >{t("calendar:error.dismiss")}</button>
         </div>
       )}
 
@@ -372,7 +374,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           )
         ) : (
           <div style={{ padding: 24, color: "var(--fg-faint)" }}>
-            No calendar selected. Click <strong>+ New</strong> to create one.
+            {t("calendar:empty.noCalendar")}
           </div>
         )}
       </div>

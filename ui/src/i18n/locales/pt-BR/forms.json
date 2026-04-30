@@ -1,0 +1,19 @@
+{
+  "required": " *",
+  "refLoading": "carregando…",
+  "refLoadFailed": "falha ao carregar destino: {{error}}",
+  "refIdPlaceholder": "cole o ID da linha destino",
+  "refEmptyOption": "—",
+  "commaSeparatedIds": "IDs separados por vírgula",
+  "selectPlaceholder": "Selecionar…",
+  "formulaComputed": "(calculado)",
+  "formulaTitle": "Campo de fórmula — valor calculado a partir de outros campos",
+  "vaultLinkPlaceholder": "caminho do vault (ex: notas/foo.md)",
+  "getItHere": "Obtenha aqui →",
+  "fieldRequired": "{{field}} é obrigatório",
+  "modal": {
+    "cancel": "Cancelar",
+    "confirm": "Confirmar",
+    "ok": "OK"
+  }
+}

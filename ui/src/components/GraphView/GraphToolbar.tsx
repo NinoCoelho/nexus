@@ -1,5 +1,6 @@
 // Sub-component for GraphView: scope/filter toolbar above the canvas.
 
+import { useTranslation } from "react-i18next";
 import type { ScopeType } from "./types";
 
 interface GraphToolbarProps {
@@ -24,13 +25,6 @@ interface GraphToolbarProps {
   onTagFilterChange: (tags: Set<string>) => void;
 }
 
-const scopeLabels: Record<ScopeType, string> = {
-  all: "All", file: "File", folder: "Folder", tag: "Tag", search: "Search", entity: "Entity",
-};
-const seedPlaceholders: Record<ScopeType, string> = {
-  all: "", file: "path/to/file.md", folder: "folder/", tag: "tag-name", search: "search query…", entity: "entity ID",
-};
-
 export function GraphToolbar({
   scope,
   seed,
@@ -52,6 +46,25 @@ export function GraphToolbar({
   onFetchGraph,
   onTagFilterChange,
 }: GraphToolbarProps) {
+  const { t } = useTranslation("graph");
+
+  const scopeLabels: Record<ScopeType, string> = {
+    all: t("graph:toolbar.scopes.all"),
+    file: t("graph:toolbar.scopes.file"),
+    folder: t("graph:toolbar.scopes.folder"),
+    tag: t("graph:toolbar.scopes.tag"),
+    search: t("graph:toolbar.scopes.search"),
+    entity: t("graph:toolbar.scopes.entity"),
+  };
+  const seedPlaceholders: Record<ScopeType, string> = {
+    all: "",
+    file: t("graph:toolbar.seedPlaceholders.file"),
+    folder: t("graph:toolbar.seedPlaceholders.folder"),
+    tag: t("graph:toolbar.seedPlaceholders.tag"),
+    search: t("graph:toolbar.seedPlaceholders.search"),
+    entity: t("graph:toolbar.seedPlaceholders.entity"),
+  };
+
   return (
     <>
       <div className="graph-toolbar">
@@ -77,9 +90,9 @@ export function GraphToolbar({
         )}
 
         <select className="graph-toolbar-select graph-toolbar-select-sm" value={hops} onChange={e => onHopsChange(Number(e.target.value))}>
-          <option value={1}>1 hop</option>
-          <option value={2}>2 hops</option>
-          <option value={3}>3 hops</option>
+          <option value={1}>{t("graph:toolbar.hops.one")}</option>
+          <option value={2}>{t("graph:toolbar.hops.two")}</option>
+          <option value={3}>{t("graph:toolbar.hops.three")}</option>
         </select>
 
         <select
@@ -87,20 +100,20 @@ export function GraphToolbar({
           value={edgeTypes}
           onChange={e => onEdgeTypesChange(e.target.value)}
         >
-          <option value="link">Links</option>
-          <option value="link,tag">Links + Tags</option>
-          <option value="link,entity">Links + Entities</option>
-          <option value="link,tag,entity">All</option>
+          <option value="link">{t("graph:toolbar.edgeTypes.links")}</option>
+          <option value="link,tag">{t("graph:toolbar.edgeTypes.linksAndTags")}</option>
+          <option value="link,entity">{t("graph:toolbar.edgeTypes.linksAndEntities")}</option>
+          <option value="link,tag,entity">{t("graph:toolbar.edgeTypes.all")}</option>
         </select>
 
-        <button className="graph-toolbar-btn" onClick={onToggleFilters}>Tags</button>
-        <button className="graph-toolbar-btn" onClick={onFitToView}>Fit</button>
+        <button className="graph-toolbar-btn" onClick={onToggleFilters}>{t("graph:toolbar.tagsButton")}</button>
+        <button className="graph-toolbar-btn" onClick={onFitToView}>{t("graph:toolbar.fitButton")}</button>
         <button className="graph-toolbar-btn" onClick={onFetchGraph} disabled={loading}>
-          {loading ? "…" : "Go"}
+          {loading ? t("graph:toolbar.loadingButton") : t("graph:toolbar.goButton")}
         </button>
-        <span className="graph-toolbar-stat">{nodeCount} nodes</span>
-        <span className="graph-toolbar-stat">{edgeCount} edges</span>
-        {entityCount > 0 && <span className="graph-toolbar-stat">{entityCount} entities</span>}
+        <span className="graph-toolbar-stat">{t("graph:toolbar.nodes", { count: nodeCount })}</span>
+        <span className="graph-toolbar-stat">{t("graph:toolbar.edges", { count: edgeCount })}</span>
+        {entityCount > 0 && <span className="graph-toolbar-stat">{t("graph:toolbar.entities", { count: entityCount })}</span>}
       </div>
 
       {showFilters && allTags.length > 0 && (
@@ -120,7 +133,7 @@ export function GraphToolbar({
           ))}
           {tagFilter.size > 0 && (
             <button className="graph-tag-chip" onClick={() => onTagFilterChange(new Set())}>
-              clear
+              {t("graph:toolbar.clearTags")}
             </button>
           )}
         </div>

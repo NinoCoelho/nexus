@@ -1,0 +1,108 @@
+{
+  "empty": {
+    "noModel": {
+      "title": "No model configured",
+      "sub": "Add a model from one of your configured providers to start chatting.",
+      "openSettings": "Open settings"
+    },
+    "start": "Start a conversation with Nexus."
+  },
+  "user": {
+    "label": "You",
+    "editTitle": "Edit & resend (truncates everything after this turn)",
+    "editAria": "Edit message"
+  },
+  "assistant": {
+    "name": "Nexus",
+    "via": "via {{model}}",
+    "thinking": "Thinking",
+    "thinkingStreaming": "Thinking…",
+    "thinkingCount": "({{count}} chars)",
+    "pin": "Pin this turn",
+    "unpin": "Unpin",
+    "pinAria": "Pin message",
+    "helpful": "Helpful",
+    "removeThumbsUp": "Remove thumbs up",
+    "markHelpfulAria": "Mark helpful",
+    "notHelpful": "Not helpful",
+    "removeThumbsDown": "Remove thumbs down",
+    "markNotHelpfulAria": "Mark not helpful",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyMarkdown": "Copy markdown",
+    "copyMarkdownAria": "Copy markdown"
+  },
+  "limit": {
+    "banner": "Hit the per-turn tool-call limit ({{limit}}). How do you want to proceed?",
+    "continue": "Continue",
+    "stop": "Stop"
+  },
+  "partial": {
+    "interrupted": "This turn was interrupted (connection dropped or server restarted).",
+    "cancelled": "You stopped this turn.",
+    "iterationLimit": "Hit the per-turn tool-call limit.",
+    "emptyResponse": "The model returned an empty response.",
+    "llmError": "The model call failed mid-turn.",
+    "crashed": "The turn crashed unexpectedly.",
+    "length": "Response was truncated — the model hit its output limit.",
+    "upstreamTimeout": "The model didn't respond in time.",
+    "proceed": "How do you want to proceed?",
+    "continue": "Continue",
+    "retry": "Retry"
+  },
+  "input": {
+    "placeholder": "Message Nexus…",
+    "uploadFile": "Upload file",
+    "uploadFileAria": "Upload file",
+    "stop": "Stop",
+    "send": "Send",
+    "voiceMessage": "Voice message",
+    "uploadFailed": "Upload failed",
+    "transcriptionNoText": "Transcription returned no text",
+    "transcriptionFailed": "Transcription failed"
+  },
+  "secret": {
+    "title": "This looks like an API key",
+    "message": "The text you're about to send contains <code>{{preview}}</code>, which matches a known credential pattern. Sending it would expose the key to the LLM (and to its provider's logging policy). You can save it locally and use <code>{{placeholder}}</code> as a placeholder instead — the value is substituted at the tool boundary, never sent to the LLM.",
+    "namePlaceholder": "GITHUB_TOKEN",
+    "cancel": "Cancel",
+    "sendAnyway": "Send anyway",
+    "saveAsCredential": "Save as credential",
+    "saving": "Saving…",
+    "nameValidationError": "Name must be UPPER_SNAKE_CASE",
+    "nameValidationDetail": "Pattern: ^[A-Z][A-Z0-9_]*$",
+    "savedAs": "Saved as ${{name}}",
+    "saveFailed": "Failed to save credential"
+  },
+  "approval": {
+    "defaultTitle": "Agent needs input",
+    "timeoutLabel": "Timeout",
+    "queueHint": "1 of {{total}} pending",
+    "deny": "Deny",
+    "allow": "Allow",
+    "send": "Send",
+    "answerPlaceholder": "Type your answer…"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "pendingPill": "{{count}} pending",
+    "enableBrowser": "Enable browser notifications →",
+    "blocked": "Notifications blocked — enable them in your browser's site settings to receive prompts when no Nexus tab is open.",
+    "empty": "No HITL events yet.",
+    "pendingTitle": "{{count}} pending",
+    "notificationsAria": "Notifications",
+    "cancelRequestTitle": "Cancel this request",
+    "cancelRequestAria": "Cancel request",
+    "openChat": "Open chat",
+    "openChatTitle": "Open the chat that produced this request",
+    "parkedTitle": "Parked: agent's turn ended; resume any time.",
+    "liveTitle": "Live: agent's turn is blocked waiting on this answer.",
+    "status": {
+      "pending": "Waiting",
+      "answered": "Answered",
+      "auto_answered": "Auto",
+      "cancelled": "Cancelled",
+      "timed_out": "Timed out"
+    }
+  }
+}

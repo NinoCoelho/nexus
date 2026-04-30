@@ -7,6 +7,7 @@
 // the replacement.
 
 import { FormEvent, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { UserRequestPayload } from "../api";
 import FormRenderer from "./FormRenderer";
 import { sounds } from "../hooks/useSounds";
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLength = 1 }: Props) {
+  const { t } = useTranslation("chat");
   const [remaining, setRemaining] = useState(request.timeout_seconds);
   const [textValue, setTextValue] = useState(request.default ?? "");
 
@@ -58,15 +60,15 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
           <span className="approval-title">
             {request.kind === "form" && request.form_title
               ? request.form_title
-              : "Agent needs input"}
+              : t("chat:approval.defaultTitle")}
           </span>
-          <span className="approval-countdown" title="Timeout">
+          <span className="approval-countdown" title={t("chat:approval.timeoutLabel")}>
             {formatCountdown(remaining)}
           </span>
         </div>
         {queueLength > 1 && (
           <div className="approval-queue-hint" title="Total pending HITL requests">
-            1 of {queueLength} pending
+            {t("chat:approval.queueHint", { total: queueLength })}
           </div>
         )}
         <div className="approval-body">
@@ -93,7 +95,7 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
               className="approval-btn approval-btn-deny"
               onClick={() => onSubmit("no")}
             >
-              Deny
+              {t("chat:approval.deny")}
             </button>
             <button
               type="button"
@@ -101,7 +103,7 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
               onClick={() => onSubmit("yes")}
               autoFocus
             >
-              Allow
+              {t("chat:approval.allow")}
             </button>
           </div>
         )}
@@ -130,7 +132,7 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
               className="approval-text-input"
               value={textValue}
               onChange={(e) => setTextValue(e.target.value)}
-              placeholder={request.default ?? "Type your answer…"}
+              placeholder={request.default ?? t("chat:approval.answerPlaceholder")}
               autoFocus
             />
             <button
@@ -138,7 +140,7 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
               className="approval-btn approval-btn-allow"
               disabled={!textValue.trim()}
             >
-              Send
+              {t("chat:approval.send")}
             </button>
           </form>
         )}

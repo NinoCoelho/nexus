@@ -234,14 +234,48 @@ def _user_block(home: "AgentHome | None") -> str:
     return f"## About the user\n\n{content}\n\n{_USER_NUDGE}"
 
 
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "pt-BR": "Brazilian Portuguese (português brasileiro)",
+}
+
+
+def _language_directive(language: str | None) -> str:
+    """Tell the LLM which language the user prefers.
+
+    The agent produces user-facing text directly (chat replies, ask_user form
+    titles/labels/help). We don't translate that on the way out — we tell the
+    model the user's language so it writes in the right one. ``en`` is the
+    no-op (the model defaults to English anyway), so we only emit a directive
+    when the user picked something else.
+    """
+    name = _LANGUAGE_NAMES.get(language or "")
+    if not name or language == "en":
+        return ""
+    return (
+        f"## Language\n\n"
+        f"The user's preferred language is {name}. Respond in {name}, including "
+        f"chat replies, summaries, and any user-facing text you produce through "
+        f"tools (form titles, field labels, help text in `ask_user`). If the "
+        f"user writes to you in a different language, follow their lead for "
+        f"that turn."
+    )
+
+
 def build_system_prompt(
     registry: SkillRegistry,
     *,
     context: str | None = None,
     home: "AgentHome | None" = None,
+    language: str | None = None,
 ) -> str:
     _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
+
+    lang_block = _language_directive(language)
+    if lang_block:
+        parts.append(lang_block)
+        parts.append("")
 
     user_block = _user_block(home)
     if user_block:

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { KanbanCard, KanbanLane } from "../../api";
 import KanbanCardItem from "./KanbanCardItem";
 import type { BoardFilters } from "./utils";
@@ -36,24 +37,25 @@ export default function KanbanLaneColumn({
   onOpenCardInChat,
   onDeleteCard,
 }: Props) {
+  const { t } = useTranslation("kanban");
   return (
     <div className="kanban-lane">
       <div className="kanban-lane-header">
         <span className="kanban-lane-title">
           {lane.title}
           {lane.prompt && (
-            <span className="kanban-lane-prompt-indicator" title="Auto-dispatch prompt set">⚡</span>
+            <span className="kanban-lane-prompt-indicator" title={t("kanban:lane.promptIndicator")}>⚡</span>
           )}
         </span>
         <span className="kanban-lane-count">{lane.cards.length}</span>
         <button
           className="kanban-icon-btn"
-          title={lane.prompt ? "Edit lane prompt" : "Set lane prompt"}
+          title={lane.prompt ? t("kanban:lane.editPrompt") : t("kanban:lane.setPrompt")}
           onClick={() => onEditLane(lane)}
         >⚙</button>
         <button
           className="kanban-icon-btn"
-          title="Delete lane"
+          title={t("kanban:lane.deleteLane")}
           onClick={() => onDeleteLane(lane.id)}
         >×</button>
       </div>
@@ -90,7 +92,8 @@ export default function KanbanLaneColumn({
         <button
           className="kanban-add-card"
           onClick={() => onAddCard(lane.id)}
-        >+ Add card</button>
+          aria-label={t("kanban:lane.addCardAria")}
+        >{t("kanban:lane.addCard")}</button>
       </div>
     </div>
   );

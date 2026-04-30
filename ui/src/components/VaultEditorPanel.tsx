@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
 import { useVaultLinkPreview } from "./vaultLink";
@@ -66,6 +67,7 @@ interface VaultEditorPanelProps {
 }
 
 export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar, onOpenTable }: VaultEditorPanelProps) {
+  const { t } = useTranslation("vault");
   const [content, setContent] = useState("");
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
   const [isBinary, setIsBinary] = useState(false);
@@ -116,7 +118,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
         setIsBinary(!!f.binary);
         setFileError(null);
       })
-      .catch(() => setFileError("Couldn't load file — is the server running?"));
+      .catch(() => setFileError(t("vault:editor.loadError")));
   }, [selectedPath]);
 
   useEffect(() => {
@@ -149,7 +151,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
     if (ev.type === "vault.removed") {
       setContent("");
       setEditMode(false);
-      setFileError("File no longer exists");
+      setFileError(t("vault:editor.removedError"));
       return;
     }
     if (ev.type === "vault.indexed") {
@@ -216,30 +218,30 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
             <path d="M4 2h8l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
             <polyline points="12 2 12 6 16 6" />
           </svg>
-          <p>Pick a file, or create one&nbsp;<span className="vault-empty-plus">+</span></p>
+          <p>{t("vault:empty")}&nbsp;<span className="vault-empty-plus">+</span></p>
         </div>
       ) : (
         <>
           <div className="vault-editor-topbar">
             <div className="vault-breadcrumb">{breadcrumb}</div>
             <div className="vault-editor-actions">
-              {saveStatus === "saved" && <span className="vault-saved-indicator">saved ✓</span>}
+              {saveStatus === "saved" && <span className="vault-saved-indicator">{t("vault:editor.saved")}</span>}
               {onViewEntityGraph && selectedPath && (
                 <button
                   className="vault-pill"
                   onClick={() => onViewEntityGraph(selectedPath!)}
-                  title="View entity graph for this file"
+                  title={t("vault:editor.graphTitle")}
                 >
-                  Graph
+                  {t("vault:editor.graph")}
                 </button>
               )}
               {historyEnabled && selectedPath && (
                 <button
                   className="vault-pill"
                   onClick={() => setHistoryOpen(true)}
-                  title="View history and undo"
+                  title={t("vault:editor.historyTitle")}
                 >
-                  History
+                  {t("vault:editor.history")}
                 </button>
               )}
               {editMode && canEdit && isMarkdown && (
@@ -249,14 +251,14 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                 <button
                   className={`vault-pill${splitMode ? " vault-pill--active" : ""}`}
                   onClick={() => setSplitMode((s) => !s)}
-                  title="Toggle live preview pane"
+                  title={t("vault:editor.splitTitle")}
                 >
-                  Split
+                  {t("vault:editor.split")}
                 </button>
               )}
               {editMode && canEdit && (
                 <button className="vault-pill" onClick={() => void save()} disabled={saveStatus === "saving"}>
-                  Save
+                  {t("vault:editor.save")}
                 </button>
               )}
               {!canEdit && selectedPath && (
@@ -265,9 +267,9 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   target="_blank"
                   rel="noopener noreferrer"
                   className="vault-pill"
-                  title="Open raw file in a new tab"
+                  title={t("vault:editor.openRawTitle")}
                 >
-                  Open raw
+                  {t("vault:editor.openRaw")}
                 </a>
               )}
               {canEdit && !isCsv && (
@@ -275,7 +277,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   className={`vault-pill${editMode ? " vault-pill--active" : ""}`}
                   onClick={() => setEditMode((m) => !m)}
                 >
-                  {editMode ? "View" : "Edit"}
+                  {editMode ? t("vault:editor.view") : t("vault:editor.edit")}
                 </button>
               )}
             </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { Model } from "../../api";
 
 interface Props {
@@ -33,6 +34,7 @@ export default function ModelRow({
   onUnassignRole,
   onSetDefault,
 }: Props) {
+  const { t } = useTranslation("models");
   const isEmb = roles.includes("embedding");
   const isExt = roles.includes("extraction");
 
@@ -61,11 +63,11 @@ export default function ModelRow({
               disabled={isDefault || roleSaving}
               title={
                 isDefault
-                  ? "Este já é o modelo padrão"
-                  : "Usar este modelo como padrão para novas conversas"
+                  ? t("models:row.defaultAlready")
+                  : t("models:row.defaultSet")
               }
             >
-              Padrão
+              {t("models:row.roleDefault")}
             </button>
             <button
               type="button"
@@ -79,13 +81,13 @@ export default function ModelRow({
               disabled={(!isEmb && !canEmbed) || roleSaving}
               title={
                 isEmb
-                  ? "Limpar (volta para o embedder local)"
+                  ? t("models:row.embeddingClear")
                   : canEmbed
-                  ? "Usar este modelo para gerar embeddings (GraphRAG)"
-                  : "Edite o modelo e marque 'Capaz de embeddings' para habilitar"
+                  ? t("models:row.embeddingAssign")
+                  : t("models:row.embeddingDisabled")
               }
             >
-              Embedding
+              {t("models:row.roleEmbedding")}
             </button>
             <button
               type="button"
@@ -97,38 +99,38 @@ export default function ModelRow({
               disabled={roleSaving}
               title={
                 isExt
-                  ? "Limpar — usa o extrator local (spaCy NER)"
-                  : "Usar este modelo para extrair entidades/relações"
+                  ? t("models:row.extractionClear")
+                  : t("models:row.extractionAssign")
               }
             >
-              Extração
+              {t("models:row.roleExtraction")}
             </button>
           </div>
         </div>
         <div className="settings-card-actions">
-          <button className="settings-icon-btn" title="Editar" onClick={onEdit}>
+          <button className="settings-icon-btn" title={t("models:row.editTitle")} onClick={onEdit}>
             ✎
           </button>
           {locked ? (
             <span
               className="settings-icon-btn settings-icon-btn--locked"
-              title="Não é possível remover — limpe a função primeiro"
+              title={t("models:row.lockedTitle")}
             >
               🔒
             </span>
           ) : confirmRemove === m.id ? (
             <>
               <button className="settings-icon-btn settings-icon-btn--bad" onClick={onRemove}>
-                Confirmar
+                {t("models:row.confirmRemove")}
               </button>
               <button className="settings-icon-btn" onClick={onCancelRemove}>
-                Cancelar
+                {t("models:row.cancelRemove")}
               </button>
             </>
           ) : (
             <button
               className="settings-icon-btn settings-icon-btn--bad"
-              title="Remover"
+              title={t("models:row.removeTitle")}
               onClick={onConfirmRemove}
             >
               ✕

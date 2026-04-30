@@ -66,9 +66,9 @@ export default function NumberFieldWithDefault({
         className="s-number__reset"
         onClick={reset}
         disabled={isDefault || disabled}
-        title={`Restaurar padrão (${defaultValue})`}
+        title={`Restore default (${defaultValue})`}
       >
-        Restaurar padrão
+        Restore default
       </button>
     </div>
   );

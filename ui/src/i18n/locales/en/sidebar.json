@@ -1,0 +1,34 @@
+{
+  "newChat": "New chat",
+  "expand": "Expand sidebar",
+  "collapse": "Collapse sidebar",
+  "resize": "Resize sidebar",
+  "resizeDrag": "Drag to resize",
+  "importSession": "Import session from .md file",
+  "importLabel": "↑ Import",
+  "views": "Views",
+  "settings": "Settings",
+  "viewNames": {
+    "chat": "Chat",
+    "calendar": "Calendar",
+    "vault": "Vault",
+    "kanban": "Kanban",
+    "data": "Data",
+    "graph": "Knowledge",
+    "insights": "Insights"
+  },
+  "session": {
+    "downloadedFile": "Downloaded {{filename}}",
+    "downloadFailed": "Download failed",
+    "summarizing": "Summarizing session…",
+    "savedRaw": "Saved raw to vault",
+    "summarySaved": "Summary saved to vault",
+    "saveRawFailed": "Couldn't save raw to vault",
+    "summarizeFailed": "Summarize failed",
+    "shareCopied": "Share link copied",
+    "shareCopiedDetail": "Anyone with the link can view (read-only).",
+    "shareReady": "Share link ready",
+    "shareCopyLabel": "Copy",
+    "shareFailed": "Couldn't create share link"
+  }
+}

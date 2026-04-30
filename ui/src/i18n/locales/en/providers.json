@@ -1,0 +1,64 @@
+{
+  "section": {
+    "addProvider": "+ Add provider"
+  },
+  "badge": {
+    "anonymous": "anonymous",
+    "viaCredential": "via ${{ref}}",
+    "inlineLegacy": "inline (legacy)",
+    "env": "env: {{env}}",
+    "notConfigured": "not configured"
+  },
+  "edit": {
+    "baseUrlLabel": "Base URL",
+    "credentialLabel": "Credential",
+    "credentialHint": "Pick a stored credential or create a new one. Takes precedence over the legacy env-var / inline key paths.",
+    "keyEnvLabel": "Key env var",
+    "keyEnvLegacy": "(legacy fallback)",
+    "keyEnvDisabledHint": "Disabled while a credential is bound.",
+    "keyEnvFallbackHint": "Used only when no credential is bound.",
+    "keyEnvPlaceholder": "MY_PROVIDER_API_KEY",
+    "clearInlineKey": "Clear legacy inline key",
+    "confirmClear": "Confirm clear",
+    "cancel": "Cancel",
+    "save": "Save",
+    "editTitle": "Edit"
+  },
+  "add": {
+    "nameLabel": "Name",
+    "namePlaceholder": "my-provider",
+    "typeLabel": "Type",
+    "typeOpenAI": "OpenAI-compatible",
+    "typeAnthropic": "Anthropic",
+    "typeOllama": "Ollama",
+    "baseUrlLabel": "Base URL",
+    "baseUrlOptional": " (optional)",
+    "credentialLabel": "Credential",
+    "credentialHint": "Pick an existing stored credential or click \"+ Create new\" to save one now. Leave as (none) to use the legacy env-var path below.",
+    "keyEnvLabel": "Key env var",
+    "keyEnvLegacy": "(legacy fallback)",
+    "keyEnvDisabledHint": "Disabled — a credential is bound.",
+    "keyEnvAutoHint": "Auto-filled from the provider name. Export this variable in your shell so Nexus can read the key.",
+    "ollamaNote": "Ollama runs locally and requires no API key.",
+    "cancel": "Cancel",
+    "add": "Add"
+  },
+  "remove": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "removeTitle": "Remove"
+  },
+  "toast": {
+    "saved": "Saved {{name}}",
+    "saveFailed": "Save failed",
+    "credentialBound": "{{name}} → ${{ref}}",
+    "credentialCleared": "Cleared credential for {{name}}",
+    "credentialBindFailed": "Failed to bind credential",
+    "removed": "Removed {{name}}",
+    "removeFailed": "Remove failed",
+    "keyCleared": "Cleared key for {{name}}",
+    "clearKeyFailed": "Clear key failed",
+    "added": "Added {{name}}",
+    "addFailed": "Add failed"
+  }
+}

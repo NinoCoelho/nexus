@@ -1,17 +1,7 @@
 // Partial-turn action banner for ChatView.
 
+import { useTranslation } from "react-i18next";
 import type { Message } from "./index";
-
-export const PARTIAL_LABEL: Record<NonNullable<Message["partial"]>["status"], string> = {
-  interrupted: "This turn was interrupted (connection dropped or server restarted).",
-  cancelled: "You stopped this turn.",
-  iteration_limit: "Hit the per-turn tool-call limit.",
-  empty_response: "The model returned an empty response.",
-  llm_error: "The model call failed mid-turn.",
-  crashed: "The turn crashed unexpectedly.",
-  length: "Response was truncated — the model hit its output limit.",
-  upstream_timeout: "The model didn't respond in time.",
-};
 
 // Statuses where Continue is useful (i.e. the turn has meaningful content
 // to build on). Retry alone for pure-failure states.
@@ -26,6 +16,17 @@ export const PARTIAL_CAN_CONTINUE: Record<NonNullable<Message["partial"]>["statu
   upstream_timeout: false,
 };
 
+const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
+  interrupted: "chat:partial.interrupted",
+  cancelled: "chat:partial.cancelled",
+  iteration_limit: "chat:partial.iterationLimit",
+  empty_response: "chat:partial.emptyResponse",
+  llm_error: "chat:partial.llmError",
+  crashed: "chat:partial.crashed",
+  length: "chat:partial.length",
+  upstream_timeout: "chat:partial.upstreamTimeout",
+};
+
 export function PartialTurnActions({
   status,
   onRetry,
@@ -35,10 +36,11 @@ export function PartialTurnActions({
   onRetry?: () => void;
   onContinue?: () => void;
 }) {
+  const { t } = useTranslation("chat");
   const showContinue = PARTIAL_CAN_CONTINUE[status] && !!onContinue;
   return (
     <div className="limit-banner" style={{ marginTop: 4 }}>
-      <div className="limit-banner-text">{PARTIAL_LABEL[status]} How do you want to proceed?</div>
+      <div className="limit-banner-text">{t(PARTIAL_KEY[status])} {t("chat:partial.proceed")}</div>
       <div className="limit-banner-actions">
         {showContinue && (
           <button
@@ -46,7 +48,7 @@ export function PartialTurnActions({
             onClick={onContinue}
             type="button"
           >
-            Continue
+            {t("chat:partial.continue")}
           </button>
         )}
         {onRetry && (
@@ -55,7 +57,7 @@ export function PartialTurnActions({
             onClick={onRetry}
             type="button"
           >
-            Retry
+            {t("chat:partial.retry")}
           </button>
         )}
       </div>

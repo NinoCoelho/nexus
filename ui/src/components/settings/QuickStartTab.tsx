@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { putRouting, type Model, type Provider, type RoutingConfig } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import AppearanceSection from "../AppearanceSection";
@@ -13,6 +14,7 @@ interface Props {
 
 export default function QuickStartTab({ routing, models, providers, onChanged }: Props) {
   const toast = useToast();
+  const { t } = useTranslation(["settings", "common"]);
   const [saving, setSaving] = useState(false);
 
   const current = routing?.default_model ?? "";
@@ -22,10 +24,16 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
     setSaving(true);
     try {
       await putRouting({ default_model: id });
-      toast.success(id ? `Modelo padrão: ${id}` : "Modelo padrão removido");
+      toast.success(
+        id
+          ? t("settings:defaultModel.toast.set", { id })
+          : t("settings:defaultModel.toast.cleared"),
+      );
       onChanged();
     } catch (e) {
-      toast.error("Falha ao salvar", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("common:toast.savingFailed"), {
+        detail: e instanceof Error ? e.message : undefined,
+      });
     } finally {
       setSaving(false);
     }
@@ -37,9 +45,9 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
   return (
     <>
       <SettingsSection
-        title="Modelo padrão"
+        title={t("settings:defaultModel.title")}
         icon="★"
-        description="Este é o modelo usado quando você inicia uma nova conversa, sem escolher outro. Você pode trocar a qualquer momento no chat."
+        description={t("settings:defaultModel.description")}
       >
         <div className="s-quick-card">
           <select
@@ -48,7 +56,7 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
             disabled={saving || models.length === 0}
             onChange={(e) => void setDefault(e.target.value)}
           >
-            <option value="">— escolher um modelo —</option>
+            <option value="">{t("settings:defaultModel.chooseHint")}</option>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.id} ({m.provider})
@@ -57,27 +65,31 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
           </select>
           {models.length === 0 ? (
             <p className="s-quick-card__desc">
-              Nenhum modelo cadastrado. Vá em <b>Modelos</b> para adicionar um modelo
-              cloud (OpenAI, Anthropic, etc.) ou instalar um localmente.
+              <Trans
+                i18nKey="settings:defaultModel.noModelsRegistered"
+                components={{ bold: <b /> }}
+              />
             </p>
           ) : currentModel ? (
             <p className="s-quick-card__desc">
-              Em uso: <b>{currentModel.id}</b> via <b>{currentModel.provider}</b>
+              <Trans
+                i18nKey="settings:defaultModel.inUse"
+                values={{ id: currentModel.id, provider: currentModel.provider }}
+                components={{ bold: <b /> }}
+              />
               {currentModel.notes && <> — {currentModel.notes}</>}
             </p>
           ) : (
-            <p className="s-quick-card__desc">
-              Selecione um modelo acima para definir como padrão.
-            </p>
+            <p className="s-quick-card__desc">{t("settings:defaultModel.selectAbove")}</p>
           )}
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Aparência" icon="🎨">
+      <SettingsSection title={t("settings:appearance.title")} icon="🎨">
         <AppearanceSection />
       </SettingsSection>
 
-      <SettingsSection title="Status" icon="✓">
+      <SettingsSection title={t("settings:status.title")} icon="✓">
         <div className="s-quick-status">
           <div className="s-quick-status__row">
             <span
@@ -86,8 +98,8 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
               }`}
             />
             {connectedProviders > 0
-              ? `${connectedProviders} ${connectedProviders === 1 ? "provedor conectado" : "provedores conectados"}`
-              : "Nenhum provedor conectado"}
+              ? t("settings:status.providersConnected", { count: connectedProviders })
+              : t("settings:status.providersNone")}
           </div>
           <div className="s-quick-status__row">
             <span
@@ -96,8 +108,8 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
               }`}
             />
             {totalModels > 0
-              ? `${totalModels} ${totalModels === 1 ? "modelo disponível" : "modelos disponíveis"}`
-              : "Nenhum modelo cadastrado"}
+              ? t("settings:status.modelsAvailable", { count: totalModels })
+              : t("settings:status.modelsNone")}
           </div>
           <div className="s-quick-status__row">
             <span
@@ -105,7 +117,7 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
                 current ? "ok" : "warn"
               }`}
             />
-            {current ? "Modelo padrão definido" : "Modelo padrão não definido"}
+            {current ? t("settings:status.defaultSet") : t("settings:status.defaultUnset")}
           </div>
         </div>
       </SettingsSection>

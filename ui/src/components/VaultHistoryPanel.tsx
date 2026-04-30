@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getVaultHistory,
   getVaultHistoryStatus,
@@ -34,6 +35,7 @@ function formatRelative(unixSec: number): string {
 }
 
 export default function VaultHistoryPanel({ path, onClose, onUndone }: Props) {
+  const { t } = useTranslation("vault");
   const [status, setStatus] = useState<VaultHistoryStatus | null>(null);
   const [commits, setCommits] = useState<VaultHistoryCommit[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,7 +53,7 @@ export default function VaultHistoryPanel({ path, onClose, onUndone }: Props) {
       setStatus(s);
       setCommits(log);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load history");
+      setError(e instanceof Error ? e.message : t("vault:history.undoFailed", { reason: "unknown" }));
     } finally {
       setLoading(false);
     }
@@ -78,15 +80,15 @@ export default function VaultHistoryPanel({ path, onClose, onUndone }: Props) {
       if (!r.undone) {
         setError(
           r.reason === "no_history"
-            ? "Nothing left to undo for this path."
-            : `Undo failed: ${r.reason ?? "unknown"}`,
+            ? t("vault:history.nothingToUndo")
+            : t("vault:history.undoFailed", { reason: r.reason ?? "unknown" }),
         );
       } else {
         onUndone?.(r.paths);
         await refresh();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Undo failed");
+      setError(e instanceof Error ? e.message : t("vault:history.undoFailed", { reason: "unknown" }));
     } finally {
       setBusy(false);
     }
@@ -97,8 +99,8 @@ export default function VaultHistoryPanel({ path, onClose, onUndone }: Props) {
       <div className="drawer-backdrop" onClick={onClose} />
       <div className="vault-history-drawer">
         <div className="drawer-header">
-          <span className="drawer-title">History · {path}</span>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">
+          <span className="drawer-title">{t("vault:history.drawerTitle", { path })}</span>
+          <button className="drawer-close" onClick={onClose} aria-label={t("vault:history.closeAria")}>
             ✕
           </button>
         </div>
@@ -107,19 +109,18 @@ export default function VaultHistoryPanel({ path, onClose, onUndone }: Props) {
             className="settings-btn settings-btn--primary"
             onClick={() => void handleUndo()}
             disabled={busy || !status?.enabled || commits.length === 0}
-            title="Step this path back one revision"
           >
-            {busy ? "Undoing…" : "Undo last change"}
+            {busy ? t("vault:history.undoing") : t("vault:history.undoLastChange")}
           </button>
           {status && !status.enabled && (
-            <span className="vault-history-hint">History is disabled. Turn it on in Settings.</span>
+            <span className="vault-history-hint">{t("vault:history.historyDisabled")}</span>
           )}
         </div>
         <div className="vault-history-body">
-          {loading && <div className="vault-history-empty">Loading…</div>}
+          {loading && <div className="vault-history-empty">{t("vault:history.loading")}</div>}
           {error && <div className="vault-history-error">{error}</div>}
           {!loading && !error && commits.length === 0 && (
-            <div className="vault-history-empty">No history yet for this path.</div>
+            <div className="vault-history-empty">{t("vault:history.noHistory")}</div>
           )}
           {!loading && commits.length > 0 && (
             <ul className="vault-history-list">

@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   clearModelRole,
   deleteModel,
@@ -38,6 +39,7 @@ interface Props {
 }
 
 export default function ModelsSection({ models, providers, routing, onRefresh }: Props) {
+  const { t } = useTranslation("models");
   const toast = useToast();
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -76,7 +78,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       await setModelRole(role, modelId);
       onRefresh();
     } catch (e) {
-      toast.error("Failed to assign role", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("models:toast.roleFailed"), { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -86,10 +88,10 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
     setRoleSaving(true);
     try {
       await putRouting({ default_model: modelId });
-      toast.success(`Padrão: ${modelId}`);
+      toast.success(t("models:toast.defaultSet", { id: modelId }));
       onRefresh();
     } catch (e) {
-      toast.error("Falha ao setar modelo padrão", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("models:toast.defaultFailed"), { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -101,7 +103,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       await clearModelRole(role);
       onRefresh();
     } catch (e) {
-      toast.error("Failed to clear role", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("models:toast.clearRoleFailed"), { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
     }
@@ -111,10 +113,10 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
     try {
       await deleteModel(id);
       setConfirmRemove(null);
-      toast.success(`Removed ${id}`);
+      toast.success(t("models:toast.removed", { id }));
       onRefresh();
     } catch (e) {
-      toast.error("Remove failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("models:toast.removeFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -203,12 +205,12 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   async function saveModel() {
     const ctxParsed = form.context_window.trim() === "" ? 0 : Number(form.context_window);
     if (Number.isNaN(ctxParsed) || ctxParsed < 0) {
-      toast.error("Context size must be a non-negative integer");
+      toast.error(t("models:toast.contextSizeError"));
       return;
     }
     const maxOutParsed = form.max_output_tokens.trim() === "" ? 0 : Number(form.max_output_tokens);
     if (Number.isNaN(maxOutParsed) || maxOutParsed < 0) {
-      toast.error("Max output tokens must be a non-negative integer");
+      toast.error(t("models:toast.maxOutputError"));
       return;
     }
     if (editingId) {
@@ -222,11 +224,11 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
           context_window: ctxParsed,
           max_output_tokens: maxOutParsed,
         });
-        toast.success(`Updated ${editingId}`);
+        toast.success(t("models:toast.updated", { id: editingId }));
         cancelForm();
         onRefresh();
       } catch (e) {
-        toast.error("Update failed", { detail: e instanceof Error ? e.message : undefined });
+        toast.error(t("models:toast.updateFailed"), { detail: e instanceof Error ? e.message : undefined });
       }
       return;
     }
@@ -244,11 +246,11 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
         max_output_tokens: maxOutParsed > 0 ? maxOutParsed : undefined,
       });
       const id = form.id.trim();
-      toast.success(`Added model ${id}`);
+      toast.success(t("models:toast.added", { id }));
       cancelForm();
       onRefresh();
     } catch (e) {
-      toast.error("Add failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("models:toast.addFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -262,13 +264,11 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   return (
     <div className="models-section">
       {roleSaving && (
-        <div style={{ fontSize: 12, color: "var(--fg-faint)" }}>Salvando…</div>
+        <div style={{ fontSize: 12, color: "var(--fg-faint)" }}>{t("models:section.saving")}</div>
       )}
       {usingBuiltinEmbedder && (
         <div style={{ fontSize: 12, color: "var(--fg-dim)", lineHeight: 1.4 }}>
-          GraphRAG está usando o embedder local
-          (sentence-transformers/all-MiniLM-L6-v2) e o extrator spaCy. Atribua um
-          modelo às funções avançadas (Embedding/Extração) para sobrescrever.
+          {t("models:section.usingBuiltinEmbedder")}
         </div>
       )}
 
@@ -318,7 +318,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
         />
       ) : (
         <button className="settings-add-btn" onClick={() => { setAdding(true); setEditingId(null); setForm(emptyForm); }}>
-          + Add model
+          {t("models:section.addModel")}
         </button>
       )}
     </div>

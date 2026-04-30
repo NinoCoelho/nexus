@@ -47,12 +47,17 @@ export interface SearchConfig {
   providers: SearchProviderEntry[];
 }
 
+export interface UIConfig {
+  language: "en" | "pt-BR";
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
   models: Model[];
   transcription?: TranscriptionConfig;
   search?: SearchConfig;
+  ui?: UIConfig;
 }
 
 // Patch payload — every nested object is independently partial because the
@@ -63,6 +68,7 @@ export interface ConfigPatch {
   models?: Model[];
   transcription?: Partial<TranscriptionConfig>;
   search?: Partial<SearchConfig>;
+  ui?: Partial<UIConfig>;
 }
 
 export async function getConfig(): Promise<Config> {

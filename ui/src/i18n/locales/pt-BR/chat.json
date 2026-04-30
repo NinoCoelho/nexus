@@ -1,0 +1,108 @@
+{
+  "empty": {
+    "noModel": {
+      "title": "Nenhum modelo configurado",
+      "sub": "Adicione um modelo de um dos seus provedores configurados para começar a conversar.",
+      "openSettings": "Abrir configurações"
+    },
+    "start": "Inicie uma conversa com o Nexus."
+  },
+  "user": {
+    "label": "Você",
+    "editTitle": "Editar e reenviar (remove tudo após este turno)",
+    "editAria": "Editar mensagem"
+  },
+  "assistant": {
+    "name": "Nexus",
+    "via": "via {{model}}",
+    "thinking": "Pensando",
+    "thinkingStreaming": "Pensando…",
+    "thinkingCount": "({{count}} caracteres)",
+    "pin": "Fixar este turno",
+    "unpin": "Desafixar",
+    "pinAria": "Fixar mensagem",
+    "helpful": "Útil",
+    "removeThumbsUp": "Remover aprovação",
+    "markHelpfulAria": "Marcar como útil",
+    "notHelpful": "Não útil",
+    "removeThumbsDown": "Remover reprovação",
+    "markNotHelpfulAria": "Marcar como não útil",
+    "copy": "Copiar",
+    "copied": "Copiado",
+    "copyMarkdown": "Copiar markdown",
+    "copyMarkdownAria": "Copiar markdown"
+  },
+  "limit": {
+    "banner": "Atingiu o limite de chamadas por turno ({{limit}}). Como deseja prosseguir?",
+    "continue": "Continuar",
+    "stop": "Parar"
+  },
+  "partial": {
+    "interrupted": "Este turno foi interrompido (conexão encerrada ou servidor reiniciado).",
+    "cancelled": "Você parou este turno.",
+    "iterationLimit": "Atingiu o limite de chamadas por turno.",
+    "emptyResponse": "O modelo retornou uma resposta vazia.",
+    "llmError": "A chamada ao modelo falhou durante o turno.",
+    "crashed": "O turno travou inesperadamente.",
+    "length": "Resposta truncada — o modelo atingiu seu limite de saída.",
+    "upstreamTimeout": "O modelo não respondeu a tempo.",
+    "proceed": "Como deseja prosseguir?",
+    "continue": "Continuar",
+    "retry": "Tentar novamente"
+  },
+  "input": {
+    "placeholder": "Mensagem para o Nexus…",
+    "uploadFile": "Enviar arquivo",
+    "uploadFileAria": "Enviar arquivo",
+    "stop": "Parar",
+    "send": "Enviar",
+    "voiceMessage": "Mensagem de voz",
+    "uploadFailed": "Falha ao enviar arquivo",
+    "transcriptionNoText": "A transcrição não retornou texto",
+    "transcriptionFailed": "Falha na transcrição"
+  },
+  "secret": {
+    "title": "Isso parece uma chave de API",
+    "message": "O texto que você está prestes a enviar contém <code>{{preview}}</code>, que corresponde a um padrão de credencial conhecido. Enviá-lo exporia a chave ao LLM (e à política de registros do provedor). Você pode salvá-lo localmente e usar <code>{{placeholder}}</code> como substituto — o valor é inserido na fronteira da ferramenta, nunca enviado ao LLM.",
+    "namePlaceholder": "GITHUB_TOKEN",
+    "cancel": "Cancelar",
+    "sendAnyway": "Enviar assim mesmo",
+    "saveAsCredential": "Salvar como credencial",
+    "saving": "Salvando…",
+    "nameValidationError": "O nome deve estar em UPPER_SNAKE_CASE",
+    "nameValidationDetail": "Padrão: ^[A-Z][A-Z0-9_]*$",
+    "savedAs": "Salvo como ${{name}}",
+    "saveFailed": "Falha ao salvar credencial"
+  },
+  "approval": {
+    "defaultTitle": "O agente precisa de entrada",
+    "timeoutLabel": "Tempo limite",
+    "queueHint": "1 de {{total}} pendentes",
+    "deny": "Negar",
+    "allow": "Permitir",
+    "send": "Enviar",
+    "answerPlaceholder": "Digite sua resposta…"
+  },
+  "notifications": {
+    "title": "Notificações",
+    "pendingPill": "{{count}} pendentes",
+    "enableBrowser": "Ativar notificações do navegador →",
+    "blocked": "Notificações bloqueadas — ative-as nas configurações do site no navegador para receber avisos quando nenhuma aba do Nexus estiver aberta.",
+    "empty": "Nenhum evento HITL ainda.",
+    "pendingTitle": "{{count}} pendentes",
+    "notificationsAria": "Notificações",
+    "cancelRequestTitle": "Cancelar esta solicitação",
+    "cancelRequestAria": "Cancelar solicitação",
+    "openChat": "Abrir conversa",
+    "openChatTitle": "Abrir a conversa que gerou esta solicitação",
+    "parkedTitle": "Estacionado: o turno do agente terminou; retome a qualquer momento.",
+    "liveTitle": "Ao vivo: o turno do agente está bloqueado aguardando esta resposta.",
+    "status": {
+      "pending": "Aguardando",
+      "answered": "Respondido",
+      "auto_answered": "Auto",
+      "cancelled": "Cancelado",
+      "timed_out": "Tempo esgotado"
+    }
+  }
+}

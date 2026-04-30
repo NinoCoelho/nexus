@@ -1,0 +1,64 @@
+{
+  "section": {
+    "addProvider": "+ Adicionar provedor"
+  },
+  "badge": {
+    "anonymous": "anônimo",
+    "viaCredential": "via ${{ref}}",
+    "inlineLegacy": "inline (legado)",
+    "env": "env: {{env}}",
+    "notConfigured": "não configurado"
+  },
+  "edit": {
+    "baseUrlLabel": "URL base",
+    "credentialLabel": "Credencial",
+    "credentialHint": "Escolha uma credencial armazenada ou crie uma nova. Tem precedência sobre o env-var legado e os caminhos de chave inline.",
+    "keyEnvLabel": "Env var da chave",
+    "keyEnvLegacy": "(fallback legado)",
+    "keyEnvDisabledHint": "Desativado enquanto uma credencial está vinculada.",
+    "keyEnvFallbackHint": "Usado somente quando nenhuma credencial está vinculada.",
+    "keyEnvPlaceholder": "MINHA_CHAVE_API",
+    "clearInlineKey": "Limpar chave inline legada",
+    "confirmClear": "Confirmar limpeza",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "editTitle": "Editar"
+  },
+  "add": {
+    "nameLabel": "Nome",
+    "namePlaceholder": "meu-provedor",
+    "typeLabel": "Tipo",
+    "typeOpenAI": "Compatível com OpenAI",
+    "typeAnthropic": "Anthropic",
+    "typeOllama": "Ollama",
+    "baseUrlLabel": "URL base",
+    "baseUrlOptional": " (opcional)",
+    "credentialLabel": "Credencial",
+    "credentialHint": "Escolha uma credencial armazenada existente ou clique em \"+ Criar nova\" para salvar uma agora. Deixe como (nenhuma) para usar o caminho de env-var legado abaixo.",
+    "keyEnvLabel": "Env var da chave",
+    "keyEnvLegacy": "(fallback legado)",
+    "keyEnvDisabledHint": "Desativado — uma credencial está vinculada.",
+    "keyEnvAutoHint": "Preenchido automaticamente pelo nome do provedor. Exporte essa variável no seu shell para que o Nexus possa ler a chave.",
+    "ollamaNote": "O Ollama roda localmente e não requer chave de API.",
+    "cancel": "Cancelar",
+    "add": "Adicionar"
+  },
+  "remove": {
+    "confirm": "Confirmar",
+    "cancel": "Cancelar",
+    "removeTitle": "Remover"
+  },
+  "toast": {
+    "saved": "{{name}} salvo",
+    "saveFailed": "Falha ao salvar",
+    "credentialBound": "{{name}} → ${{ref}}",
+    "credentialCleared": "Credencial de {{name}} removida",
+    "credentialBindFailed": "Falha ao vincular credencial",
+    "removed": "{{name}} removido",
+    "removeFailed": "Falha ao remover",
+    "keyCleared": "Chave de {{name}} removida",
+    "clearKeyFailed": "Falha ao limpar chave",
+    "added": "{{name}} adicionado",
+    "addFailed": "Falha ao adicionar"
+  }
+}

@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import Modal, { type ModalProps } from "../Modal";
 import "../VaultView.css";
 import {
@@ -58,6 +59,7 @@ export default function VaultTreePanel({
   onViewEntityGraph,
   onVisualizeFolderGraph,
 }: VaultTreePanelProps) {
+  const { t } = useTranslation("vault");
   const toast = useToast();
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
   const [treeError, setTreeError] = useState(false);
@@ -158,9 +160,9 @@ export default function VaultTreePanel({
   const handleReindex = async () => {
     try {
       const { indexed } = await reindexVault();
-      toast.success(`Indexed ${indexed} file${indexed === 1 ? "" : "s"}`);
+      toast.success(t("vault:tree.reindexed", { count: indexed }));
     } catch (e) {
-      toast.error("Reindex failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("vault:tree.reindexFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   };
   void setReindexMsg; // reserved for any legacy inline UI
@@ -246,7 +248,7 @@ export default function VaultTreePanel({
           ref={searchInputRef}
           className="vault-search-input"
           type="text"
-          placeholder="Search vault…"
+          placeholder={t("vault:tree.searchPlaceholder")}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           spellCheck={false}

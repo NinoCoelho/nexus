@@ -93,7 +93,10 @@ def build_loom_agent(
     def _before_llm_call(messages: list[lt.ChatMessage]) -> list[lt.ChatMessage]:
         _iter_counter[0] += 1
         on_trace_event("iter", {"n": _iter_counter[0]})
-        sys_prompt = build_system_prompt(registry, home=home)
+        # Read language each call so a /config PATCH takes effect on the next
+        # turn without rebuilding the agent.
+        language = getattr(getattr(nexus_cfg, "ui", None), "language", None) if nexus_cfg else None
+        sys_prompt = build_system_prompt(registry, home=home, language=language)
         return [
             lt.ChatMessage(role=lt.Role.SYSTEM, content=sys_prompt),
             *[m for m in messages if m.role != lt.Role.SYSTEM],

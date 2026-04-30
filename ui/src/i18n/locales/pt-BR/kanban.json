@@ -1,0 +1,40 @@
+{
+  "board": {
+    "loadError": "Não foi possível carregar o quadro: {{error}}",
+    "loading": "Carregando…",
+    "filterToggle": "Filtrar cartões",
+    "hideFilters": "Ocultar filtros",
+    "filters": "Filtros",
+    "activeFilterIndicator": " •",
+    "addLane": "+ Coluna",
+    "boardDeleted": "O arquivo do quadro foi excluído"
+  },
+  "lane": {
+    "promptIndicator": "Prompt de despacho automático definido",
+    "editPrompt": "Editar prompt da coluna",
+    "setPrompt": "Definir prompt da coluna",
+    "deleteLane": "Excluir coluna",
+    "addCard": "+ Cartão",
+    "addCardAria": "Adicionar cartão a esta coluna",
+    "newLaneTitle": "Nova coluna",
+    "newLanePlaceholder": "Título da coluna",
+    "newLaneConfirm": "Adicionar",
+    "deleteLaneTitle": "Excluir coluna",
+    "deleteLaneWithCards": "\"{{title}}\" contém {{count}} cartão. Tudo será removido.",
+    "deleteLaneWithCards_other": "\"{{title}}\" contém {{count}} cartões. Tudo será removido.",
+    "deleteLaneEmpty": "Excluir coluna vazia \"{{title}}\"?",
+    "deleteLaneConfirm": "Excluir"
+  },
+  "card": {
+    "deleteTitle": "Excluir cartão",
+    "deleteMessage": "Este cartão será removido do quadro.",
+    "deleteConfirm": "Excluir"
+  },
+  "filter": {
+    "textPlaceholder": "Buscar cartões…",
+    "labelPlaceholder": "Etiqueta…",
+    "priorityPlaceholder": "Prioridade…",
+    "assigneePlaceholder": "Responsável…",
+    "clear": "Limpar"
+  }
+}

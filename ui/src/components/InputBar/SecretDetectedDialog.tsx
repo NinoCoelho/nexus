@@ -14,6 +14,7 @@
 
 import { useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { setCredential } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import "../Modal.css";
@@ -38,24 +39,25 @@ export default function SecretDetectedDialog({
   onSendAnyway,
   onCancel,
 }: Props) {
+  const { t } = useTranslation("chat");
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const toast = useToast();
 
   async function handleSave() {
     if (!NAME_RE.test(name)) {
-      toast.error("Name must be UPPER_SNAKE_CASE", {
-        detail: "Pattern: ^[A-Z][A-Z0-9_]*$",
+      toast.error(t("chat:secret.nameValidationError"), {
+        detail: t("chat:secret.nameValidationDetail"),
       });
       return;
     }
     setSaving(true);
     try {
       await setCredential(name, detected, { kind: "generic" });
-      toast.success(`Saved as $${name}`);
+      toast.success(t("chat:secret.savedAs", { name }));
       onSaveAsCredential(name);
     } catch (e) {
-      toast.error("Failed to save credential", {
+      toast.error(t("chat:secret.saveFailed"), {
         detail: e instanceof Error ? e.message : undefined,
       });
     } finally {
@@ -70,8 +72,9 @@ export default function SecretDetectedDialog({
   return createPortal(
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">This looks like an API key</div>
+        <div className="modal-title">{t("chat:secret.title")}</div>
         <div className="modal-message">
+          {/* The message body references inline <code> elements; kept as JSX. */}
           The text you're about to send contains{" "}
           <code>{maskPreview(detected)}</code>, which matches a known
           credential pattern. Sending it would expose the key to the LLM
@@ -83,7 +86,7 @@ export default function SecretDetectedDialog({
         <input
           className="modal-input"
           type="text"
-          placeholder="GITHUB_TOKEN"
+          placeholder={t("chat:secret.namePlaceholder")}
           value={name}
           autoCapitalize="characters"
           spellCheck={false}
@@ -99,17 +102,17 @@ export default function SecretDetectedDialog({
         />
         <div className="modal-actions">
           <button className="modal-btn" onClick={onCancel}>
-            Cancel
+            {t("chat:secret.cancel")}
           </button>
           <button className="modal-btn" onClick={onSendAnyway}>
-            Send anyway
+            {t("chat:secret.sendAnyway")}
           </button>
           <button
             className="modal-btn modal-btn--primary"
             disabled={!NAME_RE.test(name) || saving}
             onClick={() => void handleSave()}
           >
-            {saving ? "Saving…" : "Save as credential"}
+            {saving ? t("chat:secret.saving") : t("chat:secret.saveAsCredential")}
           </button>
         </div>
       </div>

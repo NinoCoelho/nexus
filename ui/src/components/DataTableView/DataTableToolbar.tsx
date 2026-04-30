@@ -1,6 +1,7 @@
 // DataTableView — header bar with search, views, column visibility, CSV, schema, and add-row actions.
 
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 import type { DataTableView } from "../../api";
 import type { FieldSchema } from "../../types/form";
 import ColumnVisibilityMenu from "./ColumnVisibilityMenu";
@@ -29,16 +30,17 @@ export default function DataTableToolbar({
   onSearchChange, onApplyView, onClearView, onSaveView, onDeleteView,
   onToggleHidden, onExportCSV, onImportCSV, onOpenSchema, onAddRow,
 }: Props) {
+  const { t } = useTranslation("datatable");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <div className="dt-header">
-      <span className="dt-title">{title ?? "Data Table"}</span>
+      <span className="dt-title">{title ?? t("datatable:toolbar.defaultTitle")}</span>
       <div className="dt-header-actions">
         <input
           type="search"
           className="dt-search"
-          placeholder="Search…"
+          placeholder={t("datatable:toolbar.searchPlaceholder")}
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
         />
@@ -52,32 +54,32 @@ export default function DataTableToolbar({
               else onClearView();
             }}
           >
-            <option value="">All rows</option>
+            <option value="">{t("datatable:toolbar.allRows")}</option>
             {views.map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
           </select>
         )}
-        <button className="vault-pill" onClick={onSaveView} title="Save current filter/sort as a view">
-          Save view
+        <button className="vault-pill" onClick={onSaveView} title={t("datatable:toolbar.saveViewTitle")}>
+          {t("datatable:toolbar.saveView")}
         </button>
         {activeView && (
           <button
             className="dt-action-btn dt-action-btn--delete"
             onClick={onDeleteView}
-            title="Delete the active view"
+            title={t("datatable:toolbar.deleteViewTitle")}
           >
-            Del view
+            {t("datatable:toolbar.deleteView")}
           </button>
         )}
         <ColumnVisibilityMenu fields={fields} hidden={hidden} onToggle={onToggleHidden} />
-        <button className="vault-pill" onClick={onExportCSV} title="Download as CSV">
-          Export
+        <button className="vault-pill" onClick={onExportCSV} title={t("datatable:toolbar.exportTitle")}>
+          {t("datatable:toolbar.exportButton")}
         </button>
         <button
           className="vault-pill"
           onClick={() => fileInputRef.current?.click()}
-          title="Import rows from CSV"
+          title={t("datatable:toolbar.importTitle")}
         >
-          Import
+          {t("datatable:toolbar.importButton")}
         </button>
         <input
           ref={fileInputRef}
@@ -90,11 +92,11 @@ export default function DataTableToolbar({
             e.target.value = "";
           }}
         />
-        <button className="vault-pill" onClick={onOpenSchema} title="Edit schema">
-          Schema
+        <button className="vault-pill" onClick={onOpenSchema} title={t("datatable:toolbar.schemaTitle")}>
+          {t("datatable:toolbar.schemaButton")}
         </button>
         <button className="vault-pill" onClick={onAddRow}>
-          + Add Row
+          {t("datatable:toolbar.addRow")}
         </button>
       </div>
     </div>

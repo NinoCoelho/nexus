@@ -1,6 +1,7 @@
 // Custom hook for VaultTreePanel: file/folder CRUD and dispatch actions.
 
 import { useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import type { ModalProps } from "../Modal";
 import {
   createVaultKanban,
@@ -41,6 +42,7 @@ export function useVaultActions({
   descendantCounts,
   uploadCtxDirRef,
 }: UseVaultActionsOptions) {
+  const { t } = useTranslation("vault");
   const handleMove = useCallback(async (fromPath: string, toDir: string) => {
     const name = fromPath.split("/").pop() ?? fromPath;
     const toPath = `${toDir}/${name}`;
@@ -51,7 +53,7 @@ export function useVaultActions({
       if (selectedPath === fromPath) onSelectPath(toPath);
       onTreeChange?.();
     } catch (e) {
-      toast.error("Move failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("vault:toast.moveFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   }, [selectedPath, onSelectPath, refreshTree, onTreeChange, toast]);
 
@@ -59,9 +61,9 @@ export function useVaultActions({
     setCtxMenu(null);
     setModal({
       kind: "prompt",
-      title: "Rename",
+      title: t("vault:modal.renameTitle"),
       defaultValue: node.name,
-      confirmLabel: "Rename",
+      confirmLabel: t("vault:modal.renameLabel"),
       onCancel: () => setModal(null),
       onSubmit: async (newName) => {
         setModal(null);
@@ -75,7 +77,7 @@ export function useVaultActions({
           if (selectedPath === node.path) onSelectPath(toPath);
           onTreeChange?.();
         } catch (e) {
-          toast.error("Rename failed", { detail: e instanceof Error ? e.message : undefined });
+          toast.error(t("vault:toast.renameFailed"), { detail: e instanceof Error ? e.message : undefined });
         }
       },
     });
@@ -91,10 +93,10 @@ export function useVaultActions({
     setCtxMenu(null);
     setModal({
       kind: "prompt",
-      title: "New file",
-      message: dirPath ? `Creating in ${dirPath}/` : undefined,
-      defaultValue: "untitled.md",
-      confirmLabel: "Create",
+      title: t("vault:modal.newFileTitle"),
+      message: dirPath ? t("vault:modal.newFileCreatingIn", { dir: dirPath }) : undefined,
+      defaultValue: t("vault:modal.newFileDefault"),
+      confirmLabel: t("vault:modal.newFileCreate"),
       onCancel: () => setModal(null),
       onSubmit: async (name) => {
         setModal(null);
@@ -104,7 +106,7 @@ export function useVaultActions({
           refreshTree();
           onSelectPath(path);
         } catch (e) {
-          toast.error("Couldn't create file", { detail: e instanceof Error ? e.message : undefined });
+          toast.error(t("vault:toast.createFileFailed"), { detail: e instanceof Error ? e.message : undefined });
         }
       },
     });
@@ -114,10 +116,10 @@ export function useVaultActions({
     setCtxMenu(null);
     setModal({
       kind: "prompt",
-      title: "New folder",
-      message: parentPath ? `Creating in ${parentPath}/` : undefined,
-      placeholder: "folder-name",
-      confirmLabel: "Create",
+      title: t("vault:modal.newFolderTitle"),
+      message: parentPath ? t("vault:modal.newFolderCreatingIn", { dir: parentPath }) : undefined,
+      placeholder: t("vault:modal.newFolderPlaceholder"),
+      confirmLabel: t("vault:modal.newFolderCreate"),
       onCancel: () => setModal(null),
       onSubmit: async (name) => {
         setModal(null);
@@ -126,7 +128,7 @@ export function useVaultActions({
           await postVaultFolder(path);
           refreshTree();
         } catch (e) {
-          toast.error("Couldn't create folder", { detail: e instanceof Error ? e.message : undefined });
+          toast.error(t("vault:toast.createFolderFailed"), { detail: e instanceof Error ? e.message : undefined });
         }
       },
     });
@@ -136,10 +138,10 @@ export function useVaultActions({
     setCtxMenu(null);
     setModal({
       kind: "prompt",
-      title: "New kanban",
-      message: dirPath ? `Creating in ${dirPath}/` : undefined,
-      defaultValue: "board.md",
-      confirmLabel: "Create",
+      title: t("vault:modal.newKanbanTitle"),
+      message: dirPath ? t("vault:modal.newKanbanCreatingIn", { dir: dirPath }) : undefined,
+      defaultValue: t("vault:modal.newKanbanDefault"),
+      confirmLabel: t("vault:modal.newKanbanCreate"),
       onCancel: () => setModal(null),
       onSubmit: async (name) => {
         setModal(null);
@@ -150,7 +152,7 @@ export function useVaultActions({
           refreshTree();
           onSelectPath(path);
         } catch (e) {
-          toast.error("Couldn't create kanban", { detail: e instanceof Error ? e.message : undefined });
+          toast.error(t("vault:toast.createKanbanFailed"), { detail: e instanceof Error ? e.message : undefined });
         }
       },
     });
@@ -161,7 +163,7 @@ export function useVaultActions({
       const res = await dispatchFromVault({ path: filePath });
       onDispatchToChat?.(res.session_id, res.seed_message ?? "");
     } catch (e) {
-      toast.error("Couldn't start chat", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("vault:toast.chatStartFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
     setCtxMenu(null);
   }, [onDispatchToChat, toast, setCtxMenu]);
@@ -175,18 +177,18 @@ export function useVaultActions({
       }
       onTreeChange?.();
     } catch (e) {
-      toast.error("Delete failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("vault:toast.deleteFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
-  }, [selectedPath, onSelectPath, refreshTree, onTreeChange, toast]);
+  }, [selectedPath, onSelectPath, refreshTree, onTreeChange, toast, t]);
 
   const handleDelete = useCallback((node: TreeNode) => {
     setCtxMenu(null);
     if (node.type === "file") {
       setModal({
         kind: "confirm",
-        title: "Delete file",
-        message: `Delete "${node.name}"? This cannot be undone.`,
-        confirmLabel: "Delete",
+        title: t("vault:modal.deleteFileTitle"),
+        message: t("vault:modal.deleteFileMessage", { name: node.name }),
+        confirmLabel: t("vault:modal.deleteFileCta"),
         danger: true,
         onCancel: () => setModal(null),
         onSubmit: () => { setModal(null); void doDelete(node.path, false); },
@@ -198,9 +200,9 @@ export function useVaultActions({
     if (isEmpty) {
       setModal({
         kind: "confirm",
-        title: "Delete folder",
-        message: `Delete empty folder "${node.name}"?`,
-        confirmLabel: "Delete",
+        title: t("vault:modal.deleteFolderTitle"),
+        message: t("vault:modal.deleteFolderEmptyMessage", { name: node.name }),
+        confirmLabel: t("vault:modal.deleteFolderCta"),
         danger: true,
         onCancel: () => setModal(null),
         onSubmit: () => { setModal(null); void doDelete(node.path, false); },
@@ -209,27 +211,27 @@ export function useVaultActions({
     }
     // Non-empty: first confirm, then second confirmation.
     const summary = [
-      counts.files > 0 && `${counts.files} file${counts.files === 1 ? "" : "s"}`,
-      counts.dirs > 0 && `${counts.dirs} subfolder${counts.dirs === 1 ? "" : "s"}`,
+      counts.files > 0 && t("vault:modal.deleteFolderFiles", { count: counts.files }),
+      counts.dirs > 0 && t("vault:modal.deleteFolderSubfolders", { count: counts.dirs }),
     ].filter(Boolean).join(", ");
     setModal({
       kind: "confirm",
-      title: "Delete folder and its contents?",
-      message: `"${node.name}" contains ${summary}. All of it will be permanently removed.`,
-      confirmLabel: "Continue",
+      title: t("vault:modal.deleteFolderNonEmptyTitle"),
+      message: t("vault:modal.deleteFolderNonEmptyMessage", { name: node.name, summary }),
+      confirmLabel: t("vault:modal.deleteFolderContinue"),
       danger: true,
       onCancel: () => setModal(null),
       onSubmit: () => {
         setModal({
           kind: "prompt",
-          title: "Type the folder name to confirm",
-          message: `To permanently delete "${node.name}" and its ${summary}, type its name below.`,
+          title: t("vault:modal.deleteFolderConfirmTitle"),
+          message: t("vault:modal.deleteFolderConfirmMessage", { name: node.name, summary }),
           placeholder: node.name,
-          confirmLabel: "Delete forever",
+          confirmLabel: t("vault:modal.deleteFolderForever"),
           onCancel: () => setModal(null),
           onSubmit: (typed) => {
             if (typed.trim() !== node.name) {
-              toast.error("Name didn't match — delete cancelled");
+              toast.error(t("vault:toast.deleteFailed"));
               setModal(null);
               return;
             }
@@ -245,9 +247,9 @@ export function useVaultActions({
     setCtxMenu(null);
     setModal({
       kind: "confirm",
-      title: "Undo last change",
+      title: t("vault:contextMenu.undoLastChange"),
       message: `Step "${node.path}" back one revision in history?`,
-      confirmLabel: "Undo",
+      confirmLabel: t("vault:contextMenu.undoLastChange"),
       onCancel: () => setModal(null),
       onSubmit: async () => {
         setModal(null);
@@ -256,16 +258,16 @@ export function useVaultActions({
           if (!r.undone) {
             toast.error(
               r.reason === "no_history"
-                ? "Nothing to undo for this path"
-                : `Undo failed: ${r.reason ?? "unknown"}`,
+                ? t("vault:history.nothingToUndo")
+                : t("vault:history.undoFailed", { reason: r.reason ?? "unknown" }),
             );
             return;
           }
           refreshTree();
           onTreeChange?.();
-          toast.success(`Undone (${r.paths.length} file${r.paths.length === 1 ? "" : "s"} touched)`);
+          toast.success(t("vault:toast.undoDone", { count: r.paths.length }));
         } catch (e) {
-          toast.error("Undo failed", { detail: e instanceof Error ? e.message : undefined });
+          toast.error(t("vault:toast.undoFailed"), { detail: e instanceof Error ? e.message : undefined });
         }
       },
     });
@@ -283,14 +285,14 @@ export function useVaultActions({
             : undefined
         : undefined);
       const result = await uploadVaultFiles(Array.from(fileList), destDir);
-      toast.success(`Uploaded ${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"}`);
+      toast.success(t("vault:toast.uploaded", { count: result.uploaded.length }));
       refreshTree();
       if (result.uploaded.length === 1) onSelectPath(result.uploaded[0].path);
     } catch (err) {
-      toast.error("Upload failed", { detail: err instanceof Error ? err.message : undefined });
+      toast.error(t("vault:toast.uploadFailed"), { detail: err instanceof Error ? err.message : undefined });
     }
     e.target.value = "";
-  }, [selectedPath, rawNodes, refreshTree, onSelectPath, toast]);
+  }, [selectedPath, rawNodes, refreshTree, onSelectPath, toast, t]);
 
   return {
     handleMove,

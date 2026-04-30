@@ -7,6 +7,7 @@
  * discards in-progress messages.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../../api";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
@@ -144,6 +145,7 @@ export default function ChatView({
   onFeedbackChange,
   onPinChange,
 }: Props) {
+  const { t } = useTranslation(["chat", "common"]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
@@ -199,18 +201,18 @@ export default function ChatView({
       <div className="message-list">
         {visible.length === 0 && !thinking && hasModel === false && (
           <div className="chat-empty chat-empty--setup">
-            <p className="chat-empty-title">No model configured</p>
+            <p className="chat-empty-title">{t("chat:empty.noModel.title")}</p>
             <p className="chat-empty-sub">
-              Add a model from one of your configured providers to start chatting.
+              {t("chat:empty.noModel.sub")}
             </p>
             <button className="settings-btn settings-btn--primary" onClick={onOpenSettings} type="button">
-              Open settings
+              {t("chat:empty.noModel.openSettings")}
             </button>
           </div>
         )}
         {visible.length === 0 && !thinking && hasModel === true && (
           <div className="chat-empty">
-            <p>Start a conversation with Nexus.</p>
+            <p>{t("chat:empty.start")}</p>
           </div>
         )}
         {visible.map((msg, idx) =>
@@ -218,7 +220,7 @@ export default function ChatView({
             msg.kind === "limit" ? (
               <div key={idx} ref={setMsgRef(idx)} className="limit-banner">
                 <div className="limit-banner-text">
-                  Hit the per-turn tool-call limit ({msg.limitIterations ?? 16}). How do you want to proceed?
+                  {t("chat:limit.banner", { limit: msg.limitIterations ?? 16 })}
                 </div>
                 <div className="limit-banner-actions">
                   <button
@@ -226,14 +228,14 @@ export default function ChatView({
                     onClick={onContinue}
                     type="button"
                   >
-                    Continue
+                    {t("chat:limit.continue")}
                   </button>
                   <button
                     className="limit-banner-btn"
                     onClick={onDismissLimit}
                     type="button"
                   >
-                    Stop
+                    {t("chat:limit.stop")}
                   </button>
                 </div>
               </div>
@@ -273,15 +275,15 @@ export default function ChatView({
           ) : (
             <div key={idx} ref={setMsgRef(idx)} className="user-msg">
               <div className="user-msg-meta">
-                <span className="user-msg-label">You</span>
+                <span className="user-msg-label">{t("chat:user.label")}</span>
                 <span className="user-msg-time">{fmt(msg.timestamp)}</span>
                 {!thinking && onRollback && (
                   <button
                     className="user-msg-edit"
                     onClick={() => onRollback(idx)}
                     type="button"
-                    title="Edit & resend (truncates everything after this turn)"
-                    aria-label="Edit message"
+                    title={t("chat:user.editTitle")}
+                    aria-label={t("chat:user.editAria")}
                   >
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M11.5 2.5l2 2-7.5 7.5-2.5.5.5-2.5z" />

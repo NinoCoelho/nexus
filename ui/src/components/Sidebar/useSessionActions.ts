@@ -1,6 +1,7 @@
 // Session CRUD actions extracted from Sidebar/index.tsx.
 
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   createSessionShare,
   deleteSession,
@@ -54,6 +55,7 @@ export function useSessionActions({
   onActiveSessionDeleted,
   toast,
 }: SessionActionsOptions) {
+  const { t } = useTranslation("sidebar");
   const handleRename = async (id: string) => {
     try {
       await patchSession(id, { title: renameValue.trim() || "Untitled" });
@@ -83,25 +85,25 @@ export function useSessionActions({
       const a = document.createElement("a");
       a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
-      toast.success(`Downloaded ${filename}`);
+      toast.success(t("sidebar:session.downloadedFile", { filename }));
     } catch (e) {
-      toast.error("Download failed", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("sidebar:session.downloadFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   };
 
   const handleToVault = async (id: string, mode: "raw" | "summary") => {
     setMenuNull();
     setToVaultBusy((prev) => new Set(prev).add(id));
-    if (mode === "summary") toast.info("Summarizing session…", { duration: 2500 });
+    if (mode === "summary") toast.info(t("sidebar:session.summarizing"), { duration: 2500 });
     try {
       const result = await sessionToVault(id, mode);
       toast.success(
-        mode === "raw" ? "Saved raw to vault" : "Summary saved to vault",
+        mode === "raw" ? t("sidebar:session.savedRaw") : t("sidebar:session.summarySaved"),
         { detail: result.path, duration: 5000 },
       );
     } catch (e) {
       toast.error(
-        mode === "raw" ? "Couldn't save raw to vault" : "Summarize failed",
+        mode === "raw" ? t("sidebar:session.saveRawFailed") : t("sidebar:session.summarizeFailed"),
         { detail: e instanceof Error ? e.message : undefined },
       );
     } finally {
@@ -116,19 +118,19 @@ export function useSessionActions({
       const fullUrl = `${window.location.origin}${window.location.pathname}${link.path}`;
       try {
         await navigator.clipboard.writeText(fullUrl);
-        toast.success("Share link copied", { detail: "Anyone with the link can view (read-only).", duration: 5000 });
+        toast.success(t("sidebar:session.shareCopied"), { detail: t("sidebar:session.shareCopiedDetail"), duration: 5000 });
       } catch {
-        toast.info("Share link ready", {
+        toast.info(t("sidebar:session.shareReady"), {
           detail: fullUrl,
           duration: 12000,
           action: {
-            label: "Copy",
+            label: t("sidebar:session.shareCopyLabel"),
             onClick: () => { void navigator.clipboard.writeText(fullUrl).catch(() => {}); },
           },
         });
       }
     } catch (e) {
-      toast.error("Couldn't create share link", { detail: e instanceof Error ? e.message : undefined });
+      toast.error(t("sidebar:session.shareFailed"), { detail: e instanceof Error ? e.message : undefined });
     }
   };
 

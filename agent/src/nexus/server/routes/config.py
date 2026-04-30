@@ -66,6 +66,7 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "model": t.remote.model,
         },
     }
+    out["ui"] = {"language": cfg.ui.language}
     return out
 
 
@@ -146,6 +147,14 @@ async def patch_config(
         if isinstance(merged.get("language"), str) and not merged["language"].strip():
             merged["language"] = None
         raw["transcription"] = merged
+    if "ui" in body:
+        existing = raw.get("ui", {}) or {}
+        patch = body["ui"] or {}
+        merged = {**existing}
+        lang = patch.get("language")
+        if lang in ("en", "pt-BR"):
+            merged["language"] = lang
+        raw["ui"] = merged
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)

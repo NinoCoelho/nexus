@@ -15,14 +15,14 @@ export type SoundKey =
   | "attention"
   | "agentStep";
 
-/** Display labels (PT-BR) for the settings UI. */
+/** Display labels for the settings UI. */
 export const SOUND_LABELS: Record<SoundKey, string> = {
-  finalResponse: "Resposta final",
-  notification: "Notificação (toasts)",
-  popupOpen: "Popup de aprovação",
-  countdownTick: "Contagem regressiva",
-  attention: "Lembrete (a cada minuto)",
-  agentStep: "Passo do agente",
+  finalResponse: "Final response",
+  notification: "Notification (toasts)",
+  popupOpen: "Approval popup",
+  countdownTick: "Countdown",
+  attention: "Reminder (every minute)",
+  agentStep: "Agent step",
 };
 
 /** Per-effect multiplier (0..1). Default 1.0 = baseline volume. */

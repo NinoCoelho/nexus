@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type KnowledgeStats } from "../../api";
 import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
@@ -12,16 +13,17 @@ interface Props {
 }
 
 export default function FeaturesTab({ graphStats }: Props) {
+  const { t } = useTranslation("settings");
   const [reindexOpen, setReindexOpen] = useState(false);
 
   return (
     <>
       <SettingsSection
-        title="Voice transcription"
-        icon="🎙"
+        title={t("settings:features.transcriptionTitle")}
+        icon={t("settings:features.transcriptionIcon")}
         collapsible
         help={{
-          title: "Transcription",
+          title: t("settings:features.transcriptionHelpTitle"),
           body: (
             <>
               Converts audio you record into text before sending it to the agent.
@@ -36,12 +38,12 @@ export default function FeaturesTab({ graphStats }: Props) {
       </SettingsSection>
 
       <SettingsSection
-        title="Web search"
-        icon="🔍"
+        title={t("settings:features.webSearchTitle")}
+        icon={t("settings:features.webSearchIcon")}
         collapsible
         defaultOpen={false}
         help={{
-          title: "Web search",
+          title: t("settings:features.webSearchHelpTitle"),
           body: (
             <>
               Lets the agent search the web when it needs to. You can enable
@@ -55,12 +57,12 @@ export default function FeaturesTab({ graphStats }: Props) {
 
       {graphStats && (
         <SettingsSection
-          title="Knowledge graph"
-          icon="🕸"
+          title={t("settings:features.knowledgeGraphTitle")}
+          icon={t("settings:features.knowledgeGraphIcon")}
           collapsible
           defaultOpen={false}
           help={{
-            title: "Knowledge graph (GraphRAG)",
+            title: t("settings:features.knowledgeGraphHelpTitle"),
             body: (
               <>
                 Indexes your vault files as entities and relations so the agent
@@ -75,15 +77,15 @@ export default function FeaturesTab({ graphStats }: Props) {
             <div className="graphrag-stats-row">
               <div className="graphrag-stat">
                 <span className="graphrag-stat-value">{graphStats.entities}</span>
-                <span className="graphrag-stat-label">entities</span>
+                <span className="graphrag-stat-label">{t("settings:features.entities")}</span>
               </div>
               <div className="graphrag-stat">
                 <span className="graphrag-stat-value">{graphStats.triples}</span>
-                <span className="graphrag-stat-label">relations</span>
+                <span className="graphrag-stat-label">{t("settings:features.relations")}</span>
               </div>
               <div className="graphrag-stat">
                 <span className="graphrag-stat-value">{graphStats.component_count ?? 0}</span>
-                <span className="graphrag-stat-label">components</span>
+                <span className="graphrag-stat-label">{t("settings:features.components")}</span>
               </div>
             </div>
             <button
@@ -91,19 +93,19 @@ export default function FeaturesTab({ graphStats }: Props) {
               style={{ alignSelf: "flex-start" }}
               onClick={() => setReindexOpen(true)}
             >
-              Reindex
+              {t("settings:features.reindexButton")}
             </button>
           </div>
         </SettingsSection>
       )}
 
       <SettingsSection
-        title="Vault history"
-        icon="↶"
+        title={t("settings:features.vaultHistoryTitle")}
+        icon={t("settings:features.vaultHistoryIcon")}
         collapsible
         defaultOpen={false}
         help={{
-          title: "Vault history",
+          title: t("settings:features.vaultHistoryHelpTitle"),
           body: (
             <>
               Opt-in: when enabled, every vault save is committed to a

@@ -1,0 +1,63 @@
+{
+  "toolbar": {
+    "defaultTitle": "Tabela de Dados",
+    "searchPlaceholder": "Buscar…",
+    "allRows": "Todas as linhas",
+    "saveView": "Salvar visão",
+    "saveViewTitle": "Salvar filtro/ordenação atual como visão",
+    "deleteView": "Excluir visão",
+    "deleteViewTitle": "Excluir a visão ativa",
+    "exportButton": "Exportar",
+    "exportTitle": "Baixar como CSV",
+    "importButton": "Importar",
+    "importTitle": "Importar linhas de CSV",
+    "schemaButton": "Esquema",
+    "schemaTitle": "Editar esquema",
+    "addRow": "+ Adicionar Linha"
+  },
+  "grid": {
+    "noRows": "Nenhuma linha",
+    "noMatch": "Nenhuma linha corresponde ao filtro atual.",
+    "deleteRowTitle": "Excluir esta linha",
+    "editRowTitle": "Editar esta linha"
+  },
+  "columns": {
+    "menuTitle": "Colunas",
+    "showAll": "Mostrar todas",
+    "hideAll": "Ocultar todas"
+  },
+  "modal": {
+    "addRowTitle": "Adicionar Linha",
+    "editRowTitle": "Editar Linha",
+    "deleteRowTitle": "Excluir linha?",
+    "deleteRowMessage": "Esta linha será removida permanentemente.",
+    "deleteRowConfirm": "Excluir",
+    "saveViewTitle": "Salvar visão",
+    "saveViewPlaceholder": "Nome da visão…",
+    "saveViewConfirm": "Salvar"
+  },
+  "schema": {
+    "title": "Editor de esquema"
+  },
+  "pagination": {
+    "prev": "◀",
+    "next": "▶",
+    "info": "{{from}}–{{to}} de {{total}}"
+  },
+  "toast": {
+    "rowAdded": "Linha adicionada",
+    "rowUpdated": "Linha atualizada",
+    "rowDeleted": "Linha excluída",
+    "rowFailed": "Falha ao salvar linha",
+    "deleteFailed": "Falha ao excluir linha",
+    "viewSaved": "Visão salva: {{name}}",
+    "viewSaveFailed": "Falha ao salvar visão",
+    "viewDeleted": "Visão excluída",
+    "viewDeleteFailed": "Falha ao excluir visão",
+    "imported": "{{count}} linhas importadas",
+    "importFailed": "Falha ao importar",
+    "exportFailed": "Falha ao exportar",
+    "schemaFailed": "Falha ao atualizar esquema",
+    "loadFailed": "Falha ao carregar tabela"
+  }
+}

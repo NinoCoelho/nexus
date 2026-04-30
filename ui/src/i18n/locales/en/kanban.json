@@ -1,0 +1,40 @@
+{
+  "board": {
+    "loadError": "Couldn't load board: {{error}}",
+    "loading": "Loading…",
+    "filterToggle": "Filter cards",
+    "hideFilters": "Hide filters",
+    "filters": "Filters",
+    "activeFilterIndicator": " •",
+    "addLane": "+ Lane",
+    "boardDeleted": "Board file was deleted"
+  },
+  "lane": {
+    "promptIndicator": "Auto-dispatch prompt set",
+    "editPrompt": "Edit lane prompt",
+    "setPrompt": "Set lane prompt",
+    "deleteLane": "Delete lane",
+    "addCard": "+ Card",
+    "addCardAria": "Add card to this lane",
+    "newLaneTitle": "New lane",
+    "newLanePlaceholder": "Lane title",
+    "newLaneConfirm": "Add",
+    "deleteLaneTitle": "Delete lane",
+    "deleteLaneWithCards": "\"{{title}}\" contains {{count}} card. All will be removed.",
+    "deleteLaneWithCards_other": "\"{{title}}\" contains {{count}} cards. All will be removed.",
+    "deleteLaneEmpty": "Delete empty lane \"{{title}}\"?",
+    "deleteLaneConfirm": "Delete"
+  },
+  "card": {
+    "deleteTitle": "Delete card",
+    "deleteMessage": "This card will be removed from the board.",
+    "deleteConfirm": "Delete"
+  },
+  "filter": {
+    "textPlaceholder": "Search cards…",
+    "labelPlaceholder": "Label…",
+    "priorityPlaceholder": "Priority…",
+    "assigneePlaceholder": "Assignee…",
+    "clear": "Clear"
+  }
+}

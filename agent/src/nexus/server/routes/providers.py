@@ -7,7 +7,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..deps import get_agent, get_app_state
+from ...i18n import t
+from ..deps import get_agent, get_app_state, get_locale
 from .config import _rebuild_registry
 
 router = APIRouter()
@@ -143,15 +144,22 @@ async def set_provider_key(
     body: dict[str, Any],
     app_state: dict[str, Any] = Depends(get_app_state),
     a=Depends(get_agent),
+    locale: str = Depends(get_locale),
 ) -> None:
     from ...config_file import load as load_cfg, save as save_cfg
     from ... import secrets as _secrets
     api_key = body.get("api_key", "")
     if not api_key:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="api_key required")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=t("errors.providers.api_key_required", locale),
+        )
     cfg = app_state["cfg"] or load_cfg()
     if name not in cfg.providers:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"provider {name!r} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("errors.providers.not_found", locale, name=name),
+        )
     _secrets.set(name, api_key, kind="provider")
     cfg.providers[name].use_inline_key = True
     save_cfg(cfg)
@@ -163,12 +171,16 @@ async def clear_provider_key(
     name: str,
     app_state: dict[str, Any] = Depends(get_app_state),
     a=Depends(get_agent),
+    locale: str = Depends(get_locale),
 ) -> None:
     from ...config_file import load as load_cfg, save as save_cfg
     from ... import secrets as _secrets
     cfg = app_state["cfg"] or load_cfg()
     if name not in cfg.providers:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"provider {name!r} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("errors.providers.not_found", locale, name=name),
+        )
     _secrets.delete(name)
     cfg.providers[name].use_inline_key = False
     save_cfg(cfg)
@@ -181,6 +193,7 @@ async def set_provider_credential(
     body: dict[str, Any],
     app_state: dict[str, Any] = Depends(get_app_state),
     a=Depends(get_agent),
+    locale: str = Depends(get_locale),
 ) -> None:
     """Point a provider at a named entry in the credential store.
 
@@ -199,13 +212,13 @@ async def set_provider_credential(
     if name not in cfg.providers:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"provider {name!r} not found",
+            detail=t("errors.providers.not_found", locale, name=name),
         )
     raw_ref = body.get("credential_ref")
     if raw_ref is not None and (not isinstance(raw_ref, str) or not raw_ref):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="credential_ref must be a non-empty string or null",
+            detail=t("errors.providers.credential_ref_invalid", locale),
         )
     p = cfg.providers[name]
     p.credential_ref = raw_ref or None

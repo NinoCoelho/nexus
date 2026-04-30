@@ -104,25 +104,41 @@ export async function probeTunnelAuth(): Promise<AuthProbe> {
  */
 export const AUTH_401_EVENT = "nexus:auth-401";
 
-// One-time global fetch interceptor. We watch every response that targeted our
-// API base URL; on 401 we dispatch AUTH_401_EVENT so AuthGate can re-probe.
-// /tunnel/redeem is exempt — its 401 means "wrong code", which the login form
-// already surfaces. Re-probing on it would be harmless but wasteful.
+// One-time global fetch interceptor. Two jobs:
+//   1) Inject X-Locale on every request that targets our API base URL so the
+//      backend can localize HTTP error messages without touching each call site.
+//      Source-of-truth for the active language is i18next (which itself reads
+//      ~/.nexus/config.toml via /config and the localStorage cache).
+//   2) Watch responses for 401 and dispatch AUTH_401_EVENT so AuthGate can
+//      re-probe. /tunnel/redeem is exempt — its 401 means "wrong code", which
+//      the login form already surfaces.
 if (typeof window !== "undefined" && !(window as any).__nexus401Patched) {
   (window as any).__nexus401Patched = true;
   const original = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const res = await original(input as any, init);
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url;
+    const targetsApi = url.startsWith(BASE);
+    let nextInit = init;
+    if (targetsApi) {
+      const lang =
+        (typeof window !== "undefined" && (window as any).__nexusLanguage) ||
+        (typeof localStorage !== "undefined" ? localStorage.getItem("nexus-language") : null);
+      if (lang) {
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        if (!headers.has("X-Locale")) headers.set("X-Locale", String(lang));
+        nextInit = { ...(init ?? {}), headers };
+      }
+    }
+    const res = await original(input as any, nextInit);
     try {
-      const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.href
-            : (input as Request).url;
       if (
         res.status === 401 &&
-        url.startsWith(BASE) &&
+        targetsApi &&
         !url.startsWith(`${BASE}/tunnel/redeem`)
       ) {
         window.dispatchEvent(new CustomEvent(AUTH_401_EVENT));

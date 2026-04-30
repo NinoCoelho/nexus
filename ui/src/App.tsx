@@ -19,11 +19,13 @@ import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
   cancelHitlRequest,
+  getConfig,
   getGraphragIndexStatus,
   graphragIndexFile,
   pingHealth,
   respondToUserRequest,
 } from "./api";
+import i18n, { normalizeLanguage } from "./i18n";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
 import { useChatSession } from "./hooks/useChatSession";
@@ -125,6 +127,27 @@ export default function App() {
     tick();
     const id = setInterval(tick, 15000);
     return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Sync UI language from `~/.nexus/config.toml` once on mount. The fetch
+  // interceptor in api/base.ts also reads `localStorage["nexus-language"]` (and
+  // `window.__nexusLanguage`) so X-Locale stays in sync without each call site
+  // knowing about it. Settings drawer's language picker calls i18n.changeLanguage
+  // directly when the user toggles, so this effect doesn't need to refetch.
+  useEffect(() => {
+    let cancelled = false;
+    getConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        const lang = normalizeLanguage(cfg.ui?.language);
+        (window as any).__nexusLanguage = lang;
+        if (i18n.language !== lang) void i18n.changeLanguage(lang);
+      })
+      .catch(() => {
+        // /config can fail before AuthGate completes; the browser-detector
+        // fallback already gave us a reasonable default, so we just bail.
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const settings = useSettings();

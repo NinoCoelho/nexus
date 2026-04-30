@@ -1,0 +1,26 @@
+# English catalog for backend HTTP error messages.
+# Keys are dotted (errors.providers.not_found). Add new keys here first; the
+# pt-BR catalog falls back to this file when a key is missing.
+# Placeholders use Python str.format syntax: "provider {name!r} not found".
+
+[errors.providers]
+api_key_required = "api_key required"
+not_found = "provider {name!r} not found"
+credential_ref_invalid = "credential_ref must be a non-empty string or null"
+
+[errors.credentials]
+bad_name = "name must match ^[A-Z][A-Z0-9_]*$"
+value_required = "value (non-empty string) is required"
+bad_kind = "kind must be one of: generic, skill, provider"
+
+[errors.sessions]
+not_found_named = "session {session_id!r} not found"
+not_found = "Session not found"
+bad_feedback = "value must be 'up', 'down', or null"
+
+[errors.vault_datatable]
+file_not_found = "file not found"
+row_must_be_object = "`row` must be an object"
+rows_must_be_list = "`rows` must be a list"
+schema_must_be_object = "`schema` must be an object"
+views_must_be_list = "`views` must be a list"
