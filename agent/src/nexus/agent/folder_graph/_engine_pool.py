@@ -19,6 +19,7 @@ from ._storage import (
     folder_dot_dir,
     is_initialized,
     normalize_folder,
+    ontology_hash,
     open_manifest,
 )
 
@@ -146,11 +147,27 @@ def open_folder_engine(folder: str | Path, ontology: dict[str, Any],
 
     folder_p = normalize_folder(folder)
     key = str(folder_p)
+    desired_hash = ontology_hash(ontology)
 
     entry = _pool.pop(key, None)
     if entry is not None:
-        _pool[key] = entry  # move to MRU
-        return entry
+        if entry.get("ontology_hash") == desired_hash:
+            _pool[key] = entry  # move to MRU
+            return entry
+        # Ontology drifted since this engine was built — its loom OntologyConfig
+        # is stale, so any extraction would still use the old relation taxonomy.
+        # Tear it down and fall through to a rebuild below.
+        log.info("[folder_graph] ontology drift on %s — rebuilding engine", key)
+        try:
+            entry["engine"].close()
+        except Exception:
+            log.warning("[folder_graph] engine close failed during ontology rebuild for %s",
+                        key, exc_info=True)
+        try:
+            entry["manifest"].close()
+        except Exception:
+            log.warning("[folder_graph] manifest close failed during ontology rebuild for %s",
+                        key, exc_info=True)
 
     if len(_pool) >= POOL_SIZE:
         _evict_one()
@@ -162,6 +179,7 @@ def open_folder_engine(folder: str | Path, ontology: dict[str, Any],
         "manifest": manifest,
         "embedder_id": embedder_id,
         "extractor_id": extractor_id,
+        "ontology_hash": desired_hash,
     }
     _pool[key] = entry
     return entry
