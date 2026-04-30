@@ -76,4 +76,4 @@ nexus skills remove my-skill
 ```
 
 This deletes the directory under `~/.nexus/skills/<name>`. Bundled
-skills (`hello-world` etc.) get re-seeded on next start.
+skills (`brainstorm` etc.) get re-seeded on next start.
