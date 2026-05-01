@@ -42,14 +42,20 @@ interface Props {
    * contains a hidden-seed marker the chat bubble renderer filters out.
    */
   onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  /** Navigate the host app to open `path` in the Vault view — forwarded to
+   *  card detail/activity modals so vault links opened from there keep
+   *  the "Open in Vault" affordance in their preview header. */
+  onOpenInVault?: (path: string) => void;
 }
 
-export default function KanbanBoard({ path, onOpenInChat }: Props) {
+export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props) {
   const { t } = useTranslation("kanban");
   const [board, setBoard] = useState<BoardT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragCard, setDragCard] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<{ lane: string; index: number } | null>(null);
+  const [dragLane, setDragLane] = useState<string | null>(null);
+  const [laneDragOver, setLaneDragOver] = useState<number | null>(null);
   const [modal, setModal] = useState<ModalProps | null>(null);
   const [detailCard, setDetailCard] = useState<KanbanCard | null>(null);
   const [newCardLane, setNewCardLane] = useState<string | null>(null);
@@ -158,6 +164,24 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
     } catch { /* ignore move errors */ }
   };
 
+  const handleLaneDrop = async (insertIndex: number) => {
+    if (!dragLane || !board) return;
+    const laneId = dragLane;
+    const srcIndex = board.lanes.findIndex((l) => l.id === laneId);
+    setDragLane(null);
+    setLaneDragOver(null);
+    if (srcIndex < 0) return;
+    // The backend treats `position` as the index into the post-removal list,
+    // so an insertIndex past the source needs to shift down by one to land
+    // visually where the user dropped.
+    const target = insertIndex > srcIndex ? insertIndex - 1 : insertIndex;
+    if (target === srcIndex) return;
+    try {
+      await patchVaultKanbanLane(path, laneId, { position: target });
+      reload();
+    } catch { /* ignore reorder errors */ }
+  };
+
   const handleOpenInChat = async (card: KanbanCard) => {
     try {
       const res = await dispatchFromVault({ path, card_id: card.id, mode: "chat-hidden" });
@@ -247,17 +271,25 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
       </div>
       {showFilters && <KanbanFilterBar filters={filters} onFiltersChange={setFilters} />}
       <div className="kanban-lanes">
-        {board.lanes.map((lane) => (
+        {board.lanes.map((lane, idx) => (
           <KanbanLaneColumn
             key={lane.id}
             lane={lane}
+            laneIndex={idx}
+            isLastLane={idx === board.lanes.length - 1}
             dragCard={dragCard}
+            dragLane={dragLane}
             dragOver={dragOver}
+            laneDragOver={laneDragOver}
             filters={filters}
             matchesFilters={matchesFilters}
             onSetDragCard={setDragCard}
             onSetDragOver={setDragOver}
             onDrop={handleDrop}
+            onLaneDragStart={(id) => setDragLane(id)}
+            onLaneDragEnd={() => { setDragLane(null); setLaneDragOver(null); }}
+            onLaneDragOver={(insertIdx) => setLaneDragOver(insertIdx)}
+            onLaneDrop={(insertIdx) => void handleLaneDrop(insertIdx)}
             onEditLane={(l) => setEditLane(l)}
             onDeleteLane={handleDeleteLane}
             onAddCard={handleAddCard}
@@ -290,6 +322,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           cardTitle={activityCard.title}
           status={activityCard.status}
           onClose={() => { setActivityCard(null); reload(); }}
+          onOpenInVault={onOpenInVault}
         />
       )}
       {detailCard && (
@@ -298,6 +331,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           boardPath={path}
           onClose={() => setDetailCard(null)}
           onSaved={() => { setDetailCard(null); reload(); }}
+          onOpenInVault={onOpenInVault}
         />
       )}
       {newCardLane && (
@@ -306,6 +340,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           boardPath={path}
           onClose={() => setNewCardLane(null)}
           onSaved={() => { setNewCardLane(null); reload(); }}
+          onOpenInVault={onOpenInVault}
         />
       )}
     </div>

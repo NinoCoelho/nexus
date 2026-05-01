@@ -19,7 +19,7 @@ KANBAN_MANAGE_TOOL = ToolSpec(
         "Manage kanban boards stored as markdown in the vault. "
         "Each board is a single .md file with `kanban-plugin: basic` frontmatter. "
         "Actions: create_board, view, add_card, move_card, update_card, delete_card, "
-        "add_lane, delete_lane."
+        "add_lane, update_lane, move_lane, delete_lane."
     ),
     parameters={
         "type": "object",
@@ -29,7 +29,7 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                 "enum": [
                     "create_board", "view",
                     "add_card", "move_card", "update_card", "delete_card",
-                    "add_lane", "update_lane", "delete_lane",
+                    "add_lane", "update_lane", "move_lane", "delete_lane",
                 ],
                 "description": "Action to perform.",
             },
@@ -68,7 +68,13 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                     "rich markdown freely without escaping."
                 ),
             },
-            "position": {"type": "integer", "description": "Insert position within the lane (move_card)."},
+            "position": {
+                "type": "integer",
+                "description": (
+                    "Insert position within the destination lane (move_card), "
+                    "or the lane's new column index within the board (move_lane)."
+                ),
+            },
             "due": {"type": "string", "description": "ISO date 'YYYY-MM-DD' for update_card. Empty string clears."},
             "priority": {
                 "type": "string",
@@ -179,6 +185,13 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
             if not updates:
                 return json.dumps({"ok": False, "error": "no fields to update (title/prompt/model)"})
             lane = vault_kanban.update_lane(path, lane_id, updates)
+            return json.dumps({"ok": True, "lane": lane.to_dict()})
+
+        if action == "move_lane":
+            lane_id = args.get("lane", "")
+            if not lane_id:
+                return json.dumps({"ok": False, "error": "`lane` (id) is required"})
+            lane = vault_kanban.move_lane(path, lane_id, args.get("position"))
             return json.dumps({"ok": True, "lane": lane.to_dict()})
 
         if action == "delete_lane":

@@ -603,6 +603,7 @@ export default function App() {
               onOpenInChat={handleOpenInChat}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
+              onOpenInVault={handleOpenInVault}
             />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
@@ -613,6 +614,7 @@ export default function App() {
                 onOpenInChat={handleOpenInChat}
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
+                onOpenInVault={handleOpenInVault}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>

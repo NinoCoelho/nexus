@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
-import { useVaultLinkPreview } from "./vaultLink";
+import { useVaultLinkPreview, VaultLinkPreviewProvider } from "./vaultLink";
 import MermaidSnippets from "./MermaidSnippets";
 import KanbanBoard from "./KanbanBoard";
 import DataTableView from "./DataTableView";
@@ -62,11 +62,15 @@ interface VaultEditorPanelProps {
   onViewEntityGraph?: (path: string) => void;
   /** Called when the user opens a `.md` file with `calendar-plugin:` frontmatter. */
   onOpenCalendar?: (path: string) => void;
+  /** Navigate the host app to open `path` in the Vault view — passed to the
+   *  embedded vault-link preview modal so its header "Open in Vault" button
+   *  can route through the App-level navigator instead of being hidden. */
+  onOpenInVault?: (path: string) => void;
   /** Open another data-table (drill-down from related-rows panel). */
   onOpenTable?: (path: string) => void;
 }
 
-export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar, onOpenTable }: VaultEditorPanelProps) {
+export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultEditorPanelProps) {
   const { t } = useTranslation("vault");
   const [content, setContent] = useState("");
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
@@ -78,7 +82,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   const [fileError, setFileError] = useState<string | null>(null);
   const [historyEnabled, setHistoryEnabled] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
+  const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview(onOpenInVault);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -285,7 +289,13 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
           {fileError ? (
             <div className="vault-file-error">{fileError}</div>
           ) : isKanban && !editMode ? (
-            <KanbanBoard path={selectedPath!} onOpenInChat={onOpenInChat} />
+            <VaultLinkPreviewProvider onPreview={onVaultPreview}>
+              <KanbanBoard
+                path={selectedPath!}
+                onOpenInChat={onOpenInChat}
+                onOpenInVault={onOpenInVault}
+              />
+            </VaultLinkPreviewProvider>
           ) : isDataTable && !editMode ? (
             <DataTableView path={selectedPath!} onOpenTable={onOpenTable} />
           ) : isCsv ? (

@@ -123,10 +123,21 @@ async def vault_kanban_add_lane(body: dict, path: str) -> dict:
 
 @router.patch("/vault/kanban/lanes/{lane_id}")
 async def vault_kanban_patch_lane(lane_id: str, body: dict, path: str) -> dict:
-    """Update a lane's title, prompt, or auto-dispatch model. Body: {title?, prompt?, model?}."""
+    """Update a lane's title/prompt/model and/or reorder it within the board.
+
+    Body: ``{title?, prompt?, model?, position?}``. Including ``position``
+    moves the lane to that zero-based index; metadata edits in the same call
+    are applied afterwards (mirrors how move_card folds in updates).
+    """
     from ... import vault_kanban
     try:
-        lane = vault_kanban.update_lane(path, lane_id, body)
+        if "position" in body:
+            lane = vault_kanban.move_lane(path, lane_id, body.get("position"))
+            updates = {k: body[k] for k in ("title", "prompt", "model") if k in body}
+            if updates:
+                lane = vault_kanban.update_lane(path, lane_id, updates)
+        else:
+            lane = vault_kanban.update_lane(path, lane_id, body)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return lane.to_dict()
