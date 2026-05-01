@@ -1,0 +1,458 @@
+/* SkillWizard styles. Uses Nexus design tokens (tokens.css) so the modal
+ * adapts to every theme + brightness setting. Critically, --fg-on-accent
+ * is the only correct text color for buttons painted with --accent — the
+ * accent is bright lime in dark mode and deep teal in light mode; white
+ * text on lime fails contrast.
+ */
+
+.skill-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 1.5rem;
+}
+
+.skill-wizard-panel {
+  background: var(--bg-panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(720px, 96vw);
+  max-height: min(86vh, 800px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.skill-wizard-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-wizard-title {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+}
+
+.skill-wizard-step-counter {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.skill-wizard-close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.skill-wizard-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.skill-wizard-body {
+  padding: 18px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.skill-wizard-step-heading {
+  margin: 0 0 0.5rem 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.skill-wizard-helper {
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0 0 0.9rem 0;
+}
+
+.skill-wizard-textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  padding: 0.7rem;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.skill-wizard-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.skill-wizard-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.skill-wizard-primary-btn {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border: 0;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.skill-wizard-primary-btn:hover:not(:disabled) {
+  background: var(--accent-hi);
+}
+
+.skill-wizard-primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.skill-wizard-secondary-btn {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.skill-wizard-secondary-btn:hover:not(:disabled) {
+  background: var(--bg-inset);
+  border-color: var(--accent);
+}
+
+.skill-wizard-secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── searching step ───────────────────────────────────────────────────── */
+
+.skill-wizard-searching {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.skill-wizard-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: skill-wizard-spin 0.9s linear infinite;
+}
+
+@keyframes skill-wizard-spin {
+  to { transform: rotate(360deg); }
+}
+
+.skill-wizard-searching-line {
+  margin: 0;
+  font-size: 14px;
+}
+
+.skill-wizard-searching-secondary {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+/* ── choose step ──────────────────────────────────────────────────────── */
+
+.skill-wizard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding-top: 0.6rem;
+}
+
+.skill-wizard-candidate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.skill-wizard-candidate {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: 8px;
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.skill-wizard-candidate:hover {
+  border-color: var(--accent);
+}
+
+.skill-wizard-candidate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.skill-wizard-candidate-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.skill-wizard-candidate-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-dim);
+  line-height: 1.45;
+}
+
+.skill-wizard-candidate-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+}
+
+.skill-wizard-meta-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 12px;
+}
+
+.skill-wizard-meta-label {
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.skill-wizard-meta-dots {
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.skill-wizard-meta-value {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.skill-wizard-keys {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 12px;
+}
+
+.skill-wizard-keys-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.skill-wizard-key-chip {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 11px;
+  color: var(--fg);
+}
+
+.skill-wizard-source-pill {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.skill-wizard-source-pill-verified {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent-soft);
+}
+
+.skill-wizard-source-pill-unverified {
+  /* Use status-warning tokens for "not yet trusted" sources. Falls back to
+   * a neutral border when the theme doesn't define a warn token. */
+  background: var(--bg-hover);
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+}
+
+.skill-wizard-candidate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+/* ── keys step ────────────────────────────────────────────────────────── */
+
+.skill-wizard-keys-list {
+  list-style: none;
+  margin: 0 0 0.9rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.skill-wizard-key-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.skill-wizard-key-row-ready {
+  border-color: var(--accent-soft);
+}
+
+.skill-wizard-key-row-missing {
+  border-color: var(--border);
+}
+
+.skill-wizard-key-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.skill-wizard-key-name {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: var(--fg);
+}
+
+.skill-wizard-key-vendor {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.skill-wizard-key-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.skill-wizard-key-row-ready .skill-wizard-key-status {
+  color: var(--accent);
+}
+
+.skill-wizard-key-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.skill-wizard-key-free-tier {
+  font-size: 10px;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.skill-wizard-key-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.skill-wizard-key-link:hover {
+  text-decoration: underline;
+}
+
+/* ── build step ───────────────────────────────────────────────────────── */
+
+.skill-wizard-build-success,
+.skill-wizard-build-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.5rem 1rem;
+  text-align: center;
+}
+
+.skill-wizard-build-success .skill-wizard-step-heading,
+.skill-wizard-build-failure .skill-wizard-step-heading {
+  margin: 0;
+}
+
+.skill-wizard-build-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  font-weight: bold;
+}
+
+.skill-wizard-build-success .skill-wizard-build-icon {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent-soft);
+}
+
+.skill-wizard-build-failure .skill-wizard-build-icon {
+  /* Use --bad if defined by the theme (status error). Otherwise the
+   * neutral border keeps the icon legible without inventing a new color. */
+  background: var(--bg-inset);
+  color: var(--bad, var(--fg));
+  border: 1px solid var(--border);
+}
+
+/* Live build progress meta line: "Elapsed 1m 23s · iteration 4". Sits
+ * below the active stage line so the spinner stays the focal point. */
+.skill-wizard-build-meta {
+  margin: 0.2rem 0 0 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.02em;
+}
+
+.skill-wizard-build-bg-btn {
+  margin-top: 0.7rem;
+}

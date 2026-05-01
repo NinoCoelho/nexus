@@ -23,10 +23,29 @@ class ChatReply(BaseModel):
     plan: list[dict[str, Any]] | None = None
 
 
+class DerivedFromSourceDTO(BaseModel):
+    slug: str = ""
+    url: str = ""
+    title: str = ""
+
+
+class DerivedFromDTO(BaseModel):
+    """Provenance block for skills built by the capability wizard.
+
+    ``None`` on every skill that wasn't wizard-built — the UI keys off the
+    presence of this field to render the "Built from your request" affordance.
+    """
+
+    wizard_ask: str = ""
+    wizard_built_at: str = ""
+    sources: list[DerivedFromSourceDTO] = Field(default_factory=list)
+
+
 class SkillInfo(BaseModel):
     name: str
     description: str
     trust: str
+    derived_from: DerivedFromDTO | None = None
 
 
 class SkillDetail(BaseModel):
@@ -34,6 +53,7 @@ class SkillDetail(BaseModel):
     description: str
     trust: str
     body: str
+    derived_from: DerivedFromDTO | None = None
 
 
 class Health(BaseModel):

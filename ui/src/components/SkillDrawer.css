@@ -105,3 +105,34 @@
   color: var(--fg-faint);
   font-style: italic;
 }
+
+.skill-drawer-provenance {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid rgba(94, 138, 158, 0.45);
+  background: rgba(94, 138, 158, 0.08);
+  font-size: 12px;
+}
+
+.skill-drawer-provenance-label {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+}
+
+.skill-drawer-provenance-ask {
+  color: var(--fg);
+  font-style: italic;
+}
+
+.skill-drawer-provenance-sources {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--fg-faint);
+}

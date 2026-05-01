@@ -67,9 +67,19 @@ class SkillManager:
                 message=f"skill blocked by guard: {[f.pattern for f in guard.findings]}",
                 rolled_back=True,
             )
+        # Optional ``trust`` override defaults to "agent" (back-compat for the
+        # plain skill_manage("create") path). The wizard's skill-builder skill
+        # passes ``trust="user"`` so wizard-built skills are owned, not flagged
+        # as runtime self-evolution. ``derived_from`` is the wizard provenance
+        # block — opaque to manager, persisted unmodified.
+        trust = _coerce_trust(args.get("trust"))
+        derived_from = args.get("derived_from")
         skill_dir.mkdir(parents=True)
         _atomic_write(skill_dir / "SKILL.md", content)
-        _write_meta(skill_dir, trust="agent", authored_at=_now())
+        meta_kwargs: dict[str, Any] = {"trust": trust, "authored_at": _now()}
+        if isinstance(derived_from, dict):
+            meta_kwargs["derived_from"] = derived_from
+        _write_meta(skill_dir, **meta_kwargs)
         self._registry.reload()
         return ManagerResult(ok=True, message=f"skill {name!r} created")
 
@@ -203,3 +213,13 @@ def _check_path(rel_path: str, skill_dir: Path) -> str | None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_TRUST_VALUES = {"builtin", "user", "agent"}
+
+
+def _coerce_trust(v: Any) -> str:
+    """Validate the optional ``trust`` arg from skill_manage("create", …)."""
+    if isinstance(v, str) and v in _TRUST_VALUES:
+        return v
+    return "agent"

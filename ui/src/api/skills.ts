@@ -1,16 +1,32 @@
 // API client for skill management.
 import { BASE } from "./base";
 
+export interface DerivedFromSource {
+  slug: string;
+  url: string;
+  title: string;
+}
+
+export interface DerivedFrom {
+  wizard_ask: string;
+  wizard_built_at: string;
+  sources: DerivedFromSource[];
+}
+
 export interface SkillSummary {
   name: string;
   description: string;
   trust: "builtin" | "user" | "agent";
+  derived_from?: DerivedFrom | null;
 }
 
 export interface SkillDetail {
   name: string;
   body: string;
   frontmatter: Record<string, unknown>;
+  derived_from?: DerivedFrom | null;
+  trust?: "builtin" | "user" | "agent";
+  description?: string;
 }
 
 export async function getSkills(): Promise<SkillSummary[]> {
@@ -34,6 +50,88 @@ export async function updateSkill(name: string, body: string): Promise<SkillDeta
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail || `Skill update error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Wizard discovery ───────────────────────────────────────────────────────
+//
+// `discoverSkills(userAsk)` calls the Phase-1 backend. The response is
+// abstract by design — title/summary/complexity/cost/keys — never the raw
+// SKILL.md body. The wizard renders these cards directly.
+
+export interface SkillCandidateKey {
+  name: string;
+  vendor: string;
+  get_key_url: string;
+  free_tier_available: boolean;
+}
+
+export interface SkillCandidateSource {
+  slug: string;
+  url: string;
+  verified: boolean;
+}
+
+export interface SkillCandidate {
+  id: string;
+  title: string;
+  summary: string;
+  capabilities: string[];
+  complexity: number;
+  cost_tier: "free" | "low" | "medium" | "high";
+  requires_keys: SkillCandidateKey[];
+  risks: string[];
+  confidence: number;
+  score: number;
+  source: SkillCandidateSource;
+}
+
+export interface DiscoverResponse {
+  candidates: SkillCandidate[];
+}
+
+export async function discoverSkills(
+  userAsk: string,
+  language?: string,
+  limit = 8,
+): Promise<SkillCandidate[]> {
+  const res = await fetch(`${BASE}/skills/wizard/discover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_ask: userAsk, language, limit }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `Skill discovery error: ${res.status}`);
+  }
+  const data: DiscoverResponse = await res.json();
+  return data.candidates;
+}
+
+export interface BuildSkillResponse {
+  session_id: string;
+}
+
+export async function buildSkill(args: {
+  candidateId: string;
+  userAsk: string;
+  relatedIds?: string[];
+  language?: string;
+}): Promise<BuildSkillResponse> {
+  const res = await fetch(`${BASE}/skills/wizard/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      candidate_id: args.candidateId,
+      user_ask: args.userAsk,
+      related_ids: args.relatedIds ?? [],
+      language: args.language,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `Build skill error: ${res.status}`);
   }
   return res.json();
 }

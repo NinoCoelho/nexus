@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import MarkdownView from "./MarkdownView";
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export default function SkillDrawer({ skillName, onClose }: Props) {
+  const { t } = useTranslation("skillWizard");
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -103,7 +105,26 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
         <div className="drawer-body">
           {loading && <p className="drawer-loading">Loading…</p>}
           {!loading && detail && !editing && (
-            <MarkdownView onVaultLinkPreview={onPreview}>{detail.body}</MarkdownView>
+            <>
+              {detail.derived_from?.wizard_ask && (
+                <div className="skill-drawer-provenance">
+                  <span className="skill-drawer-provenance-label">
+                    {t("provenance.label")}
+                  </span>
+                  <span className="skill-drawer-provenance-ask">
+                    “{detail.derived_from.wizard_ask}”
+                  </span>
+                  {detail.derived_from.sources.length > 0 && (
+                    <span className="skill-drawer-provenance-sources">
+                      {t("provenance.viewSourcesShort", {
+                        count: detail.derived_from.sources.length,
+                      })}
+                    </span>
+                  )}
+                </div>
+              )}
+              <MarkdownView onVaultLinkPreview={onPreview}>{detail.body}</MarkdownView>
+            </>
           )}
           {!loading && detail && editing && (
             <>

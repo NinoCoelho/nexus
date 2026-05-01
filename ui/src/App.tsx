@@ -35,6 +35,8 @@ import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
 import { usePushSubscription } from "./hooks/usePushSubscription";
+import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
+import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useSessionUsage } from "./hooks/useSessionUsage";
@@ -44,6 +46,7 @@ import SharedSessionView from "./components/SharedSessionView";
 
 export default function App() {
   const toast = useToast();
+  const { t: tBg } = useTranslation("skillWizard");
   // Detect a read-only share-link route before any state setup. Hash routes
   // look like ``#/share/<token>``; that page bypasses the rest of the app
   // entirely, so unauthenticated viewers don't load the chat surface.
@@ -88,6 +91,19 @@ export default function App() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+
+  // Wizard background-build tracker — owns SSE subscriptions for any skill
+  // builds the user dismissed mid-flight, so they keep running on the
+  // server and surface a toast when the agent finishes.
+  useBackgroundSkillBuilds({
+    toast,
+    t: tBg,
+    onTryItNow: (skillName) => {
+      // Pop the new skill's drawer so the user sees what was built; from
+      // there they're one click away from a chat session that uses it.
+      setOpenSkill(skillName);
+    },
+  });
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's

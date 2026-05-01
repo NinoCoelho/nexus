@@ -12,7 +12,7 @@ from typing import Any
 
 import frontmatter  # type: ignore[import]
 
-from .types import KeyRequirement, Skill
+from .types import DerivedFrom, DerivedFromSource, KeyRequirement, Skill
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +136,9 @@ def _load_skill(skill_dir: Path) -> Skill:
     if not _NAME_RE.match(name):
         raise ValueError(f"invalid skill name: {name!r}")
     requires_keys = _parse_requires_keys(post.metadata.get("requires_keys"))
-    trust = _read_meta(skill_dir).get("trust", "user")
+    meta = _read_meta(skill_dir)
+    trust = meta.get("trust", "user")
+    derived_from = _parse_derived_from(meta.get("derived_from"))
     return Skill(
         name=name,
         description=description,
@@ -144,6 +146,36 @@ def _load_skill(skill_dir: Path) -> Skill:
         source_dir=skill_dir,
         trust=trust,
         requires_keys=requires_keys,
+        derived_from=derived_from,
+    )
+
+
+def _parse_derived_from(raw: Any) -> DerivedFrom | None:
+    """Coerce ``.meta.json`` ``derived_from`` into a :class:`DerivedFrom`.
+
+    Returns ``None`` for missing / malformed data so a corrupt sidecar
+    doesn't prevent the skill from loading.
+    """
+    if not isinstance(raw, dict):
+        return None
+    raw_sources = raw.get("sources") or []
+    if not isinstance(raw_sources, list):
+        raw_sources = []
+    sources: list[DerivedFromSource] = []
+    for entry in raw_sources:
+        if not isinstance(entry, dict):
+            continue
+        sources.append(
+            DerivedFromSource(
+                slug=str(entry.get("slug", ""))[:128],
+                url=str(entry.get("url", ""))[:512],
+                title=str(entry.get("title", ""))[:200],
+            )
+        )
+    return DerivedFrom(
+        wizard_ask=str(raw.get("wizard_ask", ""))[:500],
+        wizard_built_at=str(raw.get("wizard_built_at", ""))[:64],
+        sources=tuple(sources),
     )
 
 

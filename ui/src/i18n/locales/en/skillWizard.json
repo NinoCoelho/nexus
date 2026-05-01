@@ -1,0 +1,107 @@
+{
+  "openButton": "Add a new skill",
+  "menu": {
+    "addSkill": "Add a new skill…"
+  },
+  "title": "Teach Nexus a new skill",
+  "close": "Close",
+  "back": "Back",
+  "step": {
+    "ask": "What do you want Nexus to learn?",
+    "searching": "Looking for skills that match…",
+    "choose": "Pick the option that fits best"
+  },
+  "ask": {
+    "placeholder": "e.g. Summarize my Slack DMs each morning",
+    "helper": "Describe the capability in your own words. Nexus will search trusted skill collections and show you the options.",
+    "submit": "Find skills"
+  },
+  "searching": {
+    "registry": "Searching curated sources…",
+    "analyzing": "Analyzing candidates…",
+    "noProvider": "Configure an LLM provider in Settings to search for skills."
+  },
+  "choose": {
+    "noResults": "No skills matched that request. Try rephrasing what you want Nexus to do.",
+    "tryAgain": "Try a different request",
+    "complexityLabel": "Complexity",
+    "costLabel": "Cost",
+    "keysLabel": "Required keys",
+    "noKeys": "No keys needed",
+    "verifiedSource": "Trusted source",
+    "unverifiedSource": "Unverified source",
+    "useThis": "Use this skill",
+    "viewMore": "What does this do?"
+  },
+  "cost": {
+    "free": "Free",
+    "low": "$",
+    "medium": "$$",
+    "high": "$$$"
+  },
+  "keys": {
+    "title": "Set up access",
+    "intro": "{{title}} needs access to a few services. Add the keys below — Nexus will store them securely.",
+    "noneNeeded": "No keys needed for this skill.",
+    "ready": "All keys ready",
+    "missing": "Not yet set",
+    "addButton": "Add key",
+    "updateButton": "Update key",
+    "freeTier": "Free tier available",
+    "getKeyLink": "How to get this key →",
+    "continue": "Continue",
+    "modal": {
+      "title": "Add {{name}}",
+      "message": "Paste the value from {{vendor}}. Nexus stores it locally — it never leaves your machine.",
+      "messageNoVendor": "Paste the value. Nexus stores it locally — it never leaves your machine.",
+      "placeholder": "Paste your key…",
+      "save": "Save key",
+      "valueEmpty": "Key value cannot be empty."
+    },
+    "toast": {
+      "saved": "Saved {{name}}.",
+      "saveFailed": "Could not save {{name}}."
+    }
+  },
+  "build": {
+    "title": "Building your skill",
+    "intro": "Nexus is studying the source skill and any related ones, then writing a clean version for you.",
+    "stages": {
+      "starting": "Starting…",
+      "reviewing": "Reviewing similar skills…",
+      "reviewingCount_one": "Reviewing {{count}} similar skill in parallel…",
+      "reviewingCount_other": "Reviewing {{count}} similar skills in parallel…",
+      "synthesizing": "Writing your version…",
+      "saving": "Saving the skill…"
+    },
+    "elapsed": "Elapsed {{elapsed}}",
+    "iterations_one": "iteration {{count}}",
+    "iterations_other": "iteration {{count}}",
+    "runInBackground": "Run in background",
+    "success": "Skill ready!",
+    "successDetail": "Your new skill is installed. You can start using it in any chat.",
+    "tryItButton": "Try it now",
+    "doneButton": "Done",
+    "failed": "Build failed",
+    "failedDetail": "Something went wrong while building this skill. You can try a different option.",
+    "tryDifferent": "Try a different skill"
+  },
+  "bg": {
+    "trackingStarted": "Build moved to background",
+    "trackingStartedDetail": "Nexus will keep building \"{{title}}\" and notify you when it's ready.",
+    "success": "Built {{skillName}}",
+    "successDetail": "Derived from \"{{title}}\". You can use it in any chat.",
+    "failed": "Background build failed",
+    "tryItNow": "Show me"
+  },
+  "errors": {
+    "loadFailed": "Could not load options: {{detail}}",
+    "buildFailed": "Build failed: {{detail}}",
+    "credsLoadFailed": "Could not load saved keys: {{detail}}"
+  },
+  "provenance": {
+    "label": "Built from your request",
+    "viewSourcesShort": "{{count}} source",
+    "viewSourcesShort_other": "{{count}} sources"
+  }
+}
