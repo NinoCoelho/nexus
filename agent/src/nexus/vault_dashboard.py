@@ -39,6 +39,7 @@ Format (mirrors ``data-table-plugin`` and ``kanban-plugin`` conventions)::
 
 from __future__ import annotations
 
+import posixpath
 import re
 from pathlib import PurePosixPath
 from typing import Any
@@ -55,6 +56,23 @@ _FENCE_RE = re.compile(r"```ya?ml\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _DASHBOARD_SECTION = re.compile(r"^##\s+Dashboard\s*$", re.MULTILINE | re.IGNORECASE)
 
 _SLUG_RE = re.compile(r"^[a-z0-9_][a-z0-9_\-]*$")
+
+# Supported widget kinds. Each one steers the agent's refresh prompt to a
+# specific output shape (chart fence, terse markdown report, single number).
+# Adding a kind = (1) accept it in `_normalize_widget`, (2) add a kind-specific
+# seed in the route's refresh handler, (3) handle rendering on the UI side.
+#
+# ``list`` was a separate kind in early versions but it's a degenerate case
+# of ``report`` (markdown can already render a bullet list); it's aliased to
+# ``report`` on read so old `_data.md` files still load.
+_WIDGET_KINDS = ("chart", "report", "kpi")
+_WIDGET_KIND_ALIASES = {"list": "report"}
+_WIDGET_REFRESH = ("manual", "daily")
+
+# Coarse size buckets for widgets in the grid. Stored on the widget config
+# so the user's choice survives reload. Absent ⇒ per-kind default applied
+# at render time (chart = md, report = md, kpi = sm).
+_WIDGET_SIZES = ("sm", "md", "lg")
 
 
 def dashboard_path(folder: str) -> str:
@@ -113,8 +131,32 @@ def _extract_dashboard_yaml(body: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _normalize_operation(op: dict[str, Any]) -> dict[str, Any] | None:
-    """Coerce an operation dict; return None if it's unsalvageable."""
+def _resolve_table_path(folder: str, table: str) -> str:
+    """Resolve an operation's ``table`` to a vault-absolute path.
+
+    Bare filenames (``issues.md``) and folder-relative paths (``./orders.md``,
+    ``../other/x.md``) are resolved against the dashboard's folder. Paths that
+    already contain a slash and don't start with ``./`` or ``../`` are treated
+    as vault-absolute and only normalized.
+    """
+    table = (table or "").strip()
+    if not table:
+        return ""
+    if "/" in table and not table.startswith("./") and not table.startswith("../"):
+        return posixpath.normpath(table)
+    folder = (folder or "").strip("/")
+    if folder:
+        return posixpath.normpath(posixpath.join(folder, table))
+    return posixpath.normpath(table)
+
+
+def _normalize_operation(op: dict[str, Any], folder: str = "") -> dict[str, Any] | None:
+    """Coerce an operation dict; return None if it's unsalvageable.
+
+    ``folder`` is the dashboard's folder; used to resolve folder-relative
+    ``table`` paths to vault-absolute paths so the UI can pass them straight
+    to /vault/datatable without further resolution.
+    """
     if not isinstance(op, dict):
         return None
     op_id = str(op.get("id") or "").strip()
@@ -132,9 +174,48 @@ def _normalize_operation(op: dict[str, Any]) -> dict[str, Any] | None:
     if op.get("icon"):
         out["icon"] = str(op["icon"])
     if kind == "form":
-        out["table"] = str(op.get("table") or "").strip()
+        out["table"] = _resolve_table_path(folder, str(op.get("table") or ""))
     if op.get("prefill") and isinstance(op["prefill"], dict):
         out["prefill"] = op["prefill"]
+    return out
+
+
+def _normalize_widget(w: dict[str, Any]) -> dict[str, Any] | None:
+    """Coerce a widget dict; return None if it's unsalvageable.
+
+    Shape::
+
+        {id, kind: chart|report|kpi|list, title, prompt,
+         refresh: manual|daily, last_refreshed_at: ISO|null,
+         order: int}
+    """
+    if not isinstance(w, dict):
+        return None
+    wid = str(w.get("id") or "").strip()
+    title = str(w.get("title") or "").strip()
+    kind = str(w.get("kind") or "").strip().lower()
+    kind = _WIDGET_KIND_ALIASES.get(kind, kind)
+    if not wid or not title or kind not in _WIDGET_KINDS:
+        return None
+    refresh = str(w.get("refresh") or "manual").strip().lower()
+    if refresh not in _WIDGET_REFRESH:
+        refresh = "manual"
+    out: dict[str, Any] = {
+        "id": wid,
+        "kind": kind,
+        "title": title,
+        "prompt": str(w.get("prompt") or "").strip(),
+        "refresh": refresh,
+        "order": int(w.get("order", 0)),
+    }
+    raw_size = w.get("size")
+    if isinstance(raw_size, str) and raw_size.strip().lower() in _WIDGET_SIZES:
+        out["size"] = raw_size.strip().lower()
+    last = w.get("last_refreshed_at")
+    if isinstance(last, str) and last:
+        out["last_refreshed_at"] = last
+    else:
+        out["last_refreshed_at"] = None
     return out
 
 
@@ -145,6 +226,7 @@ def default_dashboard(folder: str) -> dict[str, Any]:
         "title": _folder_basename(folder),
         "chat_session_id": None,
         "operations": [],
+        "widgets": [],
         "exists": False,
         "schema_version": SCHEMA_VERSION,
     }
@@ -171,15 +253,24 @@ def read_dashboard(folder: str) -> dict[str, Any]:
     operations: list[dict[str, Any]] = []
     if isinstance(raw_ops, list):
         for op in raw_ops:
-            norm = _normalize_operation(op) if isinstance(op, dict) else None
+            norm = _normalize_operation(op, folder) if isinstance(op, dict) else None
             if norm is not None:
                 operations.append(norm)
     operations.sort(key=lambda o: o.get("order", 0))
+    raw_widgets = data.get("widgets")
+    widgets: list[dict[str, Any]] = []
+    if isinstance(raw_widgets, list):
+        for w in raw_widgets:
+            norm_w = _normalize_widget(w) if isinstance(w, dict) else None
+            if norm_w is not None:
+                widgets.append(norm_w)
+    widgets.sort(key=lambda w: w.get("order", 0))
     return {
         "folder": folder,
         "title": str(data.get("title") or _folder_basename(folder)),
         "chat_session_id": data.get("chat_session_id") or None,
         "operations": operations,
+        "widgets": widgets,
         "exists": True,
         "schema_version": int(data.get("schema_version") or SCHEMA_VERSION),
     }
@@ -191,6 +282,7 @@ def _serialize(dashboard: dict[str, Any]) -> str:
         "title": dashboard.get("title") or _folder_basename(dashboard.get("folder", "")),
         "chat_session_id": dashboard.get("chat_session_id"),
         "operations": dashboard.get("operations", []),
+        "widgets": dashboard.get("widgets", []),
         "schema_version": SCHEMA_VERSION,
     }
     fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False).rstrip()
@@ -210,10 +302,17 @@ def write_dashboard(folder: str, dashboard: dict[str, Any]) -> dict[str, Any]:
         "chat_session_id": dashboard.get("chat_session_id") or None,
         "operations": [
             op for op in (
-                _normalize_operation(o) if isinstance(o, dict) else None
+                _normalize_operation(o, folder) if isinstance(o, dict) else None
                 for o in (dashboard.get("operations") or [])
             )
             if op is not None
+        ],
+        "widgets": [
+            w for w in (
+                _normalize_widget(o) if isinstance(o, dict) else None
+                for o in (dashboard.get("widgets") or [])
+            )
+            if w is not None
         ],
     }
     vault.write_file(path, _serialize(payload))
@@ -231,6 +330,7 @@ def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
         "title": current.get("title"),
         "chat_session_id": current.get("chat_session_id"),
         "operations": current.get("operations", []),
+        "widgets": current.get("widgets", []),
     }
     if "title" in patch and patch["title"] is not None:
         merged["title"] = str(patch["title"])
@@ -238,12 +338,14 @@ def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
         merged["chat_session_id"] = patch["chat_session_id"] or None
     if "operations" in patch and isinstance(patch["operations"], list):
         merged["operations"] = patch["operations"]
+    if "widgets" in patch and isinstance(patch["widgets"], list):
+        merged["widgets"] = patch["widgets"]
     return write_dashboard(folder, merged)
 
 
 def upsert_operation(folder: str, op: dict[str, Any]) -> dict[str, Any]:
     """Append or replace an operation by id. Materializes the file."""
-    norm = _normalize_operation(op)
+    norm = _normalize_operation(op, folder)
     if norm is None:
         raise ValueError("operation missing required fields (id, label, kind, valid kind)")
     if not _SLUG_RE.match(norm["id"]):
@@ -269,6 +371,53 @@ def delete_operation(folder: str, op_id: str) -> dict[str, Any]:
 def set_chat_session(folder: str, session_id: str | None) -> dict[str, Any]:
     """Persist the chat session id bound to this database."""
     return patch_dashboard(folder, {"chat_session_id": session_id})
+
+
+def upsert_widget(folder: str, widget: dict[str, Any]) -> dict[str, Any]:
+    """Append or replace a widget by id. Materializes the file."""
+    norm = _normalize_widget(widget)
+    if norm is None:
+        raise ValueError(
+            "widget missing required fields (id, title, kind ∈ "
+            f"{_WIDGET_KINDS})"
+        )
+    if not _SLUG_RE.match(norm["id"]):
+        raise ValueError(f"widget id {norm['id']!r} must be a slug")
+    current = read_dashboard(folder)
+    widgets = [w for w in current.get("widgets", []) if w.get("id") != norm["id"]]
+    if "order" not in widget:
+        norm["order"] = len(widgets)
+    widgets.append(norm)
+    widgets.sort(key=lambda w: w.get("order", 0))
+    return patch_dashboard(folder, {"widgets": widgets})
+
+
+def delete_widget(folder: str, widget_id: str) -> dict[str, Any]:
+    """Remove a widget by id and delete its result file (if any)."""
+    current = read_dashboard(folder)
+    widgets = [w for w in current.get("widgets", []) if w.get("id") != widget_id]
+    # Best-effort cleanup of the result file. Missing file is fine.
+    try:
+        from . import vault_widgets
+        vault_widgets.delete_widget_result(folder, widget_id)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
+    return patch_dashboard(folder, {"widgets": widgets})
+
+
+def set_widget_refreshed(
+    folder: str, widget_id: str, last_refreshed_at: str
+) -> dict[str, Any]:
+    """Stamp ``last_refreshed_at`` on a widget. No-op if missing."""
+    current = read_dashboard(folder)
+    widgets = list(current.get("widgets", []))
+    for w in widgets:
+        if w.get("id") == widget_id:
+            w["last_refreshed_at"] = last_refreshed_at
+            break
+    else:
+        return current
+    return patch_dashboard(folder, {"widgets": widgets})
 
 
 def delete_database(folder: str, *, confirm: str) -> dict[str, Any]:

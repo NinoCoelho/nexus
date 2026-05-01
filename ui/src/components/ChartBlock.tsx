@@ -155,6 +155,42 @@ function escapeMermaidLabel(s: string): string {
   return s.replace(/"/g, "'");
 }
 
+// Curated 8-color palette used for every nexus-chart bar/line/pie. Hues are
+// spaced ~45° apart on a Tailwind-ish wheel so adjacent bars always read as
+// distinct, and saturation/lightness sit in a band that survives both light
+// and dark backgrounds (mermaid renders charts on a transparent SVG so we
+// don't need separate light/dark sets — the band is the compromise).
+//
+// Default mermaid xychart palette is a single muted grey; without an init
+// directive every bar comes out the same washed-out colour. The init block
+// below threads this palette through ``xyChart.plotColorPalette`` (bars +
+// lines) and ``pie1..pie8`` (pie slices).
+const CHART_PALETTE = [
+  "#3b82f6", // blue
+  "#10b981", // emerald
+  "#f59e0b", // amber
+  "#ef4444", // red
+  "#8b5cf6", // violet
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#f97316", // orange
+];
+
+function chartInitDirective(): string {
+  const palette = CHART_PALETTE.join(", ");
+  const pieVars = CHART_PALETTE.reduce<Record<string, string>>(
+    (acc, hex, i) => ({ ...acc, [`pie${i + 1}`]: hex }),
+    {},
+  );
+  const themeVariables = {
+    xyChart: { plotColorPalette: palette },
+    ...pieVars,
+  };
+  // Mermaid expects the init JSON on a single line; the directive itself must
+  // start the source so xychart-beta / pie pick it up.
+  return `%%{init: ${JSON.stringify({ theme: "base", themeVariables })}}%%`;
+}
+
 function specToMermaid(spec: ChartSpec): string {
   const points = coerceDataPoints(spec.data, spec.x, spec.y);
   const type = spec.type ?? "bar";
@@ -162,10 +198,12 @@ function specToMermaid(spec: ChartSpec): string {
 
   if (!points.length) return "";
 
+  const init = chartInitDirective();
+
   if (type === "pie") {
     const header = title ? `pie title ${title}` : "pie";
     const rows = points.map((p) => `    "${escapeMermaidLabel(p.x)}" : ${p.y}`);
-    return [header, ...rows].join("\n");
+    return [init, header, ...rows].join("\n");
   }
 
   const labels = points.map((p) => `"${escapeMermaidLabel(p.x)}"`).join(", ");
@@ -176,6 +214,7 @@ function specToMermaid(spec: ChartSpec): string {
   const seriesKw = type === "line" ? "line" : "bar";
 
   return [
+    init,
     "xychart-beta",
     titleLine,
     `    x-axis [${labels}]`,

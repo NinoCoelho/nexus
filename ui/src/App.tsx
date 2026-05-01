@@ -666,6 +666,7 @@ export default function App() {
                   setDataSelectedPath(null);
                   setDataDiagramFolder(null);
                 }}
+                onOpenInVault={handleOpenInVault}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>

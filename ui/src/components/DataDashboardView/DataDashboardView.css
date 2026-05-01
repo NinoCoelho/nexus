@@ -294,3 +294,182 @@
   display: flex;
   gap: 6px;
 }
+
+/* ── Widgets ───────────────────────────────────────────────────────── */
+
+.data-dash-widgets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.data-dash-widgets-header {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.data-dash-widgets-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.data-dash-widget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+}
+
+.data-dash-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--bg-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  min-height: 160px;
+  min-width: 0; /* let inner mermaid SVG shrink instead of overflowing */
+}
+
+/* Coarse size buckets. Per-kind defaults (chart=md, report=md, kpi=sm) are
+ * applied at render time by the WidgetGrid component as a `--size-*` class.
+ * The column spans are advisory: with `repeat(auto-fill, minmax(360px, 1fr))`
+ * the browser picks an integer track count, and a `span 2` widget that
+ * doesn't fit just collapses to a single column at narrow viewports. */
+.data-dash-widget--size-sm {
+  grid-column: span 1;
+  min-height: 140px;
+}
+.data-dash-widget--size-md {
+  grid-column: span 2;
+  min-height: 220px;
+}
+.data-dash-widget--size-lg {
+  grid-column: span 3;
+  min-height: 320px;
+}
+
+/* Charts always need a bit more vertical room regardless of the bucket. */
+.data-dash-widget--chart.data-dash-widget--size-sm {
+  min-height: 220px;
+}
+.data-dash-widget--chart.data-dash-widget--size-md {
+  min-height: 280px;
+}
+.data-dash-widget--chart.data-dash-widget--size-lg {
+  min-height: 360px;
+}
+
+@media (max-width: 760px) {
+  /* Narrow viewports: every widget collapses to a single column. */
+  .data-dash-widget--size-md,
+  .data-dash-widget--size-lg {
+    grid-column: span 1;
+  }
+}
+
+.data-dash-widget-sizes {
+  display: flex;
+  gap: 2px;
+  margin-right: 4px;
+}
+
+.data-dash-widget-size-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-faint);
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  line-height: 1;
+}
+.data-dash-widget-size-btn:hover {
+  background: var(--bg-panel, var(--bg-soft));
+  color: var(--fg);
+}
+.data-dash-widget-size-btn--active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.data-dash-widget--kpi {
+  align-items: stretch;
+}
+
+.data-dash-widget-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-dash-widget-icon {
+  font-size: 14px;
+}
+
+.data-dash-widget-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-dash-widget-stale {
+  font-size: 10px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.data-dash-widget-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.data-dash-widget-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-soft);
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.data-dash-widget-btn:hover:not(:disabled) {
+  background: var(--bg-panel, var(--bg-soft));
+  color: var(--fg);
+  border-color: var(--accent-lo);
+}
+.data-dash-widget-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.data-dash-widget-body {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--fg);
+  overflow-x: auto;
+}
+
+.data-dash-widget-body :is(p, ul, ol) {
+  margin: 4px 0;
+}
+
+.data-dash-widget--kpi .data-dash-widget-body {
+  font-size: 28px;
+  font-weight: 700;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
