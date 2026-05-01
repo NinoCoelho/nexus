@@ -36,6 +36,10 @@ dependencies = [
     # (`nexus_kb_search` tool) to retrieve sections from the in-app knowledge
     # base without inflating the system prompt.
     "rank_bm25>=0.2.2",
+    # PDF text extraction for multimodal document attachments when the
+    # active model can't accept a native PDF block (i.e. anything except
+    # Anthropic Claude). Pure Python; small.
+    "pypdf>=4.0",
 ]
 
 [tool.uv.sources]

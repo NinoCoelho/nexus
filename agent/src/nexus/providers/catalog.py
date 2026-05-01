@@ -120,6 +120,8 @@ Capability = Literal[
     "vision",     # accepts image inputs
     "audio",      # speech in or out (whisper, tts) — usually NOT a chat model
     "embedding",  # embeddings only — never a chat model
+    "image",      # generates image OUTPUT (gpt-image-1, gemini-2.5-flash-image)
+    "document",   # accepts native document (PDF) input blocks
 ]
 
 
@@ -196,3 +198,50 @@ def find(provider_id: str) -> ProviderCatalogEntry | None:
         if e.id == provider_id:
             return e
     return None
+
+
+@lru_cache(maxsize=1)
+def _model_name_to_capabilities() -> dict[str, set[str]]:
+    """Walk the catalog and build a flat ``{model_name: {capabilities}}`` map.
+
+    Cached for the process lifetime; invalidated only by
+    ``load_catalog.cache_clear()`` in tests. The same model id can appear
+    under multiple providers (e.g. ``gemini-2.5-flash`` is also exposed by
+    OpenRouter); we union their capabilities so the lookup is conservative
+    — if any provider tags it ``"vision"``, the encoder treats it as
+    vision-capable.
+    """
+    out: dict[str, set[str]] = {}
+    for entry in load_catalog():
+        for model in entry.default_models:
+            out.setdefault(model.id, set()).update(model.capabilities)
+    return out
+
+
+def capabilities_for_model_name(model_name: str) -> set[str]:
+    """Return the capability tags for a resolved upstream model name.
+
+    Used by the LLM provider encoders to decide whether to pass image /
+    audio / document parts through natively or fall back to text. Returns
+    an empty set for unknown models — the encoder then conservatively
+    drops non-text parts with a breadcrumb so we never send shapes the
+    upstream rejects with HTTP 400.
+
+    Strips a few known prefixes (``openrouter/``, ``models/``) so e.g.
+    ``models/gemini-2.5-flash`` and ``gemini-2.5-flash`` resolve the same.
+    """
+    if not model_name:
+        return set()
+    table = _model_name_to_capabilities()
+    if model_name in table:
+        return table[model_name]
+    for prefix in ("models/", "openrouter/"):
+        if model_name.startswith(prefix):
+            stripped = model_name[len(prefix):]
+            if stripped in table:
+                return table[stripped]
+    if "/" in model_name:
+        tail = model_name.rsplit("/", 1)[-1]
+        if tail in table:
+            return table[tail]
+    return set()

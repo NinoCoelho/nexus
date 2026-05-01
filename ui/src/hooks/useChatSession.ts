@@ -149,11 +149,16 @@ export function useChatSession(
     const hasAttachments = state.attachments.length > 0;
     if ((!rawText && !hasAttachments) || state.thinking) return;
 
-    let text = rawText;
-    if (hasAttachments) {
-      const refs = state.attachments.map((a) => `[${a.name}](vault://${a.vaultPath})`).join("\n");
-      text = text ? `${text}\n\n${refs}` : refs;
-    }
+    // Attachments now ride a structured `attachments` field on the request
+    // body; the backend translates each entry into a multipart `ContentPart`
+    // so vision-capable models receive the image/audio/document bytes
+    // natively. We no longer splice `[name](vault://path)` markdown links
+    // into the user message text — the chat bubble renders the attachment
+    // chips from `userMsg.attachments` directly.
+    const text = rawText;
+    const attachmentsForRequest = hasAttachments
+      ? state.attachments.map((a) => ({ vault_path: a.vaultPath }))
+      : undefined;
     const isHidden = text.startsWith(HIDDEN_SEED_MARKER);
     const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...state.attachments] : undefined };
     const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true };
@@ -215,7 +220,7 @@ export function useChatSession(
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail);
         }
-      }, abortController.signal, sendModel, { bypassSecretGuard });
+      }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest });
 
       if (!sawDone && !abortController.signal.aborted) {
         // Server closed the stream without a terminal `done`. Pull persisted

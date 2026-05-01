@@ -11,7 +11,8 @@ from typing import Any
 import yaml
 
 _VAULT_ROOT = Path("~/.nexus/vault").expanduser()
-_MAX_SIZE = 1 * 1024 * 1024  # 1 MiB
+_MAX_SIZE = 1 * 1024 * 1024  # 1 MiB — text writes
+_MAX_BINARY_SIZE = 32 * 1024 * 1024  # 32 MiB — images/audio/pdf attachments
 _SKIP_DIRS = {"node_modules", "__pycache__"}
 
 
@@ -367,8 +368,10 @@ def move(from_path: str, to_path: str) -> None:
 
 
 def write_file_bytes(rel_path: str, data: bytes) -> None:
-    if len(data) > _MAX_SIZE:
-        raise ValueError("content exceeds 1 MiB limit")
+    if len(data) > _MAX_BINARY_SIZE:
+        raise ValueError(
+            f"content exceeds {_MAX_BINARY_SIZE // (1024 * 1024)} MiB limit"
+        )
     root = _vault_root()
     full = _safe_resolve(rel_path, root)
     full.parent.mkdir(parents=True, exist_ok=True)

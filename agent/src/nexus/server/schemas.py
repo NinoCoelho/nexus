@@ -7,9 +7,24 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class Attachment(BaseModel):
+    """One file attached to a chat message.
+
+    The UI uploads files to ``~/.nexus/vault/uploads/`` first (via
+    ``POST /vault/upload``) and then references them here by their
+    vault-relative path. The chat route resolves each path into a
+    ``ContentPart`` (image / audio / document) before handing the
+    message to the agent loop.
+    """
+
+    vault_path: str
+    mime_type: str | None = None  # sniffed from extension when absent
+
+
 class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str
+    attachments: list[Attachment] = Field(default_factory=list)
     context: str | None = None
     model: str | None = None
 

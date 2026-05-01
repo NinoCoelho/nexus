@@ -152,11 +152,31 @@ async def chat(
 
     plan_data: list[dict[str, Any]] | None = None
 
+    # Resolve any attachments from the request into ``ContentPart``s so the
+    # agent loop can build a multipart user message. Empty list when no
+    # attachments — call signature stays backwards-compatible.
+    attachment_parts: list[Any] = []
+    if req.attachments:
+        from ...agent.llm import ContentPart as _CP
+        from ...multimodal import sniff_mime as _sniff_mime
+
+        for att in req.attachments:
+            mime = att.mime_type or _sniff_mime(att.vault_path)
+            kind = (
+                "image" if mime.startswith("image/")
+                else "audio" if mime.startswith("audio/")
+                else "document"
+            )
+            attachment_parts.append(
+                _CP(kind=kind, vault_path=att.vault_path, mime_type=mime)
+            )
+
     try:
         turn = await a.run_turn(
             req.message,
             history=session.history,
             context=session.context,
+            attachments=attachment_parts or None,
         )
     except LLMTransportError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))

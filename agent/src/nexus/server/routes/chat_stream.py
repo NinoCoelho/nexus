@@ -129,12 +129,38 @@ async def chat_stream_route(
 
         # Eagerly persist the user message so a crash between POST
         # and the first delta doesn't lose the prompt the user typed.
+        # When the request carries attachments, persist a multipart
+        # ``content`` list so reload-from-DB still shows the image/audio/
+        # document refs alongside the text.
+        attachment_parts: list[Any] = []
         try:
-            from ...agent.llm import ChatMessage as _CM, Role as _R
-            store.replace_history(
-                session.id,
-                pre_turn_history + [_CM(role=_R.USER, content=req.message)],
-            )
+            from ...agent.llm import ChatMessage as _CM, ContentPart as _CP, Role as _R
+            from ...multimodal import sniff_mime as _sniff_mime
+
+            def _classify_kind(mime: str) -> str:
+                if mime.startswith("image/"):
+                    return "image"
+                if mime.startswith("audio/"):
+                    return "audio"
+                return "document"
+
+            for att in (req.attachments or []):
+                mime = att.mime_type or _sniff_mime(att.vault_path)
+                attachment_parts.append(
+                    _CP(
+                        kind=_classify_kind(mime),
+                        vault_path=att.vault_path,
+                        mime_type=mime,
+                    )
+                )
+            if attachment_parts:
+                user_content: Any = (
+                    [_CP(kind="text", text=req.message)] if req.message else []
+                ) + attachment_parts
+                user_msg = _CM(role=_R.USER, content=user_content)
+            else:
+                user_msg = _CM(role=_R.USER, content=req.message)
+            store.replace_history(session.id, pre_turn_history + [user_msg])
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("pre-turn user message persist failed")
 
@@ -163,6 +189,7 @@ async def chat_stream_route(
                 context=session.context,
                 session_id=session.id,
                 model_id=resolved_model_id,
+                attachments=attachment_parts or None,
             ):
                 etype = event.get("type")
 

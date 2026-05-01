@@ -32,6 +32,18 @@ export type StreamEvent =
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null };
 
 /**
+ * One file attached to a chat message. The UI uploads the file to the vault
+ * first (via `POST /vault/upload`) and then references it here by path.
+ * The backend resolves each attachment into a multipart `ContentPart` so
+ * vision-capable models receive the bytes natively.
+ */
+export interface ChatAttachment {
+  vault_path: string;
+  /** Optional explicit mime type. The backend sniffs from the path when absent. */
+  mime_type?: string;
+}
+
+/**
  * Send a message to the agent via `POST /chat/stream` and process the SSE response.
  *
  * The response body is consumed as a text stream; each SSE frame
@@ -43,6 +55,8 @@ export type StreamEvent =
  * @param onEvent - Callback invoked for each received SSE event.
  * @param signal - `AbortSignal` to cancel the request (e.g. the Stop button).
  * @param model - Model identifier to use; omitting uses the server default.
+ * @param options - Extra knobs: `attachments` for multimodal input (image,
+ *   audio, document); `bypassSecretGuard` for the secret-guard escape hatch.
  * @throws {Error} If the server returns a non-2xx status.
  */
 export async function chatStream(
@@ -51,16 +65,20 @@ export async function chatStream(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   model?: string,
-  options?: { bypassSecretGuard?: boolean },
+  options?: { bypassSecretGuard?: boolean; attachments?: ChatAttachment[] },
 ): Promise<void> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options?.bypassSecretGuard) {
     headers["X-Bypass-Secret-Guard"] = "1";
   }
+  const body: Record<string, unknown> = { message, session_id, model };
+  if (options?.attachments && options.attachments.length > 0) {
+    body.attachments = options.attachments;
+  }
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, session_id, model }),
+    body: JSON.stringify(body),
     signal,
   });
 

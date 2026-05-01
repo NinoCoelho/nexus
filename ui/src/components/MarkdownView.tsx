@@ -15,6 +15,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { vaultRawUrl } from "../api";
 import {
   VaultLink,
   asVaultPath,
@@ -22,6 +23,19 @@ import {
   useVaultLinkPreviewFromContext,
   vaultUrlTransform,
 } from "./vaultLink";
+
+/**
+ * Resolve a `vault://path` (or bare `vault:path`) URL to a streaming `/vault/raw`
+ * URL the browser can actually load. Plain http(s) URLs and other schemes are
+ * passed through unchanged. Returns `undefined` for missing input so it can
+ * be spread into JSX `src`/`href` props safely.
+ */
+function rewriteVaultMediaUrl(src: string | undefined | null): string | undefined {
+  if (!src) return undefined;
+  const m = src.match(/^vault:\/\/(.+)$/i) ?? src.match(/^vault:(.+)$/i);
+  if (!m) return src;
+  return vaultRawUrl(m[1].replace(/^\/+/, ""));
+}
 
 // ChartBlock lazy-loaded on first nexus-chart fence.
 const LazyChartBlock = lazy(() => import("./ChartBlock"));
@@ -109,6 +123,10 @@ export default function MarkdownView({
       remarkPlugins={[remarkGfm]}
       urlTransform={urlTransform ?? vaultUrlTransform}
       components={{
+        img: ({ src, alt, ...rest }) => {
+          const url = rewriteVaultMediaUrl(typeof src === "string" ? src : undefined);
+          return <img src={url} alt={alt ?? ""} {...rest} />;
+        },
         code: ({ className, children: codeChildren, ...rest }) => {
           const match = /language-([\w-]+)/.exec(className || "");
           const lang = match?.[1];
