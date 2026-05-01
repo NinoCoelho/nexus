@@ -44,6 +44,10 @@ export function useAudioRecorder() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const cancelledRef = useRef(false);
+  // When set, the next stop delivers the blob to this callback instead of
+  // populating `audio` state — used by the press-and-hold / tap-tap flow that
+  // wants to transcribe and send without ever showing an attachment chip.
+  const onCompleteRef = useRef<((a: AudioAttachment) => void) | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -83,7 +87,12 @@ export function useAudioRecorder() {
         if (!cancelledRef.current) {
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
           const url = URL.createObjectURL(blob);
-          setAudio({ blob, url });
+          const cb = onCompleteRef.current;
+          onCompleteRef.current = null;
+          if (cb) cb({ blob, url });
+          else setAudio({ blob, url });
+        } else {
+          onCompleteRef.current = null;
         }
         stream.getTracks().forEach((t) => t.stop());
         setLevels(new Array(LEVEL_HISTORY).fill(0));
@@ -132,14 +141,19 @@ export function useAudioRecorder() {
     }
   }, [cleanupAnalyser, toast]);
 
-  const stopRecording = useCallback(() => {
-    cancelledRef.current = false;
-    mediaRecorderRef.current?.stop();
-    setRecording(false);
-  }, []);
+  const stopRecording = useCallback(
+    (opts?: { onComplete?: (audio: AudioAttachment) => void }) => {
+      cancelledRef.current = false;
+      onCompleteRef.current = opts?.onComplete ?? null;
+      mediaRecorderRef.current?.stop();
+      setRecording(false);
+    },
+    [],
+  );
 
   const cancelRecording = useCallback(() => {
     cancelledRef.current = true;
+    onCompleteRef.current = null;
     mediaRecorderRef.current?.stop();
     setRecording(false);
   }, []);

@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { transcribeAudio, uploadVaultFiles, type SlashCommand } from "../../api";
+import { uploadVaultFiles, type SlashCommand } from "../../api";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
@@ -32,10 +32,19 @@ interface AttachedFile {
   vaultPath: string;
 }
 
+interface ExtraAttachment extends AttachedFile {
+  /** Optional explicit mime type. Forces backend routing for ambiguous
+   * extensions — voice memos use ``audio/webm`` because ``.webm`` would
+   * otherwise sniff to ``video/webm`` and skip the audio transcription
+   * branch in ``materialize_message``. */
+  mimeType?: string;
+}
+
 interface SendOptions {
   text?: string;
   inPlace?: boolean;
   bypassSecretGuard?: boolean;
+  extraAttachments?: ExtraAttachment[];
 }
 
 interface Props {
@@ -146,28 +155,60 @@ export default function InputBar({
     setMention(detectMention(el.value, el.selectionStart ?? 0));
   };
 
-  const runTranscribeAndSend = async () => {
-    if (!audio) return;
-    setTranscribing(true);
+  const uploadAudioAndSend = async (blob: Blob, urlToRevoke?: string) => {
     try {
-      const { text } = await transcribeAudio(audio.blob);
+      // Filename pattern: voice-YYYYMMDD-HHMMSS.webm — sortable in the vault
+      // listing and obvious in the user-message attachment chip.
+      const stamp = new Date().toISOString().replace(/[:T]/g, "-").replace(/\..*/, "");
+      const file = new File([blob], `voice-${stamp}.webm`, { type: blob.type || "audio/webm" });
+      const result = await uploadVaultFiles([file], "uploads/voice");
+      const newAttachments: ExtraAttachment[] = result.uploaded.map((f) => ({
+        name: f.path.split("/").pop() ?? f.path,
+        vaultPath: f.path,
+        mimeType: "audio/webm",
+      }));
+      if (newAttachments.length === 0) {
+        toast.error(t("chat:input.uploadFailed"));
+        return;
+      }
+      // Voice memos send unconditionally — the secret guard would route
+      // through a modal whose "Send anyway" path doesn't carry
+      // ``extraAttachments``, so a typed prefix that tripped the regex would
+      // silently drop the recording. The audio is the primary signal here.
       const typed = value.trim();
-      const combined = typed ? `${text.trim()}\n\n${typed}` : text.trim();
-      if (!combined) { toast.error(t("chat:input.transcriptionNoText")); return; }
-      const proceed = () => {
-        if (audio) {
-          URL.revokeObjectURL(audio.url);
-          setAudio(null);
-        }
-        onChange("");
-        onSend(combined);
-      };
-      guardedSend(combined, proceed);
+      onChange("");
+      onSend({ text: typed, extraAttachments: newAttachments });
     } catch (err) {
-      toast.error(t("chat:input.transcriptionFailed"), { detail: err instanceof Error ? err.message : undefined });
+      toast.error(t("chat:input.uploadFailed"), { detail: err instanceof Error ? err.message : undefined });
     } finally {
+      if (urlToRevoke) URL.revokeObjectURL(urlToRevoke);
       setTranscribing(false);
     }
+  };
+
+  // Legacy path: keyboard-only Enter on a stored audio attachment. Now uploads
+  // the staged blob the same way the live recording flow does, so behavior
+  // stays consistent if `audio` ever lands in state via a future entry point.
+  const runTranscribeAndSend = async () => {
+    if (!audio) return;
+    const { blob, url } = audio;
+    setAudio(null);
+    await uploadAudioAndSend(blob, url);
+  };
+
+  // Stop the current recording and immediately upload + send the result.
+  // The audio rides as a chat attachment; the backend transcribes inline as
+  // part of preparing the model call (see multimodal.materialize_message),
+  // so the user perceives "recording → message in chat" with no separate
+  // transcribe round-trip and no input-bar pill.
+  const stopRecordingAndSend = () => {
+    // ``transcribing`` doubles as a "voice send in flight" guard so the
+    // synthetic click that follows pointerup (and the stop-button visual)
+    // doesn't re-enter startRecording before the blob lands.
+    setTranscribing(true);
+    stopRecording({
+      onComplete: (a) => { void uploadAudioAndSend(a.blob, a.url); },
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -216,13 +257,64 @@ export default function InputBar({
     return () => document.removeEventListener("mousedown", handler);
   }, [menuOpen]);
 
+  // Voice-button gesture state. The button supports two flows:
+  //   - tap → starts recording; a second tap stops + sends.
+  //   - press-and-hold → records while held; release stops + sends.
+  // We discriminate at pointerup: a release within HOLD_THRESHOLD_MS of
+  // pointerdown is treated as a tap (recording stays on); anything longer is
+  // a hold (auto-send on release).
+  const HOLD_THRESHOLD_MS = 250;
+  const pressStartedAtRef = useRef<number | null>(null);
+  const tapModeRef = useRef(false);
+
   const handleActionClick = () => {
+    // Click only handles the non-voice paths (stop/send/transcribe-existing).
+    // Voice start/stop is driven by pointerdown/pointerup so we can detect
+    // press-and-hold vs. tap. Without this guard a synthetic click that
+    // follows pointerup would fire stopRecordingAndSend a second time.
     if (busy && onStop) { onStop(); return; }
-    if (recording) { stopRecording(); return; }
+    if (recording) return;
     if (transcribing) return;
     if (audio) { void runTranscribeAndSend(); return; }
     if (hasContent) { guardedSend(value, () => onSend()); return; }
+    // Mic-only click (no pointer events, e.g. keyboard activation): start
+    // recording in tap-mode so a follow-up Enter/Space stops + sends.
+    tapModeRef.current = true;
     void startRecording();
+  };
+
+  const handleActionPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    // Only react to primary button presses; leave right-click etc. alone.
+    if (e.button !== 0) return;
+    if (busy || transcribing) return;
+    if (hasContent || audio) return;
+    if (recording && tapModeRef.current) {
+      // Second tap of tap-tap flow → stop + send immediately.
+      e.preventDefault();
+      tapModeRef.current = false;
+      pressStartedAtRef.current = null;
+      stopRecordingAndSend();
+      return;
+    }
+    if (recording) return;
+    e.preventDefault();
+    pressStartedAtRef.current = Date.now();
+    tapModeRef.current = false;
+    void startRecording();
+  };
+
+  const handleActionPointerUp = () => {
+    const startedAt = pressStartedAtRef.current;
+    if (startedAt == null) return;
+    pressStartedAtRef.current = null;
+    const elapsed = Date.now() - startedAt;
+    if (elapsed >= HOLD_THRESHOLD_MS) {
+      // Press-and-hold release → auto-send.
+      stopRecordingAndSend();
+    } else {
+      // Quick tap → stay in recording, await the next tap to send.
+      tapModeRef.current = true;
+    }
   };
 
   const isStop = busy || recording;
@@ -305,6 +397,10 @@ export default function InputBar({
           <button
             className={`input-send-btn${isStop ? " input-stop-btn" : ""}${!hasContent && !isStop ? " input-send-btn--mic" : ""}`}
             onClick={handleActionClick}
+            onPointerDown={handleActionPointerDown}
+            onPointerUp={handleActionPointerUp}
+            onPointerLeave={handleActionPointerUp}
+            onPointerCancel={handleActionPointerUp}
             disabled={disabled && !busy}
             aria-label={isStop ? t("chat:input.stop") : hasContent ? t("chat:input.send") : t("chat:input.voiceMessage")}
           >

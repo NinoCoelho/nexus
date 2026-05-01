@@ -138,15 +138,44 @@ export function useChatSession(
     let overrideText: string | undefined;
     let inPlace = false;
     let bypassSecretGuard = false;
+    // ``extraAttachments`` rides through ``onSend`` from the input bar's voice
+    // flow: the recording is uploaded to the vault and we want it to land on
+    // the same turn as the (possibly empty) typed text without a state-update
+    // round-trip through ``state.attachments``. The optional ``mimeType``
+    // forces the backend to treat the file as audio — webm sniffs to
+    // ``video/webm`` by default, which would otherwise route through the
+    // document branch and skip transcription.
+    type ExtraAtt = { name: string; vaultPath: string; mimeType?: string };
+    let extraAttachments: ExtraAtt[] = [];
     if (typeof override === "string") { overrideText = override; }
     else if (override && typeof override === "object") {
-      const o = override as { text?: unknown; inPlace?: unknown; bypassSecretGuard?: unknown };
+      const o = override as {
+        text?: unknown;
+        inPlace?: unknown;
+        bypassSecretGuard?: unknown;
+        extraAttachments?: unknown;
+      };
       if (typeof o.text === "string") overrideText = o.text;
       if (typeof o.inPlace === "boolean") inPlace = o.inPlace;
       if (typeof o.bypassSecretGuard === "boolean") bypassSecretGuard = o.bypassSecretGuard;
+      if (Array.isArray(o.extraAttachments)) {
+        extraAttachments = o.extraAttachments.flatMap((a): ExtraAtt[] => {
+          if (!a || typeof a !== "object") return [];
+          const r = a as { name?: unknown; vaultPath?: unknown; mimeType?: unknown };
+          if (typeof r.vaultPath !== "string" || typeof r.name !== "string") return [];
+          return [{
+            name: r.name,
+            vaultPath: r.vaultPath,
+            ...(typeof r.mimeType === "string" ? { mimeType: r.mimeType } : {}),
+          }];
+        });
+      }
     }
     const rawText = (overrideText ?? state.input).trim();
-    const hasAttachments = state.attachments.length > 0;
+    const allAttachments: ExtraAtt[] = extraAttachments.length > 0
+      ? [...state.attachments, ...extraAttachments]
+      : state.attachments;
+    const hasAttachments = allAttachments.length > 0;
     if ((!rawText && !hasAttachments) || state.thinking) return;
 
     // Attachments now ride a structured `attachments` field on the request
@@ -157,10 +186,13 @@ export function useChatSession(
     // chips from `userMsg.attachments` directly.
     const text = rawText;
     const attachmentsForRequest = hasAttachments
-      ? state.attachments.map((a) => ({ vault_path: a.vaultPath }))
+      ? allAttachments.map((a) => ({
+          vault_path: a.vaultPath,
+          ...(a.mimeType ? { mime_type: a.mimeType } : {}),
+        }))
       : undefined;
     const isHidden = text.startsWith(HIDDEN_SEED_MARKER);
-    const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...state.attachments] : undefined };
+    const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...allAttachments] : undefined };
     const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true };
     // In-place resume: keep the trailing assistant, clear its partial flag,
     // mark it streaming, let delta/tool events append to it. No user bubble.
