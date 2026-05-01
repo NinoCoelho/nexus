@@ -173,9 +173,34 @@ def _build_save_paths(
 
 async def handle_image_gen_tool(args: dict[str, Any]) -> str:
     """Dispatcher for ``generate_image`` tool invocations."""
-    prompt = (args.get("prompt") or "").strip()
+    log.warning("generate_image: invoked with args=%r", args)
+    # Accept a handful of common aliases — local-quantised models often
+    # emit ``text`` / ``description`` / ``query`` instead of ``prompt``,
+    # and the tool spec only documents ``prompt``. Cheaper than failing
+    # the call and watching the agent burn 30 retries on the same shape.
+    prompt = (
+        args.get("prompt")
+        or args.get("text")
+        or args.get("description")
+        or args.get("query")
+        or args.get("input")
+        or ""
+    )
+    if isinstance(prompt, str):
+        prompt = prompt.strip()
     if not prompt:
-        return json.dumps({"ok": False, "error": "`prompt` is required"})
+        return json.dumps(
+            {
+                "ok": False,
+                "error": (
+                    "missing required `prompt` field. Call like "
+                    '{"prompt": "a calm orange tabby on a sunlit roof", '
+                    '"provider": "openai"}. '
+                    f"Received keys: {sorted(args.keys())!r}. "
+                    "Stop retrying with the same shape and supply a `prompt`."
+                ),
+            }
+        )
 
     provider = (args.get("provider") or "openai").strip().lower()
     if provider not in {"openai", "gemini"}:
