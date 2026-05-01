@@ -10,11 +10,15 @@ import asyncio
 import json
 import logging
 import os
+import re
+import shutil
 from collections.abc import AsyncIterator
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from pydantic import BaseModel
 
@@ -40,6 +44,10 @@ from ..session_store import SessionStore
 
 class SkillUpdate(BaseModel):
     body: str
+
+# Mirrors ``nexus.skills.registry._NAME_RE`` — kept local so the import
+# route can validate without reaching into a private module attribute.
+_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +142,182 @@ async def update_skill(
         body=s.body,
         derived_from=_derived_from_dto(s),
     )
+
+
+@router.delete("/skills/{name}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_skill(
+    name: str,
+    registry: SkillRegistry = Depends(get_registry),
+) -> Response:
+    """Remove a skill directory from disk and reload the registry.
+
+    Mirrors the agent's ``skill_manage("delete")`` action — including
+    the manager's ``shutil.rmtree`` of the skill directory — so deleting
+    via the UI and via the agent loop produce the same end state. Bundled
+    skills are deletable by design: the seeded-marker still records they
+    were copied once, so they don't get re-seeded on the next daemon
+    start (only newly-bundled skills do).
+    """
+    try:
+        registry.get(name)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no such skill: {name!r}")
+    manager = SkillManager(registry)
+    result = manager.invoke("delete", {"name": name})
+    if not result.ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/skills/export/archive")
+async def export_skills_archive(
+    registry: SkillRegistry = Depends(get_registry),
+) -> Response:
+    """Stream a ZIP of every skill directory under ``~/.nexus/skills/``.
+
+    Bundled, user-edited, and agent-authored skills all ride in the same
+    archive so the round-trip via :func:`import_skills_archive` produces
+    a faithful snapshot — including ``meta.json`` (trust tier, authored
+    timestamp, derived-from provenance). The seeded-builtins marker file
+    is intentionally excluded so importing on a fresh host re-asserts
+    seeding behavior from the new bundle.
+    """
+    import io
+    import zipfile
+
+    skills_dir: Path = registry._dir
+    if not skills_dir.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="skills directory does not exist",
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for entry in sorted(skills_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            # Skip the seeded-builtins marker — it's regenerated per host
+            # and shipping it would mislead the import on a different box.
+            for file in entry.rglob("*"):
+                if not file.is_file():
+                    continue
+                arcname = file.relative_to(skills_dir).as_posix()
+                zf.write(file, arcname=arcname)
+
+    archive = buf.getvalue()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"nexus-skills-{timestamp}.zip"
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(archive)),
+        },
+    )
+
+
+@router.post("/skills/import/archive")
+async def import_skills_archive(
+    request: Request,
+    registry: SkillRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Extract an uploaded ZIP into ``~/.nexus/skills/`` and reload.
+
+    Accepts ``multipart/form-data`` with a single ``file`` field. The
+    archive's top-level entries are treated as skill directory names —
+    each must contain a ``SKILL.md`` to be considered valid. Existing
+    skills with the same name are **overwritten** (the user opted into
+    the import; matching the desktop "open zip → replace" mental model).
+
+    Returns a summary of what was imported / skipped so the UI can show
+    a useful toast. Path-traversal-safe: every member is resolved against
+    the skills root and rejected if it escapes.
+    """
+    import io
+    import zipfile
+
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="expected multipart/form-data with a 'file' field",
+        )
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="missing 'file' field",
+        )
+    raw = await upload.read()
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="empty upload",
+        )
+
+    skills_root: Path = registry._dir
+    skills_root_real = Path(os.path.realpath(skills_root))
+
+    imported: list[str] = []
+    skipped: list[dict[str, str]] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            # Group members by their top-level directory (the skill name).
+            by_skill: dict[str, list[zipfile.ZipInfo]] = {}
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                parts = info.filename.split("/", 1)
+                if len(parts) != 2 or not parts[0] or not parts[1]:
+                    continue
+                by_skill.setdefault(parts[0], []).append(info)
+
+            for skill_name, members in by_skill.items():
+                if not _NAME_RE.match(skill_name):
+                    skipped.append({"name": skill_name, "reason": "invalid name"})
+                    continue
+                has_skill_md = any(
+                    m.filename == f"{skill_name}/SKILL.md" for m in members
+                )
+                if not has_skill_md:
+                    skipped.append({"name": skill_name, "reason": "no SKILL.md"})
+                    continue
+
+                # Wipe any pre-existing skill of the same name first so an
+                # import is a clean replace, not a partial overlay.
+                dest = skills_root / skill_name
+                if dest.exists():
+                    shutil.rmtree(dest)
+                dest.mkdir(parents=True)
+
+                for m in members:
+                    rel = m.filename[len(skill_name) + 1:]  # drop leading "<skill>/"
+                    target = (dest / rel).resolve()
+                    try:
+                        target.relative_to(skills_root_real / skill_name)
+                    except ValueError:
+                        skipped.append(
+                            {"name": skill_name, "reason": "path traversal"}
+                        )
+                        shutil.rmtree(dest)
+                        break
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(m) as src, open(target, "wb") as out:
+                        out.write(src.read())
+                else:
+                    imported.append(skill_name)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid zip archive: {exc}",
+        )
+
+    if imported:
+        registry.reload()
+    return {"imported": imported, "skipped": skipped}
 
 
 @router.post("/chat", response_model=ChatReply)

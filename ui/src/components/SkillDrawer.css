@@ -56,6 +56,15 @@
   background: var(--bg-hover);
 }
 
+.drawer-close--danger {
+  color: var(--accent-danger, #c66);
+}
+
+.drawer-close--danger:hover {
+  color: #fff;
+  background: var(--accent-danger, #c66);
+}
+
 .drawer-body {
   flex: 1;
   overflow-y: auto;

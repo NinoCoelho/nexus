@@ -12,23 +12,31 @@ import { useTranslation } from "react-i18next";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import MarkdownView from "./MarkdownView";
+import Modal from "./Modal";
 import { useVaultLinkPreview } from "./vaultLink";
-import { getSkill, updateSkill, type SkillDetail } from "../api";
+import { useToast } from "../toast/ToastProvider";
+import { deleteSkill, getSkill, updateSkill, type SkillDetail } from "../api";
 import "./SkillDrawer.css";
 
 interface Props {
   skillName: string | null;
   onClose: () => void;
+  /** Fired after a successful delete so the host can refresh its skill
+   *  list / graph. The drawer always closes itself first. */
+  onDeleted?: (name: string) => void;
 }
 
-export default function SkillDrawer({ skillName, onClose }: Props) {
+export default function SkillDrawer({ skillName, onClose, onDeleted }: Props) {
   const { t } = useTranslation("skillWizard");
+  const toast = useToast();
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { onPreview, modal } = useVaultLinkPreview();
 
   useEffect(() => {
@@ -73,6 +81,27 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
     setSaveError(null);
   }
 
+  async function handleDelete() {
+    if (!skillName) return;
+    setConfirmDelete(false);
+    setDeleting(true);
+    try {
+      await deleteSkill(skillName);
+      toast.success(`Deleted skill "${skillName}"`);
+      onDeleted?.(skillName);
+      // Broadcast so any open graph / skill-list view refreshes without
+      // having to thread a revision counter through App.
+      window.dispatchEvent(new CustomEvent("nexus:skills-changed"));
+      onClose();
+    } catch (e) {
+      toast.error("Could not delete skill", {
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (!skillName) return null;
 
   return (
@@ -83,9 +112,19 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
           <span className="drawer-title">{skillName}</span>
           <div style={{ display: "flex", gap: 6 }}>
             {!loading && detail && !editing && (
-              <button className="drawer-close" onClick={() => setEditing(true)} aria-label="Edit">
-                Edit
-              </button>
+              <>
+                <button className="drawer-close" onClick={() => setEditing(true)} aria-label="Edit">
+                  Edit
+                </button>
+                <button
+                  className="drawer-close drawer-close--danger"
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={deleting}
+                  aria-label="Delete"
+                >
+                  {deleting ? "Deleting…" : "Delete"}
+                </button>
+              </>
             )}
             {editing && (
               <>
@@ -144,6 +183,17 @@ export default function SkillDrawer({ skillName, onClose }: Props) {
         </div>
       </div>
       {modal}
+      {confirmDelete && skillName && (
+        <Modal
+          kind="confirm"
+          danger
+          title={`Delete "${skillName}"?`}
+          message="The skill folder will be removed from disk. This can't be undone from the UI; only re-running discovery (or restoring from an export) brings it back."
+          confirmLabel="Delete"
+          onCancel={() => setConfirmDelete(false)}
+          onSubmit={handleDelete}
+        />
+      )}
     </>
   );
 }

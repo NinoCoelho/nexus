@@ -54,6 +54,44 @@ export async function updateSkill(name: string, body: string): Promise<SkillDeta
   return res.json();
 }
 
+/** Delete a skill from disk. The directory is removed and the registry
+ *  reloads on the server side. Returns nothing on success. */
+export async function deleteSkill(name: string): Promise<void> {
+  const res = await fetch(`${BASE}/skills/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  if (res.status === 204) return;
+  const detail = await res.json().catch(() => ({ detail: res.statusText }));
+  throw new Error(detail.detail || `Skill delete error: ${res.status}`);
+}
+
+/** URL the browser can open / fetch to download the skills ZIP archive. */
+export function exportSkillsArchiveUrl(): string {
+  return `${BASE}/skills/export/archive`;
+}
+
+export interface ImportSkillsResult {
+  imported: string[];
+  skipped: { name: string; reason: string }[];
+}
+
+/** Upload a ZIP of skill directories. Existing skills with matching names
+ *  are overwritten. Returns lists of imported / skipped entries so the
+ *  caller can show a summary toast. */
+export async function importSkillsArchive(file: File): Promise<ImportSkillsResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/skills/import/archive`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `Skill import error: ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Wizard discovery ───────────────────────────────────────────────────────
 //
 // `discoverSkills(userAsk)` calls the Phase-1 backend. The response is
