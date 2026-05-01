@@ -60,6 +60,28 @@ def test_capability_lookup_recognises_vision_models() -> None:
     assert "chat" not in caps_imggen
 
 
+def test_user_config_tags_extend_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model unknown to the catalog gets vision capability when the
+    user's ``[[models]] tags`` declares it. Escape hatch for local GGUFs."""
+    from nexus.config_schema import ModelEntry, NexusConfig
+
+    cfg = NexusConfig(
+        models=[
+            ModelEntry(
+                id="local-gemma/gemma-4-26b",
+                provider="local-gemma",
+                model_name="gemma-4-26b",
+                tags=["local", "vision"],
+            )
+        ]
+    )
+    monkeypatch.setattr("nexus.config_file.load", lambda: cfg)
+    caps = capabilities_for_model_name("gemma-4-26b")
+    assert "vision" in caps
+    # Non-capability tags ("local") are filtered out.
+    assert "local" not in caps
+
+
 async def test_materialize_passes_image_through_vision_capable_model() -> None:
     _write_vault("uploads/cat.png", _PNG)
     msg = ChatMessage(

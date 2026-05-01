@@ -218,14 +218,66 @@ def _model_name_to_capabilities() -> dict[str, set[str]]:
     return out
 
 
+_KNOWN_CAPABILITY_TAGS: frozenset[str] = frozenset(
+    [
+        "chat",
+        "tools",
+        "reasoning",
+        "vision",
+        "audio",
+        "embedding",
+        "image",
+        "document",
+    ]
+)
+
+
+def _user_config_capabilities(model_name: str) -> set[str]:
+    """Pull capability-like tags from the user's ``~/.nexus/config.toml``
+    ``[[models]]`` entries whose ``model_name`` (or trailing-path id)
+    matches.
+
+    This is the escape hatch for local GGUFs and any model the bundled
+    catalog doesn't know about: add ``tags = ["vision"]`` to a model
+    entry and the encoder will start sending image parts through it.
+    The user owns the assertion — if their llama-server isn't actually
+    set up with ``--mmproj``, the upstream call will fail loudly,
+    which is better than us silently dropping the bytes.
+    """
+    try:
+        from ..config_file import load as load_config
+
+        cfg = load_config()
+    except Exception:  # noqa: BLE001 — startup races / missing file
+        return set()
+    out: set[str] = set()
+    for m in cfg.models:
+        candidates = {m.model_name, m.id}
+        if "/" in m.id:
+            candidates.add(m.id.rsplit("/", 1)[-1])
+        if model_name in candidates:
+            for tag in m.tags:
+                if tag in _KNOWN_CAPABILITY_TAGS:
+                    out.add(tag)
+            break
+    return out
+
+
 def capabilities_for_model_name(model_name: str) -> set[str]:
     """Return the capability tags for a resolved upstream model name.
 
     Used by the LLM provider encoders to decide whether to pass image /
-    audio / document parts through natively or fall back to text. Returns
-    an empty set for unknown models — the encoder then conservatively
-    drops non-text parts with a breadcrumb so we never send shapes the
-    upstream rejects with HTTP 400.
+    audio / document parts through natively or fall back to text. Sources
+    (unioned, in order):
+
+    1. The bundled provider catalog (``catalog.json``) — covers the
+       cloud providers we ship metadata for.
+    2. The user's ``~/.nexus/config.toml`` ``[[models]]`` ``tags`` —
+       overrides for local GGUFs and unknown models.
+
+    Returns an empty set for fully-unknown models — the encoder then
+    conservatively drops non-text parts with a breadcrumb so we never
+    send shapes the upstream rejects with HTTP 400.
 
     Strips a few known prefixes (``openrouter/``, ``models/``) so e.g.
     ``models/gemini-2.5-flash`` and ``gemini-2.5-flash`` resolve the same.
@@ -233,15 +285,19 @@ def capabilities_for_model_name(model_name: str) -> set[str]:
     if not model_name:
         return set()
     table = _model_name_to_capabilities()
+    caps: set[str] = set()
     if model_name in table:
-        return table[model_name]
-    for prefix in ("models/", "openrouter/"):
-        if model_name.startswith(prefix):
-            stripped = model_name[len(prefix):]
-            if stripped in table:
-                return table[stripped]
-    if "/" in model_name:
-        tail = model_name.rsplit("/", 1)[-1]
-        if tail in table:
-            return table[tail]
-    return set()
+        caps = set(table[model_name])
+    else:
+        for prefix in ("models/", "openrouter/"):
+            if model_name.startswith(prefix):
+                stripped = model_name[len(prefix):]
+                if stripped in table:
+                    caps = set(table[stripped])
+                    break
+        if not caps and "/" in model_name:
+            tail = model_name.rsplit("/", 1)[-1]
+            if tail in table:
+                caps = set(table[tail])
+    caps |= _user_config_capabilities(model_name)
+    return caps
