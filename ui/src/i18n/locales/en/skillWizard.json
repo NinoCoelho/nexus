@@ -11,6 +11,17 @@
     "searching": "Looking for skills that match…",
     "choose": "Pick the option that fits best"
   },
+  "plan": {
+    "title": "Plan the skill",
+    "helper": "Review what Nexus is about to build. Add any extra context, then bundle related skills if you want them rolled in.",
+    "refineLabel": "Refine the scope",
+    "refineHelper": "Anything Nexus should keep in mind — extra use cases, sample inputs, edge cases. e.g. \"also use this for carousel and PowerPoint exports.\"",
+    "refinePlaceholder": "Optional — leave blank to build the skill as-is.",
+    "bundleLabel": "Bundle related skills",
+    "bundleHelper": "Select neighbours from the search to fold into the same skill (Nexus will study them in parallel and synthesise one consolidated SKILL.md).",
+    "pickAnother": "Pick a different skill",
+    "confirm": "Build now"
+  },
   "ask": {
     "placeholder": "e.g. Summarize my Slack DMs each morning",
     "helper": "Describe the capability in your own words. Nexus will search trusted skill collections and show you the options.",

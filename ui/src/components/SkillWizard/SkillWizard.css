@@ -456,3 +456,95 @@
 .skill-wizard-build-bg-btn {
   margin-top: 0.7rem;
 }
+
+/* ── plan step ─────────────────────────────────────────────────────── */
+
+.skill-wizard-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.skill-wizard-plan-card {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+}
+
+.skill-wizard-plan-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.skill-wizard-plan-label {
+  margin-top: 0.4rem;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+
+.skill-wizard-plan-sublabel {
+  margin: -0.4rem 0 0.4rem 0;
+}
+
+.skill-wizard-plan-bundle {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.skill-wizard-bundle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.skill-wizard-bundle-chip:hover {
+  color: var(--fg);
+  border-color: var(--fg-faint);
+}
+
+.skill-wizard-bundle-chip--on {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+
+.skill-wizard-bundle-chip--on:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.skill-wizard-bundle-chip-mark {
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.skill-wizard-bundle-chip-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22ch;
+}
+
+.skill-wizard-plan-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}

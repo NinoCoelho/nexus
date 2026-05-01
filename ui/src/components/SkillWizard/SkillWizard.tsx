@@ -40,7 +40,7 @@ import {
 } from "./buildStream";
 import "./SkillWizard.css";
 
-type Step = "ask" | "searching" | "choose" | "keys" | "build";
+type Step = "ask" | "searching" | "choose" | "keys" | "plan" | "build";
 
 type BuildState =
   | { kind: "success"; skillName: string }
@@ -60,6 +60,14 @@ export default function SkillWizard({ onClose, onSkillBuilt }: Props) {
   const [userAsk, setUserAsk] = useState("");
   const [candidates, setCandidates] = useState<SkillCandidate[]>([]);
   const [picked, setPicked] = useState<SkillCandidate | null>(null);
+  // Plan-step state — populated when the user reaches the Plan screen.
+  // ``planRefinement`` is appended to ``userAsk`` at build time so the
+  // synth model receives the user's extra context. ``bundledIds`` is the
+  // selected subset of related candidates (defaults to none — explicit
+  // opt-in, not opt-out) and replaces the implicit "all the rest" list
+  // we used to send to BuildStep.
+  const [planRefinement, setPlanRefinement] = useState("");
+  const [bundledIds, setBundledIds] = useState<string[]>([]);
   // Build session id, captured once the BuildStep POSTs /skills/wizard/build.
   // Used to hand off to the background tracker if the user dismisses the
   // wizard before the build finishes — closing the modal disconnects the
@@ -127,32 +135,64 @@ export default function SkillWizard({ onClose, onSkillBuilt }: Props) {
     } else if (step === "keys") {
       setStep("choose");
       setPicked(null);
+    } else if (step === "plan") {
+      // Plan → back to Keys if the candidate needs them, else Choose.
+      // Preserve the picked candidate so the user doesn't have to
+      // re-select if they only wanted to tweak refinement notes.
+      if (picked && picked.requires_keys.length > 0) setStep("keys");
+      else setStep("choose");
     }
-  }, [step]);
+  }, [step, picked]);
 
   const handlePick = useCallback((cand: SkillCandidate) => {
     setPicked(cand);
-    // Skip the keys step entirely when the candidate doesn't need any. The
-    // keys page just shows "no keys needed" + a Continue button — going
-    // straight to build is one click less and one screen less for the
-    // non-technical user this wizard is built for.
-    setStep(cand.requires_keys.length === 0 ? "build" : "keys");
+    // Reset any prior plan refinement so a different pick starts clean.
+    setPlanRefinement("");
+    setBundledIds([]);
+    // Keys step only shows up when the candidate actually needs keys —
+    // otherwise we go straight to Plan. Plan now sits between key setup
+    // (or pick) and build so the user can refine scope + bundle related
+    // skills before committing.
+    setStep(cand.requires_keys.length === 0 ? "plan" : "keys");
+  }, []);
+
+  const handleProceedToPlan = useCallback(() => {
+    setStep("plan");
   }, []);
 
   const handleProceedToBuild = useCallback(() => {
     setStep("build");
   }, []);
 
+  const handleToggleBundle = useCallback((id: string) => {
+    setBundledIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }, []);
+
+  // The userAsk that ultimately goes to /skills/wizard/build — original
+  // ask plus any refinement the user typed on the plan screen.
+  const augmentedUserAsk = useMemo(() => {
+    const refine = planRefinement.trim();
+    if (!refine) return userAsk;
+    return `${userAsk}\n\nAdditional scope from refinement:\n${refine}`;
+  }, [userAsk, planRefinement]);
+
   // Step counter shown in the header. Searching is a sub-state of "ask",
-  // so we collapse it visually as step 1; keys is 3, build is 4.
-  const stepIndex =
-    step === "ask" || step === "searching"
-      ? 1
-      : step === "choose"
-        ? 2
-        : step === "keys"
-          ? 3
-          : 4;
+  // so we collapse it visually as step 1; keys is 3, plan is 4, build is
+  // 5. When the picked candidate doesn't need keys we skip the Keys step
+  // entirely — the counter follows the visible flow rather than the
+  // hypothetical max so users don't see "Step 4 of 5" then jump to "5 of
+  // 5" without a 4 in sight.
+  const skipsKeys = !!picked && picked.requires_keys.length === 0;
+  const totalSteps = skipsKeys ? 4 : 5;
+  const stepIndex = (() => {
+    if (step === "ask" || step === "searching") return 1;
+    if (step === "choose") return 2;
+    if (step === "keys") return 3;
+    if (step === "plan") return skipsKeys ? 3 : 4;
+    return skipsKeys ? 4 : 5; // build
+  })();
 
   return (
     <div
@@ -165,7 +205,7 @@ export default function SkillWizard({ onClose, onSkillBuilt }: Props) {
         <div className="skill-wizard-header">
           <span className="skill-wizard-title">{t("title")}</span>
           <span className="skill-wizard-step-counter">
-            Step {stepIndex} of 4
+            Step {stepIndex} of {totalSteps}
           </span>
           <button
             type="button"
@@ -196,16 +236,26 @@ export default function SkillWizard({ onClose, onSkillBuilt }: Props) {
           {step === "keys" && picked && (
             <KeysStep
               candidate={picked}
-              onContinue={handleProceedToBuild}
+              onContinue={handleProceedToPlan}
+            />
+          )}
+          {step === "plan" && picked && (
+            <PlanStep
+              candidate={picked}
+              related={candidates.filter((c) => c.id !== picked.id)}
+              refinement={planRefinement}
+              onChangeRefinement={setPlanRefinement}
+              bundledIds={bundledIds}
+              onToggleBundle={handleToggleBundle}
+              onPickAnother={handleBack}
+              onConfirm={handleProceedToBuild}
             />
           )}
           {step === "build" && picked && (
             <BuildStep
               candidate={picked}
-              userAsk={userAsk}
-              relatedIds={candidates
-                .filter((c) => c.id !== picked.id)
-                .map((c) => c.id)}
+              userAsk={augmentedUserAsk}
+              relatedIds={bundledIds}
               language={i18n.language}
               onClose={handleCloseWithBackgroundHandoff}
               onSkillBuilt={(name) => onSkillBuilt?.(name)}
@@ -216,7 +266,7 @@ export default function SkillWizard({ onClose, onSkillBuilt }: Props) {
         </div>
 
         <div className="skill-wizard-footer">
-          {(step === "choose" || step === "keys") && (
+          {(step === "choose" || step === "keys" || step === "plan") && (
             <button
               type="button"
               className="skill-wizard-secondary-btn"
@@ -560,6 +610,126 @@ function KeysStep({
     </div>
   );
 }
+
+// ── plan step ──────────────────────────────────────────────────────────────
+
+interface PlanStepProps {
+  candidate: SkillCandidate;
+  related: SkillCandidate[];
+  refinement: string;
+  onChangeRefinement: (v: string) => void;
+  bundledIds: string[];
+  onToggleBundle: (id: string) => void;
+  /** Go back to the picker so the user can swap the primary skill. */
+  onPickAnother: () => void;
+  onConfirm: () => void;
+}
+
+function PlanStep({
+  candidate,
+  related,
+  refinement,
+  onChangeRefinement,
+  bundledIds,
+  onToggleBundle,
+  onPickAnother,
+  onConfirm,
+}: PlanStepProps) {
+  const { t } = useTranslation("skillWizard");
+  // Show at most six related candidates as togglable chips. Beyond that
+  // the chip strip becomes a wall of noise and the user is better off
+  // running another search. If they want a less-popular bundle they can
+  // go back to the picker — that's the explicit "pick another" path.
+  const bundleOptions = related.slice(0, 6);
+  return (
+    <div className="skill-wizard-step skill-wizard-plan">
+      <h2 className="skill-wizard-step-heading">{t("plan.title")}</h2>
+      <p className="skill-wizard-helper">{t("plan.helper")}</p>
+
+      <div className="skill-wizard-plan-card">
+        <h3 className="skill-wizard-candidate-title">{candidate.title}</h3>
+        <p className="skill-wizard-candidate-summary">{candidate.summary}</p>
+        {candidate.capabilities.length > 0 && (
+          <div className="skill-wizard-plan-caps">
+            {candidate.capabilities.map((cap) => (
+              <span key={cap} className="skill-wizard-key-chip">
+                {cap}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <label className="skill-wizard-plan-label" htmlFor="plan-refinement">
+        {t("plan.refineLabel")}
+      </label>
+      <p className="skill-wizard-helper skill-wizard-plan-sublabel">
+        {t("plan.refineHelper")}
+      </p>
+      <textarea
+        id="plan-refinement"
+        className="skill-wizard-textarea"
+        value={refinement}
+        onChange={(e) => onChangeRefinement(e.target.value)}
+        placeholder={t("plan.refinePlaceholder")}
+        rows={4}
+      />
+
+      {bundleOptions.length > 0 && (
+        <>
+          <label className="skill-wizard-plan-label">
+            {t("plan.bundleLabel")}
+          </label>
+          <p className="skill-wizard-helper skill-wizard-plan-sublabel">
+            {t("plan.bundleHelper")}
+          </p>
+          <ul className="skill-wizard-plan-bundle">
+            {bundleOptions.map((c) => {
+              const checked = bundledIds.includes(c.id);
+              return (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    className={
+                      "skill-wizard-bundle-chip"
+                      + (checked ? " skill-wizard-bundle-chip--on" : "")
+                    }
+                    onClick={() => onToggleBundle(c.id)}
+                    aria-pressed={checked}
+                    title={c.summary}
+                  >
+                    <span className="skill-wizard-bundle-chip-mark" aria-hidden="true">
+                      {checked ? "✓" : "+"}
+                    </span>
+                    <span className="skill-wizard-bundle-chip-title">{c.title}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+
+      <div className="skill-wizard-plan-actions">
+        <button
+          type="button"
+          className="skill-wizard-secondary-btn"
+          onClick={onPickAnother}
+        >
+          {t("plan.pickAnother")}
+        </button>
+        <button
+          type="button"
+          className="skill-wizard-primary-btn"
+          onClick={onConfirm}
+        >
+          {t("plan.confirm")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 // ── build step ─────────────────────────────────────────────────────────────
 

@@ -11,6 +11,17 @@
     "searching": "Procurando habilidades correspondentes…",
     "choose": "Escolha a opção que melhor combina"
   },
+  "plan": {
+    "title": "Planeje a habilidade",
+    "helper": "Revise o que o Nexus está prestes a construir. Adicione qualquer contexto extra e, se quiser, agrupe habilidades relacionadas.",
+    "refineLabel": "Ajuste o escopo",
+    "refineHelper": "Qualquer coisa que o Nexus deva ter em mente — casos de uso adicionais, entradas de exemplo, situações limítrofes. Ex.: \"use também para carrossel e exportações de PowerPoint.\"",
+    "refinePlaceholder": "Opcional — deixe em branco para construir a habilidade como está.",
+    "bundleLabel": "Agrupar habilidades relacionadas",
+    "bundleHelper": "Selecione vizinhos da busca para incluir na mesma habilidade (o Nexus vai estudá-los em paralelo e sintetizar um único SKILL.md consolidado).",
+    "pickAnother": "Escolher outra habilidade",
+    "confirm": "Construir agora"
+  },
   "ask": {
     "placeholder": "ex.: Resumir minhas DMs do Slack toda manhã",
     "helper": "Descreva a capacidade com suas palavras. O Nexus vai pesquisar coleções confiáveis de habilidades e mostrar as opções.",
