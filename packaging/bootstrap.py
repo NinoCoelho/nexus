@@ -1,7 +1,9 @@
-"""Launcher executed by the macOS bundle to start the Nexus FastAPI server.
+"""Launcher executed by the macOS / Windows bundle to start the Nexus FastAPI server.
 
-The Swift host app spawns this with the bundled standalone Python interpreter.
-Layout assumed at runtime (relative to this file):
+On macOS the Swift menu-bar host spawns this; on Windows the tray launcher
+(``packaging/windows/tray.pyw``) does. Both pass the bundled standalone
+Python interpreter as ``sys.executable``. Layout assumed at runtime
+(relative to this file):
 
     bootstrap.py
     site-packages/        # full venv contents
@@ -38,6 +40,21 @@ HOST_FILE = NEXUS_HOME / "host.json"
 TOKEN_FILE = NEXUS_HOME / "access_token"
 
 log = logging.getLogger("nexus.bootstrap")
+
+
+def _user_log_dir() -> Path:
+    """Standard per-user log directory for the host OS.
+
+    macOS  → ``~/Library/Logs/Nexus``
+    Windows → ``%LOCALAPPDATA%\\Nexus\\logs`` (falls back under home)
+    Linux   → ``~/.nexus/logs`` (matches the rest of Nexus state)
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "Nexus"
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "Nexus" / "logs"
+    return NEXUS_HOME / "logs"
 
 
 def _pick_free_port(host: str = "127.0.0.1") -> int:
@@ -118,7 +135,7 @@ def _start_llama(here: Path) -> tuple[subprocess.Popen | None, int | None, str |
         return None, None, None
 
     port = _pick_free_port()
-    log_path = Path.home() / "Library" / "Logs" / "Nexus" / "llama-server.log"
+    log_path = _user_log_dir() / "llama-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_path, "ab")
 

@@ -16,7 +16,7 @@
 - **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
-- **Packaged Mac app** — ships as `Nexus.app` with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh Mac. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
+- **Packaged desktop apps** — ships as `Nexus.app` (macOS) and `Nexus.exe` (Windows) with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh machine. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
 
 ---
 
@@ -45,9 +45,26 @@ cd ~/nexus/ui && npm run dev   # http://localhost:1890
 
 ---
 
-## Mac App
+## Desktop Apps
 
-Download `Nexus.app` from the [Releases page](https://github.com/NinoCoelho/nexus/releases). The app bundles the backend, web UI, and menu bar controls — no terminal required. You'll still need to set an API key (or rebuild from source with `--bundle-llm qwen-3b` to include a local model).
+Download the prebuilt bundle for your OS from the [Releases page](https://github.com/NinoCoelho/nexus/releases):
+
+- **macOS** (Apple Silicon) — `Nexus-macos-arm64.zip` → extract → drag `Nexus.app` to `/Applications`. Menu bar app with autostart and prefs.
+- **Windows** (x64) — `Nexus-windows-x64.zip` → extract anywhere → double-click `Nexus.exe`. System-tray app with the same controls (Open / Restart / Show Access Token / Logs / Quit).
+
+Both bundles ship a private CPython, all Python deps, the web UI, the bundled skills, and pre-downloaded embedding/spaCy models so the first launch works offline. You'll still need to set an API key (or rebuild from source with `--bundle-llm qwen-3b` to include a local model).
+
+### Building from source
+
+```bash
+# macOS (run on macOS arm64)
+bash packaging/build.sh                 # → dist/Nexus.app
+
+# Windows (run on Windows in PowerShell 7+)
+.\packaging\build.ps1                   # → dist\Nexus\ + dist\Nexus.zip
+```
+
+Tagged GitHub Releases are built automatically by `.github/workflows/release.yml`: publishing a release triggers parallel macOS and Windows runners that build their bundle and attach the zip as a release asset.
 
 ---
 
@@ -168,7 +185,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **In-Chat Search + Pins** | Cmd+Shift+F across the active session; pin assistant turns to a sidebar bookmarks list |
 | **Edit User Messages** | Pencil-affordance on user turns rewinds + re-runs the conversation from that point |
 | **Daemon Mode** | Background process with PID/log management and systemd / launchd / NSSM service installers |
-| **Desktop App** | Packaged `Nexus.app` macOS bundle with menu bar autostart and prefs (loopback-only bind; remote access via `nexus tunnel`) |
+| **Desktop Apps** | Packaged `Nexus.app` (macOS, menu bar) + `Nexus.exe` (Windows, system tray) — same bundled CPython + UI + models, autostart prefs, loopback-only bind; remote access via `nexus tunnel`. Tagged releases are built and attached automatically by `.github/workflows/release.yml`. |
 | **Mobile-Friendly** | Capacitor-friendly responsive layout; iOS Xcode project scaffolding included |
 | **One-Line Install** | `curl … | bash` clones, installs uv + deps, and writes a default config |
 | **Docker Image** | Single multi-stage `Dockerfile` + `docker-compose.yml` — backend + bundled UI on one port, persistent state on a named volume, loopback auth model preserved via an internal `socat` proxy |
@@ -804,7 +821,13 @@ nexus/
 │           ├── ApprovalDialog.tsx
 │           └── …
 ├── skills/                             # Bundled skills (seeded on first run)
-├── packaging/macos/                    # Nexus.app scaffolding
+├── packaging/
+│   ├── bootstrap.py                    # Shared launcher used by both bundles
+│   ├── build.sh                        # macOS .app build script
+│   ├── build.ps1                       # Windows .exe build script (PowerShell 7+)
+│   ├── macos/                          # Swift menu-bar host (NexusApp.swift, ServerController, …)
+│   └── windows/                        # Tray launcher (tray.pyw + Nexus.cmd) frozen into Nexus.exe
+├── .github/workflows/release.yml       # GitHub Release → builds macOS + Windows zips in parallel
 ├── install.sh                          # One-line installer
 ├── Dockerfile                          # Multi-stage container image (UI + backend)
 ├── docker-compose.yml                  # Single-service compose recipe
@@ -984,9 +1007,9 @@ uv run nexus daemon install --user    # systemd / launchd auto-start
 uv run nexus daemon uninstall --user
 ```
 
-#### macOS App
+#### Desktop Apps (macOS / Windows)
 
-A packaged `Nexus.app` bundle lives in `packaging/macos/`. Menu bar options cover autostart and port preferences. The app always binds to `127.0.0.1`; remote access goes through `nexus tunnel`.
+Prebuilt bundles for **macOS** (`Nexus.app`, menu bar) and **Windows** (`Nexus.exe`, system tray) are produced by `packaging/build.sh` and `packaging/build.ps1` respectively. Both bundle a private CPython + the UI + pre-downloaded models, always bind to `127.0.0.1`, and expose the same menu actions (Open / Restart / Show Access Token / Logs / Quit). Remote access goes through `nexus tunnel`. See `packaging/windows/README.md` for Windows-specific build notes; releases are produced automatically by `.github/workflows/release.yml`.
 
 #### Manual Server + UI
 
