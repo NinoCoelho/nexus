@@ -95,6 +95,7 @@ def build_tool_registry(
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
     from nexus.tools.image_gen_tool import GENERATE_IMAGE_TOOL, handle_image_gen_tool
+    from nexus.tools.ocr_tool import OCR_IMAGE_TOOL, handle_ocr_image_tool
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
     from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
@@ -257,6 +258,16 @@ def build_tool_registry(
         return await handle_image_gen_tool(args)
 
     registry.register(_SimpleToolHandler(GENERATE_IMAGE_TOOL, _generate_image))
+
+    # ocr_image — extract text from a vault image / scanned PDF using the
+    # engine declared under [ocr] in config.toml. Always advertised so
+    # the agent can surface a useful "configure OCR first" error when
+    # the user hasn't set [ocr] yet, rather than pretending the
+    # capability doesn't exist.
+    async def _ocr_image(args: dict) -> str:
+        return await handle_ocr_image_tool(args)
+
+    registry.register(_SimpleToolHandler(OCR_IMAGE_TOOL, _ocr_image))
 
     _mem_handler = MemoryHandler()
 

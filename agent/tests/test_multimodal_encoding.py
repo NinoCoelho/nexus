@@ -37,6 +37,11 @@ def _isolate_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The catalog is process-cached; clear it so other tests don't see
     # capability mutations leak across modules.
     load_catalog.cache_clear()
+    # Isolate from the real ``~/.nexus/config.toml`` — without this, any
+    # OCR/vision routing the user has configured leaks into the
+    # breadcrumb branches and changes the wording these tests assert.
+    monkeypatch.setattr("nexus.ocr._read_ocr_section", lambda: {})
+    monkeypatch.setattr("nexus.ocr._resolve_vision_model", lambda: None)
 
 
 def _write_vault(path: str, data: bytes) -> None:

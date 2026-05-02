@@ -174,16 +174,23 @@ async def materialize_message(message, capabilities: set[str]):
         if part.kind == "image":
             if "vision" in capabilities:
                 new_parts.append(part)
-            else:
-                new_parts.append(
-                    ContentPart(
-                        kind="text",
-                        text=(
-                            f"[image attached: {label} — current model does "
-                            "not support vision]"
-                        ),
-                    )
+                continue
+            # Non-vision model: leave a breadcrumb that nudges the agent
+            # toward the ``ocr_image`` tool, which routes through the
+            # model picked as the "Vision" role in Settings → Models.
+            from . import ocr as _ocr
+
+            hint = (
+                " — call `ocr_image` to extract text"
+                if _ocr.is_configured()
+                else " — current model does not support vision"
+            )
+            new_parts.append(
+                ContentPart(
+                    kind="text",
+                    text=f"[image attached: {path or label}{hint}]",
                 )
+            )
             continue
 
         if part.kind == "audio":
@@ -239,16 +246,23 @@ async def materialize_message(message, capabilities: set[str]):
                         text=f"[document attached: {label}]\n{text}",
                     )
                 )
-            else:
-                new_parts.append(
-                    ContentPart(
-                        kind="text",
-                        text=(
-                            f"[document attached: {label} — text extraction "
-                            "unavailable]"
-                        ),
-                    )
+                continue
+            # pypdf returned nothing (likely a scanned / image-only PDF).
+            # Hint the agent to call ``ocr_image`` instead of pretending
+            # we exhausted all options.
+            from . import ocr as _ocr
+
+            tail = (
+                " — likely scanned; call `ocr_image` to extract text"
+                if is_pdf(mime) and _ocr.is_configured()
+                else " — text extraction unavailable"
+            )
+            new_parts.append(
+                ContentPart(
+                    kind="text",
+                    text=f"[document attached: {path or label}{tail}]",
                 )
+            )
             continue
 
     return message.model_copy(update={"content": new_parts})

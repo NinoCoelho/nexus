@@ -77,6 +77,18 @@ bedrock = [
 markitdown = [
     "markitdown[all]>=0.0.1",
 ]
+# Local OCR engines for the multimodal image fallback + the ocr_image tool.
+# The ``llm`` engine (talking to a vision-capable endpoint like vLLM serving
+# datalab-to/chandra-ocr-2) needs no extra deps and rides the existing
+# provider layer. Pull this extra only if you want the pure-Python rapidocr
+# fallback or scanned-PDF rasterization. Install with:
+# `uv sync --extra ocr` (and `brew install poppler` for PDF support).
+ocr = [
+    "rapidocr-onnxruntime>=1.4",
+    "Pillow>=10.0",
+    "numpy>=1.26",
+    "pdf2image>=1.17",
+]
 
 [project.scripts]
 nexus = "nexus.cli:app"

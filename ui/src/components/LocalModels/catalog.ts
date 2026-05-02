@@ -25,6 +25,15 @@ export interface CatalogEntry {
   repo_id: string;
   /** Backing filename (not shown to the user). */
   filename: string;
+  /** Vision-language projector sidecar that ships in the same repo. When set,
+   *  the install flow downloads BOTH files and waits until the projector is
+   *  on disk before starting llama-server (which then loads it via --mmproj
+   *  so image inputs work). */
+  mmproj_filename?: string;
+  /** Routing role auto-assigned post-install when the matching field on
+   *  ``cfg.agent`` is empty. Currently only "vision" → ``agent.vision_model``,
+   *  which the OCR layer reads. */
+  role?: "vision";
 }
 
 export const CATALOG: CatalogEntry[] = [
@@ -77,5 +86,17 @@ export const CATALOG: CatalogEntry[] = [
     min_ram_gb: 32,
     repo_id: "unsloth/GLM-4.7-Flash-GGUF",
     filename: "GLM-4.7-Flash-Q4_K_M.gguf",
+  },
+  {
+    id: "chandra-ocr-2",
+    title: "Chandra OCR",
+    description: "Reads text from screenshots, photos, and scanned PDFs.",
+    badges: ["OCR", "Vision"],
+    approx_size_gb: 5.5,
+    min_ram_gb: 12,
+    repo_id: "prithivMLmods/chandra-ocr-2-GGUF",
+    filename: "chandra-ocr-2.Q8_0.gguf",
+    mmproj_filename: "chandra-ocr-2.mmproj-q8_0.gguf",
+    role: "vision",
   },
 ];
