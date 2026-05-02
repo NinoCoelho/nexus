@@ -90,3 +90,31 @@ def test_query_rejects_mutation(isolated_vault: Path) -> None:
 def test_unknown_action(isolated_vault: Path) -> None:
     out = _call({"action": "burninate", "path": "data.csv"})
     assert out["ok"] is False
+
+
+def test_datatable_md_redirects_to_datatable_manage(isolated_vault: Path) -> None:
+    """A `.md` file with `data-table-plugin: basic` frontmatter should not be
+    treated as a CSV — return a structured hint pointing the agent at
+    `datatable_manage` instead of the bare 'not a CSV/TSV file' error."""
+    (isolated_vault / "patients.md").write_text(
+        "---\ndata-table-plugin: basic\n---\n\n"
+        "## Schema\n```yaml\nfields:\n  - {name: name, kind: text}\n```\n\n"
+        "## Rows\n```yaml\n[]\n```\n",
+        encoding="utf-8",
+    )
+    out = _call({"action": "schema", "path": "patients.md"})
+    assert out["ok"] is False
+    assert "datatable" in out["error"].lower()
+    assert out["hint"]["tool"] == "datatable_manage"
+    assert "view" in out["hint"]["suggested_actions"]
+
+
+def test_plain_md_passes_through_to_csv_validator(isolated_vault: Path) -> None:
+    """A `.md` file *without* the datatable frontmatter still falls through to
+    the regular extension check (so the user gets the existing 'not a CSV/TSV
+    file' error rather than a misleading datatable hint)."""
+    (isolated_vault / "notes.md").write_text("# just a doc\n", encoding="utf-8")
+    out = _call({"action": "schema", "path": "notes.md"})
+    assert out["ok"] is False
+    assert "CSV" in out["error"] or "csv" in out["error"]
+    assert "hint" not in out

@@ -137,6 +137,267 @@ def test_add_rows_bulk():
     assert [r["n"] for r in tbl["rows"]] == [1, 2, 3]
 
 
+def test_add_rows_with_report_skips_non_dict():
+    """Non-dict entries used to be silently dropped — they should now surface
+    in the `skipped` channel with their index and a typed reason."""
+    schema = {"fields": [{"name": "n", "kind": "number"}]}
+    vault_datatable.create_table("rep.md", schema)
+    report = vault_datatable.add_rows_with_report(
+        "rep.md", [{"n": 1}, "oops", {"n": 2}, None],
+    )
+    assert len(report["added"]) == 2
+    assert [s["index"] for s in report["skipped"]] == [1, 3]
+    assert "str" in report["skipped"][0]["reason"]
+    assert "NoneType" in report["skipped"][1]["reason"]
+
+
+def test_add_rows_with_report_required_fields():
+    """Rows missing a required field are skipped with a descriptive reason."""
+    schema = {"fields": [
+        {"name": "name", "kind": "text", "required": True},
+        {"name": "age", "kind": "number"},
+    ]}
+    vault_datatable.create_table("req.md", schema)
+    report = vault_datatable.add_rows_with_report(
+        "req.md",
+        [{"name": "Alice", "age": 30}, {"age": 40}, {"name": "", "age": 50}],
+        required_fields=["name"],
+    )
+    assert len(report["added"]) == 1
+    assert report["added"][0]["name"] == "Alice"
+    assert {s["index"] for s in report["skipped"]} == {1, 2}
+    for s in report["skipped"]:
+        assert "name" in s["reason"]
+
+
+def test_tool_add_rows_surfaces_skipped(_vault_tmp):
+    """`datatable_manage action=add_rows` includes a `skipped` field when the
+    caller's payload contained any non-dict or required-field violations."""
+    schema = {"fields": [
+        {"name": "id", "kind": "text", "required": True},
+        {"name": "label", "kind": "text"},
+    ]}
+    vault_datatable.create_table("ar.md", schema)
+    result = json.loads(handle_datatable_tool({
+        "action": "add_rows",
+        "path": "ar.md",
+        "rows": [
+            {"id": "A", "label": "ok"},
+            "garbage",
+            {"label": "missing-id"},
+            {"id": "B", "label": "also ok"},
+        ],
+    }))
+    assert result["ok"] is True
+    assert result["count"] == 2
+    assert result["skipped_count"] == 2
+    indices = sorted(s["index"] for s in result["skipped"])
+    assert indices == [1, 2]
+
+
+def test_find_rows_substring_q():
+    """`q` matches case-insensitively across text fields. The motivating case:
+    a 145-row patients table where 'John Doe' is past page 1 of list_rows."""
+    schema = {"fields": [
+        {"name": "name", "kind": "text"},
+        {"name": "city", "kind": "text"},
+    ]}
+    vault_datatable.create_table("p.md", schema)
+    # Pad with non-matching rows past the default list_rows page size.
+    pad = [{"name": f"Person {i}", "city": "Rio"} for i in range(120)]
+    pad.append({"name": "John Doe", "city": "Miami"})
+    vault_datatable.add_rows("p.md", pad)
+
+    result = vault_datatable.find_rows("p.md", q="john doe")
+    assert result["total"] == 1
+    assert result["rows"][0]["name"] == "John Doe"
+    assert result["truncated"] is False
+
+
+def test_find_rows_where_exact():
+    schema = {"fields": [
+        {"name": "id", "kind": "text"},
+        {"name": "status", "kind": "text"},
+    ]}
+    vault_datatable.create_table("o.md", schema)
+    vault_datatable.add_rows("o.md", [
+        {"id": "A", "status": "open"},
+        {"id": "B", "status": "done"},
+        {"id": "C", "status": "open"},
+    ])
+    result = vault_datatable.find_rows("o.md", where={"status": "open"})
+    assert result["total"] == 2
+    assert {r["id"] for r in result["rows"]} == {"A", "C"}
+
+
+def test_find_rows_where_and_q_combined():
+    schema = {"fields": [
+        {"name": "name", "kind": "text"},
+        {"name": "active", "kind": "boolean"},
+    ]}
+    vault_datatable.create_table("c.md", schema)
+    vault_datatable.add_rows("c.md", [
+        {"name": "John Doe", "active": True},
+        {"name": "John Doe", "active": False},
+        {"name": "Jane", "active": True},
+    ])
+    result = vault_datatable.find_rows("c.md", where={"active": True}, q="john")
+    assert result["total"] == 1
+    assert result["rows"][0]["active"] is True
+
+
+def test_find_rows_requires_filter():
+    schema = {"fields": [{"name": "x", "kind": "text"}]}
+    vault_datatable.create_table("r.md", schema)
+    with pytest.raises(ValueError, match="where|q"):
+        vault_datatable.find_rows("r.md")
+
+
+def test_find_rows_pagination():
+    schema = {"fields": [{"name": "name", "kind": "text"}]}
+    vault_datatable.create_table("pg.md", schema)
+    vault_datatable.add_rows("pg.md", [{"name": f"John {i}"} for i in range(150)])
+
+    page1 = vault_datatable.find_rows("pg.md", q="john", limit=100, offset=0)
+    assert page1["total"] == 150
+    assert page1["count"] == 100
+    assert page1["truncated"] is True
+    page2 = vault_datatable.find_rows("pg.md", q="john", limit=100, offset=100)
+    assert page2["count"] == 50
+    assert page2["truncated"] is False
+
+
+def test_tool_find_rows_dispatch(_vault_tmp):
+    schema = {"fields": [{"name": "name", "kind": "text"}]}
+    vault_datatable.create_table("t.md", schema)
+    vault_datatable.add_rows("t.md", [{"name": "Alice"}, {"name": "Bob"}])
+    result = json.loads(handle_datatable_tool({
+        "action": "find_rows",
+        "path": "t.md",
+        "q": "ali",
+    }))
+    assert result["ok"] is True
+    assert result["total"] == 1
+    assert result["rows"][0]["name"] == "Alice"
+
+
+def test_tool_find_rows_requires_filter(_vault_tmp):
+    schema = {"fields": [{"name": "name", "kind": "text"}]}
+    vault_datatable.create_table("nf.md", schema)
+    result = json.loads(handle_datatable_tool({
+        "action": "find_rows",
+        "path": "nf.md",
+    }))
+    assert result["ok"] is False
+    assert "where" in result["error"] or "q" in result["error"]
+
+
+def test_tool_import_csv_surfaces_skipped(_vault_tmp):
+    """`import_csv` reports rows dropped for missing required fields after
+    casting (the silent-data-loss vector that prompted this change)."""
+    schema = {"fields": [
+        {"name": "name", "kind": "text", "required": True},
+        {"name": "score", "kind": "number"},
+    ]}
+    vault_datatable.create_table("imp.md", schema)
+    (_vault_tmp / "src.csv").write_text("name,score\nAlice,10\n,20\nBob,30\n")
+
+    result = json.loads(handle_datatable_tool({
+        "action": "import_csv",
+        "path": "imp.md",
+        "source": "src.csv",
+    }))
+    assert result["ok"] is True
+    assert result["added_count"] == 2
+    assert result["total"] == 3
+    assert result["skipped_count"] == 1
+    assert result["skipped"][0]["index"] == 1
+    assert "name" in result["skipped"][0]["reason"]
+
+
+def test_import_csv_identity_mapping(_vault_tmp):
+    schema = {"fields": [
+        {"name": "name", "kind": "text"},
+        {"name": "age", "kind": "number"},
+        {"name": "active", "kind": "boolean"},
+    ]}
+    vault_datatable.create_table("people.md", schema)
+    (_vault_tmp / "people.csv").write_text("name,age,active\nAlice,30,true\nBob,42,no\n")
+
+    result = json.loads(handle_datatable_tool({
+        "action": "import_csv",
+        "path": "people.md",
+        "source": "people.csv",
+    }))
+    assert result["ok"] is True
+    assert result["added_count"] == 2
+    rows = vault_datatable.read_table("people.md")["rows"]
+    assert rows[0]["name"] == "Alice" and rows[0]["age"] == 30 and rows[0]["active"] is True
+    assert rows[1]["age"] == 42 and rows[1]["active"] is False
+
+
+def test_import_csv_with_mapping_and_drop(_vault_tmp):
+    schema = {"fields": [{"name": "n", "kind": "text"}, {"name": "score", "kind": "number"}]}
+    vault_datatable.create_table("t.md", schema)
+    (_vault_tmp / "src.csv").write_text("Name,Points,Internal\nA,10,x\nB,20,y\n")
+
+    result = json.loads(handle_datatable_tool({
+        "action": "import_csv",
+        "path": "t.md",
+        "source": "src.csv",
+        "mapping": {"Name": "n", "Points": "score", "Internal": None},
+    }))
+    assert result["ok"] is True
+    assert result["added_count"] == 2
+    rows = vault_datatable.read_table("t.md")["rows"]
+    assert {r["n"] for r in rows} == {"A", "B"}
+    assert {r["score"] for r in rows} == {10, 20}
+    assert all("Internal" not in r for r in rows)
+
+
+def test_import_csv_dry_run_does_not_write(_vault_tmp):
+    schema = {"fields": [{"name": "x", "kind": "text"}]}
+    vault_datatable.create_table("dry.md", schema)
+    (_vault_tmp / "src.csv").write_text("x\nfoo\nbar\n")
+
+    result = json.loads(handle_datatable_tool({
+        "action": "import_csv",
+        "path": "dry.md",
+        "source": "src.csv",
+        "dry_run": True,
+    }))
+    assert result["ok"] is True
+    assert result["dry_run"] is True
+    assert result["total"] == 2
+    assert len(result["preview"]) == 2
+    assert vault_datatable.read_table("dry.md")["rows"] == []  # no write
+
+
+def test_import_csv_tab_delimiter(_vault_tmp):
+    schema = {"fields": [{"name": "a", "kind": "text"}, {"name": "b", "kind": "text"}]}
+    vault_datatable.create_table("tsv.md", schema)
+    (_vault_tmp / "src.tsv").write_text("a\tb\n1\t2\n3\t4\n")
+
+    result = json.loads(handle_datatable_tool({
+        "action": "import_csv",
+        "path": "tsv.md",
+        "source": "src.tsv",
+    }))
+    assert result["ok"] is True
+    assert result["added_count"] == 2
+
+
+def test_import_csv_missing_source(_vault_tmp):
+    vault_datatable.create_table("t.md", {"fields": [{"name": "x", "kind": "text"}]})
+    result = json.loads(handle_datatable_tool({
+        "action": "import_csv",
+        "path": "t.md",
+        "source": "no-such-file.csv",
+    }))
+    assert result["ok"] is False
+    assert "not found" in result["error"]
+
+
 def test_set_views_round_trip():
     schema = {"fields": [{"name": "x", "kind": "text"}]}
     vault_datatable.create_table("v.md", schema)

@@ -83,7 +83,7 @@ CSV_TOOL = ToolSpec(
 
 
 def handle_csv_tool(args: dict[str, Any]) -> str:
-    from .. import vault_csv
+    from .. import vault, vault_csv, vault_datatable
 
     def _dumps(obj: dict) -> str:
         return json.dumps(obj, default=str)
@@ -95,6 +95,26 @@ def handle_csv_tool(args: dict[str, Any]) -> str:
             return _dumps({"ok": False, "error": "`action` is required"})
         if not path:
             return _dumps({"ok": False, "error": "`path` is required"})
+
+        # Redirect datatable .md files to datatable_manage. The agent has been
+        # observed calling vault_csv on `data-table-plugin: basic` files and
+        # giving up on the resulting "not a CSV/TSV file" error — give it a
+        # structured next step instead of a flat failure.
+        if path.lower().endswith(".md"):
+            try:
+                file = vault.read_file(path)
+            except (FileNotFoundError, OSError):
+                file = None
+            if file is not None and vault_datatable.is_datatable_file(file["content"]):
+                return _dumps({
+                    "ok": False,
+                    "error": f"`{path}` is a datatable, not a CSV — use `datatable_manage` instead",
+                    "hint": {
+                        "tool": "datatable_manage",
+                        "suggested_actions": ["view", "list_rows", "add_row"],
+                        "path": path,
+                    },
+                })
 
         if action == "schema":
             return _dumps({"ok": True, **vault_csv.csv_schema(path)})

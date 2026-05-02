@@ -22,9 +22,17 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
         "Actions: create_table, view, add_row, add_rows, update_row, delete_row, "
         "list_rows (paginates: `limit` default 100, max 1000; `offset` default 0; "
         "response carries `total`, `truncated` so you can iterate), "
+        "find_rows (look up by exact `where: {field: value}` and/or "
+        "case-insensitive substring `q` across text fields — use this for "
+        "'show me X' / 'find Y' queries; never claim 'not found' from a "
+        "single `list_rows` page), "
         "set_schema, set_views, add_field, remove_field, rename_field, "
         "create_relation, create_junction, suggest_schema, er_diagram, "
-        "list_databases, related_rows."
+        "list_databases, related_rows, "
+        "import_csv (one-shot bulk ingest: reads a vault `source` CSV/TSV, applies "
+        "optional `mapping` of source-col → target-field, casts to target field "
+        "kinds, calls add_rows. Set `dry_run: true` to preview the first 5 mapped "
+        "rows without writing — recommended before committing a large import)."
     ),
     parameters={
         "type": "object",
@@ -34,11 +42,13 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                 "enum": [
                     "create_table", "view",
                     "add_row", "add_rows", "update_row", "delete_row",
-                    "list_rows", "set_schema", "set_views",
+                    "list_rows", "find_rows",
+                    "set_schema", "set_views",
                     "add_field", "remove_field", "rename_field",
                     "create_relation", "create_junction",
                     "suggest_schema", "er_diagram",
                     "list_databases", "related_rows",
+                    "import_csv",
                 ],
                 "description": "Action to perform.",
             },
@@ -109,11 +119,27 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
             },
             "limit": {
                 "type": "integer",
-                "description": "Page size for list_rows (default 100, max 1000).",
+                "description": "Page size for list_rows / find_rows (default 100, max 1000).",
             },
             "offset": {
                 "type": "integer",
-                "description": "Page offset for list_rows (default 0).",
+                "description": "Page offset for list_rows / find_rows (default 0).",
+            },
+            "where": {
+                "type": "object",
+                "description": (
+                    "find_rows: exact-match filter `{field: value}`. Combined "
+                    "with `q` via AND. List-valued cells use membership."
+                ),
+            },
+            "q": {
+                "type": "string",
+                "description": (
+                    "find_rows: case-insensitive substring matched against "
+                    "every text/textarea field plus `_id`. Use this for "
+                    "'show me John Doe' / 'find the order with SKU…'. "
+                    "Combined with `where` via AND."
+                ),
             },
             "views": {
                 "type": "array",
@@ -122,6 +148,29 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                     "Each view: { name: str, filter?: str, sort?: {field, dir: 'asc'|'desc'}, hidden?: [field_names] }"
                 ),
                 "items": {"type": "object"},
+            },
+            "source": {
+                "type": "string",
+                "description": (
+                    "Vault-relative path to a `.csv` / `.tsv` file (action=import_csv). "
+                    "Read with the standard csv module — auto-detects ',' / '\\t' / ';'."
+                ),
+            },
+            "mapping": {
+                "type": "object",
+                "description": (
+                    "Column mapping for action=import_csv: { source_col: target_field }. "
+                    "Omitted keys default to identity (source col name = target field name). "
+                    "Set a target to null to drop a source column."
+                ),
+                "additionalProperties": {"type": ["string", "null"]},
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": (
+                    "action=import_csv: when true, return the first 5 mapped rows + row count "
+                    "without writing. Use this to verify the column mapping before committing."
+                ),
             },
         },
         "required": ["action"],
@@ -165,6 +214,23 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
         if action == "view":
             tbl = vault_datatable.read_table(path)
             return json.dumps({"ok": True, "path": path, "table": tbl})
+
+        if action == "find_rows":
+            where = args.get("where") or {}
+            q = args.get("q")
+            if not isinstance(where, dict):
+                return json.dumps({"ok": False, "error": "`where` must be an object"})
+            offset = max(0, int(args.get("offset", 0)))
+            limit_raw = args.get("limit")
+            limit = 100 if limit_raw is None else max(1, min(int(limit_raw), 1000))
+            result = vault_datatable.find_rows(
+                path,
+                where=where if where else None,
+                q=q if isinstance(q, str) else None,
+                limit=limit,
+                offset=offset,
+            )
+            return json.dumps({"ok": True, **result})
 
         if action == "list_rows":
             tbl = vault_datatable.read_table(path)
@@ -220,8 +286,50 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             rows = args.get("rows")
             if not isinstance(rows, list):
                 return json.dumps({"ok": False, "error": "`rows` (list) is required for add_rows"})
-            added = vault_datatable.add_rows(path, rows)
-            return json.dumps({"ok": True, "added": added, "count": len(added)})
+            required = _required_fields(vault_datatable, path)
+            report = vault_datatable.add_rows_with_report(
+                path, rows, required_fields=required,
+            )
+            response: dict[str, Any] = {
+                "ok": True,
+                "added": report["added"],
+                "count": len(report["added"]),
+            }
+            if report["skipped"]:
+                response["skipped"] = report["skipped"]
+                response["skipped_count"] = len(report["skipped"])
+            return json.dumps(response)
+
+        if action == "import_csv":
+            source = args.get("source", "")
+            if not source:
+                return json.dumps({"ok": False, "error": "`source` is required for import_csv"})
+            mapping = args.get("mapping") or {}
+            if not isinstance(mapping, dict):
+                return json.dumps({"ok": False, "error": "`mapping` must be an object"})
+            dry_run = bool(args.get("dry_run", False))
+            mapped, total, schema_fields = _import_csv_to_rows(source, path, mapping)
+            if dry_run:
+                return json.dumps({
+                    "ok": True,
+                    "dry_run": True,
+                    "total": total,
+                    "preview": mapped[:5],
+                    "target_fields": schema_fields,
+                })
+            required = _required_fields(vault_datatable, path)
+            report = vault_datatable.add_rows_with_report(
+                path, mapped, required_fields=required,
+            )
+            response = {
+                "ok": True,
+                "added_count": len(report["added"]),
+                "total": total,
+            }
+            if report["skipped"]:
+                response["skipped"] = report["skipped"]
+                response["skipped_count"] = len(report["skipped"])
+            return json.dumps(response)
 
         if action == "set_views":
             views = args.get("views")
@@ -316,3 +424,107 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
 
     except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return json.dumps({"ok": False, "error": str(exc)})
+
+
+def _required_fields(vault_datatable_mod, path: str) -> list[str]:
+    """Return the names of fields marked ``required: true`` on the target table.
+
+    Returns an empty list if the table cannot be read or the schema is empty —
+    callers treat the absence of required fields as "no required-field check".
+    """
+    try:
+        target = vault_datatable_mod.read_table(path)
+    except (FileNotFoundError, OSError, ValueError):
+        return []
+    fields = (target.get("schema") or {}).get("fields") or []
+    return [
+        f.get("name") for f in fields
+        if isinstance(f, dict) and f.get("required") and f.get("name")
+    ]
+
+
+def _import_csv_to_rows(
+    source: str,
+    target_path: str,
+    mapping: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """Read a vault CSV/TSV and produce rows matching the target table's schema.
+
+    Returns ``(mapped_rows, total_rows_read, target_field_names)``. Source
+    columns are mapped to target fields using ``mapping`` (defaulting to
+    identity). Values are cast to the target field ``kind`` (number, boolean,
+    date) when a clean cast is possible; otherwise the raw string passes
+    through. Unknown source columns and columns mapped to ``null`` are
+    dropped silently.
+    """
+    import csv as _csv
+
+    from .. import vault, vault_datatable
+
+    target = vault_datatable.read_table(target_path)
+    fields = target.get("schema", {}).get("fields", []) or []
+    field_kinds = {f.get("name"): f.get("kind", "text") for f in fields if f.get("name")}
+    target_field_names = list(field_kinds.keys())
+
+    src_abs = vault.resolve_path(source)
+    if not src_abs.is_file():
+        raise FileNotFoundError(f"source not found: {source}")
+
+    text = src_abs.read_text(encoding="utf-8", errors="replace")
+    sniffer = _csv.Sniffer()
+    sample = text[:4096]
+    try:
+        dialect = sniffer.sniff(sample, delimiters=",\t;|")
+    except _csv.Error:
+        dialect = _csv.excel  # comma fallback
+
+    reader = _csv.DictReader(io_text(text), dialect=dialect)
+    src_cols = list(reader.fieldnames or [])
+
+    def _resolve_target(src_col: str) -> str | None:
+        if src_col in mapping:
+            return mapping[src_col]  # may be None → drop
+        return src_col if src_col in field_kinds else None
+
+    mapped: list[dict[str, Any]] = []
+    total = 0
+    for raw in reader:
+        total += 1
+        row: dict[str, Any] = {}
+        for src_col in src_cols:
+            tgt = _resolve_target(src_col)
+            if not tgt:
+                continue
+            value = raw.get(src_col)
+            row[tgt] = _cast_value(value, field_kinds.get(tgt, "text"))
+        mapped.append(row)
+
+    return mapped, total, target_field_names
+
+
+def io_text(s: str):
+    import io as _io
+    return _io.StringIO(s)
+
+
+def _cast_value(raw: Any, kind: str) -> Any:
+    """Cast a raw CSV string to the target field kind. Lossy casts return raw."""
+    if raw is None or raw == "":
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if kind == "number":
+        try:
+            f = float(s)
+            return int(f) if f.is_integer() else f
+        except ValueError:
+            return s
+    if kind == "boolean":
+        low = s.lower()
+        if low in ("true", "yes", "y", "1", "t"):
+            return True
+        if low in ("false", "no", "n", "0", "f"):
+            return False
+        return s
+    return s
