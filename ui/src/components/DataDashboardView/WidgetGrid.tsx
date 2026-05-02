@@ -6,10 +6,12 @@
  *
  *   - Refresh button per widget (kicks /widgets/<id>/refresh, listens for
  *     op_done, reloads the body).
- *   - Refresh-all button that fans the requests out in parallel.
+ *   - Refresh-all button that runs widgets sequentially — back-end hosts a
+ *     single LLM and 7+ parallel sessions made it look hung.
  *   - Daily auto-refresh: on mount, if a widget's `last_refreshed_at` isn't
- *     today (UTC) and `refresh: daily`, kick a refresh. The user controls
- *     cost by sticking to daily — we never auto-refresh hourly.
+ *     today (UTC) and `refresh: daily`, kick a refresh (also sequential).
+ *     The user controls cost by sticking to daily — we never auto-refresh
+ *     hourly.
  *   - Stale chip showing "Updated N hours ago" when the body is older than
  *     today.
  *
@@ -92,6 +94,12 @@ function freshness(iso: string | null): string {
 export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, onResize, onOpenInVault }: Props) {
   const toast = useToast();
   const [states, setStates] = useState<Record<string, WidgetState>>({});
+  // Single global refresh queue: every refresh (per-widget click, daily
+  // auto-refresh, or "Refresh all") chains off this promise, so the backend
+  // never sees more than one widget refresh in flight at a time. 7+ parallel
+  // LLM sessions would peg the agent and look hung from the UI.
+  const queueTail = useRef<Promise<void>>(Promise.resolve());
+  const [queueLength, setQueueLength] = useState(0);
   // Track running session subs so unmount or re-refresh can close them.
   const subs = useRef<Record<string, { close: () => void }>>({});
   // Guard so the daily auto-refresh effect only fires once per mount/folder.
@@ -145,50 +153,75 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, widgets.map((w) => w.id).join("|")]);
 
-  const startRefresh = useCallback(async (widget: DashboardWidget) => {
+  // Resolves only after the op finishes (or fails) so callers can await
+  // sequentially. The per-widget click-to-refresh button doesn't await this,
+  // so its UX is unchanged.
+  const startRefresh = useCallback((widget: DashboardWidget): Promise<void> => {
     setStates((s) => ({
       ...s,
       [widget.id]: { ...(s[widget.id] ?? { body: "" }), status: "running", error: undefined },
     }));
-    try {
-      const { session_id } = await refreshWidget(folder, widget.id);
-      // Close any prior subscription for this widget — the new run wins.
-      const prev = subs.current[widget.id];
-      if (prev) prev.close();
-      const sub = subscribeSessionEvents(session_id, async (event) => {
-        if (event.kind !== "op_done") return;
-        const ok = event.data.status === "done";
-        if (ok) {
-          await loadBody(widget.id);
-        } else {
+    return new Promise<void>((resolve) => {
+      void (async () => {
+        try {
+          const { session_id } = await refreshWidget(folder, widget.id);
+          // Close any prior subscription for this widget — the new run wins.
+          const prev = subs.current[widget.id];
+          if (prev) prev.close();
+          const sub = subscribeSessionEvents(session_id, async (event) => {
+            if (event.kind !== "op_done") return;
+            const ok = event.data.status === "done";
+            if (ok) {
+              await loadBody(widget.id);
+            } else {
+              setStates((s) => ({
+                ...s,
+                [widget.id]: {
+                  body: s[widget.id]?.body ?? "",
+                  status: "failed",
+                  error: event.data.error ?? undefined,
+                },
+              }));
+            }
+            const current = subs.current[widget.id];
+            if (current) {
+              current.close();
+              delete subs.current[widget.id];
+            }
+            resolve();
+          });
+          subs.current[widget.id] = sub;
+        } catch (e) {
           setStates((s) => ({
             ...s,
             [widget.id]: {
               body: s[widget.id]?.body ?? "",
               status: "failed",
-              error: event.data.error ?? undefined,
+              error: (e as Error).message,
             },
           }));
+          toast.error(`Couldn't refresh "${widget.title}"`, { detail: (e as Error).message });
+          resolve();
         }
-        const current = subs.current[widget.id];
-        if (current) {
-          current.close();
-          delete subs.current[widget.id];
-        }
-      });
-      subs.current[widget.id] = sub;
-    } catch (e) {
-      setStates((s) => ({
-        ...s,
-        [widget.id]: {
-          body: s[widget.id]?.body ?? "",
-          status: "failed",
-          error: (e as Error).message,
-        },
-      }));
-      toast.error(`Couldn't refresh "${widget.title}"`, { detail: (e as Error).message });
-    }
+      })();
+    });
   }, [folder, loadBody, toast]);
+
+  // Append a refresh to the global queue. Every entry point goes through
+  // here, including the per-widget click — so even rapid clicks across many
+  // widgets serialize into a single chain. Optimistically marks the widget
+  // as running so the UI reflects the queued state immediately.
+  const enqueueRefresh = useCallback((widget: DashboardWidget): void => {
+    setStates((s) => ({
+      ...s,
+      [widget.id]: { ...(s[widget.id] ?? { body: "" }), status: "running", error: undefined },
+    }));
+    setQueueLength((n) => n + 1);
+    queueTail.current = queueTail.current
+      .catch(() => undefined)
+      .then(() => startRefresh(widget))
+      .finally(() => setQueueLength((n) => Math.max(0, n - 1)));
+  }, [startRefresh]);
 
   // Daily auto-refresh: fire once per (folder + day) for any widget marked
   // `refresh: daily` whose last_refreshed_at isn't today. Manual widgets are
@@ -201,17 +234,15 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
     const stale = widgetsRef.current.filter(
       (w) => w.refresh === "daily" && !isoIsToday(w.last_refreshed_at),
     );
-    for (const w of stale) {
-      void startRefresh(w);
-    }
+    for (const w of stale) enqueueRefresh(w);
     // We intentionally don't depend on `widgets` directly: if widgets shift
     // mid-session we don't want to re-fire today's auto-refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folder, startRefresh]);
+  }, [folder, enqueueRefresh]);
 
   const refreshAll = useCallback(() => {
-    for (const w of widgets) void startRefresh(w);
-  }, [widgets, startRefresh]);
+    for (const w of widgets) enqueueRefresh(w);
+  }, [widgets, enqueueRefresh]);
 
   return (
     <div className="data-dash-widgets">
@@ -221,10 +252,14 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
             type="button"
             className="data-dash-action-btn"
             onClick={refreshAll}
-            disabled={widgets.length === 0}
-            title="Refresh every widget on this dashboard"
+            disabled={widgets.length === 0 || queueLength > 0}
+            title={
+              queueLength > 0
+                ? `Refreshing — ${queueLength} widget${queueLength === 1 ? "" : "s"} left`
+                : "Refresh every widget on this dashboard"
+            }
           >
-            ↻ Refresh all
+            {queueLength > 0 ? `↻ Refreshing… (${queueLength})` : "↻ Refresh all"}
           </button>
           <button
             type="button"
@@ -282,7 +317,7 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
                     <button
                       type="button"
                       className="data-dash-widget-btn"
-                      onClick={() => void startRefresh(w)}
+                      onClick={() => enqueueRefresh(w)}
                       disabled={running}
                       title={running ? "Refreshing…" : "Refresh"}
                     >
