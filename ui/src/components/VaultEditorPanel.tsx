@@ -24,6 +24,7 @@ import FilePreview from "./FilePreview";
 import VaultHistoryPanel from "./VaultHistoryPanel";
 import { getVaultFile, getVaultHistoryStatus, putVaultFile, vaultRawUrl } from "../api";
 import { useVaultEvents } from "../hooks/useVaultEvents";
+import { useTTS } from "../hooks/useTTS";
 import { classify } from "../fileTypes";
 import "./VaultView.css";
 
@@ -83,6 +84,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
   const [historyEnabled, setHistoryEnabled] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview(onOpenInVault);
+  const tts = useTTS();
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -246,6 +248,20 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   title={t("vault:editor.historyTitle")}
                 >
                   {t("vault:editor.history")}
+                </button>
+              )}
+              {tts.available && content && !editMode && (isMarkdown || fileKind === "text") && (
+                <button
+                  className={`vault-pill${tts.state === "playing" ? " vault-pill--active" : ""}`}
+                  onClick={() => {
+                    if (tts.state === "idle") void tts.speak(content);
+                    else tts.stop();
+                  }}
+                  title={tts.state === "playing" ? "Stop reading" : "Read aloud"}
+                  aria-pressed={tts.state === "playing"}
+                  disabled={tts.state === "loading"}
+                >
+                  {tts.state === "playing" ? "Stop" : "Read aloud"}
                 </button>
               )}
               {editMode && canEdit && isMarkdown && (

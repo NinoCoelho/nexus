@@ -40,6 +40,16 @@ dependencies = [
     # active model can't accept a native PDF block (i.e. anything except
     # Anthropic Claude). Pure Python; small.
     "pypdf>=4.0",
+    # Local TTS engine — Piper synthesizes high-quality speech on CPU
+    # using small ONNX models. Default voices (en_US-amy-medium,
+    # pt_BR-faber-medium) auto-download on first daemon start to
+    # ~/.nexus/tts/piper, ~63 MB each. Always available — no extras
+    # dance, no third-party API keys.
+    "piper-tts>=1.2",
+    # Number-to-words conversion for the TTS pre-formatting normalizer
+    # (1250 → "one thousand two hundred fifty" / "mil duzentos e cinquenta").
+    # Pure Python, ~few hundred KB, supports en + pt + es first-class.
+    "num2words>=0.5",
 ]
 
 [tool.uv.sources]

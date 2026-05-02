@@ -36,6 +36,10 @@ _GLOBAL_HITL_KINDS = frozenset({
     "user_request_auto",
     "user_request_cancelled",
     "calendar_alert",
+    # voice_ack is published when the agent has a spoken status update for
+    # the user. Routed globally so a completion ack from a session the user
+    # isn't currently viewing still reaches the audio player + toast.
+    "voice_ack",
 })
 
 

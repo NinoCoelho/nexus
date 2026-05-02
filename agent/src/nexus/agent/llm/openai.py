@@ -240,6 +240,7 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
@@ -267,6 +268,15 @@ class OpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
+        # Pass-through for caller-supplied extras (e.g. voice_ack disables
+        # extended thinking via {"thinking": {"type": "disabled"}} so the
+        # ack call doesn't burn its token budget on internal reasoning).
+        # Most OpenAI-compat providers silently ignore unknown fields;
+        # the strict ones (Gemini compat) reject them, so we skip there.
+        if extra_payload and not self._strict_compat:
+            for k, v in extra_payload.items():
+                if k not in payload:  # never overwrite explicit fields
+                    payload[k] = v
 
         try:
             resp = await self._client.post(

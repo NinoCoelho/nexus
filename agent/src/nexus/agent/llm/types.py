@@ -146,6 +146,7 @@ class LLMProvider(ABC):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse: ...
 
     async def chat_stream(

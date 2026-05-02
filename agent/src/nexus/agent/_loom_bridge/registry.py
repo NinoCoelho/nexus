@@ -53,9 +53,14 @@ class AgentHandlers:
         terminal: Any | None = None,
         dispatcher: Any | None = None,
         subagent_runner: Any | None = None,
+        notify_user: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
+        # NotifyUserHandler — fire-and-forget status pings (TTS when the
+        # user dictated, toast always). Late-bound by the server so the
+        # tool registry can be built before the SessionStore exists.
+        self.notify_user = notify_user
         # Async callable: dispatcher(path, card_id?, mode) -> dict
         # with keys {session_id, seed_message?, path, card_id?, mode}.
         # Late-bound by app.py so tools can spawn sub-sessions.
@@ -321,6 +326,18 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
     registry.register(_SimpleToolHandler(TERMINAL_TOOL_SPEC, _terminal))
+
+    # notify_user — fire-and-forget status pings (TTS when input was
+    # voice, toast always). Read at dispatch time via ``handlers``.
+    from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
+
+    async def _notify_user(args: dict) -> str:
+        h = handlers.notify_user
+        if h is None:
+            return '{"ok": false, "error": "notify_user unavailable: handler not wired"}'
+        return await h.invoke(args)
+
+    registry.register(_SimpleToolHandler(NOTIFY_USER_TOOL, _notify_user))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.

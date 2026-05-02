@@ -194,6 +194,14 @@ class Agent:
     def _dispatcher(self, value: Any) -> None:
         self._handlers.dispatcher = value
 
+    @property
+    def _notify_user_handler(self) -> Any:
+        return self._handlers.notify_user
+
+    @_notify_user_handler.setter
+    def _notify_user_handler(self, value: Any) -> None:
+        self._handlers.notify_user = value
+
     def _context_window_for(self, model_id: str | None) -> int:
         """Lookup the configured context window for a model id.
 

@@ -204,6 +204,7 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
@@ -227,6 +228,14 @@ class AnthropicProvider(LLMProvider):
             "messages": filtered,
             "temperature": self._temperature,
         }
+        # Caller-supplied extras (e.g. voice_ack disables extended thinking
+        # via {"thinking": {"type": "disabled"}}). Anthropic accepts a
+        # `thinking` field natively. Other extras are passed through; the
+        # SDK will reject anything it doesn't recognize.
+        if extra_payload:
+            for k, v in extra_payload.items():
+                if k not in kwargs:
+                    kwargs[k] = v
         if system:
             kwargs["system"] = system
         if tools:

@@ -138,6 +138,7 @@ export function useChatSession(
     let overrideText: string | undefined;
     let inPlace = false;
     let bypassSecretGuard = false;
+    let inputMode: "voice" | "text" | undefined;
     // ``extraAttachments`` rides through ``onSend`` from the input bar's voice
     // flow: the recording is uploaded to the vault and we want it to land on
     // the same turn as the (possibly empty) typed text without a state-update
@@ -154,10 +155,12 @@ export function useChatSession(
         inPlace?: unknown;
         bypassSecretGuard?: unknown;
         extraAttachments?: unknown;
+        inputMode?: unknown;
       };
       if (typeof o.text === "string") overrideText = o.text;
       if (typeof o.inPlace === "boolean") inPlace = o.inPlace;
       if (typeof o.bypassSecretGuard === "boolean") bypassSecretGuard = o.bypassSecretGuard;
+      if (o.inputMode === "voice" || o.inputMode === "text") inputMode = o.inputMode;
       if (Array.isArray(o.extraAttachments)) {
         extraAttachments = o.extraAttachments.flatMap((a): ExtraAtt[] => {
           if (!a || typeof a !== "object") return [];
@@ -252,7 +255,7 @@ export function useChatSession(
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail);
         }
-      }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest });
+      }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode });
 
       if (!sawDone && !abortController.signal.aborted) {
         // Server closed the stream without a terminal `done`. Pull persisted

@@ -275,6 +275,14 @@ def create_app(
         broker=sessions.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
     )
+
+    # notify_user — fire-and-forget status pings the agent emits during
+    # long operations (TTS when the originating message was voice; toast
+    # in every case). The handler depends on the SessionStore both for
+    # publishing on the per-session SSE channel and for reading the
+    # original input_mode (stashed on the store by chat_stream).
+    from ..agent.notify_user_tool import NotifyUserHandler
+    agent._notify_user_handler = NotifyUserHandler(session_store=sessions)
     # Give the agent the SessionStore so the streaming loop can persist
     # parked HITL snapshots and the resume entry-point can rehydrate them.
     agent._sessions = sessions
@@ -442,6 +450,15 @@ def create_app(
                     log.warning("[startup] builtin embedder prefetch failed", exc_info=True)
             asyncio.create_task(_prefetch_builtin())
 
+            # Pre-download the default Piper voices in the background so
+            # the user never waits on a model fetch the first time they
+            # click Play or send a voice message. No-op on warm starts.
+            try:
+                from ..tts.voice_setup import bootstrap_default_voices
+                asyncio.create_task(bootstrap_default_voices())
+            except Exception:
+                log.warning("[startup] piper voice prefetch failed", exc_info=True)
+
         # ── calendar bootstrap + heartbeat scheduler ─────────────────────────
         scheduler = None
         try:
@@ -600,6 +617,7 @@ def create_app(
     from .routes.push import router as push_router
     from .routes.skill_wizard import router as skill_wizard_router
     from .routes.tunnel import router as tunnel_router
+    from .routes.tts import router as tts_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -629,6 +647,7 @@ def create_app(
     app.include_router(push_router)
     app.include_router(skill_wizard_router)
     app.include_router(tunnel_router)
+    app.include_router(tts_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

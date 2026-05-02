@@ -65,7 +65,13 @@ export async function chatStream(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   model?: string,
-  options?: { bypassSecretGuard?: boolean; attachments?: ChatAttachment[] },
+  options?: {
+    bypassSecretGuard?: boolean;
+    attachments?: ChatAttachment[];
+    /** "voice" when the user dictated; the backend uses this to decide
+     * whether to fire spoken acknowledgments. Defaults to "text". */
+    inputMode?: "voice" | "text";
+  },
 ): Promise<void> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options?.bypassSecretGuard) {
@@ -74,6 +80,9 @@ export async function chatStream(
   const body: Record<string, unknown> = { message, session_id, model };
   if (options?.attachments && options.attachments.length > 0) {
     body.attachments = options.attachments;
+  }
+  if (options?.inputMode) {
+    body.input_mode = options.inputMode;
   }
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
@@ -225,6 +234,24 @@ export type CalendarAlertPayload = {
   all_day?: boolean;
 };
 
+export interface VoiceAckPayload {
+  /** Which moment in the turn this announcement covers.
+   * - "start" / "progress" — programmatic acks (legacy; not currently emitted)
+   * - "complete" — completion summary spoken at end of turn
+   * - "notify" — agent-initiated status update via the `notify_user` tool */
+  kind: "start" | "progress" | "complete" | "notify";
+  /** What the agent decided to say, plain text (no markdown). */
+  transcript: string;
+  /** Backend-rendered audio bytes, base64-encoded. Null when engine=webspeech. */
+  audio_b64: string | null;
+  /** MIME of the bytes when audio_b64 is present. */
+  audio_mime: string;
+  engine: string;
+  voice: string;
+  language: string;
+  speed: number;
+}
+
 export type SessionEvent =
   | { kind: "iter"; data: { n: number } }
   | { kind: "delta"; data: { text: string } }
@@ -235,6 +262,7 @@ export type SessionEvent =
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
   | { kind: "calendar_alert"; data: CalendarAlertPayload }
+  | { kind: "voice_ack"; data: VoiceAckPayload }
   // Terminal signal for ephemeral runs (e.g. dashboard operations) so the
   // caller can flip its UI state without inspecting persisted history.
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
@@ -272,6 +300,7 @@ export function subscribeSessionEvents(
     "user_request",
     "user_request_auto",
     "user_request_cancelled",
+    "voice_ack",
     "op_done",
   ];
   for (const kind of kinds) {
@@ -389,6 +418,7 @@ function openGlobalNotifSource(): void {
     "user_request_auto",
     "user_request_cancelled",
     "calendar_alert",
+    "voice_ack",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {

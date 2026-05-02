@@ -22,7 +22,12 @@ from ..schemas import ChatRequest
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
+from ...config_file import load as load_config
 from ...redact import redact_sensitive_text
+from ...voice_ack import (
+    _AckTrigger,
+    emit_completion_ack,
+)
 from ..session_store import SessionStore
 
 # Shared with chat.py — the cancel endpoint in chat.py mutates these same dicts
@@ -182,6 +187,54 @@ async def chat_stream_route(
                     user_message=req.message,
                 )
             )
+
+        # ── Voice acknowledgment plumbing ────────────────────────────────────
+        # Only kicks in for voice-input turns. There's NO programmatic
+        # start ack anymore — the agent itself uses the `notify_user`
+        # tool when it wants to give the user a status update mid-turn
+        # (the tool routes to TTS when input_mode is voice). The
+        # completion ack still fires on `done` to summarize the reply.
+        is_voice = req.input_mode == "voice"
+        # Stash on session.context so the notify_user tool handler knows
+        # whether to TTS the message or just surface it as a toast.
+        try:
+            session.context = (session.context or "") + ""  # no-op touch
+        except Exception:  # noqa: BLE001
+            pass
+        store._latest_input_mode = getattr(store, "_latest_input_mode", {})  # type: ignore[attr-defined]
+        store._latest_input_mode[session.id] = req.input_mode  # type: ignore[attr-defined]
+        # Also track the last *global* input_mode so notify_user fired
+        # from sessions we didn't see (vault dispatch, kanban-card spawn,
+        # etc.) can fall back to "what the user has been doing recently"
+        # instead of always defaulting to text.
+        store._last_global_input_mode = req.input_mode  # type: ignore[attr-defined]
+        log.warning(
+            "[chat_stream] sess=%s input_mode=%r (is_voice=%s)",
+            session.id, req.input_mode, is_voice,
+        )
+
+        tts_cfg = load_config().tts
+        ack_active = (
+            is_voice
+            and tts_cfg.enabled
+            and tts_cfg.ack_enabled
+            and getattr(a, "_provider_registry", None) is not None
+        )
+        log.warning(
+            "[chat_stream] voice_ack ack_active=%s (is_voice=%s tts.enabled=%s ack_enabled=%s registry=%s)",
+            ack_active, is_voice, tts_cfg.enabled, tts_cfg.ack_enabled,
+            getattr(a, "_provider_registry", None) is not None,
+        )
+
+        # Speculative completion-ack kickoff: when the agent has streamed
+        # ~80+ words of content and is in the middle of writing its final
+        # reply, fire the summary call NOW so the audio is ready (or
+        # nearly ready) by the time `done` arrives. Without this, audio
+        # plays 5-15s AFTER the visible text is fully written — the user
+        # has been complaining about exactly that lag.
+        SPECULATIVE_WORD_THRESHOLD = 80
+        completion_task: asyncio.Task | None = None
+
         try:
             async for event in a.run_turn_stream(
                 req.message,
@@ -195,6 +248,28 @@ async def chat_stream_route(
 
                 if etype == "delta":
                     accumulated_text += event.get("text", "")
+                    # Speculative summary kickoff (see comment above).
+                    if (
+                        ack_active
+                        and completion_task is None
+                        and len(accumulated_text.split()) >= SPECULATIVE_WORD_THRESHOLD
+                    ):
+                        # Snapshot accumulated_text now (str is immutable;
+                        # later appends won't mutate the captured value).
+                        snapshot = accumulated_text
+                        log.warning(
+                            "[chat_stream] kicking off speculative completion ack at %d words",
+                            len(snapshot.split()),
+                        )
+                        completion_task = asyncio.create_task(emit_completion_ack(
+                            agent=a, store=store,
+                            trigger=_AckTrigger(
+                                user_text=req.message,
+                                session_id=session.id,
+                                full_reply=snapshot,
+                            ),
+                            cfg=load_config(),
+                        ))
                     yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
 
                 elif etype == "thinking":
@@ -273,6 +348,30 @@ async def chat_stream_route(
                         "model": usage.get("model") or resolved_model_id,
                     }
                     yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+
+                    # Voice ack: fire completion ack as a fire-and-forget
+                    # task — but ONLY if the speculative kickoff above
+                    # didn't already fire. When it did, we'd be
+                    # double-publishing two completion summaries that
+                    # the UI player would race against each other.
+                    if ack_active and completion_task is None:
+                        asyncio.create_task(emit_completion_ack(
+                            agent=a, store=store,
+                            trigger=_AckTrigger(
+                                user_text=req.message,
+                                session_id=session.id,
+                                full_reply=event.get("reply", ""),
+                            ),
+                            cfg=load_config(),
+                        ))
+                    elif completion_task is not None:
+                        log.warning(
+                            "[chat_stream] speculative ack already running — "
+                            "skipping post-done emit (snapshot may be ~%d words "
+                            "vs final %d words)",
+                            SPECULATIVE_WORD_THRESHOLD,
+                            len(event.get("reply", "").split()),
+                        )
 
                 elif etype == "error":
                     # Mid-stream structured error from the agent loop

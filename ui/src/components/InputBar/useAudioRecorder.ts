@@ -76,7 +76,25 @@ export function useAudioRecorder() {
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      // iOS Safari and desktop browsers disagree on default codec. Pick the
+      // best supported format up-front so we know what we're producing —
+      // hardcoding `audio/webm` was breaking iPhone recordings (Safari
+      // produces audio/mp4 + AAC by default and the resulting blob would
+      // get mislabelled, breaking faster-whisper transcription).
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4;codecs=mp4a.40.2",   // iOS AAC
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+      ];
+      const isSupported = (typeof MediaRecorder !== "undefined" && typeof (MediaRecorder as any).isTypeSupported === "function")
+        ? (m: string) => (MediaRecorder as any).isTypeSupported(m)
+        : (_m: string) => false;
+      const chosenMime = candidates.find(isSupported) || "";
+      const recorder = chosenMime
+        ? new MediaRecorder(stream, { mimeType: chosenMime })
+        : new MediaRecorder(stream);
       chunksRef.current = [];
       cancelledRef.current = false;
       recorder.ondataavailable = (e) => {
@@ -85,7 +103,11 @@ export function useAudioRecorder() {
       recorder.onstop = () => {
         cleanupAnalyser();
         if (!cancelledRef.current) {
-          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          // Use the recorder's actual mime — it might differ from what
+          // we asked for if the browser substituted. Strip the ;codecs=
+          // suffix because backends sniffing by extension don't care.
+          const actualMime = recorder.mimeType || chosenMime || "audio/webm";
+          const blob = new Blob(chunksRef.current, { type: actualMime });
           const url = URL.createObjectURL(blob);
           const cb = onCompleteRef.current;
           onCompleteRef.current = null;

@@ -34,6 +34,8 @@ import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
+import { useVoiceAckPlayer } from "./hooks/useVoiceAckPlayer";
+import { subscribeGlobalNotifications } from "./api/chat";
 import { usePushSubscription } from "./hooks/usePushSubscription";
 import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
 import { useTranslation } from "react-i18next";
@@ -284,6 +286,28 @@ export default function App() {
     setView("chat");
     setSessionsRevision((r) => r + 1);
   }, [setChatStates, setActiveSession, setSessionsRevision]);
+
+  // Voice acknowledgment playback. The hook handles ack-kind routing
+  // (suppress start/progress for background sessions, surface a clickable
+  // toast for cross-session completions). The subscription is global —
+  // /notifications/events fans `voice_ack` out for every session, so
+  // background turns are heard even when the user has navigated away.
+  const ackPlayer = useVoiceAckPlayer({
+    activeSessionId: activeSession ?? null,
+    view,
+    onJumpToSession: (sid) => {
+      setActiveSession(sid);
+      setView("chat");
+    },
+  });
+  useEffect(() => {
+    const sub = subscribeGlobalNotifications((sessionId, event) => {
+      if (event.kind === "voice_ack") {
+        ackPlayer.handle(sessionId, event.data);
+      }
+    });
+    return () => sub.close();
+  }, [ackPlayer]);
 
   const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string) => {
     setChatStates((prev) => {

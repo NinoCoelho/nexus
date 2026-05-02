@@ -51,11 +51,21 @@ export interface UIConfig {
   language: "en" | "pt-BR";
 }
 
+export interface TTSConfig {
+  /** Master switch — show speaker buttons + run synth at all. */
+  enabled: boolean;
+  /** Speak start + completion acks on voice-input turns. */
+  ack_enabled: boolean;
+  /** Where the bundled Piper voices live on disk. Empty = ~/.nexus/tts/piper. */
+  voices_dir: string;
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
   models: Model[];
   transcription?: TranscriptionConfig;
+  tts?: TTSConfig;
   search?: SearchConfig;
   ui?: UIConfig;
 }
@@ -67,6 +77,7 @@ export interface ConfigPatch {
   providers?: Partial<Config["providers"]>;
   models?: Model[];
   transcription?: Partial<TranscriptionConfig>;
+  tts?: Partial<TTSConfig>;
   search?: Partial<SearchConfig>;
   ui?: Partial<UIConfig>;
 }
