@@ -14,6 +14,12 @@ export interface DashboardOperation {
   prefill?: Record<string, unknown>;
   icon?: string;
   order?: number;
+  /** Opt-in: when true, chat-kind operations show a plan-review step before
+   *  executing. The agent first produces a JSON plan of what it would do;
+   *  the user approves, refines, or cancels; only then does the real run
+   *  start. Off by default — most ops are routine and a mandatory approval
+   *  trains users to rubber-stamp. Reserve for ops with risky writes. */
+  preview?: boolean;
 }
 
 export type WidgetKind = "chart" | "report" | "kpi";
@@ -144,6 +150,48 @@ export async function runOperation(
   return res.json();
 }
 
+/**
+ * Plan-only run for an operation marked ``preview: true``. The agent reads
+ * the data it needs but doesn't write — instead it emits a JSON ``nexus-plan``
+ * fence the UI parses for user approval.
+ */
+export async function planOperation(
+  folder: string,
+  opId: string,
+): Promise<RunOperationResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/run-operation/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, op_id: opId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Plan operation error: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Execute an operation against an approved (and possibly edited) plan. The
+ * agent receives the plan in its seed and is instructed to execute it.
+ */
+export async function executeOperation(
+  folder: string,
+  opId: string,
+  approvedPlan: string,
+): Promise<RunOperationResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/run-operation/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, op_id: opId, approved_plan: approvedPlan }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Execute operation error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteOperation(folder: string, opId: string): Promise<Dashboard> {
   const res = await fetch(
     `${BASE}/vault/dashboard/operations/${encodeURIComponent(opId)}?folder=${encodeURIComponent(folder)}`,
@@ -225,6 +273,74 @@ export async function refreshWidget(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { detail?: string }).detail ?? `Refresh widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Re-run a widget refresh after a failed render with the prior attempt's
+ * output and error message embedded in the seed, so the agent can correct
+ * its own output (e.g. emit YAML when it had emitted JSON).
+ */
+export async function refineWidget(
+  folder: string,
+  widgetId: string,
+  previousOutput: string,
+  errorMessage: string,
+): Promise<RefreshWidgetResult> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/refine`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder,
+        previous_output: previousOutput,
+        error_message: errorMessage,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Refine widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Wizard ────────────────────────────────────────────────────────────────
+
+export type WizardKind = "widget" | "operation";
+
+export interface WizardStartResult {
+  session_id: string;
+  folder: string;
+  kind: WizardKind;
+  status: "running";
+}
+
+/**
+ * Start a back-and-forth design wizard for a widget or operation.
+ *
+ * Creates a hidden chat session pre-seeded with the wizard's role + the
+ * user's initial goal, and kicks the first turn. The UI then drives the
+ * conversation via the regular `/chat/stream` endpoint with the returned
+ * `session_id`. The wizard is instructed to ask at most one clarifying
+ * question per turn (max 2 total) and emit a fenced JSON proposal that
+ * the UI parses and commits via addWidget / addOperation.
+ */
+export async function startWizard(
+  folder: string,
+  kind: WizardKind,
+  goal: string,
+): Promise<WizardStartResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/wizard/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, kind, goal }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Wizard start error: ${res.status}`);
   }
   return res.json();
 }

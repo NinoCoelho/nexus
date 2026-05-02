@@ -23,6 +23,8 @@ import {
   deleteOperation,
   deleteDatabase,
   runOperation,
+  planOperation,
+  executeOperation,
   fetchRunHistory,
   addWidget,
   deleteWidget,
@@ -47,6 +49,8 @@ import OperationChips, { type OpRunState } from "./OperationChips";
 import AddOperationModal from "./AddOperationModal";
 import AddWidgetModal from "./AddWidgetModal";
 import WidgetGrid from "./WidgetGrid";
+import DashboardWizard from "./DashboardWizard";
+import PlanReviewModal from "./PlanReviewModal";
 import DataChatBubble, { type DataChatBubbleHandle } from "../DataChatBubble";
 import CardActivityModal from "../CardActivityModal";
 import "./DataDashboardView.css";
@@ -73,6 +77,17 @@ export default function DataDashboardView({
   const [error, setError] = useState<string | null>(null);
   const [showAddOp, setShowAddOp] = useState(false);
   const [showAddWidget, setShowAddWidget] = useState(false);
+  // Wizard surfaces — separate state slot from the simple modals so users
+  // can pick "✨ Wizard" for fuzzy intents without losing the fast simple
+  // form for power-user flows.
+  const [showWidgetWizard, setShowWidgetWizard] = useState(false);
+  const [showOpWizard, setShowOpWizard] = useState(false);
+  // Active plan-review for an op marked ``preview: true`` — populated when
+  // the user clicks the chip and we kick a plan-only run instead of the
+  // real one. Cleared on approve / cancel.
+  const [planReview, setPlanReview] = useState<
+    { op: DashboardOperation; sessionId: string } | null
+  >(null);
   const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
   const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<DashboardWidget | null>(null);
   const [formOp, setFormOp] = useState<{ op: DashboardOperation; table: DataTable } | null>(null);
@@ -161,66 +176,70 @@ export default function DataDashboardView({
     };
   }, [folder]);
 
+  // Wires the running op session into runState + auto-pop CardActivityModal
+  // when it terminates. Used for both the direct path and the post-approval
+  // execute path so they behave identically once kicked.
+  const trackChatOpSession = useCallback((op: DashboardOperation, sessionId: string) => {
+    const prevTimer = fadeTimers.current[op.id];
+    if (prevTimer) {
+      window.clearTimeout(prevTimer);
+      delete fadeTimers.current[op.id];
+    }
+    const prevSub = runSubs.current[op.id];
+    if (prevSub) {
+      prevSub.close();
+      delete runSubs.current[op.id];
+    }
+    setRunState((s) => ({ ...s, [op.id]: { sessionId, status: "running" } }));
+    const sub = subscribeSessionEvents(sessionId, (event) => {
+      if (event.kind !== "op_done") return;
+      const ok = event.data.status === "done";
+      const finalStatus: OpRunState["status"] = ok ? "done" : "failed";
+      setRunState((s) =>
+        s[op.id]?.sessionId === sessionId
+          ? {
+              ...s,
+              [op.id]: {
+                sessionId,
+                status: finalStatus,
+                error: ok ? undefined : event.data.error ?? undefined,
+              },
+            }
+          : s,
+      );
+      setOpenRun({
+        op,
+        state: { sessionId, status: finalStatus, error: ok ? undefined : event.data.error ?? undefined },
+      });
+      const current = runSubs.current[op.id];
+      if (current) {
+        current.close();
+        delete runSubs.current[op.id];
+      }
+    });
+    runSubs.current[op.id] = sub;
+  }, []);
+
   const handleRunOperation = useCallback(async (op: DashboardOperation) => {
     if (op.kind === "chat") {
+      // Preview-flagged ops route through plan-then-execute. The plan run
+      // itself is hidden from the chip status — only the post-approval
+      // execute drives runState — so a cancelled plan leaves no trace.
+      if (op.preview) {
+        try {
+          const { session_id } = await planOperation(folder, op.id);
+          setPlanReview({ op, sessionId: session_id });
+        } catch (e) {
+          toast.error("Couldn't build a plan.", { detail: (e as Error).message });
+        }
+        return;
+      }
       // Kick an ephemeral *hidden* session — never appears in the sidebar.
       // The chip surfaces status via `runState`; the user can click the
       // status icon to open the run in CardActivityModal.
       try {
         const result = await runOperation(folder, op.id);
-        const sessionId = result.session_id;
-        // Cancel any prior fade timer / subscription for this op.
-        const prevTimer = fadeTimers.current[op.id];
-        if (prevTimer) {
-          window.clearTimeout(prevTimer);
-          delete fadeTimers.current[op.id];
-        }
-        const prevSub = runSubs.current[op.id];
-        if (prevSub) {
-          prevSub.close();
-          delete runSubs.current[op.id];
-        }
-        setRunState((s) => ({ ...s, [op.id]: { sessionId, status: "running" } }));
-        // Wait for the explicit `op_done` terminal event the server
-        // publishes from /vault/dashboard/run-operation. The persisted
-        // history is finalized before that event fires, so CardActivityModal
-        // can read it back via getSession() when the user clicks through.
-        const sub = subscribeSessionEvents(sessionId, (event) => {
-          if (event.kind !== "op_done") return;
-          const ok = event.data.status === "done";
-          const finalStatus: OpRunState["status"] = ok ? "done" : "failed";
-          setRunState((s) =>
-            s[op.id]?.sessionId === sessionId
-              ? {
-                  ...s,
-                  [op.id]: {
-                    sessionId,
-                    status: finalStatus,
-                    error: ok ? undefined : event.data.error ?? undefined,
-                  },
-                }
-              : s,
-          );
-          // Auto-open the result modal so the user sees the agent's reply
-          // without an extra click. Only for runs the user kicked from this
-          // view (we still own a live subscription for it). Hydrated stale
-          // failures don't auto-pop — those just sit on the chip until
-          // clicked.
-          setOpenRun({
-            op,
-            state: { sessionId, status: finalStatus, error: ok ? undefined : event.data.error ?? undefined },
-          });
-          // Don't auto-fade or delete the session here: the modal is open and
-          // its onClose handler does the cleanup. If the user closes the
-          // popup, the chip clears; if they walk away, the run sits on the
-          // chip until next mount, where the hydration path handles it.
-          const current = runSubs.current[op.id];
-          if (current) {
-            current.close();
-            delete runSubs.current[op.id];
-          }
-        });
-        runSubs.current[op.id] = sub;
+        trackChatOpSession(op, result.session_id);
       } catch (e) {
         toast.error("Couldn't start action.", { detail: (e as Error).message });
         setRunState((s) => {
@@ -242,7 +261,20 @@ export default function DataDashboardView({
     } catch (e) {
       toast.error("Couldn't load the target table.", { detail: (e as Error).message });
     }
-  }, [folder, toast]);
+  }, [folder, toast, trackChatOpSession]);
+
+  // Plan-review → execute. Called from PlanReviewModal once the user clicks
+  // Approve. Closes the modal and kicks the real run, which then drives the
+  // chip via the same trackChatOpSession path direct runs use.
+  const handleApprovePlan = useCallback(async (op: DashboardOperation, approvedPlan: string) => {
+    setPlanReview(null);
+    try {
+      const result = await executeOperation(folder, op.id, approvedPlan);
+      trackChatOpSession(op, result.session_id);
+    } catch (e) {
+      toast.error("Couldn't start the approved run.", { detail: (e as Error).message });
+    }
+  }, [folder, toast, trackChatOpSession]);
 
   const handleOpenRun = useCallback((op: DashboardOperation) => {
     const state = runState[op.id];
@@ -414,6 +446,7 @@ export default function DataDashboardView({
           onRunOperation={(op) => void handleRunOperation(op)}
           onOpenRun={handleOpenRun}
           onAddOperation={() => setShowAddOp(true)}
+          onAddOperationWizard={() => setShowOpWizard(true)}
           onRemoveOperation={(id) => {
             const op = dashboard.operations.find((o) => o.id === id);
             if (op) setPendingRemoval(op);
@@ -468,6 +501,7 @@ export default function DataDashboardView({
           folder={folder}
           widgets={dashboard.widgets ?? []}
           onAdd={() => setShowAddWidget(true)}
+          onAddWizard={() => setShowWidgetWizard(true)}
           onEdit={(w) => setEditingWidget(w)}
           onRemove={(id) => {
             const w = (dashboard.widgets ?? []).find((x) => x.id === id);
@@ -515,6 +549,39 @@ export default function DataDashboardView({
           tables={tables}
           onSubmit={handleAddOperation}
           onCancel={() => setShowAddOp(false)}
+        />
+      )}
+
+      {showWidgetWizard && (
+        <DashboardWizard
+          folder={folder}
+          kind="widget"
+          onApproveWidget={async (w) => {
+            await handleAddWidget(w);
+            setShowWidgetWizard(false);
+          }}
+          onCancel={() => setShowWidgetWizard(false)}
+        />
+      )}
+
+      {showOpWizard && (
+        <DashboardWizard
+          folder={folder}
+          kind="operation"
+          onApproveOperation={async (op) => {
+            await handleAddOperation(op);
+            setShowOpWizard(false);
+          }}
+          onCancel={() => setShowOpWizard(false)}
+        />
+      )}
+
+      {planReview && (
+        <PlanReviewModal
+          operation={planReview.op}
+          sessionId={planReview.sessionId}
+          onApprove={(approved) => handleApprovePlan(planReview.op, approved)}
+          onCancel={() => setPlanReview(null)}
         />
       )}
 
@@ -591,7 +658,12 @@ export default function DataDashboardView({
         />
       )}
 
-      <DataChatBubble ref={bubbleRef} folder={folder} databaseTitle={dashboard.title} />
+      <DataChatBubble
+        ref={bubbleRef}
+        folder={folder}
+        databaseTitle={dashboard.title}
+        onTurnComplete={() => void reload()}
+      />
 
       {openRun && (
         <CardActivityModal

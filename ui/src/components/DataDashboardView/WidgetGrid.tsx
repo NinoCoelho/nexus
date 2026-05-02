@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchWidgetContent,
   refreshWidget,
+  refineWidget,
   type DashboardWidget,
   type WidgetSize,
 } from "../../api/dashboard";
@@ -34,6 +35,9 @@ interface Props {
   folder: string;
   widgets: DashboardWidget[];
   onAdd: () => void;
+  /** Optional wizard entry point. When omitted, only the simple "+ Widget"
+   *  button shows. */
+  onAddWizard?: () => void;
   onEdit: (widget: DashboardWidget) => void;
   onRemove: (widgetId: string) => void;
   /** Persist a size change for a widget. Caller upserts via `addWidget` so
@@ -59,6 +63,10 @@ interface WidgetState {
   body: string;
   status: WidgetStatus;
   error?: string;
+  /** Set when the body refreshed successfully but failed to render
+   *  client-side (e.g. malformed nexus-chart fence). Different from
+   *  ``error``, which carries server-side refresh failures. */
+  renderError?: string;
 }
 
 const KIND_ICON: Record<string, string> = {
@@ -91,7 +99,7 @@ function freshness(iso: string | null): string {
   return `Updated ${days}d ago`;
 }
 
-export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, onResize, onOpenInVault }: Props) {
+export default function WidgetGrid({ folder, widgets, onAdd, onAddWizard, onEdit, onRemove, onResize, onOpenInVault }: Props) {
   const toast = useToast();
   const [states, setStates] = useState<Record<string, WidgetState>>({});
   // Single global refresh queue: every refresh (per-widget click, daily
@@ -114,7 +122,14 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
       const { content } = await fetchWidgetContent(folder, widgetId);
       setStates((s) => ({
         ...s,
-        [widgetId]: { ...(s[widgetId] ?? { status: "idle" }), body: content, status: "idle", error: undefined },
+        [widgetId]: {
+          ...(s[widgetId] ?? { status: "idle" }),
+          body: content,
+          status: "idle",
+          error: undefined,
+          // Clear stale render errors so the next render gets a fresh shot.
+          renderError: undefined,
+        },
       }));
     } catch (e) {
       setStates((s) => ({
@@ -244,6 +259,72 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
     for (const w of widgets) enqueueRefresh(w);
   }, [widgets, enqueueRefresh]);
 
+  // Capture render errors from embedded chart fences so the widget card can
+  // show a friendly recovery UI instead of just the raw red error block.
+  const handleRenderError = useCallback((widgetId: string, message: string) => {
+    setStates((s) => {
+      const prev = s[widgetId];
+      if (prev?.renderError === message) return s;
+      return {
+        ...s,
+        [widgetId]: { ...(prev ?? { body: "", status: "idle" }), renderError: message },
+      };
+    });
+  }, []);
+
+  // Refine: re-run the refresh with the prior failure context attached.
+  // Always queued through the same global queue so it can't double up with
+  // a manual click or daily auto-refresh in flight.
+  const enqueueRefine = useCallback((widget: DashboardWidget, previous: string, errorMsg: string): void => {
+    setStates((s) => ({
+      ...s,
+      [widget.id]: { ...(s[widget.id] ?? { body: "" }), status: "running", error: undefined, renderError: undefined },
+    }));
+    setQueueLength((n) => n + 1);
+    queueTail.current = queueTail.current
+      .catch(() => undefined)
+      .then(() => new Promise<void>((resolve) => {
+        void (async () => {
+          try {
+            const { session_id } = await refineWidget(folder, widget.id, previous, errorMsg);
+            const prevSub = subs.current[widget.id];
+            if (prevSub) prevSub.close();
+            const sub = subscribeSessionEvents(session_id, async (event) => {
+              if (event.kind !== "op_done") return;
+              const ok = event.data.status === "done";
+              if (ok) {
+                await loadBody(widget.id);
+              } else {
+                setStates((s) => ({
+                  ...s,
+                  [widget.id]: {
+                    body: s[widget.id]?.body ?? "",
+                    status: "failed",
+                    error: event.data.error ?? undefined,
+                  },
+                }));
+              }
+              const current = subs.current[widget.id];
+              if (current) {
+                current.close();
+                delete subs.current[widget.id];
+              }
+              resolve();
+            });
+            subs.current[widget.id] = sub;
+          } catch (e) {
+            setStates((s) => ({
+              ...s,
+              [widget.id]: { body: s[widget.id]?.body ?? "", status: "failed", error: (e as Error).message },
+            }));
+            toast.error(`Couldn't refine "${widget.title}"`, { detail: (e as Error).message });
+            resolve();
+          }
+        })();
+      }))
+      .finally(() => setQueueLength((n) => Math.max(0, n - 1)));
+  }, [folder, loadBody, toast]);
+
   return (
     <div className="data-dash-widgets">
       <div className="data-dash-widgets-header">
@@ -265,10 +346,20 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
             type="button"
             className="data-dash-action-btn"
             onClick={onAdd}
-            title="Add a new widget"
+            title="Add a new widget (simple form)"
           >
             + Widget
           </button>
+          {onAddWizard && (
+            <button
+              type="button"
+              className="data-dash-action-btn"
+              onClick={onAddWizard}
+              title="Design a widget with a wizard — describe what you want and the agent helps shape it."
+            >
+              ✨ Wizard
+            </button>
+          )}
         </div>
       </div>
 
@@ -343,13 +434,20 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
                   </div>
                 </header>
                 <div className="data-dash-widget-body">
-                  {failed && (
-                    <div className="dt-error" style={{ marginBottom: 6 }}>
-                      Last refresh failed: {state.error ?? "(no detail)"}
-                    </div>
-                  )}
-                  {state.body ? (
-                    <MarkdownView onVaultLinkPreview={onOpenInVault}>{state.body}</MarkdownView>
+                  {(failed || state.renderError) ? (
+                    <WidgetErrorCard
+                      widget={w}
+                      refreshError={failed ? state.error : undefined}
+                      renderError={state.renderError}
+                      previousBody={state.body}
+                      onEdit={() => onEdit(w)}
+                      onRefine={(prev, msg) => enqueueRefine(w, prev, msg)}
+                    />
+                  ) : state.body ? (
+                    <MarkdownView
+                      onVaultLinkPreview={onOpenInVault}
+                      onChartError={(msg) => handleRenderError(w.id, msg)}
+                    >{state.body}</MarkdownView>
                   ) : (
                     <div className="data-dash-hint">
                       {running ? "Running first refresh…" : "Not refreshed yet — click ↻."}
@@ -360,6 +458,70 @@ export default function WidgetGrid({ folder, widgets, onAdd, onEdit, onRemove, o
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
+
+interface ErrorCardProps {
+  widget: DashboardWidget;
+  /** Set when the refresh session itself failed (server / agent error). */
+  refreshError?: string;
+  /** Set when the body refreshed but the client failed to render it
+   *  (e.g. malformed nexus-chart fence). */
+  renderError?: string;
+  /** The agent's last output, shown collapsed so the user can see what went
+   *  wrong and so the refine call can pass it to the next attempt. */
+  previousBody: string;
+  onEdit: () => void;
+  onRefine: (previous: string, errorMsg: string) => void;
+}
+
+/**
+ * Friendly recovery surface for a widget whose last refresh failed or whose
+ * body couldn't render. Surfaces three affordances:
+ *   - **Refine with agent** → re-runs the refresh seeded with the prior
+ *     output + error so the agent can self-correct (e.g. emit YAML when its
+ *     last try produced JSON).
+ *   - **Edit prompt** → opens the existing AddWidgetModal in edit mode so
+ *     the user can rephrase the prompt themselves.
+ *   - The raw output collapsed in a ``<details>`` so power users can still
+ *     inspect what the agent actually returned.
+ */
+function WidgetErrorCard({ widget, refreshError, renderError, previousBody, onEdit, onRefine }: ErrorCardProps) {
+  const isRender = !refreshError && !!renderError;
+  const message = isRender
+    ? "I produced output that didn't render. Want me to try again?"
+    : "Last refresh failed.";
+  const detail = renderError ?? refreshError ?? "(no detail)";
+
+  return (
+    <div className="widget-error-card">
+      <div className="widget-error-card-msg">{message}</div>
+      <div className="widget-error-card-detail">{detail}</div>
+      <div className="widget-error-card-actions">
+        <button
+          type="button"
+          className="data-dash-action-btn data-dash-action-btn--primary"
+          onClick={() => onRefine(previousBody, detail)}
+          title="Re-run the refresh with the failure as context — the agent will try to self-correct."
+        >
+          ↻ Refine with agent
+        </button>
+        <button
+          type="button"
+          className="data-dash-action-btn"
+          onClick={onEdit}
+          title="Rephrase the widget prompt yourself."
+        >
+          ✎ Edit prompt
+        </button>
+      </div>
+      {previousBody && (
+        <details className="widget-error-card-raw">
+          <summary>Show raw output ({widget.kind})</summary>
+          <pre><code>{previousBody}</code></pre>
+        </details>
       )}
     </div>
   );

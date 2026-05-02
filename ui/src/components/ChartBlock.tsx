@@ -15,7 +15,7 @@
  *     - { x: "B", y: 7 }
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { MermaidBlock } from "./MarkdownView";
 
 interface DataPoint {
@@ -29,6 +29,28 @@ interface ChartSpec {
   x?: string;
   y?: string;
   data?: unknown[];
+}
+
+// LLM-authored widgets sometimes spell these as JSON with `chartType`,
+// `xField`, `yField` instead of the YAML `type` / `x` / `y` we document.
+// Accept both rather than failing silently with "No data points to chart".
+function normalizeSpec(raw: unknown): ChartSpec {
+  if (!raw || typeof raw !== "object") return {};
+  const r = raw as Record<string, unknown>;
+  const pick = <T,>(...keys: string[]): T | undefined => {
+    for (const k of keys) {
+      const v = r[k];
+      if (v !== undefined && v !== null) return v as T;
+    }
+    return undefined;
+  };
+  return {
+    type: pick<ChartSpec["type"]>("type", "chartType", "kind"),
+    title: pick<string>("title"),
+    x: pick<string>("x", "xField", "xKey", "xAxis"),
+    y: pick<string>("y", "yField", "yKey", "yAxis"),
+    data: pick<unknown[]>("data", "rows", "points"),
+  };
 }
 
 // ── YAML parser (tiny, no dep) ──────────────────────────────────────────────
@@ -227,10 +249,33 @@ function specToMermaid(spec: ChartSpec): string {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function ChartBlock({ code }: { code: string }) {
+function parseSpec(code: string): ChartSpec {
+  // Try JSON first — LLMs often emit JSON-shaped specs even when we asked
+  // for YAML. The leading-brace check avoids paying JSON.parse on every
+  // YAML body just to fail.
+  const trimmed = code.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      return normalizeSpec(JSON.parse(trimmed));
+    } catch {
+      // fall through to YAML
+    }
+  }
+  return normalizeSpec(parseSimpleYaml(code));
+}
+
+interface ChartBlockProps {
+  code: string;
+  /** Notified when the spec fails to parse or yields no plottable data, so a
+   *  wrapping container (e.g. WidgetGrid) can offer a friendly error UI with
+   *  Edit / Refine actions instead of just rendering raw text. */
+  onError?: (message: string) => void;
+}
+
+export default function ChartBlock({ code, onError }: ChartBlockProps) {
   const { mermaidSrc, error } = useMemo(() => {
     try {
-      const spec = parseSimpleYaml(code) as ChartSpec;
+      const spec = parseSpec(code);
       const src = specToMermaid(spec);
       if (!src) return { mermaidSrc: "", error: "No data points to chart" };
       return { mermaidSrc: src, error: null };
@@ -241,6 +286,12 @@ export default function ChartBlock({ code }: { code: string }) {
       };
     }
   }, [code]);
+
+  // Fire onError as a side effect so the parent can react. We avoid calling
+  // it during render — React would flag the state update as out-of-tree.
+  useEffect(() => {
+    if (error && onError) onError(error);
+  }, [error, onError]);
 
   if (error) {
     return (

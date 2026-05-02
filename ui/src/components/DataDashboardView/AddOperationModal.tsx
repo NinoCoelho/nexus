@@ -47,6 +47,7 @@ export default function AddOperationModal({ folder: _folder, tables, onSubmit, o
   const [kind, setKind] = useState<OperationKind>("chat");
   const [table, setTable] = useState(tables[0]?.path ?? "");
   const [prompt, setPrompt] = useState("");
+  const [preview, setPreview] = useState(false);
   // Form-kind only: live default values typed into the rendered FormRenderer.
   const [prefill, setPrefill] = useState<Record<string, unknown>>({});
   const [tableSchema, setTableSchema] = useState<DataTable | null>(null);
@@ -115,6 +116,7 @@ export default function AddOperationModal({ folder: _folder, tables, onSubmit, o
         ...(compactPrefill && Object.keys(compactPrefill).length > 0
           ? { prefill: compactPrefill }
           : {}),
+        ...(preview && kind === "chat" ? { preview: true } : {}),
       };
       await onSubmit(op);
     } finally {
@@ -176,6 +178,26 @@ export default function AddOperationModal({ folder: _folder, tables, onSubmit, o
               placeholder="Add a new customer named {name}"
               rows={3}
             />
+          </div>
+        )}
+
+        {kind === "chat" && (
+          <div className="dt-schema-row">
+            <label className="dt-schema-label">Preview</label>
+            <label style={{ display: "flex", gap: 8, alignItems: "flex-start", flex: 1 }}>
+              <input
+                type="checkbox"
+                checked={preview}
+                onChange={(e) => setPreview(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span style={{ fontSize: 12, lineHeight: 1.4 }}>
+                <strong>Plan before running.</strong> Agent shows what it
+                would do (a checklist of intended actions) for you to approve
+                or refine before any writes happen. Recommended for ops that
+                modify data.
+              </span>
+            </label>
           </div>
         )}
 
