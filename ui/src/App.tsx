@@ -34,7 +34,11 @@ import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
+import { useVoiceAckPlayer } from "./hooks/useVoiceAckPlayer";
+import { subscribeGlobalNotifications } from "./api/chat";
 import { usePushSubscription } from "./hooks/usePushSubscription";
+import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
+import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useSessionUsage } from "./hooks/useSessionUsage";
@@ -44,6 +48,7 @@ import SharedSessionView from "./components/SharedSessionView";
 
 export default function App() {
   const toast = useToast();
+  const { t: tBg } = useTranslation("skillWizard");
   // Detect a read-only share-link route before any state setup. Hash routes
   // look like ``#/share/<token>``; that page bypasses the rest of the app
   // entirely, so unauthenticated viewers don't load the chat surface.
@@ -88,6 +93,19 @@ export default function App() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+
+  // Wizard background-build tracker — owns SSE subscriptions for any skill
+  // builds the user dismissed mid-flight, so they keep running on the
+  // server and surface a toast when the agent finishes.
+  useBackgroundSkillBuilds({
+    toast,
+    t: tBg,
+    onTryItNow: (skillName) => {
+      // Pop the new skill's drawer so the user sees what was built; from
+      // there they're one click away from a chat session that uses it.
+      setOpenSkill(skillName);
+    },
+  });
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's
@@ -268,6 +286,28 @@ export default function App() {
     setView("chat");
     setSessionsRevision((r) => r + 1);
   }, [setChatStates, setActiveSession, setSessionsRevision]);
+
+  // Voice acknowledgment playback. The hook handles ack-kind routing
+  // (suppress start/progress for background sessions, surface a clickable
+  // toast for cross-session completions). The subscription is global —
+  // /notifications/events fans `voice_ack` out for every session, so
+  // background turns are heard even when the user has navigated away.
+  const ackPlayer = useVoiceAckPlayer({
+    activeSessionId: activeSession ?? null,
+    view,
+    onJumpToSession: (sid) => {
+      setActiveSession(sid);
+      setView("chat");
+    },
+  });
+  useEffect(() => {
+    const sub = subscribeGlobalNotifications((sessionId, event) => {
+      if (event.kind === "voice_ack") {
+        ackPlayer.handle(sessionId, event.data);
+      }
+    });
+    return () => sub.close();
+  }, [ackPlayer]);
 
   const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string) => {
     setChatStates((prev) => {
@@ -587,6 +627,7 @@ export default function App() {
               onOpenInChat={handleOpenInChat}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
+              onOpenInVault={handleOpenInVault}
             />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
@@ -597,6 +638,7 @@ export default function App() {
                 onOpenInChat={handleOpenInChat}
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
+                onOpenInVault={handleOpenInVault}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
@@ -648,6 +690,7 @@ export default function App() {
                   setDataSelectedPath(null);
                   setDataDiagramFolder(null);
                 }}
+                onOpenInVault={handleOpenInVault}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>

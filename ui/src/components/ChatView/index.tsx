@@ -9,11 +9,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../../api";
+import { classify } from "../../fileTypes";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
 import { PartialTurnActions } from "./partialTurn";
 import ChatSearchBar from "./ChatSearchBar";
+import VoiceAttachment from "./VoiceAttachment";
 import "../ChatView.css";
+
+// Voice memos are recorded as audio/webm and stored under ``uploads/voice/``.
+// ``classify`` keys off the extension and treats ``.webm`` as video, so we
+// special-case the voice path to render an <audio> player instead.
+function isAudioAttachment(path: string): boolean {
+  if (classify(path).kind === "audio") return true;
+  return path.startsWith("uploads/voice/") && path.toLowerCase().endsWith(".webm");
+}
 
 export interface TimelineStep {
   id: string;
@@ -292,7 +302,22 @@ export default function ChatView({
                   </button>
                 )}
               </div>
-              <div className="user-msg-bubble">{msg.content}</div>
+              <div className="user-msg-bubble">
+                {msg.attachments && msg.attachments.length > 0 && (
+                  <div className="user-msg-attachments">
+                    {msg.attachments.map((a, i) => (
+                      isAudioAttachment(a.vaultPath) ? (
+                        <VoiceAttachment key={i} path={a.vaultPath} />
+                      ) : (
+                        <span key={i} className="user-msg-attachment-chip">
+                          {a.name}
+                        </span>
+                      )
+                    ))}
+                  </div>
+                )}
+                {msg.content}
+              </div>
             </div>
           )
         )}

@@ -12,7 +12,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
-import { getAgentGraph, type AgentGraphData, type AgentGraphNode } from "../../api";
+import {
+  exportSkillsArchiveUrl,
+  getAgentGraph,
+  importSkillsArchive,
+  type AgentGraphData,
+  type AgentGraphNode,
+} from "../../api";
+import { useToast } from "../../toast/ToastProvider";
 import "../AgentGraphView.css";
 
 interface Props {
@@ -52,10 +59,13 @@ function radiusFor(type: AgentGraphNode["type"]): number {
 export default function AgentGraphView({ onOpenSkill, onSelectSession }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<FgInstance | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const toast = useToast();
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 800, h: 600 });
   const [graph, setGraph] = useState<AgentGraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -151,11 +161,75 @@ export default function AgentGraphView({ onOpenSkill, onSelectSession }: Props) 
   const nodeCount = graph?.nodes.length ?? 0;
   const edgeCount = graph?.edges.length ?? 0;
 
+  const handleExport = useCallback(() => {
+    // Plain navigation triggers the Content-Disposition download in any
+    // browser without us having to juggle a hidden anchor.
+    window.location.href = exportSkillsArchiveUrl();
+  }, []);
+
+  const handleImportPick = useCallback(() => {
+    importInputRef.current?.click();
+  }, []);
+
+  const handleImportFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = "";
+      if (!file) return;
+      setImporting(true);
+      try {
+        const result = await importSkillsArchive(file);
+        const summary = `Imported ${result.imported.length} skill${
+          result.imported.length === 1 ? "" : "s"
+        }${result.skipped.length ? ` (skipped ${result.skipped.length})` : ""}`;
+        toast.success(summary, {
+          detail: result.skipped.length
+            ? result.skipped.map((s) => `${s.name}: ${s.reason}`).join("\n")
+            : undefined,
+        });
+        window.dispatchEvent(new CustomEvent("nexus:skills-changed"));
+        fetchGraph();
+      } catch (err) {
+        toast.error("Skill import failed", {
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        setImporting(false);
+      }
+    },
+    [fetchGraph, toast],
+  );
+
+  // Refetch the graph whenever a skill is added / deleted / imported
+  // anywhere else in the app (SkillDrawer delete, wizard finish, ...).
+  useEffect(() => {
+    const onChanged = () => fetchGraph();
+    window.addEventListener("nexus:skills-changed", onChanged);
+    return () => window.removeEventListener("nexus:skills-changed", onChanged);
+  }, [fetchGraph]);
+
   return (
     <div className="agent-graph-view" ref={wrapRef}>
       <div className="agent-graph-toolbar">
         <button className="agent-graph-toolbar-btn" onClick={fitToView}>Fit to view</button>
         <button className="agent-graph-toolbar-btn" onClick={fetchGraph}>Refresh</button>
+        <button className="agent-graph-toolbar-btn" onClick={handleExport}>
+          Export skills
+        </button>
+        <button
+          className="agent-graph-toolbar-btn"
+          onClick={handleImportPick}
+          disabled={importing}
+        >
+          {importing ? "Importing…" : "Import skills"}
+        </button>
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".zip,application/zip"
+          style={{ display: "none" }}
+          onChange={(e) => void handleImportFile(e)}
+        />
         <span className="agent-graph-toolbar-stat">{nodeCount} nodes</span>
         <span className="agent-graph-toolbar-stat">{edgeCount} edges</span>
       </div>

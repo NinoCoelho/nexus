@@ -153,9 +153,34 @@ class SessionStore(PubSubMixin, QueryMixin):
                     loom_tcs = [lt.ToolCall(**tc) for tc in raw]
                 except Exception:
                     pass
+            # ``content`` is stored as text. For multipart messages loom's
+            # _serialize_content emits a JSON-encoded list of parts; we
+            # have to reverse that here or loom's pydantic validator
+            # rejects the row at construction time. Mirrors
+            # loom.store.session.SessionStore._deserialize_content.
+            content_raw = r[1]
+            content: Any = content_raw
+            if isinstance(content_raw, str) and content_raw.startswith("["):
+                try:
+                    parsed = json.loads(content_raw)
+                except json.JSONDecodeError:
+                    parsed = None
+                if (
+                    isinstance(parsed, list)
+                    and parsed
+                    and isinstance(parsed[0], dict)
+                    and "type" in parsed[0]
+                ):
+                    try:
+                        from pydantic import TypeAdapter
+
+                        adapter = TypeAdapter(list[lt.ContentPart])
+                        content = adapter.validate_python(parsed)
+                    except Exception:  # noqa: BLE001 — fall back to raw text
+                        content = content_raw
             loom_msg = lt.ChatMessage(
                 role=lt.Role(r[0]),
-                content=r[1],
+                content=content,
                 tool_calls=loom_tcs,
                 tool_call_id=r[3],
                 name=r[4],
@@ -292,10 +317,23 @@ class SessionStore(PubSubMixin, QueryMixin):
         ).fetchone()
         if row and (row[0] is None or row[0] == "New session"):
             for msg in history:
-                if msg.role == Role.USER and msg.content:
-                    title = msg.content.strip()[:40]
+                if msg.role != Role.USER or not msg.content:
+                    continue
+                # Multipart content (image/audio/document attachments) is a
+                # list of ``ContentPart`` — pull the first text part for the
+                # title rather than calling .strip() on the list.
+                text_for_title = ""
+                if isinstance(msg.content, str):
+                    text_for_title = msg.content
+                elif isinstance(msg.content, list):
+                    for part in msg.content:
+                        if getattr(part, "kind", None) == "text" and part.text:
+                            text_for_title = part.text
+                            break
+                title = text_for_title.strip()[:40]
+                if title:
                     self._loom.set_title(session_id, title)
-                    break
+                break
 
     def reset(self, session_id: str) -> None:
         self._loom.reset(session_id)

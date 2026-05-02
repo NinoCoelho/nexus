@@ -24,8 +24,11 @@ import {
   deleteDatabase,
   runOperation,
   fetchRunHistory,
+  addWidget,
+  deleteWidget,
   type Dashboard,
   type DashboardOperation,
+  type DashboardWidget,
 } from "../../api/dashboard";
 import { deleteSession } from "../../api/sessions";
 import {
@@ -42,6 +45,8 @@ import FormRenderer from "../FormRenderer";
 import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
 import OperationChips, { type OpRunState } from "./OperationChips";
 import AddOperationModal from "./AddOperationModal";
+import AddWidgetModal from "./AddWidgetModal";
+import WidgetGrid from "./WidgetGrid";
 import DataChatBubble, { type DataChatBubbleHandle } from "../DataChatBubble";
 import CardActivityModal from "../CardActivityModal";
 import "./DataDashboardView.css";
@@ -51,6 +56,8 @@ interface Props {
   onOpenTable: (path: string) => void;
   onOpenDiagram: (folder: string) => void;
   onAfterDelete: () => void;
+  /** Optional vault-link preview handler forwarded to widget markdown. */
+  onOpenInVault?: (path: string) => void;
 }
 
 export default function DataDashboardView({
@@ -58,12 +65,16 @@ export default function DataDashboardView({
   onOpenTable,
   onOpenDiagram,
   onAfterDelete,
+  onOpenInVault,
 }: Props) {
   const toast = useToast();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [tables, setTables] = useState<DatabaseTableSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAddOp, setShowAddOp] = useState(false);
+  const [showAddWidget, setShowAddWidget] = useState(false);
+  const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
+  const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<DashboardWidget | null>(null);
   const [formOp, setFormOp] = useState<{ op: DashboardOperation; table: DataTable } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [typeToConfirm, setTypeToConfirm] = useState(false);
@@ -177,35 +188,32 @@ export default function DataDashboardView({
         const sub = subscribeSessionEvents(sessionId, (event) => {
           if (event.kind !== "op_done") return;
           const ok = event.data.status === "done";
+          const finalStatus: OpRunState["status"] = ok ? "done" : "failed";
           setRunState((s) =>
             s[op.id]?.sessionId === sessionId
               ? {
                   ...s,
                   [op.id]: {
                     sessionId,
-                    status: ok ? "done" : "failed",
+                    status: finalStatus,
                     error: ok ? undefined : event.data.error ?? undefined,
                   },
                 }
               : s,
           );
-          if (ok) {
-            // Auto-fade success after a few seconds; failures stay warned
-            // until the user opens them. The session itself is also GC'd
-            // here — successful runs aren't worth persisting.
-            const t = window.setTimeout(() => {
-              setRunState((s) => {
-                if (s[op.id]?.sessionId !== sessionId) return s;
-                if (s[op.id]?.status !== "done") return s;
-                const { [op.id]: _gone, ...rest } = s;
-                void _gone;
-                return rest;
-              });
-              delete fadeTimers.current[op.id];
-              void deleteSession(sessionId).catch(() => { /* benign */ });
-            }, 4000);
-            fadeTimers.current[op.id] = t;
-          }
+          // Auto-open the result modal so the user sees the agent's reply
+          // without an extra click. Only for runs the user kicked from this
+          // view (we still own a live subscription for it). Hydrated stale
+          // failures don't auto-pop — those just sit on the chip until
+          // clicked.
+          setOpenRun({
+            op,
+            state: { sessionId, status: finalStatus, error: ok ? undefined : event.data.error ?? undefined },
+          });
+          // Don't auto-fade or delete the session here: the modal is open and
+          // its onClose handler does the cleanup. If the user closes the
+          // popup, the chip clears; if they walk away, the run sits on the
+          // chip until next mount, where the hydration path handles it.
           const current = runSubs.current[op.id];
           if (current) {
             current.close();
@@ -259,6 +267,62 @@ export default function DataDashboardView({
       setDashboard(next);
     } catch (e) {
       toast.error("Couldn't remove operation", { detail: (e as Error).message });
+    }
+  }, [folder, toast]);
+
+  const handleAddWidget = useCallback(async (widget: DashboardWidget) => {
+    try {
+      const next = await addWidget(folder, widget);
+      setDashboard(next);
+      setShowAddWidget(false);
+      toast.success(`Added widget "${widget.title}"`);
+    } catch (e) {
+      toast.error("Couldn't add widget", { detail: (e as Error).message });
+    }
+  }, [folder, toast]);
+
+  const handleEditWidget = useCallback(async (widget: DashboardWidget) => {
+    // Server upserts by id, so a Save reuses the same `_widgets/<id>.md`
+    // result file — no need to refresh; the saved body is still valid for
+    // the new title/prompt until the user explicitly hits ↻.
+    try {
+      const next = await addWidget(folder, widget);
+      setDashboard(next);
+      setEditingWidget(null);
+      toast.success(`Saved "${widget.title}"`);
+    } catch (e) {
+      toast.error("Couldn't save widget", { detail: (e as Error).message });
+    }
+  }, [folder, toast]);
+
+  const handleResizeWidget = useCallback(async (widget: DashboardWidget, size: "sm" | "md" | "lg") => {
+    if (widget.size === size) return;
+    // Optimistic local update so the click feels instant — server upsert
+    // races below and only the dashboard list is reconciled.
+    setDashboard((d) =>
+      d
+        ? {
+            ...d,
+            widgets: (d.widgets ?? []).map((w) => (w.id === widget.id ? { ...w, size } : w)),
+          }
+        : d,
+    );
+    try {
+      const next = await addWidget(folder, { ...widget, size });
+      setDashboard(next);
+    } catch (e) {
+      toast.error("Couldn't resize widget", { detail: (e as Error).message });
+      // Roll back the optimistic update by triggering a fresh load.
+      void reload();
+    }
+  }, [folder, reload, toast]);
+
+  const handleRemoveWidget = useCallback(async (widgetId: string) => {
+    try {
+      const next = await deleteWidget(folder, widgetId);
+      setDashboard(next);
+    } catch (e) {
+      toast.error("Couldn't remove widget", { detail: (e as Error).message });
     }
   }, [folder, toast]);
 
@@ -397,6 +461,53 @@ export default function DataDashboardView({
           </div>
         )}
       </section>
+
+      <section className="data-dash-section">
+        <h2 className="data-dash-section-title">Widgets</h2>
+        <WidgetGrid
+          folder={folder}
+          widgets={dashboard.widgets ?? []}
+          onAdd={() => setShowAddWidget(true)}
+          onEdit={(w) => setEditingWidget(w)}
+          onRemove={(id) => {
+            const w = (dashboard.widgets ?? []).find((x) => x.id === id);
+            if (w) setPendingWidgetRemoval(w);
+          }}
+          onResize={handleResizeWidget}
+          onOpenInVault={onOpenInVault}
+        />
+      </section>
+
+      {showAddWidget && (
+        <AddWidgetModal
+          onSubmit={handleAddWidget}
+          onCancel={() => setShowAddWidget(false)}
+        />
+      )}
+
+      {editingWidget && (
+        <AddWidgetModal
+          editing={editingWidget}
+          onSubmit={handleEditWidget}
+          onCancel={() => setEditingWidget(null)}
+        />
+      )}
+
+      {pendingWidgetRemoval && (
+        <Modal
+          kind="confirm"
+          title={`Remove "${pendingWidgetRemoval.title}"?`}
+          message="This deletes the widget and its saved result. The prompt is gone — re-create it from + Widget."
+          confirmLabel="Remove"
+          danger
+          onSubmit={() => {
+            const w = pendingWidgetRemoval;
+            setPendingWidgetRemoval(null);
+            void handleRemoveWidget(w.id);
+          }}
+          onCancel={() => setPendingWidgetRemoval(null)}
+        />
+      )}
 
       {showAddOp && (
         <AddOperationModal

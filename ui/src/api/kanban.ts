@@ -230,11 +230,13 @@ export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQu
 }
 
 /**
- * Update a lane's metadata (title, automation prompt, or default model).
+ * Update a lane's metadata (title, automation prompt, or default model)
+ * and/or move it to a different column index within the board.
  *
  * `prompt` and `model` control the lane's auto-dispatch behaviour: when a card
  * is moved into the lane, the agent can be triggered automatically with that
- * prompt and model. Sending `null` clears the field.
+ * prompt and model. Sending `null` clears the field. To reorder columns,
+ * include `position` (zero-based index against the post-removal list).
  *
  * @param path - Path to the board's `.md` file.
  * @param laneId - Unique ID of the lane to update.
@@ -243,7 +245,7 @@ export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQu
 export async function patchVaultKanbanLane(
   path: string,
   laneId: string,
-  patch: { title?: string; prompt?: string | null; model?: string | null },
+  patch: { title?: string; prompt?: string | null; model?: string | null; position?: number },
 ): Promise<KanbanLane> {
   const res = await fetch(
     `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}?path=${encodeURIComponent(path)}`,

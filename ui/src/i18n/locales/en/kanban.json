@@ -14,6 +14,7 @@
     "editPrompt": "Edit lane prompt",
     "setPrompt": "Set lane prompt",
     "deleteLane": "Delete lane",
+    "dragHandle": "Drag to reorder lane",
     "addCard": "+ Card",
     "addCardAria": "Add card to this lane",
     "newLaneTitle": "New lane",

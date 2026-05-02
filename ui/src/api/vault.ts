@@ -37,6 +37,18 @@ export function vaultRawUrl(path: string): string {
   return `${BASE}/vault/raw?path=${encodeURIComponent(path)}`;
 }
 
+/** Lazy server-side transcription of a vault audio file. Cached on the
+ * server by (path, mtime), so this is cheap to call repeatedly. */
+export async function transcribeVaultAudio(path: string): Promise<{ text: string }> {
+  const res = await fetch(`${BASE}/vault/transcribe?path=${encodeURIComponent(path)}`);
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { const j = await res.json(); if (j?.detail) detail = j.detail; } catch { /* ignore */ }
+    throw new Error(`Transcription failed: ${detail}`);
+  }
+  return res.json();
+}
+
 export async function getVaultTree(): Promise<VaultNode[]> {
   const res = await fetch(`${BASE}/vault/tree`);
   if (!res.ok) throw new Error(`Vault tree error: ${res.status}`);

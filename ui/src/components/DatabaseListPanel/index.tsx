@@ -42,10 +42,6 @@ export default function DatabaseListPanel({
     try {
       const res = await listDatabases();
       setDatabases(res.databases);
-      // Auto-expand the first database for one-click visibility.
-      if (res.databases.length > 0) {
-        setExpanded((prev) => prev.size === 0 ? new Set([res.databases[0].folder]) : prev);
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load databases");
     } finally {
@@ -78,14 +74,17 @@ export default function DatabaseListPanel({
   }, [expanded, tablesByFolder]);
 
   const handleHeaderClick = (folder: string) => {
-    // Primary action: open the dashboard.
-    onSelectDatabase?.(folder);
-    // Secondary: ensure the inline table list is visible. Toggle only when the
-    // user clicks the header of the *already-active* database (lets them
-    // collapse).
+    // First click on a different database: just open its dashboard, leave the
+    // tree collapsed (loading the table list is slow because of row counts).
+    if (selectedDatabase !== folder) {
+      onSelectDatabase?.(folder);
+      return;
+    }
+    // Second click on the already-active database: toggle the inline table
+    // list. The dashboard stays open in the main pane.
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (selectedDatabase === folder && next.has(folder)) next.delete(folder);
+      if (next.has(folder)) next.delete(folder);
       else next.add(folder);
       return next;
     });

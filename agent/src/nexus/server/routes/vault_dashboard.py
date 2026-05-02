@@ -181,6 +181,17 @@ async def vault_dashboard_run_operation(
         f"You are running quick action **{label}** on database **{title}** "
         f"(vault folder `{folder or '/'}`).",
         "",
+        "How this runs:",
+        "- There is no chat UI for this turn. The user kicked this from a "
+        "dashboard chip and will see your **final assistant message** in a "
+        "preview modal.",
+        "- If you need any input from the user (a missing value, an "
+        "ambiguous choice, a confirmation before a write), call the "
+        "`ask_user` tool. The user will see a popup; do not guess.",
+        "- Keep your final reply terse and result-shaped. No preamble like "
+        "\"Here's what I did\". No closing remarks. Just the artifact: a "
+        "short status line, the table you produced, the chart fence, etc.",
+        "",
         prompt,
     ]
     seed_message = "\n".join(seed_lines)
@@ -252,6 +263,219 @@ async def vault_dashboard_run_operation(
         "session_id": session.id,
         "folder": folder,
         "op_id": op_id,
+        "status": "running",
+    }
+
+
+_WIDGET_KIND_INSTRUCTIONS: dict[str, str] = {
+    "chart": (
+        "OUTPUT FORMAT: Reply with **exactly one** ```nexus-chart fenced "
+        "block`` and nothing else. No prose before or after, no headings, "
+        "no analysis. Use the `visualize_table` tool against a vault data-"
+        "table when possible — its return value is already the right shape."
+    ),
+    "report": (
+        "OUTPUT FORMAT: Reply with terse markdown (bullets, short "
+        "paragraphs, or a small table). No preamble (\"Here's the "
+        "report\"), no closing remarks, no analysis unless the user's "
+        "prompt explicitly asked for analysis."
+    ),
+    "kpi": (
+        "OUTPUT FORMAT: Reply with **one number** on the first line and "
+        "**one short label** on the second line. Nothing else. Example:\n"
+        "    1,247\n"
+        "    Open issues"
+    ),
+}
+
+
+@router.post("/vault/dashboard/widgets", status_code=status.HTTP_201_CREATED)
+async def vault_dashboard_add_widget(body: dict) -> dict:
+    """Append or replace a widget on the dashboard."""
+    from ... import vault_dashboard
+    folder = body.get("folder", "")
+    widget = body.get("widget")
+    if not isinstance(widget, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`widget` must be an object",
+        )
+    try:
+        return vault_dashboard.upsert_widget(folder, widget)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc),
+        )
+
+
+@router.delete("/vault/dashboard/widgets/{widget_id}")
+async def vault_dashboard_delete_widget(widget_id: str, folder: str = "") -> dict:
+    from ... import vault_dashboard
+    return vault_dashboard.delete_widget(folder, widget_id)
+
+
+@router.get("/vault/dashboard/widgets/{widget_id}/content")
+async def vault_dashboard_widget_content(widget_id: str, folder: str = "") -> dict:
+    """Return the widget's current result body. Empty string if not refreshed yet."""
+    from ... import vault_widgets
+    try:
+        body = vault_widgets.read_widget_result(folder, widget_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc),
+        )
+    return {"folder": folder, "widget_id": widget_id, "content": body}
+
+
+def _widget_context_prefix(folder: str) -> str:
+    return f"Widget refresh: {folder}#"
+
+
+@router.post(
+    "/vault/dashboard/widgets/{widget_id}/refresh",
+    status_code=status.HTTP_201_CREATED,
+)
+async def vault_dashboard_refresh_widget(
+    widget_id: str,
+    body: dict,
+    a: Agent = Depends(get_agent),
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Run a hidden refresh turn for a widget.
+
+    Body: ``{folder}``. Looks up the widget config in `_data.md`, kicks an
+    ephemeral hidden agent session with a kind-specific output-format seed,
+    and on terminal: writes the agent's last assistant message verbatim into
+    ``<folder>/_widgets/<widget_id>.md`` and stamps ``last_refreshed_at``.
+
+    Returns ``{session_id}`` so the UI can subscribe to ``op_done`` and pull
+    fresh content.
+    """
+    from datetime import datetime, timezone
+    from ... import vault_dashboard, vault_widgets
+    from ..events import SessionEvent
+    from .vault_dispatch import HIDDEN_SEED_MARKER, _resolve_dispatch_model
+    from .vault_dispatch_helpers import run_background_agent_turn
+
+    folder = body.get("folder")
+    if not isinstance(folder, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`folder` required",
+        )
+
+    dashboard = vault_dashboard.read_dashboard(folder)
+    widget = next(
+        (w for w in dashboard.get("widgets") or [] if w.get("id") == widget_id),
+        None,
+    )
+    if widget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"widget {widget_id!r} not found in dashboard",
+        )
+
+    kind = widget.get("kind", "report")
+    title = widget.get("title") or widget_id
+    user_prompt = (widget.get("prompt") or "").strip() or title
+    db_title = (dashboard.get("title") or folder or "(root)").strip()
+    output_rule = _WIDGET_KIND_INSTRUCTIONS.get(
+        kind, _WIDGET_KIND_INSTRUCTIONS["report"],
+    )
+
+    seed_lines = [
+        HIDDEN_SEED_MARKER.rstrip(),
+        f"You are refreshing widget **{title}** ({kind}) on database "
+        f"**{db_title}** (vault folder `{folder or '/'}`).",
+        "",
+        output_rule,
+        "",
+        "Use the available vault tools (read tables, search, visualize) to "
+        "compute the answer. Do NOT call `ask_user` — widgets refresh "
+        "without user interaction. If something is ambiguous, make a "
+        "reasonable assumption and proceed.",
+        "",
+        "User's widget prompt:",
+        user_prompt,
+    ]
+    seed_message = "\n".join(seed_lines)
+
+    session = store.create(context=f"{_widget_context_prefix(folder)}{widget_id}")
+    try:
+        store.mark_hidden(session.id)
+    except Exception:
+        log.exception("widget refresh: mark_hidden failed")
+    try:
+        store.rename(session.id, f"🔄 {title}"[:60])
+    except Exception:
+        log.exception("widget refresh: title rename failed")
+
+    resolved_model = _resolve_dispatch_model(None, a)
+
+    async def _run_with_capture() -> None:
+        outcome = "done"
+        error_msg: str | None = None
+        try:
+            await run_background_agent_turn(
+                session_id=session.id,
+                seed_message=seed_message,
+                card_path="",
+                card_id="",
+                agent_=a,
+                store=store,
+                model_id=resolved_model,
+                entity_kind="none",
+            )
+        except Exception as exc:
+            outcome = "failed"
+            error_msg = str(exc)
+        else:
+            try:
+                final = store.get_or_create(session.id)
+                history = list(final.history)
+                last = history[-1] if history else None
+                content = (getattr(last, "content", "") or "") if last is not None else ""
+                if last is None or content.startswith("["):
+                    outcome = "failed"
+                    error_msg = content[:200] or "Widget refresh did not complete."
+                else:
+                    # Capture the agent's terse final reply as the widget body.
+                    try:
+                        vault_widgets.write_widget_result(folder, widget_id, content)
+                    except Exception as exc:
+                        outcome = "failed"
+                        error_msg = f"failed to persist widget result: {exc}"
+                    else:
+                        try:
+                            now = datetime.now(timezone.utc).isoformat(
+                                timespec="seconds",
+                            ).replace("+00:00", "Z")
+                            vault_dashboard.set_widget_refreshed(
+                                folder, widget_id, now,
+                            )
+                        except Exception:
+                            log.exception(
+                                "widget refresh: timestamp stamp failed",
+                            )
+            except Exception:
+                log.exception("widget refresh: outcome inspection failed")
+        try:
+            store.publish(
+                session.id,
+                SessionEvent(
+                    kind="op_done",
+                    data={"status": outcome, "error": error_msg},
+                ),
+            )
+        except Exception:
+            log.exception("widget refresh: terminal event publish failed")
+
+    asyncio.create_task(_run_with_capture())
+
+    return {
+        "session_id": session.id,
+        "folder": folder,
+        "widget_id": widget_id,
         "status": "running",
     }
 

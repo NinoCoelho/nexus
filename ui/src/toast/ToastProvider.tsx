@@ -47,7 +47,7 @@ interface Toast {
   exiting: boolean;
 }
 
-interface ToastAPI {
+export interface ToastAPI {
   success: (message: string, opts?: ToastOptions) => string;
   error: (message: string, opts?: ToastOptions) => string;
   info: (message: string, opts?: ToastOptions) => string;

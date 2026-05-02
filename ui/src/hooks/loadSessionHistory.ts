@@ -41,8 +41,36 @@ export async function loadSessionHistory(
       const m = raw[i];
 
       if (m.role === "user") {
-        const content = m.content ?? "";
-        if (content.trim().length === 0) continue;
+        // Server may serialize ``content`` as a plain string OR a list of
+        // ContentPart dicts when the turn carried image/audio/document
+        // attachments. Split a multipart payload into a text body + chip
+        // list so the bubble renders the same way it did during streaming.
+        // The TS type narrows to ``string`` for all the common paths; cast
+        // through ``unknown`` here to accept the array shape at runtime.
+        const rawContent = m.content as unknown;
+        let content = "";
+        let attachments: { name: string; vaultPath: string }[] | undefined;
+        if (typeof rawContent === "string") {
+          content = rawContent;
+        } else if (Array.isArray(rawContent)) {
+          const texts: string[] = [];
+          const atts: { name: string; vaultPath: string }[] = [];
+          for (const p of rawContent as Array<{
+            kind?: string; text?: string; vault_path?: string;
+          }>) {
+            if (p?.kind === "text" && typeof p.text === "string") {
+              texts.push(p.text);
+            } else if (typeof p?.vault_path === "string" && p.vault_path) {
+              atts.push({
+                name: p.vault_path.split("/").pop() ?? p.vault_path,
+                vaultPath: p.vault_path,
+              });
+            }
+          }
+          content = texts.join("\n\n");
+          if (atts.length > 0) attachments = atts;
+        }
+        if (content.trim().length === 0 && !attachments) continue;
         if (content.startsWith(HIDDEN_SEED_MARKER)) continue;
         flush();
         msgs.push({
@@ -51,6 +79,7 @@ export async function loadSessionHistory(
           timestamp: parseHistoryTimestamp(m.created_at),
           seq: m.seq,
           pinned: m.pinned ?? false,
+          ...(attachments ? { attachments } : {}),
         });
         continue;
       }

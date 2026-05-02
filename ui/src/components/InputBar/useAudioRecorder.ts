@@ -44,6 +44,10 @@ export function useAudioRecorder() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const cancelledRef = useRef(false);
+  // When set, the next stop delivers the blob to this callback instead of
+  // populating `audio` state — used by the press-and-hold / tap-tap flow that
+  // wants to transcribe and send without ever showing an attachment chip.
+  const onCompleteRef = useRef<((a: AudioAttachment) => void) | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -72,7 +76,25 @@ export function useAudioRecorder() {
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      // iOS Safari and desktop browsers disagree on default codec. Pick the
+      // best supported format up-front so we know what we're producing —
+      // hardcoding `audio/webm` was breaking iPhone recordings (Safari
+      // produces audio/mp4 + AAC by default and the resulting blob would
+      // get mislabelled, breaking faster-whisper transcription).
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4;codecs=mp4a.40.2",   // iOS AAC
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+      ];
+      const isSupported = (typeof MediaRecorder !== "undefined" && typeof (MediaRecorder as any).isTypeSupported === "function")
+        ? (m: string) => (MediaRecorder as any).isTypeSupported(m)
+        : (_m: string) => false;
+      const chosenMime = candidates.find(isSupported) || "";
+      const recorder = chosenMime
+        ? new MediaRecorder(stream, { mimeType: chosenMime })
+        : new MediaRecorder(stream);
       chunksRef.current = [];
       cancelledRef.current = false;
       recorder.ondataavailable = (e) => {
@@ -81,9 +103,18 @@ export function useAudioRecorder() {
       recorder.onstop = () => {
         cleanupAnalyser();
         if (!cancelledRef.current) {
-          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          // Use the recorder's actual mime — it might differ from what
+          // we asked for if the browser substituted. Strip the ;codecs=
+          // suffix because backends sniffing by extension don't care.
+          const actualMime = recorder.mimeType || chosenMime || "audio/webm";
+          const blob = new Blob(chunksRef.current, { type: actualMime });
           const url = URL.createObjectURL(blob);
-          setAudio({ blob, url });
+          const cb = onCompleteRef.current;
+          onCompleteRef.current = null;
+          if (cb) cb({ blob, url });
+          else setAudio({ blob, url });
+        } else {
+          onCompleteRef.current = null;
         }
         stream.getTracks().forEach((t) => t.stop());
         setLevels(new Array(LEVEL_HISTORY).fill(0));
@@ -132,14 +163,19 @@ export function useAudioRecorder() {
     }
   }, [cleanupAnalyser, toast]);
 
-  const stopRecording = useCallback(() => {
-    cancelledRef.current = false;
-    mediaRecorderRef.current?.stop();
-    setRecording(false);
-  }, []);
+  const stopRecording = useCallback(
+    (opts?: { onComplete?: (audio: AudioAttachment) => void }) => {
+      cancelledRef.current = false;
+      onCompleteRef.current = opts?.onComplete ?? null;
+      mediaRecorderRef.current?.stop();
+      setRecording(false);
+    },
+    [],
+  );
 
   const cancelRecording = useCallback(() => {
     cancelledRef.current = true;
+    onCompleteRef.current = null;
     mediaRecorderRef.current?.stop();
     setRecording(false);
   }, []);

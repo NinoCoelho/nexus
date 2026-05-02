@@ -91,6 +91,11 @@ class AgentConfig(BaseModel):
     # legacy 4096 since its API requires the field). Per-model overrides on
     # ``ModelEntry.max_output_tokens`` win when > 0.
     default_max_output_tokens: int = 0
+    # Model id (matches a [[models]] entry) designated as the OCR / vision
+    # worker. Empty = no model is wired up; nexus.ocr falls back to whatever
+    # else is in [ocr] or returns no-op. Set via the "Vision" toggle in the
+    # models settings table.
+    vision_model: str = ""
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
@@ -184,6 +189,24 @@ class TranscriptionConfig(BaseModel):
     remote: RemoteTranscriptionConfig = Field(default_factory=RemoteTranscriptionConfig)
 
 
+class TTSConfig(BaseModel):
+    """Voice output settings — intentionally minimal.
+
+    The engine is fixed (bundled Piper). The two default voices
+    (en_US-amy-medium, pt_BR-faber-medium) auto-download on first daemon
+    start. Language is auto-detected per utterance via ``langdetect``.
+    The ack model is the agent's main default model — no separate pick.
+    """
+    # Master switch. When False, click-to-listen buttons hide and no
+    # spoken acknowledgments fire.
+    enabled: bool = True
+    # Speak short feedback when a turn was started from a *voice* message
+    # (start + completion). Always-on when enabled — no per-kind toggles.
+    ack_enabled: bool = True
+    # Where the downloaded ONNX voice files live. Empty → ~/.nexus/tts/piper/.
+    voices_dir: str = ""
+
+
 class VaultHistoryConfig(BaseModel):
     # When enabled, every vault mutation (write/delete/move) produces a git
     # commit in a separate work-tree at ~/.nexus/.vault-history. Disabled by
@@ -211,6 +234,7 @@ class NexusConfig(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    tts: TTSConfig = Field(default_factory=TTSConfig)
     vault: VaultConfig = Field(default_factory=VaultConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
 

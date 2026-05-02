@@ -22,6 +22,7 @@ import type { TimelineStep } from "./ChatView";
 import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
 import { VaultLink, asVaultPath, linkifyVaultPaths, vaultUrlTransform } from "./vaultLink";
+import { useTTS } from "../hooks/useTTS";
 const LazyChartBlock = lazy(() => import("./ChartBlock"));
 import "./AssistantMessage.css";
 
@@ -103,6 +104,7 @@ function fmt(d: Date) {
 export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
+  const tts = useTTS();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
   const [localPinned, setLocalPinned] = useState<boolean>(!!pinned);
@@ -258,6 +260,38 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
                 </svg>
               </button>
             </>
+          )}
+          {tts.available && content && !streaming && (
+            <button
+              className={`bubble-action-btn${tts.state === "playing" ? " is-active" : ""}`}
+              onClick={() => {
+                if (tts.state === "idle") void tts.speak(content);
+                else tts.stop();
+              }}
+              title={
+                tts.state === "playing"
+                  ? "Stop reading"
+                  : tts.state === "loading"
+                  ? "Loading…"
+                  : "Read aloud"
+              }
+              aria-label="Read message aloud"
+              aria-pressed={tts.state === "playing"}
+              disabled={tts.state === "loading"}
+            >
+              {tts.state === "playing" ? (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <rect x="3" y="3" width="4" height="10" rx="0.5" />
+                  <rect x="9" y="3" width="4" height="10" rx="0.5" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 6h2l3-3v10l-3-3H3z" fill="currentColor" />
+                  <path d="M11 5.5a3.5 3.5 0 0 1 0 5" />
+                  <path d="M13 3.5a6 6 0 0 1 0 9" />
+                </svg>
+              )}
+            </button>
           )}
           <button
             className="bubble-action-btn"

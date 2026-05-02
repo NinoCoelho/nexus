@@ -54,6 +54,17 @@
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+}
+.kanban-lane-header:active { cursor: grabbing; }
+
+.kanban-lane--dragging { opacity: 0.4; }
+.kanban-lane--drop-before {
+  box-shadow: -2px 0 0 0 var(--accent, #3b82f6);
+}
+.kanban-lane--drop-after {
+  box-shadow: 2px 0 0 0 var(--accent, #3b82f6);
 }
 
 .kanban-lane-title {

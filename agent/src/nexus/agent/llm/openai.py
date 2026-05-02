@@ -13,6 +13,7 @@ from .auth import AuthStrategy
 from .types import (
     ChatMessage,
     ChatResponse,
+    ContentPart,
     LLMError,
     LLMProvider,
     LLMTransportError,
@@ -56,9 +57,60 @@ def _is_repeating_tail(text: str, threshold: int) -> bool:
     return False
 
 
+def _encode_part_openai(part: ContentPart) -> dict[str, Any] | None:
+    """Translate one ``ContentPart`` into OpenAI-compat multipart shape.
+
+    Image parts read bytes from the vault and produce a ``data:`` URL
+    (works on api.openai.com and on Google's ``/v1beta/openai`` shim).
+    Audio parts emit ``input_audio`` blocks (gpt-4o-audio-preview style).
+    The encoder assumes ``materialize_message`` has already lowered any
+    parts the model can't handle natively to text — so unsupported kinds
+    (e.g. document) simply fall back to a breadcrumb text block.
+    """
+    import base64
+
+    if part.kind == "text":
+        return {"type": "text", "text": part.text or ""}
+    if part.kind == "image":
+        from ...multimodal import read_vault_bytes, sniff_mime
+
+        path = part.vault_path or ""
+        mime = part.mime_type or sniff_mime(path)
+        try:
+            data = read_vault_bytes(path)
+        except FileNotFoundError:
+            return {"type": "text", "text": f"[image missing: {path}]"}
+        b64 = base64.b64encode(data).decode("ascii")
+        return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+    if part.kind == "audio":
+        from ...multimodal import read_vault_bytes, sniff_mime
+
+        path = part.vault_path or ""
+        mime = part.mime_type or sniff_mime(path)
+        try:
+            data = read_vault_bytes(path)
+        except FileNotFoundError:
+            return {"type": "text", "text": f"[audio missing: {path}]"}
+        # OpenAI's ``input_audio.format`` accepts the bare extension
+        # (``wav``, ``mp3``); normalise from the mime type.
+        fmt = mime.split("/", 1)[-1]
+        b64 = base64.b64encode(data).decode("ascii")
+        return {"type": "input_audio", "input_audio": {"data": b64, "format": fmt}}
+    # Document parts shouldn't reach the OpenAI encoder — materialize_message
+    # extracts them to text — but emit a safe breadcrumb just in case.
+    return {"type": "text", "text": f"[unsupported part kind: {part.kind}]"}
+
+
 def _encode_msg(m: ChatMessage) -> dict[str, Any]:
     out: dict[str, Any] = {"role": m.role.value}
-    if m.content is not None:
+    if isinstance(m.content, list):
+        encoded_parts: list[dict[str, Any]] = []
+        for part in m.content:
+            translated = _encode_part_openai(part)
+            if translated is not None:
+                encoded_parts.append(translated)
+        out["content"] = encoded_parts
+    elif m.content is not None:
         out["content"] = m.content
     if m.tool_calls:
         out["tool_calls"] = [
@@ -188,13 +240,19 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
             raise LLMError("No model specified: pass model= or set a default at construction")
+        from ...multimodal import materialize_messages
+        from ...providers.catalog import capabilities_for_model_name
+
+        caps = capabilities_for_model_name(resolved_model)
+        prepared = await materialize_messages(messages, caps)
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": [_encode_msg(m) for m in messages],
+            "messages": [_encode_msg(m) for m in prepared],
             "temperature": self._temperature,
         }
         # OpenAI-extensions: silently ignored by most compat providers
@@ -210,6 +268,15 @@ class OpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
+        # Pass-through for caller-supplied extras (e.g. voice_ack disables
+        # extended thinking via {"thinking": {"type": "disabled"}} so the
+        # ack call doesn't burn its token budget on internal reasoning).
+        # Most OpenAI-compat providers silently ignore unknown fields;
+        # the strict ones (Gemini compat) reject them, so we skip there.
+        if extra_payload and not self._strict_compat:
+            for k, v in extra_payload.items():
+                if k not in payload:  # never overwrite explicit fields
+                    payload[k] = v
 
         try:
             resp = await self._client.post(
@@ -254,9 +321,14 @@ class OpenAIProvider(LLMProvider):
         resolved_model = model or self._model
         if not resolved_model:
             raise LLMError("No model specified: pass model= or set a default at construction")
+        from ...multimodal import materialize_messages
+        from ...providers.catalog import capabilities_for_model_name
+
+        caps = capabilities_for_model_name(resolved_model)
+        prepared = await materialize_messages(messages, caps)
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": [_encode_msg(m) for m in messages],
+            "messages": [_encode_msg(m) for m in prepared],
             "temperature": self._temperature,
             "stream": True,
         }

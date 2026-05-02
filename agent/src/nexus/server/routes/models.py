@@ -120,6 +120,7 @@ async def get_routing(app_state: dict[str, Any] = Depends(get_app_state)) -> dic
         "available_models": chat_available,
         "embedding_model_id": embedding_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
+        "vision_model_id": cfg.agent.vision_model,
     }
 
 
@@ -155,6 +156,8 @@ async def set_routing(
         cfg.graphrag.embedding_model_id = body["embedding_model_id"]
     if "extraction_model_id" in body:
         cfg.graphrag.extraction_model_id = body["extraction_model_id"]
+    if "vision_model_id" in body:
+        cfg.agent.vision_model = body["vision_model_id"] or ""
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
     if "embedding_model_id" in body or "extraction_model_id" in body:
@@ -169,6 +172,7 @@ async def set_routing(
         "last_used_model": cfg.agent.last_used_model,
         "embedding_model_id": cfg.graphrag.embedding_model_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
+        "vision_model_id": cfg.agent.vision_model,
     }
 
 
@@ -194,6 +198,10 @@ async def set_model_role(
         cfg.graphrag.embedding_model_id = new_id
     elif body.role == "extraction":
         cfg.graphrag.extraction_model_id = new_id
+    elif body.role == "vision":
+        if new_id and not any(m.id == new_id for m in cfg.models):
+            raise HTTPException(404, f"model {new_id!r} not found")
+        cfg.agent.vision_model = new_id
     else:
         raise HTTPException(400, f"Unknown role: {body.role}")
     save_cfg(cfg)

@@ -28,6 +28,12 @@ class ServerHandle:
     slug: str
     model_path: Path
     is_embedding: bool = False
+    # True when an ``*mmproj*.gguf`` projector sidecar was found alongside
+    # the language GGUF and ``--mmproj`` was passed to llama-server. The
+    # caller surfaces this through a ``vision`` tag on the [[models]]
+    # entry so chat-side capability detection treats the model as
+    # vision-capable.
+    is_vision: bool = False
 
 
 # Architectures (from GGUF metadata `general.architecture`) that produce
@@ -57,6 +63,43 @@ _EMBEDDING_NAME_HINTS = (
     "minilm", "bge-", "bge_", "nomic-embed", "e5-", "e5_",
     "gte-", "mxbai-embed", "embed",
 )
+
+
+def is_mmproj_file(path: Path) -> bool:
+    """Vision-language projector sidecar (e.g. ``*mmproj*.gguf``).
+
+    These files aren't models on their own — they pair with a language
+    GGUF and feed llama-server through ``--mmproj``. Callers that scan
+    ``~/.nexus/models/llm/`` for installable models must skip them so
+    each projector doesn't get treated as its own runnable model.
+    """
+    return "mmproj" in path.name.lower() and path.suffix.lower() == ".gguf"
+
+
+def find_mmproj_sidecar(model_path: Path) -> Path | None:
+    """Return the projector GGUF that pairs with ``model_path``, if any.
+
+    The convention used by community quantizers (e.g.
+    ``prithivMLmods/chandra-ocr-2-GGUF``) is to ship a sibling named
+    ``<base>.mmproj-<quant>.gguf`` alongside the language GGUF. We look
+    in the same directory for any ``*mmproj*.gguf`` and prefer the one
+    whose quant suffix matches the language file (``q8_0``, ``f16``,
+    etc.); otherwise fall back to the first match.
+    """
+    parent = model_path.parent
+    if not parent.is_dir():
+        return None
+    candidates = sorted(p for p in parent.glob("*mmproj*.gguf") if p.is_file())
+    if not candidates:
+        return None
+    # Try to match the quant tier of the language GGUF.
+    stem_lower = model_path.stem.lower()
+    for tier in ("q8_0", "q6_k", "q5_k_m", "q4_k_m", "f16", "bf16", "f32"):
+        if tier in stem_lower:
+            for c in candidates:
+                if tier in c.stem.lower():
+                    return c
+    return candidates[0]
 
 
 def _read_gguf_architecture(model_path: Path) -> str | None:
@@ -260,12 +303,21 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         "-c", str(ctx_size),
         "-ngl", "99",
     ]
+    mmproj_path: Path | None = None
     if is_emb:
         # Embedding-only mode: chat-template flags (--jinja) are incompatible
         # with --embeddings on most builds, and the OpenAI-compat
         # /v1/embeddings route only exists when this flag is set.
         cmd += ["--embeddings", "--pooling", "mean"]
     else:
+        # Vision-language models (e.g. chandra-ocr-2, llava-style) ship a
+        # projector sidecar that llama-server loads via --mmproj.
+        # Without it, image inputs get rejected with "image input is not
+        # supported - hint: ... mmproj". When we find a sibling, wire it up
+        # — chat-only GGUFs without a sidecar are unaffected.
+        mmproj_path = find_mmproj_sidecar(model_path)
+        if mmproj_path is not None:
+            cmd += ["--mmproj", str(mmproj_path)]
         # `--jinja` enables the chat template so tool-calling and reasoning
         # routing work as the model expects. We let `--reasoning-format`
         # default to `auto`: for thinking models (DeepSeek-R1, QwQ, GLM
@@ -276,6 +328,7 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         # parser, which only scans the post-think tail. The Nexus UI renders
         # the separate `thinking` SSE channel as a collapsed section.
         cmd += ["--jinja"]
+    is_vision = mmproj_path is not None
 
     log.info("[local_llm] starting llama-server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
@@ -294,7 +347,7 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
                 if r.status == 200:
                     handle = ServerHandle(
                         proc=proc, port=port, slug=slug, model_path=model_path,
-                        is_embedding=is_emb,
+                        is_embedding=is_emb, is_vision=is_vision,
                     )
                     _servers[filename] = handle
                     log.info(
@@ -376,6 +429,7 @@ def add_to_config(
     port: int,
     is_embedding: bool = False,
     context_window: int = 0,
+    is_vision: bool = False,
 ) -> str:
     """Register a running local model in ``~/.nexus/config.toml``.
 
@@ -430,11 +484,17 @@ def add_to_config(
     ]
     # Also clean up legacy ``provider == "local"`` entries from the singleton era.
     models = [m for m in models if m.get("provider") != "local"]
+    if is_embedding:
+        tags = ["local", "offline", "embedding"]
+    else:
+        tags = ["local", "offline"]
+        if is_vision:
+            tags.append("vision")
     entry: dict = {
         "id": model_id,
         "provider": pname,
         "model_name": slug,
-        "tags": ["local", "offline", "embedding"] if is_embedding else ["local", "offline"],
+        "tags": tags,
         "tier": "fast",
         "notes": (
             "Local embedding model served by llama.cpp."
@@ -573,7 +633,12 @@ def restart_local_models(models_dir: Path | None = None) -> int:
         return 0
 
     mdir = models_dir or (Path.home() / ".nexus" / "models" / "llm")
-    ggufs: list[Path] = sorted(mdir.glob("*.gguf")) if mdir.is_dir() else []
+    # Filter out mmproj sidecars — those aren't runnable models.
+    ggufs: list[Path] = (
+        sorted(p for p in mdir.glob("*.gguf") if not is_mmproj_file(p))
+        if mdir.is_dir()
+        else []
+    )
     by_slug = {slugify(p.stem): p for p in ggufs}
 
     started = 0
@@ -595,6 +660,7 @@ def restart_local_models(models_dir: Path | None = None) -> int:
         add_to_config(
             handle.slug, handle.port,
             is_embedding=handle.is_embedding,
+            is_vision=handle.is_vision,
             context_window=ctx,
         )
         started += 1

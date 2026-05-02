@@ -14,6 +14,10 @@ export interface SessionSummary {
 export interface SessionMessage {
   seq?: number;
   role: "user" | "assistant" | "tool";
+  /** Plain text in the common case. The server may also serialize a list of
+   * ContentPart-shaped dicts for user turns that carried image/audio/
+   * document attachments — consumers that need attachments should read the
+   * raw value (``content as unknown``) and detect ``Array.isArray``. */
   content: string;
   tool_calls?: unknown;
   tool_call_id?: string;

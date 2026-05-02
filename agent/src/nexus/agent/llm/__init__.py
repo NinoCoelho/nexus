@@ -10,6 +10,7 @@ from .openai import OpenAIProvider
 from .types import (
     ChatMessage,
     ChatResponse,
+    ContentPart,
     LLMError,
     LLMProvider,
     LLMTransportError,
@@ -29,6 +30,7 @@ __all__ = [
     "StaticBearerAuth",
     "ChatMessage",
     "ChatResponse",
+    "ContentPart",
     "LLMError",
     "LLMProvider",
     "LLMTransportError",

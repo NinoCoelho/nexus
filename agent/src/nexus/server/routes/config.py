@@ -67,6 +67,12 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
         },
     }
     out["ui"] = {"language": cfg.ui.language}
+    tts = cfg.tts
+    out["tts"] = {
+        "enabled": tts.enabled,
+        "ack_enabled": tts.ack_enabled,
+        "voices_dir": tts.voices_dir,
+    }
     return out
 
 
@@ -155,6 +161,15 @@ async def patch_config(
         if lang in ("en", "pt-BR"):
             merged["language"] = lang
         raw["ui"] = merged
+    if "tts" in body:
+        existing = raw.get("tts", {}) or {}
+        patch = body["tts"] or {}
+        # TTSConfig only accepts enabled / ack_enabled / voices_dir now.
+        # Drop everything else silently so old UI clients (or stale
+        # browser caches) don't break the merge.
+        ALLOWED = {"enabled", "ack_enabled", "voices_dir"}
+        clean = {k: v for k, v in patch.items() if k in ALLOWED}
+        raw["tts"] = {**existing, **clean}
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)

@@ -53,9 +53,14 @@ class AgentHandlers:
         terminal: Any | None = None,
         dispatcher: Any | None = None,
         subagent_runner: Any | None = None,
+        notify_user: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
+        # NotifyUserHandler — fire-and-forget status pings (TTS when the
+        # user dictated, toast always). Late-bound by the server so the
+        # tool registry can be built before the SessionStore exists.
+        self.notify_user = notify_user
         # Async callable: dispatcher(path, card_id?, mode) -> dict
         # with keys {session_id, seed_message?, path, card_id?, mode}.
         # Late-bound by app.py so tools can spawn sub-sessions.
@@ -94,6 +99,8 @@ def build_tool_registry(
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
+    from nexus.tools.image_gen_tool import GENERATE_IMAGE_TOOL, handle_image_gen_tool
+    from nexus.tools.ocr_tool import OCR_IMAGE_TOOL, handle_ocr_image_tool
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
     from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
@@ -251,6 +258,22 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
 
+    # generate_image — OpenAI gpt-image-1 + Gemini nano banana
+    async def _generate_image(args: dict) -> str:
+        return await handle_image_gen_tool(args)
+
+    registry.register(_SimpleToolHandler(GENERATE_IMAGE_TOOL, _generate_image))
+
+    # ocr_image — extract text from a vault image / scanned PDF using the
+    # engine declared under [ocr] in config.toml. Always advertised so
+    # the agent can surface a useful "configure OCR first" error when
+    # the user hasn't set [ocr] yet, rather than pretending the
+    # capability doesn't exist.
+    async def _ocr_image(args: dict) -> str:
+        return await handle_ocr_image_tool(args)
+
+    registry.register(_SimpleToolHandler(OCR_IMAGE_TOOL, _ocr_image))
+
     _mem_handler = MemoryHandler()
 
     async def _mem_read(args: dict) -> str:
@@ -303,6 +326,18 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
     registry.register(_SimpleToolHandler(TERMINAL_TOOL_SPEC, _terminal))
+
+    # notify_user — fire-and-forget status pings (TTS when input was
+    # voice, toast always). Read at dispatch time via ``handlers``.
+    from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
+
+    async def _notify_user(args: dict) -> str:
+        h = handlers.notify_user
+        if h is None:
+            return '{"ok": false, "error": "notify_user unavailable: handler not wired"}'
+        return await h.invoke(args)
+
+    registry.register(_SimpleToolHandler(NOTIFY_USER_TOOL, _notify_user))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.

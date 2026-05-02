@@ -20,7 +20,9 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
         "Tables in the same folder form a 'database'; fields can declare typed "
         "relations to other tables via `kind: ref` + `target_table`. "
         "Actions: create_table, view, add_row, add_rows, update_row, delete_row, "
-        "list_rows, set_schema, set_views, add_field, remove_field, rename_field, "
+        "list_rows (paginates: `limit` default 100, max 1000; `offset` default 0; "
+        "response carries `total`, `truncated` so you can iterate), "
+        "set_schema, set_views, add_field, remove_field, rename_field, "
         "create_relation, create_junction, suggest_schema, er_diagram, "
         "list_databases, related_rows."
     ),
@@ -105,6 +107,14 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                 "type": "string",
                 "description": "Row identifier (primary-key value, or _id) for update_row, delete_row, related_rows.",
             },
+            "limit": {
+                "type": "integer",
+                "description": "Page size for list_rows (default 100, max 1000).",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Page offset for list_rows (default 0).",
+            },
             "views": {
                 "type": "array",
                 "description": (
@@ -158,7 +168,22 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
 
         if action == "list_rows":
             tbl = vault_datatable.read_table(path)
-            return json.dumps({"ok": True, "rows": tbl["rows"], "count": len(tbl["rows"])})
+            all_rows = tbl["rows"]
+            total = len(all_rows)
+            offset = max(0, int(args.get("offset", 0)))
+            limit_raw = args.get("limit")
+            # Default 100, hard cap 1000 to keep payloads under ~100k tokens.
+            limit = 100 if limit_raw is None else max(1, min(int(limit_raw), 1000))
+            page = all_rows[offset : offset + limit]
+            return json.dumps({
+                "ok": True,
+                "rows": page,
+                "count": len(page),
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "truncated": (offset + len(page)) < total,
+            })
 
         if action == "add_row":
             row = args.get("row")

@@ -807,7 +807,71 @@ def test_tool_add_and_list_rows():
     result = json.loads(handle_datatable_tool({"action": "list_rows", "path": "tl.md"}))
     assert result["ok"] is True
     assert result["count"] == 1
+    assert result["total"] == 1
+    assert result["offset"] == 0
+    assert result["limit"] == 100
+    assert result["truncated"] is False
     assert result["rows"][0]["x"] == "hello"
+
+
+def test_tool_list_rows_paginates():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "page.md",
+        "schema": {"fields": [{"name": "n", "kind": "number"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "page.md",
+        "rows": [{"n": i} for i in range(250)],
+    })
+    # Default page (limit=100, offset=0).
+    p1 = json.loads(handle_datatable_tool({"action": "list_rows", "path": "page.md"}))
+    assert p1["count"] == 100
+    assert p1["total"] == 250
+    assert p1["offset"] == 0
+    assert p1["truncated"] is True
+    assert p1["rows"][0]["n"] == 0
+    assert p1["rows"][-1]["n"] == 99
+    # Second page.
+    p2 = json.loads(handle_datatable_tool({
+        "action": "list_rows",
+        "path": "page.md",
+        "offset": 100,
+        "limit": 100,
+    }))
+    assert p2["count"] == 100
+    assert p2["offset"] == 100
+    assert p2["truncated"] is True
+    assert p2["rows"][0]["n"] == 100
+    # Tail page.
+    p3 = json.loads(handle_datatable_tool({
+        "action": "list_rows",
+        "path": "page.md",
+        "offset": 200,
+        "limit": 100,
+    }))
+    assert p3["count"] == 50
+    assert p3["truncated"] is False
+
+
+def test_tool_list_rows_caps_limit_at_1000():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "cap.md",
+        "schema": {"fields": [{"name": "n", "kind": "number"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "cap.md",
+        "rows": [{"n": i} for i in range(5)],
+    })
+    out = json.loads(handle_datatable_tool({
+        "action": "list_rows",
+        "path": "cap.md",
+        "limit": 999_999,
+    }))
+    assert out["limit"] == 1000  # capped, not the requested value
 
 
 def test_tool_update_row():

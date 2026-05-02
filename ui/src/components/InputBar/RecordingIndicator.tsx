@@ -35,7 +35,7 @@ export default function RecordingIndicator({ levels, seconds, onCancel }: Props)
           />
         ))}
       </div>
-      <span className="recording-hint">Tap ✓ to send</span>
+      <span className="recording-hint">Release or tap mic to send</span>
     </div>
   );
 }

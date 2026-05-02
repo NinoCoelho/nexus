@@ -37,6 +37,7 @@ export default function ModelRow({
   const { t } = useTranslation("models");
   const isEmb = roles.includes("embedding");
   const isExt = roles.includes("extraction");
+  const isVision = roles.includes("vision");
 
   return (
     <div className="settings-card">
@@ -104,6 +105,22 @@ export default function ModelRow({
               }
             >
               {t("models:row.roleExtraction")}
+            </button>
+            <button
+              type="button"
+              className={`model-role-badge ${isVision ? "model-role-badge--active" : ""}`}
+              onClick={() => {
+                if (isVision) onUnassignRole("vision");
+                else onAssignRole("vision", m.id);
+              }}
+              disabled={roleSaving}
+              title={
+                isVision
+                  ? t("models:row.visionClear")
+                  : t("models:row.visionAssign")
+              }
+            >
+              {t("models:row.roleVision")}
             </button>
           </div>
         </div>

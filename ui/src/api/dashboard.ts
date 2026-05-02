@@ -16,11 +16,30 @@ export interface DashboardOperation {
   order?: number;
 }
 
+export type WidgetKind = "chart" | "report" | "kpi";
+export type WidgetRefresh = "manual" | "daily";
+export type WidgetSize = "sm" | "md" | "lg";
+
+export interface DashboardWidget {
+  id: string;
+  kind: WidgetKind;
+  title: string;
+  prompt: string;
+  refresh: WidgetRefresh;
+  /** ISO 8601 UTC timestamp of the most recent successful refresh, or null. */
+  last_refreshed_at: string | null;
+  /** Optional size override. When absent, a per-kind default is used at
+   *  render time (chart = md, report = md, kpi = sm). */
+  size?: WidgetSize;
+  order?: number;
+}
+
 export interface Dashboard {
   folder: string;
   title: string;
   chat_session_id: string | null;
   operations: DashboardOperation[];
+  widgets: DashboardWidget[];
   /** True iff `_data.md` exists on disk; false means caller is seeing defaults. */
   exists: boolean;
   schema_version?: number;
@@ -146,6 +165,70 @@ export interface DeleteDatabaseResult {
  * Server requires ``confirm`` to equal the folder's basename — pass it
  * explicitly so callers can't trigger a wipe by mistake.
  */
+// ── Widgets ───────────────────────────────────────────────────────────────
+
+export interface RefreshWidgetResult {
+  session_id: string;
+  folder: string;
+  widget_id: string;
+  status: "running";
+}
+
+export async function addWidget(
+  folder: string,
+  widget: DashboardWidget,
+): Promise<Dashboard> {
+  const res = await fetch(`${BASE}/vault/dashboard/widgets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, widget }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Add widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteWidget(folder: string, widgetId: string): Promise<Dashboard> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}?folder=${encodeURIComponent(folder)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(`Delete widget error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchWidgetContent(
+  folder: string,
+  widgetId: string,
+): Promise<{ content: string }> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/content?folder=${encodeURIComponent(folder)}`,
+  );
+  if (!res.ok) throw new Error(`Widget content error: ${res.status}`);
+  return res.json();
+}
+
+export async function refreshWidget(
+  folder: string,
+  widgetId: string,
+): Promise<RefreshWidgetResult> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/refresh`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Refresh widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteDatabase(
   folder: string,
   confirm: string,

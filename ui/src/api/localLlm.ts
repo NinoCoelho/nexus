@@ -49,6 +49,10 @@ export interface InstalledModel {
   is_active: boolean;
   port: number | null;
   slug: string;
+  /** True for vision-language projector sidecars (`*mmproj*.gguf`) — listed
+   *  so the UI can wait for them before auto-starting the language model,
+   *  but hidden from the user-facing tile list. */
+  is_mmproj?: boolean;
 }
 
 export async function getHardware(): Promise<HardwareProbe> {

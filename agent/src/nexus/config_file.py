@@ -30,6 +30,7 @@ from .config_schema import (  # noqa: F401
     ScrapeConfig,
     RemoteTranscriptionConfig,
     TranscriptionConfig,
+    TTSConfig,
     VaultHistoryConfig,
     VaultConfig,
     UIConfig,
@@ -140,6 +141,11 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "api_key_env": cfg.transcription.remote.api_key_env,
                 "model": cfg.transcription.remote.model,
             },
+        },
+        "tts": {
+            "enabled": cfg.tts.enabled,
+            "ack_enabled": cfg.tts.ack_enabled,
+            "voices_dir": cfg.tts.voices_dir,
         },
         "vault": {
             "history": {
@@ -283,6 +289,26 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     if isinstance(t_raw.get("language"), str) and not t_raw["language"].strip():
         t_raw["language"] = None
     transcription = TranscriptionConfig(**t_raw)
+    tts_raw = dict(raw.get("tts", {}))
+    # Older configs had per-engine sub-blocks, an `engine` field, per-kind
+    # ack toggles, threshold ints, voice/speed/language overrides and an
+    # `ack_model` field. Drop them silently — TTSConfig is now intentionally
+    # minimal (enabled + ack_enabled + voices_dir).
+    legacy_piper = tts_raw.pop("piper", None)
+    if isinstance(legacy_piper, dict) and "voices_dir" not in tts_raw:
+        vd = legacy_piper.get("voices_dir")
+        if isinstance(vd, str):
+            tts_raw["voices_dir"] = vd
+    for legacy_key in (
+        "openai", "elevenlabs", "engine",
+        "voice", "speed", "language", "auto_detect_language",
+        "ack_start_enabled", "ack_progress_enabled", "ack_complete_enabled",
+        "completion_ack_cross_session", "ack_model",
+        "long_process_threshold_s", "long_process_repeat_s",
+        "completion_ack_threshold_s",
+    ):
+        tts_raw.pop(legacy_key, None)
+    tts = TTSConfig(**tts_raw)
     vault_raw = dict(raw.get("vault", {}))
     history_raw = dict(vault_raw.get("history", {}))
     vault = VaultConfig(history=VaultHistoryConfig(**history_raw))
@@ -295,7 +321,7 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
-        transcription=transcription, vault=vault, ui=ui,
+        transcription=transcription, tts=tts, vault=vault, ui=ui,
     )
 
 

@@ -291,6 +291,24 @@ def build_system_prompt(
         parts.append(creds_block)
         parts.append("")
 
+    parts.append(
+        "## Status updates\n\n"
+        "When a step in your plan will take more than a few seconds — web "
+        "research, multi-source aggregation, large data ops, anything that "
+        "would leave the user staring at a blank screen — call the "
+        "`notify_user` tool with a short, casual message before starting. "
+        "If the run keeps going, call it again mid-flight to reassure the "
+        "user something is still happening. Examples:\n\n"
+        "- `notify_user(message=\"Looking that up — about a minute, hold on.\")`\n"
+        "- `notify_user(message=\"Already got the headlines, drafting the summary now.\")`\n"
+        "- `notify_user(message=\"Tô buscando, vai demorar uns instantes.\")`\n\n"
+        "Match the user's language. Keep messages under 20 words. Don't use "
+        "this tool to ask questions (that's `ask_user`) or to deliver final "
+        "results (those go in your reply). The user sees a toast in every "
+        "case; if they dictated by voice, the message is also spoken aloud."
+    )
+    parts.append("")
+
     descs = registry.descriptions()
     if descs:
         parts.append("## Available skills")

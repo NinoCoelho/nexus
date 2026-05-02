@@ -10,12 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
 from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
-from ..llm import ChatMessage, LLMProvider, Role, StreamEvent
+from ..llm import ChatMessage, ContentPart, LLMProvider, Role, StreamEvent
 from ...skills.registry import SkillRegistry
 from ._builder import build_loom_agent
 from .helpers import (
     AgentTurn,
     _annotate_short_reply,
+    _build_user_message,
     _from_loom_message,
     _to_loom_message,
 )
@@ -193,6 +194,14 @@ class Agent:
     def _dispatcher(self, value: Any) -> None:
         self._handlers.dispatcher = value
 
+    @property
+    def _notify_user_handler(self) -> Any:
+        return self._handlers.notify_user
+
+    @_notify_user_handler.setter
+    def _notify_user_handler(self, value: Any) -> None:
+        self._handlers.notify_user = value
+
     def _context_window_for(self, model_id: str | None) -> int:
         """Lookup the configured context window for a model id.
 
@@ -224,6 +233,7 @@ class Agent:
         history: list[ChatMessage] | None = None,
         context: str | None = None,
         model_id: str | None = None,
+        attachments: list[ContentPart] | None = None,
     ) -> AgentTurn:
         """Execute a complete turn in blocking mode and return the result.
 
@@ -232,6 +242,12 @@ class Agent:
             history: Prior message history for the session.
             context: Optional additional context injected into the turn.
             model_id: Force a specific model; None uses the configured default.
+            attachments: Optional non-text parts (image/audio/document) to send
+                alongside ``user_message``. When present, the user message is
+                built as a multipart ``content`` list rather than a plain
+                string. Multimodal-capable models receive them natively;
+                others get a transcribed/extracted text breadcrumb at encode
+                time (see ``materialize_messages`` in ``multimodal.py``).
 
         Returns:
             AgentTurn containing the reply, token usage, event trace, and the
@@ -251,9 +267,8 @@ class Agent:
         # Annotate terse yes/no using loom agent's pending question
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
-        loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=annotated or user_message)
-        )
+        user_msg = _build_user_message(annotated or user_message, attachments)
+        loom_messages.append(_to_loom_message(user_msg))
 
         loom_turn = await self._loom.run_turn(loom_messages, model_id=model_id)
 
@@ -280,6 +295,7 @@ class Agent:
         context: str | None = None,
         session_id: str | None = None,
         model_id: str | None = None,
+        attachments: list[ContentPart] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Execute a turn in streaming mode, yielding typed SSE events.
 
@@ -311,10 +327,10 @@ class Agent:
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
-        user_msg_content = annotated or user_message
-        loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=user_msg_content)
-        )
+        user_msg_text = annotated or user_message
+        user_msg = _build_user_message(user_msg_text, attachments)
+        user_msg_content = user_msg.content
+        loom_messages.append(_to_loom_message(user_msg))
 
         # Pre-flight overflow check — refuse the turn now if the request can't
         # fit in the chosen model's context window. Without this, providers
