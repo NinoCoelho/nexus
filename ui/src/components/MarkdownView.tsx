@@ -58,6 +58,18 @@ function loadMermaid() {
   return _mermaidPromise;
 }
 
+// Mermaid v11 appends a temporary <div id="d{id}"> to document.body during
+// render. On parse failure (common with streamed/partial fences) it can leak
+// the bomb-icon "Syntax error in text" SVG into that orphan div. Sweep any
+// element whose id starts with our render id, including the `d`-prefixed twin.
+function purgeMermaidOrphans(id: string) {
+  if (!id) return;
+  const sel = `[id^="${CSS.escape(id)}"], [id^="${CSS.escape("d" + id)}"]`;
+  document.querySelectorAll(sel).forEach((el) => {
+    if (!el.closest(".mermaid-block")) el.remove();
+  });
+}
+
 export function MermaidBlock({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -68,18 +80,29 @@ export function MermaidBlock({ code }: { code: string }) {
     if (!trimmed) return;
     let cancelled = false;
     loadMermaid()
-      .then((mermaid) => mermaid.render(idRef.current, trimmed))
-      .then(({ svg }) => {
-        if (cancelled || !ref.current) return;
-        ref.current.innerHTML = svg;
+      .then(async (mermaid) => {
+        const ok = await mermaid.parse(trimmed, { suppressErrors: true });
+        if (!ok) throw new Error("invalid mermaid syntax");
+        return mermaid.render(idRef.current, trimmed);
+      })
+      .then((res) => {
+        if (cancelled || !ref.current || !res) return;
+        ref.current.innerHTML = res.svg;
         setErr(null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        purgeMermaidOrphans(idRef.current);
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; purgeMermaidOrphans(idRef.current); };
   }, [code]);
+
+  useEffect(() => {
+    return () => { purgeMermaidOrphans(idRef.current); };
+  }, []);
 
   if (err) {
     return (
@@ -103,6 +126,10 @@ type Props = {
    *  before rendering. Off by default — useful for chat/agent output where
    *  unwrapped paths are common, off for generic markdown bodies. */
   linkifyVaultPaths?: boolean;
+  /** Notified when an embedded ```nexus-chart``` fence fails to render — the
+   *  callsite can swap in a friendlier "couldn't render that, want to refine
+   *  the prompt?" UI instead of showing raw error text. */
+  onChartError?: (message: string) => void;
 };
 
 export default function MarkdownView({
@@ -111,6 +138,7 @@ export default function MarkdownView({
   urlTransform,
   onVaultLinkPreview,
   linkifyVaultPaths,
+  onChartError,
 }: Props) {
   const ctxPreview = useVaultLinkPreviewFromContext();
   const previewHandler = onVaultLinkPreview ?? ctxPreview ?? undefined;
@@ -137,7 +165,7 @@ export default function MarkdownView({
           if (lang === "nexus-chart") {
             return (
               <Suspense fallback={<span className="mermaid-block" />}>
-                <LazyChartBlock code={raw.replace(/\n$/, "")} />
+                <LazyChartBlock code={raw.replace(/\n$/, "")} onError={onChartError} />
               </Suspense>
             );
           }

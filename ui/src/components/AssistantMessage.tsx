@@ -47,6 +47,18 @@ function loadMermaid() {
   return _mermaidPromise;
 }
 
+// Mermaid v11 appends a temporary <div id="d{id}"> to document.body during
+// render. On parse failure (common with streamed/partial fences) it can leak
+// the bomb-icon "Syntax error in text" SVG into that orphan div. Sweep any
+// element whose id starts with our render id, including the `d`-prefixed twin.
+function purgeMermaidOrphans(id: string) {
+  if (!id) return;
+  const sel = `[id^="${CSS.escape(id)}"], [id^="${CSS.escape("d" + id)}"]`;
+  document.querySelectorAll(sel).forEach((el) => {
+    if (!el.closest(".mermaid-block")) el.remove();
+  });
+}
+
 function MermaidBlock({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -57,18 +69,31 @@ function MermaidBlock({ code }: { code: string }) {
     if (!trimmed) return;
     let cancelled = false;
     loadMermaid()
-      .then((mermaid) => mermaid.render(idRef.current, trimmed))
-      .then(({ svg }) => {
-        if (cancelled || !ref.current) return;
-        ref.current.innerHTML = svg;
+      .then(async (mermaid) => {
+        // Validate first — render() leaks an error SVG into <body> on parse
+        // failure, which is what the user sees as a stray bomb icon.
+        const ok = await mermaid.parse(trimmed, { suppressErrors: true });
+        if (!ok) throw new Error("invalid mermaid syntax");
+        return mermaid.render(idRef.current, trimmed);
+      })
+      .then((res) => {
+        if (cancelled || !ref.current || !res) return;
+        ref.current.innerHTML = res.svg;
         setErr(null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        purgeMermaidOrphans(idRef.current);
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; purgeMermaidOrphans(idRef.current); };
   }, [code]);
+
+  useEffect(() => {
+    return () => { purgeMermaidOrphans(idRef.current); };
+  }, []);
 
   if (err) {
     return (
@@ -95,13 +120,19 @@ interface Props {
   pinned?: boolean;
   onPinChange?: (pinned: boolean) => void;
   thinking?: string;
+  reconnecting?: {
+    attempt: number;
+    maxAttempts: number;
+    delaySeconds: number;
+    reason: string;
+  };
 }
 
 function fmt(d: Date) {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking }: Props) {
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking, reconnecting }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const tts = useTTS();
@@ -174,6 +205,20 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
             </summary>
             <pre className="asst-thinking-body">{thinking}</pre>
           </details>
+        )}
+        {reconnecting && (
+          <div className="asst-reconnecting" role="status" aria-live="polite">
+            <span className="asst-reconnecting-spinner" aria-hidden="true" />
+            <span className="asst-reconnecting-text">
+              {t("chat:assistant.reconnecting", {
+                attempt: reconnecting.attempt,
+                max: reconnecting.maxAttempts,
+                reason: reconnecting.reason || "transient error",
+                delay: Math.round(reconnecting.delaySeconds),
+                defaultValue: "Reconnecting after {{reason}}… (attempt {{attempt}}/{{max}}, retrying in {{delay}}s)",
+              })}
+            </span>
+          </div>
         )}
         <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} />
         <div className="asst-body">
