@@ -68,13 +68,35 @@ def test_describe(isolated_vault: Path) -> None:
     assert "Sao Paulo" in top_cities
 
 
-def test_query_select_only(isolated_vault: Path) -> None:
+def test_query_select_only_columnar_default(isolated_vault: Path) -> None:
     p = _seed(isolated_vault, "people.csv", SAMPLE)
     out = vault_csv.csv_query(p, "SELECT city, count(*) AS n FROM t GROUP BY city ORDER BY n DESC")
-    by_city = {r["city"]: r["n"] for r in out["rows"]}
+    assert out["format"] == "columns"
+    assert out["columns"] == ["city", "n"]
+    by_city = {row[0]: row[1] for row in out["data"]}
     assert by_city["Sao Paulo"] == 2
     assert by_city["Rio"] == 2
     assert by_city["Belo Horizonte"] == 1
+    assert "rows" not in out
+
+
+def test_query_rows_format_backcompat(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    out = vault_csv.csv_query(
+        p,
+        "SELECT city, count(*) AS n FROM t GROUP BY city ORDER BY n DESC",
+        fmt="rows",
+    )
+    assert out["format"] == "rows"
+    by_city = {r["city"]: r["n"] for r in out["rows"]}
+    assert by_city["Sao Paulo"] == 2
+    assert "data" not in out
+
+
+def test_query_rejects_invalid_fmt(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    with pytest.raises(ValueError):
+        vault_csv.csv_query(p, "SELECT 1", fmt="parquet")
 
 
 def test_query_rejects_non_select(isolated_vault: Path) -> None:
@@ -89,8 +111,16 @@ def test_query_truncates(isolated_vault: Path) -> None:
     p = _seed(isolated_vault, "people.csv", SAMPLE)
     out = vault_csv.csv_query(p, "SELECT * FROM t", limit=2)
     assert out["truncated"] is True
-    assert len(out["rows"]) == 2
+    assert len(out["data"]) == 2
     assert out["row_count"] == 5
+
+
+def test_query_caps_limit_at_max(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    out = vault_csv.csv_query(p, "SELECT * FROM t", limit=999_999)
+    # Tightened cap — sanity-check it's the documented MAX, not the requested value.
+    assert out["limit"] == vault_csv._MAX_QUERY_LIMIT
+    assert out["limit"] == 1000
 
 
 def test_relationships(isolated_vault: Path) -> None:

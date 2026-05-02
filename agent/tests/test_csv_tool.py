@@ -61,9 +61,23 @@ def test_query_requires_sql(isolated_vault: Path) -> None:
     assert out["ok"] is False
 
 
-def test_query(isolated_vault: Path) -> None:
+def test_query_columnar_default(isolated_vault: Path) -> None:
     out = _call({"action": "query", "path": "data.csv", "sql": "SELECT count(*) AS n FROM t"})
     assert out["ok"]
+    assert out["format"] == "columns"
+    assert out["columns"] == ["n"]
+    assert out["data"] == [[3]]
+
+
+def test_query_rows_format(isolated_vault: Path) -> None:
+    out = _call({
+        "action": "query",
+        "path": "data.csv",
+        "sql": "SELECT count(*) AS n FROM t",
+        "format": "rows",
+    })
+    assert out["ok"]
+    assert out["format"] == "rows"
     assert out["rows"][0]["n"] == 3
 
 

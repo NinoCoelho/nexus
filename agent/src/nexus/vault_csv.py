@@ -20,7 +20,9 @@ from . import vault
 _MAX_EDITABLE_BYTES = 50 * 1024 * 1024  # 50MB hard cap on UI edits
 
 _DEFAULT_QUERY_LIMIT = 200
-_MAX_QUERY_LIMIT = 5000
+# Cap chosen so that worst-case payload (1000 rows × ~10 wide cols ≈ ~96 tok/row)
+# stays under ~100k tokens — fits in a 200k context with room to spare.
+_MAX_QUERY_LIMIT = 1000
 _RELATIONSHIP_OVERLAP_THRESHOLD = 0.5
 _RELATIONSHIP_MAX_CANDIDATES = 20
 
@@ -156,9 +158,16 @@ def csv_describe(rel_path: str, columns: list[str] | None = None) -> dict[str, A
 _SQL_LEAD_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
 
 
-def csv_query(rel_path: str, sql: str, limit: int = _DEFAULT_QUERY_LIMIT) -> dict[str, Any]:
+def csv_query(
+    rel_path: str,
+    sql: str,
+    limit: int = _DEFAULT_QUERY_LIMIT,
+    fmt: str = "columns",
+) -> dict[str, Any]:
     if not _SQL_LEAD_RE.match(sql or ""):
         raise ValueError("only SELECT / WITH queries are allowed")
+    if fmt not in ("columns", "rows"):
+        raise ValueError("`fmt` must be 'columns' or 'rows'")
     if limit <= 0:
         limit = _DEFAULT_QUERY_LIMIT
     limit = min(int(limit), _MAX_QUERY_LIMIT)
@@ -181,15 +190,20 @@ def csv_query(rel_path: str, sql: str, limit: int = _DEFAULT_QUERY_LIMIT) -> dic
             total = len(rows)
     finally:
         con.close()
-    return {
+    payload: dict[str, Any] = {
         "path": rel_path,
         "sql": sql,
         "columns": columns,
-        "rows": [_row_to_dict(columns, r) for r in rows],
         "row_count": int(total),
         "truncated": truncated,
         "limit": limit,
+        "format": fmt,
     }
+    if fmt == "columns":
+        payload["data"] = [list(r) for r in rows]
+    else:
+        payload["rows"] = [_row_to_dict(columns, r) for r in rows]
+    return payload
 
 
 def csv_relationships(rel_path: str, candidates: list[str] | None = None) -> dict[str, Any]:
@@ -359,6 +373,17 @@ def _write_all(full: Path, header: list[str], rows: list[list[str]]) -> None:
     full.write_text(buf.getvalue(), encoding="utf-8")
 
 
+def _publish_indexed(rel_path: str) -> None:
+    # Notify the UI's vault-event SSE stream so any open CsvEditorView for
+    # this file reloads. CSV writes bypass vault.write_file (which would
+    # publish on its own), so we post the event explicitly.
+    try:
+        from .server.event_bus import publish
+        publish({"type": "vault.indexed", "path": rel_path})
+    except Exception:
+        pass
+
+
 def csv_read_page(
     rel_path: str,
     *,
@@ -391,6 +416,7 @@ def csv_append_row(rel_path: str, values: dict[str, Any]) -> dict[str, Any]:
     new = [str(values.get(c, "")) for c in header]
     rows.append(new)
     _write_all(full, header, rows)
+    _publish_indexed(rel_path)
     return {"path": rel_path, "row_index": len(rows) - 1, "total_rows": len(rows)}
 
 
@@ -404,6 +430,7 @@ def csv_update_cell(rel_path: str, row_index: int, column: str, value: Any) -> d
         raise ValueError(f"row_index out of range: {row_index}")
     rows[row_index][header.index(column)] = "" if value is None else str(value)
     _write_all(full, header, rows)
+    _publish_indexed(rel_path)
     return {"path": rel_path, "row_index": row_index, "column": column}
 
 
@@ -415,6 +442,7 @@ def csv_delete_row(rel_path: str, row_index: int) -> dict[str, Any]:
         raise ValueError(f"row_index out of range: {row_index}")
     rows.pop(row_index)
     _write_all(full, header, rows)
+    _publish_indexed(rel_path)
     return {"path": rel_path, "total_rows": len(rows)}
 
 
@@ -443,4 +471,5 @@ def csv_set_schema(rel_path: str, columns: list[dict[str, str]]) -> dict[str, An
                 new_row.append("")
         new_rows.append(new_row)
     _write_all(full, new_header, new_rows)
+    _publish_indexed(rel_path)
     return {"path": rel_path, "columns": new_header, "total_rows": len(new_rows)}

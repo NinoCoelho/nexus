@@ -25,7 +25,10 @@ CSV_TOOL = ToolSpec(
         "Pass `columns` to limit; omit for all.\n"
         "- `query`: run a SQL SELECT against the CSV (the file is exposed as the "
         "view `t`). Only SELECT/WITH allowed. Result truncated to `limit` rows "
-        "(default 200). Use this for groupby/aggregate/filter.\n"
+        "(default 200, max 1000). Response shape is columnar by default "
+        "(`{columns: [...], data: [[...], ...]}`) — ~40% fewer tokens than the "
+        "row-of-objects shape. Pass `format: \"rows\"` for the legacy shape "
+        "(`{rows: [{col: val, ...}, ...]}`). Use `query` for groupby/aggregate/filter.\n"
         "- `relationships`: discover likely joins/FKs against other CSVs in the "
         "vault. Returns column pairs scored by name similarity + value overlap. "
         "Pass `candidates` to restrict to specific paths."
@@ -61,7 +64,12 @@ CSV_TOOL = ToolSpec(
             },
             "limit": {
                 "type": "integer",
-                "description": "Row cap for query results (default 200, max 5000).",
+                "description": "Row cap for query results (default 200, max 1000).",
+            },
+            "format": {
+                "type": "string",
+                "enum": ["columns", "rows"],
+                "description": "Response shape for action=query. 'columns' (default) returns {columns, data: [[...]]} — ~40% fewer tokens. 'rows' returns the legacy {rows: [{col: val}, ...]}.",
             },
             "candidates": {
                 "type": "array",
@@ -102,7 +110,8 @@ def handle_csv_tool(args: dict[str, Any]) -> str:
             if not sql:
                 return _dumps({"ok": False, "error": "`sql` is required for action=query"})
             limit = int(args.get("limit", 200))
-            return _dumps({"ok": True, **vault_csv.csv_query(path, sql, limit=limit)})
+            fmt = args.get("format", "columns")
+            return _dumps({"ok": True, **vault_csv.csv_query(path, sql, limit=limit, fmt=fmt)})
         if action == "relationships":
             cands = args.get("candidates")
             return _dumps({"ok": True, **vault_csv.csv_relationships(path, candidates=cands)})
