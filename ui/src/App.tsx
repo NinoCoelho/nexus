@@ -82,6 +82,8 @@ export default function App() {
   const [dataDiagramFolder, setDataDiagramFolder] = useState<string | null>(null);
   /** Currently selected database (folder) — drives the dashboard view. */
   const [dataSelectedDatabase, setDataSelectedDatabase] = useState<string | null>(null);
+  /** Bumped to force DatabaseListPanel to reload (e.g. after delete). */
+  const [databaseListRevision, setDatabaseListRevision] = useState(0);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -475,6 +477,7 @@ export default function App() {
         onKanbanOpen={(path) => { setKanbanSelectedPath(path); setView("kanban"); }}
         databaseSelectedPath={dataSelectedPath}
         databaseSelectedFolder={dataSelectedDatabase}
+        databaseListRevision={databaseListRevision}
         onDatabaseOpen={(path) => {
           setDataSelectedPath(path);
           setDataDiagramFolder(null);
@@ -689,6 +692,7 @@ export default function App() {
                   setDataSelectedDatabase(null);
                   setDataSelectedPath(null);
                   setDataDiagramFolder(null);
+                  setDatabaseListRevision((n) => n + 1);
                 }}
                 onOpenInVault={handleOpenInVault}
               />

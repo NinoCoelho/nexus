@@ -50,6 +50,7 @@ interface Props {
   onKanbanOpen: (path: string) => void;
   databaseSelectedPath: string | null;
   databaseSelectedFolder: string | null;
+  databaseListRevision?: number;
   onDatabaseOpen: (path: string) => void;
   onDatabaseSelectFolder: (folder: string) => void;
   onDatabaseOpenDiagram?: (folder: string) => void;
@@ -64,7 +65,7 @@ export default function Sidebar({
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
   onVisualizeFolderGraph,
   kanbanSelectedPath, onKanbanOpen,
-  databaseSelectedPath, databaseSelectedFolder,
+  databaseSelectedPath, databaseSelectedFolder, databaseListRevision,
   onDatabaseOpen, onDatabaseSelectFolder, onDatabaseOpenDiagram,
   mobileOpen = false, onMobileClose,
 }: Props) {
@@ -313,6 +314,7 @@ export default function Sidebar({
           <DatabaseListPanel
             selectedPath={databaseSelectedPath}
             selectedDatabase={databaseSelectedFolder}
+            revision={databaseListRevision}
             onOpen={onDatabaseOpen}
             onSelectDatabase={onDatabaseSelectFolder}
             onOpenDiagram={onDatabaseOpenDiagram}

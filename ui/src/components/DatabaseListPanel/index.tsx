@@ -17,6 +17,8 @@ import "./DatabaseListPanel.css";
 interface Props {
   selectedPath: string | null;
   selectedDatabase?: string | null;
+  /** Bumped by the host to force a reload (e.g. after a database is deleted). */
+  revision?: number;
   onOpen: (path: string) => void;
   /** Click on a database header → open its dashboard. Primary action. */
   onSelectDatabase?: (folder: string) => void;
@@ -26,6 +28,7 @@ interface Props {
 export default function DatabaseListPanel({
   selectedPath,
   selectedDatabase,
+  revision,
   onOpen,
   onSelectDatabase,
   onOpenDiagram,
@@ -50,6 +53,15 @@ export default function DatabaseListPanel({
   }, []);
 
   useEffect(() => { void refreshDatabases(); }, [refreshDatabases]);
+
+  // Host-driven reloads (e.g. after a database is deleted from the dashboard).
+  // Also clear the cached table lists so an expanded folder doesn't keep
+  // stale rows after the underlying files are gone.
+  useEffect(() => {
+    if (revision === undefined) return;
+    setTablesByFolder({});
+    void refreshDatabases();
+  }, [revision, refreshDatabases]);
 
   // Fetch tables for any expanded folder we don't yet have.
   useEffect(() => {
