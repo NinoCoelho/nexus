@@ -28,7 +28,26 @@ export function applyDeltaEvent(
       } else {
         tl.push({ id: `t${tl.length}`, type: "text", text });
       }
-      msgs[lastIdx] = { ...last, content: last.content + text, timeline: tl };
+      // Recovery succeeded — clear any "Reconnecting…" hint.
+      msgs[lastIdx] = { ...last, content: last.content + text, timeline: tl, reconnecting: undefined };
+    }
+    next.set(key, { ...cur, messages: msgs });
+    return next;
+  });
+}
+
+export function applyReconnectingEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  info: { attempt: number; maxAttempts: number; delaySeconds: number; reason: string },
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const msgs = [...cur.messages];
+    const lastIdx = msgs.length - 1;
+    if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+      msgs[lastIdx] = { ...msgs[lastIdx], reconnecting: info };
     }
     next.set(key, { ...cur, messages: msgs });
     return next;
@@ -99,7 +118,9 @@ export function applyToolEvent(
       tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, status: "pending" });
       sounds.agentStep();
     }
-    msgs[lastIdx] = { ...prevMsg, trace: newTrace, timeline: tl };
+    // A tool event means a fresh LLM iteration produced output — clear
+    // any active reconnect hint left over from a prior retry burst.
+    msgs[lastIdx] = { ...prevMsg, trace: newTrace, timeline: tl, reconnecting: undefined };
     next.set(key, { ...cur, messages: msgs });
     return next;
   });
@@ -230,7 +251,8 @@ export function applyErrorEvent(
     // Attach partial to the existing (possibly streaming) assistant
     // placeholder so its partial content + badges stay visible.
     if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, partial: { status: mapped, detail: prettifyStreamError(detail, reason) } };
+      // Clear any reconnect hint — the error banner takes over.
+      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, reconnecting: undefined, partial: { status: mapped, detail: prettifyStreamError(detail, reason) } };
     } else {
       msgs.push({ role: "assistant", content: "", timestamp: new Date(), partial: { status: mapped, detail: prettifyStreamError(detail, reason) } });
     }

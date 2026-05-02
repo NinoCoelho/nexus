@@ -71,6 +71,15 @@ export interface Message {
       | "upstream_timeout";
     detail?: string;
   };
+  /** Transient hint while the agent backs off after a retryable mid-stream
+   * error. Cleared on the next delta/tool event (recovery succeeded) or
+   * when the error finally surfaces (recovery exhausted). */
+  reconnecting?: {
+    attempt: number;
+    maxAttempts: number;
+    delaySeconds: number;
+    reason: string;
+  };
 }
 
 /**
@@ -251,7 +260,7 @@ export default function ChatView({
               </div>
             ) : (
               <div key={idx} ref={setMsgRef(idx)}>
-                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0) && (
+                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0 || msg.reconnecting != null) && (
                   <AssistantMessage
                     content={msg.content}
                     trace={msg.trace}
@@ -265,6 +274,7 @@ export default function ChatView({
                     seq={msg.seq}
                     feedback={msg.feedback ?? null}
                     pinned={msg.pinned ?? false}
+                    reconnecting={msg.reconnecting}
                     onFeedbackChange={
                       onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
                     }

@@ -29,6 +29,7 @@ export type StreamEvent =
   | { type: "tool"; name: string; args?: unknown; result_preview?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
+  | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null };
 
 /**
@@ -152,6 +153,14 @@ export async function chatStream(
           });
         } else if (eventName === "limit_reached") {
           onEvent({ type: "limit_reached", iterations: (parsed.iterations as number) ?? 0 });
+        } else if (eventName === "reconnecting") {
+          onEvent({
+            type: "reconnecting",
+            attempt: (parsed.attempt as number) ?? 1,
+            maxAttempts: (parsed.max_attempts as number) ?? 1,
+            delaySeconds: (parsed.delay_seconds as number) ?? 0,
+            reason: (parsed.reason as string) ?? "",
+          });
         } else if (eventName === "error") {
           onEvent({
             type: "error",

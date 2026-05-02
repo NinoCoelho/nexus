@@ -283,6 +283,18 @@ async def chat_stream_route(
                     partial_status = "iteration_limit"
                     yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
 
+                elif etype == "reconnecting":
+                    # Auto-retry hint from Agent.run_turn_stream during
+                    # backoff. Forwarded so the UI can show a small
+                    # "Reconnecting (attempt N/M)…" indicator while the
+                    # backend waits to restart the loom turn. The UI
+                    # clears the indicator on the next delta/tool event.
+                    yield (
+                        f"event: reconnecting\ndata: "
+                        f"{json.dumps({'attempt': event.get('attempt', 1), 'max_attempts': event.get('max_attempts', 1), 'delay_seconds': event.get('delay_seconds', 0), 'reason': event.get('reason', '')})}"
+                        f"\n\n"
+                    )
+
                 elif etype in ("tool_exec_start", "tool_exec_result"):
                     payload: dict[str, Any] = {"name": event.get("name", "")}
                     if "args" in event:

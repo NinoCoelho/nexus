@@ -15,6 +15,7 @@ import asyncio
 import io
 import json
 import logging
+import threading
 import wave
 from pathlib import Path
 from typing import Any
@@ -105,19 +106,52 @@ def _voice_sample_rate(voice: object, config_path: Path) -> int:
         raise TTSError(f"could not resolve sample rate from {config_path}: {exc}")
 
 
-def _synthesize_blocking(model_path: Path, config_path: Path, text: str, speed: float) -> bytes:
+# Loaded PiperVoice instances are cached per (model, config) path so the
+# ~23 MB ONNX deserialize + runtime init only happens once per voice per
+# process. Without this, every /tts/synthesize and every voice_ack pays
+# 200–500 ms of model-load latency, which dominates "speak" latency on a
+# local server. ONNX Runtime inference is thread-safe; the lock just
+# prevents two concurrent first-use callers from loading the same voice
+# twice.
+_VOICE_CACHE: dict[tuple[str, str], object] = {}
+_VOICE_CACHE_LOCK = threading.Lock()
+
+
+def _load_voice_cached(model_path: Path, config_path: Path) -> object:
     try:
         from piper import PiperVoice  # type: ignore
     except ImportError as exc:
-        # Should never happen — piper-tts is a base dependency now. Kept
-        # as defense-in-depth for broken installs.
         raise TTSError("piper-tts not installed") from exc
+    key = (str(model_path), str(config_path))
+    cached = _VOICE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    with _VOICE_CACHE_LOCK:
+        cached = _VOICE_CACHE.get(key)
+        if cached is None:
+            log.info("[tts/piper] loading voice %s into cache", model_path.name)
+            cached = PiperVoice.load(str(model_path), config_path=str(config_path))
+            _VOICE_CACHE[key] = cached
+        return cached
+
+
+async def warm_voice_cache(model_path: Path, config_path: Path) -> None:
+    """Pre-load a voice into the process cache off the event loop. Safe to
+    call from startup tasks — failures are swallowed since this is a
+    latency optimization, not a correctness requirement."""
+    try:
+        await asyncio.to_thread(_load_voice_cached, model_path, config_path)
+    except Exception:  # noqa: BLE001
+        log.warning("[tts/piper] cache warm failed for %s", model_path.name, exc_info=True)
+
+
+def _synthesize_blocking(model_path: Path, config_path: Path, text: str, speed: float) -> bytes:
     try:
         from piper import SynthesisConfig  # type: ignore
     except ImportError:
         SynthesisConfig = None  # type: ignore[assignment]
 
-    voice = PiperVoice.load(str(model_path), config_path=str(config_path))
+    voice = _load_voice_cached(model_path, config_path)
     # Piper's length_scale is inverse of speed (>1 = slower). Map our
     # multiplier (0.75=slower, 1.5=faster) so 1.0 stays neutral.
     length_scale = 1.0 / max(0.25, min(4.0, speed or 1.0))

@@ -410,6 +410,21 @@ class Agent:
         last_tool_exec_id: str | None = None
         last_tool_exec_name: str | None = None
 
+        # Auto-retry on retryable mid-stream errors (peer-closed connections,
+        # 429 rate limits, transient 5xx, "empty response" from a flaky
+        # provider). Loom emits ErrorEvent + DoneEvent and ends the iterator;
+        # without this layer the UI would surface a "Retry" banner that the
+        # user has to click. Instead we silently restart the loom run from
+        # ``working_messages`` (which already mirrors loom's all_messages),
+        # so every completed tool call in this turn is preserved and not
+        # replayed. We only auto-retry when no visible content has been
+        # streamed for the current LLM iteration — restarting after partial
+        # text would duplicate tokens in the UI.
+        _MAX_LOOM_RETRIES = 3
+        _LOOM_RETRY_BACKOFFS = (2.0, 5.0, 12.0)
+        _loom_retry_attempts = 0
+        _delta_emitted_this_iter = False
+
         def _materialise_assistant_if_needed() -> None:
             nonlocal materialised_for_iter
             if materialised_for_iter:
@@ -523,6 +538,7 @@ class Agent:
                 full_text += delta
                 pending_content_chunks.append(delta)
                 materialised_for_iter = False
+                _delta_emitted_this_iter = True
                 # Mirror to the trace bus so /chat/{sid}/events subscribers
                 # (e.g. CardActivityModal) can render typing live, not only
                 # after the post-turn `reply` event.
@@ -678,6 +694,11 @@ class Agent:
                 pending_content_chunks.clear()
                 pending_tcs.clear()
                 materialised_for_iter = False
+                # A tool result completed an LLM iteration successfully;
+                # the next iteration starts fresh, so visible-content
+                # tracking and the retry budget both reset.
+                _delta_emitted_this_iter = False
+                _loom_retry_attempts = 0
                 self._on_event("tool_result", {"name": tool_name, "preview": preview})
                 yield {
                     "type": "tool_exec_result",
@@ -710,16 +731,81 @@ class Agent:
                 }
 
             elif etype == "error":
-                # loom already classified this. Forward verbatim AND mark
-                # the turn as having seen an error so the done branch's
-                # empty-reply synthesis doesn't run and overwrite it in
-                # the UI's applyErrorEvent (last error wins there).
+                # Auto-recover from transient mid-stream failures (peer-closed
+                # connections, 429 rate limits, transient 5xx, "empty
+                # response" from a flaky provider). When loom flags the
+                # error retryable AND nothing visible has been streamed for
+                # this LLM iteration AND we still have retry budget, swallow
+                # the error+done frames, sleep, and restart loom from
+                # ``working_messages`` (which already has every successful
+                # tool result this turn — no replay). The user sees a brief
+                # pause instead of a "Retry" banner.
+                retryable = bool(ev.get("retryable", False))
+                if (
+                    retryable
+                    and not _delta_emitted_this_iter
+                    and _loom_retry_attempts < _MAX_LOOM_RETRIES
+                ):
+                    # Drain the loom DoneEvent that follows every ErrorEvent
+                    # before we swap iterators. ``loom_task`` is already
+                    # awaiting the next __anext__ result (line above), which
+                    # is the done frame. We discard it; the new loom run
+                    # will emit its own done when it finishes.
+                    try:
+                        await loom_task  # consume the trailing done event
+                    except StopAsyncIteration:
+                        pass
+                    except Exception:  # noqa: BLE001 — best-effort drain
+                        pass
+                    delay = _LOOM_RETRY_BACKOFFS[
+                        min(_loom_retry_attempts, len(_LOOM_RETRY_BACKOFFS) - 1)
+                    ]
+                    log.warning(
+                        "loom auto-retry: attempt=%d/%d delay=%.1fs reason=%r "
+                        "(message=%r)",
+                        _loom_retry_attempts + 1, _MAX_LOOM_RETRIES,
+                        delay, ev.get("reason"),
+                        (ev.get("message") or "")[:200],
+                    )
+                    # Surface the backoff so the UI can render a small
+                    # "Reconnecting…" hint instead of leaving the user
+                    # staring at a frozen bubble.
+                    yield {
+                        "type": "reconnecting",
+                        "attempt": _loom_retry_attempts + 1,
+                        "max_attempts": _MAX_LOOM_RETRIES,
+                        "delay_seconds": delay,
+                        "reason": ev.get("reason") or "",
+                    }
+                    await asyncio.sleep(delay)
+                    _loom_retry_attempts += 1
+                    # Reset per-iteration state from the failed attempt so
+                    # the new loom run doesn't see stale tool_call_delta or
+                    # content_delta fragments.
+                    pending_content_chunks.clear()
+                    pending_tcs.clear()
+                    _tc_id_by_index.clear()
+                    materialised_for_iter = False
+                    _delta_emitted_this_iter = False
+                    # Restart loom from the working_messages we've already
+                    # accumulated — every successful tool call/result is
+                    # there, so no work is replayed.
+                    loom_iter = self._loom.run_turn_stream(
+                        working_messages, model_id=model_id
+                    ).__aiter__()
+                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                    continue
+                # Either non-retryable, content already streamed, or budget
+                # exhausted — surface the error as before. _saw_loom_error
+                # suppresses the done branch's empty-reply synthesis so the
+                # UI's applyErrorEvent (last error wins) keeps loom's
+                # classified message instead of a generic banner.
                 _saw_loom_error = True
                 yield {
                     "type": "error",
                     "detail": ev.get("message", ""),
                     "reason": ev.get("reason"),
-                    "retryable": ev.get("retryable", False),
+                    "retryable": retryable,
                     "status_code": ev.get("status_code"),
                 }
 

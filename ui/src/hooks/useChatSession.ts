@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
 import { chatStream, truncateSession, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyReconnectingEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -252,6 +252,13 @@ export function useChatSession(
           applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, key, activeSession, state.selectedModel, event);
         } else if (event.type === "limit_reached") {
           applyLimitReachedEvent(setChatStates, key, event.iterations);
+        } else if (event.type === "reconnecting") {
+          applyReconnectingEvent(setChatStates, key, {
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            delaySeconds: event.delaySeconds,
+            reason: event.reason,
+          });
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail);
         }

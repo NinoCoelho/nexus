@@ -308,3 +308,33 @@
   max-height: 320px;
   overflow-y: auto;
 }
+
+/* Transient hint shown while the agent backs off after a retryable
+ * mid-stream error. Cleared on the next delta/tool/error event. */
+.asst-reconnecting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px 0;
+  padding: 6px 10px;
+  background: var(--bg-inset, rgba(255, 165, 0, 0.08));
+  border: 1px solid rgba(255, 165, 0, 0.25);
+  border-radius: var(--radius, 6px);
+  font-size: 12px;
+  color: var(--fg-muted, #8a6d3b);
+}
+.asst-reconnecting-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 165, 0, 0.35);
+  border-top-color: rgba(255, 165, 0, 0.9);
+  border-radius: 50%;
+  animation: asst-reconnecting-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+.asst-reconnecting-text {
+  flex: 1;
+}
+@keyframes asst-reconnecting-spin {
+  to { transform: rotate(360deg); }
+}
