@@ -125,7 +125,7 @@ export default function NexusTab() {
     return (
       <NexusSignin
         websiteUrl={websiteUrl}
-        onSignedIn={() => {
+        onSignedIn={(_payload) => {
           setShowSignin(false);
           void account.reload();
           toast.success(t("settings:nexus.account.connected"));
@@ -140,6 +140,7 @@ export default function NexusTab() {
   const status = account.status;
   const signedIn = status?.signedIn ?? false;
   const tier = status?.tier ?? "free";
+  const cancelsAt = status?.cancelsAt ?? null;
   const tierLabel =
     tier === "pro"
       ? t("settings:nexus.account.tierPro")
@@ -203,6 +204,11 @@ export default function NexusTab() {
           <div className="nexus-tab-row-label">{t("settings:nexus.account.planLabel")}</div>
           <div className="nexus-tab-row-value nexus-tab-row-value--inline">
             <span className={`nexus-tab-tier nexus-tab-tier-${tier}`}>{tierLabel}</span>
+            {tier === "pro" && cancelsAt && (
+              <span className="nexus-tab-cancels">
+                cancels {new Date(cancelsAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+              </span>
+            )}
             {tier !== "pro" && (
               <button
                 type="button"

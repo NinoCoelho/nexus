@@ -22,6 +22,8 @@ export interface NexusAccountStatus {
   signedIn: boolean;
   email: string;
   tier: "free" | "pro" | string;
+  /** ISO date when pro access ends (set when user cancels, cleared on reactivation). */
+  cancelsAt: string | null;
   /** True once /api/keys/confirm has flipped the website's connected flag. */
   connected: boolean;
   models: string[];
@@ -35,6 +37,7 @@ export interface NexusVerifyResponse {
   email: string;
   displayName: string;
   tier: "free" | "pro" | string;
+  apiKey: string;
   isNew: boolean;
 }
 

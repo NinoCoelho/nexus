@@ -214,7 +214,7 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
     # Folder-scoped actions don't need a path.
     folder_actions = {"er_diagram", "suggest_schema", "list_databases"}
     if action not in folder_actions and not path:
-        return json.dumps({"ok": False, "error": "`path` is required"})
+        return json.dumps({"ok": False, "error": f"`path` is required for action '{action}' (use `folder` for er_diagram/suggest_schema/list_databases)"})
 
     try:
         if action == "create_table":

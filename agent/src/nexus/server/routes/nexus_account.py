@@ -1,10 +1,12 @@
 """Routes for the optional Nexus account integration.
 
-All four endpoints are loopback-only — same posture as the tunnel admin
+All endpoints are loopback-only — same posture as the tunnel admin
 routes — so even a tunnel-authenticated client can't enumerate or rotate
 the user's apiKey through them.
 
 * ``POST /auth/nexus/verify``   — exchange a Firebase idToken for an apiKey.
+  The website reconciles the LiteLLM key with the Firestore tier on every
+  call, so re-signing-in after an upgrade/downgrade is sufficient to sync.
 * ``GET  /auth/nexus/status``   — read the cached status (no outbound call).
 * ``POST /auth/nexus/refresh``  — force a fresh /api/status fetch.
 * ``POST /auth/nexus/logout``   — drop the apiKey + cached account record.
@@ -57,6 +59,7 @@ def _account_view(*, watcher: StatusWatcher | None) -> dict[str, Any]:
         "signedIn": signed_in,
         "email": (record or {}).get("email", "") if signed_in else "",
         "tier": (record or {}).get("tier", "free") if signed_in else "free",
+        "cancelsAt": (record or {}).get("cancelsAt") or None,
         # The desktop has "connected" the apiKey when /api/keys/confirm
         # succeeded after sign-in. The UI surfaces this as a Connect CTA
         # when false (e.g. user signed in before the confirm path

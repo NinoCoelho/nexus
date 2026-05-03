@@ -18,7 +18,7 @@ import { verifyNexusIdToken } from "../../../api";
 interface Props {
   websiteUrl: string;
   /** Called once the apiKey is stored locally (i.e. verify returned 2xx). */
-  onSignedIn: () => void;
+  onSignedIn: (payload: { tier: string; apiKey: string }) => void;
   /** Called when the user closes the popup without completing. */
   onCancel: () => void;
   /** True when the wizard is mid-applyProviderWizard so we can disable retry. */
@@ -70,8 +70,8 @@ export default function NexusSignin({ websiteUrl, onSignedIn, onCancel, busy }: 
     setStatus("verifying");
     setError(null);
     try {
-      await verifyNexusIdToken(event.data.idToken);
-      onSignedIn();
+      const res = await verifyNexusIdToken(event.data.idToken);
+      onSignedIn({ tier: res.tier, apiKey: res.apiKey });
     } catch (err) {
       setStatus("idle");
       setError(err instanceof Error ? err.message : t("settings:nexus.signIn.verifyFailed"));

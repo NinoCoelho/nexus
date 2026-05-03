@@ -50,6 +50,12 @@
   color: var(--fg-on-accent, #000);
 }
 
+.nexus-tab-cancels {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-left: 6px;
+}
+
 .nexus-tab-actions {
   display: flex;
   gap: 8px;

@@ -22,7 +22,7 @@ interface Props {
   /** Website base URL — e.g. https://www.nexus-model.us. From cfg.nexus_account. */
   websiteUrl: string;
   /** Called after the backend confirms the apiKey is stored. */
-  onSignedIn: () => void;
+  onSignedIn: (payload: { tier: string; apiKey: string }) => void;
 }
 
 interface AuthMessage {
@@ -79,8 +79,8 @@ export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
       setStatus("verifying");
       setError(null);
       try {
-        await verifyNexusIdToken(idToken);
-        onSignedIn();
+        const res = await verifyNexusIdToken(idToken);
+        onSignedIn({ tier: res.tier, apiKey: res.apiKey });
       } catch (err) {
         setStatus("idle");
         setBusy(false);

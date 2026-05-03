@@ -134,8 +134,8 @@ async def test_verify_id_token_stores_key_and_account(
     assert record["email"] == "alice@example.com"
     assert record["tier"] == "free"
     assert record["isNew"] is True
-    # apiKey is *never* returned to the caller
-    assert "apiKey" not in record
+    # apiKey is returned to the caller for UI callback
+    assert record["apiKey"] == "sk-litellm-test"
     # Stored in secrets, mirrored in account.json (no apiKey there).
     assert secrets.get(nexus_account.SECRET_NAME) == "sk-litellm-test"
     cached = nexus_account.load_account()

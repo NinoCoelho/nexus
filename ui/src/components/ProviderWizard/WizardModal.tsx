@@ -251,22 +251,28 @@ export default function WizardModal({
   // top-down), so we read the latest function from a ref that gets
   // populated below in an effect.
   const buildPayloadRef = useRef<((s: WizardState) => WizardPayload | null) | null>(null);
-  const handleNexusSignedIn = useCallback(async () => {
-    // Resolve the canonical model for the live tier BEFORE building the
-    // wizard payload. The website's /api/status (cached on the backend
-    // by the watcher's first tick that fired during /auth/nexus/verify)
-    // is the source of truth for what model the user actually has —
-    // we register exactly one entry, never both.
+  const handleNexusSignedIn = useCallback(async (payload?: { tier: string; apiKey: string }) => {
+    // Resolve the canonical model for the tier. Pro users get nexus model,
+    // free users get demo model.
     setSubmitting(true);
     let canonical = "demo";
-    try {
-      const live = await getNexusAccountStatus();
-      const models = live.status?.models ?? live.models ?? [];
-      if (models.includes("nexus")) canonical = "nexus";
-      else if (models.includes("demo")) canonical = "demo";
-    } catch {
-      // Fall through to demo — the watcher will reconcile to the right
-      // model on its next tick anyway.
+
+    // Use tier from callback if available (pro = nexus, free = demo)
+    if (payload?.tier === "pro") {
+      canonical = "nexus";
+    } else if (payload?.tier === "free") {
+      canonical = "demo";
+    } else {
+      // Fallback: fetch live status for models list
+      try {
+        const live = await getNexusAccountStatus();
+        const models = live.status?.models ?? live.models ?? [];
+        if (models.includes("nexus")) canonical = "nexus";
+        else if (models.includes("demo")) canonical = "demo";
+      } catch {
+        // Fall through to demo — the watcher will reconcile to the right
+        // model on its next tick anyway.
+      }
     }
     setState((prev) => {
       if (!prev.catalog || !prev.authMethod) {
@@ -642,7 +648,7 @@ export default function WizardModal({
           {state.step === "nexus-signin" && (
             <NexusSignin
               websiteUrl={nexusWebsiteUrl}
-              onSignedIn={() => void handleNexusSignedIn()}
+              onSignedIn={(payload) => void handleNexusSignedIn(payload)}
               onCancel={handleBack}
               busy={submitting}
             />
