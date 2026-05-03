@@ -209,6 +209,29 @@ export default function NexusTab() {
                 cancels {new Date(cancelsAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
               </span>
             )}
+            {tier === "pro" && !cancelsAt && (
+              <button
+                type="button"
+                className="nexus-tab-link nexus-tab-link--cancel"
+                onClick={() => {
+                  const url = `${websiteUrl.replace(/\/$/, "")}/billing`;
+                  const popup = window.open(url, "nexus-billing", "popup,width=520,height=760");
+                  if (!popup) {
+                    window.open(url, "_blank", "noopener,noreferrer");
+                    return;
+                  }
+                  try { popup.focus(); } catch { /* */ }
+                  const interval = window.setInterval(() => {
+                    if (popup.closed) {
+                      window.clearInterval(interval);
+                      void account.refresh();
+                    }
+                  }, 500);
+                }}
+              >
+                Manage subscription
+              </button>
+            )}
             {tier !== "pro" && (
               <button
                 type="button"
