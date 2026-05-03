@@ -102,6 +102,8 @@ def list_tables_in_folder(folder: str) -> list[dict[str, Any]]:
 
 _ER_NAME_SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
 
+_MERMAID_BLOCK_KEYWORDS = frozenset({"pk", "fk", "uk"})
+
 
 def _erd_node_name(path: str) -> str:
     """Mermaid erDiagram entity names must be alphanumeric/underscore."""
@@ -220,6 +222,8 @@ def er_diagram(folder: str) -> str:
             elif kind == "ref":
                 type_str = "ref"
             safe = "".join(c if c in _ER_NAME_SAFE else "_" for c in fname) or "field"
+            if safe.lower() in _MERMAID_BLOCK_KEYWORDS:
+                safe += "_"
             tbl_meta = schema.get("table") if isinstance(schema, dict) else None
             pk = (
                 tbl_meta.get("primary_key")
