@@ -204,12 +204,16 @@ export default function NexusTab() {
           <div className="nexus-tab-row-label">{t("settings:nexus.account.planLabel")}</div>
           <div className="nexus-tab-row-value nexus-tab-row-value--inline">
             <span className={`nexus-tab-tier nexus-tab-tier-${tier}`}>{tierLabel}</span>
-            {tier === "pro" && cancelsAt && (
-              <span className="nexus-tab-cancels">
-                cancels {new Date(cancelsAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-              </span>
-            )}
-            {tier === "pro" && !cancelsAt && (
+            {tier === "pro" && cancelsAt && (() => {
+              const days = Math.max(0, Math.ceil((new Date(cancelsAt).getTime() - Date.now()) / 86400000));
+              return (
+                <span className="nexus-tab-cancels">
+                  {days > 0 ? `${days} day${days !== 1 ? "s" : ""} left` : "ends today"}
+                  {" "}(cancels {new Date(cancelsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })})
+                </span>
+              );
+            })()}
+            {tier === "pro" && (
               <button
                 type="button"
                 className="nexus-tab-link nexus-tab-link--cancel"
@@ -229,7 +233,7 @@ export default function NexusTab() {
                   }, 500);
                 }}
               >
-                Manage subscription
+                {cancelsAt ? "Reactivate or manage" : "Manage subscription"}
               </button>
             )}
             {tier !== "pro" && (
