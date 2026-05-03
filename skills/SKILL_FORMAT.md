@@ -76,4 +76,16 @@ nexus skills remove my-skill
 ```
 
 This deletes the directory under `~/.nexus/skills/<name>`. Bundled
-skills (`brainstorm` etc.) get re-seeded on next start.
+skills (`brainstorm` etc.) are tracked in
+`~/.nexus/skills/.seeded-builtins.json`. Re-seeding only occurs when
+the skill name is **not** already in that file. To force a re-seed
+(e.g. after a bundled skill update), remove the name from the
+`seeded` array in `.seeded-builtins.json` and restart Nexus.
+
+## External binaries / runtimes
+
+If the skill needs CLI tools (ffmpeg, tesseract, demucs, node, etc.) or
+custom Python venvs, the body **must** start with a pre-flight block
+that runs `command -v <tool> >/dev/null || { echo "missing: <tool>";
+exit 1; }` and includes brew/apt/pip install hints. The agent
+surfaces the failure to the user without aborting the session.
