@@ -60,6 +60,13 @@ export interface TTSConfig {
   voices_dir: string;
 }
 
+export interface NexusAccountConfig {
+  base_url: string;
+  gateway_url: string;
+  poll_seconds: number;
+  auto_upgrade_default: boolean;
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
@@ -68,6 +75,7 @@ export interface Config {
   tts?: TTSConfig;
   search?: SearchConfig;
   ui?: UIConfig;
+  nexus_account?: NexusAccountConfig;
 }
 
 // Patch payload — every nested object is independently partial because the

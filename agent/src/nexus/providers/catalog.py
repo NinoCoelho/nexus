@@ -82,6 +82,12 @@ AuthMethodId = Literal[
     # instead of running a fresh OAuth round-trip.
     "local_claude_code",
     "local_codex",
+    # Nexus subscription sign-in. The wizard handles this specially:
+    # opens a popup to the Nexus website's Firebase auth, receives the
+    # idToken via postMessage, exchanges it through /auth/nexus/verify,
+    # then writes a provider entry with runtime_kind="nexus" pointing at
+    # the LiteLLM gateway. No credential prompts shown to the user.
+    "nexus_signin",
 ]
 
 
@@ -106,6 +112,12 @@ RuntimeKind = Literal[
     "bedrock",
     "vertex",
     "azure_openai",
+    # OpenAI-compatible under the hood (same wire shape as openai_compat)
+    # but kept as its own kind so config files visually distinguish the
+    # paid Nexus subscription from any BYO openai_compat provider the
+    # user may have configured separately. The status watcher and the
+    # /auth/nexus/* routes only act on providers with this runtime_kind.
+    "nexus",
 ]
 
 Category = Literal["frontier", "open", "cloud", "local", "aggregator", "other"]
@@ -164,6 +176,12 @@ class ProviderCatalogEntry(BaseModel):
     default_models: list[ModelInfo] = Field(default_factory=list)
     docs_url: str = ""
     icon: str = ""
+    # Featured providers float to the top of the wizard's "Select
+    # provider" step in their own visually-distinct section. Used to
+    # surface the Nexus subscription before any BYO option.
+    featured: bool = False
+    # Optional one-line tagline shown beside featured tiles.
+    tagline: str = ""
 
 
 # ---------------------------------------------------------------------------

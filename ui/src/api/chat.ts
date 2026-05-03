@@ -272,6 +272,18 @@ export type SessionEvent =
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
   | { kind: "calendar_alert"; data: CalendarAlertPayload }
   | { kind: "voice_ack"; data: VoiceAckPayload }
+  // Fired by the backend's nexus status_watcher when the signed-in
+  // user's tier (and therefore the available Nexus model list) changes.
+  | {
+      kind: "nexus_tier_changed";
+      data: {
+        from_models: string[];
+        to_models: string[];
+        default_model_from: string;
+        default_model_to: string;
+        tier?: string;
+      };
+    }
   // Terminal signal for ephemeral runs (e.g. dashboard operations) so the
   // caller can flip its UI state without inspecting persisted history.
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
@@ -428,6 +440,7 @@ function openGlobalNotifSource(): void {
     "user_request_cancelled",
     "calendar_alert",
     "voice_ack",
+    "nexus_tier_changed",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {

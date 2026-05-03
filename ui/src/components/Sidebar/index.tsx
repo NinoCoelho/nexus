@@ -21,6 +21,7 @@ import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDT
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
 import BrightnessKnob from "../BrightnessKnob";
+import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
 type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights";
@@ -329,6 +330,7 @@ export default function Sidebar({
 
       {/* Settings + always-accessible brightness knob */}
       <div className="sidebar-bottom">
+        <NexusUsageGauges collapsed={collapsed} onOpenSettings={onOpenSettings} />
         <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? t("sidebar:settings") : undefined}>
           <span className="sidebar-nav-icon"><IconGear /></span>
           {!collapsed && <span className="sidebar-nav-label">{t("sidebar:settings")}</span>}

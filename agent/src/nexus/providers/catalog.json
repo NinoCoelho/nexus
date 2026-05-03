@@ -1,5 +1,27 @@
 [
   {
+    "id": "nexus",
+    "display_name": "Nexus",
+    "category": "frontier",
+    "runtime_kind": "nexus",
+    "base_url": "https://llm.nexus-model.us/v1",
+    "featured": true,
+    "tagline": "Sign in once — demo free, Pro unlocks the larger Nexus model.",
+    "docs_url": "https://www.nexus-model.us",
+    "auth_methods": [
+      {
+        "id": "nexus_signin",
+        "label": "Sign in with Nexus",
+        "priority": 10,
+        "prompts": []
+      }
+    ],
+    "default_models": [
+      { "id": "demo", "capabilities": ["chat", "tools"] },
+      { "id": "nexus", "capabilities": ["chat", "tools", "reasoning"] }
+    ]
+  },
+  {
     "id": "openai",
     "display_name": "OpenAI",
     "category": "frontier",

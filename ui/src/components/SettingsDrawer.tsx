@@ -32,6 +32,7 @@ import CredentialsTab from "./settings/CredentialsTab";
 import DefaultModelStrip from "./settings/DefaultModelStrip";
 import FeaturesTab from "./settings/FeaturesTab";
 import ModelsTab from "./settings/ModelsTab";
+import NexusTab from "./settings/NexusTab";
 import QuickStartTab from "./settings/QuickStartTab";
 import SettingsTabs from "./settings/SettingsTabs";
 import "./SettingsDrawer.css";
@@ -42,12 +43,13 @@ interface Props {
   onClose: () => void;
 }
 
-type TabId = "quick" | "models" | "credentials" | "features" | "advanced";
+type TabId = "nexus" | "quick" | "models" | "credentials" | "features" | "advanced";
 
 export default function SettingsDrawer({ open, onClose }: Props) {
   const { t } = useTranslation("settings");
 
   const TABS: { id: TabId; label: string }[] = [
+    { id: "nexus", label: t("settings:tabs.nexus") },
     { id: "quick", label: t("settings:tabs.quick") },
     { id: "models", label: t("settings:tabs.models") },
     { id: "credentials", label: t("settings:tabs.credentials") },
@@ -62,7 +64,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [graphStats, setGraphStats] = useState<KnowledgeStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<TabId>("quick");
+  const [active, setActive] = useState<TabId>("nexus");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -130,6 +132,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           {loading && !routing && <p className="settings-loading">Loading…</p>}
           {error && <p className="settings-error">{error}</p>}
 
+          {active === "nexus" && <NexusTab />}
           {active === "quick" && (
             <QuickStartTab
               routing={routing}

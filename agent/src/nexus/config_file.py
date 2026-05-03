@@ -34,6 +34,7 @@ from .config_schema import (  # noqa: F401
     VaultHistoryConfig,
     VaultConfig,
     UIConfig,
+    NexusAccountConfig,
     NexusConfig,
     default_config,
 )
@@ -154,6 +155,12 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         },
         "ui": {
             "language": cfg.ui.language,
+        },
+        "nexus_account": {
+            "base_url": cfg.nexus_account.base_url,
+            "gateway_url": cfg.nexus_account.gateway_url,
+            "poll_seconds": cfg.nexus_account.poll_seconds,
+            "auto_upgrade_default": cfg.nexus_account.auto_upgrade_default,
         },
     }
     for m in cfg.models:
@@ -318,10 +325,12 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     if ui_raw.get("language") not in ("en", "pt-BR"):
         ui_raw.pop("language", None)
     ui = UIConfig(**ui_raw)
+    nexus_account = NexusAccountConfig(**dict(raw.get("nexus_account", {})))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
+        nexus_account=nexus_account,
     )
 
 

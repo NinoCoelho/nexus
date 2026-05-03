@@ -12,6 +12,7 @@ import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
+import "./components/onboarding/NexusLoginScreen.css";
 import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import DatabaseSchemaView from "./components/DatabaseSchemaView";
@@ -31,6 +32,7 @@ import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
 import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
+import { useNexusAccount } from "./hooks/useNexusAccount";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
@@ -174,6 +176,12 @@ export default function App() {
   const settings = useSettings();
   const { hasModel, availableModels, lastUsedModel, defaultModel, yoloMode, bumpSettingsRevision, persistUsedModel } = settings;
 
+  // Nexus account — drives the mandatory first-run sign-in gate and the
+  // Settings → Nexus tab. ``nexusAccount.status === null`` while the
+  // initial /auth/nexus/status fetch is in flight so we don't flash the
+  // login screen for already-signed-in users on every page load.
+  const nexusAccount = useNexusAccount();
+
   const chatSession = useChatSession(
     { availableModels, lastUsedModel, defaultModel, persistUsedModel },
     freshSessionId,
@@ -302,14 +310,30 @@ export default function App() {
       setView("chat");
     },
   });
+  const { t: tSettings } = useTranslation("settings");
   useEffect(() => {
     const sub = subscribeGlobalNotifications((sessionId, event) => {
       if (event.kind === "voice_ack") {
         ackPlayer.handle(sessionId, event.data);
+      } else if (event.kind === "nexus_tier_changed") {
+        const upgraded =
+          !event.data.from_models.includes("nexus")
+          && event.data.to_models.includes("nexus");
+        const downgraded =
+          event.data.from_models.includes("nexus")
+          && !event.data.to_models.includes("nexus");
+        if (upgraded) {
+          toast.success(tSettings("settings:nexus.tierChanged.upgraded"));
+        } else if (downgraded) {
+          toast.info(tSettings("settings:nexus.tierChanged.downgraded"));
+        }
+        // Refresh settings so the Default model strip + ModelsTab pick
+        // up the new registry contents.
+        bumpSettingsRevision();
       }
     });
     return () => sub.close();
-  }, [ackPlayer]);
+  }, [ackPlayer, toast, tSettings, bumpSettingsRevision]);
 
   const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string) => {
     setChatStates((prev) => {
@@ -738,7 +762,10 @@ export default function App() {
           mode="first-run"
           configuredNames={[]}
           onClose={(result) => {
-            if (result.saved) bumpSettingsRevision();
+            if (result.saved) {
+              bumpSettingsRevision();
+              void nexusAccount.reload();
+            }
           }}
         />
       )}

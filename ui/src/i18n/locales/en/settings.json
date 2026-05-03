@@ -43,11 +43,58 @@
     "loadFailed": "Failed to load settings"
   },
   "tabs": {
+    "nexus": "Nexus",
     "quick": "Quick start",
     "models": "Models",
     "credentials": "Credentials",
     "features": "Features",
     "advanced": "Advanced"
+  },
+  "nexus": {
+    "signIn": {
+      "title": "Welcome to Nexus",
+      "subtitle": "Sign in to your Nexus account to start chatting. The free tier includes the demo model; Pro adds the larger Nexus model.",
+      "primary": "Sign in / Sign up",
+      "opening": "Opening browser…",
+      "verifying": "Verifying…",
+      "popupBlocked": "Popup blocked. Allow popups for this app and try again.",
+      "popupClosed": "Sign-in window closed before completion.",
+      "verifyFailed": "Could not complete sign-in.",
+      "footer": "We never see your password. Authentication runs on Nexus's website."
+    },
+    "account": {
+      "signedInAs": "Signed in as <bold>{{email}}</bold>",
+      "tierFree": "Free",
+      "tierPro": "Pro",
+      "refresh": "Refresh status",
+      "signOut": "Sign out",
+      "signOutConfirm": "Sign out of Nexus? Your local chat history stays on this machine.",
+      "signInAgain": "Sign in again",
+      "lastChecked": "Last checked {{time}}",
+      "panelTitle": "Account",
+      "emailLabel": "Email",
+      "planLabel": "Plan",
+      "upgrade": "Upgrade →",
+      "connectionLabel": "Nexus",
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "connect": "Connect",
+      "usageLabel": "Usage",
+      "usageOf": "{{spend}} / {{max}}",
+      "usagePeriod": "{{period}} · resets in {{time}}",
+      "usageNoData": "No usage data yet — sign-in pending."
+    },
+    "gauges": {
+      "spendLabel": "Spend",
+      "spendOf": "{{spend}} / {{max}} ({{duration}})",
+      "limits": "{{rpm}} rpm · {{tpm}} tpm",
+      "resetIn": "Resets in {{time}}",
+      "openSettings": "Open Nexus settings"
+    },
+    "tierChanged": {
+      "upgraded": "You're now on Nexus Pro — switched to the nexus model.",
+      "downgraded": "Pro plan ended — switched back to the demo model."
+    }
   },
   "credentials": {
     "sectionTitle": "Credentials",

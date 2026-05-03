@@ -376,6 +376,29 @@ def create_app(
                     _local_mgr.cleanup_stale_config()
             except Exception:
                 log.exception("local_llm restart failed")
+        # ── nexus status watcher ─────────────────────────────────────────────
+        # Polls https://www.nexus-model.us/api/status with the user's stored
+        # apiKey. On model-list changes we re-register provider models and
+        # auto-promote demo -> nexus when pro becomes available.
+        try:
+            from ..auth.status_watcher import StatusWatcher
+            from ..config_file import save as _save_cfg
+            from .routes.config import _rebuild_registry as _rebuild_reg
+
+            watcher = StatusWatcher(
+                mutable_state=mutable_state,
+                agent=agent,
+                sessions=sessions,
+                rebuild_registry=_rebuild_reg,
+                save_config=_save_cfg,
+            )
+            watcher.start()
+            app.state.nexus_status_watcher = watcher
+            log.info("[nexus] status watcher started")
+        except Exception:
+            log.exception("[nexus] status watcher start failed")
+            app.state.nexus_status_watcher = None
+
         # ── parked HITL sweep (durable async ask_user) ──────────────────────
         # Re-publish ``user_request`` for any rows that were left parked when
         # the server stopped, so connected clients re-queue them in the bell.
@@ -540,6 +563,12 @@ def create_app(
         try:
             yield
         finally:
+            watcher = getattr(app.state, "nexus_status_watcher", None)
+            if watcher is not None:
+                try:
+                    await watcher.stop()
+                except Exception:
+                    log.exception("[nexus] status watcher stop failed")
             if scheduler is not None:
                 try:
                     scheduler.stop()
@@ -618,6 +647,7 @@ def create_app(
     from .routes.skill_wizard import router as skill_wizard_router
     from .routes.tunnel import router as tunnel_router
     from .routes.tts import router as tts_router
+    from .routes.nexus_account import router as nexus_account_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -648,6 +678,7 @@ def create_app(
     app.include_router(skill_wizard_router)
     app.include_router(tunnel_router)
     app.include_router(tts_router)
+    app.include_router(nexus_account_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

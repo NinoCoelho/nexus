@@ -43,11 +43,58 @@
     "loadFailed": "Falha ao carregar configurações"
   },
   "tabs": {
+    "nexus": "Nexus",
     "quick": "Início rápido",
     "models": "Modelos",
     "credentials": "Credenciais",
     "features": "Recursos",
     "advanced": "Avançado"
+  },
+  "nexus": {
+    "signIn": {
+      "title": "Bem-vindo ao Nexus",
+      "subtitle": "Faça login na sua conta Nexus para começar. O plano gratuito inclui o modelo demo; o Pro libera o modelo Nexus.",
+      "primary": "Entrar / Criar conta",
+      "opening": "Abrindo navegador…",
+      "verifying": "Verificando…",
+      "popupBlocked": "Pop-up bloqueado. Libere pop-ups para este app e tente novamente.",
+      "popupClosed": "Janela de login fechada antes da conclusão.",
+      "verifyFailed": "Não foi possível concluir o login.",
+      "footer": "Nunca vemos sua senha — o login roda no site do Nexus."
+    },
+    "account": {
+      "signedInAs": "Conectado como <bold>{{email}}</bold>",
+      "tierFree": "Grátis",
+      "tierPro": "Pro",
+      "refresh": "Atualizar status",
+      "signOut": "Sair",
+      "signOutConfirm": "Sair da conta Nexus? Seu histórico local de conversas permanece neste computador.",
+      "signInAgain": "Entrar novamente",
+      "lastChecked": "Última verificação {{time}}",
+      "panelTitle": "Conta",
+      "emailLabel": "E-mail",
+      "planLabel": "Plano",
+      "upgrade": "Fazer upgrade →",
+      "connectionLabel": "Nexus",
+      "connected": "Conectado",
+      "notConnected": "Não conectado",
+      "connect": "Conectar",
+      "usageLabel": "Uso",
+      "usageOf": "{{spend}} / {{max}}",
+      "usagePeriod": "{{period}} · renova em {{time}}",
+      "usageNoData": "Sem dados de uso — login pendente."
+    },
+    "gauges": {
+      "spendLabel": "Gasto",
+      "spendOf": "{{spend}} / {{max}} ({{duration}})",
+      "limits": "{{rpm}} rpm · {{tpm}} tpm",
+      "resetIn": "Renova em {{time}}",
+      "openSettings": "Abrir configurações Nexus"
+    },
+    "tierChanged": {
+      "upgraded": "Você agora é Nexus Pro — modelo nexus selecionado.",
+      "downgraded": "Plano Pro encerrado — voltamos para o modelo demo."
+    }
   },
   "credentials": {
     "sectionTitle": "Credenciais",

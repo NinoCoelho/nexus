@@ -178,6 +178,32 @@
   color: var(--ok);
 }
 
+/* Featured providers (e.g. Nexus subscription) get an accent ring + badge
+   so they read as the recommended path on first run. */
+.provider-wizard-group--featured .provider-wizard-grid {
+  grid-template-columns: 1fr;
+}
+.provider-wizard-tile--featured {
+  border-color: var(--accent);
+  background: var(--bg-panel);
+}
+.provider-wizard-tile--featured:hover {
+  border-color: var(--accent);
+}
+.provider-wizard-tile__featured-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--fg-on-accent, #000);
+  vertical-align: 1px;
+}
+
 /* ── step 2: auth methods ────────────────────────────────────────────── */
 
 .provider-wizard-step__title {

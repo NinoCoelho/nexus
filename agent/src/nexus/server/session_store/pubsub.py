@@ -40,6 +40,9 @@ _GLOBAL_HITL_KINDS = frozenset({
     # the user. Routed globally so a completion ack from a session the user
     # isn't currently viewing still reaches the audio player + toast.
     "voice_ack",
+    # Fired by the nexus status_watcher when the user's tier (and therefore
+    # the available Nexus model list) changes.
+    "nexus_tier_changed",
 })
 
 

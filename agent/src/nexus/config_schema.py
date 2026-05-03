@@ -68,6 +68,31 @@ class ProviderConfig(BaseModel):
     iam_extra: dict[str, str] = Field(default_factory=dict)
 
 
+class NexusAccountConfig(BaseModel):
+    """Settings for the optional Nexus hosted-LLM subscription.
+
+    All fields are optional with sensible production defaults. Users who
+    don't sign in to a Nexus account get the same behavior as before —
+    the watcher just no-ops when no key is stored in
+    ``~/.nexus/secrets.toml`` under ``nexus_api_key``.
+    """
+
+    # The Next.js website that issues API keys (auth/verify) and exposes
+    # /api/status. The desktop app opens its /auth/signin in a popup and
+    # the new Settings tab embeds its root in an iframe.
+    base_url: str = "https://www.nexus-model.us"
+    # The OpenAI-compat LiteLLM gateway that actually serves chat
+    # completions for the Nexus-tier models.
+    gateway_url: str = "https://llm.nexus-model.us/v1"
+    # How often the status-watcher polls /api/status for tier / model
+    # changes. Clamped to >= 60s by the watcher itself.
+    poll_seconds: int = 300
+    # When True, the watcher upgrades the agent's default model from
+    # ``demo`` to ``nexus`` automatically the moment ``nexus`` becomes
+    # available (i.e. the user upgrades to pro).
+    auto_upgrade_default: bool = True
+
+
 class AgentConfig(BaseModel):
     default_model: str = ""
     last_used_model: str = ""
@@ -237,6 +262,7 @@ class NexusConfig(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     vault: VaultConfig = Field(default_factory=VaultConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    nexus_account: NexusAccountConfig = Field(default_factory=NexusAccountConfig)
 
 
 # Fresh install starts with providers configured but NO models.

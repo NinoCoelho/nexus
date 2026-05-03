@@ -67,6 +67,14 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
         },
     }
     out["ui"] = {"language": cfg.ui.language}
+    na = getattr(cfg, "nexus_account", None)
+    if na is not None:
+        out["nexus_account"] = {
+            "base_url": na.base_url,
+            "gateway_url": na.gateway_url,
+            "poll_seconds": na.poll_seconds,
+            "auto_upgrade_default": na.auto_upgrade_default,
+        }
     tts = cfg.tts
     out["tts"] = {
         "enabled": tts.enabled,

@@ -1,0 +1,90 @@
+.nexus-gauges {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: calc(100% - 16px);
+  padding: 6px 8px;
+  margin: 0 8px 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nexus-gauges:hover {
+  background: var(--bg-hover);
+}
+
+.nexus-gauges--collapsed {
+  width: calc(100% - 12px);
+  margin: 0 6px 4px 6px;
+  padding: 6px 6px;
+}
+
+.nexus-gauges-bar {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.nexus-gauges-fill {
+  height: 100%;
+  transition: width 200ms ease-out;
+}
+
+.nexus-gauges-bar-ok .nexus-gauges-fill {
+  background: var(--accent, #4ec9b0);
+}
+
+.nexus-gauges-bar-warn .nexus-gauges-fill {
+  background: #d3a534;
+}
+
+.nexus-gauges-bar-high .nexus-gauges-fill {
+  background: #d35450;
+}
+
+/* Hover tooltip — absolutely positioned just above the bar so it
+   doesn't shift surrounding sidebar layout. */
+.nexus-gauges-tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 8px;
+  right: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  text-align: left;
+  pointer-events: none;
+  z-index: 50;
+  white-space: nowrap;
+}
+
+.nexus-gauges-tooltip-row {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}
+
+.nexus-gauges-tooltip-row + .nexus-gauges-tooltip-row {
+  margin-top: 2px;
+}
+
+.nexus-gauges-tooltip-tier {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.nexus-gauges-tooltip-dim {
+  color: var(--fg-dim);
+  font-size: 11px;
+}

@@ -12,7 +12,12 @@ export type WizardStep =
   | "oauth-in-progress"
   | "claim-local-creds"
   | "enter-credentials"
-  | "select-models";
+  | "select-models"
+  // Nexus subscription sign-in: opens the Firebase popup, awaits the
+  // postMessage with the idToken, and forwards it to /auth/nexus/verify.
+  // No credentials are typed in the wizard; once verified, the wizard
+  // applies a provider entry with runtime_kind="nexus".
+  | "nexus-signin";
 
 export interface WizardState {
   step: WizardStep;
@@ -61,6 +66,7 @@ export const SUPPORTED_AUTH_METHODS: AuthMethodId[] = [
   "local_claude_code",
   "local_codex",
   "iam_aws",
+  "nexus_signin",
 ];
 
 /** IAM methods route through the standard EnterCredentials step (the
@@ -91,3 +97,9 @@ export const LOCAL_CREDS_AUTH_METHODS: AuthMethodId[] = [
 export const LOCAL_OAUTH_BUNDLE_METHODS: AuthMethodId[] = [
   "local_claude_code",
 ];
+
+/** Auth methods handled entirely outside the wizard form: a popup opens
+ *  to a third-party sign-in page, posts back an idToken, and the backend
+ *  exchanges it for a stored credential. The wizard then applies a
+ *  provider config bound to that pre-existing credential. */
+export const NEXUS_AUTH_METHODS: AuthMethodId[] = ["nexus_signin"];
