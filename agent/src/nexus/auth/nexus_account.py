@@ -172,6 +172,7 @@ async def verify_id_token(id_token: str, *, base_url: str) -> dict[str, Any]:
         "displayName": user.get("displayName") or "",
         "tier": user.get("tier", "free"),
         "cancelsAt": user.get("cancelsAt") or None,
+        "trialEnd": user.get("trialEnd") or None,
         "connected": bool(user.get("connected", False)),
         "stripeCustomerId": user.get("stripeCustomerId") or "",
         "stripeSubscriptionId": user.get("stripeSubscriptionId") or "",
@@ -304,6 +305,7 @@ async def refresh_status(*, base_url: str) -> dict[str, Any]:
     record = load_account() or {}
     record["tier"] = payload.get("tier") or record.get("tier") or "free"
     record["cancelsAt"] = payload.get("cancelsAt") or None
+    record["trialEnd"] = payload.get("trialEnd") or None
     record["models"] = payload.get("models") or []
     record["refreshedAt"] = datetime.now(timezone.utc).isoformat()
     record["lastStatus"] = {

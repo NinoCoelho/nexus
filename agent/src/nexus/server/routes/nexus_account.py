@@ -60,6 +60,7 @@ def _account_view(*, watcher: StatusWatcher | None) -> dict[str, Any]:
         "email": (record or {}).get("email", "") if signed_in else "",
         "tier": (record or {}).get("tier", "free") if signed_in else "free",
         "cancelsAt": (record or {}).get("cancelsAt") or None,
+        "trialEnd": (record or {}).get("trialEnd") or None,
         # The desktop has "connected" the apiKey when /api/keys/confirm
         # succeeded after sign-in. The UI surfaces this as a Connect CTA
         # when false (e.g. user signed in before the confirm path

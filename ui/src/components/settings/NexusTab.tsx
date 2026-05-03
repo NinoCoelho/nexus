@@ -141,6 +141,7 @@ export default function NexusTab() {
   const signedIn = status?.signedIn ?? false;
   const tier = status?.tier ?? "free";
   const cancelsAt = status?.cancelsAt ?? null;
+  const trialEnd = status?.trialEnd ?? null;
   const tierLabel =
     tier === "pro"
       ? t("settings:nexus.account.tierPro")
@@ -202,21 +203,31 @@ export default function NexusTab() {
 
         <div className="nexus-tab-row">
           <div className="nexus-tab-row-label">{t("settings:nexus.account.planLabel")}</div>
-          <div className="nexus-tab-row-value nexus-tab-row-value--inline">
-            <span className={`nexus-tab-tier nexus-tab-tier-${tier}`}>{tierLabel}</span>
-            {tier === "pro" && cancelsAt && (() => {
-              const days = Math.max(0, Math.ceil((new Date(cancelsAt).getTime() - Date.now()) / 86400000));
-              return (
-                <span className="nexus-tab-cancels">
-                  {days > 0 ? `${days} day${days !== 1 ? "s" : ""} left` : "ends today"}
-                  {" "}(cancels {new Date(cancelsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })})
-                </span>
-              );
-            })()}
-            {tier === "pro" && (
+          <div className="nexus-tab-row-value">
+            <div className="nexus-tab-plan-row">
+              <span className={`nexus-tab-tier nexus-tab-tier-${tier}`}>{tierLabel}</span>
+              {tier === "pro" && cancelsAt && (() => {
+                const days = Math.max(0, Math.ceil((new Date(cancelsAt).getTime() - Date.now()) / 86400000));
+                return (
+                  <span className="nexus-tab-cancels">
+                    {days > 0 ? `${days} day${days !== 1 ? "s" : ""} left` : "ends today"}
+                    {" — "}{new Date(cancelsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                  </span>
+                );
+              })()}
+              {tier === "pro" && !cancelsAt && trialEnd && (() => {
+                const days = Math.max(0, Math.ceil((new Date(trialEnd).getTime() - Date.now()) / 86400000));
+                return (
+                  <span className="nexus-tab-cancels">
+                    {days > 0 ? `${days} day${days !== 1 ? "s" : ""} left on trial` : "trial ending soon"}
+                  </span>
+                );
+              })()}
+            </div>
+            {tier === "pro" ? (
               <button
                 type="button"
-                className="nexus-tab-link nexus-tab-link--cancel"
+                className="nexus-tab-manage-btn"
                 onClick={() => {
                   const url = `${websiteUrl.replace(/\/$/, "")}/billing`;
                   const popup = window.open(url, "nexus-billing", "popup,width=520,height=760");
@@ -233,10 +244,9 @@ export default function NexusTab() {
                   }, 500);
                 }}
               >
-                {cancelsAt ? "Reactivate or manage" : "Manage subscription"}
+                {cancelsAt ? "Reactivate or manage subscription" : "Manage subscription"}
               </button>
-            )}
-            {tier !== "pro" && (
+            ) : (
               <button
                 type="button"
                 className="nexus-tab-link"

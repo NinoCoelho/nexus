@@ -36,7 +36,7 @@ export function useNexusAccount(): UseNexusAccountResult {
       const next = await getNexusAccountStatus();
       if (mounted.current) setStatus(next);
     } catch {
-      if (mounted.current) setStatus({ signedIn: false, email: "", tier: "free", cancelsAt: null, connected: false, models: [], refreshedAt: "" });
+      if (mounted.current) setStatus({ signedIn: false, email: "", tier: "free", cancelsAt: null, trialEnd: null, connected: false, models: [], refreshedAt: "" });
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -53,7 +53,7 @@ export function useNexusAccount(): UseNexusAccountResult {
   const logout = useCallback(async () => {
     await logoutNexusAccount();
     if (mounted.current) {
-      setStatus({ signedIn: false, email: "", tier: "free", cancelsAt: null, connected: false, models: [], refreshedAt: "" });
+      setStatus({ signedIn: false, email: "", tier: "free", cancelsAt: null, trialEnd: null, connected: false, models: [], refreshedAt: "" });
     }
   }, []);
 
