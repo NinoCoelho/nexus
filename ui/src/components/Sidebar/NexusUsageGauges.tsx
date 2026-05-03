@@ -51,7 +51,7 @@ export default function NexusUsageGauges({ collapsed, onOpenSettings }: Props) {
   const { status } = useNexusAccount();
   const [hovered, setHovered] = useState(false);
 
-  if (!status?.signedIn) return null;
+  if (!status?.signedIn || status.cancelsAt) return null;
   const live = status.status;
   if (!live || live.maxBudget <= 0) return null;
 

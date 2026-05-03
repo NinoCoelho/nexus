@@ -284,6 +284,7 @@ export default function NexusTab() {
           </div>
         </div>
 
+        {!cancelsAt && (
         <div className="nexus-tab-row nexus-tab-row--usage">
           <div className="nexus-tab-row-label">{t("settings:nexus.account.usageLabel")}</div>
           <div className="nexus-tab-row-value nexus-tab-row-value--block">
@@ -319,6 +320,7 @@ export default function NexusTab() {
             )}
           </div>
         </div>
+        )}
       </div>
 
       {showSignOutConfirm && (
