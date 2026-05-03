@@ -46,14 +46,61 @@ def _sql_str(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
+_PYTZ_AVAILABLE: bool | None = None
+
+
+def _has_pytz() -> bool:
+    """Cache an import probe for pytz.
+
+    DuckDB needs pytz at runtime to materialize ``TIMESTAMP WITH TIME ZONE``
+    columns into Python ``datetime`` via ``fetchall()``. When the daemon
+    venv is missing pytz (e.g. it predates the dependency being added), every
+    such fetch raises ``Invalid Input Error: Required module 'pytz' …``.
+    Probing once at first use lets ``_register`` pre-cast the offending
+    columns to ``VARCHAR`` instead of letting the query blow up.
+    """
+    global _PYTZ_AVAILABLE
+    if _PYTZ_AVAILABLE is None:
+        try:
+            import pytz  # noqa: F401
+            _PYTZ_AVAILABLE = True
+        except ImportError:
+            _PYTZ_AVAILABLE = False
+    return _PYTZ_AVAILABLE
+
+
 def _register(con: duckdb.DuckDBPyConnection, full: Path, view: str = "t") -> None:
     # read_csv_auto sniffs delimiter, header, and types. DuckDB does not
     # accept prepared parameters in DDL, so we inline the path as an escaped
     # string literal — the path was already validated by _resolve.
     path_lit = _sql_str(str(full))
+    if _has_pytz():
+        con.execute(
+            f"CREATE OR REPLACE VIEW {view} AS "
+            f"SELECT * FROM read_csv_auto({path_lit}, sample_size=4096)"
+        )
+        return
+    # No pytz: cast TIMESTAMP WITH TIME ZONE columns to VARCHAR so fetch
+    # never goes through pytz. Stage the raw scan in a hidden view, DESCRIBE
+    # it, then build the public view with the casts applied.
+    raw_view = f"__{view}_raw"
+    con.execute(
+        f"CREATE OR REPLACE VIEW {raw_view} AS "
+        f"SELECT * FROM read_csv_auto({path_lit}, sample_size=4096)"
+    )
+    cols = con.execute(f"DESCRIBE {raw_view}").fetchall()
+    select_parts: list[str] = []
+    for r in cols:
+        col_name = r[0]
+        col_type = (r[1] or "").upper()
+        q = _quote_ident(col_name)
+        if "TIMESTAMP" in col_type and "TIME ZONE" in col_type:
+            select_parts.append(f"CAST({q} AS VARCHAR) AS {q}")
+        else:
+            select_parts.append(q)
     con.execute(
         f"CREATE OR REPLACE VIEW {view} AS "
-        f"SELECT * FROM read_csv_auto({path_lit}, sample_size=4096)"
+        f"SELECT {', '.join(select_parts)} FROM {raw_view}"
     )
 
 
@@ -158,12 +205,20 @@ def csv_describe(rel_path: str, columns: list[str] | None = None) -> dict[str, A
 _SQL_LEAD_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
 
 
-def csv_query(
-    rel_path: str,
+def run_select(
+    con: duckdb.DuckDBPyConnection,
     sql: str,
+    *,
     limit: int = _DEFAULT_QUERY_LIMIT,
     fmt: str = "columns",
 ) -> dict[str, Any]:
+    """Execute a read-only SELECT/WITH against ``con`` and shape the result.
+
+    Shared between :func:`csv_query` and ``datatable_manage(action=query)`` so
+    the response envelope (columns/data/row_count/truncated/limit/format) and
+    the SELECT-only guard stay consistent. The caller is responsible for
+    registering the input view (named ``t`` by convention).
+    """
     if not _SQL_LEAD_RE.match(sql or ""):
         raise ValueError("only SELECT / WITH queries are allowed")
     if fmt not in ("columns", "rows"):
@@ -171,27 +226,19 @@ def csv_query(
     if limit <= 0:
         limit = _DEFAULT_QUERY_LIMIT
     limit = min(int(limit), _MAX_QUERY_LIMIT)
-    full = _resolve(rel_path)
-    con = _connect()
-    try:
-        _register(con, full)
-        # Execute as subquery so we can tack on LIMIT and a total count without
-        # parsing the user's SQL.
-        rel = con.execute(f"SELECT * FROM ({sql}) AS __q LIMIT {limit + 1}")
-        columns = [d[0] for d in rel.description]
-        rows = rel.fetchall()
-        truncated = len(rows) > limit
-        if truncated:
-            rows = rows[:limit]
-        # Compute total only when truncation hit; otherwise we already know.
-        if truncated:
-            total = con.execute(f"SELECT count(*) FROM ({sql}) AS __q").fetchone()[0]
-        else:
-            total = len(rows)
-    finally:
-        con.close()
+    # Execute as subquery so we can tack on LIMIT and a total count without
+    # parsing the user's SQL.
+    rel = con.execute(f"SELECT * FROM ({sql}) AS __q LIMIT {limit + 1}")
+    columns = [d[0] for d in rel.description]
+    rows = rel.fetchall()
+    truncated = len(rows) > limit
+    if truncated:
+        rows = rows[:limit]
+    if truncated:
+        total = con.execute(f"SELECT count(*) FROM ({sql}) AS __q").fetchone()[0]
+    else:
+        total = len(rows)
     payload: dict[str, Any] = {
-        "path": rel_path,
         "sql": sql,
         "columns": columns,
         "row_count": int(total),
@@ -203,6 +250,23 @@ def csv_query(
         payload["data"] = [list(r) for r in rows]
     else:
         payload["rows"] = [_row_to_dict(columns, r) for r in rows]
+    return payload
+
+
+def csv_query(
+    rel_path: str,
+    sql: str,
+    limit: int = _DEFAULT_QUERY_LIMIT,
+    fmt: str = "columns",
+) -> dict[str, Any]:
+    full = _resolve(rel_path)
+    con = _connect()
+    try:
+        _register(con, full)
+        payload = run_select(con, sql, limit=limit, fmt=fmt)
+    finally:
+        con.close()
+    payload["path"] = rel_path
     return payload
 
 

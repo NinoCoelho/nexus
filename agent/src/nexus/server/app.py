@@ -836,6 +836,11 @@ def _mount_bundled_ui(app: FastAPI) -> None:
     # Registered as a Starlette route (not a FastAPI route) so FastAPI's
     # parameter introspection doesn't try to coerce ``request`` into a query
     # param. Mounted last, so all explicit API routes win.
+    #
+    # Cache policy: hashed assets under /assets/ are content-addressed and
+    # can be cached forever; index.html / sw.js / manifest.json must always
+    # be revalidated so a fresh build's new chunk hashes are picked up
+    # instead of clients holding onto vanished filenames.
     async def _spa(request: Request) -> Response:
         ui_path = request.path_params.get("ui_path", "") or ""
         if ui_path:
@@ -843,12 +848,16 @@ def _mount_bundled_ui(app: FastAPI) -> None:
                 target = (dist / ui_path).resolve()
                 target.relative_to(dist_resolved)
                 if target.is_file():
-                    return FileResponse(target)
+                    if ui_path.startswith("assets/"):
+                        headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+                    else:
+                        headers = {"Cache-Control": "no-cache"}
+                    return FileResponse(target, headers=headers)
             except (ValueError, OSError):
                 pass
         accept = request.headers.get("accept", "")
         if "text/html" in accept or accept == "" or accept == "*/*":
-            return FileResponse(index_html)
+            return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
         return Response(status_code=404)
 
     app.router.add_route("/{ui_path:path}", _spa, methods=["GET"], include_in_schema=False)

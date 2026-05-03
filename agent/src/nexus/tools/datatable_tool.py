@@ -26,6 +26,10 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
         "case-insensitive substring `q` across text fields — use this for "
         "'show me X' / 'find Y' queries; never claim 'not found' from a "
         "single `list_rows` page), "
+        "query (run DuckDB SQL against the table — referenced as `t` — for "
+        "aggregations, joins via subqueries, filters that find_rows can't "
+        "express; SELECT/WITH only, capped at 1000 rows, returns "
+        "`columns`/`data` like vault_csv), "
         "set_schema, set_views, add_field, remove_field, rename_field, "
         "create_relation, create_junction, suggest_schema, er_diagram, "
         "list_databases, related_rows, "
@@ -42,7 +46,7 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                 "enum": [
                     "create_table", "view",
                     "add_row", "add_rows", "update_row", "delete_row",
-                    "list_rows", "find_rows",
+                    "list_rows", "find_rows", "query",
                     "set_schema", "set_views",
                     "add_field", "remove_field", "rename_field",
                     "create_relation", "create_junction",
@@ -172,6 +176,15 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                     "without writing. Use this to verify the column mapping before committing."
                 ),
             },
+            "sql": {
+                "type": "string",
+                "description": (
+                    "DuckDB SQL for action=query. Reference the table as `t` "
+                    "(same convention as vault_csv). SELECT / WITH only — DDL "
+                    "and writes are rejected. Limit defaults to 200 rows, hard "
+                    "cap 1000; truncated results carry `truncated: true`."
+                ),
+            },
         },
         "required": ["action"],
     },
@@ -231,6 +244,19 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
                 offset=offset,
             )
             return json.dumps({"ok": True, **result})
+
+        if action == "query":
+            sql = args.get("sql")
+            if not isinstance(sql, str) or not sql.strip():
+                return json.dumps({"ok": False, "error": "`sql` is required for query"})
+            limit_raw = args.get("limit")
+            try:
+                limit = int(limit_raw) if limit_raw is not None else 200
+            except (TypeError, ValueError):
+                return json.dumps({"ok": False, "error": "`limit` must be an integer"})
+            tbl = vault_datatable.read_table(path)
+            payload = _run_datatable_query(tbl, sql, limit=limit)
+            return json.dumps({"ok": True, "path": path, **payload})
 
         if action == "list_rows":
             tbl = vault_datatable.read_table(path)
@@ -424,6 +450,96 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
 
     except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return json.dumps({"ok": False, "error": str(exc)})
+
+
+_KIND_TO_DUCKDB = {
+    "number": "DOUBLE",
+    "boolean": "BOOLEAN",
+    "date": "DATE",
+}
+
+
+def _coerce_for_duckdb(value: Any, kind: str) -> Any:
+    """Convert a row cell into a DuckDB-friendly Python scalar.
+
+    Lists / dicts are JSON-encoded so the agent can still grep them with
+    ``LIKE`` or ``json_extract``. Numbers and booleans are best-effort cast;
+    bad casts become ``NULL`` (rather than raising) to keep the query running.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    if kind == "number":
+        if isinstance(value, bool):
+            return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    if kind == "boolean":
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("true", "1", "yes", "y")
+    if kind == "date":
+        return str(value)
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _run_datatable_query(
+    tbl: dict[str, Any],
+    sql: str,
+    *,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Materialize ``tbl`` into an in-memory DuckDB table ``t`` and run ``sql``.
+
+    Reuses :func:`nexus.vault_csv.run_select` for the SELECT-only guard,
+    LIMIT/truncation handling, and the response envelope so the shape matches
+    ``vault_csv``'s ``query`` action.
+    """
+    import duckdb
+
+    from .. import vault_csv
+
+    fields = (tbl.get("schema") or {}).get("fields") or []
+    field_specs = [
+        (f["name"], f.get("kind", "text"))
+        for f in fields
+        if isinstance(f, dict) and f.get("name")
+    ]
+    rows = tbl.get("rows") or []
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        if not field_specs:
+            con.execute('CREATE TABLE t (_empty VARCHAR)')
+        else:
+            cols_def = ", ".join(
+                f"{_quote_ident(name)} {_KIND_TO_DUCKDB.get(kind, 'VARCHAR')}"
+                for name, kind in field_specs
+            )
+            con.execute(f"CREATE TABLE t ({cols_def})")
+            if rows:
+                placeholders = ", ".join("?" * len(field_specs))
+                col_list = ", ".join(_quote_ident(n) for n, _ in field_specs)
+                tuples = [
+                    tuple(_coerce_for_duckdb(r.get(n), k) for n, k in field_specs)
+                    for r in rows
+                ]
+                con.executemany(
+                    f"INSERT INTO t ({col_list}) VALUES ({placeholders})",
+                    tuples,
+                )
+        return vault_csv.run_select(con, sql, limit=limit)
+    finally:
+        con.close()
 
 
 def _required_fields(vault_datatable_mod, path: str) -> list[str]:

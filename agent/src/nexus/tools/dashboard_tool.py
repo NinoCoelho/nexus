@@ -17,10 +17,12 @@ DASHBOARD_MANAGE_TOOL = ToolSpec(
     description=(
         "Manage per-database dashboards stored as `_data.md` markdown files in "
         "the vault (one per folder containing data-tables). Each dashboard "
-        "holds a list of quick-action operations (chat or form), a chat "
-        "session id bound to that database, and an optional title. "
+        "holds quick-action operations (chat or form), widgets (chart/report/"
+        "kpi cards), a chat session id bound to that database, and an "
+        "optional title. "
         "Actions: view, set_operations, add_operation, remove_operation, "
-        "set_chat_session, set_title, delete_database."
+        "set_widgets, add_widget, remove_widget, set_chat_session, set_title, "
+        "delete_database."
     ),
     parameters={
         "type": "object",
@@ -32,6 +34,9 @@ DASHBOARD_MANAGE_TOOL = ToolSpec(
                     "set_operations",
                     "add_operation",
                     "remove_operation",
+                    "set_widgets",
+                    "add_widget",
+                    "remove_widget",
                     "set_chat_session",
                     "set_title",
                     "delete_database",
@@ -56,6 +61,26 @@ DASHBOARD_MANAGE_TOOL = ToolSpec(
             "op_id": {
                 "type": "string",
                 "description": "Operation id for remove_operation.",
+            },
+            "widgets": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": (
+                    "List of widgets for set_widgets. Each: "
+                    "{id (slug), title, kind: 'chart'|'report'|'kpi', "
+                    "prompt, refresh: 'manual'|'daily', size?: 'sm'|'md'|'lg', order?}. "
+                    "Widget body is computed lazily on refresh; the prompt steers "
+                    "the agent to produce the right shape (chart fence / terse "
+                    "markdown / single number)."
+                ),
+            },
+            "widget": {
+                "type": "object",
+                "description": "Single widget for add_widget. Same shape as `widgets` items.",
+            },
+            "widget_id": {
+                "type": "string",
+                "description": "Widget id for remove_widget.",
             },
             "session_id": {
                 "type": ["string", "null"],
@@ -110,6 +135,27 @@ def handle_dashboard_tool(args: dict[str, Any]) -> str:
             if not op_id:
                 return json.dumps({"ok": False, "error": "`op_id` required"})
             patched = vault_dashboard.delete_operation(folder, op_id)
+            return json.dumps({"ok": True, "dashboard": patched})
+
+        if action == "set_widgets":
+            widgets = args.get("widgets")
+            if not isinstance(widgets, list):
+                return json.dumps({"ok": False, "error": "`widgets` (list) required"})
+            patched = vault_dashboard.patch_dashboard(folder, {"widgets": widgets})
+            return json.dumps({"ok": True, "dashboard": patched})
+
+        if action == "add_widget":
+            widget = args.get("widget")
+            if not isinstance(widget, dict):
+                return json.dumps({"ok": False, "error": "`widget` (object) required"})
+            patched = vault_dashboard.upsert_widget(folder, widget)
+            return json.dumps({"ok": True, "dashboard": patched})
+
+        if action == "remove_widget":
+            widget_id = args.get("widget_id", "")
+            if not widget_id:
+                return json.dumps({"ok": False, "error": "`widget_id` required"})
+            patched = vault_dashboard.delete_widget(folder, widget_id)
             return json.dumps({"ok": True, "dashboard": patched})
 
         if action == "set_chat_session":

@@ -25,6 +25,10 @@ dependencies = [
     "loom-framework[anthropic,acp,tui,graphrag,search,scrape]",
     "huggingface_hub>=0.24",
     "duckdb>=1.0",
+    # DuckDB needs pytz at runtime to materialize TIMESTAMP WITH TIME ZONE
+    # columns into Python datetimes via fetchall(). Without it, vault_csv
+    # blows up on any CSV with TZ-aware timestamps.
+    "pytz>=2024.1",
     "python-dateutil>=2.9",
     "pywebpush>=2.0",
     "cryptography>=42.0",

@@ -257,7 +257,27 @@ async def _handle_semantic_search(args: dict[str, Any], _dumps: Any) -> str:
     engine = _get_graphrag_engine()
     if engine is None:
         return _dumps({"ok": False, "error": "GraphRAG not enabled or not initialized"})
-    results = await engine.retrieve(query, top_k=limit)
+    try:
+        results = await engine.retrieve(query, top_k=limit)
+    except ValueError as exc:
+        # Loom's _batch_cosine calls np.array(vectors, ...) which raises
+        # "inhomogeneous shape" when stored embeddings have mixed
+        # dimensions — caused by switching embedding models without
+        # re-indexing. Surface an actionable error instead of the raw
+        # numpy traceback so the agent stops retrying blindly.
+        msg = str(exc)
+        if "inhomogeneous" in msg or "setting an array element with a sequence" in msg:
+            return _dumps({
+                "ok": False,
+                "error": (
+                    "Vault embeddings have mixed dimensions — likely after an "
+                    "embedding-model change. Re-index the vault before calling "
+                    "vault_semantic_search again. Use `vault_search` (FTS) "
+                    "for now."
+                ),
+                "recovery": "rebuild_vault_index",
+            })
+        raise
     return _dumps({
         "ok": True,
         "results": [

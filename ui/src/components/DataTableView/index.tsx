@@ -11,7 +11,7 @@
  *   - formula cells are computed at render time from other fields
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import FormRenderer from "../FormRenderer";
 import Modal, { type ModalProps } from "../Modal";
 import SchemaEditor from "../datatable/SchemaEditor";
@@ -21,6 +21,7 @@ import DataTableGrid from "./DataTableGrid";
 import RelatedRowsPanel from "./RelatedRowsPanel";
 import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
 import { useDataTableActions } from "./useDataTableActions";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import { useVaultLinkPreview, VaultLinkPreviewProvider } from "../vaultLink";
 import "../DataTableView.css";
 
@@ -66,6 +67,28 @@ export default function DataTableView({ path, onOpenTable }: Props) {
 
   // Reset paging on filter/search/path change
   useEffect(() => { setPage(0); }, [path, search, sort]);
+
+  // Live-refresh when the agent (or another client) edits this table file.
+  // Mutations route through vault.write_file → event_bus → the SSE stream
+  // consumed by useVaultEvents. Debounce 200ms to coalesce a tool turn that
+  // does several mutations (e.g. add_row + update_row). Skip while the user
+  // is mid inline-edit so we don't blow away their cellDraft.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useVaultEvents((ev) => {
+    if (ev.path !== path) return;
+    if (ev.type !== "vault.indexed") return;
+    if (editingCell) return;
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      reload();
+    }, 200);
+  });
+  useEffect(() => {
+    return () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    };
+  }, []);
 
   const actions = useDataTableActions({
     path, table, search, sort, hidden, activeView,

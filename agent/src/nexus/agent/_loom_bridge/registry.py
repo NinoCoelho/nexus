@@ -402,6 +402,7 @@ def build_tool_registry(
         )
 
     _install_skill_redirect(registry, skill_registry)
+    _install_unknown_tool_helper(registry)
 
     return registry
 
@@ -429,5 +430,49 @@ def _install_skill_redirect(registry: ToolRegistry, skill_registry: Any) -> None
                     )
                     return await original_dispatch("skill_view", {"name": candidate})
         return await original_dispatch(name, args)
+
+    registry.dispatch = dispatch  # type: ignore[method-assign]
+
+
+# Names that smaller / OpenAI-compat models routinely hallucinate when they
+# want to run code — copied from other agent frameworks (Anthropic API tool_use
+# blocks, OpenAI code-interpreter, generic shell wrappers). When the agent
+# emits one of these, the bare ``Unknown tool: …`` response gives no recovery
+# signal: the model retries with another invented name and gives up. Replacing
+# it with a structured hint converts the wasted turn into a useful retry.
+_EXEC_ALIASES = frozenset({
+    "tool_use", "tool_create_file", "create_file", "write_file",
+    "run_python", "python", "python3", "code_interpreter", "execute_code",
+    "exec", "execute", "shell", "bash", "run_shell", "run_command",
+})
+
+
+_EXEC_ALIAS_HINT = (
+    "Tool {name!r} doesn't exist in Nexus. To run code, call `terminal` "
+    "with command=\"python3 -c '...'\" (or write the script to a temp file "
+    "first via `vault_write` and run it with `terminal` "
+    "command=\"python3 ~/.nexus/vault/<path>\"). To create a file, use "
+    "`vault_write` for vault paths, or `terminal` with `cat > /path << EOF` "
+    "for arbitrary paths. Retry the original intent using one of these tools."
+)
+
+
+def _install_unknown_tool_helper(registry: ToolRegistry) -> None:
+    """Convert hallucinated exec-tool names into a recovery hint.
+
+    Wraps ``registry.dispatch`` (after the skill-redirect wrapper) so that an
+    unknown name in :data:`_EXEC_ALIASES` returns a non-error :class:`ToolResult`
+    that explicitly names ``terminal`` and ``vault_write``. Without this, the
+    bare ``Unknown tool: …`` envelope gave the model no signal and it'd retry
+    with another invented name (observed: ``tool_use`` → ``tool_create_file``
+    → giving up and asking the user to run the script themselves).
+    """
+    wrapped_dispatch = registry.dispatch
+
+    async def dispatch(name: str, args: dict) -> ToolResult:
+        if name not in registry._handlers and name in _EXEC_ALIASES:
+            log.info("exec-alias tool call %r redirected to terminal hint", name)
+            return ToolResult(text=_EXEC_ALIAS_HINT.format(name=name), is_error=True)
+        return await wrapped_dispatch(name, args)
 
     registry.dispatch = dispatch  # type: ignore[method-assign]

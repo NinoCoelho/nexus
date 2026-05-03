@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addVaultCsvRow,
   deleteVaultCsvRow,
@@ -7,6 +7,7 @@ import {
   updateVaultCsvCell,
   type CsvPage,
 } from "../../api/csv";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import "./CsvEditorView.css";
 
 interface CsvEditorViewProps {
@@ -42,6 +43,27 @@ export default function CsvEditorView({ path }: CsvEditorViewProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Live-refresh when something else writes to this CSV (e.g. the agent
+  // editing the file via a future write tool, or another browser tab).
+  // Skip while a local mutation is in flight — `load()` already runs after
+  // those, and we'd otherwise double-fetch.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useVaultEvents((ev) => {
+    if (ev.path !== path) return;
+    if (ev.type !== "vault.indexed") return;
+    if (busy) return;
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      void load();
+    }, 200);
+  });
+  useEffect(() => {
+    return () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    };
+  }, []);
 
   const onSort = (col: string) => {
     if (sort === col) {
