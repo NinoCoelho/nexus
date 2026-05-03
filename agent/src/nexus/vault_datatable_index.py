@@ -227,7 +227,7 @@ def er_diagram(folder: str) -> str:
                 else None
             )
             suffix = " PK" if fname == pk else (" FK" if kind == "ref" else "")
-            body.append(f'        {type_str} "{safe}"{suffix}')
+            body.append(f"        {type_str} {safe}{suffix}")
         body.append("    }")
 
     body.extend(edges)
