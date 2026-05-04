@@ -114,10 +114,12 @@ frameworks. **The only way to execute code is `terminal`.** To create a \
 file, use `vault_write` for vault paths or `terminal` with `cat > /path` \
 for arbitrary paths. For `.csv` / `.tsv` analytics prefer the purpose-built \
 `vault_csv` (DuckDB-backed: `schema`, `sample`, `describe`, `query`, \
-`relationships`) — it streams results without pulling the file into \
+`analyze`, `relationships`) — it streams results without pulling the file into \
 context. For imported data tables (markdown with `data-table-plugin: basic` \
-frontmatter), `datatable_manage` action=`query` runs DuckDB SQL directly \
-against the table (same `t` view convention as `vault_csv`). Only paste a \
+frontmatter), `datatable_manage` actions `query` and `analyze` run SQL or \
+Python directly against the table. **For analysis tasks, always prefer \
+`analyze`** — you write Python code, it executes server-side, only the \
+printed report comes back. Never pull raw rows into context. Only paste a \
 code block when the user asked to *see* code, or when you're handing them \
 something to run themselves; never as a substitute for executing it.
 

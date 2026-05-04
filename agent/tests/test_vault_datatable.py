@@ -1070,7 +1070,7 @@ def test_tool_add_and_list_rows():
     assert result["count"] == 1
     assert result["total"] == 1
     assert result["offset"] == 0
-    assert result["limit"] == 100
+    assert result["limit"] == 25
     assert result["truncated"] is False
     assert result["rows"][0]["x"] == "hello"
 
@@ -1086,37 +1086,37 @@ def test_tool_list_rows_paginates():
         "path": "page.md",
         "rows": [{"n": i} for i in range(250)],
     })
-    # Default page (limit=100, offset=0).
+    # Default page (limit=25, offset=0).
     p1 = json.loads(handle_datatable_tool({"action": "list_rows", "path": "page.md"}))
-    assert p1["count"] == 100
+    assert p1["count"] == 25
     assert p1["total"] == 250
     assert p1["offset"] == 0
     assert p1["truncated"] is True
     assert p1["rows"][0]["n"] == 0
-    assert p1["rows"][-1]["n"] == 99
+    assert p1["rows"][-1]["n"] == 24
     # Second page.
     p2 = json.loads(handle_datatable_tool({
         "action": "list_rows",
         "path": "page.md",
-        "offset": 100,
-        "limit": 100,
+        "offset": 25,
+        "limit": 25,
     }))
-    assert p2["count"] == 100
-    assert p2["offset"] == 100
+    assert p2["count"] == 25
+    assert p2["offset"] == 25
     assert p2["truncated"] is True
-    assert p2["rows"][0]["n"] == 100
-    # Tail page.
+    assert p2["rows"][0]["n"] == 25
+    # Tail page — explicit limit to get all remaining.
     p3 = json.loads(handle_datatable_tool({
         "action": "list_rows",
         "path": "page.md",
         "offset": 200,
-        "limit": 100,
+        "limit": 200,
     }))
     assert p3["count"] == 50
     assert p3["truncated"] is False
 
 
-def test_tool_list_rows_caps_limit_at_1000():
+def test_tool_list_rows_caps_limit_at_200():
     handle_datatable_tool({
         "action": "create_table",
         "path": "cap.md",
@@ -1132,7 +1132,7 @@ def test_tool_list_rows_caps_limit_at_1000():
         "path": "cap.md",
         "limit": 999_999,
     }))
-    assert out["limit"] == 1000  # capped, not the requested value
+    assert out["limit"] == 200  # capped, not the requested value
 
 
 def test_tool_update_row():
@@ -1393,3 +1393,139 @@ def test_ask_user_form_kind_invalid_field():
     result = asyncio.get_event_loop().run_until_complete(_run())
     assert result.ok is False
     assert result.error is not None
+
+
+# ── analyze action ─────────────────────────────────────────────────────────────
+
+
+def test_tool_analyze_basic():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "an.md",
+        "schema": {"fields": [{"name": "x", "kind": "number"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "an.md",
+        "rows": [{"x": 10}, {"x": 20}, {"x": 30}],
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "analyze",
+        "path": "an.md",
+        "script": "print(sum(r['x'] for r in t))",
+    }))
+    assert result["ok"] is True
+    assert "60" in result["output"]
+
+
+def test_tool_analyze_with_validation():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "av.md",
+        "schema": {"fields": [{"name": "id", "kind": "number"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "av.md",
+        "rows": [{"id": i} for i in range(5)],
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "analyze",
+        "path": "av.md",
+        "script": "assert_row_count(min=1, max=10)\nassert_unique('id')",
+    }))
+    assert result["ok"] is True
+    assert "PASS assert_row_count" in result["output"]
+    assert "PASS assert_unique(id)" in result["output"]
+
+
+def test_tool_analyze_error():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "ae.md",
+        "schema": {"fields": [{"name": "x", "kind": "text"}]},
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "analyze",
+        "path": "ae.md",
+        "script": "1 / 0",
+    }))
+    assert result["ok"] is False
+    assert result.get("error") or result.get("exit_code")
+
+
+def test_tool_analyze_missing_script():
+    result = json.loads(handle_datatable_tool({
+        "action": "analyze",
+        "path": "any.md",
+        "script": "",
+    }))
+    assert result["ok"] is False
+    assert "script" in result["error"]
+
+
+def test_tool_view_returns_sample_not_all_rows():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "vs.md",
+        "schema": {"fields": [{"name": "n", "kind": "number"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "vs.md",
+        "rows": [{"n": i} for i in range(10)],
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "view",
+        "path": "vs.md",
+    }))
+    assert result["ok"] is True
+    assert result["row_count"] == 10
+    assert len(result["sample"]) == 3
+    assert result["sample"][0]["n"] == 0
+    assert "rows" not in result
+
+
+def test_tool_query_auto_summarize():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "qs.md",
+        "schema": {"fields": [{"name": "n", "kind": "number"}, {"name": "cat", "kind": "text"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "qs.md",
+        "rows": [{"n": i, "cat": f"c{i % 5}"} for i in range(50)],
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "query",
+        "path": "qs.md",
+        "sql": "SELECT * FROM t",
+    }))
+    assert result["ok"] is True
+    assert result["summarized"] is True
+    assert "summary" in result
+    assert "data" not in result
+    assert "data_head" in result
+
+
+def test_tool_query_summarize_override():
+    handle_datatable_tool({
+        "action": "create_table",
+        "path": "qo.md",
+        "schema": {"fields": [{"name": "n", "kind": "number"}]},
+    })
+    handle_datatable_tool({
+        "action": "add_rows",
+        "path": "qo.md",
+        "rows": [{"n": i} for i in range(50)],
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "query",
+        "path": "qo.md",
+        "sql": "SELECT * FROM t",
+        "summarize": False,
+    }))
+    assert result["ok"] is True
+    assert result.get("summarized") is not True
+    assert "data" in result

@@ -13,136 +13,223 @@ nexus_authored_by: builtin
 
 The "what tool, in what order, when something fails" playbook. Pair with `scripting-plan` (which forces the planning gate). This skill assumes you're already past the plan and need to actually do the work.
 
+## The 4-step analysis loop (mandatory for all analytical tasks)
+
+Every analytical task follows this exact sequence. Do not skip steps.
+
+### Step 1: UNDERSTAND — metadata only, no rows
+
+Gather schema, types, distributions, row counts. **No raw data enters context.**
+
+| Goal | Tool call |
+|---|---|
+| CSV shape | `vault_csv action=schema` → columns, types, row_count |
+| CSV column stats | `vault_csv action=describe` → count, nulls, distinct, min/max/mean, top values |
+| Data-table structure | `datatable_manage action=view` → schema, types, relations, row_count + 3 sample rows |
+| Cross-file joins | `vault_csv action=relationships` → scored column pairs |
+
+**Never** call `list_rows`, `find_rows`, or `query` without `summarize` in step 1. These return raw rows. You don't need raw rows to understand a data model.
+
+### Step 2: PLAN — what to extract and how to validate
+
+Write a 3-line plan stating:
+1. What data to extract (which columns, filters, joins)
+2. What transformations/aggregations to apply
+3. How to validate the results (row counts, sanity checks, cross-totals)
+
+The plan lives in your reasoning text. Keep it short.
+
+### Step 3: EXECUTE — generate code, run locally
+
+**For complex analysis**: use `analyze`.
+
+- `vault_csv action=analyze path=<csv> script="..."`
+- `datatable_manage action=analyze path=<table.md> script="..."`
+
+The variable `t` is a pandas DataFrame with all rows. Pre-loaded: `duckdb`, `pandas` (as `pd`), `numpy` (as `np`). Available validation helpers:
+- `assert_row_count(min=None, max=None)` — check row count bounds
+- `assert_no_nulls(columns=None)` — check for nulls
+- `assert_unique(column)` — check for duplicates
+- `assert_range(column, min=None, max=None)` — check numeric bounds
+
+Use `print()` to output your report. Output capped at ~4000 chars. 30-second timeout.
+
+**For simple aggregations**: use `query` with GROUP BY. Results >30 rows are auto-summarized.
+
+- `vault_csv action=query path=<csv> sql="SELECT ... GROUP BY ..."`
+- `datatable_manage action=query path=<table.md> sql="SELECT ... GROUP BY ..."`
+
+### Step 4: EVALUATE — read the report, present to user
+
+You receive only the `print()` output or query summary. Evaluate:
+- Do the numbers make sense? (cross-check with row counts from step 1)
+- Did validation pass? (look for PASS/FAIL lines)
+- Is the answer complete, or do you need another analysis pass?
+
+If validation failed → adjust the script and re-run (back to step 3).
+
 ## Tool selection (read this first, don't guess)
 
-| Job                                           | Tool                                                | Notes |
-|-----------------------------------------------|-----------------------------------------------------|-------|
-| Inspect a `.csv`/`.tsv` shape                 | `vault_csv action=schema`                           | First move on any CSV. Returns columns + row count, no data into context. |
-| Sample N rows of a CSV                        | `vault_csv action=sample`                           | Default 20 rows. `mode: head|tail|random`. |
-| Per-column stats / nulls / distinct counts    | `vault_csv action=describe`                         | Pass `columns` to limit. |
-| SQL over a CSV (filter / join / aggregate)    | `vault_csv action=query`                            | The CSV is exposed as view `t`. Default columnar shape (~40% fewer tokens). |
-| Discover joins / FKs across CSVs              | `vault_csv action=relationships`                    | Score by name similarity + value overlap. |
-| Read a data-table (markdown w/ frontmatter)   | `datatable_manage action=view` or `list_rows`       | Never `vault_read` a data-table for analysis. |
-| List tables in a database folder              | `datatable_manage action=list_tables`               | "Database" = folder of data-tables. |
-| Bulk insert into a data-table                 | `datatable_manage action=add_rows` (or `import_csv`)| `add_rows` takes a JSON array; `import_csv` ingests a vault CSV directly. |
-| Inspect a JSON file                           | `vault_read` (small) or `terminal` `head -c 4096`   | For huge JSON: `terminal` + `jq` / `python3 -c`. |
-| Search vault by keyword                       | `vault_search` (FTS) or `vault_semantic_search`     | FTS for exact tokens; semantic for fuzzy intent. |
-| Run a quick Python / shell one-liner          | `terminal`                                          | HITL-gated; YOLO auto-approves. Use this *instead* of pasting code. |
-| Long-running pipeline / fan-out               | `spawn_subagents`                                   | Stage inputs in vault, give each child the schema verbatim, ask for one return value. |
+| Job | Tool | Notes |
+|---|---|---|
+| Inspect a `.csv`/`.tsv` shape | `vault_csv action=schema` | First move on any CSV. Returns metadata only. |
+| Per-column stats | `vault_csv action=describe` | count, nulls, distinct, min/max/mean, top values. |
+| Sample N rows of a CSV | `vault_csv action=sample` | Default 20 rows. `mode: head\|tail\|random`. |
+| **Complex analysis** | `vault_csv action=analyze` | Python script with pandas DataFrame `t`. Prints report. |
+| Simple SQL aggregation | `vault_csv action=query` | GROUP BY queries. Auto-summarizes >30 rows. |
+| Discover joins / FKs | `vault_csv action=relationships` | Score by name similarity + value overlap. |
+| Data-table structure | `datatable_manage action=view` | Schema + row_count + 3 sample rows. **No full dump.** |
+| **Complex table analysis** | `datatable_manage action=analyze` | Python script with pandas DataFrame `t`. Prints report. |
+| Simple table SQL | `datatable_manage action=query` | Auto-summarizes >30 rows. |
+| Paginated row browsing | `datatable_manage action=list_rows` | Default 25, max 200. For CRUD verification, not analysis. |
+| Lookup by value | `datatable_manage action=find_rows` | `where` + `q`. Default 25, max 200. For single-row lookups only. |
+| Bulk insert | `datatable_manage action=add_rows` / `import_csv` | One-shot when possible. |
+| Inspect a JSON file | `vault_read` (small) or `terminal` + `head -c 4096` | For huge JSON: `jq` / `python3 -c`. |
+| Search vault by keyword | `vault_search` (FTS) or `vault_semantic_search` | FTS for exact tokens; semantic for fuzzy. |
+| Shell one-liner | `terminal` | HITL-gated; YOLO auto-approves. |
 
 **The most common mistake**: calling `vault_read` on a `.csv`. That dumps raw text into context (expensive) and ignores DuckDB. **Don't.** First read on any CSV is `vault_csv action=schema`.
 
+**The second most common mistake**: using `list_rows` or `find_rows` for analysis. These return raw rows to context. Use `query` with GROUP BY or `analyze` with Python instead. The model should never receive raw datasets — only summaries and reports.
+
 ### Dispatch by file extension (don't cross the streams)
 
-Pick the tool from the path before you do anything else:
+| Path | Tool |
+|---|---|
+| `*.csv` / `*.tsv` | `vault_csv` |
+| `*.md` with frontmatter `data-table-plugin: basic` | `datatable_manage` |
+| `*.md` with frontmatter `kanban-plugin: basic` | `kanban_tool` |
+| `*.md` (no plugin tag) | `vault_read` / `vault_write` |
 
-| Path                                                          | Tool                          |
-|---------------------------------------------------------------|-------------------------------|
-| `*.csv` / `*.tsv`                                             | `vault_csv`                   |
-| `*.md` with frontmatter `data-table-plugin: basic`            | `datatable_manage`            |
-| `*.md` with frontmatter `kanban-plugin: basic`                | `kanban_tool`                 |
-| `*.md` (no plugin tag)                                        | `vault_read` / `vault_write`  |
+**When `vault_csv` returns `hint.tool: datatable_manage`**, switch tools and continue — don't stop.
 
-**Concrete failure to avoid** (from a real session): the agent called `vault_csv action=schema` on `clinic/clinical_notes.md` and `clinic/prescriptions.md` — both datatables. `vault_csv` returned a redirect hint pointing at `datatable_manage`, but if you ignore the hint, you'll silently fail to record the data the user asked for. **When `vault_csv` returns `hint.tool: datatable_manage`, switch tools and continue — don't stop.**
+## The `analyze` action — writing effective scripts
+
+### Template
+
+```python
+# Validate input matches expectations from step 1
+assert_row_count(min=1)
+print(f"Rows: {len(t)}, Columns: {list(t.columns)}")
+
+# Core analysis
+result = t.groupby('category').agg(
+    count=('id', 'count'),
+    total=('amount', 'sum'),
+).reset_index()
+print("## Results")
+print(result.to_markdown(index=False))
+
+# Cross-validation
+print(f"Validation: total rows={len(t)}, grouped sum={result['count'].sum()}")
+```
+
+### Rules
+
+1. **Always start with validation** — `assert_row_count` or a manual check against the count from `schema`.
+2. **Always print your results** — unprinted computations are lost.
+3. **Keep it focused** — one script does one analysis. If you need a second angle, make a second `analyze` call.
+4. **Handle messy data** — use `pd.to_numeric(..., errors='coerce')` for numeric columns that might have strings.
+5. **Don't import extra libraries** — only `duckdb`, `pandas`, `numpy` are available. If you need something else, use `terminal` instead.
 
 ## Failure recovery — concrete rules
 
-These are calibrated from real session failures. Follow them; don't improvise.
-
 ### `vault_csv` returns `ModuleNotFoundError`
 
-Almost always `pytz` on a TZ-aware timestamp. Treat it as a **permanent fail in this session** — pivot once, don't retry the same call.
+Almost always `pytz` on a TZ-aware timestamp. Treat as **permanent fail** — pivot once.
 
-- Pivot: run via `terminal` with `python3 -c "import csv, json; ..."` reading the file directly. Stdlib `csv` handles ISO timestamps as strings.
-- Or: `vault_csv action=query` with `CAST(col AS VARCHAR)` to bypass the timezone parser.
+- Pivot: `vault_csv action=query` with `CAST(col AS VARCHAR)` to bypass the timezone parser.
+- Or: `vault_csv action=analyze` — pandas reads timestamps as strings by default.
 
-Do **not** retry the same `vault_csv` call expecting it to start working. Past sessions burned 6 retries on this.
+Do **not** retry the same `vault_csv` call expecting it to start working.
 
 ### `terminal unavailable: handler not wired`
 
-Often transient (the handler binds late). Recovery:
+Often transient. Recovery:
 
-1. Retry once with a trivial command: `terminal command='echo ok'`.
-2. If that succeeds → re-issue the original command.
-3. If it fails again → look for a tool-only path before falling back to "run it yourself":
-   - CSV analytics → `vault_csv`
-   - Data-table CRUD → `datatable_manage`
-   - File read → `vault_read` / `vault_list`
-4. Only after both retries fail and no tool-only path exists, tell the user: *"Terminal isn't responding right now. Here's the script to run yourself: …"* — and label the code block `# manual fallback`.
+1. Retry once with `terminal command='echo ok'`.
+2. If that succeeds → re-issue.
+3. If it fails again → use `vault_csv` / `datatable_manage` tools instead.
 
-The dispatch screenshot showed an agent giving up on the first error. Don't.
+### `analyze` script error
+
+Read the `error` field in the response. Common causes:
+- KeyError: column name mismatch (check schema from step 1)
+- TypeError: data type mismatch (use `pd.to_numeric` or explicit casts)
+- Timeout: script too complex — break into smaller steps
+
+Fix and re-run. Two strikes → switch to `query` with SQL or `terminal`.
 
 ### `vault_csv query` SQL error
 
-DuckDB error messages name the column. Read the error, inspect with `action=schema`, retry once with the fix. If it fails again, switch to `terminal` + `python3` — don't retry blindly.
+DuckDB error messages name the column. Read the error, inspect with `action=schema`, retry once with the fix. If it fails again, switch to `analyze`.
 
 ### Sub-agent context limit
 
-Caused by sub-agent re-fetching schema, listing /tmp, re-counting rows before doing real work. Fix at spawn time:
-
-- Stage inputs **inside the vault** (not `/tmp` — sub-agents can't always reach it).
+Caused by sub-agent re-fetching schema. Fix at spawn time:
+- Stage inputs **inside the vault**.
 - Include the target table schema **verbatim** in the sub-agent prompt.
-- Tell the sub-agent its job is exactly one thing: "call `add_rows` once with the JSON below, then return the row count".
+- Tell the sub-agent exactly one thing: "call `add_rows` once with the JSON below, then return the row count".
 
 ## Bulk-import recipe (CSV → data-table)
 
-The largest token-sink in past sessions was a bulk import done turn-by-turn. The recipe:
-
-1. **Inspect the source.** `vault_csv action=schema path=<csv>`. Note columns + row count.
-2. **Inspect the target.** `datatable_manage action=view path=<table.md>`. Note schema fields + types.
-3. **Map columns.** Build a mental column map (source → target). Confirm in one line of prose if non-obvious.
-4. **Try the one-shot path first.** If `datatable_manage action=import_csv` exists with the column map, use it. One tool call, done.
-5. **Fallback for non-trivial transforms.** When column mapping isn't 1:1 (renames, casts, derived fields, joining a second CSV), do this:
-   - `vault_csv action=query` with a SELECT that produces the exact target shape. Save the result to a vault JSON file via `terminal` (`vault_csv ... > vault/imports/staged.json`).
-   - Pass that JSON to `datatable_manage action=add_rows` (split into batches of ≤500 if huge — single call otherwise).
-6. **Don't fan out unless necessary.** A single `add_rows` call with 1000 rows beats 4 sub-agents each calling `add_rows` with 250. Spawn sub-agents only when the per-row work is non-trivial (LLM-driven enrichment, OCR, web lookup).
+1. **Inspect the source.** `vault_csv action=schema path=<csv>`.
+2. **Inspect the target.** `datatable_manage action=view path=<table.md>`.
+3. **Map columns.** Confirm the mapping in one line of prose.
+4. **One-shot.** `datatable_manage action=import_csv path=<table.md> source=<csv> mapping={...}`. Done.
+5. **Fallback for transforms.** Use `vault_csv action=analyze` to produce the transformed data, then `add_rows`.
 
 ## Lookups — never trust a single page
 
-When the user asks "show me X / find Y / does Z exist," **use `datatable_manage action=find_rows`**, not `list_rows`. `find_rows` accepts:
+When the user asks "show me X / find Y / does Z exist," use `datatable_manage action=find_rows`:
+- `where: {field: value}` — exact match.
+- `q: "<substring>"` — case-insensitive substring across text fields + `_id`.
 
-- `where: {field: value}` — exact match on one or more fields.
-- `q: "<substring>"` — case-insensitive substring across every text/textarea field plus `_id`. The natural "by name" mode.
+`list_rows` is for **paginated browsing** (CRUD verification), not lookups. If you scan one page and don't find it, you haven't proven it doesn't exist.
 
-`list_rows` is for *iterating the whole table* (paginated, default 100 per page). It is **not** a lookup tool. If you scan one page of `list_rows` and the row isn't there, you have not proven the row doesn't exist — you've proven the row isn't on that page.
+**Concrete failure to avoid**: user asked "show me John Doe" against a 145-row table. Agent called `list_rows` (got 25 rows), didn't see John Doe, answered "not found." John Doe was on page 2.
 
-**Concrete failure to avoid** (from a real session): user asked "show me John Doe" against a 145-row patients table. Agent called `list_rows` (got 100 rows), didn't see John Doe on page 1, answered "no patient named John Doe in the database." John Doe was on page 2. Two rules:
-
-1. Use `find_rows q="John Doe"` for any name lookup.
-2. If you do use `list_rows` for a lookup and the response says `truncated: true`, you **must** either iterate the remaining pages or pivot to `find_rows`. Never claim "not in the database" with `truncated: true` in the same response.
-
-When a lookup genuinely returns zero matches, frame the response with what was searched: *"I searched all 145 patients by name and substring — no match for 'John Doe'."* That's both more honest and gives the user a foothold to correct the query (typo, alternate spelling).
+Rules:
+1. Use `find_rows q="John Doe"` for any lookup.
+2. If `truncated: true`, you **must** iterate or pivot to `find_rows`.
+3. Frame zero-match responses: *"I searched all 145 patients by name — no match for 'John Doe'."*
 
 ## Multi-table writes — plan, then verify
 
-When the user asks for a single conceptual change that fans out across multiple tables ("add patient John Doe with phone, a clinical note about back pain, and a Naproxen prescription"):
+1. **Enumerate writes** upfront. List target tables and content.
+2. **Execute in dependency order** (parents before children).
+3. **Verify.** Call `datatable_manage action=view` on every table you wrote to. Check `row_count` matches expectation.
+4. **Surface failures.** If any write failed, say so explicitly.
 
-1. **Enumerate the writes upfront** before the first tool call. List the target tables and what goes in each. If you can't name them all, ask once.
-2. **Execute in dependency order** (parents before children that ref them) so ref fields can carry the parent `_id`.
-3. **Verify at the end.** Before claiming the request is done, call `datatable_manage action=list_rows` (or `view`) on every table you wrote to and confirm the new row is there with the expected fields. Report the row counts back to the user.
-4. **If any write failed, say so.** Don't claim a partial success as complete. The user can't see your tool errors — if you abandoned a sub-task because a tool returned an error, surface that explicitly: *"I added the patient row but couldn't write the prescription because …"*.
+## Anti-patterns
 
-## Anti-patterns (the audit's findings)
-
-- **Code theater.** Pasting ` ```python ` blocks instead of calling a tool. The single most-disliked behaviour. If you want to run Python, run it via `terminal`.
+- **Pulling raw rows into context for analysis.** Use `analyze` (Python) or `query` with GROUP BY. The model should receive reports, not datasets.
+- **Using `view` to get all rows.** `view` returns schema + 3 sample rows. For analysis, use `analyze` or `query`.
+- **Code theater.** Pasting ` ```python ` blocks instead of calling a tool. If you want to run Python, use `analyze`.
 - **`vault_read` on a `.csv`** before `vault_csv schema`. Pulls raw rows into context — expensive and unnecessary.
-- **Re-reading the same file across turns.** Once `vault_csv schema` returned the columns, those columns don't change. Cache them in your reasoning.
-- **"I don't have access to your files"** — false when the file is in the vault. You do. Use `vault_csv` / `vault_read`.
+- **Re-reading the same file across turns.** Cache schema in your reasoning.
+- **"I don't have access to your files"** — false when the file is in the vault.
 - **"Please share the file"** for a path the user already named.
-- **Producing record-shaped output (clinical timeline, order list, patient summary) from a `vault_list` alone.** That's hallucination. Read the data first.
+- **Producing record-shaped output from a `vault_list` alone.** That's hallucination. Read the data first.
 - **Retrying the same failing tool call 3+ times.** Two strikes — pivot.
-- **Spawning sub-agents that re-discover schema.** Always include the schema in the spawn prompt.
+- **Spawning sub-agents that re-discover schema.** Include schema in spawn prompt.
 
 ## What good looks like
 
+> User: "What's the monthly revenue trend for 2025? Which products drive the most revenue?"
+>
+> Turn 1: `vault_csv action=schema path=shop/orders.csv` + `vault_csv action=describe path=shop/orders.csv` (parallel).
+> Turn 2: Plan + `vault_csv action=analyze path=shop/orders.csv script="..."`
+>   (script filters to 2025, groups by month and by product, prints two tables, validates totals).
+> Turn 3: Evaluate the printed report, present formatted answer to user.
+
 > User: "Reconstruct patient 289624's clinical history from `Clinica Junior/289624/`."
 >
-> Turn 1: Plan + `vault_csv schema` on `25-04-2026-patient.csv`.
-> Turn 2: `vault_csv schema` on the other two CSVs (parallel if the runner supports it).
-> Turn 3: `vault_csv query` joining patient/scheduling/records on `id_patient`/`id_event_schedule`, ordered by `start_date`.
-> Turn 4: Final answer — a markdown timeline. **All field values come from the query result, none from memory.**
+> Turn 1: `vault_csv action=schema` on all three CSVs.
+> Turn 2: `vault_csv action=analyze` joining patient/scheduling/records, printing a timeline.
+> Turn 3: Final answer from the printed report.
 
 > User: "Import these 1k rows into the bugs table."
 >
-> Turn 1: Plan + `vault_csv schema path=imports/bugs.csv` and `datatable_manage view path=data/bugs.md` (parallel).
+> Turn 1: `vault_csv action=schema path=imports/bugs.csv` + `datatable_manage action=view path=data/bugs.md` (parallel).
 > Turn 2: `datatable_manage action=import_csv path=data/bugs.md source=imports/bugs.csv mapping={...}`. Done.

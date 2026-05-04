@@ -17,59 +17,92 @@ For the "what tool actually does the work" decisions and recovery recipes, follo
 
 ## The hard rules
 
-These apply for every turn during a data task. Treat them as invariants, not suggestions.
+1. **Every "I will / vou / let me / vamos" turn carries a tool call in the same turn.** Prose-only turns are forbidden. If you can't pick a tool, call `vault_csv action=schema` as a default first move.
 
-1. **Every "I will / vou / let me / vamos" turn carries a tool call in the same turn.** Prose-only "next I'll do X" turns are forbidden. If you can't pick a tool, you don't have a plan — call `vault_csv action=schema` on the input as a default first move and then decide.
+2. **No inert code blocks.** Fenced ```python``` / ```bash``` / ```sql``` blocks in chat do *not* execute. Show code only when (a) it just executed via a tool call you also emitted this turn, (b) the user explicitly asked to *see* code, or (c) you've labelled it `# manual fallback` because a tool error proves execution is impossible.
 
-2. **No inert code blocks.** A fenced ```python``` / ```bash``` / ```sql``` block in chat does *not* execute. Show code only when (a) it just executed via a tool call you also emitted this turn (paste the result, not the script), (b) the user explicitly asked to *see* code, or (c) you've labelled it `# manual fallback — run yourself` because a tool error proves execution is impossible. The user has flagged this as the single most disliked behaviour — do not paste pandas/duckdb snippets as if they ran.
+3. **No record values without a tool result behind them.** Don't produce dates, IDs, names, amounts, counts, or summaries unless a tool call in *this conversation* returned it.
 
-3. **No record values without a tool result behind them.** Don't produce dates, IDs, names, amounts, counts, summaries of clinical / financial / legal records, or any specific field value unless a tool call in *this conversation* returned it. If you've only called `vault_list`, the only allowed answer is "I see N files; reading them now" plus the next tool call.
-
-4. **The plan is three lines max.** No nested numbering, no preamble. Format:
+4. **The plan is three lines max.** Format:
    ```
-   Plan: (1) inspect <file> with vault_csv schema  (2) <verify step>  (3) <target action>
+   Plan: (1) inspect <file> with schema  (2) <verify step>  (3) <target action>
    ```
-   Then immediately make the first tool call. If the plan needs a fourth line, it's actually two tasks — split them and finish the first.
+   Then immediately make the first tool call.
 
-5. **Step 2 starts with another tool call, not prose.** When a tool result comes back, the next assistant turn either calls another tool or returns a final answer. "Now I'll just analyze this..." with no tool call burns a turn.
+5. **Step 2 starts with another tool call, not prose.**
+
+6. **For analytical tasks, follow the 4-step loop:**
+   - Step 1: `schema` + `describe` → understand data model (metadata only, no rows)
+   - Step 2: Write plan with extraction targets and validation criteria
+   - Step 3: `analyze` with Python script that extracts, validates, and prints report
+   - Step 4: Evaluate printed report, present to user
 
 ## Trigger phrases
 
-Any of these in the user's message means this skill is in scope:
+Any of these means this skill is in scope:
 
-- *import / load / ingest / bring in* (CSV, TSV, JSON, parquet, dump, export, etc.)
+- *import / load / ingest / bring in* (CSV, TSV, JSON, parquet, dump, export)
 - *analyze / summarise / count / aggregate / group / rank / top N / bottom N*
 - *join / merge / match / correlate / relate / link*
 - *clean / dedupe / normalize / fix / transform / convert*
 - *script / pipeline / batch / for each*
 - mentions of `.csv` / `.tsv` / `.json` / `.parquet` / `.xlsx` / `.sql` / a data-table folder
-- "Reconstruct / show / list / find / pull" rows / records / patients / orders / events from data the user owns
+- "Reconstruct / show / list / find / pull" rows / records from data the user owns
 
 ## Default first move (when in doubt)
 
-If the user named a CSV path: `vault_csv action=schema path=<...>` — gets columns + row count cheaply, no data into context.
-If the user named a vault folder of data-tables: `datatable_manage action=list_tables folder=<...>`.
-If the user named a JSON file: `vault_read path=<...>` (small) or `terminal command='wc -c <path> && head -c 2000 <path>'` (large).
-If the user gave a free-form ask without a path: one `ask_user` for the source — but only if vault search wouldn't find it. Try `vault_search query=<keywords>` first.
+| Situation | First tool call |
+|---|---|
+| User named a CSV path | `vault_csv action=schema path=<...>` |
+| User named a data-table | `datatable_manage action=view path=<...>` |
+| User named a vault folder | `datatable_manage action=list_databases folder=<...>` |
+| User named a JSON file | `vault_read path=<...>` (small) or `terminal command='wc -c <path> && head -c 2000 <path>'` (large) |
+| Free-form ask without a path | `vault_search query=<keywords>` first, then `ask_user` if needed |
 
-## Anti-patterns (the audit's worst hits)
+## Analysis planning template
 
+When the user asks for analysis, your plan must include **extraction** and **validation**:
+
+```
+Plan: (1) schema + describe on <files> to understand shape
+      (2) analyze with script that extracts <what>, validates <how>
+      (3) evaluate report, present results
+```
+
+### Validation criteria to include in your plan
+
+- **Row count**: "expect N rows after filtering" (compare with schema row_count)
+- **Cross-totals**: "sum of groups should equal grand total"
+- **Null checks**: "critical columns X, Y should have no nulls"
+- **Range checks**: "numeric column should be within [min, max]"
+
+These get baked into your `analyze` script as `assert_*` calls.
+
+## Anti-patterns
+
+- **Pulling raw data into context.** Never use `list_rows`, `find_rows`, or `query` (without summarize) to retrieve datasets for in-context reasoning. Use `analyze` — the model generates code, server executes, only the report comes back.
 - **Code theater.** Writing pandas / SQL as text "for clarity" without calling a tool. Forbidden.
-- **"You'll need to run this yourself"** when `terminal` is available. The user has explicitly approved tunnel/YOLO sessions where it works. Try the tool first; only suggest manual run if the tool returned a hard error twice.
-- **"Please share the file"** for a path the user already gave you or one that lives in their vault. Use `vault_csv` / `vault_read` / `vault_list`.
-- **Re-reading the same CSV across turns.** Once `vault_csv schema` has run, cache the column list in your reasoning — don't re-fetch.
-- **Generating record-shape output (a clinical table, a list of orders, a summary by patient) after only listing files.** That's hallucination. Read the data first.
+- **"You'll need to run this yourself"** when `analyze` or `terminal` is available. Try the tool first.
+- **"Please share the file"** for a path the user already gave or that lives in the vault.
+- **Re-reading the same schema across turns.** Cache in your reasoning after the first call.
+- **Generating record-shaped output after only listing files.** That's hallucination. Read the data first.
 
 ## What good looks like
 
-> User: "Reconstruct the clinical history for patient 289624 from the CSVs in `Clinica Junior/289624/`."
+> User: "What's the monthly revenue trend for 2025?"
 >
 > Assistant (one turn):
-> "Plan: (1) `vault_csv schema` on the three CSVs to confirm shape, (2) `vault_csv query` to filter to the patient and join, (3) format the timeline."
+> "Plan: (1) `vault_csv schema` + `describe` on orders.csv  (2) `analyze` to filter 2025, group by month, validate totals  (3) present trend"
+> *(emits `vault_csv action=schema path=shop/orders.csv` + `vault_csv action=describe path=shop/orders.csv` in the same turn)*
+
+> User: "Reconstruct the clinical history for patient 289624."
+>
+> Assistant (one turn):
+> "Plan: (1) `schema` on the three CSVs  (2) `analyze` to join and filter by patient, print timeline  (3) format and present"
 > *(emits `vault_csv action=schema path=Clinica Junior/289624/25-04-2026-patient.csv` in the same turn)*
 
 > User: "Import these 1k rows into the data-table."
 >
 > Assistant (one turn):
-> "Plan: (1) `vault_csv schema` on the source, (2) `datatable_manage list_tables` on the target folder, (3) `datatable_manage import_csv` mapping the columns."
-> *(emits the schema call in the same turn — does not paste a Python script)*
+> "Plan: (1) `schema` on source, `view` on target  (2) `import_csv` with mapping  (3) verify row count"
+> *(emits the schema + view calls in the same turn)*

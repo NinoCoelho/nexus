@@ -19,10 +19,13 @@ from . import vault
 
 _MAX_EDITABLE_BYTES = 50 * 1024 * 1024  # 50MB hard cap on UI edits
 
-_DEFAULT_QUERY_LIMIT = 200
-# Cap chosen so that worst-case payload (1000 rows × ~10 wide cols ≈ ~96 tok/row)
-# stays under ~100k tokens — fits in a 200k context with room to spare.
-_MAX_QUERY_LIMIT = 1000
+_DEFAULT_QUERY_LIMIT = 50
+_MAX_QUERY_LIMIT = 200
+
+_SUMMARIZE_THRESHOLD = 30
+_SUMMARY_HEAD_TAIL = 3
+_SANDBOX_OUTPUT_CAP = 4000
+_ANALYZE_ROW_CAP = 10_000
 _RELATIONSHIP_OVERLAP_THRESHOLD = 0.5
 _RELATIONSHIP_MAX_CANDIDATES = 20
 
@@ -211,13 +214,18 @@ def run_select(
     *,
     limit: int = _DEFAULT_QUERY_LIMIT,
     fmt: str = "columns",
+    summarize: bool | None = None,
 ) -> dict[str, Any]:
     """Execute a read-only SELECT/WITH against ``con`` and shape the result.
 
     Shared between :func:`csv_query` and ``datatable_manage(action=query)`` so
-    the response envelope (columns/data/row_count/truncated/limit/format) and
-    the SELECT-only guard stay consistent. The caller is responsible for
+    the response envelope stays consistent. The caller is responsible for
     registering the input view (named ``t`` by convention).
+
+    When the result exceeds ``_SUMMARIZE_THRESHOLD`` rows (default 30) and
+    ``summarize`` is not explicitly ``False``, the response contains column-
+    level statistics instead of raw rows. Pass ``summarize=False`` to force
+    raw output or ``summarize=True`` to always summarize.
     """
     if not _SQL_LEAD_RE.match(sql or ""):
         raise ValueError("only SELECT / WITH queries are allowed")
@@ -226,8 +234,6 @@ def run_select(
     if limit <= 0:
         limit = _DEFAULT_QUERY_LIMIT
     limit = min(int(limit), _MAX_QUERY_LIMIT)
-    # Execute as subquery so we can tack on LIMIT and a total count without
-    # parsing the user's SQL.
     rel = con.execute(f"SELECT * FROM ({sql}) AS __q LIMIT {limit + 1}")
     columns = [d[0] for d in rel.description]
     rows = rel.fetchall()
@@ -246,11 +252,74 @@ def run_select(
         "limit": limit,
         "format": fmt,
     }
-    if fmt == "columns":
-        payload["data"] = [list(r) for r in rows]
+    should_summarize = summarize if summarize is not None else len(rows) > _SUMMARIZE_THRESHOLD
+    if should_summarize and len(rows) > 0:
+        payload["summarized"] = True
+        payload["summary"] = _summarize_result(con, sql, columns, rows)
+        head = rows[:_SUMMARY_HEAD_TAIL]
+        tail = rows[-_SUMMARY_HEAD_TAIL:] if len(rows) > _SUMMARY_HEAD_TAIL * 2 else []
+        if fmt == "columns":
+            payload["data_head"] = [list(r) for r in head]
+            if tail:
+                payload["data_tail"] = [list(r) for r in tail]
+        else:
+            payload["rows_head"] = [_row_to_dict(columns, r) for r in head]
+            if tail:
+                payload["rows_tail"] = [_row_to_dict(columns, r) for r in tail]
     else:
-        payload["rows"] = [_row_to_dict(columns, r) for r in rows]
+        if fmt == "columns":
+            payload["data"] = [list(r) for r in rows]
+        else:
+            payload["rows"] = [_row_to_dict(columns, r) for r in rows]
     return payload
+
+
+def _summarize_result(
+    con: duckdb.DuckDBPyConnection,
+    sql: str,
+    columns: list[str],
+    rows: list[tuple],
+) -> list[dict[str, Any]]:
+    """Compute per-column summary statistics over the query result."""
+    col_stats: list[dict[str, Any]] = []
+    for i, col in enumerate(columns):
+        quoted = _quote_ident(col)
+        stats: dict[str, Any] = {"column": col}
+        try:
+            base = con.execute(
+                f"SELECT count({quoted}), count(*) - count({quoted}), "
+                f"count(DISTINCT {quoted}) FROM ({sql}) AS __q"
+            ).fetchone()
+            stats["count"] = int(base[0])
+            stats["null_count"] = int(base[1])
+            stats["distinct_count"] = int(base[2])
+        except duckdb.Error:
+            col_stats.append({"column": col, "error": "could not compute stats"})
+            continue
+        sample_vals = [r[i] for r in rows[:20] if r[i] is not None]
+        if sample_vals and isinstance(sample_vals[0], (int, float)):
+            try:
+                num = con.execute(
+                    f"SELECT min({quoted}), max({quoted}), avg({quoted}), "
+                    f"stddev({quoted}) FROM ({sql}) AS __q"
+                ).fetchone()
+                stats["min"] = num[0]
+                stats["max"] = num[1]
+                stats["mean"] = round(float(num[2]), 4) if num[2] is not None else None
+                stats["stddev"] = round(float(num[3]), 4) if num[3] is not None else None
+            except duckdb.Error:
+                pass
+        else:
+            try:
+                top = con.execute(
+                    f"SELECT {quoted} AS v, count(*) AS c FROM ({sql}) AS __q "
+                    f"WHERE {quoted} IS NOT NULL GROUP BY v ORDER BY c DESC LIMIT 5"
+                ).fetchall()
+                stats["top_values"] = [{"value": r[0], "count": int(r[1])} for r in top]
+            except duckdb.Error:
+                pass
+        col_stats.append(stats)
+    return col_stats
 
 
 def csv_query(
@@ -258,16 +327,71 @@ def csv_query(
     sql: str,
     limit: int = _DEFAULT_QUERY_LIMIT,
     fmt: str = "columns",
+    summarize: bool | None = None,
 ) -> dict[str, Any]:
     full = _resolve(rel_path)
     con = _connect()
     try:
         _register(con, full)
-        payload = run_select(con, sql, limit=limit, fmt=fmt)
+        payload = run_select(con, sql, limit=limit, fmt=fmt, summarize=summarize)
     finally:
         con.close()
     payload["path"] = rel_path
     return payload
+
+
+def csv_analyze(
+    rel_path: str,
+    script: str,
+) -> dict[str, Any]:
+    """Run a Python analysis script over a CSV file in a sandboxed subprocess.
+
+    The CSV is loaded into a pandas DataFrame ``t`` (capped at
+    ``_ANALYZE_ROW_CAP`` rows).  The script has access to ``duckdb``,
+    ``pandas`` (as ``pd``), ``numpy`` (as ``np``), and validation helpers.
+    ``print()`` output is captured and returned.  When the CSV exceeds the
+    row cap, ``truncated`` is set and the full ``row_count`` is exposed so
+    the script can validate coverage.
+    """
+    from .tools._sandbox import run_sandbox
+
+    full = _resolve(rel_path)
+    con = _connect()
+    try:
+        _register(con, full)
+        schema_rows = con.execute("DESCRIBE t").fetchall()
+        field_specs = [{"name": r[0], "type": r[1]} for r in schema_rows]
+        row_count = con.execute("SELECT count(*) FROM t").fetchone()[0]
+        if row_count > _ANALYZE_ROW_CAP:
+            cap = _ANALYZE_ROW_CAP
+            truncated = True
+        else:
+            cap = row_count
+            truncated = False
+        rel = con.execute(f"SELECT * FROM t LIMIT {cap}")
+        columns = [d[0] for d in rel.description]
+        fetched = rel.fetchall()
+    finally:
+        con.close()
+
+    rows = [
+        {col: val for col, val in zip(columns, row_vals)}
+        for row_vals in fetched
+    ]
+    context: dict[str, Any] = {
+        "rows": rows,
+        "field_specs": field_specs,
+        "row_count": int(row_count),
+        "row_count_loaded": len(rows),
+        "truncated": truncated,
+    }
+    result = run_sandbox(script, context)
+    result["path"] = rel_path
+    result["truncated"] = truncated
+    if truncated:
+        result["row_count"] = int(row_count)
+        result["row_count_loaded"] = len(rows)
+    return result
 
 
 def csv_relationships(rel_path: str, candidates: list[str] | None = None) -> dict[str, Any]:

@@ -18,25 +18,24 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
         "Each table is a single .md file with `data-table-plugin: basic` frontmatter "
         "containing a Schema block (field definitions) and a Rows block (YAML list). "
         "Tables in the same folder form a 'database'; fields can declare typed "
-        "relations to other tables via `kind: ref` + `target_table`. "
-        "Actions: create_table, view, add_row, add_rows, update_row, delete_row, "
-        "list_rows (paginates: `limit` default 100, max 1000; `offset` default 0; "
-        "response carries `total`, `truncated` so you can iterate), "
-        "find_rows (look up by exact `where: {field: value}` and/or "
-        "case-insensitive substring `q` across text fields — use this for "
-        "'show me X' / 'find Y' queries; never claim 'not found' from a "
-        "single `list_rows` page), "
-        "query (run DuckDB SQL against the table — referenced as `t` — for "
-        "aggregations, joins via subqueries, filters that find_rows can't "
-        "express; SELECT/WITH only, capped at 1000 rows, returns "
-        "`columns`/`data` like vault_csv), "
+        "relations to other tables via `kind: ref` + `target_table`.\n\n"
+        "Analysis workflow — always follow this order:\n"
+        "1. `view` → understand schema, types, relations, row count (returns metadata only, NOT all rows).\n"
+        "2. `query` or `analyze` → run SQL or Python to extract, aggregate, transform. "
+        "Raw results are auto-summarized when >30 rows (pass `summarize: false` to override).\n"
+        "3. Never use `list_rows` or `find_rows` for analytical work — they return raw rows.\n\n"
+        "Actions: create_table, view (schema + row_count + 3 sample rows), "
+        "add_row, add_rows, update_row, delete_row, "
+        "list_rows (paginated browsing: `limit` default 25, max 200; for CRUD only, not analysis), "
+        "find_rows (exact `where` and/or substring `q` lookup; limit default 25, max 200), "
+        "query (DuckDB SQL against `t`; default limit 50, max 200; auto-summarizes >30 rows), "
+        "analyze (run a Python script with `t` as a pandas DataFrame; "
+        "use duckdb/pandas/numpy; print() your report; validation helpers available), "
         "set_schema, set_views, add_field, remove_field, rename_field, "
         "create_relation, create_junction, suggest_schema, er_diagram, "
         "list_databases, related_rows, "
-        "import_csv (one-shot bulk ingest: reads a vault `source` CSV/TSV, applies "
-        "optional `mapping` of source-col → target-field, casts to target field "
-        "kinds, calls add_rows. Set `dry_run: true` to preview the first 5 mapped "
-        "rows without writing — recommended before committing a large import)."
+        "import_csv (one-shot bulk ingest with optional `mapping`; "
+        "set `dry_run: true` to preview first 5 mapped rows)."
     ),
     parameters={
         "type": "object",
@@ -46,7 +45,7 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                 "enum": [
                     "create_table", "view",
                     "add_row", "add_rows", "update_row", "delete_row",
-                    "list_rows", "find_rows", "query",
+                    "list_rows", "find_rows", "query", "analyze",
                     "set_schema", "set_views",
                     "add_field", "remove_field", "rename_field",
                     "create_relation", "create_junction",
@@ -123,7 +122,7 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
             },
             "limit": {
                 "type": "integer",
-                "description": "Page size for list_rows / find_rows (default 100, max 1000).",
+                "description": "Page size for list_rows / find_rows (default 25, max 200). For query, default 50, max 200.",
             },
             "offset": {
                 "type": "integer",
@@ -179,10 +178,29 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
             "sql": {
                 "type": "string",
                 "description": (
-                    "DuckDB SQL for action=query. Reference the table as `t` "
-                    "(same convention as vault_csv). SELECT / WITH only — DDL "
-                    "and writes are rejected. Limit defaults to 200 rows, hard "
-                    "cap 1000; truncated results carry `truncated: true`."
+                    "DuckDB SQL for action=query. Reference the table as `t`. "
+                    "SELECT / WITH only — DDL and writes are rejected. "
+                    "Limit defaults to 50 rows, hard cap 200. "
+                    "Results >30 rows are auto-summarized (column stats + head/tail sample). "
+                    "Pass `summarize: false` to force raw output."
+                ),
+            },
+            "summarize": {
+                "type": "boolean",
+                "description": (
+                    "For action=query: force summarization on (true) or off (false). "
+                    "When omitted, results >30 rows are auto-summarized."
+                ),
+            },
+            "script": {
+                "type": "string",
+                "description": (
+                    "Python script for action=analyze. The variable `t` is a pandas "
+                    "DataFrame with the table rows. Pre-loaded: duckdb, pandas (as pd), "
+                    "numpy (as np). Validation helpers: assert_row_count(min, max), "
+                    "assert_no_nulls(columns), assert_unique(column), "
+                    "assert_range(column, min, max). Use print() to output your report. "
+                    "Output capped at ~4000 chars. 30-second timeout."
                 ),
             },
         },
@@ -226,7 +244,14 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
 
         if action == "view":
             tbl = vault_datatable.read_table(path)
-            return json.dumps({"ok": True, "path": path, "table": tbl})
+            return json.dumps({
+                "ok": True,
+                "path": path,
+                "schema": tbl.get("schema", {}),
+                "views": tbl.get("views", []),
+                "row_count": len(tbl.get("rows", [])),
+                "sample": tbl.get("rows", [])[:3],
+            })
 
         if action == "find_rows":
             where = args.get("where") or {}
@@ -235,7 +260,7 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
                 return json.dumps({"ok": False, "error": "`where` must be an object"})
             offset = max(0, int(args.get("offset", 0)))
             limit_raw = args.get("limit")
-            limit = 100 if limit_raw is None else max(1, min(int(limit_raw), 1000))
+            limit = 25 if limit_raw is None else max(1, min(int(limit_raw), 200))
             result = vault_datatable.find_rows(
                 path,
                 where=where if where else None,
@@ -251,12 +276,29 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
                 return json.dumps({"ok": False, "error": "`sql` is required for query"})
             limit_raw = args.get("limit")
             try:
-                limit = int(limit_raw) if limit_raw is not None else 200
+                limit = int(limit_raw) if limit_raw is not None else 50
             except (TypeError, ValueError):
                 return json.dumps({"ok": False, "error": "`limit` must be an integer"})
+            summarize_raw = args.get("summarize")
+            summarize = None if summarize_raw is None else bool(summarize_raw)
             tbl = vault_datatable.read_table(path)
-            payload = _run_datatable_query(tbl, sql, limit=limit)
+            payload = _run_datatable_query(tbl, sql, limit=limit, summarize=summarize)
             return json.dumps({"ok": True, "path": path, **payload})
+
+        if action == "analyze":
+            script = args.get("script")
+            if not isinstance(script, str) or not script.strip():
+                return json.dumps({"ok": False, "error": "`script` is required for analyze"})
+            tbl = vault_datatable.read_table(path)
+            fields = (tbl.get("schema") or {}).get("fields") or []
+            field_specs = [
+                {"name": f["name"], "kind": f.get("kind", "text")}
+                for f in fields
+                if isinstance(f, dict) and f.get("name")
+            ]
+            rows = tbl.get("rows") or []
+            result = _run_analyze(rows, field_specs, script)
+            return json.dumps({"ok": True, "path": path, **result})
 
         if action == "list_rows":
             tbl = vault_datatable.read_table(path)
@@ -264,8 +306,7 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             total = len(all_rows)
             offset = max(0, int(args.get("offset", 0)))
             limit_raw = args.get("limit")
-            # Default 100, hard cap 1000 to keep payloads under ~100k tokens.
-            limit = 100 if limit_raw is None else max(1, min(int(limit_raw), 1000))
+            limit = 25 if limit_raw is None else max(1, min(int(limit_raw), 200))
             page = all_rows[offset : offset + limit]
             return json.dumps({
                 "ok": True,
@@ -496,13 +537,13 @@ def _run_datatable_query(
     tbl: dict[str, Any],
     sql: str,
     *,
-    limit: int = 200,
+    limit: int = 50,
+    summarize: bool | None = None,
 ) -> dict[str, Any]:
     """Materialize ``tbl`` into an in-memory DuckDB table ``t`` and run ``sql``.
 
     Reuses :func:`nexus.vault_csv.run_select` for the SELECT-only guard,
-    LIMIT/truncation handling, and the response envelope so the shape matches
-    ``vault_csv``'s ``query`` action.
+    LIMIT/truncation handling, auto-summarization, and the response envelope.
     """
     import duckdb
 
@@ -537,9 +578,24 @@ def _run_datatable_query(
                     f"INSERT INTO t ({col_list}) VALUES ({placeholders})",
                     tuples,
                 )
-        return vault_csv.run_select(con, sql, limit=limit)
+        return vault_csv.run_select(con, sql, limit=limit, summarize=summarize)
     finally:
         con.close()
+
+
+def _run_analyze(
+    rows: list[dict[str, Any]],
+    field_specs: list[dict[str, str]],
+    script: str,
+) -> dict[str, Any]:
+    """Execute a Python analysis script over table rows in a sandboxed subprocess."""
+    from ._sandbox import run_sandbox
+
+    context = {
+        "rows": rows,
+        "field_specs": field_specs,
+    }
+    return run_sandbox(script, context)
 
 
 def _required_fields(vault_datatable_mod, path: str) -> list[str]:

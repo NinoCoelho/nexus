@@ -120,7 +120,7 @@ def test_query_caps_limit_at_max(isolated_vault: Path) -> None:
     out = vault_csv.csv_query(p, "SELECT * FROM t", limit=999_999)
     # Tightened cap — sanity-check it's the documented MAX, not the requested value.
     assert out["limit"] == vault_csv._MAX_QUERY_LIMIT
-    assert out["limit"] == 1000
+    assert out["limit"] == 200
 
 
 def test_relationships(isolated_vault: Path) -> None:
@@ -179,3 +179,78 @@ def test_non_csv_path_rejected(isolated_vault: Path) -> None:
     _seed(isolated_vault, "note.md", "# hi\n")
     with pytest.raises(ValueError):
         vault_csv.csv_schema("note.md")
+
+
+def test_analyze_basic(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    script = "print(len(t))"
+    out = vault_csv.csv_analyze(p, script)
+    assert out["ok"] is True
+    assert "5" in out["output"]
+    assert out["path"] == p
+    assert out.get("truncated") is False
+
+
+def test_analyze_aggregation(isolated_vault: Path) -> None:
+    pytest.importorskip("pandas")
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    script = (
+        "result = t.groupby('city')['age'].mean().reset_index()\n"
+        "print(result.to_markdown(index=False))"
+    )
+    out = vault_csv.csv_analyze(p, script)
+    assert out["ok"] is True
+    assert "Sao Paulo" in out["output"]
+
+
+def test_analyze_error(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    out = vault_csv.csv_analyze(p, "1 / 0")
+    assert out["ok"] is False
+    assert out.get("error") or out.get("exit_code")
+
+
+def test_analyze_truncated_large_csv(isolated_vault: Path) -> None:
+    rows = "id,val\n" + "\n".join(f"{i},{i * 10}" for i in range(11_000))
+    p = _seed(isolated_vault, "big.csv", rows)
+    out = vault_csv.csv_analyze(p, "print(len(t))")
+    assert out["ok"] is True
+    assert out["truncated"] is True
+    assert out["row_count"] == 11_000
+    assert out["row_count_loaded"] == 10_000
+    assert "10000" in out["output"]
+
+
+def test_analyze_full_coverage_validation(isolated_vault: Path) -> None:
+    rows = "id,val\n" + "\n".join(f"{i},{i * 10}" for i in range(11_000))
+    p = _seed(isolated_vault, "big.csv", rows)
+    out = vault_csv.csv_analyze(p, "assert_full_coverage()")
+    assert "WARN assert_full_coverage" in out["output"]
+
+
+def test_query_auto_summarize(isolated_vault: Path) -> None:
+    rows = "id,name\n" + "\n".join(f"{i},item_{i}" for i in range(50))
+    p = _seed(isolated_vault, "items.csv", rows)
+    out = vault_csv.csv_query(p, "SELECT * FROM t")
+    assert out["summarized"] is True
+    assert "summary" in out
+    assert len(out["summary"]) == 2
+    assert "data" not in out
+    assert "data_head" in out
+    assert len(out["data_head"]) == 3
+
+
+def test_query_summarize_forced_off(isolated_vault: Path) -> None:
+    rows = "id,name\n" + "\n".join(f"{i},item_{i}" for i in range(50))
+    p = _seed(isolated_vault, "items.csv", rows)
+    out = vault_csv.csv_query(p, "SELECT * FROM t", summarize=False)
+    assert out.get("summarized") is not True
+    assert "data" in out
+    assert len(out["data"]) == 50
+
+
+def test_query_summarize_forced_on_small_result(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "people.csv", SAMPLE)
+    out = vault_csv.csv_query(p, "SELECT * FROM t", summarize=True)
+    assert out["summarized"] is True
+    assert "summary" in out
