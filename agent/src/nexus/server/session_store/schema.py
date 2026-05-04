@@ -130,6 +130,32 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 """
 
+# LLM error log — tracks rate limits, timeouts, context overflows, empty
+# responses, auth failures, etc. per session for observability and the
+# future error dashboard.
+_LLM_ERRORS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS llm_errors (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    error_type      TEXT NOT NULL,
+    status_code     INTEGER,
+    provider        TEXT,
+    model           TEXT,
+    message         TEXT,
+    retryable       INTEGER NOT NULL DEFAULT 0,
+    retry_attempt   INTEGER,
+    tokens_in       INTEGER,
+    context_window  INTEGER
+);
+CREATE INDEX IF NOT EXISTS llm_errors_session_idx
+    ON llm_errors(session_id);
+CREATE INDEX IF NOT EXISTS llm_errors_type_time_idx
+    ON llm_errors(error_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS llm_errors_created_idx
+    ON llm_errors(created_at DESC);
+"""
+
 
 def _ensure_feedback_pinned_column(db) -> None:
     """Migrate older databases that pre-date the ``pinned`` column."""
@@ -171,6 +197,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_HITL_EVENTS_SCHEMA)
     db.executescript(_HITL_PENDING_SCHEMA)
     db.executescript(_PUSH_SUBS_SCHEMA)
+    db.executescript(_LLM_ERRORS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
     # Backfill FTS for existing messages when the table was just created.

@@ -229,6 +229,32 @@ plain markdown files in the vault with `kanban-plugin: basic` frontmatter — \
 pick or create one at a sensible path like `boards/work.md`. Create cards \
 when the user mentions work to do, move them between lanes as status \
 changes, and keep them current.
+
+## Context Management
+
+Your conversation context is finite. Long sessions with many tool calls will \
+eventually exhaust the context window, causing empty responses or errors. \
+Manage your context proactively:
+
+- **`context_status`** — check how full your context window is and get \
+recommendations. Call this before starting complex multi-step operations.
+- **`fork_session`** — start a new session with a summary of the current \
+conversation. Use at natural boundaries: new feature, new debugging target, \
+new phase of work.
+- **`spawn_subagents`** — run independent subtasks in isolated sessions. Use \
+for parallel work (research, analysis, file operations).
+- **`vault_write`** — persist intermediate results to the vault instead of \
+keeping them in context.
+
+### Planning rules
+
+When planning a task with 3+ steps:
+1. Consider whether independent steps can run as sub-agents.
+2. At phase boundaries, fork to a fresh session with a summary.
+3. Use `vault_write` for large outputs — don't keep them in chat.
+4. Check `context_status` if you've been running many tool calls.
+
+Never let context grow past the orange zone without taking action.
 """
 
 

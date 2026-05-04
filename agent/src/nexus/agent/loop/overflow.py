@@ -29,12 +29,9 @@ from typing import Any, Iterable
 
 # Per-message overhead (role markers, separators, etc).
 _PER_MESSAGE_TOKENS = 4
-# Headroom kept for the model's own output and the system prompt the agent
-# loop injects (skills index, vault context, USER.md). Was 2048; bumped to
-# 4096 because Nexus's system prompt with a populated skills index easily
-# exceeds 2K tokens on its own, and z.ai gives no error when the combined
-# request overflows — it just returns empty content.
 _OUTPUT_HEADROOM_TOKENS = 4096
+_DEFAULT_FALLBACK_WINDOW = 32_000
+_DEFAULT_MAX_MESSAGES = 80
 
 # Tunable chars/token ratios.
 _CHARS_PER_TOKEN_ASCII = 4
@@ -124,21 +121,28 @@ def check_overflow(
     context_window: int,
     output_headroom: int = _OUTPUT_HEADROOM_TOKENS,
 ) -> OverflowCheck:
-    """Return an OverflowCheck describing whether this turn likely fits.
-
-    `context_window=0` disables the check (caller hasn't configured a limit
-    for the model).
-    """
     est = estimate_tokens(messages)
-    if context_window <= 0:
-        return OverflowCheck(False, est, 0, 0)
-    budget = context_window - output_headroom
+    effective_window = context_window if context_window > 0 else _DEFAULT_FALLBACK_WINDOW
+    budget = effective_window - output_headroom
     if est <= budget:
         return OverflowCheck(False, est, context_window, output_headroom)
-    pct = est * 100 // max(1, context_window)
+    pct = est * 100 // max(1, effective_window)
+    window_label = f"{context_window:,}" if context_window > 0 else f"{_DEFAULT_FALLBACK_WINDOW:,} (fallback)"
     detail = (
         f"Conversation is too large for this model: ~{est:,} input tokens "
-        f"vs. {context_window:,} window ({pct}% of capacity, no room for a "
+        f"vs. {window_label} window ({pct}% of capacity, no room for a "
         f"reply). Compact the history or start a new session."
     )
     return OverflowCheck(True, est, context_window, output_headroom, detail)
+
+
+def check_message_count(
+    messages: Iterable[Any],
+    limit: int = _DEFAULT_MAX_MESSAGES,
+) -> bool:
+    n = 0
+    for _ in messages:
+        n += 1
+        if n > limit:
+            return True
+    return False

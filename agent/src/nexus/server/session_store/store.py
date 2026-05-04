@@ -429,6 +429,40 @@ class SessionStore(PubSubMixin, QueryMixin):
             for r in rows
         ]
 
+    def log_error(
+        self,
+        session_id: str,
+        error_type: str,
+        *,
+        status_code: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        message: str | None = None,
+        retryable: bool = False,
+        retry_attempt: int | None = None,
+        tokens_in: int | None = None,
+        context_window: int | None = None,
+    ) -> None:
+        self._loom._db.execute(
+            "INSERT INTO llm_errors "
+            "(session_id, error_type, status_code, provider, model, message, "
+            "retryable, retry_attempt, tokens_in, context_window) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                error_type,
+                status_code,
+                provider,
+                model,
+                (message or "")[:4000],
+                1 if retryable else 0,
+                retry_attempt,
+                tokens_in,
+                context_window,
+            ),
+        )
+        self._loom._db.commit()
+
     def rename(self, session_id: str, title: str) -> None:
         self._loom.set_title(session_id, title)
         # Also bump updated_at.

@@ -20,7 +20,9 @@ from .helpers import (
     _from_loom_message,
     _to_loom_message,
 )
-from .overflow import check_overflow
+from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES, estimate_tokens
+from .zones import classify_zone
+from .compact import auto_compact
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -216,6 +218,34 @@ class Agent:
                 return int(getattr(m, "context_window", 0) or 0)
         return 0
 
+    def _log_llm_error(
+        self,
+        *,
+        session_id: str | None,
+        error_type: str,
+        message: str | None = None,
+        retryable: bool = False,
+        retry_attempt: int | None = None,
+        model_id: str | None = None,
+        tokens_est: int | None = None,
+        ctx_window: int | None = None,
+    ) -> None:
+        if self._sessions is None or not session_id:
+            return
+        try:
+            self._sessions.log_error(
+                session_id,
+                error_type,
+                message=message,
+                model=model_id,
+                retryable=retryable,
+                retry_attempt=retry_attempt,
+                tokens_in=tokens_est,
+                context_window=ctx_window,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
         """Return (nexus_provider, upstream_model_name). Kept for app.py compat."""
         if self._provider_registry and model_id:
@@ -320,10 +350,26 @@ class Agent:
         self._chosen_model = model_id
 
         loom_messages: list[lt.ChatMessage] = []
+        stripped_history: list[ChatMessage] = []
         if history:
-            loom_messages = [
-                _to_loom_message(m) for m in _strip_dead_placeholders(history)
-            ]
+            stripped_history = _strip_dead_placeholders(history)
+
+        ctx_window = self._context_window_for(model_id or self._chosen_model)
+        effective_window = ctx_window if ctx_window > 0 else _DEFAULT_MAX_MESSAGES * 200
+
+        if stripped_history:
+            est_tokens = estimate_tokens([_to_loom_message(m) for m in stripped_history])
+            zone = classify_zone(est_tokens, effective_window)
+            if zone in ("yellow", "orange", "red"):
+                compacted_history, report = auto_compact(stripped_history)
+                if report.compacted > 0:
+                    log.info(
+                        "auto-compact: zone=%s compacted=%d saved=%d bytes",
+                        zone, report.compacted, report.saved_bytes,
+                    )
+                    stripped_history = compacted_history
+
+        loom_messages = [_to_loom_message(m) for m in stripped_history]
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
@@ -338,39 +384,54 @@ class Agent:
         # which surfaces as the generic "empty_response" error and triggers an
         # endless retry loop.
         ctx_window = self._context_window_for(model_id or self._chosen_model)
-        if ctx_window > 0:
-            check = check_overflow(loom_messages, context_window=ctx_window)
-            if check.overflowed:
-                yield {
-                    "type": "error",
-                    "detail": check.detail,
-                    "reason": "context_overflow",
-                    "retryable": False,
-                    "status_code": None,
-                    "estimated_input_tokens": check.estimated_input_tokens,
-                    "context_window": check.context_window,
-                    "actions": ["compact_history", "new_session"],
-                }
-                yield {
-                    "type": "done",
-                    "session_id": session_id,
-                    "reply": "",
-                    "trace": [{"event": "context_overflow",
-                               "estimated_input_tokens": check.estimated_input_tokens,
-                               "context_window": check.context_window}],
-                    "skills_touched": [],
-                    "iterations": 0,
-                    "messages": list(history or []) + [
-                        ChatMessage(role=Role.USER, content=user_msg_content),
-                    ],
-                    "usage": {
-                        "input_tokens": check.estimated_input_tokens,
-                        "output_tokens": 0,
-                        "tool_calls": 0,
-                        "model": model_id or self._chosen_model,
-                    },
-                }
-                return
+        check = check_overflow(loom_messages, context_window=ctx_window)
+        msg_limit_exceeded = check_message_count(loom_messages)
+        if check.overflowed or msg_limit_exceeded:
+            if msg_limit_exceeded and not check.overflowed:
+                check = OverflowCheck(
+                    True, check.estimated_input_tokens, ctx_window,
+                    check.headroom,
+                    f"Message count ({len(loom_messages)}) exceeds safety limit "
+                    f"({_DEFAULT_MAX_MESSAGES}). Compact the history or start a new session.",
+                )
+            self._log_llm_error(
+                session_id=session_id,
+                error_type="context_overflow",
+                message=check.detail,
+                model_id=model_id,
+                tokens_est=check.estimated_input_tokens,
+                ctx_window=check.context_window,
+            )
+            yield {
+                "type": "error",
+                "detail": check.detail,
+                "reason": "context_overflow",
+                "retryable": False,
+                "status_code": None,
+                "estimated_input_tokens": check.estimated_input_tokens,
+                "context_window": check.context_window,
+                "actions": ["compact_history", "new_session"],
+            }
+            yield {
+                "type": "done",
+                "session_id": session_id,
+                "reply": "",
+                "trace": [{"event": "context_overflow",
+                           "estimated_input_tokens": check.estimated_input_tokens,
+                           "context_window": check.context_window}],
+                "skills_touched": [],
+                "iterations": 0,
+                "messages": list(history or []) + [
+                    ChatMessage(role=Role.USER, content=user_msg_content),
+                ],
+                "usage": {
+                    "input_tokens": check.estimated_input_tokens,
+                    "output_tokens": 0,
+                    "tool_calls": 0,
+                    "model": model_id or self._chosen_model,
+                },
+            }
+            return
 
         # loom yields serialized dicts (via serialize_event=model_dump) but the
         # event structure differs from what app.py expects.  We translate here.
@@ -715,10 +776,14 @@ class Agent:
                 yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
 
             elif etype == "context_overflow":
-                # Loom refused the next LLM call because the prompt would
-                # overflow the model's context window. Forward as a
-                # structured error so the UI renders the existing
-                # "Compact history / New session" affordance.
+                self._log_llm_error(
+                    session_id=session_id,
+                    error_type="context_overflow",
+                    message=ev.get("message", "context overflow"),
+                    model_id=model_id,
+                    tokens_est=ev.get("estimated_input_tokens", 0),
+                    ctx_window=ev.get("context_window", 0),
+                )
                 yield {
                     "type": "error",
                     "detail": ev.get("message", "context overflow"),
@@ -801,6 +866,16 @@ class Agent:
                 # UI's applyErrorEvent (last error wins) keeps loom's
                 # classified message instead of a generic banner.
                 _saw_loom_error = True
+                self._log_llm_error(
+                    session_id=session_id,
+                    error_type=ev.get("reason") or "llm_error",
+                    message=(ev.get("message") or "")[:2000],
+                    retryable=retryable,
+                    retry_attempt=_loom_retry_attempts if _loom_retry_attempts > 0 else None,
+                    model_id=model_id,
+                    tokens_est=check_overflow(loom_messages, context_window=ctx_window or 0).estimated_input_tokens if ctx_window > 0 else None,
+                    ctx_window=ctx_window,
+                )
                 yield {
                     "type": "error",
                     "detail": ev.get("message", ""),
@@ -852,6 +927,14 @@ class Agent:
                         "(model=%s, stop_reason=%s, iters=%s, in_tokens=%s, out_tokens=%s)",
                         model_used, stop_reason, ev.get("iterations"),
                         usage_in, usage_out,
+                    )
+                    self._log_llm_error(
+                        session_id=session_id,
+                        error_type="empty_response",
+                        message=f"stop_reason={stop_reason} iters={ev.get('iterations')} in={usage_in} out={usage_out}",
+                        model_id=model_id,
+                        tokens_est=usage_in,
+                        ctx_window=ctx_window,
                     )
                     # Heuristic: if the request was already large, the most
                     # likely cause of a 200-with-empty-content is upstream

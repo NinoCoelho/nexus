@@ -425,10 +425,6 @@ async def chat_stream_route(
                             err_payload[k] = event[k]
                     yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
         except (LLMTransportError, MalformedOutputError) as exc:
-            # Map loom's classified reason (timeout / rate_limit / 5xx /
-            # auth / ...) onto our partial_status so the persisted prefix
-            # + UI banner line up. Fall back to llm_error for anything
-            # the classifier doesn't recognise.
             partial_status = "llm_error"
             try:
                 from ...error_classifier import classify_api_error as _c
@@ -437,18 +433,10 @@ async def chat_stream_route(
                     partial_status = "upstream_timeout"
             except Exception:  # noqa: BLE001
                 pass
-            # Surface the upstream failure in the daemon log so the user
-            # can see WHICH provider call failed. Without this, a 401/404
-            # from OpenAI just disappears — the SSE error event reaches
-            # the UI but the daemon log is silent, making remote debug
-            # extremely painful.
             log.warning(
                 "chat_stream LLM call failed: %s (status=%s)",
                 exc, getattr(exc, "status_code", None),
             )
-            # Classify so the client gets a readable summary on top of
-            # the raw detail (e.g. "Provider rate limit — retrying with
-            # backoff." vs. the raw "HTTP 429: ..." body).
             detail = str(exc)
             reason = None
             retryable = None
@@ -461,6 +449,17 @@ async def chat_stream_route(
                 if classified.user_facing_summary:
                     detail = f"{classified.user_facing_summary} ({detail})"
             except Exception:
+                pass
+            try:
+                store.log_error(
+                    session.id,
+                    reason or "llm_error",
+                    message=detail[:2000],
+                    status_code=status_code,
+                    model=session.model_id if hasattr(session, 'model_id') else None,
+                    retryable=retryable or False,
+                )
+            except Exception:  # noqa: BLE001
                 pass
             err_payload = {
                 "detail": detail,

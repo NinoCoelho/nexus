@@ -298,6 +298,21 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(NEXUS_KB_TOOL, _nexus_kb_search))
 
+    from nexus.tools.context_tool import (
+        CONTEXT_STATUS_TOOL, handle_context_status,
+        FORK_SESSION_TOOL, handle_fork_session,
+    )
+
+    async def _context_status(args: dict) -> str:
+        return handle_context_status(args)
+
+    registry.register(_SimpleToolHandler(CONTEXT_STATUS_TOOL, _context_status))
+
+    async def _fork_session(args: dict) -> str:
+        return handle_fork_session(args)
+
+    registry.register(_SimpleToolHandler(FORK_SESSION_TOOL, _fork_session))
+
     # HITL tools — always registered; handlers resolved at dispatch time.
     # This lets app.py late-bind handlers without rebuilding the registry.
     async def _ask_user(args: dict) -> str:

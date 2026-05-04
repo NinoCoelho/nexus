@@ -19,11 +19,16 @@ Goals:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..llm.types import ChatMessage, Role
+
+log = logging.getLogger(__name__)
 
 
 # Default threshold: anything bigger than this in a single tool message is a
@@ -171,6 +176,81 @@ def compact_history(
         new_content = _compact_one(
             msg.content, head_keep=head_keep, sample_rows=sample_rows
         )
+        bytes_after += len(new_content)
+        compacted += 1
+        out.append(
+            ChatMessage(
+                role=msg.role,
+                content=new_content,
+                tool_call_id=msg.tool_call_id,
+                name=msg.name,
+            )
+        )
+    return out, CompactionReport(
+        inspected=inspected,
+        compacted=compacted,
+        bytes_before=bytes_before,
+        bytes_after=bytes_after,
+        skipped_already_compacted=skipped,
+    )
+
+
+_AUTO_COMPACT_THRESHOLD_BYTES = 8 * 1024
+_AUTO_COMPACT_HEAD_KEEP = 1024
+_AUTO_COMPACT_SAMPLE_ROWS = 3
+
+_VAULT_TOOL_CACHE_DIR = Path("~/.nexus/vault/.tool-cache").expanduser()
+
+
+def _persist_to_vault(content: str, tool_call_id: str | None) -> str | None:
+    try:
+        _VAULT_TOOL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        h = hashlib.sha256(content.encode()).hexdigest()[:16]
+        suffix = f"{h}.json"
+        if tool_call_id:
+            suffix = f"{tool_call_id}_{suffix}"
+        path = _VAULT_TOOL_CACHE_DIR / suffix
+        path.write_text(content, encoding="utf-8")
+        return f"vault://.tool-cache/{suffix}"
+    except Exception:
+        log.debug("failed to persist tool result to vault cache", exc_info=True)
+        return None
+
+
+def auto_compact(
+    history: list[ChatMessage],
+    *,
+    threshold_bytes: int = _AUTO_COMPACT_THRESHOLD_BYTES,
+    head_keep: int = _AUTO_COMPACT_HEAD_KEEP,
+    sample_rows: int = _AUTO_COMPACT_SAMPLE_ROWS,
+) -> tuple[list[ChatMessage], CompactionReport]:
+    out: list[ChatMessage] = []
+    inspected = 0
+    compacted = 0
+    bytes_before = 0
+    bytes_after = 0
+    skipped = 0
+
+    for msg in history:
+        if msg.role != Role.TOOL or not msg.content:
+            out.append(msg)
+            continue
+        inspected += 1
+        size = len(msg.content)
+        bytes_before += size
+        if size <= threshold_bytes:
+            bytes_after += size
+            out.append(msg)
+            continue
+        if _is_compacted(msg.content):
+            skipped += 1
+            bytes_after += size
+            out.append(msg)
+            continue
+        vault_ref = _persist_to_vault(msg.content, msg.tool_call_id)
+        new_content = _compact_one(msg.content, head_keep=head_keep, sample_rows=sample_rows)
+        if vault_ref:
+            new_content += f"\n\n[Full result saved to {vault_ref}]"
         bytes_after += len(new_content)
         compacted += 1
         out.append(
