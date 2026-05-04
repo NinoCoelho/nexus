@@ -9,7 +9,11 @@ from ..agent.llm import ToolSpec
 
 VAULT_LIST_TOOL = ToolSpec(
     name="vault_list",
-    description="List files and folders in the vault (or a subdirectory).",
+    description=(
+        "List files and folders in the vault (or a subdirectory). "
+        "Use this to discover valid paths before calling `vault_read`, `vault_write`, "
+        "`vault_csv`, or `datatable_manage`."
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -30,7 +34,15 @@ VAULT_READ_TOOL = ToolSpec(
         "When the result contains `truncated: true`, the response also includes a "
         "`slice` object with metadata (lines_returned, next_offset, …) so you can "
         "page through the file. Reading a 1MB CSV in one shot will pollute the "
-        "conversation context — always slice large files."
+        "conversation context — always slice large files.\n\n"
+        "Anti-patterns:\n"
+        "- Do NOT use `vault_read` for large structured datasets (`.csv`, `.tsv`, "
+        "`.jsonl`); prefer `vault_csv` (DuckDB-backed, no raw data into context) or "
+        "`datatable_manage.import_csv`. Dumping large raw files into context wastes "
+        "tokens and increases hallucination risk.\n"
+        "- Do NOT use `vault_read` on data-table `.md` files (frontmatter `data-table-plugin: basic`) "
+        "for analysis — use `datatable_manage action=view` instead.\n\n"
+        "To discover valid paths, use `vault_list`."
     ),
     parameters={
         "type": "object",
@@ -59,7 +71,17 @@ VAULT_READ_TOOL = ToolSpec(
 
 VAULT_WRITE_TOOL = ToolSpec(
     name="vault_write",
-    description="Write (create or overwrite) a file in the vault.",
+    description=(
+        "Write (create or overwrite) a file in the vault.\n\n"
+        "Safe usage pattern:\n"
+        "- Before overwriting an existing path, call `vault_read` with `head=20` to "
+        "verify content and confirm you intend to overwrite.\n"
+        "- If unsure whether the path exists, check with `vault_list` first.\n"
+        "- If you want to preserve existing content, write to a new path instead of "
+        "overwriting (e.g. append a timestamp or version suffix).\n"
+        "- Overwriting data-table or kanban `.md` files directly bypasses their "
+        "schema validation — prefer `datatable_manage`/`kanban_manage` for those."
+    ),
     parameters={
         "type": "object",
         "properties": {

@@ -36,7 +36,16 @@ SKILL_MANAGE_TOOL = ToolSpec(
         "  ## Gotchas\n"
         "  - Known failure modes and how to recover (auth walls, rate limits, missing deps).\n\n"
         "Write in the imperative voice of a teammate handing off a recipe. Skip background theory and "
-        "library-feature tours — those belong in upstream docs. If the skill won't save a future-you turn, don't create it."
+        "library-feature tours — those belong in upstream docs. If the skill won't save a future-you turn, don't create it.\n\n"
+        "Safe usage pattern:\n"
+        "- Before `edit`, `patch`, or `delete`, always call `skill_view` to inspect the current SKILL.md.\n"
+        "- Preserve existing 'Gotchas' sections unless they are obsolete — those capture hard-won lessons.\n"
+        "- After `create`, call `skill_view` to verify the skill was saved correctly before relying on it.\n\n"
+        "Micro-recipe for creating a new skill:\n"
+        "1. Draft content in your reasoning (do NOT output inert code blocks to the user).\n"
+        "2. Call `skill_manage` with `action: 'create'` and fully-formed SKILL.md content.\n"
+        "3. Verify with `skill_view` that the skill saved correctly.\n"
+        "4. Only then start using the skill in your own future plans."
     ),
     parameters={
         "type": "object",

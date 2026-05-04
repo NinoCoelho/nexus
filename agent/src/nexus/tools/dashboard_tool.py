@@ -22,7 +22,15 @@ DASHBOARD_MANAGE_TOOL = ToolSpec(
         "optional title. "
         "Actions: view, set_operations, add_operation, remove_operation, "
         "set_widgets, add_widget, remove_widget, set_chat_session, set_title, "
-        "delete_database."
+        "delete_database.\n\n"
+        "Discovery: dashboards live alongside datatables. Start by calling "
+        "`datatable_manage action=list_databases` to identify database folders, "
+        "then call `dashboard_manage action=view folder=<folder>` to inspect.\n\n"
+        "Safe usage pattern:\n"
+        "- Before `set_operations`/`set_widgets` (which replace all items), call `view` "
+        "first to inspect current state and decide what to keep vs. change.\n"
+        "- `delete_database` is irreversible and deletes the `_data.md` file; requires "
+        "an explicit `confirm` parameter matching the folder basename."
     ),
     parameters={
         "type": "object",

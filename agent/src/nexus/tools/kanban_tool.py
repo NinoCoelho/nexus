@@ -19,7 +19,18 @@ KANBAN_MANAGE_TOOL = ToolSpec(
         "Manage kanban boards stored as markdown in the vault. "
         "Each board is a single .md file with `kanban-plugin: basic` frontmatter. "
         "Actions: create_board, view, add_card, move_card, update_card, delete_card, "
-        "add_lane, update_lane, move_lane, delete_lane."
+        "add_lane, update_lane, move_lane, delete_lane.\n\n"
+        "Safe usage pattern:\n"
+        "- Before `update_card`/`delete_card`/`update_lane`/`delete_lane`, call `view` "
+        "to inspect the current board state and confirm the target exists.\n"
+        "- `delete_card` and `delete_lane` are irreversible.\n\n"
+        "Automated workflow pattern:\n"
+        "1. `create_board` for a project.\n"
+        "2. `add_lane` for each stage; use `update_lane` with `prompt` to bind an "
+        "agent behavior that auto-dispatches when cards enter the lane.\n"
+        "3. `add_card` with a problem description in the body.\n"
+        "4. `move_card` into a lane to auto-dispatch the agent with that lane's "
+        "prompt + card body as context."
     ),
     parameters={
         "type": "object",
