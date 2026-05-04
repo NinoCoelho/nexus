@@ -137,8 +137,6 @@ if ($LASTEXITCODE -ne 0) { throw 'nexus install failed' }
 # Pillow may already be present via the [pdf] extra; pip is a no-op if so.
 & $Py -m pip install pystray Pillow
 if ($LASTEXITCODE -ne 0) { throw 'tray launcher deps install failed' }
-& $Py -m pip install pywebview
-if ($LASTEXITCODE -ne 0) { throw 'pywebview install failed' }
 
 # Move site-packages into the staged layout expected by tray.pyw / bootstrap.py.
 # python-build-standalone on Windows places site-packages under
@@ -289,7 +287,7 @@ $BuildPy = Join-Path $BuildVenv 'Scripts\python.exe'
 if ($LASTEXITCODE -ne 0) { throw 'pip upgrade in build venv failed' }
 # pystray + Pillow have to be importable when PyInstaller scans the source —
 # its modulegraph follows real imports, not string analysis.
-& $BuildPy -m pip install pyinstaller pystray Pillow pywebview
+& $BuildPy -m pip install pyinstaller pystray Pillow
 if ($LASTEXITCODE -ne 0) { throw 'pyinstaller install failed' }
 
 # Generate a multi-resolution .ico the same way the tray icon is drawn at

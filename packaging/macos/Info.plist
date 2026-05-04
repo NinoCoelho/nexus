@@ -29,7 +29,5 @@
     </dict>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Nexus uses the microphone for voice input to the agent.</string>
 </dict>
 </plist>

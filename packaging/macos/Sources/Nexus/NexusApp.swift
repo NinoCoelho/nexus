@@ -35,7 +35,6 @@ final class AppController: ObservableObject {
     private let server = ServerController()
     private let prefsWindow = PreferencesWindowController()
     private let notifier = HitlNotifier()
-    let mainWindow = MainWindowController()
 
     func start() {
         Task {
@@ -44,7 +43,7 @@ final class AppController: ObservableObject {
                 status = "Waiting for server…"
                 let port = try await server.waitForReady(timeout: 60)
                 status = "Running on \(server.bindHost):\(port)"
-                showMainWindow(port: port)
+                openInBrowser(port: port)
                 notifier.start(server: server)
             } catch {
                 status = "Error: \(error.localizedDescription)"
@@ -52,11 +51,14 @@ final class AppController: ObservableObject {
         }
     }
 
-    func showMainWindow(port: Int? = nil) {
+    func openInBrowser(port: Int? = nil) {
         guard let p = port ?? server.port else { return }
+        // Use loopback in the browser even when bound to 0.0.0.0 — opening
+        // 0.0.0.0 in a browser doesn't work and the local user has loopback
+        // exemption from the auth check.
         let urlString = "http://127.0.0.1:\(p)/"
         guard let url = URL(string: urlString) else { return }
-        mainWindow.show(url: url)
+        NSWorkspace.shared.open(url)
     }
 
     func restartServer() {
@@ -68,7 +70,7 @@ final class AppController: ObservableObject {
                 try server.launch()
                 let port = try await server.waitForReady(timeout: 60)
                 status = "Running on \(server.bindHost):\(port)"
-                showMainWindow(port: port)
+                openInBrowser(port: port)
                 notifier.start(server: server)
             } catch {
                 status = "Error: \(error.localizedDescription)"
@@ -108,6 +110,10 @@ final class AppController: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func showAccessToken() {
+        TokenDialog.showCurrentToken()
+    }
+
     func shutdown() {
         notifier.stop()
         server.terminate()
@@ -121,7 +127,7 @@ struct MenuView: View {
         Text(controller.status)
             .font(.caption)
         Divider()
-        Button("Open Nexus") { controller.showMainWindow() }
+        Button("Open Nexus") { controller.openInBrowser() }
             .keyboardShortcut("o")
         Divider()
         Button("Restart Server") { controller.restartServer() }
@@ -131,8 +137,9 @@ struct MenuView: View {
             controller.toggleStartAtLogin()
         }
         Divider()
+        Button("Show Access Token…") { controller.showAccessToken() }
         Button("Show Logs") { controller.revealLogs() }
-        Button("Open Vault Folder") { controller.revealStateDir() }
+        Button("Open ~/.nexus") { controller.revealStateDir() }
         Divider()
         Button("Quit") { NSApp.terminate(nil) }
             .keyboardShortcut("q")

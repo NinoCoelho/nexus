@@ -17,10 +17,12 @@ import { uploadVaultFiles, type SlashCommand } from "../../api";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
+import SecretPicker, { type SecretPickerHandle } from "../SecretPicker";
 import SlashCommandPicker, { type SlashPickerHandle } from "../SlashCommandPicker";
 import "../InputBar.css";
 import { useAudioRecorder } from "./useAudioRecorder";
 import { useMentionPicker } from "./useMentionPicker";
+import { useSecretPicker } from "./useSecretPicker";
 import { useSlashPicker } from "./useSlashPicker";
 import AttachmentsBar from "./AttachmentsBar";
 import ModelBadge from "./ModelBadge";
@@ -82,6 +84,7 @@ export default function InputBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mentionRef = useRef<MentionPickerHandle>(null);
+  const secretRef = useRef<SecretPickerHandle>(null);
   const slashRef = useRef<SlashPickerHandle>(null);
   const toast = useToast();
 
@@ -152,6 +155,7 @@ export default function InputBar({
     }
   }, []);
   const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(value, onChange);
+  const { secret, setSecret, secretResults, detectSecret, insertSecret } = useSecretPicker(value, onChange);
   const { slash, setSlash, commands: slashCommands } = useSlashPicker(value);
 
   const insertSlashCommand = (cmd: SlashCommand) => {
@@ -192,12 +196,15 @@ export default function InputBar({
     adjust();
     const caret = textareaRef.current?.selectionStart ?? text.length;
     setMention(detectMention(text, caret));
+    setSecret(detectSecret(text, caret));
   };
 
   const handleSelectionChange = () => {
     const el = textareaRef.current;
     if (!el) return;
-    setMention(detectMention(el.value, el.selectionStart ?? 0));
+    const caret = el.selectionStart ?? 0;
+    setMention(detectMention(el.value, caret));
+    setSecret(detectSecret(el.value, caret));
   };
 
   const uploadAudioAndSend = async (blob: Blob, urlToRevoke?: string) => {
@@ -270,6 +277,7 @@ export default function InputBar({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mention && mentionRef.current?.handleKey(e)) return;
+    if (secret && secretRef.current?.handleKey(e)) return;
     if (slash && slashRef.current?.handleKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -398,7 +406,15 @@ export default function InputBar({
             onClose={() => setMention(null)}
           />
         )}
-        {slash && !mention && (
+        {secret && !mention && (
+          <SecretPicker
+            ref={secretRef}
+            results={secretResults}
+            onSelect={(name) => insertSecret(name, textareaRef)}
+            onClose={() => setSecret(null)}
+          />
+        )}
+        {slash && !mention && !secret && (
           <SlashCommandPicker
             ref={slashRef}
             results={slashCommands}
@@ -439,7 +455,7 @@ export default function InputBar({
               onKeyDown={handleKeyDown}
               onKeyUp={handleSelectionChange}
               onClick={handleSelectionChange}
-              onBlur={() => setTimeout(() => setMention(null), 120)}
+              onBlur={() => setTimeout(() => { setMention(null); setSecret(null); }, 120)}
               disabled={disabled}
             />
           )}

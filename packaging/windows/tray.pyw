@@ -2,10 +2,9 @@
 
 Spawns the bundled CPython interpreter against ``bootstrap.py``, polls for
 the server's chosen port (written to ``.port`` next to this file), opens
-an embedded WebView window (via pywebview) when /health succeeds, and
-surfaces a system-tray menu with the same actions as the macOS menu-bar
-app: Open Nexus, Restart, Show Access Token, Reveal Logs, Open ~/.nexus,
-Quit.
+the default browser when /health succeeds, and surfaces a system-tray
+menu with the same actions as the macOS menu-bar app: Open Nexus,
+Restart, Show Access Token, Reveal Logs, Open ~/.nexus, Quit.
 
 Launched by ``Nexus.cmd`` via ``pythonw.exe`` so no console window
 appears. All long-running work happens off the UI thread; the tray menu
@@ -22,6 +21,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 # When packaged with PyInstaller (--onefile), ``__file__`` points into the
@@ -179,23 +179,27 @@ def main() -> int:
         from pystray import Menu, MenuItem
     except ImportError:
         log.exception("pystray missing — falling back to headless launch")
+        # Headless fallback: run the server, open browser, block on the process.
         ctl = ServerController()
         ctl.launch()
         try:
             port = ctl.wait_for_ready()
-            _open_webview(ctl, port)
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+            if ctl.process is not None:
+                ctl.process.wait()
         finally:
             ctl.terminate()
         return 0
 
     controller = ServerController()
     icon = pystray.Icon("Nexus", _make_icon_image(), "Nexus")
-    webview_state = {"window": None, "started": False, "lock": threading.Lock()}
 
-    def open_nexus(_=None) -> None:
+    state = {"opened_once": False}
+
+    def open_browser(_=None) -> None:
         if controller.port is None:
             return
-        _open_webview(controller, controller.port, webview_state)
+        webbrowser.open(f"http://127.0.0.1:{controller.port}/")
 
     def restart(_=None) -> None:
         def _do() -> None:
@@ -203,15 +207,30 @@ def main() -> int:
             try:
                 controller.launch()
                 port = controller.wait_for_ready()
-                _open_webview(controller, port, webview_state)
+                webbrowser.open(f"http://127.0.0.1:{port}/")
                 icon.title = f"Nexus — running on {controller.bind_host}:{port}"
             except Exception as exc:  # noqa: BLE001
                 log.exception("restart failed")
                 icon.title = f"Nexus — error: {exc}"
         threading.Thread(target=_do, daemon=True).start()
 
+    def show_token(_=None) -> None:
+        # Mirror the Swift TokenDialog — show the persistent token from
+        # ~/.nexus/access_token via the system message box. ctypes is in
+        # the stdlib so this never needs an extra dep.
+        import ctypes
+        token_path = NEXUS_HOME / "access_token"
+        try:
+            tok = token_path.read_text().strip()
+        except OSError:
+            tok = "(not yet generated — start the server first)"
+        ctypes.windll.user32.MessageBoxW(
+            0, tok, "Nexus access token",
+            0x00000040,  # MB_ICONINFORMATION
+        )
+
     def reveal_logs(_=None) -> None:
-        os.startfile(str(LOG_DIR))  # noqa: S606
+        os.startfile(str(LOG_DIR))  # noqa: S606 — Windows-only helper
 
     def reveal_state(_=None) -> None:
         NEXUS_HOME.mkdir(parents=True, exist_ok=True)
@@ -222,17 +241,16 @@ def main() -> int:
         icon.stop()
 
     icon.menu = Menu(
-        MenuItem("Open Nexus", open_nexus, default=True),
+        MenuItem("Open Nexus", open_browser, default=True),
         Menu.SEPARATOR,
         MenuItem("Restart Server", restart),
         Menu.SEPARATOR,
+        MenuItem("Show Access Token…", show_token),
         MenuItem("Show Logs", reveal_logs),
-        MenuItem("Open Vault Folder", reveal_state),
+        MenuItem("Open ~/.nexus", reveal_state),
         Menu.SEPARATOR,
         MenuItem("Quit", quit_app),
     )
-
-    state = {"opened_once": False}
 
     def boot() -> None:
         try:
@@ -241,7 +259,7 @@ def main() -> int:
             icon.title = f"Nexus — running on {controller.bind_host}:{port}"
             if not state["opened_once"]:
                 state["opened_once"] = True
-                _open_webview(controller, port, webview_state)
+                webbrowser.open(f"http://127.0.0.1:{port}/")
         except Exception as exc:  # noqa: BLE001
             log.exception("startup failed")
             icon.title = f"Nexus — error: {exc}"
@@ -253,60 +271,6 @@ def main() -> int:
     finally:
         controller.terminate()
     return 0
-
-
-def _open_webview(
-    controller: ServerController,
-    port: int,
-    state: dict | None = None,
-) -> None:
-    """Open or re-focus the embedded webview window.
-
-    pywebview must run its event loop on the main thread via
-    ``webview.start()``. Since the tray icon already owns the main thread
-    (pystray runs a blocking Windows message loop), we run webview on a
-    dedicated thread. ``webview.start()`` blocks until all windows are
-    closed, so we keep a long-lived thread alive that re-creates windows
-    as needed.
-    """
-    try:
-        import webview  # type: ignore
-    except ImportError:
-        import webbrowser
-        log.warning("pywebview not available — falling back to system browser")
-        webbrowser.open(f"http://127.0.0.1:{port}/")
-        return
-
-    url = f"http://127.0.0.1:{port}/"
-
-    if state is not None:
-        with state["lock"]:
-            win = state.get("window")
-            if win is not None:
-                try:
-                    win.load_url(url)
-                    win.restore()
-                    return
-                except Exception:  # noqa: BLE001
-                    state["window"] = None
-
-    def _run() -> None:
-        win = webview.create_window("Nexus", url, width=1280, height=800)
-        if state is not None:
-            with state["lock"]:
-                state["window"] = win
-        webview.start()
-
-    if state is not None and not state.get("started"):
-        state["started"] = True
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-    elif state is not None:
-        with state["lock"]:
-            win = webview.create_window("Nexus", url, width=1280, height=800)
-            state["window"] = win
-    else:
-        _run()
 
 
 if __name__ == "__main__":

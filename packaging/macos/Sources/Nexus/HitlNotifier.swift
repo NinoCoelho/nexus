@@ -226,11 +226,12 @@ final class HitlNotifier: NSObject {
 
     fileprivate func openInBrowser(sessionId: String, requestId: String) {
         guard let port = server?.port else { return }
+        // Always 127.0.0.1 in the browser even if the daemon is bound to
+        // 0.0.0.0 — opening 0.0.0.0 doesn't work in browsers, and loopback
+        // is exempt from the auth check. Mirrors AppController.openInBrowser.
         let urlStr = "http://127.0.0.1:\(port)/?session=\(sessionId)&request_id=\(requestId)"
         guard let url = URL(string: urlStr) else { return }
-        Task { @MainActor in
-            (NSApp.delegate as? AppDelegate)?.controller.mainWindow.load(url: url)
-        }
+        NSWorkspace.shared.open(url)
     }
 
     fileprivate func postRespond(

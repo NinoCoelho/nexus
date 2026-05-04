@@ -153,6 +153,11 @@
   overflow-x: auto;
 }
 .kanban-card-body code { font-size: 10px; }
+.kanban-card-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
 
 .kanban-card-actions {
   display: flex;
