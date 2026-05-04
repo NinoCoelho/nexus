@@ -156,6 +156,20 @@ CREATE INDEX IF NOT EXISTS llm_errors_created_idx
     ON llm_errors(created_at DESC);
 """
 
+_PAUSED_TURNS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS paused_turns (
+    session_id          TEXT PRIMARY KEY,
+    user_message        TEXT NOT NULL,
+    working_messages    TEXT NOT NULL,
+    paused_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    retry_after         TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'paused',
+    model_id            TEXT,
+    error_detail        TEXT,
+    resume_count        INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 
 def _ensure_feedback_pinned_column(db) -> None:
     """Migrate older databases that pre-date the ``pinned`` column."""
@@ -198,6 +212,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_HITL_PENDING_SCHEMA)
     db.executescript(_PUSH_SUBS_SCHEMA)
     db.executescript(_LLM_ERRORS_SCHEMA)
+    db.executescript(_PAUSED_TURNS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
     # Backfill FTS for existing messages when the table was just created.

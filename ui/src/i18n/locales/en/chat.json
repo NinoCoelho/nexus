@@ -46,6 +46,7 @@
     "crashed": "The turn crashed unexpectedly.",
     "length": "Response was truncated — the model hit its output limit.",
     "upstreamTimeout": "The model didn't respond in time.",
+    "rateLimited": "Rate limit hit — the turn has been paused. Resume after the cooldown.",
     "proceed": "How do you want to proceed?",
     "continue": "Continue",
     "retry": "Retry"

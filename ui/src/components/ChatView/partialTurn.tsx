@@ -14,6 +14,7 @@ export const PARTIAL_CAN_CONTINUE: Record<NonNullable<Message["partial"]>["statu
   crashed: false,
   length: true,
   upstream_timeout: false,
+  rate_limited: true,
 };
 
 const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
@@ -25,6 +26,7 @@ const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
   crashed: "chat:partial.crashed",
   length: "chat:partial.length",
   upstream_timeout: "chat:partial.upstreamTimeout",
+  rate_limited: "chat:partial.rateLimited",
 };
 
 export function PartialTurnActions({

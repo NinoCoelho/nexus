@@ -23,6 +23,7 @@ from .helpers import (
 from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES, estimate_tokens
 from .zones import classify_zone
 from .compact import auto_compact
+from .summarize import summarize_older_turns
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -368,6 +369,26 @@ class Agent:
                         zone, report.compacted, report.saved_bytes,
                     )
                     stripped_history = compacted_history
+            if zone in ("orange", "red"):
+                re_est = estimate_tokens([_to_loom_message(m) for m in stripped_history])
+                re_zone = classify_zone(re_est, effective_window)
+                if re_zone in ("orange", "red"):
+                    provider, upstream_model = self._resolve_provider(model_id)
+                    summary, recent = await summarize_older_turns(
+                        stripped_history, provider,
+                        model_id=upstream_model or model_id,
+                    )
+                    if summary:
+                        summary_msg = ChatMessage(
+                            role=Role.SYSTEM,
+                            content=f"[Session Memory — auto-generated summary]\n{summary}",
+                        )
+                        stripped_history = [summary_msg] + recent
+                        log.info(
+                            "summarization: reduced from %d to %d messages",
+                            len(compacted_history if report.compacted > 0 else history or []),
+                            len(stripped_history),
+                        )
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
 
@@ -876,6 +897,36 @@ class Agent:
                     tokens_est=check_overflow(loom_messages, context_window=ctx_window or 0).estimated_input_tokens if ctx_window > 0 else None,
                     ctx_window=ctx_window,
                 )
+                error_reason = ev.get("reason") or ""
+                if error_reason == "rate_limit" and session_id and self._sessions is not None:
+                    try:
+                        from datetime import datetime, timezone, timedelta
+                        cooldown = 60
+                        retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+                        wm_json = json.dumps(
+                            [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
+                              "content": m.content if isinstance(m.content, str) else json.dumps(m.content, default=str),
+                              "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in (m.tool_calls or [])] if m.tool_calls else None,
+                              "tool_call_id": m.tool_call_id, "name": m.name}
+                             for m in working_messages],
+                            default=str,
+                        )
+                        self._sessions.pause_turn(
+                            session_id,
+                            user_message=user_msg_content,
+                            working_messages_json=wm_json,
+                            retry_after_iso=retry_after.isoformat(),
+                            model_id=model_id,
+                            error_detail=(ev.get("message") or "")[:500],
+                        )
+                        yield {
+                            "type": "paused_for_cooldown",
+                            "retry_after": retry_after.isoformat(),
+                            "estimated_seconds": cooldown,
+                            "reason": error_reason,
+                        }
+                    except Exception:
+                        log.debug("failed to persist paused turn", exc_info=True)
                 yield {
                     "type": "error",
                     "detail": ev.get("message", ""),

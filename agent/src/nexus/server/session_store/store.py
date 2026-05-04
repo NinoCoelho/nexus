@@ -488,3 +488,58 @@ class SessionStore(PubSubMixin, QueryMixin):
                 (model, session_id),
             )
             self._loom._db.commit()
+
+    def pause_turn(
+        self,
+        session_id: str,
+        *,
+        user_message: str,
+        working_messages_json: str,
+        retry_after_iso: str,
+        model_id: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        self._loom._db.execute(
+            "INSERT OR REPLACE INTO paused_turns "
+            "(session_id, user_message, working_messages, retry_after, model_id, error_detail, status, resume_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'paused', COALESCE("
+            "  (SELECT resume_count FROM paused_turns WHERE session_id = ?), 0"
+            "))",
+            (session_id, user_message, working_messages_json, retry_after_iso,
+             model_id, error_detail, session_id),
+        )
+        self._loom._db.commit()
+
+    def load_paused(self, session_id: str) -> dict[str, Any] | None:
+        row = self._loom._db.execute(
+            "SELECT session_id, user_message, working_messages, paused_at, "
+            "retry_after, status, model_id, error_detail, resume_count "
+            "FROM paused_turns WHERE session_id = ? AND status = 'paused'",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "session_id": row[0],
+            "user_message": row[1],
+            "working_messages_json": row[2],
+            "paused_at": row[3],
+            "retry_after": row[4],
+            "status": row[5],
+            "model_id": row[6],
+            "error_detail": row[7],
+            "resume_count": row[8],
+        }
+
+    def resume_paused(self, session_id: str) -> dict[str, Any] | None:
+        paused = self.load_paused(session_id)
+        if not paused:
+            return None
+        self._loom._db.execute(
+            "UPDATE paused_turns SET status = 'resumed', resume_count = resume_count + 1 "
+            "WHERE session_id = ?",
+            (session_id,),
+        )
+        self._loom._db.commit()
+        paused["resume_count"] += 1
+        return paused

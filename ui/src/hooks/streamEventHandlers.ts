@@ -246,7 +246,7 @@ export function applyErrorEvent(
   const knownStatuses: NonNullable<Message["partial"]>["status"][] = [
     "interrupted", "cancelled", "iteration_limit",
     "empty_response", "llm_error", "crashed",
-    "length", "upstream_timeout",
+    "length", "upstream_timeout", "rate_limited",
   ];
   const mapped = reason && (knownStatuses as string[]).includes(reason)
     ? (reason as NonNullable<Message["partial"]>["status"])

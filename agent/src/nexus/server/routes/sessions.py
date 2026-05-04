@@ -388,3 +388,58 @@ async def export_session(
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/sessions/{session_id}/paused")
+async def get_paused_turn(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    paused = store.load_paused(session_id)
+    if not paused:
+        return {"ok": True, "paused": False}
+    from datetime import datetime, timezone
+    try:
+        retry_after = datetime.fromisoformat(paused["retry_after"])
+        now = datetime.now(timezone.utc)
+        remaining = max(0, int((retry_after - now).total_seconds()))
+    except (ValueError, TypeError):
+        remaining = 0
+    return {
+        "ok": True,
+        "paused": True,
+        "retry_after": paused["retry_after"],
+        "remaining_seconds": remaining,
+        "error_detail": paused.get("error_detail"),
+        "model_id": paused.get("model_id"),
+        "resume_count": paused.get("resume_count", 0),
+    }
+
+
+@router.post("/sessions/{session_id}/resume-paused")
+async def resume_paused_turn(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    paused = store.resume_paused(session_id)
+    if not paused:
+        raise HTTPException(status_code=404, detail="No paused turn for this session")
+    from datetime import datetime, timezone
+    try:
+        retry_after = datetime.fromisoformat(paused["retry_after"])
+        now = datetime.now(timezone.utc)
+        remaining = (retry_after - now).total_seconds()
+    except (ValueError, TypeError):
+        remaining = 0
+    if remaining > 0:
+        raise HTTPException(
+            status_code=425,
+            detail=f"Cooldown not elapsed. Wait {int(remaining)} more seconds.",
+            headers={"Retry-After": str(int(remaining))},
+        )
+    return {
+        "ok": True,
+        "working_messages_json": paused["working_messages_json"],
+        "user_message": paused["user_message"],
+        "model_id": paused.get("model_id"),
+    }

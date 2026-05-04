@@ -259,6 +259,9 @@ export function useChatSession(
             delaySeconds: event.delaySeconds,
             reason: event.reason,
           });
+        } else if (event.type === "paused_for_cooldown") {
+          applyErrorEvent(setChatStates, key, "rate_limited",
+            `Rate limit hit. You can continue this task after the cooldown. Estimated wait: ${event.estimated_seconds}s.`);
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail);
         }

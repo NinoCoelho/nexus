@@ -66,7 +66,8 @@ export interface Message {
       | "llm_error"
       | "crashed"
       | "length"
-      | "upstream_timeout";
+      | "upstream_timeout"
+      | "rate_limited";
     detail?: string;
   };
   /** Transient hint while the agent backs off after a retryable mid-stream
