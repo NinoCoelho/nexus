@@ -145,6 +145,7 @@ export function useVoiceAckPlayer({
       // when the user is on another tab or session.
       if (payload.kind === "notify") {
         toast.info(payload.transcript, {
+          silent: true,
           duration: 6000,
           action: !sameSession && onJumpToSession
             ? {

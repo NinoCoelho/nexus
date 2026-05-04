@@ -34,6 +34,7 @@ export interface ToastOptions {
   detail?: string;
   duration?: number;
   action?: ToastAction;
+  silent?: boolean;
 }
 
 interface Toast {
@@ -225,7 +226,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
-    sounds.notification();
+    if (!opts.silent) sounds.notification();
 
     if (duration > 0) startTimer(id, duration);
     return id;
