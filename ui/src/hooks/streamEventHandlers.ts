@@ -211,18 +211,26 @@ export function applyDoneEvent(
 export function applyLimitReachedEvent(
   setChatStates: SetChatStates,
   key: string,
-  iterations: number,
+  _iterations: number,
 ) {
-  const banner: Message = { role: "assistant", content: "", kind: "limit", limitIterations: iterations, timestamp: new Date() };
   setChatStates((prev) => {
     const next = new Map(prev);
     const cur = next.get(key) ?? emptyState();
-    const msgs = cur.messages.slice();
+    const msgs = [...cur.messages];
     const lastIdx = msgs.length - 1;
     if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-      msgs[lastIdx] = banner;
+      msgs[lastIdx] = {
+        ...msgs[lastIdx],
+        streaming: false,
+        partial: { status: "iteration_limit" },
+      };
     } else {
-      msgs.push(banner);
+      msgs.push({
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        partial: { status: "iteration_limit" },
+      });
     }
     next.set(key, { ...cur, messages: msgs, thinking: false });
     return next;

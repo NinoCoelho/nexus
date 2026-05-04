@@ -43,8 +43,6 @@ export interface Message {
   timeline?: TimelineStep[];
   timestamp: Date;
   streaming?: boolean;
-  kind?: "limit";
-  limitIterations?: number;
   attachments?: { name: string; vaultPath: string }[];
   model?: string;
   /** Backend-assigned position in session.history; only set for messages
@@ -116,8 +114,6 @@ interface Props {
   onInputChange: (v: string) => void;
   onSend: (override?: string | { text?: string; inPlace?: boolean; bypassSecretGuard?: boolean }) => void;
   onStop?: () => void;
-  onContinue?: () => void;
-  onDismissLimit?: () => void;
   onRetryPartial?: (msgIndex: number) => void;
   onContinuePartial?: (msgIndex: number) => void;
   hasModel: boolean | null;
@@ -147,8 +143,6 @@ export default function ChatView({
   onInputChange,
   onSend,
   onStop,
-  onContinue,
-  onDismissLimit,
   onRetryPartial,
   onContinuePartial,
   hasModel,
@@ -199,7 +193,6 @@ export default function ChatView({
   const visible = messages.filter(
     (m) =>
       (m.content ?? "").trim().length > 0 ||
-      m.kind === "limit" ||
       (m.timeline ?? []).length > 0 ||
       m.partial != null,
   );
@@ -236,62 +229,38 @@ export default function ChatView({
         )}
         {visible.map((msg, idx) =>
           msg.role === "assistant" ? (
-            msg.kind === "limit" ? (
-              <div key={idx} ref={setMsgRef(idx)} className="limit-banner">
-                <div className="limit-banner-text">
-                  {t("chat:limit.banner", { limit: msg.limitIterations ?? 16 })}
-                </div>
-                <div className="limit-banner-actions">
-                  <button
-                    className="limit-banner-btn limit-banner-btn-primary"
-                    onClick={onContinue}
-                    type="button"
-                  >
-                    {t("chat:limit.continue")}
-                  </button>
-                  <button
-                    className="limit-banner-btn"
-                    onClick={onDismissLimit}
-                    type="button"
-                  >
-                    {t("chat:limit.stop")}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div key={idx} ref={setMsgRef(idx)}>
-                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0 || msg.reconnecting != null) && (
-                  <AssistantMessage
-                    content={msg.content}
-                    trace={msg.trace}
-                    timeline={msg.timeline}
-                    thinking={msg.thinking}
-                    timestamp={msg.timestamp}
-                    streaming={msg.streaming}
-                    onOpenInVault={onOpenInVault}
-                    model={msg.model}
-                    sessionId={activeSessionId ?? null}
-                    seq={msg.seq}
-                    feedback={msg.feedback ?? null}
-                    pinned={msg.pinned ?? false}
-                    reconnecting={msg.reconnecting}
-                    onFeedbackChange={
-                      onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
-                    }
-                    onPinChange={
-                      onPinChange ? (p) => onPinChange(idx, p) : undefined
-                    }
-                  />
-                )}
-                {msg.partial && !thinking && (
-                  <PartialTurnActions
-                    status={msg.partial.status}
-                    onRetry={onRetryPartial ? () => onRetryPartial(idx) : undefined}
-                    onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
-                  />
-                )}
-              </div>
-            )
+            <div key={idx} ref={setMsgRef(idx)}>
+              {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0 || msg.reconnecting != null) && (
+                <AssistantMessage
+                  content={msg.content}
+                  trace={msg.trace}
+                  timeline={msg.timeline}
+                  thinking={msg.thinking}
+                  timestamp={msg.timestamp}
+                  streaming={msg.streaming}
+                  onOpenInVault={onOpenInVault}
+                  model={msg.model}
+                  sessionId={activeSessionId ?? null}
+                  seq={msg.seq}
+                  feedback={msg.feedback ?? null}
+                  pinned={msg.pinned ?? false}
+                  reconnecting={msg.reconnecting}
+                  onFeedbackChange={
+                    onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
+                  }
+                  onPinChange={
+                    onPinChange ? (p) => onPinChange(idx, p) : undefined
+                  }
+                />
+              )}
+              {msg.partial && !thinking && (
+                <PartialTurnActions
+                  status={msg.partial.status}
+                  onRetry={onRetryPartial ? () => onRetryPartial(idx) : undefined}
+                  onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
+                />
+              )}
+            </div>
           ) : (
             <div key={idx} ref={setMsgRef(idx)} className="user-msg">
               <div className="user-msg-meta">

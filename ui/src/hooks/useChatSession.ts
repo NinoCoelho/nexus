@@ -118,7 +118,7 @@ export function useChatSession(
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
     if (state.thinking) return;
-    const visible = state.messages.filter((m) => (m.content ?? "").trim().length > 0 || m.kind === "limit");
+    const visible = state.messages.filter((m) => (m.content ?? "").trim().length > 0 || m.partial != null || (m.timeline ?? []).length > 0);
     const targetMsg = visible[visibleIdx];
     if (!targetMsg || targetMsg.role !== "user") return;
     const fullIdx = state.messages.indexOf(targetMsg);
@@ -337,23 +337,6 @@ export function useChatSession(
     });
   }, [activeKey, activeSession, pendingSessionId]);
 
-  const dismissLimitBanner = useCallback(() => {
-    setChatStates((prev) => {
-      const next = new Map(prev);
-      const cur = next.get(activeKey);
-      if (!cur) return prev;
-      next.set(activeKey, { ...cur, messages: cur.messages.filter((m) => m.kind !== "limit") });
-      return next;
-    });
-  }, [activeKey]);
-
-  const handleContinue = useCallback(() => {
-    dismissLimitBanner();
-    // Same hidden-seed / in-place trick the partial-turn Continue uses:
-    // the user clicked a button, don't add a "continue" user bubble.
-    void send({ text: `${HIDDEN_SEED_MARKER}continue`, inPlace: true });
-  }, [dismissLimitBanner, send]);
-
   const handleContinuePartial = useCallback((_visibleIdx: number) => {
     // Continue **in place** — no "continue" user bubble. The existing
     // partial assistant keeps its content and timeline; its ``partial``
@@ -366,7 +349,7 @@ export function useChatSession(
     const state = chatStates.get(activeKey) ?? emptyState();
     if (state.thinking) return;
     const visible = state.messages.filter(
-      (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit" || (m.timeline ?? []).length > 0 || m.partial != null,
+      (m) => (m.content ?? "").trim().length > 0 || (m.timeline ?? []).length > 0 || m.partial != null,
     );
     // Walk back from the clicked assistant to find its preceding user message.
     let userVisibleIdx = -1;
@@ -393,9 +376,9 @@ export function useChatSession(
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,
     pendingSessionId, setPendingSessionId, sessionsRevision, setSessionsRevision,
     pendingNewSession,
-    pendingAutoSend, send, handleStop, handleRollback, handleContinue,
+    pendingAutoSend, send, handleStop, handleRollback,
     handleContinuePartial, handleRetryPartial, handleInputChange,
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
-    handleNewChat, loadSessionHistory, patchState, computeSeedModel, dismissLimitBanner,
+    handleNewChat, loadSessionHistory, patchState, computeSeedModel,
   };
 }

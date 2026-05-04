@@ -153,7 +153,7 @@ class _PdfBuilder:
             return
         self._check_space()
         self.pdf.set_font(_B_FONT, "", _BODY_SIZE)
-        self.pdf.multi_cell(0, _BODY_SIZE * 1.6, text, new_x="LMARGIN", new_y="NEXT")
+        self.pdf.multi_cell(0, _BODY_SIZE * 1.0, text, new_x="LMARGIN", new_y="NEXT")
         self.pdf.ln(2)
 
     def _collect_text(self, el) -> str:
@@ -204,10 +204,10 @@ class _PdfBuilder:
             self.pdf.set_font(_B_FONT, "", _BODY_SIZE)
             x = self.pdf.l_margin + indent
             self.pdf.set_x(x)
-            self.pdf.cell(6, _BODY_SIZE * 1.6, bullet, new_x="END")
+            self.pdf.cell(6, _BODY_SIZE * 1.0, bullet, new_x="END")
             self.pdf.multi_cell(
                 self.pdf.w - x - 6 - self.pdf.r_margin,
-                _BODY_SIZE * 1.6,
+                _BODY_SIZE * 1.0,
                 text,
                 new_x="LMARGIN",
                 new_y="NEXT",
@@ -253,7 +253,7 @@ class _PdfBuilder:
         self.pdf.set_text_color(100, 100, 100)
         self.pdf.multi_cell(
             self.pdf.w - x - 8 - self.pdf.r_margin,
-            _BODY_SIZE * 1.6,
+            _BODY_SIZE * 1.0,
             text,
             new_x="LMARGIN",
             new_y="NEXT",
@@ -301,7 +301,7 @@ class _PdfBuilder:
         if text:
             self._check_space()
             self.pdf.set_font(_B_FONT, "", _BODY_SIZE)
-            self.pdf.multi_cell(0, _BODY_SIZE * 1.6, text, new_x="LMARGIN", new_y="NEXT")
+            self.pdf.multi_cell(0, _BODY_SIZE * 1.0, text, new_x="LMARGIN", new_y="NEXT")
             self.pdf.ln(2)
 
 

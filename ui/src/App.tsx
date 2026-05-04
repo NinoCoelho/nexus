@@ -191,8 +191,8 @@ export default function App() {
     activeState, activeSession, setActiveSession, setChatStates,
     sessionsRevision, setSessionsRevision,
     pendingAutoSend, pendingNewSession,
-    send, handleStop, handleRollback, handleContinue,
-    handleContinuePartial, handleRetryPartial, dismissLimitBanner,
+    send, handleStop, handleRollback,
+    handleContinuePartial, handleRetryPartial,
     handleInputChange, handleAttachmentsChange, handleModelChange,
     handleSessionSelect: _handleSessionSelect,
     handleNewChat: _handleNewChat,
@@ -582,7 +582,6 @@ export default function App() {
                   const visible = cur.messages.filter(
                     (m) =>
                       (m.content ?? "").trim().length > 0 ||
-                      m.kind === "limit" ||
                       (m.timeline ?? []).length > 0 ||
                       m.partial != null,
                   );
@@ -605,7 +604,6 @@ export default function App() {
                   const visible = cur.messages.filter(
                     (m) =>
                       (m.content ?? "").trim().length > 0 ||
-                      m.kind === "limit" ||
                       (m.timeline ?? []).length > 0 ||
                       m.partial != null,
                   );
@@ -625,10 +623,8 @@ export default function App() {
               onInputChange={handleInputChange}
               onSend={send}
               onStop={handleStop}
-              onContinue={handleContinue}
               onRetryPartial={handleRetryPartial}
               onContinuePartial={handleContinuePartial}
-              onDismissLimit={dismissLimitBanner}
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenInVault={handleOpenInVault}

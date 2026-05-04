@@ -234,15 +234,11 @@ export interface UseChatSessionResult {
   setPendingSessionId: (id: string) => void;
   sessionsRevision: number;
   setSessionsRevision: React.Dispatch<React.SetStateAction<number>>;
-  /** Placeholder session shown in the sidebar list while the first turn of a
-   * brand-new chat is in flight (before the backend confirms creation). */
   pendingNewSession: SessionSummary | null;
-  /** Ref for pending auto-send: { sid, seed } to fire after activeSession propagates. */
   pendingAutoSend: React.MutableRefObject<{ sid: string; seed: string } | null>;
   send: (override?: unknown) => Promise<void>;
   handleStop: () => void;
   handleRollback: (visibleIdx: number) => Promise<void>;
-  handleContinue: () => void;
   handleContinuePartial: (visibleIdx: number) => void;
   handleRetryPartial: (visibleIdx: number) => Promise<void>;
   handleInputChange: (v: string) => void;
@@ -253,5 +249,4 @@ export interface UseChatSessionResult {
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
   computeSeedModel: () => string;
-  dismissLimitBanner: () => void;
 }

@@ -257,7 +257,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                   className="vault-pill"
                   title={t("vault:editor.exportPdfTitle")}
                 >
-                  {t("vault:editor.exportPdf")}
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2h8l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><polyline points="12 2 12 6 16 6"/><text x="6" y="14.5" fontSize="6" fontFamily="sans-serif" fill="currentColor" stroke="none" fontWeight="600">PDF</text></svg>
                 </a>
               )}
               {tts.available && content && !editMode && (isMarkdown || fileKind === "text") && (
