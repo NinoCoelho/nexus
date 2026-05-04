@@ -54,6 +54,10 @@ dependencies = [
     # (1250 → "one thousand two hundred fifty" / "mil duzentos e cinquenta").
     # Pure Python, ~few hundred KB, supports en + pt + es first-class.
     "num2words>=0.5",
+    # Markdown → HTML conversion for vault PDF export. Pure Python, lightweight.
+    "markdown>=3.5",
+    # PDF generation for vault export (write_html renders styled HTML to PDF).
+    "fpdf2>=2.7",
 ]
 
 [tool.uv.sources]

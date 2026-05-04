@@ -474,6 +474,34 @@ async def vault_csv_schema_endpoint(body: dict) -> dict:
         raise HTTPException(status_code=code, detail=msg)
 
 
+@router.get("/vault/export/pdf")
+async def vault_export_pdf(path: str):
+    """Export a vault markdown file as a styled PDF document.
+
+    Strips frontmatter, converts markdown to HTML (with tables, fenced code,
+    etc.), renders to PDF and streams it back for download.
+    """
+    from fastapi.responses import Response
+    from ...vault_pdf import vault_file_to_pdf
+
+    if not path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="`path` required")
+    try:
+        data = vault_file_to_pdf(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    import os
+    filename = os.path.splitext(os.path.basename(path))[0] + ".pdf"
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)
 async def vault_move(body: dict) -> None:
     from ...vault import move

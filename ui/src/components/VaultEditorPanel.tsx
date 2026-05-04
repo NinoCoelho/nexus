@@ -22,7 +22,7 @@ import DataTableView from "./DataTableView";
 import CsvEditorView from "./CsvEditorView";
 import FilePreview from "./FilePreview";
 import VaultHistoryPanel from "./VaultHistoryPanel";
-import { getVaultFile, getVaultHistoryStatus, putVaultFile, vaultRawUrl } from "../api";
+import { getVaultFile, getVaultHistoryStatus, putVaultFile, vaultExportPdfUrl, vaultRawUrl } from "../api";
 import { useVaultEvents } from "../hooks/useVaultEvents";
 import { useTTS } from "../hooks/useTTS";
 import { classify } from "../fileTypes";
@@ -249,6 +249,16 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
                 >
                   {t("vault:editor.history")}
                 </button>
+              )}
+              {selectedPath && (isMarkdown || fileKind === "text") && (
+                <a
+                  href={vaultExportPdfUrl(selectedPath)}
+                  download
+                  className="vault-pill"
+                  title={t("vault:editor.exportPdfTitle")}
+                >
+                  {t("vault:editor.exportPdf")}
+                </a>
               )}
               {tts.available && content && !editMode && (isMarkdown || fileKind === "text") && (
                 <button

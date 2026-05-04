@@ -150,3 +150,7 @@ export async function getVaultForwardLinks(path: string): Promise<{ path: string
   if (!res.ok) throw new Error(`Vault forward links error: ${res.status}`);
   return res.json() as Promise<{ path: string; forward_links: string[] }>;
 }
+
+export function vaultExportPdfUrl(path: string): string {
+  return `${BASE}/vault/export/pdf?path=${encodeURIComponent(path)}`;
+}
