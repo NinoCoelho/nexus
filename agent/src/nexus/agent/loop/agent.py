@@ -389,6 +389,26 @@ class Agent:
                             len(compacted_history if report.compacted > 0 else history or []),
                             len(stripped_history),
                         )
+            final_est = estimate_tokens([_to_loom_message(m) for m in stripped_history])
+            final_zone = classify_zone(final_est, effective_window)
+            if final_zone == "red" and self._sessions is not None and session_id:
+                try:
+                    child = self._sessions.create_child(
+                        parent_session_id=session_id,
+                        title="Auto-forked session",
+                        hidden=False,
+                    )
+                    summary_content = "\n".join(
+                        (m.content or "")[:500] for m in stripped_history[:5]
+                        if m.role in (Role.USER, Role.SYSTEM)
+                    )
+                    self._sessions.get_or_create(child.id, context=summary_content[:2000])
+                    log.warning(
+                        "auto-fork: session %s exceeded red zone, created child %s",
+                        session_id, child.id,
+                    )
+                except Exception:
+                    log.debug("auto-fork failed", exc_info=True)
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
 
