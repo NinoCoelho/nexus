@@ -72,6 +72,7 @@ function emptyState(): WizardState {
     models: [],
     testResult: null,
     oauthCredentialRef: null,
+    selectedCredentialRef: null,
   };
 }
 
@@ -140,6 +141,7 @@ export default function WizardModal({
             models: editPrefill.models,
             testResult: null,
             oauthCredentialRef: editPrefill.credentialRef,
+            selectedCredentialRef: null,
           });
         }
       })
@@ -181,6 +183,7 @@ export default function WizardModal({
         models: [],
         testResult: null,
         oauthCredentialRef: null,
+        selectedCredentialRef: null,
       }));
     },
     [],
@@ -226,6 +229,7 @@ export default function WizardModal({
           models: [],
           testResult: null,
           oauthCredentialRef: null,
+          selectedCredentialRef: null,
         };
       });
     },
@@ -313,8 +317,14 @@ export default function WizardModal({
   );
 
   const handleCredentialsChange = useCallback(
-    (values: Record<string, string>, baseUrl: string) => {
-      setState((prev) => ({ ...prev, values, baseUrl, testResult: null }));
+    (values: Record<string, string>, baseUrl: string, selectedCredentialRef: string | null) => {
+      setState((prev) => ({
+        ...prev,
+        values,
+        baseUrl,
+        testResult: null,
+        selectedCredentialRef,
+      }));
     },
     [],
   );
@@ -366,14 +376,12 @@ export default function WizardModal({
         }
       }
     } else if (authMethod.id === "api") {
-      // Generic openai-compat splits the credential into name + value
-      // prompts; everyone else uses the prompt name AS the credential
-      // store name.
-      if (s.values.credential_name && s.values.credential_value) {
+      if (s.selectedCredentialRef) {
+        credentialRef = s.selectedCredentialRef;
+      } else if (s.values.credential_name && s.values.credential_value) {
         credentialRef = s.values.credential_name;
         credentials[s.values.credential_name] = s.values.credential_value;
       } else {
-        // Find the (single) secret prompt in the auth method and bind it.
         const secretPrompt = authMethod.prompts.find((p) => p.secret);
         if (secretPrompt) {
           credentialRef = secretPrompt.name;
@@ -381,7 +389,6 @@ export default function WizardModal({
           if (v) credentials[secretPrompt.name] = v;
         }
       }
-      // base_url override carried in prompts (rare for api flow).
       if (s.values.base_url) baseUrl = s.values.base_url;
     }
 
@@ -623,6 +630,7 @@ export default function WizardModal({
               initialValues={state.values}
               initialBaseUrl={state.baseUrl}
               editing={mode === "edit"}
+              selectedCredentialRef={state.selectedCredentialRef}
               onChange={handleCredentialsChange}
               onTest={handleTest}
               testResult={state.testResult}

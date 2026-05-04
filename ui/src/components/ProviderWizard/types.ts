@@ -37,6 +37,10 @@ export interface WizardState {
   /** Set after the OAuth flow completes — the credential name in the
    *  secret store that the wizard then binds via ``oauth_token_ref``. */
   oauthCredentialRef: string | null;
+  /** When the user picks an existing credential from the store instead of
+   *  entering a new one, this holds the chosen credential name. The wizard
+   *  binds the provider to it without writing any new secret. */
+  selectedCredentialRef: string | null;
 }
 
 export interface WizardEditPrefill {
