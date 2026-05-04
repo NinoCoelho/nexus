@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..agent.context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW
 from ..agent.llm import ToolSpec
 from ..agent.loop.overflow import estimate_tokens, _DEFAULT_FALLBACK_WINDOW
 from ..agent.loop.zones import classify_zone
@@ -19,8 +20,10 @@ CONTEXT_STATUS_TOOL = ToolSpec(
 )
 
 
-def handle_context_status(args: dict[str, Any], *, history: list[Any] | None = None, context_window: int = 0) -> str:
-    msgs = history or []
+def handle_context_status(args: dict[str, Any]) -> str:
+    history = CURRENT_HISTORY.get([])
+    context_window = CURRENT_CONTEXT_WINDOW.get(0)
+    msgs = history
     est = estimate_tokens(msgs)
     effective_window = context_window if context_window > 0 else _DEFAULT_FALLBACK_WINDOW
     zone = classify_zone(est, effective_window)
@@ -72,10 +75,11 @@ FORK_SESSION_TOOL = ToolSpec(
 )
 
 
-def handle_fork_session(args: dict[str, Any], *, history: list[Any] | None = None) -> str:
+def handle_fork_session(args: dict[str, Any]) -> str:
     title = args.get("title", "Continued session")
     summary_focus = args.get("summary_focus", "")
-    msgs = history or []
+    history = CURRENT_HISTORY.get([])
+    msgs = history
 
     goals = []
     decisions = []

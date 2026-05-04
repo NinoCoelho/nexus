@@ -351,19 +351,22 @@ When even summarization isn't enough, auto-fork as a last resort.
 
 ## Execution Order
 
-| Phase | Depends on | Est. effort | Impact |
-|-------|-----------|-------------|--------|
-| 1: Error log table | — | Small | Observability |
-| 2: Fallback ctx protection | — | Small | Prevents the exact failure shown in the log |
-| 3: Auto-compaction | Phase 2 | Medium | Highest token savings |
-| 4: Summarization | Phase 3 | Large | Long-session resilience |
-| 5: Agent awareness | Phase 2 | Medium | Preventive behavior |
-| 6: 429 Continue Later | Phase 1 | Medium | Rate-limit resilience |
-| 7: Auto-fork | Phase 4 | Medium | Safety net |
+| Phase | Depends on | Est. effort | Impact | Status |
+|-------|-----------|-------------|--------|--------|
+| 1: Error log table | — | Small | Observability | **Done** |
+| 2: Fallback ctx protection | — | Small | Prevents the exact failure shown in the log | **Done** |
+| 3: Auto-compaction | Phase 2 | Medium | Highest token savings | **Done** |
+| 4: Summarization | Phase 3 | Large | Long-session resilience | **Done** |
+| 5: Agent awareness | Phase 2 | Medium | Preventive behavior | **Done** |
+| 6: 429 Continue Later | Phase 1 | Medium | Rate-limit resilience | **Done** |
+| 7: Auto-fork | Phase 4 | Medium | Safety net | **Done** |
 
-Recommended start: **Phase 1 + Phase 2** together (small, immediate protection),
-then **Phase 3** (biggest impact), then Phase 5 (can ship before Phase 4),
-then Phase 4, then Phase 6 + 7.
+All phases implemented in 4 commits on `feat/skill-wizard`:
+
+1. `4f06f52` — Phases 1-3 + 5
+2. `18a9ec7` — Phases 4 + 6
+3. `90c1561` — Phase 7
+4. `4b3d799` — Bugfixes: ContextVar wiring for tools, `[rate_limited]` strip
 
 ---
 

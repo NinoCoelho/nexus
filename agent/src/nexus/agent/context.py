@@ -36,3 +36,17 @@ from loom.context import (  # noqa: F401 — re-export
 DISPATCH_CHAIN: ContextVar[tuple[str, ...]] = ContextVar(
     "DISPATCH_CHAIN", default=()
 )
+
+# Snapshot of the session history passed to the current turn, as
+# Nexus ChatMessage objects. Set by the agent loop before entering
+# loom's turn, read by tools like context_status and fork_session
+# that need to know the current context size. Empty list by default
+# (tests, sub-agents).
+CURRENT_HISTORY: ContextVar[list] = ContextVar(
+    "CURRENT_HISTORY", default=[]
+)
+
+# The effective context window for the current turn. 0 = unknown.
+CURRENT_CONTEXT_WINDOW: ContextVar[int] = ContextVar(
+    "CURRENT_CONTEXT_WINDOW", default=0
+)

@@ -53,6 +53,7 @@ _DROP_ASSISTANT_PLACEHOLDERS = (
     "[crashed]",
     "[interrupted]",
     "[cancelled]",
+    "[rate_limited]",
 )
 
 
@@ -411,6 +412,10 @@ class Agent:
                     log.debug("auto-fork failed", exc_info=True)
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
+
+        from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW
+        CURRENT_HISTORY.set(stripped_history)
+        CURRENT_CONTEXT_WINDOW.set(effective_window)
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
