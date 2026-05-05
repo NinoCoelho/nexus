@@ -18,6 +18,8 @@ interface Props {
   onRemove: (widgetId: string) => void;
   onResize: (widget: DashboardWidget, size: WidgetSize) => void | Promise<void>;
   onDesign?: (widget: DashboardWidget) => void;
+  onSqlEdit?: (widget: DashboardWidget) => void;
+  onAIFix?: (widget: DashboardWidget, error: string) => void;
 }
 
 const VIZ_DEFAULT_SIZE: Record<string, WidgetSize> = {
@@ -87,12 +89,13 @@ function parseWidgetContent(raw: string): WidgetQueryResult | null {
   return null;
 }
 
-export default function WidgetGrid({ folder, widgets, onAddWizard, onEdit, onRemove, onResize, onDesign }: Props) {
+export default function WidgetGrid({ folder, widgets, onAddWizard, onEdit, onRemove, onResize, onDesign, onSqlEdit, onAIFix }: Props) {
   const toast = useToast();
   const [states, setStates] = useState<Record<string, WidgetState>>({});
   const queueTail = useRef<Promise<void>>(Promise.resolve());
   const [queueLength, setQueueLength] = useState(0);
   const dailyFiredFor = useRef<string>("");
+  const autoExecutedIds = useRef<Set<string>>(new Set());
   const widgetsRef = useRef(widgets);
   widgetsRef.current = widgets;
 
@@ -179,6 +182,21 @@ export default function WidgetGrid({ folder, widgets, onAddWizard, onEdit, onRem
     for (const w of stale) enqueueExecute(w);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, enqueueExecute]);
+
+  useEffect(() => {
+    const widgetIds = new Set(widgets.map((w) => w.id));
+    for (const id of autoExecutedIds.current) {
+      if (!widgetIds.has(id)) autoExecutedIds.current.delete(id);
+    }
+    for (const w of widgets) {
+      const st = states[w.id];
+      if (!st || st.result !== null || st.status !== "idle") continue;
+      if (autoExecutedIds.current.has(w.id)) continue;
+      if (!w.query) continue;
+      autoExecutedIds.current.add(w.id);
+      enqueueExecute(w);
+    }
+  }, [states, widgets, enqueueExecute]);
 
   const refreshAll = useCallback(() => {
     for (const w of widgets) enqueueExecute(w);
@@ -270,7 +288,18 @@ export default function WidgetGrid({ folder, widgets, onAddWizard, onEdit, onRem
                         title="Redesign with AI"
                         aria-label="Redesign with AI"
                       >
-                        \u2728
+                        {"\u2728"}
+                      </button>
+                    )}
+                    {onSqlEdit && (
+                      <button
+                        type="button"
+                        className="data-dash-widget-btn"
+                        onClick={() => onSqlEdit(w)}
+                        title="Edit SQL"
+                        aria-label="Edit SQL"
+                      >
+                        {"\u2699"}
                       </button>
                     )}
                     <button
@@ -279,26 +308,27 @@ export default function WidgetGrid({ folder, widgets, onAddWizard, onEdit, onRem
                       onClick={() => onEdit(w)}
                       title="Edit widget"
                       aria-label="Edit widget"
-                    >
-                      \u270E
-                    </button>
+                      >
+                        {"\u270E"}
+                      </button>
                     <button
                       type="button"
                       className="data-dash-widget-btn"
                       onClick={() => onRemove(w.id)}
                       title="Remove widget"
                     >
-                      \u00D7
+                      {"\u00D7"}
                     </button>
                   </div>
                 </header>
                 <div className="data-dash-widget-body">
                   {failed ? (
-                    <WidgetErrorCard
-                      error={state.error ?? "Query execution failed"}
-                      onRetry={() => enqueueExecute(w)}
-                      onEdit={() => onEdit(w)}
-                    />
+                     <WidgetErrorCard
+                       error={state.error ?? "Query execution failed"}
+                       onRetry={() => enqueueExecute(w)}
+                       onSqlEdit={onSqlEdit ? () => onSqlEdit(w) : undefined}
+                       onAIFix={onAIFix ? () => onAIFix(w, state.error ?? "Query execution failed") : undefined}
+                     />
                   ) : state.result && state.result.rows.length > 0 ? (
                     <WidgetVizRenderer
                       vizType={w.viz_type}
@@ -308,9 +338,9 @@ export default function WidgetGrid({ folder, widgets, onAddWizard, onEdit, onRem
                   ) : state.result && state.result.rows.length === 0 ? (
                     <div className="data-dash-hint">Query returned 0 rows.</div>
                   ) : running ? (
-                    <div className="data-dash-hint">Running first execution\u2026</div>
+                    <div className="data-dash-hint">{"Running first execution\u2026"}</div>
                   ) : (
-                    <div className="data-dash-hint">Not executed yet \u2014 click \u21BB.</div>
+                    <div className="data-dash-hint">{"Not executed yet \u2014 click \u21BB."}</div>
                   )}
                 </div>
               </article>
@@ -344,14 +374,14 @@ function WidgetVizRenderer({
 interface ErrorCardProps {
   error: string;
   onRetry: () => void;
-  onEdit: () => void;
+  onSqlEdit?: () => void;
+  onAIFix?: () => void;
 }
 
-function WidgetErrorCard({ error, onRetry, onEdit }: ErrorCardProps) {
+function WidgetErrorCard({ error: _error, onRetry, onSqlEdit, onAIFix }: ErrorCardProps) {
   return (
     <div className="widget-error-card">
-      <div className="widget-error-card-msg">Query execution failed.</div>
-      <div className="widget-error-card-detail">{error}</div>
+      <div className="widget-error-card-msg">Something went wrong with this widget.</div>
       <div className="widget-error-card-actions">
         <button
           type="button"
@@ -359,16 +389,28 @@ function WidgetErrorCard({ error, onRetry, onEdit }: ErrorCardProps) {
           onClick={onRetry}
           title="Re-execute the widget query"
         >
-          \u21BB Retry
+          {"\u21BB Retry"}
         </button>
-        <button
-          type="button"
-          className="data-dash-action-btn"
-          onClick={onEdit}
-          title="Edit the widget query"
-        >
-          \u270E Edit query
-        </button>
+        {onSqlEdit && (
+          <button
+            type="button"
+            className="data-dash-action-btn"
+            onClick={onSqlEdit}
+            title="Edit the SQL query manually"
+          >
+            {"\u2699 Edit query"}
+          </button>
+        )}
+        {onAIFix && (
+          <button
+            type="button"
+            className="data-dash-action-btn"
+            onClick={onAIFix}
+            title="Let AI fix the query"
+          >
+            {"\u2728 Ask AI to fix"}
+          </button>
+        )}
       </div>
     </div>
   );

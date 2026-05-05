@@ -702,3 +702,46 @@
   color: var(--fg-muted, rgba(255, 255, 255, 0.55));
   user-select: none;
 }
+
+.widget-sql-editor-textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 10px 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg-deep, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  resize: vertical;
+  outline: none;
+  tab-size: 2;
+}
+.widget-sql-editor-textarea:focus {
+  border-color: var(--accent, rgba(99, 144, 255, 0.5));
+}
+.widget-sql-editor-error {
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: rgba(255, 80, 80, 0.9);
+  background: rgba(255, 80, 80, 0.06);
+  border: 1px solid rgba(255, 80, 80, 0.2);
+  border-radius: 4px;
+  word-break: break-word;
+}
+.widget-sql-editor-preview {
+  margin-top: 4px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 260px;
+}
+.widget-sql-editor-preview-header {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--fg-muted, rgba(255, 255, 255, 0.55));
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}

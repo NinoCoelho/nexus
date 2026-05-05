@@ -58,6 +58,8 @@ export interface DashboardWidget {
   last_refreshed_at: string | null;
   size?: WidgetSize;
   order?: number;
+  /** When true, the widget was manually edited and AI auto-fix is skipped. */
+  user_defined?: boolean;
 }
 
 export interface WidgetQueryResult {

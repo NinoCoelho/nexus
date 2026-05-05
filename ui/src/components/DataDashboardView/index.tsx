@@ -53,6 +53,7 @@ import DashboardWizard from "./DashboardWizard";
 import PlanReviewModal from "./PlanReviewModal";
 import DataChatBubble, { type DataChatBubbleHandle } from "../DataChatBubble";
 import CardActivityModal from "../CardActivityModal";
+import WidgetSQLEditor from "./WidgetSQLEditor";
 import "./DataDashboardView.css";
 
 interface Props {
@@ -78,6 +79,8 @@ export default function DataDashboardView({
   const [showWidgetWizard, setShowWidgetWizard] = useState(false);
   const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
   const [showOpWizard, setShowOpWizard] = useState(false);
+  const [sqlEditWidget, setSqlEditWidget] = useState<DashboardWidget | null>(null);
+  const [aiFixContext, setAiFixContext] = useState<{ widget: DashboardWidget; error: string } | null>(null);
   // Active plan-review for an op marked ``preview: true`` — populated when
   // the user clicks the chip and we kick a plan-only run instead of the
   // real one. Cleared on approve / cancel.
@@ -322,6 +325,17 @@ export default function DataDashboardView({
     })();
   }, [folder, toast]);
 
+  const handleSqlEditSave = useCallback(async (widget: DashboardWidget) => {
+    try {
+      const next = await addWidget(folder, widget);
+      setDashboard(next);
+      setSqlEditWidget(null);
+      toast.success(`Saved "${widget.title}"`);
+    } catch (e) {
+      toast.error("Couldn't save widget", { detail: (e as Error).message });
+    }
+  }, [folder, toast]);
+
   const handleResizeWidget = useCallback(async (widget: DashboardWidget, size: "sm" | "md" | "lg") => {
     if (widget.size === size) return;
     // Optimistic local update so the click feels instant — server upsert
@@ -503,6 +517,8 @@ export default function DataDashboardView({
           }}
           onResize={handleResizeWidget}
           onDesign={handleDesignWidget}
+          onSqlEdit={(w) => setSqlEditWidget(w)}
+          onAIFix={(w, error) => setAiFixContext({ widget: w, error })}
         />
       </section>
 
@@ -531,7 +547,7 @@ export default function DataDashboardView({
         />
       )}
 
-      {(showWidgetWizard || editingWidget) && (
+      {(showWidgetWizard || editingWidget) && !aiFixContext && (
         <DashboardWizard
           folder={folder}
           kind="widget"
@@ -543,6 +559,34 @@ export default function DataDashboardView({
             setShowWidgetWizard(false);
             setEditingWidget(null);
           }}
+        />
+      )}
+
+      {aiFixContext && (
+        <DashboardWizard
+          folder={folder}
+          kind="widget"
+          initialGoal={
+            `Fix the widget "${aiFixContext.widget.title}". The query failed with this error:\n` +
+            `${aiFixContext.error}\n\n` +
+            `Current query:\n${aiFixContext.widget.query}\n\n` +
+            `Please output a corrected nexus-widget-proposal with a working SQL query. ` +
+            `Keep the same viz_type ("${aiFixContext.widget.viz_type}") and widget id ("${aiFixContext.widget.id}").`
+          }
+          onApproveWidget={async (w) => {
+            await handleEditWidget(w);
+            setAiFixContext(null);
+          }}
+          onCancel={() => setAiFixContext(null)}
+        />
+      )}
+
+      {sqlEditWidget && (
+        <WidgetSQLEditor
+          folder={folder}
+          widget={sqlEditWidget}
+          onClose={() => setSqlEditWidget(null)}
+          onSaved={handleSqlEditSave}
         />
       )}
 

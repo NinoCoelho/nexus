@@ -1,15 +1,13 @@
-"""Per-widget result storage as vault markdown files.
+"""Per-widget result storage as vault files.
 
 Each widget configured on a database dashboard (`_data.md` → `widgets`) has a
 companion result file at::
 
-    <folder>/_widgets/<widget_id>.md
+    <folder>/_widgets/<widget_id>.json
 
-The file holds the latest agent-generated result for the widget — a
-``nexus-chart`` fence for ``kind: chart``, terse markdown for ``kind: report``,
-a single number for ``kind: kpi``, a bulleted list for ``kind: list``. The
-file is overwritten on every refresh; we don't keep history (history is what
-the chat is for).
+The file holds the latest query execution result — a JSON object with
+``{columns, rows, row_count}``. The file is overwritten on every execute;
+we don't keep history (history is what the chat is for).
 
 Storing the body in a vault file means the user can browse, copy, or open
 the artifact like any other vault note. Deleting the parent database via
@@ -33,12 +31,12 @@ def widget_path(folder: str, widget_id: str) -> str:
     if not _SLUG_RE.match(widget_id):
         raise ValueError(f"widget_id {widget_id!r} must be a slug")
     folder = (folder or "").strip("/")
-    base = f"{WIDGETS_SUBDIR}/{widget_id}.md"
+    base = f"{WIDGETS_SUBDIR}/{widget_id}.json"
     return f"{folder}/{base}" if folder else base
 
 
 def read_widget_result(folder: str, widget_id: str) -> str:
-    """Return the widget's current result body, or ``""`` if not yet refreshed."""
+    """Return the widget's current result body, or ``""`` if not yet executed."""
     try:
         file = vault.read_file(widget_path(folder, widget_id))
     except (FileNotFoundError, OSError):
@@ -49,8 +47,7 @@ def read_widget_result(folder: str, widget_id: str) -> str:
 def write_widget_result(folder: str, widget_id: str, body: str) -> None:
     """Overwrite the widget's result file with ``body`` verbatim.
 
-    Caller is responsible for keeping ``body`` aligned with the widget's
-    ``kind`` (e.g. a single ``nexus-chart`` fence for chart widgets).
+    Caller is responsible for keeping ``body`` as valid JSON.
     """
     vault.write_file(widget_path(folder, widget_id), body or "")
 

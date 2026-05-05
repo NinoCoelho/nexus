@@ -118,9 +118,18 @@ DASHBOARD_MANAGE_TOOL = ToolSpec(
 )
 
 
+def _execute_widget_sql(folder: str, widget: dict[str, Any]) -> dict[str, Any] | None:
+    from ..widget_query import execute_widget_query
+
+    query = widget.get("query", "")
+    if not isinstance(query, str) or not query.strip():
+        return None
+    return execute_widget_query(folder, query, query_tables=widget.get("query_tables"))
+
+
 def handle_dashboard_tool(args: dict[str, Any]) -> str:
     """Dispatch the requested dashboard action and return serialized JSON."""
-    from .. import vault_dashboard
+    from .. import vault_dashboard, vault_widgets
 
     action = args.get("action", "")
     folder = args.get("folder", "")
@@ -157,14 +166,40 @@ def handle_dashboard_tool(args: dict[str, Any]) -> str:
             if not isinstance(widgets, list):
                 return json.dumps({"ok": False, "error": "`widgets` (list) required"})
             patched = vault_dashboard.patch_dashboard(folder, {"widgets": widgets})
-            return json.dumps({"ok": True, "dashboard": patched})
+            errors = {}
+            for w in widgets:
+                if not isinstance(w, dict):
+                    continue
+                result = _execute_widget_sql(folder, w)
+                if result and result.get("error"):
+                    errors[w.get("id", "?")] = result["error"]
+                elif result:
+                    wid = w.get("id", "")
+                    if wid:
+                        vault_widgets.write_widget_result(folder, wid, json.dumps(result))
+            resp: dict[str, Any] = {"ok": True, "dashboard": patched}
+            if errors:
+                resp["sql_errors"] = errors
+            return json.dumps(resp)
 
         if action == "add_widget":
             widget = args.get("widget")
             if not isinstance(widget, dict):
                 return json.dumps({"ok": False, "error": "`widget` (object) required"})
             patched = vault_dashboard.upsert_widget(folder, widget)
-            return json.dumps({"ok": True, "dashboard": patched})
+            result = _execute_widget_sql(folder, widget)
+            resp = {"ok": True, "dashboard": patched}
+            if result and result.get("error"):
+                resp["sql_error"] = result["error"]
+            elif result:
+                wid = widget.get("id", "")
+                if wid:
+                    vault_widgets.write_widget_result(folder, wid, json.dumps(result))
+                resp["execution_preview"] = {
+                    "row_count": result.get("row_count", 0),
+                    "columns": result.get("columns", []),
+                }
+            return json.dumps(resp)
 
         if action == "remove_widget":
             widget_id = args.get("widget_id", "")

@@ -25,6 +25,7 @@ interface Props {
   folder: string;
   kind: WizardKind;
   editing?: DashboardWidget | null;
+  initialGoal?: string | null;
   onApproveWidget?: (widget: DashboardWidget) => void | Promise<void>;
   onApproveOperation?: (op: DashboardOperation) => void | Promise<void>;
   onCancel: () => void;
@@ -161,6 +162,7 @@ export default function DashboardWizard({
   folder,
   kind,
   editing,
+  initialGoal,
   onApproveWidget,
   onApproveOperation,
   onCancel,
@@ -183,6 +185,7 @@ export default function DashboardWizard({
   const retryCountRef = useRef(0);
   const [autoRetrying, setAutoRetrying] = useState(false);
   const lastWidgetProposalRef = useRef<WidgetProposal | null>(null);
+  const initialGoalSent = useRef(false);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -293,6 +296,13 @@ export default function DashboardWizard({
       void sendFollowup(text);
     }
   }, [draft, busy, sessionId, sendInitialGoal, sendFollowup]);
+
+  useEffect(() => {
+    if (initialGoal && !initialGoalSent.current) {
+      initialGoalSent.current = true;
+      void sendInitialGoal(initialGoal);
+    }
+  }, [initialGoal, sendInitialGoal]);
 
   type Proposal =
     | { kind: "widget"; widget: WidgetProposal; prose: string }
