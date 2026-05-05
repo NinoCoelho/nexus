@@ -216,7 +216,7 @@ async def test_completion_ack_uses_portuguese_prompt_for_portuguese_input(
     trigger = _AckTrigger(
         user_text="Resuma os principais pontos do relatório financeiro.",
         session_id="sess-1",
-        full_reply="Done — saved a summary to your vault.",
+        full_reply="Done — saved a summary to your vault. Want me to schedule a daily run for you?",
     )
     await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
     assert len(seen_prompts) == 1
@@ -331,7 +331,7 @@ async def test_completion_ack_uses_ui_language_when_user_text_empty(
     trigger = _AckTrigger(
         user_text="",  # empty — this is the bug we're fixing
         session_id="sess-1",
-        full_reply="Done. Saved to vault.",
+        full_reply="Done. Saved to vault. Want me to schedule a daily run for you?",
     )
     await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
     # The chosen prompt should be the Portuguese one despite empty user_text.
@@ -356,3 +356,59 @@ async def test_start_ack_falls_back_to_template_when_llm_empty(
     _, _, data = store.published[0]
     # Hardcoded PT template is "Tô olhando isso, um momento."
     assert "olhando" in data["transcript"].lower()
+
+
+async def test_completion_ack_skips_entirely_for_empty_reply() -> None:
+    """Empty full_reply → no LLM call, no audio, no event published."""
+    store = _StubStore()
+    cfg = default_config()
+
+    chat_calls = 0
+    async def _counting_chat(messages, *, model=None, max_tokens=0, extra_payload=None):
+        nonlocal chat_calls
+        chat_calls += 1
+        from nexus.agent.llm import ChatResponse, StopReason
+        return ChatResponse(content="should not be used", tool_calls=[],
+                            stop_reason=StopReason.STOP, usage={})
+
+    agent = _StubAgent()
+    agent.provider.chat = _counting_chat  # type: ignore[assignment]
+    trigger = _AckTrigger(
+        user_text="what is 2+2?",
+        session_id="sess-1",
+        full_reply="",
+    )
+    await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
+    assert chat_calls == 0
+    assert len(store.published) == 0
+
+
+async def test_completion_ack_speaks_short_reply_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replies ≤10 words are cleaned and published without LLM summarization."""
+    _patch_synth_to_silent(monkeypatch)
+    store = _StubStore()
+    cfg = default_config()
+
+    chat_calls = 0
+    async def _counting_chat(messages, *, model=None, max_tokens=0, extra_payload=None):
+        nonlocal chat_calls
+        chat_calls += 1
+        from nexus.agent.llm import ChatResponse, StopReason
+        return ChatResponse(content="should not be used", tool_calls=[],
+                            stop_reason=StopReason.STOP, usage={})
+
+    agent = _StubAgent()
+    agent.provider.chat = _counting_chat  # type: ignore[assignment]
+    trigger = _AckTrigger(
+        user_text="what is 2+2?",
+        session_id="sess-1",
+        full_reply="**The answer is 42.**",
+    )
+    await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
+    assert chat_calls == 0
+    assert len(store.published) == 1
+    _, _, data = store.published[0]
+    # Markdown stripped, spoken directly.
+    assert data["transcript"] == "The answer is 42."

@@ -363,6 +363,21 @@ async def emit_completion_ack(
             trigger.session_id, cfg.tts.enabled, cfg.tts.ack_enabled,
         )
         return
+    cleaned_reply = _truncate_for_speech(trigger.full_reply, max_words=999)
+    if not cleaned_reply:
+        log.info("[voice_ack/complete] empty reply — skipping sess=%s",
+                 trigger.session_id)
+        return
+
+    if len(cleaned_reply.split()) <= 10:
+        log.info("[voice_ack/complete] short reply (%d words) — speaking directly sess=%s",
+                 len(cleaned_reply.split()), trigger.session_id)
+        await _publish(
+            store=store, session_id=trigger.session_id,
+            kind="complete", transcript=cleaned_reply, cfg=cfg,
+        )
+        return
+
     lang = _ack_lang(trigger, cfg)
     log.info("[voice_ack/complete] firing sess=%s lang=%s reply_chars=%d",
              trigger.session_id, lang, len(trigger.full_reply))
