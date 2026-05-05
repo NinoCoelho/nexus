@@ -214,15 +214,18 @@ async def chat_stream_route(
         )
 
         tts_cfg = load_config().tts
+        # ack_mode="always" → fire on every turn; "voice" → voice-input only.
+        ack_wanted = is_voice or tts_cfg.ack_mode == "always"
         ack_active = (
-            is_voice
+            ack_wanted
             and tts_cfg.enabled
             and tts_cfg.ack_enabled
             and getattr(a, "_provider_registry", None) is not None
         )
         log.warning(
-            "[chat_stream] voice_ack ack_active=%s (is_voice=%s tts.enabled=%s ack_enabled=%s registry=%s)",
-            ack_active, is_voice, tts_cfg.enabled, tts_cfg.ack_enabled,
+            "[chat_stream] voice_ack ack_active=%s (is_voice=%s ack_wanted=%s ack_mode=%s tts.enabled=%s ack_enabled=%s registry=%s)",
+            ack_active, is_voice, ack_wanted, tts_cfg.ack_mode,
+            tts_cfg.enabled, tts_cfg.ack_enabled,
             getattr(a, "_provider_registry", None) is not None,
         )
 

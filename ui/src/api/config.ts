@@ -56,6 +56,9 @@ export interface TTSConfig {
   enabled: boolean;
   /** Speak start + completion acks on voice-input turns. */
   ack_enabled: boolean;
+  /** When "voice", acks only fire on voice turns. When "always", the agent
+   * speaks its completion summary on every turn (hands-free / accessibility). */
+  ack_mode: "voice" | "always";
   /** Where the bundled Piper voices live on disk. Empty = ~/.nexus/tts/piper. */
   voices_dir: string;
 }

@@ -1,7 +1,7 @@
 """Local Piper TTS engine — the only engine Nexus ships.
 
 Voice files live under ``~/.nexus/tts/piper/`` (or ``cfg.voices_dir`` when
-set). The two default voices (``en_US-amy-medium``, ``pt_BR-faber-medium``)
+set). The two default voices (``en_US-bryce-medium``, ``pt_BR-faber-medium``)
 auto-download on first daemon start via ``voice_setup.bootstrap_default_voices``;
 this module also lazily downloads any *other* voice the user references
 manually.

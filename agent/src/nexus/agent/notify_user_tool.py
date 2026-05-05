@@ -54,7 +54,7 @@ class NotifyUserHandler:
 
         # input_mode for the active turn lives in store._latest_input_mode
         # (set by chat_stream.py on every POST). Voice → speak the
-        # message; text → toast only.
+        # message; text → toast only (unless ack_mode is "always").
         #
         # Sessions started via vault_dispatch / kanban-card spawn don't
         # go through chat_stream, so the per-session map has no entry.
@@ -72,12 +72,21 @@ class NotifyUserHandler:
             input_mode = getattr(store, "_last_global_input_mode", None) or "text"
             source = "global-fallback" if input_mode != "text" else "default"
 
+        # Check ack_mode: when "always", speak even on text input.
+        ack_mode = "voice"
+        try:
+            from ..config_file import load as load_config
+            ack_mode = load_config().tts.ack_mode
+        except Exception:  # noqa: BLE001
+            pass
+        speak = input_mode == "voice" or ack_mode == "always"
+
         # WARNING-level so it survives the daemon's default log filter and
         # the user can grep ``~/.nexus/nexus-daemon.log`` to verify the
         # detected mode when "toast appeared but no audio" happens.
         log.warning(
-            "[notify_user] invoke sess=%s input_mode=%s source=%s msg=%r",
-            session_id, input_mode, source, message[:80],
+            "[notify_user] invoke sess=%s input_mode=%s speak=%s ack_mode=%s source=%s msg=%r",
+            session_id, input_mode, speak, ack_mode, source, message[:80],
         )
 
         # Fire-and-forget: don't keep the agent waiting on Piper synth.
@@ -88,7 +97,7 @@ class NotifyUserHandler:
             store=store,
             session_id=session_id,
             message=message,
-            speak=(input_mode == "voice"),
+            speak=speak,
         ))
         return json.dumps({"ok": True})
 

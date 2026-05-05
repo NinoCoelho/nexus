@@ -146,6 +146,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         "tts": {
             "enabled": cfg.tts.enabled,
             "ack_enabled": cfg.tts.ack_enabled,
+            "ack_mode": cfg.tts.ack_mode,
             "voices_dir": cfg.tts.voices_dir,
         },
         "vault": {

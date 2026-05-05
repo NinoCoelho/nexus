@@ -218,7 +218,7 @@ class TTSConfig(BaseModel):
     """Voice output settings — intentionally minimal.
 
     The engine is fixed (bundled Piper). The two default voices
-    (en_US-amy-medium, pt_BR-faber-medium) auto-download on first daemon
+    (en_US-bryce-medium, pt_BR-faber-medium) auto-download on first daemon
     start. Language is auto-detected per utterance via ``langdetect``.
     The ack model is the agent's main default model — no separate pick.
     """
@@ -228,6 +228,10 @@ class TTSConfig(BaseModel):
     # Speak short feedback when a turn was started from a *voice* message
     # (start + completion). Always-on when enabled — no per-kind toggles.
     ack_enabled: bool = True
+    # When "voice", acks only fire on voice-input turns (classic behaviour).
+    # When "always", the agent speaks its completion summary on every turn,
+    # even when the user typed — useful for hands-free / accessibility use.
+    ack_mode: Literal["voice", "always"] = "voice"
     # Where the downloaded ONNX voice files live. Empty → ~/.nexus/tts/piper/.
     voices_dir: str = ""
 

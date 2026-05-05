@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 # it on startup, and (b) shipping the .onnx + .onnx.json under
 # ``~/.nexus/tts/piper/``.
 DEFAULT_VOICES: dict[str, str] = {
-    "en": "en_US-amy-medium",
+    "en": "en_US-bryce-medium",
     "pt": "pt_BR-faber-medium",
 }
 _FALLBACK_VOICE = DEFAULT_VOICES["en"]
