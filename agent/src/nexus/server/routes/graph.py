@@ -507,7 +507,7 @@ async def folder_full_subgraph(
     abs_path = _resolve_vault_folder(path)
     meta = fg.load_meta(abs_path)
     if not meta or not meta.get("ontology"):
-        return {"nodes": [], "edges": [], "exists": False}
+        return {"nodes": [], "edges": [], "ontology": {}, "exists": False}
     cfg = app_state.get("cfg")
     try:
         entry = fg.open_folder_engine(abs_path, meta["ontology"], cfg)
@@ -515,7 +515,7 @@ async def folder_full_subgraph(
         log.exception("[folder_graph] open failed for %s", abs_path)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail=str(exc))
-    sg = fg.full_subgraph(entry["engine"], max_nodes=max_nodes)
+    sg = fg.full_subgraph(entry["engine"], max_nodes=max_nodes, ontology=meta["ontology"])
     sg["exists"] = True
     return sg
 

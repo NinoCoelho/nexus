@@ -28,6 +28,7 @@ import {
   fetchRunHistory,
   addWidget,
   deleteWidget,
+  designWidget,
   type Dashboard,
   type DashboardOperation,
   type DashboardWidget,
@@ -47,7 +48,6 @@ import FormRenderer from "../FormRenderer";
 import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
 import OperationChips, { type OpRunState } from "./OperationChips";
 import AddOperationModal from "./AddOperationModal";
-import AddWidgetModal from "./AddWidgetModal";
 import WidgetGrid from "./WidgetGrid";
 import DashboardWizard from "./DashboardWizard";
 import PlanReviewModal from "./PlanReviewModal";
@@ -60,7 +60,6 @@ interface Props {
   onOpenTable: (path: string) => void;
   onOpenDiagram: (folder: string) => void;
   onAfterDelete: () => void;
-  /** Optional vault-link preview handler forwarded to widget markdown. */
   onOpenInVault?: (path: string) => void;
 }
 
@@ -69,18 +68,15 @@ export default function DataDashboardView({
   onOpenTable,
   onOpenDiagram,
   onAfterDelete,
-  onOpenInVault,
+  onOpenInVault: _onOpenInVault,
 }: Props) {
   const toast = useToast();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [tables, setTables] = useState<DatabaseTableSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAddOp, setShowAddOp] = useState(false);
-  const [showAddWidget, setShowAddWidget] = useState(false);
-  // Wizard surfaces — separate state slot from the simple modals so users
-  // can pick "✨ Wizard" for fuzzy intents without losing the fast simple
-  // form for power-user flows.
   const [showWidgetWizard, setShowWidgetWizard] = useState(false);
+  const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
   const [showOpWizard, setShowOpWizard] = useState(false);
   // Active plan-review for an op marked ``preview: true`` — populated when
   // the user clicks the chip and we kick a plan-only run instead of the
@@ -88,7 +84,6 @@ export default function DataDashboardView({
   const [planReview, setPlanReview] = useState<
     { op: DashboardOperation; sessionId: string } | null
   >(null);
-  const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
   const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<DashboardWidget | null>(null);
   const [formOp, setFormOp] = useState<{ op: DashboardOperation; table: DataTable } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -302,29 +297,29 @@ export default function DataDashboardView({
     }
   }, [folder, toast]);
 
-  const handleAddWidget = useCallback(async (widget: DashboardWidget) => {
-    try {
-      const next = await addWidget(folder, widget);
-      setDashboard(next);
-      setShowAddWidget(false);
-      toast.success(`Added widget "${widget.title}"`);
-    } catch (e) {
-      toast.error("Couldn't add widget", { detail: (e as Error).message });
-    }
-  }, [folder, toast]);
-
   const handleEditWidget = useCallback(async (widget: DashboardWidget) => {
-    // Server upserts by id, so a Save reuses the same `_widgets/<id>.md`
-    // result file — no need to refresh; the saved body is still valid for
-    // the new title/prompt until the user explicitly hits ↻.
     try {
       const next = await addWidget(folder, widget);
       setDashboard(next);
+      setShowWidgetWizard(false);
       setEditingWidget(null);
       toast.success(`Saved "${widget.title}"`);
     } catch (e) {
       toast.error("Couldn't save widget", { detail: (e as Error).message });
     }
+  }, [folder, toast]);
+
+  const handleDesignWidget = useCallback((widget: DashboardWidget) => {
+    const goal = widget.prompt || `Redesign widget "${widget.title}" with a better query and visualization`;
+    void (async () => {
+      try {
+        const { session_id: _sid } = await designWidget(folder, widget.id, goal);
+        void _sid;
+        toast.info(`Designing "${widget.title}"\u2026`, { detail: "The agent is inspecting your schema and planning a query." });
+      } catch (e) {
+        toast.error("Couldn't start design", { detail: (e as Error).message });
+      }
+    })();
   }, [folder, toast]);
 
   const handleResizeWidget = useCallback(async (widget: DashboardWidget, size: "sm" | "md" | "lg") => {
@@ -500,7 +495,6 @@ export default function DataDashboardView({
         <WidgetGrid
           folder={folder}
           widgets={dashboard.widgets ?? []}
-          onAdd={() => setShowAddWidget(true)}
           onAddWizard={() => setShowWidgetWizard(true)}
           onEdit={(w) => setEditingWidget(w)}
           onRemove={(id) => {
@@ -508,30 +502,15 @@ export default function DataDashboardView({
             if (w) setPendingWidgetRemoval(w);
           }}
           onResize={handleResizeWidget}
-          onOpenInVault={onOpenInVault}
+          onDesign={handleDesignWidget}
         />
       </section>
-
-      {showAddWidget && (
-        <AddWidgetModal
-          onSubmit={handleAddWidget}
-          onCancel={() => setShowAddWidget(false)}
-        />
-      )}
-
-      {editingWidget && (
-        <AddWidgetModal
-          editing={editingWidget}
-          onSubmit={handleEditWidget}
-          onCancel={() => setEditingWidget(null)}
-        />
-      )}
 
       {pendingWidgetRemoval && (
         <Modal
           kind="confirm"
           title={`Remove "${pendingWidgetRemoval.title}"?`}
-          message="This deletes the widget and its saved result. The prompt is gone — re-create it from + Widget."
+          message="This deletes the widget and its saved result. The query is gone \u2014 re-create it from + Widget."
           confirmLabel="Remove"
           danger
           onSubmit={() => {
@@ -552,15 +531,18 @@ export default function DataDashboardView({
         />
       )}
 
-      {showWidgetWizard && (
+      {(showWidgetWizard || editingWidget) && (
         <DashboardWizard
           folder={folder}
           kind="widget"
+          editing={editingWidget}
           onApproveWidget={async (w) => {
-            await handleAddWidget(w);
-            setShowWidgetWizard(false);
+            await handleEditWidget(w);
           }}
-          onCancel={() => setShowWidgetWizard(false)}
+          onCancel={() => {
+            setShowWidgetWizard(false);
+            setEditingWidget(null);
+          }}
         />
       )}
 

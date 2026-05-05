@@ -12,10 +12,12 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
-def full_subgraph(engine: Any, *, max_nodes: int = 500) -> dict[str, Any]:
+def full_subgraph(engine: Any, *, max_nodes: int = 500,
+                  ontology: dict[str, Any] | None = None) -> dict[str, Any]:
     """All entities + edges in the folder DB. Capped to keep payloads sane."""
     if engine is None:
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "edges": [], "ontology": ontology or {}}
+    result: dict[str, Any] = {"ontology": ontology or {}}
     graph = engine._entity_graph
     entities = graph.list_all_entities()
     if max_nodes and len(entities) > max_nodes:
@@ -46,7 +48,9 @@ def full_subgraph(engine: Any, *, max_nodes: int = 500) -> dict[str, Any]:
             "relation": t.relation,
             "strength": t.strength,
         })
-    return {"nodes": nodes, "edges": edges}
+    result["nodes"] = nodes
+    result["edges"] = edges
+    return result
 
 
 def subgraph_for_seed(engine: Any, seed: int, *, hops: int = 2,

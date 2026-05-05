@@ -22,22 +22,50 @@ export interface DashboardOperation {
   preview?: boolean;
 }
 
-export type WidgetKind = "chart" | "report" | "kpi";
+export type VizType = "bar" | "line" | "area" | "pie" | "donut" | "table" | "kpi";
 export type WidgetRefresh = "manual" | "daily";
 export type WidgetSize = "sm" | "md" | "lg";
 
+export interface VizConfig {
+  x_field?: string;
+  y_field?: string;
+  y_fields?: string[];
+  y_label?: string;
+  x_label?: string;
+  title?: string;
+  stacked?: boolean;
+  horizontal?: boolean;
+  show_dots?: boolean;
+  show_grid?: boolean;
+  donut?: boolean;
+  number_format?: string;
+  trend_field?: string;
+  label_field?: string;
+  [key: string]: unknown;
+}
+
 export interface DashboardWidget {
   id: string;
-  kind: WidgetKind;
   title: string;
-  prompt: string;
+  viz_type: VizType;
+  query: string;
+  query_tables?: string[];
+  viz_config?: VizConfig;
+  /** Optional prompt — kept for redesign reference, not used for refresh. */
+  prompt?: string;
   refresh: WidgetRefresh;
-  /** ISO 8601 UTC timestamp of the most recent successful refresh, or null. */
+  /** ISO 8601 UTC timestamp of the most recent successful execute, or null. */
   last_refreshed_at: string | null;
-  /** Optional size override. When absent, a per-kind default is used at
-   *  render time (chart = md, report = md, kpi = sm). */
   size?: WidgetSize;
   order?: number;
+}
+
+export interface WidgetQueryResult {
+  columns: { name: string; type: string }[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  truncated?: boolean;
+  error?: string;
 }
 
 export interface Dashboard {
@@ -215,11 +243,11 @@ export interface DeleteDatabaseResult {
  */
 // ── Widgets ───────────────────────────────────────────────────────────────
 
-export interface RefreshWidgetResult {
-  session_id: string;
+export interface ExecuteWidgetResult {
   folder: string;
   widget_id: string;
-  status: "running";
+  result: WidgetQueryResult;
+  executed_at: string;
 }
 
 export async function addWidget(
@@ -258,12 +286,12 @@ export async function fetchWidgetContent(
   return res.json();
 }
 
-export async function refreshWidget(
+export async function executeWidget(
   folder: string,
   widgetId: string,
-): Promise<RefreshWidgetResult> {
+): Promise<ExecuteWidgetResult> {
   const res = await fetch(
-    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/refresh`,
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/execute`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -272,37 +300,63 @@ export async function refreshWidget(
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? `Refresh widget error: ${res.status}`);
+    throw new Error((body as { detail?: string }).detail ?? `Execute widget error: ${res.status}`);
   }
   return res.json();
 }
 
-/**
- * Re-run a widget refresh after a failed render with the prior attempt's
- * output and error message embedded in the seed, so the agent can correct
- * its own output (e.g. emit YAML when it had emitted JSON).
- */
-export async function refineWidget(
+export async function refreshWidget(
   folder: string,
   widgetId: string,
-  previousOutput: string,
-  errorMessage: string,
-): Promise<RefreshWidgetResult> {
+): Promise<ExecuteWidgetResult> {
+  return executeWidget(folder, widgetId);
+}
+
+export interface DesignWidgetResult {
+  session_id: string;
+  folder: string;
+  widget_id: string;
+  status: "running";
+}
+
+export async function previewWidget(
+  folder: string,
+  widget: {
+    query: string;
+    viz_type: VizType;
+    viz_config?: VizConfig;
+    query_tables?: string[];
+  },
+): Promise<WidgetQueryResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/widgets/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, ...widget }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Preview widget error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.result as WidgetQueryResult;
+}
+
+export async function designWidget(
+  folder: string,
+  widgetId: string,
+  goal: string,
+): Promise<DesignWidgetResult> {
   const res = await fetch(
-    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/refine`,
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/design`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        folder,
-        previous_output: previousOutput,
-        error_message: errorMessage,
-      }),
+      body: JSON.stringify({ folder, goal }),
     },
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { detail?: string }).detail ?? `Refine widget error: ${res.status}`);
+    throw new Error((body as { detail?: string }).detail ?? `Design widget error: ${res.status}`);
   }
   return res.json();
 }

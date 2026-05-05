@@ -450,6 +450,63 @@ _WIDGET_KIND_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+_WIDGET_DESIGN_INSTRUCTIONS = (
+    "You are designing a **dashboard widget**. Your job is to produce a "
+    "SQL query and a visualization config that the system will save and "
+    "re-execute on every refresh WITHOUT calling the LLM again.\n\n"
+    "Available visualization types:\n"
+    "- `bar` — bar chart (vertical/horizontal, stacked)\n"
+    "- `line` — line chart (trends, multi-series)\n"
+    "- `area` — area chart (volume, stacked)\n"
+    "- `pie` / `donut` — pie or donut chart (part-to-whole)\n"
+    "- `table` — structured data table\n"
+    "- `kpi` — single metric card with optional trend\n\n"
+    "Steps:\n"
+    "1. Use `datatable_manage` with action=`view` to inspect the schema "
+    "of tables in this database. Understand columns, types, and relations.\n"
+    "2. Write a DuckDB SQL query that extracts exactly the data needed. "
+    "Reference tables by their filename without `.md` (e.g. `sales` not "
+    "`sales.md`). Only SELECT/WITH queries are allowed.\n\n"
+    "DuckDB SQL pitfalls — IMPORTANT:\n"
+    "- strftime does NOT support `%q` or `%Q` for quarters. To group by "
+    "quarter use: `'Q' || CAST(EXTRACT(QUARTER FROM col) AS VARCHAR) || "
+    "' ' || CAST(EXTRACT(YEAR FROM col) AS VARCHAR)` or just "
+    "'EXTRACT(YEAR FROM col) || \\x27-Q\\x27 || EXTRACT(QUARTER FROM col)'.\n"
+    "- strftime format specifiers: `%Y` year, `%m` month, `%d` day, `%H` "
+    "hour, `%M` minute, `%S` second. Use `EXTRACT()` for anything else.\n"
+    "- Date math: use `col - INTERVAL '30 days'`, `DATE_TRUNC('month', col)`, "
+    "etc.\n"
+    "- Do NOT use table alias `t` in your query — unlike datatable_manage, "
+    "the widget system uses the actual table filename as the table name "
+    "(e.g., `encounters` not `t` for encounters.md).\n\n"
+    "3. Pick the best `viz_type` from the list above.\n"
+    "4. Output EXACTLY ONE fenced JSON block tagged `nexus-widget-plan` "
+    "with this shape:\n"
+    "```nexus-widget-plan\n"
+    "{\n"
+    '  "title": "short widget title",\n'
+    '  "viz_type": "bar",\n'
+    '  "query": "SELECT ... FROM table_name ...",\n'
+    '  "query_tables": ["table_name.md"],\n'
+    '  "viz_config": {\n'
+    '    "x_field": "column_name",\n'
+    '    "y_field": "column_name",\n'
+    '    "y_label": "optional axis label",\n'
+    '    "x_label": "optional axis label"\n'
+    "  }\n"
+    "}\n```\n\n"
+    "viz_config guidance:\n"
+    "- For `bar`/`line`/`area`: `x_field` (labels), `y_field` (values). "
+    "Multi-series: use `y_fields` array. `stacked: true` for stacked.\n"
+    "- For `pie`/`donut`: `x_field` (slice labels), `y_field` (slice values).\n"
+    "- For `table`: no special config needed — all columns render.\n"
+    "- For `kpi`: `y_field` (the metric), `label_field` (label text). "
+    "Optional `trend_field` for comparing current vs previous row.\n\n"
+    "After the JSON block, write 1-2 sentences explaining the widget. "
+    "Do NOT call `ask_user`. Do NOT use tools after producing the plan."
+)
+
+
 @router.post("/vault/dashboard/widgets", status_code=status.HTTP_201_CREATED)
 async def vault_dashboard_add_widget(body: dict) -> dict:
     """Append or replace a widget on the dashboard."""
@@ -477,7 +534,7 @@ async def vault_dashboard_delete_widget(widget_id: str, folder: str = "") -> dic
 
 @router.get("/vault/dashboard/widgets/{widget_id}/content")
 async def vault_dashboard_widget_content(widget_id: str, folder: str = "") -> dict:
-    """Return the widget's current result body. Empty string if not refreshed yet."""
+    """Return the widget's current query result (JSON). Empty if not refreshed yet."""
     from ... import vault_widgets
     try:
         body = vault_widgets.read_widget_result(folder, widget_id)
@@ -488,87 +545,60 @@ async def vault_dashboard_widget_content(widget_id: str, folder: str = "") -> di
     return {"folder": folder, "widget_id": widget_id, "content": body}
 
 
-def _widget_context_prefix(folder: str) -> str:
-    return f"Widget refresh: {folder}#"
+@router.post(
+    "/vault/dashboard/widgets/preview",
+    status_code=status.HTTP_200_OK,
+)
+async def vault_dashboard_preview_widget(body: dict) -> dict:
+    """Execute a widget query without persisting anything.
 
-
-def _build_widget_seed(
-    *,
-    widget: dict,
-    folder: str,
-    db_title: str,
-    refinement: dict | None = None,
-) -> str:
-    """Compose the hidden-session seed for a widget refresh / refine run.
-
-    Shared by both endpoints so the format/instructions stay in one place.
-    When ``refinement`` is provided, appends a "your last attempt failed"
-    block telling the agent what to fix.
+    Body: ``{folder, query, viz_type, viz_config?, query_tables?}``.
+    Runs the SQL against the folder's data-tables via DuckDB and returns
+    the structured result. No widget is created or modified — pure read.
     """
-    from .vault_dispatch import HIDDEN_SEED_MARKER
+    folder = body.get("folder", "")
+    query = (body.get("query") or "").strip()
+    if not isinstance(folder, str) or not folder:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`folder` required",
+        )
+    if not query:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`query` required",
+        )
 
-    kind = widget.get("kind", "report")
-    title = widget.get("title") or widget.get("id") or "widget"
-    user_prompt = (widget.get("prompt") or "").strip() or title
-    output_rule = _WIDGET_KIND_INSTRUCTIONS.get(
-        kind, _WIDGET_KIND_INSTRUCTIONS["report"],
-    )
+    from ...widget_query import execute_widget_query
 
-    seed_lines = [
-        HIDDEN_SEED_MARKER.rstrip(),
-        f"You are refreshing widget **{title}** ({kind}) on database "
-        f"**{db_title}** (vault folder `{folder or '/'}`).",
-        "",
-        output_rule,
-        "",
-        "Use the available vault tools (read tables, search, visualize) to "
-        "compute the answer. Do NOT call `ask_user` — widgets refresh "
-        "without user interaction. If something is ambiguous, make a "
-        "reasonable assumption and proceed.",
-        "",
-        "User's widget prompt:",
-        user_prompt,
-    ]
+    query_tables = body.get("query_tables")
+    if isinstance(query_tables, str):
+        query_tables = [query_tables]
 
-    if refinement:
-        prev = (refinement.get("previous_output") or "").strip()
-        err = (refinement.get("error_message") or "").strip()
-        # Truncate so we don't blow context on a very long prior body — the
-        # interesting failure mode is almost always visible in the head.
-        if len(prev) > 2000:
-            prev = prev[:2000] + "\n…(truncated)"
-        seed_lines.extend([
-            "",
-            "RETRY CONTEXT — your previous attempt failed to render. Fix it.",
-            f"Renderer error: {err or '(no detail)'}",
-            "Previous output (do not repeat verbatim):",
-            "```",
-            prev or "(empty)",
-            "```",
-            "Pay attention to the OUTPUT FORMAT rule above — most failures "
-            "come from emitting JSON when YAML was required, missing the "
-            "fenced block, or wrong field names.",
-        ])
-
-    return "\n".join(seed_lines)
+    result = execute_widget_query(folder, query, query_tables=query_tables)
+    return {"result": result}
 
 
-async def _kick_widget_refresh(
-    *,
+@router.post(
+    "/vault/dashboard/widgets/{widget_id}/execute",
+    status_code=status.HTTP_200_OK,
+)
+async def vault_dashboard_execute_widget(
     widget_id: str,
-    folder: str,
-    refinement: dict | None,
-    a: Agent,
-    store: SessionStore,
+    body: dict,
 ) -> dict:
-    """Shared body for ``/refresh`` and ``/refine``: validate, seed, kick a
-    background turn that captures the agent's reply into the widget body."""
+    """Execute the widget's saved SQL query and return structured JSON.
+
+    Body: ``{folder}``. Reads the widget config, runs the stored query
+    against DuckDB with the folder's data-tables, persists the result
+    to ``<folder>/_widgets/<widget_id>.json``, and stamps
+    ``last_refreshed_at``. No LLM involved — fast, cheap, deterministic.
+    """
     from datetime import datetime, timezone
     from ... import vault_dashboard, vault_widgets
-    from ..events import SessionEvent
-    from .vault_dispatch import _resolve_dispatch_model
-    from .vault_dispatch_helpers import run_background_agent_turn
+    from ...widget_query import execute_widget_query
 
+    folder = body.get("folder", "")
     if not isinstance(folder, str):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -586,29 +616,132 @@ async def _kick_widget_refresh(
             detail=f"widget {widget_id!r} not found in dashboard",
         )
 
-    title = widget.get("title") or widget_id
-    db_title = (dashboard.get("title") or folder or "(root)").strip()
-    seed_message = _build_widget_seed(
-        widget=widget,
-        folder=folder,
-        db_title=db_title,
-        refinement=refinement,
+    query = widget.get("query", "")
+    if not query:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"widget {widget_id!r} has no query to execute",
+        )
+
+    result = execute_widget_query(
+        folder,
+        query,
+        query_tables=widget.get("query_tables"),
     )
+
+    if "error" in result and result.get("row_count", 0) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=result["error"],
+        )
+
+    import json
+    vault_widgets.write_widget_result(folder, widget_id, json.dumps(result))
+
+    try:
+        now = datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        ).replace("+00:00", "Z")
+        vault_dashboard.set_widget_refreshed(folder, widget_id, now)
+    except Exception:
+        log.exception("widget execute: timestamp stamp failed")
+
+    return {
+        "folder": folder,
+        "widget_id": widget_id,
+        "result": result,
+        "executed_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds",
+        ).replace("+00:00", "Z"),
+    }
+
+
+def _widget_context_prefix(folder: str) -> str:
+    return f"Widget: {folder}#"
+
+
+@router.post(
+    "/vault/dashboard/widgets/{widget_id}/refresh",
+    status_code=status.HTTP_200_OK,
+)
+async def vault_dashboard_refresh_widget(
+    widget_id: str,
+    body: dict,
+) -> dict:
+    """Execute the widget's saved SQL query (no LLM).
+
+    Alias for ``/execute`` — kept for backward compatibility with the
+    UI's refresh button wiring. Body: ``{folder}``.
+    """
+    return await vault_dashboard_execute_widget(widget_id, body)
+
+
+@router.post(
+    "/vault/dashboard/widgets/{widget_id}/design",
+    status_code=status.HTTP_201_CREATED,
+)
+async def vault_dashboard_design_widget(
+    widget_id: str,
+    body: dict,
+    a: Agent = Depends(get_agent),
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Run an LLM session to design a widget's query + visualization.
+
+    Body: ``{folder, goal}``. The LLM inspects the database schema and
+    produces a ``nexus-widget-plan`` JSON fence with query, viz_type, and
+    viz_config. The UI parses the plan, previews it, and saves it via
+    ``POST /vault/dashboard/widgets`` (upsert).
+
+    Returns ``{session_id}`` so the UI can stream the LLM's reply and
+    subscribe to ``op_done``.
+    """
+    from .vault_dispatch import HIDDEN_SEED_MARKER, _resolve_dispatch_model
+    from .vault_dispatch_helpers import run_background_agent_turn
+    from ..events import SessionEvent
+
+    folder = body.get("folder", "")
+    goal = (body.get("goal") or "").strip()
+    if not isinstance(folder, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="`folder` required",
+        )
+
+    from ... import vault_dashboard
+    dashboard = vault_dashboard.read_dashboard(folder)
+    db_title = (dashboard.get("title") or folder or "(root)").strip()
+    widget = next(
+        (w for w in dashboard.get("widgets") or [] if w.get("id") == widget_id),
+        None,
+    )
+    widget_title = widget.get("title", widget_id) if widget else widget_id
+
+    seed_lines = [
+        HIDDEN_SEED_MARKER.rstrip(),
+        _WIDGET_DESIGN_INSTRUCTIONS,
+        "",
+        f"You are designing widget **{widget_title}** on database "
+        f"**{db_title}** (vault folder `{folder or '/'}`).",
+        "",
+        "User's goal:",
+        goal or f"Design the best widget for \"{widget_title}\"",
+    ]
+    seed_message = "\n".join(seed_lines)
 
     session = store.create(context=f"{_widget_context_prefix(folder)}{widget_id}")
     try:
         store.mark_hidden(session.id)
     except Exception:
-        log.exception("widget refresh: mark_hidden failed")
+        log.exception("widget design: mark_hidden failed")
     try:
-        marker = "♻️" if refinement else "🔄"
-        store.rename(session.id, f"{marker} {title}"[:60])
+        store.rename(session.id, f"✨ Design: {widget_title}"[:60])
     except Exception:
-        log.exception("widget refresh: title rename failed")
+        log.exception("widget design: title rename failed")
 
     resolved_model = _resolve_dispatch_model(None, a)
 
-    async def _run_with_capture() -> None:
+    async def _run_design() -> None:
         outcome = "done"
         error_msg: str | None = None
         try:
@@ -625,35 +758,6 @@ async def _kick_widget_refresh(
         except Exception as exc:
             outcome = "failed"
             error_msg = str(exc)
-        else:
-            try:
-                final = store.get_or_create(session.id)
-                history = list(final.history)
-                last = history[-1] if history else None
-                content = (getattr(last, "content", "") or "") if last is not None else ""
-                if last is None or content.startswith("["):
-                    outcome = "failed"
-                    error_msg = content[:200] or "Widget refresh did not complete."
-                else:
-                    try:
-                        vault_widgets.write_widget_result(folder, widget_id, content)
-                    except Exception as exc:
-                        outcome = "failed"
-                        error_msg = f"failed to persist widget result: {exc}"
-                    else:
-                        try:
-                            now = datetime.now(timezone.utc).isoformat(
-                                timespec="seconds",
-                            ).replace("+00:00", "Z")
-                            vault_dashboard.set_widget_refreshed(
-                                folder, widget_id, now,
-                            )
-                        except Exception:
-                            log.exception(
-                                "widget refresh: timestamp stamp failed",
-                            )
-            except Exception:
-                log.exception("widget refresh: outcome inspection failed")
         try:
             store.publish(
                 session.id,
@@ -663,9 +767,9 @@ async def _kick_widget_refresh(
                 ),
             )
         except Exception:
-            log.exception("widget refresh: terminal event publish failed")
+            log.exception("widget design: terminal event publish failed")
 
-    asyncio.create_task(_run_with_capture())
+    asyncio.create_task(_run_design())
 
     return {
         "session_id": session.id,
@@ -675,98 +779,68 @@ async def _kick_widget_refresh(
     }
 
 
-@router.post(
-    "/vault/dashboard/widgets/{widget_id}/refresh",
-    status_code=status.HTTP_201_CREATED,
-)
-async def vault_dashboard_refresh_widget(
-    widget_id: str,
-    body: dict,
-    a: Agent = Depends(get_agent),
-    store: SessionStore = Depends(get_sessions),
-) -> dict:
-    """Run a hidden refresh turn for a widget.
-
-    Body: ``{folder}``. Looks up the widget config in `_data.md`, kicks an
-    ephemeral hidden agent session with a kind-specific output-format seed,
-    and on terminal: writes the agent's last assistant message verbatim into
-    ``<folder>/_widgets/<widget_id>.md`` and stamps ``last_refreshed_at``.
-
-    Returns ``{session_id}`` so the UI can subscribe to ``op_done`` and pull
-    fresh content.
-    """
-    return await _kick_widget_refresh(
-        widget_id=widget_id,
-        folder=body.get("folder"),
-        refinement=None,
-        a=a,
-        store=store,
-    )
-
-
-@router.post(
-    "/vault/dashboard/widgets/{widget_id}/refine",
-    status_code=status.HTTP_201_CREATED,
-)
-async def vault_dashboard_refine_widget(
-    widget_id: str,
-    body: dict,
-    a: Agent = Depends(get_agent),
-    store: SessionStore = Depends(get_sessions),
-) -> dict:
-    """Re-run a widget refresh after a failed render.
-
-    Body: ``{folder, previous_output, error_message}``. Same as ``/refresh``
-    but seeds the session with the prior attempt's output and the renderer
-    error so the agent can self-correct (e.g. emit a YAML chart fence after
-    its last try produced JSON).
-    """
-    refinement = {
-        "previous_output": body.get("previous_output", ""),
-        "error_message": body.get("error_message", ""),
-    }
-    return await _kick_widget_refresh(
-        widget_id=widget_id,
-        folder=body.get("folder"),
-        refinement=refinement,
-        a=a,
-        store=store,
-    )
-
-
 _WIZARD_SYSTEM_PROMPTS: dict[str, str] = {
     "widget": (
         "You are a **dashboard-widget design assistant**. Your job is to help "
         "the user define ONE widget for the database dashboard, then hand it "
         "off to the system that will create it.\n\n"
         "How widgets work:\n"
-        "- A widget has: `title` (short label), `kind` (`chart` | `report` | "
-        "`kpi`), `prompt` (a natural-language instruction the agent runs each "
-        "refresh), `refresh` (`daily` | `manual`), and `size` (`sm` | `md` | "
-        "`lg`).\n"
-        "- `chart` returns a `nexus-chart` fence (bar/line/pie). Best for "
-        "trends and comparisons.\n"
-        "- `report` returns terse markdown (bullets, mini tables). Best for "
-        "summaries.\n"
-        "- `kpi` returns a single number + label. Best for headline metrics.\n\n"
+        "- A widget has: `title` (short label), `viz_type` (`bar` | `line` | "
+        "`area` | `pie` | `donut` | `table` | `kpi`), `query` (DuckDB SQL), "
+        "`query_tables` (list of .md filenames referenced), `viz_config` "
+        "(field mappings, labels), `refresh` (`daily` | `manual`), and "
+        "`size` (`sm` | `md` | `lg`).\n"
+        "- `bar`/`line`/`area` — chart with x_field, y_field (or y_fields "
+        "for multi-series). Best for trends and comparisons.\n"
+        "- `pie`/`donut` — part-to-whole chart. x_field for labels, y_field "
+        "for values.\n"
+        "- `table` — structured data table. No special viz_config needed.\n"
+        "- `kpi` — single metric card with optional trend. y_field for value, "
+        "label_field for the label.\n\n"
         "How to behave:\n"
-        "1. Read the user's goal. If it's already specific, skip ahead to the "
-        "proposal.\n"
+        "1. Read the user's goal. Use `datatable_manage` with action=`view` "
+        "to inspect table schemas so you can write correct SQL.\n"
         "2. If something is genuinely ambiguous (e.g. which table to read, "
         "which column to plot, time window), ask **at most ONE concise "
         "clarifying question per turn**. Don't ask more than 2 questions "
         "total — pick the highest-value missing piece, then propose with "
-        "reasonable defaults for the rest.\n"
+        "reasonable defaults for the rest.\n\n"
+        "DuckDB SQL pitfalls — IMPORTANT:\n"
+        "- strftime does NOT support `%q` or `%Q` for quarters. To group by "
+        "quarter use: `'Q' || CAST(EXTRACT(QUARTER FROM col) AS VARCHAR) || "
+        "' ' || CAST(EXTRACT(YEAR FROM col) AS VARCHAR)` or "
+        "'EXTRACT(YEAR FROM col) || \\x27-Q\\x27 || EXTRACT(QUARTER FROM col)'.\n"
+        "- strftime format specifiers: `%Y` year, `%m` month, `%d` day, "
+        "`%H` hour, `%M` minute, `%S` second. Use `EXTRACT()` for anything "
+        "else.\n"
+        "- Date math: use `col - INTERVAL '30 days'`, "
+        "`DATE_TRUNC('month', col)`, etc.\n"
+        "- Do NOT use table alias `t` in your query — unlike datatable_manage, "
+        "the widget system uses the actual table filename as the table name "
+        "(e.g., `encounters` not `t` for encounters.md).\n\n"
         "3. When ready to propose, output exactly one fenced JSON block with "
         "language tag `nexus-widget-proposal` containing the full widget "
-        "config. Example:\n"
+        "config. Include a `summary` field with one plain-English sentence "
+        "describing what the widget shows (the user will see this, not the "
+        "SQL). If the data shape supports other visualization types besides "
+        "your primary pick, include an `alternatives` array listing them "
+        "(e.g. `[\"line\", \"table\"]`). Omit `alternatives` if only one "
+        "viz type makes sense. Example:\n"
         "```nexus-widget-proposal\n"
-        "{\n  \"title\": \"...\",\n  \"kind\": \"chart\",\n  \"prompt\": "
-        "\"...\",\n  \"refresh\": \"daily\",\n  \"size\": \"md\"\n}\n```\n"
+        "{\n  \"title\": \"Monthly Revenue\",\n  \"viz_type\": \"bar\",\n  "
+        "\"query\": \"SELECT strftime(date, '%Y-%m') AS month, SUM(amount) "
+        "AS total FROM sales GROUP BY month ORDER BY month\",\n  "
+        "\"query_tables\": [\"sales.md\"],\n  \"viz_config\": {\"x_field\": "
+        "\"month\", \"y_field\": \"total\", \"y_label\": \"Revenue ($)\"},\n  "
+        "\"refresh\": \"daily\",\n  \"size\": \"md\",\n  "
+        "\"summary\": \"A bar chart showing total revenue grouped by month "
+        "across all sales.\",\n  \"alternatives\": [\"line\", \"table\"]\n}\n"
+        "```\n"
         "4. After proposing, write one short sentence inviting the user to "
-        "approve, tweak, or ask for changes. Do NOT call any tools — your "
-        "job is design, not execution. The system will create the widget "
-        "when the user clicks Approve."
+        "approve, tweak, or ask for changes. Do NOT mention SQL, column "
+        "names, or query syntax in your prose — speak in plain language "
+        "about what the widget shows. Do NOT call `ask_user`. The system "
+        "will create the widget when the user clicks Approve."
     ),
     "operation": (
         "You are a **dashboard-operation design assistant**. Your job is to "
