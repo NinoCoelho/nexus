@@ -68,9 +68,16 @@ async def index_folder_streaming(folder, *, cfg, ontology, full: bool = False
     # the build-time snapshot to detect real drift.
     build_hash = get_meta_kv(manifest, "build_ontology_hash") or ""
     new_hash = ontology_hash(ontology)
-    if not full and build_hash and new_hash != build_hash:
-        log.info("[folder_graph] ontology drift on %s — forcing full reindex", folder_p)
-        full = True
+    if not full:
+        if build_hash:
+            if new_hash != build_hash:
+                log.info("[folder_graph] ontology drift on %s — forcing full reindex", folder_p)
+                full = True
+        else:
+            from ._storage import all_indexed_files
+            if all_indexed_files(manifest):
+                log.info("[folder_graph] no build_ontology_hash on %s — forcing full reindex", folder_p)
+                full = True
 
     if full:
         yield _sse("status", {"message": "Dropping existing per-folder data…"})

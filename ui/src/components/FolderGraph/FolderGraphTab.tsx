@@ -91,7 +91,7 @@ export function FolderGraphTab({
   // External "Reindex" trigger from the toolbar
   useEffect(() => {
     if (externalReindex > 0 && phase.kind === "ready" && phase.current.ontology) {
-      setPhase({ kind: "indexing", ontology: phase.current.ontology, full: false });
+      setPhase({ kind: "indexing", ontology: phase.current.ontology, full: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalReindex]);
@@ -106,7 +106,7 @@ export function FolderGraphTab({
       return;
     }
     if (opts.triggerIndex) {
-      setPhase({ kind: "indexing", ontology: ont, full: false });
+      setPhase({ kind: "indexing", ontology: ont, full: true });
     } else {
       await refresh();
     }
