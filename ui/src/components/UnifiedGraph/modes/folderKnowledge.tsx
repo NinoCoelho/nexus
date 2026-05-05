@@ -147,7 +147,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
   const filtersBar = useMemo(() => {
     if (allTypes.length === 0) return null;
     return (
-      <>
+      <div className="kv-filters">
         <button
           className={`kv-pill${typeFilter === null ? " kv-pill--active" : ""}`}
           onClick={() => setTypeFilter(null)}
@@ -168,7 +168,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
             {t} <span className="kv-pill-count">{typeCounts[t] ?? 0}</span>
           </button>
         ))}
-      </>
+      </div>
     );
   }, [allTypes, typeFilter, typeCounts, sg?.ontology]);
 

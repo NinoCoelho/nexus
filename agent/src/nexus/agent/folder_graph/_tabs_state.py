@@ -12,8 +12,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ._storage import normalize_folder
-
 log = logging.getLogger(__name__)
 
 _FILENAME = "folder_graphs.json"
@@ -22,6 +20,16 @@ _FILENAME = "folder_graphs.json"
 def _state_file() -> Path:
     from ..graphrag_manager import get_home
     return get_home() / _FILENAME
+
+
+def _norm_tab_path(path: str) -> str:
+    """Normalise a vault-relative tab path for storage / dedup.
+
+    Strips leading/trailing slashes and collapses repeated ``/`` so that
+    ``/foo/bar`` and ``foo/bar/`` compare equal.  Does **not** call
+    ``os.path.realpath`` — the path is vault-relative, not filesystem-relative.
+    """
+    return "/".join(part for part in path.strip().split("/") if part)
 
 
 def list_tabs() -> list[dict[str, Any]]:
@@ -46,7 +54,7 @@ def list_tabs() -> list[dict[str, Any]]:
     for entry in tabs:
         if not isinstance(entry, dict):
             continue
-        path = str(entry.get("path") or "").strip()
+        path = _norm_tab_path(str(entry.get("path") or ""))
         if not path or path in seen_paths:
             continue
         seen_paths.add(path)
@@ -62,12 +70,9 @@ def set_tabs(tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for entry in tabs:
         if not isinstance(entry, dict):
             continue
-        raw_path = str(entry.get("path") or "").strip()
-        if not raw_path:
+        path = _norm_tab_path(str(entry.get("path") or ""))
+        if not path:
             continue
-        # Resolve symlinks/trailing slashes so we never store two flavours of
-        # the same folder, and the cache key matches the engine pool's.
-        path = str(normalize_folder(raw_path))
         if path in seen:
             continue
         seen.add(path)
@@ -82,19 +87,19 @@ def set_tabs(tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def add_tab(path: str, label: str | None = None) -> list[dict[str, Any]]:
     """Idempotent: appends if missing, no-op if already present."""
-    norm = str(normalize_folder(path))
+    norm = _norm_tab_path(path)
     current = list_tabs()
     for tab in current:
-        if str(normalize_folder(tab["path"])) == norm:
+        if _norm_tab_path(tab["path"]) == norm:
             return current
     current.append({"path": norm, "label": label or Path(norm).name or norm})
     return set_tabs(current)
 
 
 def remove_tab(path: str) -> list[dict[str, Any]]:
-    norm = str(normalize_folder(path))
+    norm = _norm_tab_path(path)
     current = list_tabs()
-    kept = [t for t in current if str(normalize_folder(t["path"])) != norm]
+    kept = [t for t in current if _norm_tab_path(t["path"]) != norm]
     if len(kept) == len(current):
         return current
     return set_tabs(kept)
