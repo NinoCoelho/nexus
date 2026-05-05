@@ -75,6 +75,7 @@ export default function UnifiedGraph({
   // Bumped to forward toolbar Edit/Reindex actions to the active FolderGraphTab.
   const [folderEditTrigger, setFolderEditTrigger] = useState(0);
   const [folderReindexTrigger, setFolderReindexTrigger] = useState(0);
+  const [folderResetTrigger, setFolderResetTrigger] = useState(0);
 
   const [graphSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -263,9 +264,16 @@ export default function UnifiedGraph({
           <button
             className="ug-tool-btn"
             onClick={() => setFolderReindexTrigger((v) => v + 1)}
-            title="Reindex this folder"
+            title="Rebuild graph from scratch"
           >
-            ⟳⟳
+            ⟳
+          </button>
+          <button
+            className="ug-tool-btn"
+            onClick={() => setFolderResetTrigger((v) => v + 1)}
+            title="Delete graph and start over"
+          >
+            ✕
           </button>
         </>
       )}
@@ -434,6 +442,7 @@ export default function UnifiedGraph({
               onReindexComplete={() => setFolderRefreshKey((v) => v + 1)}
               externalEditOntology={folderEditTrigger}
               externalReindex={folderReindexTrigger}
+              externalReset={folderResetTrigger}
             />
           )}
         </div>
