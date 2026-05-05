@@ -548,6 +548,43 @@
   white-space: nowrap;
 }
 
+.dt-actions-col--icons {
+  width: auto;
+  text-align: left;
+  padding-left: 8px;
+  padding-right: 4px;
+}
+
+.dt-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+tr:hover .dt-icon-btn {
+  opacity: 1;
+}
+
+.dt-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.dt-icon-btn--delete:hover {
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad);
+}
+
 .dt-action-btn {
   padding: 3px 8px;
   font-size: 11px;
