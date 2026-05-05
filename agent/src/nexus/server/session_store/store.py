@@ -340,9 +340,24 @@ class SessionStore(PubSubMixin, QueryMixin):
         self._cancel_all_pending(session_id)
 
     def delete(self, session_id: str) -> None:
+        self._loom._db.execute(
+            "DELETE FROM messages WHERE session_id = ?", (session_id,)
+        )
         self._loom.delete_session(session_id)
         self._loom._db.execute(
             "DELETE FROM message_feedback WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM hitl_events WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM hitl_pending WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM llm_errors WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM paused_turns WHERE session_id = ?", (session_id,)
         )
         self._loom._db.commit()
         self._cancel_all_pending(session_id)

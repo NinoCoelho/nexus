@@ -79,6 +79,7 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
     out["tts"] = {
         "enabled": tts.enabled,
         "ack_enabled": tts.ack_enabled,
+        "ack_mode": tts.ack_mode,
         "voices_dir": tts.voices_dir,
     }
     return out
@@ -175,7 +176,7 @@ async def patch_config(
         # TTSConfig only accepts enabled / ack_enabled / voices_dir now.
         # Drop everything else silently so old UI clients (or stale
         # browser caches) don't break the merge.
-        ALLOWED = {"enabled", "ack_enabled", "voices_dir"}
+        ALLOWED = {"enabled", "ack_enabled", "ack_mode", "voices_dir"}
         clean = {k: v for k, v in patch.items() if k in ALLOWED}
         raw["tts"] = {**existing, **clean}
     new_cfg = NexusConfig(**raw)

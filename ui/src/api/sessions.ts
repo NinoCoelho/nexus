@@ -227,9 +227,10 @@ export async function truncateSession(sessionId: string, beforeSeq: number): Pro
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+  if (!res.ok) throw new Error(`Delete error: ${res.status}`);
 }
 
 export async function exportSession(id: string): Promise<{ markdown: string; filename: string }> {
