@@ -57,16 +57,7 @@ _DASHBOARD_SECTION = re.compile(r"^##\s+Dashboard\s*$", re.MULTILINE | re.IGNORE
 
 _SLUG_RE = re.compile(r"^[a-z0-9_][a-z0-9_\-]*$")
 
-# Supported widget kinds. Each one steers the agent's refresh prompt to a
-# specific output shape (chart fence, terse markdown report, single number).
-# Adding a kind = (1) accept it in `_normalize_widget`, (2) add a kind-specific
-# seed in the route's refresh handler, (3) handle rendering on the UI side.
-#
-# ``list`` was a separate kind in early versions but it's a degenerate case
-# of ``report`` (markdown can already render a bullet list); it's aliased to
-# ``report`` on read so old `_data.md` files still load.
-_WIDGET_KINDS = ("chart", "report", "kpi")
-_WIDGET_KIND_ALIASES = {"list": "report"}
+_VIZ_TYPES = ("bar", "line", "area", "pie", "donut", "table", "kpi")
 _WIDGET_REFRESH = ("manual", "daily")
 
 # Coarse size buckets for widgets in the grid. Stored on the widget config
@@ -185,29 +176,44 @@ def _normalize_widget(w: dict[str, Any]) -> dict[str, Any] | None:
 
     Shape::
 
-        {id, kind: chart|report|kpi|list, title, prompt,
+        {id, title, viz_type: bar|line|area|pie|donut|table|kpi,
+         query: str, query_tables: [str], viz_config: dict,
+         prompt: str (optional, kept for redesign),
          refresh: manual|daily, last_refreshed_at: ISO|null,
-         order: int}
+         size: sm|md|lg, order: int}
     """
     if not isinstance(w, dict):
         return None
     wid = str(w.get("id") or "").strip()
     title = str(w.get("title") or "").strip()
-    kind = str(w.get("kind") or "").strip().lower()
-    kind = _WIDGET_KIND_ALIASES.get(kind, kind)
-    if not wid or not title or kind not in _WIDGET_KINDS:
+    viz_type = str(w.get("viz_type") or w.get("kind") or "").strip().lower()
+    if viz_type in ("chart", "report", "list"):
+        viz_type = "bar"
+    if not wid or not title or viz_type not in _VIZ_TYPES:
+        return None
+    query = str(w.get("query") or "").strip()
+    if not query:
         return None
     refresh = str(w.get("refresh") or "manual").strip().lower()
     if refresh not in _WIDGET_REFRESH:
         refresh = "manual"
     out: dict[str, Any] = {
         "id": wid,
-        "kind": kind,
         "title": title,
-        "prompt": str(w.get("prompt") or "").strip(),
-        "refresh": refresh,
+        "viz_type": viz_type,
+        "query": query,
         "order": int(w.get("order", 0)),
     }
+    qt = w.get("query_tables")
+    if isinstance(qt, list):
+        out["query_tables"] = [str(t) for t in qt if isinstance(t, str)]
+    vc = w.get("viz_config")
+    if isinstance(vc, dict):
+        out["viz_config"] = vc
+    prompt = str(w.get("prompt") or "").strip()
+    if prompt:
+        out["prompt"] = prompt
+    out["refresh"] = refresh
     raw_size = w.get("size")
     if isinstance(raw_size, str) and raw_size.strip().lower() in _WIDGET_SIZES:
         out["size"] = raw_size.strip().lower()
@@ -378,8 +384,8 @@ def upsert_widget(folder: str, widget: dict[str, Any]) -> dict[str, Any]:
     norm = _normalize_widget(widget)
     if norm is None:
         raise ValueError(
-            "widget missing required fields (id, title, kind ∈ "
-            f"{_WIDGET_KINDS})"
+            "widget missing required fields (id, title, viz_type ∈ "
+            f"{_VIZ_TYPES})"
         )
     if not _SLUG_RE.match(norm["id"]):
         raise ValueError(f"widget id {norm['id']!r} must be a slug")

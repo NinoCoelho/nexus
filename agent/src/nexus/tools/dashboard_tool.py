@@ -74,17 +74,24 @@ DASHBOARD_MANAGE_TOOL = ToolSpec(
                 "type": "array",
                 "items": {"type": "object"},
                 "description": (
-                    "List of widgets for set_widgets. Each: "
-                    "{id (slug), title, kind: 'chart'|'report'|'kpi', "
-                    "prompt, refresh: 'manual'|'daily', size?: 'sm'|'md'|'lg', order?}. "
-                    "Widget body is computed lazily on refresh; the prompt steers "
-                    "the agent to produce the right shape (chart fence / terse "
-                    "markdown / single number)."
+                    "List of widgets for set_widgets. Each widget MUST include: "
+                    "id (slug), title, viz_type ('bar'|'line'|'area'|'pie'|'donut'|'table'|'kpi'), "
+                    "query (DuckDB SQL — SELECT/WITH only, reference tables by filename "
+                    "without .md), query_tables (list of .md filenames, e.g. ['sales.md']), "
+                    "viz_config: {x_field, y_field, y_label?, x_label?, stacked?} "
+                    "(not needed for 'table' viz_type), "
+                    "refresh ('manual'|'daily'), size? ('sm'|'md'|'lg'), order?. "
+                    "The query is executed against DuckDB on refresh — no LLM involved. "
+                    "You MUST write the actual SQL; do NOT use a 'prompt' instead of a query."
                 ),
             },
             "widget": {
                 "type": "object",
-                "description": "Single widget for add_widget. Same shape as `widgets` items.",
+                "description": (
+                    "Single widget for add_widget. Same shape as `widgets` items. "
+                    "Required: id, title, viz_type, query (DuckDB SQL). "
+                    "Use datatable_manage action=view to inspect table schemas before writing SQL."
+                ),
             },
             "widget_id": {
                 "type": "string",
