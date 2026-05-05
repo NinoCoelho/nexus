@@ -71,15 +71,21 @@ export default function Sidebar({
   mobileOpen = false, onMobileClose,
 }: Props) {
   const { t } = useTranslation("sidebar");
-  const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
-    { id: "chat",     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
-    { id: "calendar", label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
-    { id: "vault",    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
-    { id: "kanban",   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
-    { id: "data",     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
-    { id: "graph",    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
-    { id: "insights", label: t("sidebar:viewNames.insights"), Icon: IconInsights },
-  ];
+  const VIEWS = {
+    primary: [
+      { id: "chat" as View,     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
+    ],
+    content: [
+      { id: "vault" as View,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
+      { id: "kanban" as View,   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
+      { id: "calendar" as View, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+    ],
+    analytics: [
+      { id: "data" as View,     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
+      { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
+      { id: "insights" as View, label: t("sidebar:viewNames.insights"), Icon: IconInsights },
+    ],
+  };
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; }
@@ -240,7 +246,34 @@ export default function Sidebar({
       <div className="sidebar-section">
         {!collapsed && <div className="sidebar-section-label">{t("sidebar:views")}</div>}
         <nav className="sidebar-nav">
-          {VIEWS.map(({ id, label, Icon }) => (
+          {/* Primary */}
+          {VIEWS.primary.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
+              onClick={() => onViewChange(id)}
+              title={collapsed ? label : undefined}
+            >
+              <span className="sidebar-nav-icon"><Icon /></span>
+              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+            </button>
+          ))}
+          {!collapsed && <div className="sidebar-nav-divider" />}
+          {/* Content */}
+          {VIEWS.content.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
+              onClick={() => onViewChange(id)}
+              title={collapsed ? label : undefined}
+            >
+              <span className="sidebar-nav-icon"><Icon /></span>
+              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+            </button>
+          ))}
+          {!collapsed && <div className="sidebar-nav-divider" />}
+          {/* Analytics */}
+          {VIEWS.analytics.map(({ id, label, Icon }) => (
             <button
               key={id}
               className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}

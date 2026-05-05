@@ -147,6 +147,13 @@
   margin-top: 2px;
 }
 
+.sidebar-nav-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 10px 4px;
+  opacity: 0.5;
+}
+
 .sidebar-nav-item {
   display: flex;
   align-items: center;
