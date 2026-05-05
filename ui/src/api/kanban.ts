@@ -258,3 +258,52 @@ export async function patchVaultKanbanLane(
   if (!res.ok) throw new Error(`Kanban lane patch error: ${res.status}`);
   return res.json();
 }
+
+export async function cancelVaultKanbanCard(path: string, cardId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}/cancel?path=${encodeURIComponent(path)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`Kanban card cancel error: ${res.status}`);
+  return res.json();
+}
+
+export async function retryVaultKanbanCard(path: string, cardId: string): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}/retry?path=${encodeURIComponent(path)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`Kanban card retry error: ${res.status}`);
+  return res.json();
+}
+
+export interface LaneWebhookInfo {
+  enabled: boolean;
+  url: string | null;
+  token: string | null;
+}
+
+export async function getLaneWebhook(path: string, laneId: string): Promise<LaneWebhookInfo> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}/webhook?path=${encodeURIComponent(path)}`,
+  );
+  if (!res.ok) throw new Error(`Lane webhook get error: ${res.status}`);
+  return res.json();
+}
+
+export async function setLaneWebhook(
+  path: string,
+  laneId: string,
+  patch: { enabled: boolean },
+): Promise<LaneWebhookInfo> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}/webhook?path=${encodeURIComponent(path)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!res.ok) throw new Error(`Lane webhook set error: ${res.status}`);
+  return res.json();
+}

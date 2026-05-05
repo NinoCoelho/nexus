@@ -18,12 +18,14 @@ import CardActivityModal from "../CardActivityModal";
 import LanePromptDialog from "../LanePromptDialog";
 import {
   addVaultKanbanLane,
+  cancelVaultKanbanCard,
   deleteVaultKanbanCard,
   deleteVaultKanbanLane,
   dispatchFromVault,
   getVaultKanban,
   patchVaultKanbanCard,
   patchVaultKanbanLane,
+  retryVaultKanbanCard,
   type KanbanBoard as BoardT,
   type KanbanCard,
   type KanbanLane,
@@ -251,6 +253,20 @@ export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props
     });
   };
 
+  const handleCancelCard = async (cardId: string) => {
+    try {
+      await cancelVaultKanbanCard(path, cardId);
+      reload();
+    } catch { /* ignore */ }
+  };
+
+  const handleRetryCard = async (cardId: string) => {
+    try {
+      await retryVaultKanbanCard(path, cardId);
+      reload();
+    } catch { /* ignore */ }
+  };
+
   const hasActiveFilters = !!(filters.text || filters.label || filters.priority || filters.assignee);
 
   return (
@@ -297,6 +313,8 @@ export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props
             onOpenCardActivity={(card) => setActivityCard(card)}
             onOpenCardInChat={(card) => void handleOpenInChat(card)}
             onDeleteCard={handleDeleteCard}
+            onCancelCard={handleCancelCard}
+            onRetryCard={handleRetryCard}
           />
         ))}
       </div>
@@ -304,6 +322,7 @@ export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props
       {editLane && (
         <LanePromptDialog
           lane={editLane}
+          boardPath={path}
           onCancel={() => setEditLane(null)}
           onSubmit={async (patch) => {
             try {

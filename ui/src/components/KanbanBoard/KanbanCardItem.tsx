@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KanbanCard } from "../../api";
 import MarkdownView from "../MarkdownView";
 import { dueBadge, PRIORITY_CLASS } from "./utils";
@@ -16,7 +17,11 @@ interface Props {
   onOpenInChat: () => void;
   onDelete: () => void;
   onViewActivity: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
 }
+
+type StatusVariant = "idle" | "confirm-stop" | "confirm-retry";
 
 export default function KanbanCardItem({
   card,
@@ -32,9 +37,155 @@ export default function KanbanCardItem({
   onOpenInChat,
   onDelete,
   onViewActivity,
+  onCancel,
+  onRetry,
 }: Props) {
   const due = dueBadge(card.due);
   const isDragging = dragCardId === card.id;
+  const [variant, setVariant] = useState<StatusVariant>("idle");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const resetVariant = useCallback(() => {
+    setVariant("idle");
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    setVariant("idle");
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, [card.status]);
+
+  const showConfirm = (v: StatusVariant) => {
+    resetVariant();
+    setVariant(v);
+    timerRef.current = setTimeout(() => {
+      setVariant("idle");
+      timerRef.current = null;
+    }, 5000);
+  };
+
+  const handleStatusClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (card.status === "running") {
+      if (variant === "confirm-stop") {
+        resetVariant();
+        onCancel();
+      } else {
+        showConfirm("confirm-stop");
+      }
+    } else if (card.status === "failed") {
+      if (variant === "confirm-retry") {
+        resetVariant();
+        onRetry();
+      } else {
+        showConfirm("confirm-retry");
+      }
+    } else if (card.status === "done") {
+      if (variant === "confirm-retry") {
+        resetVariant();
+        onRetry();
+      } else {
+        showConfirm("confirm-retry");
+      }
+    } else {
+      onViewActivity();
+    }
+  };
+
+  const statusIcon = () => {
+    if (card.status === "running") {
+      if (variant === "confirm-stop") {
+        return (
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <rect x="3" y="3" width="10" height="10" rx="1" />
+          </svg>
+        );
+      }
+      return <span className="kanban-card-spin" />;
+    }
+    if (card.status === "failed") {
+      if (variant === "confirm-retry") {
+        return (
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="2 8 6 12 14 4" />
+            <path d="M14 8A6 6 0 1 1 8 2" />
+          </svg>
+        );
+      }
+      return (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="4" y1="4" x2="12" y2="12" />
+          <line x1="12" y1="4" x2="4" y2="12" />
+        </svg>
+      );
+    }
+    if (card.status === "done") {
+      if (variant === "confirm-retry") {
+        return (
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="2 8 6 12 14 4" />
+            <path d="M14 8A6 6 0 1 1 8 2" />
+          </svg>
+        );
+      }
+      return (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="3 8 7 12 13 4" />
+        </svg>
+      );
+    }
+    return null;
+  };
+
+  const statusTitle = () => {
+    if (card.status === "running") {
+      return variant === "confirm-stop"
+        ? "Click to stop"
+        : "Agent is working — click to stop";
+    }
+    if (card.status === "failed") {
+      return variant === "confirm-retry"
+        ? "Click to retry"
+        : "Agent failed — click to retry";
+    }
+    if (card.status === "done") {
+      return variant === "confirm-retry"
+        ? "Click to re-run"
+        : "Agent finished — click to re-run or view activity";
+    }
+    return "";
+  };
+
+  const statusClass = () => {
+    if (card.status === "running") {
+      return variant === "confirm-stop"
+        ? "kanban-card-status--stop"
+        : "kanban-card-status--running";
+    }
+    if (card.status === "failed") {
+      return variant === "confirm-retry"
+        ? "kanban-card-status--retry"
+        : "kanban-card-status--failed";
+    }
+    if (card.status === "done") {
+      return variant === "confirm-retry"
+        ? "kanban-card-status--retry"
+        : "kanban-card-status--done";
+    }
+    return "";
+  };
 
   return (
     <div
@@ -74,8 +225,6 @@ export default function KanbanCardItem({
       {card.body && (
         <div
           className="kanban-card-body"
-          // Mousewheel scrolls the body without grabbing the card; clicks still
-          // propagate so the card opens the detail modal as before.
           onWheel={(e) => e.stopPropagation()}
         >
           <MarkdownView>{card.body}</MarkdownView>
@@ -95,26 +244,11 @@ export default function KanbanCardItem({
       <div className="kanban-card-actions">
         {(card.status === "running" || card.status === "done" || card.status === "failed") && (
           <button
-            className={`kanban-card-status kanban-card-status--${card.status}`}
-            onClick={(e) => { e.stopPropagation(); onViewActivity(); }}
-            title={
-              card.status === "running" ? "Agent is working — click to view"
-              : card.status === "done" ? "Agent finished — click to review"
-              : "Agent failed — click to view"
-            }
+            className={`kanban-card-status ${statusClass()}`}
+            onClick={handleStatusClick}
+            title={statusTitle()}
           >
-            {card.status === "running" && <span className="kanban-card-spin" />}
-            {card.status === "done" && (
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 8 7 12 13 4" />
-              </svg>
-            )}
-            {card.status === "failed" && (
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="4" y1="4" x2="12" y2="12" />
-                <line x1="12" y1="4" x2="4" y2="12" />
-              </svg>
-            )}
+            {statusIcon()}
           </button>
         )}
         <button

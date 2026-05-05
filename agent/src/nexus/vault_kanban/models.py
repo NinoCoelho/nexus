@@ -53,7 +53,9 @@ class Lane:
     title: str
     cards: list[Card] = field(default_factory=list)
     prompt: str | None = None
-    model: str | None = None  # model id used when auto-dispatching this lane's prompt
+    model: str | None = None
+    webhook_token: str | None = None
+    webhook_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "title": self.title, "cards": [c.to_dict() for c in self.cards]}

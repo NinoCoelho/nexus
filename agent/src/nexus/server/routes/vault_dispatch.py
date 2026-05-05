@@ -8,7 +8,6 @@ re-exported for the agent's dispatch_card tool (via app.state._agent_dispatcher)
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -404,8 +403,9 @@ async def _dispatch_impl(
 
     if mode == "background":
         resolved_model = _resolve_dispatch_model(lane_model, a)
-        asyncio.create_task(
-            _run_background_agent_turn(
+
+        async def _bg_turn() -> None:
+            await _run_background_agent_turn(
                 session_id=session.id,
                 seed_message=seed_message,
                 card_path=path,
@@ -416,7 +416,10 @@ async def _dispatch_impl(
                 entity_kind=entity_kind,
                 occurrence_start=occurrence_start if entity_kind == "event" else None,
             )
-        )
+
+        from ..kanban_queue import get_queue
+        get_queue().submit(path, event_id or card_id, _bg_turn)
+
         return {
             "session_id": session.id, "path": path, "card_id": card_id,
             "event_id": event_id, "mode": mode, "model": resolved_model,

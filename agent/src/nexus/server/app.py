@@ -30,6 +30,7 @@ TUNNEL_COOKIE = "nexus_tunnel_token"
 TUNNEL_PUBLIC_PATHS = frozenset({
     "/tunnel/redeem",
     "/tunnel/auth-status",
+    "/webhook",
 })
 
 # API surface that must require a cookie when reached through the tunnel. This
@@ -72,6 +73,8 @@ def _tunnel_path_requires_auth(path: str) -> bool:
     UI content.
     """
     if path in TUNNEL_PUBLIC_PATHS:
+        return False
+    if path.startswith("/webhook/"):
         return False
     if path.startswith("/tunnel/"):
         # /tunnel/start, /stop, /status, /install — admin. Require a cookie
@@ -617,6 +620,10 @@ def create_app(
     app.state.graphrag_cfg = graphrag_cfg
     app.state.ask_user_handler = ask_user_handler
 
+    from .kanban_queue import init_queue
+    init_queue()
+    log.info("kanban queue initialised")
+
     # ── mount routers ──────────────────────────────────────────────────────────
     from .routes.chat import router as chat_router
     from .routes.chat_slash import router as chat_slash_router
@@ -648,6 +655,7 @@ def create_app(
     from .routes.tunnel import router as tunnel_router
     from .routes.tts import router as tts_router
     from .routes.nexus_account import router as nexus_account_router
+    from .routes.webhook import router as webhook_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -679,6 +687,7 @@ def create_app(
     app.include_router(tunnel_router)
     app.include_router(tts_router)
     app.include_router(nexus_account_router)
+    app.include_router(webhook_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

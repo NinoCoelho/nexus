@@ -27,6 +27,8 @@ interface Props {
   onOpenCardActivity: (card: KanbanCard) => void;
   onOpenCardInChat: (card: KanbanCard) => void;
   onDeleteCard: (cardId: string) => void;
+  onCancelCard: (cardId: string) => void;
+  onRetryCard: (cardId: string) => void;
 }
 
 export default function KanbanLaneColumn({
@@ -52,6 +54,8 @@ export default function KanbanLaneColumn({
   onOpenCardActivity,
   onOpenCardInChat,
   onDeleteCard,
+  onCancelCard,
+  onRetryCard,
 }: Props) {
   const { t } = useTranslation("kanban");
   const isLaneDragging = dragLane === lane.id;
@@ -138,6 +142,8 @@ export default function KanbanLaneColumn({
             onOpenInChat={() => onOpenCardInChat(card)}
             onDelete={() => onDeleteCard(card.id)}
             onViewActivity={() => onOpenCardActivity(card)}
+            onCancel={() => onCancelCard(card.id)}
+            onRetry={() => onRetryCard(card.id)}
           />
         ))}
         <button

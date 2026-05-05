@@ -225,6 +225,26 @@
   border-color: color-mix(in srgb, var(--bad, #d84f4f) 45%, transparent);
 }
 
+.kanban-card-status--stop {
+  color: var(--bad, #d84f4f);
+  border-color: color-mix(in srgb, var(--bad, #d84f4f) 45%, transparent);
+  background: color-mix(in srgb, var(--bad, #d84f4f) 10%, transparent);
+}
+
+.kanban-card-status--stop:hover {
+  background: color-mix(in srgb, var(--bad, #d84f4f) 25%, transparent);
+}
+
+.kanban-card-status--retry {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.kanban-card-status--retry:hover {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
 .kanban-card-spin {
   display: inline-block;
   width: 10px;
