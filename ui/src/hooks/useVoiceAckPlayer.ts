@@ -25,14 +25,13 @@ import type { VoiceAckPayload } from "../api/chat";
 import { useToast } from "../toast/ToastProvider";
 
 interface UseVoiceAckPlayerArgs {
-  /** Currently-viewed session id, so we can suppress noisy starts/progress
-   * for background turns and route cross-session completions to the toast. */
   activeSessionId: string | null;
-  /** Top-level view name (e.g. "chat", "vault", "calendar"). Audio only
-   * fires when the user is on the "chat" view. */
   view: string;
-  /** Caller wants control of "jump to this session" UX. */
   onJumpToSession?: (sessionId: string) => void;
+  /** Fired when a voice ack finishes playing (audio onended or Web Speech
+   *  onend). Receives the ack kind so callers can distinguish complete
+   *  (turn done, safe to re-open mic) from start/progress. */
+  onPlaybackDone?: (kind: VoiceAckPayload["kind"]) => void;
 }
 
 const _b64ToBlob = (b64: string, mime: string): Blob => {
@@ -42,29 +41,20 @@ const _b64ToBlob = (b64: string, mime: string): Blob => {
   return new Blob([arr], { type: mime || "audio/wav" });
 };
 
-const _speakViaWebSpeech = (
-  text: string,
-  language: string,
-  speed: number,
-): void => {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = language || "en-US";
-  utter.rate = speed || 1.0;
-  window.speechSynthesis.speak(utter);
-};
-
 export function useVoiceAckPlayer({
   activeSessionId,
   view,
   onJumpToSession,
+  onPlaybackDone,
 }: UseVoiceAckPlayerArgs) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lastKindRef = useRef<VoiceAckPayload["kind"] | null>(null);
+  const webSpeechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const toast = useToast();
 
-  // Live visibility tracked via ref so the gate is read at handle-time
-  // without forcing re-renders.
+  const onPlaybackDoneRef = useRef(onPlaybackDone);
+  onPlaybackDoneRef.current = onPlaybackDone;
+
   const visibleRef = useRef(
     typeof document !== "undefined"
       ? document.visibilityState === "visible"
@@ -79,17 +69,44 @@ export function useVoiceAckPlayer({
     return () => document.removeEventListener("visibilitychange", onChange);
   }, []);
 
+  const _firePlaybackDone = useCallback(() => {
+    const kind = lastKindRef.current;
+    if (kind) {
+      lastKindRef.current = null;
+      onPlaybackDoneRef.current?.(kind);
+      try {
+        window.dispatchEvent(new CustomEvent("nexus:voice-ack-done", {
+          detail: { kind },
+        }));
+      } catch { /* SSR / test env */ }
+    }
+  }, []);
+
+  const _speakViaWebSpeech = useCallback(
+    (text: string, language: string, speed: number): void => {
+      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = language || "en-US";
+      utter.rate = speed || 1.0;
+      utter.onend = () => {
+        webSpeechUtteranceRef.current = null;
+        _firePlaybackDone();
+      };
+      utter.onerror = () => {
+        webSpeechUtteranceRef.current = null;
+        _firePlaybackDone();
+      };
+      webSpeechUtteranceRef.current = utter;
+      window.speechSynthesis.speak(utter);
+    },
+    [_firePlaybackDone],
+  );
+
   const playPayload = useCallback(
     (payload: VoiceAckPayload): void => {
       const text = payload.transcript?.trim();
       if (!text) return;
-      // Stop whatever was playing — newer acks always win, an outdated
-      // "still working..." right before "all done" is just confusing.
-      // `pause()` + `src = ""` alone isn't enough on Chrome / Safari:
-      // the underlying media buffer can keep emitting sound for a few
-      // hundred ms. `removeAttribute('src') + load()` forces a full
-      // reset so the previous audio truly stops before the new one
-      // starts (otherwise back-to-back acks "embolam" / overlap).
       if (audioRef.current) {
         const prev = audioRef.current;
         audioRef.current = null;
@@ -103,10 +120,10 @@ export function useVoiceAckPlayer({
       }
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
+        webSpeechUtteranceRef.current = null;
       }
-      // Backend synth failed (Piper missing / wrong sample rate / disk
-      // error). Fall back to the OS rather than going silent — the user
-      // dictated, they expect to hear something.
+      lastKindRef.current = payload.kind;
+
       if (!payload.audio_b64) {
         _speakViaWebSpeech(text, payload.language, payload.speed);
         return;
@@ -114,24 +131,25 @@ export function useVoiceAckPlayer({
       const blob = _b64ToBlob(payload.audio_b64, payload.audio_mime);
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      audio.onended = () => URL.revokeObjectURL(url);
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        _firePlaybackDone();
+      };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
-        // The decoded blob couldn't be played (codec mismatch, corrupt
-        // bytes). Fall through to OS synth so the user still gets the
-        // message.
+        audioRef.current = null;
         _speakViaWebSpeech(text, payload.language, payload.speed);
       };
       audioRef.current = audio;
       void audio.play().catch((err) => {
-        // Browsers block autoplay until user interaction. Try Web Speech,
-        // which sometimes gets a separate exemption.
         // eslint-disable-next-line no-console
         console.warn("[voice_ack] audio.play() blocked, trying Web Speech:", err);
+        audioRef.current = null;
         _speakViaWebSpeech(text, payload.language, payload.speed);
       });
     },
-    [],
+    [_speakViaWebSpeech, _firePlaybackDone],
   );
 
   const handle = useCallback(
@@ -140,9 +158,6 @@ export function useVoiceAckPlayer({
       const onChatView = view === "chat";
       const visible = visibleRef.current;
 
-      // `notify` events ALWAYS surface as a toast — they're agent-
-      // initiated status pings meant to be the attention point even
-      // when the user is on another tab or session.
       if (payload.kind === "notify") {
         toast.info(payload.transcript, {
           silent: true,
@@ -154,11 +169,6 @@ export function useVoiceAckPlayer({
               }
             : undefined,
         });
-        // Notify audio: deliberately permissive. The agent is actively
-        // talking TO the user with a status update; suppressing audio
-        // because their tab happens to be backgrounded would defeat
-        // the purpose. Play whenever it's the same session — even on
-        // other tabs/views, even when hidden.
         if (sameSession && payload.audio_b64) {
           // eslint-disable-next-line no-console
           console.info("[voice_ack/notify] playing",
@@ -172,9 +182,6 @@ export function useVoiceAckPlayer({
         return;
       }
 
-      // Non-notify (start/progress/complete) keeps the strict gate so
-      // a long-running task in a backgrounded session doesn't blast
-      // audio at someone who's reading something else.
       const canPlay = visible && onChatView && sameSession;
       if (!canPlay) {
         // eslint-disable-next-line no-console
@@ -183,9 +190,6 @@ export function useVoiceAckPlayer({
           { kind: payload.kind, sessionId, activeSessionId, view, visible,
             transcript: payload.transcript.slice(0, 80) },
         );
-        // Cross-session completion still surfaces a clickable trail —
-        // the user might be in a different session but wants to know
-        // their long-running task finished.
         if (payload.kind === "complete" && !sameSession) {
           toast.info(payload.transcript, {
             duration: 8000,
@@ -208,7 +212,6 @@ export function useVoiceAckPlayer({
     [activeSessionId, view, onJumpToSession, playPayload, toast],
   );
 
-  // Stop on unmount.
   useEffect(
     () => () => {
       if (audioRef.current) {
@@ -218,6 +221,7 @@ export function useVoiceAckPlayer({
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
+      webSpeechUtteranceRef.current = null;
     },
     [],
   );
