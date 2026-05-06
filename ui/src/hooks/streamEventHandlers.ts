@@ -242,11 +242,13 @@ export function applyErrorEvent(
   key: string,
   reason: string | undefined,
   detail: string,
+  actions?: string[],
 ) {
   const knownStatuses: NonNullable<Message["partial"]>["status"][] = [
     "interrupted", "cancelled", "iteration_limit",
     "empty_response", "llm_error", "crashed",
     "length", "upstream_timeout", "rate_limited",
+    "context_overflow", "message_too_large",
   ];
   const mapped = reason && (knownStatuses as string[]).includes(reason)
     ? (reason as NonNullable<Message["partial"]>["status"])
@@ -256,13 +258,12 @@ export function applyErrorEvent(
     const cur = next.get(key) ?? emptyState();
     const msgs = [...cur.messages];
     const lastIdx = msgs.length - 1;
-    // Attach partial to the existing (possibly streaming) assistant
-    // placeholder so its partial content + badges stay visible.
+    const partial: NonNullable<Message["partial"]> = { status: mapped, detail: prettifyStreamError(detail, reason) };
+    if (actions) partial.actions = actions;
     if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
-      // Clear any reconnect hint — the error banner takes over.
-      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, reconnecting: undefined, partial: { status: mapped, detail: prettifyStreamError(detail, reason) } };
+      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, reconnecting: undefined, partial };
     } else {
-      msgs.push({ role: "assistant", content: "", timestamp: new Date(), partial: { status: mapped, detail: prettifyStreamError(detail, reason) } });
+      msgs.push({ role: "assistant", content: "", timestamp: new Date(), partial });
     }
     next.set(key, { ...cur, messages: msgs, thinking: false });
     return next;

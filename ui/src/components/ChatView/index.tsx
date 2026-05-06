@@ -67,8 +67,11 @@ export interface Message {
       | "crashed"
       | "length"
       | "upstream_timeout"
-      | "rate_limited";
+      | "rate_limited"
+      | "context_overflow"
+      | "message_too_large";
     detail?: string;
+    actions?: string[];
   };
   /** Transient hint while the agent backs off after a retryable mid-stream
    * error. Cleared on the next delta/tool event (recovery succeeded) or
@@ -123,6 +126,9 @@ interface Props {
   attachments?: { name: string; vaultPath: string }[];
   onAttachmentsChange?: (files: { name: string; vaultPath: string }[]) => void;
   onRollback?: (msgIndex: number) => void;
+  onCompact?: () => void;
+  onNewSession?: () => void;
+  onRemoveLast?: () => void;
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
@@ -152,6 +158,9 @@ export default function ChatView({
   attachments,
   onAttachmentsChange,
   onRollback,
+  onCompact,
+  onNewSession,
+  onRemoveLast,
   models,
   selectedModel,
   onModelChange,
@@ -259,6 +268,9 @@ export default function ChatView({
                   status={msg.partial.status}
                   onRetry={onRetryPartial ? () => onRetryPartial(idx) : undefined}
                   onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
+                  onCompact={onCompact}
+                  onNewSession={onNewSession}
+                  onRemoveLast={onRemoveLast}
                 />
               )}
             </div>

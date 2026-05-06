@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
 import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyReconnectingEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
@@ -263,7 +263,7 @@ export function useChatSession(
           applyErrorEvent(setChatStates, key, "rate_limited",
             `Rate limit hit. You can continue this task after the cooldown. Estimated wait: ${event.estimated_seconds}s.`);
         } else if (event.type === "error") {
-          applyErrorEvent(setChatStates, key, event.reason, event.detail);
+          applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
         }
       }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode });
 
@@ -375,6 +375,31 @@ export function useChatSession(
     void send(`${HIDDEN_SEED_MARKER}retry: ${targetUser.content}`);
   }, [activeKey, chatStates, send]);
 
+  const handleCompact = useCallback(async () => {
+    const sid = activeSession;
+    if (!sid) return;
+    try {
+      const result = await compactSession(sid);
+      const state = chatStates.get(activeKey) ?? emptyState();
+      if (state.thinking) return;
+      await loadHistory(sid, setChatStates, computeSeedModel, patchState);
+      return result;
+    } catch {
+      /* best-effort */
+    }
+  }, [activeSession, activeKey, chatStates, setChatStates, computeSeedModel, patchState]);
+
+  const handleRemoveLast = useCallback(async () => {
+    const sid = activeSession;
+    if (!sid) return;
+    try {
+      await rollbackLastMessage(sid);
+      await loadHistory(sid, setChatStates, computeSeedModel, patchState);
+    } catch {
+      /* best-effort */
+    }
+  }, [activeSession, setChatStates, computeSeedModel, patchState]);
+
   return {
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,
     pendingSessionId, setPendingSessionId, sessionsRevision, setSessionsRevision,
@@ -383,5 +408,6 @@ export function useChatSession(
     handleContinuePartial, handleRetryPartial, handleInputChange,
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
     handleNewChat, loadSessionHistory, patchState, computeSeedModel,
+    handleCompact, handleRemoveLast,
   };
 }

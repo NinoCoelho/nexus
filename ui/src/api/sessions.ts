@@ -193,6 +193,10 @@ export interface SessionUsage {
   tool_call_count: number;
   estimated_cost_usd: number | null;
   cost_status: "ok" | "unknown" | "zero";
+  context_window_tokens: number;
+  estimated_context_tokens: number;
+  context_pct: number;
+  context_zone: "green" | "yellow" | "orange" | "red" | "unknown";
 }
 
 export async function getSessionUsage(sessionId: string): Promise<SessionUsage> {
@@ -224,6 +228,23 @@ export async function truncateSession(sessionId: string, beforeSeq: number): Pro
     body: JSON.stringify({ before_seq: beforeSeq }),
   });
   if (!res.ok) throw new Error(`Truncate error: ${res.status}`);
+}
+
+export async function compactSession(sessionId: string): Promise<{ compacted: number; saved_bytes: number }> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/compact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) throw new Error(`Compact error: ${res.status}`);
+  return res.json();
+}
+
+export async function rollbackLastMessage(sessionId: string): Promise<{ removed_count: number; remaining_messages: number }> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/messages/last`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Rollback error: ${res.status}`);
+  return res.json();
 }
 
 export async function deleteSession(id: string): Promise<void> {

@@ -205,6 +205,35 @@ async def get_session_trajectories(
     return {"enabled": True, "records": records}
 
 
+_KNOWN_WINDOWS: dict[str, int] = {
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-2.0-flash": 1_048_576,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4.1-mini": 1_047_576,
+    "gpt-4.1-nano": 1_047_576,
+    "o3": 200_000,
+    "o4-mini": 200_000,
+    "claude-sonnet-4-20250514": 200_000,
+    "claude-3.5-sonnet": 200_000,
+    "claude-3.7-sonnet": 200_000,
+    "glm-4.7": 128_000,
+    "glm-5": 128_000,
+    "glm-5.1": 128_000,
+    "deepseek-r1": 128_000,
+    "deepseek-chat": 128_000,
+}
+
+
+def _known_context_window(model: str) -> int:
+    if not model:
+        return 0
+    name = model.split("/")[-1]
+    return _KNOWN_WINDOWS.get(name, 0)
+
+
 @router.get("/sessions/{session_id}/usage")
 async def get_session_usage(
     session_id: str,
@@ -234,6 +263,40 @@ async def get_session_usage(
     cost, cost_status = (None, "unknown")
     if model:
         cost, cost_status = estimate_cost(model, input_tokens=in_tok, output_tokens=out_tok)
+
+    context_window_tokens = 0
+    estimated_context_tokens = 0
+    context_pct = 0.0
+    context_zone = "unknown"
+    try:
+        from ...config_file import load as load_config
+        from ...agent.loop.overflow import estimate_tokens
+        from ...agent.loop.zones import classify_zone
+
+        _FALLBACK_WINDOW = 128_000
+        cfg = load_config()
+        for entry in cfg.models:
+            if entry.id == model or entry.model_name == model:
+                context_window_tokens = int(entry.context_window or 0)
+                break
+        if context_window_tokens == 0:
+            context_window_tokens = _known_context_window(model)
+        session_obj = store.get(session_id)
+        if session_obj and session_obj.history:
+            estimated_context_tokens = estimate_tokens(session_obj.history)
+            effective_window = context_window_tokens if context_window_tokens > 0 else _FALLBACK_WINDOW
+            context_pct = round(
+                min(estimated_context_tokens / effective_window, 1.0), 4
+            )
+            if context_window_tokens > 0:
+                context_zone = classify_zone(estimated_context_tokens, context_window_tokens)
+            elif context_pct > 0.8:
+                context_zone = "red"
+            elif context_pct > 0.6:
+                context_zone = "orange"
+    except Exception:
+        log.debug("context-zone enrichment failed", exc_info=True)
+
     return {
         "model": model or None,
         "input_tokens": in_tok,
@@ -241,6 +304,10 @@ async def get_session_usage(
         "tool_call_count": tool_calls,
         "estimated_cost_usd": cost,
         "cost_status": cost_status,
+        "context_window_tokens": context_window_tokens,
+        "estimated_context_tokens": estimated_context_tokens,
+        "context_pct": context_pct,
+        "context_zone": context_zone,
     }
 
 
@@ -279,6 +346,36 @@ async def truncate_session(
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     truncated = session.history[: body.before_seq]
     store.replace_history(session_id, truncated)
+
+
+@router.delete("/sessions/{session_id}/messages/last")
+async def rollback_last_message(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
+) -> dict:
+    """Remove the last user message (and any trailing assistant) from history.
+
+    Recovery path for sessions stuck due to oversized messages that triggered
+    ``context_overflow`` or ``message_too_large`` — without this, the session
+    is permanently broken because every turn immediately fails the pre-flight
+    overflow check.
+    """
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
+    history = list(session.history)
+    if not history:
+        raise HTTPException(status_code=422, detail="Session history is empty")
+    removed = 0
+    while history and history[-1].role.value != "user":
+        history.pop()
+        removed += 1
+    if history:
+        history.pop()
+        removed += 1
+    store.replace_history(session_id, history)
+    return {"removed_count": removed, "remaining_messages": len(history)}
 
 
 @router.post("/sessions/{session_id}/compact")

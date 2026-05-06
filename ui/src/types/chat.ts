@@ -110,6 +110,7 @@ const REASON_TO_BANNER: Record<string, string> = {
   transport: "Couldn't reach the provider — check your network or the base URL.",
   upstream_timeout: "Provider took too long to respond. Try again, or reduce context size.",
   context_overflow: "Conversation is too long for the model's context window. Compact history or start a new session.",
+  message_too_large: "This message is too large to send. Try shortening it or compacting the conversation first.",
   empty_response: "The model returned an empty response. Sometimes a retry helps.",
   length: "The response was cut off because it hit the model's output limit.",
   iteration_limit: "Agent stopped after hitting the per-turn iteration limit.",
@@ -249,4 +250,6 @@ export interface UseChatSessionResult {
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
   computeSeedModel: () => string;
+  handleCompact: () => Promise<{ compacted: number; saved_bytes: number } | undefined>;
+  handleRemoveLast: () => Promise<void>;
 }

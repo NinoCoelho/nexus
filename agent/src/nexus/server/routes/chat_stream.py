@@ -132,6 +132,84 @@ async def chat_stream_route(
                     _inflight_turns.pop(session.id, None)
             return
 
+        # Pre-send size guard: reject oversized messages BEFORE persisting
+        # them. Without this, a huge paste gets saved, and every subsequent
+        # turn immediately fails the pre-flight overflow check — the session
+        # becomes permanently stuck with no UI recovery path.
+        _MAX_MESSAGE_CHARS = 50_000
+        msg_len = len(req.message or "")
+        if msg_len > _MAX_MESSAGE_CHARS:
+            yield json.dumps({
+                "type": "error",
+                "detail": (
+                    f"Message too long ({msg_len:,} characters). "
+                    f"Maximum is {_MAX_MESSAGE_CHARS:,} characters."
+                ),
+                "reason": "message_too_large",
+                "retryable": False,
+                "status_code": None,
+                "actions": ["compact_history", "new_session"],
+            }) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "session_id": session.id,
+                "reply": "",
+                "trace": [],
+                "skills_touched": [],
+                "iterations": 0,
+                "messages": list(pre_turn_history),
+                "usage": {"input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "model": resolved_model_id},
+            }) + "\n"
+            return
+
+        # Context-window pre-check: estimate history + incoming message
+        # tokens and refuse early if they won't fit. The agent loop's own
+        # pre-flight check (overflow.py) runs after this, but this gate
+        # prevents the oversized message from being persisted.
+        _OUTPUT_HEADROOM = 4096
+        try:
+            from ...agent.loop.overflow import estimate_tokens as _est_tok
+            cfg = load_config()
+            ctx_window = 0
+            effective_model = resolved_model_id or getattr(cfg.agent, "default_model", "")
+            for entry in cfg.models:
+                if entry.id == effective_model or entry.model_name == effective_model:
+                    ctx_window = int(entry.context_window or 0)
+                    break
+            if ctx_window > 0 and pre_turn_history:
+                history_tokens = _est_tok(pre_turn_history)
+                incoming_tokens = _est_tok([
+                    type("M", (), {"content": req.message, "tool_calls": []})()
+                ])
+                if history_tokens + incoming_tokens > ctx_window - _OUTPUT_HEADROOM:
+                    yield json.dumps({
+                        "type": "error",
+                        "detail": (
+                            f"Sending this message would exceed the model's context window "
+                            f"(~{history_tokens + incoming_tokens:,} tokens needed vs "
+                            f"{ctx_window:,} available). Compact the conversation or start a new session."
+                        ),
+                        "reason": "message_too_large",
+                        "retryable": False,
+                        "status_code": None,
+                        "actions": ["compact_history", "new_session"],
+                        "estimated_input_tokens": history_tokens + incoming_tokens,
+                        "context_window": ctx_window,
+                    }) + "\n"
+                    yield json.dumps({
+                        "type": "done",
+                        "session_id": session.id,
+                        "reply": "",
+                        "trace": [],
+                        "skills_touched": [],
+                        "iterations": 0,
+                        "messages": list(pre_turn_history),
+                        "usage": {"input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "model": resolved_model_id},
+                    }) + "\n"
+                    return
+        except Exception:
+            log.debug("pre-send context-window check failed", exc_info=True)
+
         # Eagerly persist the user message so a crash between POST
         # and the first delta doesn't lose the prompt the user typed.
         # When the request carries attachments, persist a multipart

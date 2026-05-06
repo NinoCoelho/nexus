@@ -20,6 +20,20 @@
   color: var(--fg-dim);
 }
 
+.agent-status-ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-status-ctx-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 .agent-status-bar.is-thinking .agent-status-pill {
   animation: agent-status-pulse 1.5s ease-in-out infinite;
 }

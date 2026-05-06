@@ -47,9 +47,14 @@
     "length": "Response was truncated — the model hit its output limit.",
     "upstreamTimeout": "The model didn't respond in time.",
     "rateLimited": "Rate limit hit — the turn has been paused. Resume after the cooldown.",
+    "contextOverflow": "Conversation is too long for the model's context window.",
+    "messageTooLarge": "This message is too large to send.",
     "proceed": "How do you want to proceed?",
     "continue": "Continue",
-    "retry": "Retry"
+    "retry": "Retry",
+    "compact": "Compact",
+    "newSession": "New session",
+    "removeLast": "Remove last message"
   },
   "input": {
     "placeholder": "Message Nexus…",

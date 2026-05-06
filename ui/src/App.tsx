@@ -196,6 +196,7 @@ export default function App() {
     handleInputChange, handleAttachmentsChange, handleModelChange,
     handleSessionSelect: _handleSessionSelect,
     handleNewChat: _handleNewChat,
+    handleCompact, handleRemoveLast,
   } = chatSession;
 
   // Seed the __new__ slot's selectedModel whenever routing info loads so
@@ -423,6 +424,34 @@ export default function App() {
 
   const sessionUsage = useSessionUsage(activeSession, activeState.thinking);
 
+  const lastPromptedZoneRef = useRef<string>("green");
+  useEffect(() => {
+    if (!sessionUsage || activeState.thinking) return;
+    const zone = sessionUsage.context_zone;
+    if (!zone || zone === "unknown" || zone === "green") {
+      lastPromptedZoneRef.current = "green";
+      return;
+    }
+    if (zone === lastPromptedZoneRef.current) return;
+    lastPromptedZoneRef.current = zone;
+    if (zone === "red") {
+      toast.warning("Conversation is very long — you may hit the context limit soon.", {
+        duration: 12000,
+        action: { label: "Compact now", onClick: () => { void handleCompact(); } },
+      });
+    } else if (zone === "orange") {
+      toast.warning("Your conversation is getting long. Compact to keep things running smoothly.", {
+        duration: 8000,
+        action: { label: "Compact now", onClick: () => { void handleCompact(); } },
+      });
+    } else if (zone === "yellow") {
+      toast.info("Context is filling up. Consider compacting soon.", {
+        duration: 6000,
+        action: { label: "Compact now", onClick: () => { void handleCompact(); } },
+      });
+    }
+  }, [sessionUsage, activeState.thinking, handleCompact]);
+
   const handleSpawnSessionFromEntity = useCallback((entityId: number, entityName: string) => {
     void entityId;
     _handleNewChat();
@@ -631,6 +660,9 @@ export default function App() {
               attachments={activeState.attachments}
               onAttachmentsChange={handleAttachmentsChange}
               onRollback={handleRollback}
+              onCompact={handleCompact}
+              onNewSession={_handleNewChat}
+              onRemoveLast={handleRemoveLast}
               models={availableModels}
               selectedModel={activeState.selectedModel}
               onModelChange={handleModelChange}
