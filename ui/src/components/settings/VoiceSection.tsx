@@ -4,20 +4,27 @@ import {
   patchConfig,
   type TTSConfig,
 } from "../../api/config";
+import { type Model } from "../../api/models";
 import { invalidateTTSConfigCache } from "../../hooks/useTTS";
 
 const DEFAULT_CFG: TTSConfig = {
   enabled: true,
   ack_enabled: true,
   ack_mode: "voice",
+  ack_model: "",
   voices_dir: "",
 };
 
-export default function VoiceSection() {
+interface Props {
+  models: Model[];
+}
+
+export default function VoiceSection({ models }: Props) {
   const [cfg, setCfg] = useState<TTSConfig>(DEFAULT_CFG);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pickingAckModel, setPickingAckModel] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +105,49 @@ export default function VoiceSection() {
           >
             <span className="hitl-switch-knob" />
           </button>
+        </div>
+      )}
+
+      {cfg.ack_enabled && (
+        <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>
+          <span className="settings-row-name">
+            Acknowledgment model
+            <span className="settings-row-hint" style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}>
+              Fast model for spoken feedback — empty uses default
+            </span>
+          </span>
+          <div style={{ flexBasis: "100%" }}>
+            {pickingAckModel ? (
+              <select
+                className="s-select"
+                autoFocus
+                disabled={saving}
+                value={cfg.ack_model}
+                onChange={(e) => {
+                  update({ ack_model: e.target.value });
+                  setPickingAckModel(false);
+                }}
+                onBlur={() => setPickingAckModel(false)}
+              >
+                <option value="">Default (agent model)</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button
+                type="button"
+                className="s-default-strip__btn"
+                onClick={() => setPickingAckModel(true)}
+                disabled={saving || models.length === 0}
+                style={{ marginTop: 2 }}
+              >
+                {cfg.ack_model || "Default"}
+              </button>
+            )}
+          </div>
         </div>
       )}
 

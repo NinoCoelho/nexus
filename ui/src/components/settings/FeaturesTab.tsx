@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { type KnowledgeStats } from "../../api";
+import { type KnowledgeStats, type Model } from "../../api";
 import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
@@ -11,9 +11,10 @@ import VoiceSection from "./VoiceSection";
 
 interface Props {
   graphStats: KnowledgeStats | null;
+  models: Model[];
 }
 
-export default function FeaturesTab({ graphStats }: Props) {
+export default function FeaturesTab({ graphStats, models }: Props) {
   const { t } = useTranslation("settings");
   const [reindexOpen, setReindexOpen] = useState(false);
 
@@ -58,7 +59,7 @@ export default function FeaturesTab({ graphStats }: Props) {
           ),
         }}
       >
-        <VoiceSection />
+        <VoiceSection models={models} />
       </SettingsSection>
 
       <SettingsSection

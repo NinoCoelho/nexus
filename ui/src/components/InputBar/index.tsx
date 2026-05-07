@@ -248,9 +248,10 @@ export default function InputBar({
       }
 
       const vaultPath = newAttachments[0].vaultPath;
+      let transcript = "";
       try {
         const r = await transcribeVaultAudio(vaultPath);
-        const transcript = r.text ?? "";
+        transcript = r.text ?? "";
         if (!looksLikeSpeech(transcript)) {
           toast.info("I couldn\u2019t understand. Please try again.");
           if (conversationModeRef.current) {
@@ -262,7 +263,7 @@ export default function InputBar({
         // Transcription check failed — send anyway, let the backend handle it.
       }
 
-      const typed = value.trim();
+      const typed = value.trim() || transcript.trim();
       onChange("");
       onSend({ text: typed, extraAttachments: newAttachments, inputMode: "voice" });
     } catch (err) {
@@ -310,14 +311,8 @@ export default function InputBar({
   }, []);
 
   retryFollowUpRef.current = () => {
-    if (transcribingRef.current || recording) return;
     setConversationMode(true);
-    sounds.micReady();
-    void startRecording({
-      onSilenceTimeout: handleSilenceTimeout,
-      followUpMode: true,
-      onFollowUpTimeout: handleFollowUpTimeout,
-    });
+    openFollowUpMic();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -430,22 +425,51 @@ export default function InputBar({
     }
   };
 
+  const turnDoneRef = useRef(true);
+  const pendingMicReopenRef = useRef(false);
+  const prevBusyRef = useRef(busy);
+
+  const openFollowUpMic = useCallback(() => {
+    if (transcribingRef.current || recording) return;
+    if (!conversationModeRef.current) return;
+    sounds.micReady();
+    void startRecording({
+      onSilenceTimeout: handleSilenceTimeout,
+      followUpMode: true,
+      onFollowUpTimeout: handleFollowUpTimeout,
+    });
+  }, [startRecording, handleSilenceTimeout, handleFollowUpTimeout, recording]);
+
+  useEffect(() => {
+    if (busy) {
+      turnDoneRef.current = false;
+      pendingMicReopenRef.current = false;
+    }
+    if (prevBusyRef.current && !busy) {
+      turnDoneRef.current = true;
+      if (pendingMicReopenRef.current) {
+        pendingMicReopenRef.current = false;
+        openFollowUpMic();
+      }
+    }
+    prevBusyRef.current = busy;
+  }, [busy, openFollowUpMic]);
+
   useEffect(() => {
     const handler = (e: Event) => {
       const kind = (e as CustomEvent).detail?.kind;
       if (kind !== "complete") return;
       if (!conversationModeRef.current) return;
       if (transcribingRef.current || recording) return;
-      sounds.micReady();
-      void startRecording({
-        onSilenceTimeout: handleSilenceTimeout,
-        followUpMode: true,
-        onFollowUpTimeout: handleFollowUpTimeout,
-      });
+      if (turnDoneRef.current) {
+        openFollowUpMic();
+      } else {
+        pendingMicReopenRef.current = true;
+      }
     };
     window.addEventListener("nexus:voice-ack-done", handler);
     return () => window.removeEventListener("nexus:voice-ack-done", handler);
-  }, [startRecording, handleSilenceTimeout, handleFollowUpTimeout, disabled, recording]);
+  }, [openFollowUpMic]);
 
   const isStop = busy || recording;
   const showModelBadge = !hasContent && !!selectedModel;

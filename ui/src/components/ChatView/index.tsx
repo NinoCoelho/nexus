@@ -206,7 +206,8 @@ export default function ChatView({
     (m) =>
       (m.content ?? "").trim().length > 0 ||
       (m.timeline ?? []).length > 0 ||
-      m.partial != null,
+      m.partial != null ||
+      (m.attachments ?? []).length > 0,
   );
 
   const setMsgRef = (idx: number) => (el: HTMLDivElement | null) => {

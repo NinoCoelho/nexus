@@ -2,13 +2,14 @@
 
 Two kinds, both gated by ``cfg.tts.ack_enabled``:
 
-  - **start**:    fired the moment a voice message arrives — a one-line
-                  "okay, looking that up" so the user gets instant audio
-                  feedback before the agent loop even runs.
-  - **complete**: fired when the agent's reply lands — a 2-5 sentence
-                  spoken summary highlighting findings + next steps.
+  - **start**:    fired the moment a voice message arrives — a short
+                  contextual phrase (max 7 words) so the user gets
+                  instant audio feedback before the agent loop runs.
+  - **complete**: fired when the agent's reply lands — a concise
+                  highlight (max 15 words) of the main result.
 
-Each ack uses the agent's main default model. Audio is synthesized
+Each ack uses a dedicated fast model (``cfg.tts.ack_model``) when
+configured, otherwise the agent's default model. Audio is synthesized
 server-side through the bundled Piper engine; the event carries
 base64 WAV bytes that the UI decodes and plays. When the LLM returns
 empty (some local models do), a hardcoded language-aware template is
@@ -40,15 +41,11 @@ log = logging.getLogger(__name__)
 _START_PROMPT_EN = (
     "You are a voice assistant giving an instant verbal acknowledgment "
     "BEFORE starting work. The user dictated: {user_text!r}\n\n"
-    "Imagine roughly how long this will take:\n"
-    "  - Trivial chat / fact lookup → fast (< 5 sec)\n"
-    "  - Web search, vault read, simple analysis → medium (5–30 sec)\n"
-    "  - Multi-step research, big data ops, multiple tools → long (> 30 sec)\n\n"
-    "Generate ONE short, casual spoken sentence (under 15 words) that:\n"
+    "Generate ONE short, casual spoken sentence (at most 7 words) that:\n"
     "  - Confirms what you understood, in plain words\n"
-    "  - Hints at the expected duration WITHOUT being formal — e.g. 'right "
-    "back', 'one moment', 'this'll take a bit, hang on', 'looking that up'\n"
-    "  - Sounds natural and informal, like a person, not a script\n\n"
+    "  - Sounds natural and informal, like a person, not a script\n"
+    "  - Hints at the expected action (e.g. 'right back', 'one moment', "
+    "'looking that up', 'checking now')\n\n"
     "REPLY IN ENGLISH. Reply with ONLY the spoken sentence — no quotes, "
     "no preamble."
 )
@@ -56,30 +53,25 @@ _START_PROMPT_EN = (
 _START_PROMPT_PT = (
     "Você é um assistente de voz dando uma confirmação verbal instantânea "
     "ANTES de começar a trabalhar. O usuário ditou: {user_text!r}\n\n"
-    "Estime mais ou menos quanto tempo isso vai levar:\n"
-    "  - Conversa trivial / busca rápida de fato → rápido (< 5 seg)\n"
-    "  - Pesquisa na web, leitura do vault, análise simples → médio (5–30 seg)\n"
-    "  - Pesquisa em múltiplos passos, operações grandes em dados, várias "
-    "ferramentas → longo (> 30 seg)\n\n"
-    "Gere UMA frase falada, curta e casual (menos de 15 palavras) que:\n"
+    "Gere UMA frase falada, curta e casual (no máximo 7 palavras) que:\n"
     "  - Confirme o que você entendeu, em palavras simples\n"
-    "  - Dê uma pista da duração SEM ser formal — ex: 'tô vendo isso', "
-    "'um momento', 'isso vai levar um tempinho, segura aí', 'tô olhando'\n"
-    "  - Soe natural e informal, como uma pessoa, não um script\n\n"
+    "  - Soe natural e informal, como uma pessoa, não um script\n"
+    "  - Dê uma pista da ação esperada (ex: 'tô vendo isso', "
+    "'um momento', 'verificando agora', 'olhando isso')\n\n"
     "RESPONDA EM PORTUGUÊS BRASILEIRO. Responda com APENAS a frase falada — "
     "sem aspas, sem preâmbulo."
 )
 
 _COMPLETE_PROMPT_EN = (
-    "Summarize the text below into ONE short paragraph (under 50 words). "
-    "Plain spoken English. No markdown, no closing pleasantries, no "
-    "headers, no bullets — just the paragraph.\n\n{full_reply}"
+    "Summarize the text below into ONE spoken sentence (at most 15 words). "
+    "Highlight the single main result or finding. Plain spoken English. "
+    "No markdown, no closing pleasantries, no headers, no bullets.\n\n{full_reply}"
 )
 
 _COMPLETE_PROMPT_PT = (
-    "Resuma o texto abaixo em UM parágrafo curto (menos de 50 palavras). "
-    "Português brasileiro falado. Sem markdown, sem despedidas, sem "
-    "títulos, sem marcadores — só o parágrafo.\n\n{full_reply}"
+    "Resuma o texto abaixo em UMA frase falada (no máximo 15 palavras). "
+    "Destaque o principal resultado ou descoberta. Português brasileiro "
+    "falado. Sem markdown, sem despedidas, sem títulos, sem marcadores.\n\n{full_reply}"
 )
 
 _SUMMARIZE_PROMPT_EN = (
@@ -98,12 +90,12 @@ _SUMMARIZE_PROMPT_PT = (
 # back empty. Plain "summarize this" works on weaker local models that
 # choke on multi-section instructions.
 _SIMPLE_SUMMARY_PROMPT_EN = (
-    "Summarize this text in 2-3 short spoken sentences. Plain English, "
-    "no markdown.\n\n{reply}"
+    "Summarize this text in 1 short spoken sentence, at most 15 words. "
+    "Plain English, no markdown.\n\n{reply}"
 )
 _SIMPLE_SUMMARY_PROMPT_PT = (
-    "Resuma este texto em 2-3 frases curtas faladas. Português simples, "
-    "sem markdown.\n\n{reply}"
+    "Resuma este texto em 1 frase curta falada, no máximo 15 palavras. "
+    "Português simples, sem markdown.\n\n{reply}"
 )
 
 
@@ -188,13 +180,11 @@ _FALLBACK_COMPLETE_GENERIC = {
 }
 
 
-def _truncate_for_speech(text: str, *, max_words: int = 60) -> str:
+def _truncate_for_speech(text: str, *, max_words: int = 15) -> str:
     """Take the first N words of text, ending on a sentence boundary
-    when possible. Used as the LAST-RESORT fallback for the completion
+    when possible. Used as the last-resort fallback for the completion
     ack when both the structured prompt and the simpler retry come back
-    empty — better to read raw content with a clear preamble than say
-    'the answer is in the chat' (which the user has been complaining
-    about, rightly)."""
+    empty."""
     cleaned = (text or "").strip()
     if not cleaned:
         return ""
@@ -210,34 +200,28 @@ def _truncate_for_speech(text: str, *, max_words: int = 60) -> str:
     return snippet + "…"
 
 
-async def _generate_text(agent: "Agent", cfg: NexusConfig, prompt: str) -> str:
+async def _generate_text(
+    agent: "Agent",
+    cfg: NexusConfig,
+    prompt: str,
+    *,
+    max_tokens: int = 400,
+) -> str:
     from .agent.llm import ChatMessage, Role
 
-    # Always use the agent's default model — no separate ack model. The
-    # registry resolves the friendly id into the upstream name the
-    # provider wants (same dance as the autotitle helper).
-    target = cfg.agent.default_model or ""
+    # Prefer a dedicated ack model (fast/cheap) when configured;
+    # otherwise fall back to the agent's default model.
+    target = cfg.tts.ack_model or cfg.agent.default_model or ""
     if not target:
         log.warning(
-            "[voice_ack] agent.default_model is empty — trying default provider, "
-            "but you should configure a default model in settings"
+            "[voice_ack] no ack_model or default_model set — trying "
+            "default provider, but you should configure a model in settings"
         )
     provider, upstream = agent._resolve_provider(target)
     if provider is None:
         log.warning("[voice_ack] _resolve_provider returned None for model=%r", target)
         return ""
     try:
-        # Disable extended thinking for ack calls — the structured ack
-        # prompts are simple paraphrasing tasks, no reasoning needed,
-        # and reasoning models would otherwise burn the entire token
-        # budget on internal chain-of-thought before producing visible
-        # content (manifests as `stop_reason=length` + empty content).
-        # The dict has redundant flags so different gateways pick up
-        # at least one: Anthropic native + LiteLLM uses `thinking`,
-        # Qwen/vLLM uses `enable_thinking` and `chat_template_kwargs`,
-        # GLM accepts both. Unknown fields are silently ignored by
-        # most OpenAI-compat servers (the strict ones, like Gemini,
-        # are skipped in the OpenAI provider).
         no_think = {
             "thinking": {"type": "disabled"},
             "enable_thinking": False,
@@ -246,7 +230,8 @@ async def _generate_text(agent: "Agent", cfg: NexusConfig, prompt: str) -> str:
         resp = await provider.chat(
             [ChatMessage(role=Role.USER, content=prompt)],
             model=upstream,
-            max_tokens=400,
+            max_tokens=max_tokens,
+            temperature=0.0,
             extra_payload=no_think,
         )
     except Exception as exc:  # noqa: BLE001 — best-effort, never break the turn
@@ -338,7 +323,7 @@ async def emit_start_ack(
                  lang, text)
     else:
         prompt = _start_prompt(lang, trigger.user_text[:300])
-        text = await _generate_text(agent, cfg, prompt)
+        text = await _generate_text(agent, cfg, prompt, max_tokens=25)
         if not text:
             text = _FALLBACK_START.get(lang, _FALLBACK_START["en"])
             log.info("[voice_ack/start] using template fallback (lang=%s): %r", lang, text)
@@ -369,7 +354,7 @@ async def emit_completion_ack(
                  trigger.session_id)
         return
 
-    if len(cleaned_reply.split()) <= 10:
+    if len(cleaned_reply.split()) <= 15:
         log.info("[voice_ack/complete] short reply (%d words) — speaking directly sess=%s",
                  len(cleaned_reply.split()), trigger.session_id)
         await _publish(
@@ -386,24 +371,18 @@ async def emit_completion_ack(
         trigger.user_text[:300] or "(voice message)",
         trigger.full_reply[:1500],
     )
-    text = await _generate_text(agent, cfg, prompt)
+    text = await _generate_text(agent, cfg, prompt, max_tokens=40)
     if not text:
-        # LLM didn't follow the structured prompt — try a much simpler
-        # one-shot. Local models often handle "summarize this" better
-        # than "produce a 2-paragraph response with these sections".
         log.info("[voice_ack/complete] structured prompt empty — retrying simpler")
         simple = _SIMPLE_SUMMARY_PROMPT_PT if lang == "pt" else _SIMPLE_SUMMARY_PROMPT_EN
         text = await _generate_text(
             agent, cfg, simple.format(reply=trigger.full_reply[:1200]),
+            max_tokens=40,
         )
     if not text:
-        # Both prompts failed. Speaking nothing useful is the worst
-        # outcome. Read a truncated version of the actual reply with a
-        # clear preamble so the user knows they're hearing the raw
-        # content, not a polished summary.
-        snippet = _truncate_for_speech(trigger.full_reply, max_words=60)
+        snippet = _truncate_for_speech(trigger.full_reply, max_words=15)
         if snippet:
-            preamble = "Resumo do conteúdo: " if lang == "pt" else "Brief content: "
+            preamble = "Resultado: " if lang == "pt" else "Result: "
             text = preamble + snippet
             log.info("[voice_ack/complete] using snippet fallback with preamble (lang=%s)",
                      lang)

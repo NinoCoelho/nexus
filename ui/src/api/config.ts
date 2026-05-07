@@ -59,6 +59,8 @@ export interface TTSConfig {
   /** When "voice", acks only fire on voice turns. When "always", the agent
    * speaks its completion summary on every turn (hands-free / accessibility). */
   ack_mode: "voice" | "always";
+  /** Fast/cheap model for voice ack LLM calls. Empty = agent default model. */
+  ack_model: string;
   /** Where the bundled Piper voices live on disk. Empty = ~/.nexus/tts/piper. */
   voices_dir: string;
 }

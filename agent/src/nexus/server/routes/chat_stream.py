@@ -27,6 +27,7 @@ from ...redact import redact_sensitive_text
 from ...voice_ack import (
     _AckTrigger,
     emit_completion_ack,
+    emit_start_ack,
 )
 from ..session_store import SessionStore
 
@@ -306,6 +307,20 @@ async def chat_stream_route(
             tts_cfg.enabled, tts_cfg.ack_enabled,
             getattr(a, "_provider_registry", None) is not None,
         )
+
+        # Fire a spoken start-ack for voice-input turns so the user
+        # hears an immediate contextual acknowledgment while the agent
+        # loop processes. Runs as a fire-and-forget task concurrent
+        # with the main agent loop.
+        if is_voice and ack_active:
+            asyncio.create_task(emit_start_ack(
+                agent=a, store=store,
+                trigger=_AckTrigger(
+                    user_text=req.message,
+                    session_id=session.id,
+                ),
+                cfg=load_config(),
+            ))
 
         # Speculative completion-ack kickoff: when the agent has streamed
         # ~80+ words of content and is in the middle of writing its final

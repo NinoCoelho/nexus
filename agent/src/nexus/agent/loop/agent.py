@@ -397,7 +397,7 @@ class Agent:
                     child = self._sessions.create_child(
                         parent_session_id=session_id,
                         title="Auto-forked session",
-                        hidden=False,
+                        hidden=True,
                     )
                     summary_content = "\n".join(
                         (m.content or "")[:500] for m in stripped_history[:5]

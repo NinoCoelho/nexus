@@ -150,7 +150,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             />
           )}
           {active === "credentials" && <CredentialsTab />}
-          {active === "features" && <FeaturesTab graphStats={graphStats} />}
+          {active === "features" && <FeaturesTab graphStats={graphStats} models={models} />}
           {active === "advanced" && (
             <AdvancedTab hitl={hitl} onHitlChanged={setHitl} />
           )}
