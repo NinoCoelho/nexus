@@ -156,6 +156,55 @@
   flex-shrink: 0;
 }
 
+.user-msg-voice-preview {
+  align-self: flex-start;
+  display: block;
+  text-align: left;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-left: 2px solid var(--border-soft, rgba(0, 0, 0, 0.2));
+  background: var(--bg-soft, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+  color: var(--fg-faint);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.5;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.user-msg-voice-preview:hover {
+  color: var(--fg);
+  background: var(--bg-soft-hover, rgba(0, 0, 0, 0.07));
+}
+
+.user-msg-voice-collapse {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.18));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-faint);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.4;
+  font-style: normal;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.user-msg-voice-collapse:hover {
+  background: var(--bg-soft, rgba(0, 0, 0, 0.06));
+  color: var(--fg);
+  border-color: var(--border, rgba(0, 0, 0, 0.25));
+}
+
 .user-msg-voice-transcript {
   font-size: 13px;
   line-height: 1.5;

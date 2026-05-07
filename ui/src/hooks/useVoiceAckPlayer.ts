@@ -19,6 +19,10 @@
  * Audio source: prefer the backend-rendered Piper bytes (audio_b64). If
  * synth failed and the bytes are missing, fall back to the OS via
  * window.speechSynthesis with the same transcript — better than silent.
+ *
+ * A generation counter prevents stale audio callbacks (from force-stopped
+ * audio elements) from dispatching premature or duplicate
+ * `nexus:voice-ack-done` events.
  */
 import { useCallback, useEffect, useRef } from "react";
 import type { VoiceAckPayload } from "../api/chat";
@@ -28,9 +32,6 @@ interface UseVoiceAckPlayerArgs {
   activeSessionId: string | null;
   view: string;
   onJumpToSession?: (sessionId: string) => void;
-  /** Fired when a voice ack finishes playing (audio onended or Web Speech
-   *  onend). Receives the ack kind so callers can distinguish complete
-   *  (turn done, safe to re-open mic) from start/progress. */
   onPlaybackDone?: (kind: VoiceAckPayload["kind"]) => void;
 }
 
@@ -49,6 +50,7 @@ export function useVoiceAckPlayer({
 }: UseVoiceAckPlayerArgs) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastKindRef = useRef<VoiceAckPayload["kind"] | null>(null);
+  const playGenRef = useRef(0);
   const webSpeechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const toast = useToast();
 
@@ -69,7 +71,8 @@ export function useVoiceAckPlayer({
     return () => document.removeEventListener("visibilitychange", onChange);
   }, []);
 
-  const _firePlaybackDone = useCallback(() => {
+  const _firePlaybackDone = useCallback((gen: number) => {
+    if (playGenRef.current !== gen) return;
     const kind = lastKindRef.current;
     if (kind) {
       lastKindRef.current = null;
@@ -83,7 +86,7 @@ export function useVoiceAckPlayer({
   }, []);
 
   const _speakViaWebSpeech = useCallback(
-    (text: string, language: string, speed: number): void => {
+    (text: string, language: string, speed: number, gen: number): void => {
       if (typeof window === "undefined" || !window.speechSynthesis) return;
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(text);
@@ -91,11 +94,11 @@ export function useVoiceAckPlayer({
       utter.rate = speed || 1.0;
       utter.onend = () => {
         webSpeechUtteranceRef.current = null;
-        _firePlaybackDone();
+        _firePlaybackDone(gen);
       };
       utter.onerror = () => {
         webSpeechUtteranceRef.current = null;
-        _firePlaybackDone();
+        _firePlaybackDone(gen);
       };
       webSpeechUtteranceRef.current = utter;
       window.speechSynthesis.speak(utter);
@@ -107,6 +110,7 @@ export function useVoiceAckPlayer({
     (payload: VoiceAckPayload): void => {
       const text = payload.transcript?.trim();
       if (!text) return;
+      const gen = ++playGenRef.current;
       if (audioRef.current) {
         const prev = audioRef.current;
         audioRef.current = null;
@@ -125,7 +129,7 @@ export function useVoiceAckPlayer({
       lastKindRef.current = payload.kind;
 
       if (!payload.audio_b64) {
-        _speakViaWebSpeech(text, payload.language, payload.speed);
+        _speakViaWebSpeech(text, payload.language, payload.speed, gen);
         return;
       }
       const blob = _b64ToBlob(payload.audio_b64, payload.audio_mime);
@@ -134,19 +138,17 @@ export function useVoiceAckPlayer({
       audio.onended = () => {
         URL.revokeObjectURL(url);
         audioRef.current = null;
-        _firePlaybackDone();
+        _firePlaybackDone(gen);
       };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
         audioRef.current = null;
-        _speakViaWebSpeech(text, payload.language, payload.speed);
+        _speakViaWebSpeech(text, payload.language, payload.speed, gen);
       };
       audioRef.current = audio;
-      void audio.play().catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn("[voice_ack] audio.play() blocked, trying Web Speech:", err);
+      void audio.play().catch(() => {
         audioRef.current = null;
-        _speakViaWebSpeech(text, payload.language, payload.speed);
+        _speakViaWebSpeech(text, payload.language, payload.speed, gen);
       });
     },
     [_speakViaWebSpeech, _firePlaybackDone],

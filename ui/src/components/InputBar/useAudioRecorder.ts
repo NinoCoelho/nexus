@@ -11,10 +11,12 @@
  * VAD (voice activity detection): After a per-recording fingerprint
  * calibration window (first ~1s), silence below the calibrated threshold
  * for 3 consecutive seconds triggers `onSilenceTimeout`. In follow-up
- * mode, if no speech is detected within 5s of recording start, the
- * recording is auto-cancelled.
+ * mode, if no speech is detected within 10s of recording start, the
+ * recording is auto-cancelled and a soft waiting beep plays every 2s
+ * to remind the user the mic is listening.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { sounds } from "../../hooks/useSounds";
 import { useToast } from "../../toast/ToastProvider";
 
 export interface AudioAttachment {
@@ -23,18 +25,16 @@ export interface AudioAttachment {
 }
 
 export interface RecorderOptions {
-  /** Called when 3s of silence is detected after speech. */
   onSilenceTimeout?: () => void;
-  /** Follow-up mode: auto-cancel (no send) if no speech within 5s. */
   followUpMode?: boolean;
-  /** Called when follow-up mode times out with no speech. */
   onFollowUpTimeout?: () => void;
 }
 
 const LEVEL_HISTORY = 32;
 const FINGERPRINT_DURATION_MS = 1000;
 const SILENCE_TIMEOUT_MS = 3000;
-const FOLLOW_UP_TIMEOUT_MS = 5000;
+const FOLLOW_UP_TIMEOUT_MS = 10000;
+const WAITING_BEEP_INTERVAL_MS = 2000;
 const DEFAULT_THRESHOLD = 0.05;
 const MIN_THRESHOLD = 0.02;
 
@@ -63,6 +63,7 @@ export function useAudioRecorder() {
   const silenceStartRef = useRef<number | null>(null);
   const silenceTimerRef = useRef<number | null>(null);
   const followUpTimerRef = useRef<number | null>(null);
+  const waitingBeepRef = useRef<number | null>(null);
   const vadStoppedRef = useRef(false);
   const recordingStartRef = useRef<number>(0);
 
@@ -74,6 +75,10 @@ export function useAudioRecorder() {
     if (followUpTimerRef.current != null) {
       clearTimeout(followUpTimerRef.current);
       followUpTimerRef.current = null;
+    }
+    if (waitingBeepRef.current != null) {
+      clearInterval(waitingBeepRef.current);
+      waitingBeepRef.current = null;
     }
     silenceStartRef.current = null;
   }, []);
@@ -167,9 +172,19 @@ export function useAudioRecorder() {
       recordingStartRef.current = startedAt;
 
       if (opts?.followUpMode) {
+        waitingBeepRef.current = window.setInterval(() => {
+          if (!speechDetectedRef.current && !vadStoppedRef.current) {
+            sounds.micWaiting();
+          }
+        }, WAITING_BEEP_INTERVAL_MS);
+
         followUpTimerRef.current = window.setTimeout(() => {
           if (!speechDetectedRef.current && !vadStoppedRef.current) {
             vadStoppedRef.current = true;
+            if (waitingBeepRef.current != null) {
+              clearInterval(waitingBeepRef.current);
+              waitingBeepRef.current = null;
+            }
             cancelledRef.current = true;
             onCompleteRef.current = null;
             mediaRecorderRef.current?.stop();
@@ -217,6 +232,10 @@ export function useAudioRecorder() {
               if (followUpTimerRef.current != null) {
                 clearTimeout(followUpTimerRef.current);
                 followUpTimerRef.current = null;
+              }
+              if (waitingBeepRef.current != null) {
+                clearInterval(waitingBeepRef.current);
+                waitingBeepRef.current = null;
               }
             }
             silenceStartRef.current = null;

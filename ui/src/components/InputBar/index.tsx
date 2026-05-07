@@ -412,7 +412,7 @@ export default function InputBar({
       const kind = (e as CustomEvent).detail?.kind;
       if (kind !== "complete") return;
       if (!conversationModeRef.current) return;
-      if (disabled || transcribingRef.current || recording) return;
+      if (transcribingRef.current || recording) return;
       sounds.micReady();
       void startRecording({
         onSilenceTimeout: handleSilenceTimeout,

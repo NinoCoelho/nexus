@@ -1,12 +1,13 @@
 /**
- * VoiceAttachment — audio player + lazy transcript reveal.
+ * VoiceAttachment — audio player + collapsed transcript preview.
  *
  * Used inside the user message bubble for voice-memo attachments. Renders
- * the playable audio inline; the transcript stays hidden behind a small
- * "person speaking" chip and is fetched on the first click via
- * GET /vault/transcribe (cached server-side by path+mtime).
+ * the playable audio inline. The transcript is fetched eagerly on mount
+ * via GET /vault/transcribe (cached server-side by path+mtime) and shown
+ * as a single-line collapsed preview (~200 chars). Clicking the preview
+ * reveals the full transcript text.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { transcribeVaultAudio, vaultRawUrl } from "../../api";
 
 interface Props {
@@ -19,21 +20,20 @@ export default function VoiceAttachment({ path }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const onToggle = async () => {
-    if (open) { setOpen(false); return; }
-    setOpen(true);
-    if (text != null || loading) return;
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    try {
-      const r = await transcribeVaultAudio(path);
-      setText(r.text);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Transcription failed");
-    } finally {
-      setLoading(false);
-    }
-  };
+    transcribeVaultAudio(path)
+      .then((r) => { if (!cancelled) setText(r.text); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Transcription failed"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [path]);
+
+  const previewText = text != null && text.trim().length > 0
+    ? text.length > 200 ? text.slice(0, 200) + "\u2026" : text
+    : null;
 
   return (
     <div className="user-msg-voice">
@@ -43,31 +43,41 @@ export default function VoiceAttachment({ path }: Props) {
         controls
         preload="metadata"
       />
-      <button
-        type="button"
-        className={`user-msg-voice-chip${open ? " open" : ""}`}
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-label={open ? "Hide transcript" : "Show transcript"}
-        title={open ? "Hide transcript" : "Show transcript"}
-      >
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <circle cx="6" cy="5" r="2.2" />
-          <path d="M2.5 13c0-2 7-2 7 0" />
-          <path d="M11 4.5q1.6 1 0 4" />
-          <path d="M13 3q2.6 1.5 0 7" />
-        </svg>
-        <span>{open ? "Hide" : "Transcript"}</span>
-      </button>
+      {!open && (
+        <button
+          type="button"
+          className="user-msg-voice-preview"
+          onClick={() => setOpen(true)}
+          aria-label="Show transcript"
+          title="Show transcript"
+        >
+          {loading && <span className="user-msg-voice-muted">Transcribing\u2026</span>}
+          {!loading && error && <span className="user-msg-voice-error">{error}</span>}
+          {!loading && !error && text != null && (
+            previewText
+              ? <>{previewText}</>
+              : <span className="user-msg-voice-muted">No speech detected</span>
+          )}
+        </button>
+      )}
       {open && (
         <div className="user-msg-voice-transcript">
-          {loading && <span className="user-msg-voice-muted">Transcribing…</span>}
+          {loading && <span className="user-msg-voice-muted">Transcribing\u2026</span>}
           {!loading && error && <span className="user-msg-voice-error">{error}</span>}
           {!loading && !error && text != null && (
             text.trim().length > 0
               ? text
               : <span className="user-msg-voice-muted">No speech detected</span>
           )}
+          <button
+            type="button"
+            className="user-msg-voice-collapse"
+            onClick={() => setOpen(false)}
+            aria-label="Collapse transcript"
+            title="Collapse transcript"
+          >
+            Collapse
+          </button>
         </div>
       )}
     </div>
