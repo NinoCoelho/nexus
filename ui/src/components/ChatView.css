@@ -163,10 +163,10 @@
   width: 100%;
   padding: 6px 10px;
   border: none;
-  border-left: 2px solid var(--border-soft, rgba(0, 0, 0, 0.2));
+  border-left: 2px solid var(--accent, rgba(0, 0, 0, 0.3));
   background: var(--bg-soft, rgba(0, 0, 0, 0.04));
   border-radius: 4px;
-  color: var(--fg-faint);
+  color: var(--fg-muted, rgba(0, 0, 0, 0.6));
   font-family: var(--font-ui);
   font-size: 13px;
   font-style: italic;
@@ -175,6 +175,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-height: 28px;
   transition: color 120ms ease, background 120ms ease;
 }
 
