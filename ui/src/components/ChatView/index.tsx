@@ -340,7 +340,7 @@ export default function ChatView({
                     ))}
                   </div>
                 )}
-                {msg.content}
+                {!msg.attachments?.some((a) => isAudioAttachment(a.vaultPath)) && msg.content}
               </div>
             </div>
           )
