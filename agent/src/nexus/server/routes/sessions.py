@@ -371,11 +371,17 @@ async def rollback_last_message(
     while history and history[-1].role.value != "user":
         history.pop()
         removed += 1
+    user_content: str | None = None
     if history:
-        history.pop()
+        last_user = history.pop()
         removed += 1
+        if isinstance(last_user.content, str):
+            user_content = last_user.content
+        elif isinstance(last_user.content, list):
+            parts = [p.text for p in last_user.content if getattr(p, "kind", None) == "text" and p.text]
+            user_content = " ".join(parts) if parts else None
     store.replace_history(session_id, history)
-    return {"removed_count": removed, "remaining_messages": len(history)}
+    return {"removed_count": removed, "remaining_messages": len(history), "removed_user_content": user_content}
 
 
 @router.post("/sessions/{session_id}/compact")

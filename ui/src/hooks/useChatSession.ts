@@ -392,13 +392,18 @@ export function useChatSession(
   const handleRemoveLast = useCallback(async () => {
     const sid = activeSession;
     if (!sid) return;
+    const state = chatStates.get(activeKey) ?? emptyState();
+    if (state.thinking) return;
     try {
-      await rollbackLastMessage(sid);
-      await loadHistory(sid, setChatStates, computeSeedModel, patchState);
+      const result = await rollbackLastMessage(sid);
+      await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
+      if (result.removed_user_content) {
+        patchState(activeKey, { input: result.removed_user_content });
+      }
     } catch {
       /* best-effort */
     }
-  }, [activeSession, setChatStates, computeSeedModel, patchState]);
+  }, [activeSession, activeKey, chatStates, setChatStates, computeSeedModel, patchState]);
 
   return {
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,

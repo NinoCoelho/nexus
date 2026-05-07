@@ -54,21 +54,14 @@ class AgentHandlers:
         dispatcher: Any | None = None,
         subagent_runner: Any | None = None,
         notify_user: Any | None = None,
+        hb_manager_getter: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
-        # NotifyUserHandler — fire-and-forget status pings (TTS when the
-        # user dictated, toast always). Late-bound by the server so the
-        # tool registry can be built before the SessionStore exists.
         self.notify_user = notify_user
-        # Async callable: dispatcher(path, card_id?, mode) -> dict
-        # with keys {session_id, seed_message?, path, card_id?, mode}.
-        # Late-bound by app.py so tools can spawn sub-sessions.
         self.dispatcher = dispatcher
-        # Async callable: subagent_runner(tasks, parent_session_id, depth) ->
-        # list[{session_id, result, error}]. Late-bound by app.py; left None
-        # for sub-agent registries to disable recursive spawn_subagents.
         self.subagent_runner = subagent_runner
+        self.hb_manager_getter = hb_manager_getter
 
 
 def build_tool_registry(
@@ -223,6 +216,18 @@ def build_tool_registry(
         return await handle_dispatch_card_tool(args, handlers.dispatcher)
 
     registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
+
+    # manage_heartbeat — CRUD for heartbeat drivers. The manager getter is
+    # resolved lazily via handlers.hb_manager_getter because the
+    # HeartbeatRegistry / Store are created inside the lifespan.
+    from nexus.tools.heartbeat_tool import (
+        HEARTBEAT_MANAGE_TOOL, handle_heartbeat_manage_tool,
+    )
+
+    async def _manage_heartbeat(args: dict) -> str:
+        return await handle_heartbeat_manage_tool(args, handlers.hb_manager_getter)
+
+    registry.register(_SimpleToolHandler(HEARTBEAT_MANAGE_TOOL, _manage_heartbeat))
 
     # spawn_subagents — run N agent loops in parallel with fresh contexts.
     # Loom's SpawnSubagentsTool reads CURRENT_SESSION_ID and SUBAGENT_DEPTH

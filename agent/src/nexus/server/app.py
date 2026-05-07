@@ -42,7 +42,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
-    "/transcribe", "/audio", "/health",
+    "/transcribe", "/audio", "/health", "/heartbeat",
 )
 
 
@@ -515,11 +515,44 @@ def create_app(
                 mode: str = "background",
                 occurrence_start: str | None = None,
             ) -> dict:
-                return await _cal_dispatch(
-                    path=path, card_id=None, event_id=event_id,
-                    mode=mode, a=agent, store=sessions,
-                    occurrence_start=occurrence_start,
+                import time as _time
+                from .. import vault_calendar as _vc
+                event_title = ""
+                try:
+                    _cal = _vc.read_calendar(path)
+                    _found = _vc.find_event(_cal, event_id)
+                    if _found:
+                        event_title = _found[0].title
+                except Exception:
+                    pass
+                _log_id = log_store.log_fire(
+                    heartbeat_id="calendar_trigger",
+                    event_id=event_id,
+                    event_title=event_title,
+                    calendar_path=path,
                 )
+                _t0 = _time.monotonic()
+                try:
+                    result = await _cal_dispatch(
+                        path=path, card_id=None, event_id=event_id,
+                        mode=mode, a=agent, store=sessions,
+                        occurrence_start=occurrence_start,
+                    )
+                    _sid = result.get("session_id")
+                    if _sid:
+                        log_store.update_session_id(_log_id, _sid)
+                    log_store.update_status(
+                        _log_id, status="done",
+                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    )
+                    return result
+                except Exception as _dispatch_err:
+                    log_store.update_status(
+                        _log_id, status="failed",
+                        error=str(_dispatch_err),
+                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    )
+                    raise
             _set_cal_dispatcher(_calendar_dispatcher)
 
             # Notifier — fire-and-forget calendar_alert publishes onto the
@@ -547,10 +580,10 @@ def create_app(
             registry.scan()
             store = HeartbeatStore(db_path)
 
+            from ..heartbeat_log import HeartbeatLogStore
+            log_store = HeartbeatLogStore(db_path)
+
             async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
-                # Driver dispatches inline and returns events=[], so this is
-                # never called. Return a placeholder AgentTurn-shaped object
-                # in case loom's contract changes.
                 from loom.loop import AgentTurn
                 return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
 
@@ -559,6 +592,17 @@ def create_app(
             )
             scheduler.start()
             app.state.heartbeat_scheduler = scheduler
+            app.state.heartbeat_registry = registry
+            app.state.heartbeat_store = store
+            app.state.heartbeat_log_store = log_store
+
+            from loom.heartbeat import HeartbeatManager
+
+            def _hb_manager_getter():
+                return HeartbeatManager(registry=registry, store=store)
+
+            agent._handlers.hb_manager_getter = _hb_manager_getter
+
             log.info("heartbeat scheduler started (calendar_trigger registered)")
         except Exception:
             log.exception("heartbeat / calendar bootstrap failed")
@@ -656,6 +700,7 @@ def create_app(
     from .routes.tts import router as tts_router
     from .routes.nexus_account import router as nexus_account_router
     from .routes.webhook import router as webhook_router
+    from .routes.heartbeat import router as heartbeat_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -688,6 +733,7 @@ def create_app(
     app.include_router(tts_router)
     app.include_router(nexus_account_router)
     app.include_router(webhook_router)
+    app.include_router(heartbeat_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

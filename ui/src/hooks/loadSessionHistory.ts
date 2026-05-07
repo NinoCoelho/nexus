@@ -19,6 +19,7 @@ export async function loadSessionHistory(
   setChatStates: SetChatStates,
   computeSeedModel: () => string,
   patchState: (key: string, patch: Partial<ChatState>) => void,
+  forceRefresh?: boolean,
 ): Promise<void> {
   try {
     const detail = await getSession(id);
@@ -184,7 +185,7 @@ export async function loadSessionHistory(
       // Don't clobber in-flight state: if thinking or local-only messages
       // exist for this session already, preserve them; only seed history
       // for sessions we haven't loaded yet.
-      if (cur && cur.historyLoaded) return prev;
+      if (!forceRefresh && cur && cur.historyLoaded) return prev;
       const seedModel = cur?.selectedModel || computeSeedModel();
       next.set(id, {
         messages: filtered,

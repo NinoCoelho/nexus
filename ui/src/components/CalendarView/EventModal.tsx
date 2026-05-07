@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import type { CalendarEvent, EventStatus, EventTrigger } from "../../api/calendar";
 import { getRouting } from "../../api";
+import MarkdownEditor from "../MarkdownEditor";
 import RepeatPicker from "./RepeatPicker";
 import { fromLocalInputValue, toLocalInputValue } from "./dateUtils";
 
@@ -256,10 +257,12 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
 
         <label className="cal-modal-notes">
           Notes
-          <textarea
+          <MarkdownEditor
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Agenda, attendees, links…"
+            onChange={setBody}
+            blockHeadings
+            wordWrap
+            className="cal-modal-notes-editor"
           />
         </label>
 

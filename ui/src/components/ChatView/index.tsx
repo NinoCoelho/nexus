@@ -12,6 +12,7 @@ import type { TraceEvent } from "../../api";
 import { classify } from "../../fileTypes";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
+import Modal, { type ModalProps } from "../Modal";
 import { PartialTurnActions } from "./partialTurn";
 import ChatSearchBar from "./ChatSearchBar";
 import VoiceAttachment from "./VoiceAttachment";
@@ -172,6 +173,7 @@ export default function ChatView({
   const bottomRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [rollbackModal, setRollbackModal] = useState<ModalProps | null>(null);
 
   useEffect(() => {
     if (autoScrollEnabled) {
@@ -270,7 +272,23 @@ export default function ChatView({
                   onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
                   onCompact={onCompact}
                   onNewSession={onNewSession}
-                  onRemoveLast={onRemoveLast}
+                  onRemoveLast={
+                    onRemoveLast
+                      ? () =>
+                          setRollbackModal({
+                            kind: "confirm",
+                            title: t("chat:rollback.undoConfirmTitle"),
+                            message: t("chat:rollback.undoConfirmMessage"),
+                            confirmLabel: t("chat:rollback.undoConfirmLabel"),
+                            danger: true,
+                            onCancel: () => setRollbackModal(null),
+                            onSubmit: () => {
+                              setRollbackModal(null);
+                              onRemoveLast();
+                            },
+                          })
+                      : undefined
+                  }
                 />
               )}
             </div>
@@ -282,7 +300,20 @@ export default function ChatView({
                 {!thinking && onRollback && (
                   <button
                     className="user-msg-edit"
-                    onClick={() => onRollback(idx)}
+                    onClick={() =>
+                      setRollbackModal({
+                        kind: "confirm",
+                        title: t("chat:rollback.confirmTitle"),
+                        message: t("chat:rollback.confirmMessage"),
+                        confirmLabel: t("chat:rollback.confirmLabel"),
+                        danger: true,
+                        onCancel: () => setRollbackModal(null),
+                        onSubmit: () => {
+                          setRollbackModal(null);
+                          onRollback(idx);
+                        },
+                      })
+                    }
                     type="button"
                     title={t("chat:user.editTitle")}
                     aria-label={t("chat:user.editAria")}
@@ -326,6 +357,36 @@ export default function ChatView({
             </div>
           </div>
         )}
+        {!thinking && visible.length > 0 && onRemoveLast && (
+          <div className="rollback-undo-row">
+            <button
+              className="rollback-undo-btn"
+              onClick={() =>
+                setRollbackModal({
+                  kind: "confirm",
+                  title: t("chat:rollback.undoConfirmTitle"),
+                  message: t("chat:rollback.undoConfirmMessage"),
+                  confirmLabel: t("chat:rollback.undoConfirmLabel"),
+                  danger: true,
+                  onCancel: () => setRollbackModal(null),
+                  onSubmit: () => {
+                    setRollbackModal(null);
+                    onRemoveLast();
+                  },
+                })
+              }
+              type="button"
+              title={t("chat:rollback.undoTitle")}
+              aria-label={t("chat:rollback.undoAria")}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 2v5h5" />
+                <path d="M2.5 7C3.5 4 6.5 2 9.5 2.5c4 .7 6 5 4.5 8.5s-6 4.5-9 2.5" />
+              </svg>
+              {t("chat:rollback.undoTitle")}
+            </button>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
@@ -348,6 +409,8 @@ export default function ChatView({
           </div>
         </div>
       </div>
+
+      {rollbackModal && <Modal {...rollbackModal} />}
     </div>
   );
 }

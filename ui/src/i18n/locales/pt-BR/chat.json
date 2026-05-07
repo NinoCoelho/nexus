@@ -12,6 +12,18 @@
     "editTitle": "Editar e reenviar (remove tudo após este turno)",
     "editAria": "Editar mensagem"
   },
+  "rollback": {
+    "undoTitle": "Desfazer último turno",
+    "undoAria": "Desfazer último turno",
+    "editTitle": "Reverter edição",
+    "editAria": "Reverter edição",
+    "confirmTitle": "Reverter este turno?",
+    "confirmMessage": "A resposta e sua mensagem serão removidas. Seu texto será restaurado na caixa de entrada para você editar e reenviar.",
+    "confirmLabel": "Reverter",
+    "undoConfirmTitle": "Desfazer último turno?",
+    "undoConfirmMessage": "A última resposta e sua mensagem serão removidas. Seu texto será restaurado na caixa de entrada para você editar e reenviar.",
+    "undoConfirmLabel": "Desfazer"
+  },
   "assistant": {
     "name": "Nexus",
     "via": "via {{model}}",

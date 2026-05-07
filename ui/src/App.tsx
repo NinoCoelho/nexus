@@ -17,6 +17,7 @@ import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import DatabaseSchemaView from "./components/DatabaseSchemaView";
 import DataDashboardView from "./components/DataDashboardView";
+import HeartbeatView from "./components/HeartbeatView";
 import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
@@ -127,7 +128,7 @@ export default function App() {
       if (window.location.hash === "#/database") {
         window.history.replaceState(null, "", "#/data");
       }
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights)$/);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();
@@ -771,6 +772,14 @@ export default function App() {
             {view === "insights" && (
               <InsightsView
                 onOpenSession={(sid) => { setView("chat"); handleSessionSelect(sid); }}
+              />
+            )}
+          </div>
+          <div className="view-pane" style={{ display: view === "heartbeat" ? "flex" : "none" }}>
+            {view === "heartbeat" && (
+              <HeartbeatView
+                onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
+                onOpenInVault={handleOpenInVault}
               />
             )}
           </div>

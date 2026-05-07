@@ -239,7 +239,7 @@ export async function compactSession(sessionId: string): Promise<{ compacted: nu
   return res.json();
 }
 
-export async function rollbackLastMessage(sessionId: string): Promise<{ removed_count: number; remaining_messages: number }> {
+export async function rollbackLastMessage(sessionId: string): Promise<{ removed_count: number; remaining_messages: number; removed_user_content: string | null }> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/messages/last`, {
     method: "DELETE",
   });

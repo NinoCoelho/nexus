@@ -2,7 +2,7 @@ import type React from "react";
 import type { Message } from "../components/ChatView";
 import type { SessionSummary } from "../api";
 
-export type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights";
+export type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -218,7 +218,7 @@ export function readInitialView(): { view: View; vaultPath: string | null } {
   const qs = new URLSearchParams(window.location.search);
   const v = qs.get("view");
   const path = qs.get("path");
-  const allowed: View[] = ["chat", "calendar", "vault", "kanban", "data", "graph", "insights"];
+  const allowed: View[] = ["chat", "calendar", "vault", "kanban", "data", "graph", "insights", "heartbeat"];
   const view = (allowed as string[]).includes(v ?? "") ? (v as View) : "chat";
   return { view, vaultPath: path };
 }
