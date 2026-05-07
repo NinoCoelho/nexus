@@ -253,7 +253,9 @@ async def _handle_fire_window(
         return
     window_start = datetime.combine(today_local, time(from_h, from_m), tzinfo=tz).astimezone(UTC)
     window_end = datetime.combine(today_local, time(to_h, to_m), tzinfo=tz).astimezone(UTC)
-    if now < window_start or now > window_end:
+    if now < window_start:
+        return
+    if window_end > window_start and now > window_end:
         return
 
     # Dedup: respect fire_every_min since the last fire.
