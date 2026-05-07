@@ -45,34 +45,36 @@ export default function VoiceAttachment({ path }: Props) {
         preload="metadata"
       />
       {!open && (
-        <button
-          type="button"
+        <div
           className="user-msg-voice-preview"
+          role="button"
+          tabIndex={0}
           onClick={() => setOpen(true)}
-          aria-label="Show transcript"
-          title="Show transcript"
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setOpen(true); }}
+          aria-label="Show full transcript"
+          title="Show full transcript"
         >
           {loading ? (
-            <span className="user-msg-voice-muted">Transcribing\u2026</span>
+            <em className="user-msg-voice-muted">Transcribing&#8230;</em>
           ) : error ? (
             <span className="user-msg-voice-error">{error}</span>
           ) : hasText ? (
-            previewText
+            <em>{previewText}</em>
           ) : (
-            <span className="user-msg-voice-muted">No speech detected</span>
+            <em className="user-msg-voice-muted">No speech detected</em>
           )}
-        </button>
+        </div>
       )}
       {open && (
         <div className="user-msg-voice-transcript">
           {loading ? (
-            <span className="user-msg-voice-muted">Transcribing\u2026</span>
+            <em className="user-msg-voice-muted">Transcribing&#8230;</em>
           ) : error ? (
             <span className="user-msg-voice-error">{error}</span>
           ) : hasText ? (
             text
           ) : (
-            <span className="user-msg-voice-muted">No speech detected</span>
+            <em className="user-msg-voice-muted">No speech detected</em>
           )}
           <button
             type="button"

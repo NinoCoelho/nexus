@@ -15,7 +15,8 @@ export type SoundKey =
   | "attention"
   | "agentStep"
   | "micReady"
-  | "micWaiting";
+  | "micWaiting"
+  | "micSilence";
 
 /** Display labels for the settings UI. */
 export const SOUND_LABELS: Record<SoundKey, string> = {
@@ -27,6 +28,7 @@ export const SOUND_LABELS: Record<SoundKey, string> = {
   agentStep: "Agent step",
   micReady: "Mic ready (follow-up)",
   micWaiting: "Mic waiting beep",
+  micSilence: "Silence detected (auto-send)",
 };
 
 /** Per-effect multiplier (0..1). Default 1.0 = baseline volume. */
@@ -39,6 +41,7 @@ const DEFAULT_VOLUMES: Record<SoundKey, number> = {
   agentStep: 1,
   micReady: 1,
   micWaiting: 1,
+  micSilence: 1,
 };
 
 const MUTE_KEY = "nx.soundMuted";
@@ -187,6 +190,10 @@ const RECIPES: Record<SoundKey, ToneOpts[]> = {
     { freq: 200, duration: 0.05, volume: 0.08 },
     { freq: 260, duration: 0.06, volume: 0.08, delay: 0.06 },
   ],
+  micSilence: [
+    { freq: 600, duration: 0.08, volume: 0.15 },
+    { freq: 400, duration: 0.12, volume: 0.15, delay: 0.08 },
+  ],
 };
 
 function play(key: SoundKey) {
@@ -207,6 +214,7 @@ export const sounds: Record<SoundKey, () => void> = {
   agentStep: () => play("agentStep"),
   micReady: () => play("micReady"),
   micWaiting: () => play("micWaiting"),
+  micSilence: () => play("micSilence"),
 };
 
 /** Number of distinct tones in this effect's recipe (1 or 2). */
@@ -224,6 +232,7 @@ export const SOUND_KEYS: SoundKey[] = [
   "agentStep",
   "micReady",
   "micWaiting",
+  "micSilence",
 ];
 
 // ── React hooks ──────────────────────────────────────────────────────────────

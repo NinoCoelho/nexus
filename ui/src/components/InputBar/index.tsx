@@ -13,8 +13,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { uploadVaultFiles, type SlashCommand } from "../../api";
+import { transcribeVaultAudio, uploadVaultFiles, type SlashCommand } from "../../api";
 import { sounds } from "../../hooks/useSounds";
+import { looksLikeSpeech } from "../../lib/speechDetect";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
@@ -219,12 +220,10 @@ export default function InputBar({
     setSecret(detectSecret(el.value, caret));
   };
 
+  const retryFollowUpRef = useRef<() => void>(() => {});
+
   const uploadAudioAndSend = async (blob: Blob, urlToRevoke?: string) => {
     try {
-      // Pick filename extension from the actual blob mime — iOS Safari
-      // produces audio/mp4 (AAC), desktop Chrome/Firefox produce
-      // audio/webm. The previous hardcoded `.webm` was making
-      // faster-whisper choke on iPhone recordings.
       const rawMime = (blob.type || "audio/webm").split(";")[0].trim();
       const extByMime: Record<string, string> = {
         "audio/webm": "webm",
@@ -247,10 +246,22 @@ export default function InputBar({
         toast.error(t("chat:input.uploadFailed"));
         return;
       }
-      // Voice memos send unconditionally — the secret guard would route
-      // through a modal whose "Send anyway" path doesn't carry
-      // ``extraAttachments``, so a typed prefix that tripped the regex would
-      // silently drop the recording. The audio is the primary signal here.
+
+      const vaultPath = newAttachments[0].vaultPath;
+      try {
+        const r = await transcribeVaultAudio(vaultPath);
+        const transcript = r.text ?? "";
+        if (!looksLikeSpeech(transcript)) {
+          toast.info("I couldn\u2019t understand. Please try again.");
+          if (conversationModeRef.current) {
+            setTimeout(() => retryFollowUpRef.current(), 300);
+          }
+          return;
+        }
+      } catch {
+        // Transcription check failed — send anyway, let the backend handle it.
+      }
+
       const typed = value.trim();
       onChange("");
       onSend({ text: typed, extraAttachments: newAttachments, inputMode: "voice" });
@@ -281,6 +292,7 @@ export default function InputBar({
     if (transcribing) return;
     setTranscribing(true);
     setConversationMode(true);
+    sounds.micSilence();
     stopRecording({
       onComplete: (a) => { void uploadAudioAndSend(a.blob, a.url); },
     });
@@ -296,6 +308,17 @@ export default function InputBar({
   const handleFollowUpTimeout = useCallback(() => {
     setConversationMode(false);
   }, []);
+
+  retryFollowUpRef.current = () => {
+    if (transcribingRef.current || recording) return;
+    setConversationMode(true);
+    sounds.micReady();
+    void startRecording({
+      onSilenceTimeout: handleSilenceTimeout,
+      followUpMode: true,
+      onFollowUpTimeout: handleFollowUpTimeout,
+    });
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mention && mentionRef.current?.handleKey(e)) return;
