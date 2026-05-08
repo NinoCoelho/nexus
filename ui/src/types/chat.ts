@@ -249,7 +249,7 @@ export interface UseChatSessionResult {
   handleNewChat: () => void;
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
-  computeSeedModel: () => string;
+  computeSeedModel: (preferred?: string) => string;
   handleCompact: () => Promise<{ compacted: number; saved_bytes: number } | undefined>;
   handleRemoveLast: () => Promise<void>;
 }

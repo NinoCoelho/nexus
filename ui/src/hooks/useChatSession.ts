@@ -70,7 +70,8 @@ export function useChatSession(
     [availableModels],
   );
 
-  const computeSeedModel = useCallback((): string => {
+  const computeSeedModel = useCallback((preferred?: string): string => {
+    if (preferred && isRealModel(preferred)) return preferred;
     if (isRealModel(lastUsedModel)) return lastUsedModel;
     if (isRealModel(defaultModel)) return defaultModel;
     return availableModels[0] ?? "";
@@ -382,7 +383,7 @@ export function useChatSession(
       const result = await compactSession(sid);
       const state = chatStates.get(activeKey) ?? emptyState();
       if (state.thinking) return;
-      await loadHistory(sid, setChatStates, computeSeedModel, patchState);
+      await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
       return result;
     } catch {
       /* best-effort */

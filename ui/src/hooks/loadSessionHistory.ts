@@ -17,7 +17,7 @@ const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_respo
 export async function loadSessionHistory(
   id: string,
   setChatStates: SetChatStates,
-  computeSeedModel: () => string,
+  computeSeedModel: (preferred?: string) => string,
   patchState: (key: string, patch: Partial<ChatState>) => void,
   forceRefresh?: boolean,
 ): Promise<void> {
@@ -186,7 +186,7 @@ export async function loadSessionHistory(
       // exist for this session already, preserve them; only seed history
       // for sessions we haven't loaded yet.
       if (!forceRefresh && cur && cur.historyLoaded) return prev;
-      const seedModel = cur?.selectedModel || computeSeedModel();
+      const seedModel = computeSeedModel(cur?.selectedModel);
       next.set(id, {
         messages: filtered,
         thinking: cur?.thinking ?? false,

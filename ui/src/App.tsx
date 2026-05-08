@@ -209,10 +209,34 @@ export default function App() {
     setChatStates((prev) => {
       const next = new Map(prev);
       const cur = next.get(NEW_KEY);
-      if (cur && !cur.selectedModel) next.set(NEW_KEY, { ...cur, selectedModel: seed });
+      if (cur && (!cur.selectedModel || !isReal(cur.selectedModel))) next.set(NEW_KEY, { ...cur, selectedModel: seed });
       return next;
     });
   }, [availableModels, lastUsedModel, defaultModel, setChatStates]);
+
+  // When availableModels changes (e.g. tier upgrade demo→nexus), sweep all
+  // sessions whose selectedModel is no longer available and switch them to
+  // the best valid model.
+  useEffect(() => {
+    if (availableModels.length === 0) return;
+    const pick = (s: string | undefined) => {
+      if (s && availableModels.includes(s)) return s;
+      if (availableModels.includes(defaultModel)) return defaultModel;
+      if (availableModels.includes(lastUsedModel)) return lastUsedModel;
+      return availableModels[0] ?? "";
+    };
+    setChatStates((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [key, state] of next) {
+        if (state.selectedModel && !availableModels.includes(state.selectedModel)) {
+          next.set(key, { ...state, selectedModel: pick(state.selectedModel) });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [availableModels, defaultModel, lastUsedModel, setChatStates]);
 
   // Cross-session HITL subscription. ``useApprovalQueue`` listens on
   // /notifications/events so any agent's question (active chat,
