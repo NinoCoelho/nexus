@@ -146,6 +146,57 @@ def _replace_tables(text: str, lang: str) -> str:
     return _TABLE_RE.sub(_r, text)
 
 
+def _strip_markdown(text: str) -> str:
+    """Remove markdown formatting so TTS reads plain text, not symbols.
+
+    Runs AFTER fenced code blocks and tables (which are replaced with
+    spoken placeholders by earlier passes) but BEFORE everything else,
+    so asterisks / hashes / pipes don't leak through to the synthesizer.
+    """
+
+    # HTML comments (used by Nexus for nx:* markers).
+    text = re.compile(r"<!--[\s\S]*?-->").sub("", text)
+
+    # Images: ![alt](url) → alt
+    text = re.compile(r"!\[([^\]]*)\]\([^)]*\)").sub(r"\1", text)
+
+    # Links: [text](url) → text
+    text = re.compile(r"\[([^\]]+)\]\([^)]*\)").sub(r"\1", text)
+
+    # Reference-style links: [text][ref] → text
+    text = re.compile(r"\[([^\]]+)\]\[[^\]]*\]").sub(r"\1", text)
+
+    # Inline code → just the contents.
+    text = re.compile(r"`([^`]+)`").sub(r"\1", text)
+
+    # Headings (# ## ### …) — drop the leading hashes.
+    text = re.compile(r"^#{1,6}\s+", flags=re.MULTILINE).sub("", text)
+
+    # Blockquotes
+    text = re.compile(r"^>\s?", flags=re.MULTILINE).sub("", text)
+
+    # Bold / italic / strikethrough — keep inner text only.
+    text = re.compile(r"\*\*([^*]+)\*\*").sub(r"\1", text)
+    text = re.compile(r"__([^_]+)__").sub(r"\1", text)
+    text = re.compile(r"\*([^*\n]+)\*").sub(r"\1", text)
+    text = re.compile(r"_([^_\n]+)_").sub(r"\1", text)
+    text = re.compile(r"~~([^~]+)~~").sub(r"\1", text)
+
+    # Horizontal rules (---, ***, ___).
+    text = re.compile(r"^[-*_]{3,}\s*$", flags=re.MULTILINE).sub("", text)
+
+    # Unordered list markers: -, *, +
+    text = re.compile(r"^\s*[-*+]\s+", flags=re.MULTILINE).sub("", text)
+
+    # Ordered list markers: 1. 2. etc.
+    text = re.compile(r"^\s*\d+\.\s+", flags=re.MULTILINE).sub("", text)
+
+    # Any stray pipes left over from non-table contexts.
+    text = text.replace("|", " ")
+
+    return text
+
+
 def _collapse_whitespace(text: str) -> str:
     # Multiple newlines → single space; runs of spaces → single space.
     text = re.sub(r"\n{2,}", " ", text)
@@ -308,6 +359,7 @@ def normalize_for_speech(text: str, lang: str | None = None) -> str:
     # delimiters our other passes would chew through.
     text = _replace_fenced(text, L)
     text = _replace_tables(text, L)
+    text = _strip_markdown(text)
     text = _strip_emojis(text)
     text = _replace_urls(text)
     # Hashes / UUIDs run AFTER url replacement (so we don't try to "hash"

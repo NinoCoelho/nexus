@@ -47,7 +47,10 @@ _START_PROMPT_EN = (
     "  - Hints at the expected action (e.g. 'right back', 'one moment', "
     "'looking that up', 'checking now')\n\n"
     "REPLY IN ENGLISH. Reply with ONLY the spoken sentence — no quotes, "
-    "no preamble."
+    "no preamble.\n"
+    "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
+    "or any formatting symbols. Use only plain words and basic punctuation "
+    "(period, comma, question mark, exclamation mark)."
 )
 
 _START_PROMPT_PT = (
@@ -59,31 +62,44 @@ _START_PROMPT_PT = (
     "  - Dê uma pista da ação esperada (ex: 'tô vendo isso', "
     "'um momento', 'verificando agora', 'olhando isso')\n\n"
     "RESPONDA EM PORTUGUÊS BRASILEIRO. Responda com APENAS a frase falada — "
-    "sem aspas, sem preâmbulo."
+    "sem aspas, sem preâmbulo.\n"
+    "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
+    "símbolo de formatação. Use apenas palavras e pontuação básica "
+    "(ponto, vírgula, ponto de interrogação, ponto de exclamação)."
 )
 
 _COMPLETE_PROMPT_EN = (
     "Summarize the text below into ONE spoken sentence (at most 45 words). "
     "Highlight the single main result or finding. Plain spoken English. "
-    "No markdown, no closing pleasantries, no headers, no bullets.\n\n{full_reply}"
+    "No markdown, no closing pleasantries, no headers, no bullets.\n"
+    "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
+    "or any formatting symbols. Use only plain words and basic punctuation "
+    "(period, comma, question mark, exclamation mark).\n\n{full_reply}"
 )
 
 _COMPLETE_PROMPT_PT = (
     "Resuma o texto abaixo em UMA frase falada (no máximo 45 palavras). "
     "Destaque o principal resultado ou descoberta. Português brasileiro "
-    "falado. Sem markdown, sem despedidas, sem títulos, sem marcadores.\n\n{full_reply}"
+    "falado. Sem markdown, sem despedidas, sem títulos, sem marcadores.\n"
+    "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
+    "símbolo de formatação. Use apenas palavras e pontuação básica "
+    "(ponto, vírgula, ponto de interrogação, ponto de exclamação).\n\n{full_reply}"
 )
 
 _SUMMARIZE_PROMPT_EN = (
     "Summarize the following text into 1-2 short paragraphs (under "
     "200 words total). Plain spoken language for audio. No bullets, "
-    "no markdown, no headers. REPLY IN ENGLISH.\n\n{text}"
+    "no markdown, no headers. REPLY IN ENGLISH.\n"
+    "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
+    "or any formatting symbols. Use only plain words and basic punctuation.\n\n{text}"
 )
 
 _SUMMARIZE_PROMPT_PT = (
     "Resuma o texto a seguir em 1-2 parágrafos curtos (no total menos de "
     "200 palavras). Linguagem falada simples, para áudio. Sem marcadores, "
-    "sem markdown, sem títulos. RESPONDA EM PORTUGUÊS BRASILEIRO.\n\n{text}"
+    "sem markdown, sem títulos. RESPONDA EM PORTUGUÊS BRASILEIRO.\n"
+    "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
+    "símbolo de formatação. Use apenas palavras e pontuação básica.\n\n{text}"
 )
 
 # Last-ditch retry prompts when the structured complete-ack prompt comes
@@ -91,11 +107,13 @@ _SUMMARIZE_PROMPT_PT = (
 # choke on multi-section instructions.
 _SIMPLE_SUMMARY_PROMPT_EN = (
     "Summarize this text in 1 short spoken sentence, at most 45 words. "
-    "Plain English, no markdown.\n\n{reply}"
+    "Plain English, no markdown. No asterisks, hashes, backticks, or "
+    "formatting symbols.\n\n{reply}"
 )
 _SIMPLE_SUMMARY_PROMPT_PT = (
     "Resuma este texto em 1 frase curta falada, no máximo 45 palavras. "
-    "Português simples, sem markdown.\n\n{reply}"
+    "Português simples, sem markdown. Sem asteriscos, cerquilhas, crases "
+    "ou símbolos de formatação.\n\n{reply}"
 )
 
 
