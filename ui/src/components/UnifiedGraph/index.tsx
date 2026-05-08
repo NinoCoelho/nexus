@@ -34,6 +34,12 @@ import {
 } from "../../api/folderGraph";
 import { WebGLBoundary, WebGLFallback, probeWebGL } from "./WebGLBoundary";
 import type { ContextMenuItem, GraphCanvasHandle, ModeId, UnifiedNode } from "./types";
+import {
+  type GraphSettings,
+  loadGraphSettings,
+  saveGraphSettings,
+} from "./graphSettings";
+import { GraphSettingsPanel } from "./GraphSettingsPanel";
 
 /** "vault" = the global GraphRAG knowledge graph. Anything else = a folder path. */
 type KnowledgeTab = "vault" | string;
@@ -83,6 +89,13 @@ export default function UnifiedGraph({
   const [fullscreen, setFullscreen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [graphSettings, setGraphSettings] = useState<GraphSettings>(loadGraphSettings);
+
+  const handleSettingsChange = useCallback((next: GraphSettings) => {
+    setGraphSettings(next);
+    saveGraphSettings(next);
+  }, []);
 
   const canvasRef = useRef<GraphCanvasHandle | null>(null);
   // Probe once on mount. If the host can't give us a WebGL context, render
@@ -279,6 +292,14 @@ export default function UnifiedGraph({
       )}
 
       <button
+        className={`ug-tool-btn${settingsOpen ? " ug-tool-btn--active" : ""}`}
+        onClick={() => setSettingsOpen((v) => !v)}
+        title="Display settings"
+      >
+        ⚙
+      </button>
+
+      <button
         className={`ug-tool-btn${findOpen ? " ug-tool-btn--active" : ""}`}
         onClick={() => {
           setFindOpen((v) => !v);
@@ -412,6 +433,7 @@ export default function UnifiedGraph({
                 selectedId={selectedId}
                 search={canvasSearch}
                 findQuery={findOpen ? findQuery : ""}
+                settings={graphSettings}
                 onSelect={handleNodeClick}
                 onNodeRightClick={handleNodeRightClick}
                 contextMenu={contextMenu}
@@ -425,6 +447,14 @@ export default function UnifiedGraph({
               nodeCount={stats.nodes}
               edgeCount={stats.links}
               onRetry={() => setWebglProbe(probeWebGL())}
+            />
+          )}
+
+          {settingsOpen && (
+            <GraphSettingsPanel
+              settings={graphSettings}
+              onChange={handleSettingsChange}
+              onClose={() => setSettingsOpen(false)}
             />
           )}
 

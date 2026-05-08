@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { GeometryKind } from "./types";
 
-export function makeTextSprite(text: string): THREE.Sprite {
+export function makeTextSprite(text: string, labelScale: number = 1): THREE.Sprite {
   const padding = 6;
   const fontSize = 22;
   const measure = document.createElement("canvas").getContext("2d")!;
@@ -26,7 +26,7 @@ export function makeTextSprite(text: string): THREE.Sprite {
   texture.minFilter = THREE.LinearFilter;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
-  const scale = 0.05;
+  const scale = 0.05 * labelScale;
   sprite.scale.set(canvas.width * scale, canvas.height * scale, 1);
   return sprite;
 }
