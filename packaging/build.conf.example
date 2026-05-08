@@ -1,0 +1,35 @@
+# Nexus build configuration.
+#
+# Copy to build.conf and fill in your values. build.conf is git-ignored.
+# Any setting here can be overridden by a CLI flag or an env var of the same
+# name (env vars win over this file).
+
+# ── Code signing ─────────────────────────────────────────────────────────────
+# Your Apple Developer signing identity. Run:
+#   security find-identity -v -p codesigning
+# to list available identities. Use the full string, e.g.:
+#   "Developer ID Application: Your Name (ABC123DEF4)"
+#SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+
+# ── Notarization ─────────────────────────────────────────────────────────────
+# Required when distributing outside the App Store.
+# See: https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution
+#
+# NOTARIZE=1                  # set to 1 to enable notarization
+# NOTARY_APPLE_ID="you@icloud.com"
+# NOTARY_TEAM_ID="TEAMID"
+# NOTARY_PASSWORD="xxxx-xxxx-xxxx-xxxx"   # app-specific password from appleid.apple.com
+
+# ── Installer package signing ────────────────────────────────────────────────
+# The .pkg is created automatically. To sign it for distribution you need a
+# separate "Developer ID Installer" certificate (different from the Application
+# one). Run: security find-identity -v -p batch
+#NEXUS_INSTALLER_IDENTITY="Developer ID Installer: Your Name (TEAMID)"
+
+# ── Demo LLM ─────────────────────────────────────────────────────────────────
+# Ship a pre-configured remote model so a fresh install starts with chat
+# working out of the box. All three must be set together (or all unset).
+# bootstrap.py only seeds when ~/.nexus/config.toml is absent.
+#DEMO_LLM_BASE_URL="https://llm.example.com/v1"
+#DEMO_LLM_API_KEY="sk-..."
+#DEMO_LLM_MODEL="nexus"

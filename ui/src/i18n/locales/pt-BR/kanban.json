@@ -7,7 +7,15 @@
     "filters": "Filtros",
     "activeFilterIndicator": " •",
     "addLane": "+ Coluna",
-    "boardDeleted": "O arquivo do quadro foi excluído"
+    "boardDeleted": "O arquivo do quadro foi excluído",
+    "boardSettingsTitle": "Configurações do quadro — {{title}}",
+    "boardPromptDescription": "O prompt do quadro é adicionado antes de qualquer prompt de coluna em cada despacho. Use para definir personalidade, comportamento e instruções gerais para todos os cartões deste quadro.",
+    "boardPromptLabel": "Prompt do quadro",
+    "boardPromptPlaceholder": "ex. Você é um assistente de escrita criativa. Seja imaginativo, use linguagem vívida e sugira ideias ousadas.",
+    "boardPromptIndicator": "Prompt do quadro definido — clique para editar",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "saving": "Salvando..."
   },
   "lane": {
     "promptIndicator": "Prompt de despacho automático definido",

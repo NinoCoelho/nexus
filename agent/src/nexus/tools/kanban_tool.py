@@ -18,7 +18,8 @@ KANBAN_MANAGE_TOOL = ToolSpec(
     description=(
         "Manage kanban boards stored as markdown in the vault. "
         "Each board is a single .md file with `kanban-plugin: basic` frontmatter. "
-        "Actions: create_board, view, add_card, move_card, update_card, delete_card, "
+        "Actions: create_board, view, update_board, "
+        "add_card, move_card, update_card, delete_card, "
         "add_lane, update_lane, move_lane, delete_lane.\n\n"
         "Safe usage pattern:\n"
         "- Before `update_card`/`delete_card`/`update_lane`/`delete_lane`, call `view` "
@@ -38,7 +39,7 @@ KANBAN_MANAGE_TOOL = ToolSpec(
             "action": {
                 "type": "string",
                 "enum": [
-                    "create_board", "view",
+                    "create_board", "view", "update_board",
                     "add_card", "move_card", "update_card", "delete_card",
                     "add_lane", "update_lane", "move_lane", "delete_lane",
                 ],
@@ -58,6 +59,14 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                     "Auto-dispatch prompt for update_lane. When a card is added/moved into "
                     "the lane, the agent is auto-dispatched with this prompt as context. "
                     "Empty string clears."
+                ),
+            },
+            "board_prompt": {
+                "type": "string",
+                "description": (
+                    "Board-level system prompt for update_board. Prepended before any "
+                    "lane prompt on every dispatch — use it to set personality, behaviour, "
+                    "and general instructions for all cards on this board. Empty string clears."
                 ),
             },
             "model": {
@@ -143,6 +152,18 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
         if action == "view":
             board = vault_kanban.read_board(path)
             return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
+
+        if action == "update_board":
+            updates: dict[str, Any] = {}
+            if "title" in args:
+                updates["title"] = args["title"]
+            if "board_prompt" in args:
+                bp = args["board_prompt"]
+                updates["board_prompt"] = bp if bp else None
+            if not updates:
+                return json.dumps({"ok": False, "error": "no fields to update (title/board_prompt)"})
+            board = vault_kanban.update_board(path, updates)
+            return json.dumps({"ok": True, "board": board.to_dict()})
 
         if action == "add_card":
             lane = args.get("lane", "")

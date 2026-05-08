@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 
@@ -41,6 +42,24 @@ async def vault_kanban_create(body: dict) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return {"path": path, **board.to_dict()}
+
+
+@router.patch("/vault/kanban")
+async def vault_kanban_patch_board(body: dict, path: str) -> dict:
+    """Update board-level fields. Body: {title?, board_prompt?}."""
+    from ... import vault_kanban
+    updates: dict[str, Any] = {}
+    if "title" in body:
+        updates["title"] = body["title"]
+    if "board_prompt" in body:
+        updates["board_prompt"] = body["board_prompt"] or None
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="no fields to update")
+    try:
+        board = vault_kanban.update_board(path, updates)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
     return {"path": path, **board.to_dict()}
 
 

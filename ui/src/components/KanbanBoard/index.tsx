@@ -16,6 +16,7 @@ import Modal, { type ModalProps } from "../Modal";
 import CardDetailModal from "../CardDetailModal";
 import CardActivityModal from "../CardActivityModal";
 import LanePromptDialog from "../LanePromptDialog";
+import BoardPromptDialog from "../BoardPromptDialog";
 import {
   addVaultKanbanLane,
   cancelVaultKanbanCard,
@@ -24,6 +25,7 @@ import {
   dispatchFromVault,
   fetchCardSessions,
   getVaultKanban,
+  patchVaultKanbanBoard,
   patchVaultKanbanCard,
   patchVaultKanbanLane,
   retryVaultKanbanCard,
@@ -71,6 +73,7 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
   const [sessionPicker, setSessionPicker] = useState<{ card: KanbanCard; sessions: CardSession[] } | null>(null);
   const [filters, setFilters] = useState<BoardFilters>({ text: "", label: "", priority: "", assignee: "" });
   const [showFilters, setShowFilters] = useState(false);
+  const [editBoard, setEditBoard] = useState(false);
 
   const matchesFilters = (card: KanbanCard): boolean => {
     if (filters.text) {
@@ -298,7 +301,31 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
   return (
     <div className="kanban-board">
       <div className="kanban-board-header">
-        <div className="kanban-board-title">{board.title}</div>
+        <div className="kanban-board-title">
+          {board.title}
+          {board.board_prompt && (
+            <button
+              className="kanban-icon-btn"
+              title={t("kanban:board.boardPromptIndicator")}
+              onClick={() => setEditBoard(true)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--accent)",
+                cursor: "pointer",
+                fontSize: 14,
+                marginLeft: 6,
+                padding: "0 2px",
+                verticalAlign: "middle",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="3" />
+                <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" />
+              </svg>
+            </button>
+          )}
+        </div>
         <div className="kanban-board-header-actions">
           <button
             className="kanban-pill"
@@ -394,6 +421,21 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
           onSelect={(sid) => { setSessionPicker(null); onNavigateToSession?.(sid); }}
           onNewSession={() => { const card = sessionPicker.card; setSessionPicker(null); void handleNewDispatch(card); }}
           onCancel={() => setSessionPicker(null)}
+        />
+      )}
+      {editBoard && board && (
+        <BoardPromptDialog
+          board={board}
+          onCancel={() => setEditBoard(false)}
+          onSubmit={async (patch) => {
+            try {
+              await patchVaultKanbanBoard(path, patch);
+              setEditBoard(false);
+              reload();
+            } catch {
+              setEditBoard(false);
+            }
+          }}
         />
       )}
     </div>

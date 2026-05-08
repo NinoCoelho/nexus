@@ -63,13 +63,13 @@ _START_PROMPT_PT = (
 )
 
 _COMPLETE_PROMPT_EN = (
-    "Summarize the text below into ONE spoken sentence (at most 15 words). "
+    "Summarize the text below into ONE spoken sentence (at most 45 words). "
     "Highlight the single main result or finding. Plain spoken English. "
     "No markdown, no closing pleasantries, no headers, no bullets.\n\n{full_reply}"
 )
 
 _COMPLETE_PROMPT_PT = (
-    "Resuma o texto abaixo em UMA frase falada (no máximo 15 palavras). "
+    "Resuma o texto abaixo em UMA frase falada (no máximo 45 palavras). "
     "Destaque o principal resultado ou descoberta. Português brasileiro "
     "falado. Sem markdown, sem despedidas, sem títulos, sem marcadores.\n\n{full_reply}"
 )
@@ -90,11 +90,11 @@ _SUMMARIZE_PROMPT_PT = (
 # back empty. Plain "summarize this" works on weaker local models that
 # choke on multi-section instructions.
 _SIMPLE_SUMMARY_PROMPT_EN = (
-    "Summarize this text in 1 short spoken sentence, at most 15 words. "
+    "Summarize this text in 1 short spoken sentence, at most 45 words. "
     "Plain English, no markdown.\n\n{reply}"
 )
 _SIMPLE_SUMMARY_PROMPT_PT = (
-    "Resuma este texto em 1 frase curta falada, no máximo 15 palavras. "
+    "Resuma este texto em 1 frase curta falada, no máximo 45 palavras. "
     "Português simples, sem markdown.\n\n{reply}"
 )
 
@@ -153,15 +153,18 @@ def _short_code(lang: str | None) -> str:
 
 
 def _ack_lang(trigger: "_AckTrigger", cfg: NexusConfig) -> str:
-    """Pick a language for an ack. Detect from the user's request text;
-    if that's empty (typical for pure-voice messages, where the audio
-    transcript hasn't run yet), fall back to the agent's reply, and
-    finally to the user's configured UI language."""
+    """Pick a language for an ack. When ``cfg.tts.voice_language`` is set,
+    use it directly — skip unreliable detection on short utterances.
+    Otherwise detect from the user's request text; if that's empty
+    (typical for pure-voice messages), fall back to the agent's reply,
+    and finally to the user's configured UI language."""
+    override = getattr(cfg.tts, "voice_language", "").strip()
+    if override:
+        return _short_code(override)
     ui_lang = _short_code(getattr(cfg.ui, "language", None))
     detected = _detect_lang_short(trigger.user_text, fallback=ui_lang)
     if detected != "en" or trigger.user_text.strip():
         return detected
-    # user_text was empty AND default fell to en — try the reply.
     return _detect_lang_short(trigger.full_reply or "", fallback=ui_lang)
 
 
@@ -231,7 +234,6 @@ async def _generate_text(
             [ChatMessage(role=Role.USER, content=prompt)],
             model=upstream,
             max_tokens=max_tokens,
-            temperature=0.0,
             extra_payload=no_think,
         )
     except Exception as exc:  # noqa: BLE001 — best-effort, never break the turn
@@ -371,16 +373,16 @@ async def emit_completion_ack(
         trigger.user_text[:300] or "(voice message)",
         trigger.full_reply[:1500],
     )
-    text = await _generate_text(agent, cfg, prompt, max_tokens=40)
+    text = await _generate_text(agent, cfg, prompt, max_tokens=120)
     if not text:
         log.info("[voice_ack/complete] structured prompt empty — retrying simpler")
         simple = _SIMPLE_SUMMARY_PROMPT_PT if lang == "pt" else _SIMPLE_SUMMARY_PROMPT_EN
         text = await _generate_text(
             agent, cfg, simple.format(reply=trigger.full_reply[:1200]),
-            max_tokens=40,
+            max_tokens=120,
         )
     if not text:
-        snippet = _truncate_for_speech(trigger.full_reply, max_words=15)
+        snippet = _truncate_for_speech(trigger.full_reply, max_words=45)
         if snippet:
             preamble = "Resultado: " if lang == "pt" else "Result: "
             text = preamble + snippet

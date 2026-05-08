@@ -177,7 +177,7 @@ async def patch_config(
         # TTSConfig only accepts enabled / ack_enabled / voices_dir now.
         # Drop everything else silently so old UI clients (or stale
         # browser caches) don't break the merge.
-        ALLOWED = {"enabled", "ack_enabled", "ack_mode", "ack_model", "voices_dir"}
+        ALLOWED = {"enabled", "ack_enabled", "ack_mode", "ack_model", "voice_language", "voices_dir"}
         clean = {k: v for k, v in patch.items() if k in ALLOWED}
         raw["tts"] = {**existing, **clean}
     new_cfg = NexusConfig(**raw)

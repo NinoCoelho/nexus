@@ -306,6 +306,39 @@ def _language_directive(language: str | None) -> str:
     )
 
 
+def _time_location_block() -> str:
+    from datetime import datetime, timezone
+
+    from ..location import get_location
+
+    loc = get_location()
+    now_utc = datetime.now(timezone.utc)
+    lines = ["## Current time & location", ""]
+    lines.append(f"- **UTC:** {now_utc.strftime('%Y-%m-%d %H:%M UTC')}")
+
+    tz_name = loc.timezone
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            tz = ZoneInfo(tz_name)
+            now_local = datetime.now(tz)
+            offset = now_local.strftime("%z")
+            offset_fmt = f"UTC{offset[:3]}:{offset[3:]}" if offset else ""
+            lines.append(
+                f"- **Local:** {now_local.strftime('%Y-%m-%d %H:%M')} {offset_fmt} ({tz_name})"
+            )
+        except Exception:
+            pass
+
+    if loc.city or loc.region or loc.country:
+        parts = [p for p in (loc.city, loc.region, loc.country) if p]
+        lines.append(f"- **Location:** {', '.join(parts)}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     registry: SkillRegistry,
     *,
@@ -315,6 +348,10 @@ def build_system_prompt(
 ) -> str:
     _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
+
+    tl_block = _time_location_block()
+    parts.append(tl_block)
+    parts.append("")
 
     lang_block = _language_directive(language)
     if lang_block:

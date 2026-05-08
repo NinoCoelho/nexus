@@ -74,7 +74,8 @@ HIDDEN_SEED_MARKER = "<!-- nx:hidden-seed -->\n"
 
 def _compose_card_context_seed(
     *,
-    lane_prompt: str | None,
+    board_prompt: str | None = None,
+    lane_prompt: str | None = None,
     path: str,
     card_title: str,
     card_id: str,
@@ -92,6 +93,9 @@ def _compose_card_context_seed(
     """
     folder = path.rsplit("/", 1)[0] if "/" in path else ""
     parts = []
+    if board_prompt:
+        parts.append(board_prompt.strip())
+        parts.append("")
     if lane_prompt:
         parts.append(lane_prompt.strip())
         parts.append("")
@@ -124,16 +128,28 @@ def _compose_card_context_seed(
     return "\n".join(parts)
 
 
-def _compose_hidden_chat_seed(*, path: str, card_title: str, card_id: str, card_body: str) -> str:
+def _compose_hidden_chat_seed(
+    *,
+    board_prompt: str | None = None,
+    path: str,
+    card_title: str,
+    card_id: str,
+    card_body: str,
+) -> str:
     folder = path.rsplit("/", 1)[0] if "/" in path else ""
     body = [
         HIDDEN_SEED_MARKER.rstrip(),
+    ]
+    if board_prompt:
+        body.append(board_prompt.strip())
+        body.append("")
+    body.append(
         f"The user just opened this kanban card. Check the board file at `{path}`, "
         f"read the card, suggest 2-3 concrete next steps to the user, and then wait for instructions. "
-        f"Don't make changes yet.",
-        "",
-        f"**Board:** `{path}`",
-    ]
+        f"Don't make changes yet."
+    )
+    body.append("")
+    body.append(f"**Board:** `{path}`")
     if folder:
         body.append(f"**Folder:** `{folder}/`")
     body.append(f"**Card:** {card_title}")
@@ -278,6 +294,7 @@ async def _dispatch_impl(
     current_lane_id: str | None = None
     current_lane_title: str | None = None
     all_lanes: list[tuple[str, str]] = []
+    board_prompt: str | None = None
     # calendar branch state
     calendar_prompt: str | None = None
     event_start: str = ""
@@ -302,6 +319,7 @@ async def _dispatch_impl(
         current_lane_id = lane.id
         current_lane_title = lane.title
         all_lanes = [(ln.id, ln.title) for ln in board.lanes]
+        board_prompt = board.board_prompt
 
     is_fire_window_event = False
     if event_id:
@@ -363,6 +381,7 @@ async def _dispatch_impl(
             )
         else:
             seed_message = _compose_hidden_chat_seed(
+                board_prompt=board_prompt,
                 path=path, card_title=seed_title, card_id=card_id or "",
                 card_body=seed_body or "",
             )
@@ -376,6 +395,7 @@ async def _dispatch_impl(
             )
         else:
             seed_message = _compose_card_context_seed(
+                board_prompt=board_prompt,
                 lane_prompt=lane_prompt, path=path, card_title=seed_title,
                 card_id=card_id or "", card_body=seed_body or "",
                 current_lane_id=current_lane_id,

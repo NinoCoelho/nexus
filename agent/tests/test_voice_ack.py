@@ -147,7 +147,19 @@ async def test_completion_ack_passes_full_reply_into_prompt(
 
     agent = _StubAgent()
     agent.provider.chat = _capturing_chat  # type: ignore[assignment]
-    await emit_completion_ack(agent=agent, store=store, trigger=_trigger(), cfg=cfg)
+    # Use a reply longer than 15 words so it goes through the LLM path.
+    await emit_completion_ack(
+        agent=agent, store=store,
+        trigger=_AckTrigger(
+            user_text="give me the latest news",
+            session_id="sess-1",
+            full_reply=(
+                "Done — saved a summary of the latest headlines to your vault. "
+                "Want me to schedule a daily run for you tomorrow morning?"
+            ),
+        ),
+        cfg=cfg,
+    )
     assert len(seen_prompts) == 1
     assert "schedule a daily run" in seen_prompts[0]
 
@@ -234,7 +246,7 @@ async def test_completion_ack_falls_back_to_snippet_with_preamble_when_llm_empty
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When BOTH the structured and simple prompts return empty, we read
-    a truncated version of the actual reply with a clear 'Brief content:'
+    a truncated version of the actual reply with a clear 'Result:'
     preamble so the user knows it's raw content (not a polished summary)
     rather than hearing 'the answer is on the chat' which conveys nothing."""
     _patch_synth_to_silent(monkeypatch)
@@ -242,14 +254,21 @@ async def test_completion_ack_falls_back_to_snippet_with_preamble_when_llm_empty
     cfg = default_config()
 
     agent = _StubAgent(provider=_StubProvider(content=""))  # LLM always empty
-    await emit_completion_ack(agent=agent, store=store, trigger=_trigger(), cfg=cfg)
+    # Reply must be >15 words to reach the LLM → fallback path.
+    trigger = _AckTrigger(
+        user_text="give me the latest news",
+        session_id="sess-1",
+        full_reply=(
+            "Done — saved a summary of the latest headlines to your vault. "
+            "Want me to schedule a daily run for you tomorrow morning?"
+        ),
+    )
+    await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
     assert len(store.published) == 1
     _, _, data = store.published[0]
     transcript = data["transcript"]
-    assert "Brief content" in transcript
-    # The actual reply content must reach the listener — that's the whole
-    # point of the snippet preamble.
-    assert "saved a summary to your vault" in transcript
+    assert "Result" in transcript
+    assert "summary" in transcript and "vault" in transcript
 
 
 async def test_completion_ack_uses_simple_retry_when_structured_empty(
@@ -275,7 +294,16 @@ async def test_completion_ack_uses_simple_retry_when_structured_empty(
 
     agent = _StubAgent()
     agent.provider.chat = _capturing_chat  # type: ignore[assignment]
-    await emit_completion_ack(agent=agent, store=store, trigger=_trigger(), cfg=cfg)
+    # Reply must be >15 words to reach the LLM path.
+    trigger = _AckTrigger(
+        user_text="give me the latest news",
+        session_id="sess-1",
+        full_reply=(
+            "Done — saved a summary of the latest headlines to your vault. "
+            "Want me to schedule a daily run for you tomorrow morning?"
+        ),
+    )
+    await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
     assert len(seen_prompts) == 2
     # Second prompt is the SIMPLE one — much shorter than structured.
     assert "Summarize this text" in seen_prompts[1] or "Resuma este texto" in seen_prompts[1]
@@ -329,9 +357,12 @@ async def test_completion_ack_uses_ui_language_when_user_text_empty(
     agent = _StubAgent()
     agent.provider.chat = _capturing_chat  # type: ignore[assignment]
     trigger = _AckTrigger(
-        user_text="",  # empty — this is the bug we're fixing
+        user_text="",
         session_id="sess-1",
-        full_reply="Done. Saved to vault. Want me to schedule a daily run for you?",
+        full_reply=(
+            "Done. Saved the full summary of the report to your vault. "
+            "Want me to schedule a daily run for you tomorrow morning?"
+        ),
     )
     await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
     # The chosen prompt should be the Portuguese one despite empty user_text.

@@ -115,6 +115,29 @@ def _seed_spacy_cache(bundled_models: Path) -> None:
     shutil.copytree(meta.parent, cache)
 
 
+def _seed_whisper_model(bundled_models: Path) -> None:
+    """Copy the bundled faster-whisper model into ~/.nexus/models/huggingface/.
+
+    faster-whisper downloads models via huggingface_hub; when the bundle is
+    read-only (e.g. /Applications), HF_HOME is redirected to ~/.nexus/ but
+    the model isn't there yet.  This copies it from the bundle so no runtime
+    download is needed.
+    """
+    hf_cache = NEXUS_HOME / "models" / "huggingface"
+    bundled_hf = bundled_models / "huggingface"
+    if not bundled_hf.is_dir():
+        return
+    for child in bundled_hf.iterdir():
+        if not child.is_dir():
+            continue
+        dest = hf_cache / child.name
+        if dest.is_dir():
+            continue
+        log.info("[bootstrap] seeding huggingface model %s → %s", child.name, dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(child, dest)
+
+
 def _start_llama(here: Path) -> tuple[subprocess.Popen | None, int | None, str | None]:
     """Launch the bundled llama.cpp server if a manifest is present.
 
@@ -400,9 +423,27 @@ def main() -> int:
         os.environ.setdefault("XDG_CACHE_HOME", str(models_dir / "cache"))
         _seed_spacy_cache(models_dir)
 
+    _writable_models = NEXUS_HOME / "models"
+    _writable_models.mkdir(parents=True, exist_ok=True)
+
+    if models_dir.is_dir():
+        _test_file = models_dir / ".write_test"
+        try:
+            _test_file.write_text("x")
+            _test_file.unlink()
+        except OSError:
+            log.info("[bootstrap] Resources not writable — redirecting caches to ~/.nexus/")
+            os.environ["NEXUS_MODELS_DIR"] = str(_writable_models)
+            os.environ["HF_HOME"] = str(_writable_models / "huggingface")
+            os.environ["XDG_CACHE_HOME"] = str(_writable_models / "cache")
+            _seed_spacy_cache(models_dir)
+            _seed_whisper_model(models_dir)
+
     ui_dist = here / "ui"
     if (ui_dist / "index.html").is_file():
         os.environ.setdefault("NEXUS_UI_DIST", str(ui_dist))
+
+    os.environ.setdefault("NEXUS_BUNDLE_DIR", str(here))
 
     # Point the skill registry at the bundled skills tree. In a dev checkout
     # the registry walks up from its own __file__ to find <repo>/skills, but
@@ -441,13 +482,14 @@ def main() -> int:
     # 0, which is the default) would tunnel to the hard-coded default 18989,
     # silently routing public traffic at the wrong daemon (or nowhere).
     os.environ["NEXUS_PORT"] = str(port)
-    port_file = Path(os.environ.get("NEXUS_PORT_FILE", here / ".port"))
+    port_file = Path(os.environ.get("NEXUS_PORT_FILE", ""))
+    if not port_file.parent.is_dir() or not os.access(port_file.parent, os.W_OK):
+        port_file = NEXUS_HOME / ".port"
+    NEXUS_HOME.mkdir(parents=True, exist_ok=True)
     try:
         port_file.write_text(str(port))
     except OSError:
         pass
-    # Write a sibling file with the bind host so the Swift host can show the
-    # right URL in its menu (otherwise it would assume 127.0.0.1).
     try:
         (port_file.parent / ".host").write_text(bind_host)
     except OSError:

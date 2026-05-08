@@ -34,6 +34,7 @@ from .config_schema import (  # noqa: F401
     VaultHistoryConfig,
     VaultConfig,
     UIConfig,
+    LocationConfig,
     NexusAccountConfig,
     NexusConfig,
     default_config,
@@ -162,6 +163,15 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "gateway_url": cfg.nexus_account.gateway_url,
             "poll_seconds": cfg.nexus_account.poll_seconds,
             "auto_upgrade_default": cfg.nexus_account.auto_upgrade_default,
+        },
+        "location": {
+            "city": cfg.location.city,
+            "region": cfg.location.region,
+            "country": cfg.location.country,
+            "timezone": cfg.location.timezone,
+            "lat": cfg.location.lat,
+            "lon": cfg.location.lon,
+            "disabled": cfg.location.disabled,
         },
     }
     for m in cfg.models:
@@ -327,11 +337,12 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         ui_raw.pop("language", None)
     ui = UIConfig(**ui_raw)
     nexus_account = NexusAccountConfig(**dict(raw.get("nexus_account", {})))
+    location = LocationConfig(**dict(raw.get("location", {})))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
-        nexus_account=nexus_account,
+        nexus_account=nexus_account, location=location,
     )
 
 

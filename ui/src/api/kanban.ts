@@ -34,6 +34,7 @@ export interface KanbanBoard {
   path: string;
   title: string;
   lanes: KanbanLane[];
+  board_prompt?: string;
 }
 
 export interface KanbanBoardSummary {
@@ -305,5 +306,18 @@ export async function setLaneWebhook(
     },
   );
   if (!res.ok) throw new Error(`Lane webhook set error: ${res.status}`);
+  return res.json();
+}
+
+export async function patchVaultKanbanBoard(
+  path: string,
+  patch: { title?: string; board_prompt?: string | null },
+): Promise<KanbanBoard> {
+  const res = await fetch(`${BASE}/vault/kanban?path=${encodeURIComponent(path)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Kanban board patch error: ${res.status}`);
   return res.json();
 }

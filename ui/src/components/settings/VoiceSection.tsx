@@ -12,6 +12,7 @@ const DEFAULT_CFG: TTSConfig = {
   ack_enabled: true,
   ack_mode: "voice",
   ack_model: "",
+  voice_language: "",
   voices_dir: "",
 };
 
@@ -147,6 +148,30 @@ export default function VoiceSection({ models }: Props) {
                 {cfg.ack_model || "Default"}
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {cfg.ack_enabled && (
+        <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>
+          <span className="settings-row-name">
+            Voice language
+            <span className="settings-row-hint" style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}>
+              Override spoken ack language — empty auto-detects
+            </span>
+          </span>
+          <div style={{ flexBasis: "100%" }}>
+            <select
+              className="s-select"
+              disabled={saving}
+              value={cfg.voice_language}
+              onChange={(e) => update({ voice_language: e.target.value })}
+            >
+              <option value="">Auto-detect</option>
+              <option value="pt">Portuguese</option>
+              <option value="en">English</option>
+              <option value="es">Spanish</option>
+            </select>
           </div>
         </div>
       )}

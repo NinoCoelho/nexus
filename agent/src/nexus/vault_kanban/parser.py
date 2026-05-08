@@ -205,6 +205,9 @@ def parse(content: str) -> Board:
     if lane is not None:
         board.lanes.append(lane)
 
+    bp = frontmatter.get("board_prompt")
+    if bp and isinstance(bp, str):
+        board.board_prompt = bp
     lane_prompts: dict[str, str] = frontmatter.get("lane_prompts") or {}
     lane_models: dict[str, str] = frontmatter.get("lane_models") or {}
     lane_webhooks: dict[str, dict[str, Any]] = frontmatter.get("lane_webhooks") or {}
@@ -242,6 +245,10 @@ def serialize(board: Board) -> str:
     """
     fm = dict(board.frontmatter)
     fm.setdefault(KANBAN_PLUGIN_KEY, "basic")
+    if board.board_prompt:
+        fm["board_prompt"] = board.board_prompt
+    else:
+        fm.pop("board_prompt", None)
     lp = {ln.id: ln.prompt for ln in board.lanes if ln.prompt}
     if lp:
         fm["lane_prompts"] = lp

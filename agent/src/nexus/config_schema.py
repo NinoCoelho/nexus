@@ -235,6 +235,10 @@ class TTSConfig(BaseModel):
     # falls back to the agent's default_model. Setting a fast/cheap model
     # (e.g. gpt-4o-mini, claude-3-5-haiku) keeps ack latency low.
     ack_model: str = ""
+    # Override language for spoken acks. Empty → auto-detect via langdetect.
+    # Set to a 2-letter code (e.g. "pt") to skip detection and always use
+    # that language — useful when langdetect misidentifies short utterances.
+    voice_language: str = ""
     # Where the downloaded ONNX voice files live. Empty → ~/.nexus/tts/piper/.
     voices_dir: str = ""
 
@@ -258,6 +262,16 @@ class UIConfig(BaseModel):
     language: Literal["en", "pt-BR"] = "en"
 
 
+class LocationConfig(BaseModel):
+    city: str = ""
+    region: str = ""
+    country: str = ""
+    timezone: str = ""
+    lat: float = 0.0
+    lon: float = 0.0
+    disabled: bool = False
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -270,6 +284,7 @@ class NexusConfig(BaseModel):
     vault: VaultConfig = Field(default_factory=VaultConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     nexus_account: NexusAccountConfig = Field(default_factory=NexusAccountConfig)
+    location: LocationConfig = Field(default_factory=LocationConfig)
 
 
 # Fresh install starts with providers configured but NO models.

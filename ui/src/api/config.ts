@@ -61,6 +61,8 @@ export interface TTSConfig {
   ack_mode: "voice" | "always";
   /** Fast/cheap model for voice ack LLM calls. Empty = agent default model. */
   ack_model: string;
+  /** Override language for spoken acks. Empty = auto-detect. */
+  voice_language: string;
   /** Where the bundled Piper voices live on disk. Empty = ~/.nexus/tts/piper. */
   voices_dir: string;
 }

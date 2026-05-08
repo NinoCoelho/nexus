@@ -7,7 +7,15 @@
     "filters": "Filters",
     "activeFilterIndicator": " •",
     "addLane": "+ Lane",
-    "boardDeleted": "Board file was deleted"
+    "boardDeleted": "Board file was deleted",
+    "boardSettingsTitle": "Board settings — {{title}}",
+    "boardPromptDescription": "The board prompt is prepended before any lane prompt on every dispatch. Use it to set personality, behaviour, and general instructions for all cards on this board.",
+    "boardPromptLabel": "Board prompt",
+    "boardPromptPlaceholder": "e.g. You are a creative writing assistant. Be imaginative, use vivid language, and suggest bold ideas.",
+    "boardPromptIndicator": "Board prompt set — click to edit",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving..."
   },
   "lane": {
     "promptIndicator": "Auto-dispatch prompt set",
