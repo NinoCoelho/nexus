@@ -57,9 +57,10 @@ function isCalendarContent(content: string): boolean {
 
 interface VaultEditorPanelProps {
   selectedPath: string | null;
-  /** Kept for sidebar plumbing symmetry; not consumed in the editor itself. */
+  /** Kept for sidebar plumbing symmetry, not consumed in the editor itself. */
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
+  onNavigateToSession?: (sessionId: string) => void;
   onViewEntityGraph?: (path: string) => void;
   /** Called when the user opens a `.md` file with `calendar-plugin:` frontmatter. */
   onOpenCalendar?: (path: string) => void;
@@ -71,7 +72,7 @@ interface VaultEditorPanelProps {
   onOpenTable?: (path: string) => void;
 }
 
-export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultEditorPanelProps) {
+export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigateToSession, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultEditorPanelProps) {
   const { t } = useTranslation("vault");
   const [content, setContent] = useState("");
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
@@ -319,6 +320,7 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onViewEnt
               <KanbanBoard
                 path={selectedPath!}
                 onOpenInChat={onOpenInChat}
+                onNavigateToSession={onNavigateToSession}
                 onOpenInVault={onOpenInVault}
               />
             </VaultLinkPreviewProvider>

@@ -370,3 +370,58 @@
 .kanban-assignee {
   font-style: italic;
 }
+
+.session-picker-dialog {
+  max-width: 420px;
+}
+
+.session-picker-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft, #e0e0e0);
+  border-radius: 6px;
+}
+
+.session-picker-list li {
+  border-bottom: 1px solid var(--border-soft, #e0e0e0);
+}
+
+.session-picker-list li:last-child {
+  border-bottom: none;
+}
+
+.session-picker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg, #222);
+  text-align: left;
+}
+
+.session-picker-item:hover {
+  background: var(--bg-soft, #f5f5f5);
+}
+
+.session-picker-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-picker-item-date {
+  flex-shrink: 0;
+  margin-left: 12px;
+  font-size: 11px;
+  color: var(--fg-faint, #999);
+}

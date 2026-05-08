@@ -47,7 +47,7 @@ type ViewMode = "month" | "week" | "day";
 interface Props {
   selectedPath: string | null;
   onSelectPath: (path: string | null) => void;
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
 }
 
 export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat }: Props) {
@@ -237,6 +237,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
         res.session_id,
         res.seed_message ?? `${HIDDEN_SEED_MARKER}${ev.title}`,
         ev.title,
+        res.model ?? undefined,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : t("calendar:error.chatFailed"));

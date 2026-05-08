@@ -13,7 +13,8 @@ import "./VaultView.css";
 interface VaultViewProps {
   selectedPath: string | null;
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
+  onNavigateToSession?: (sessionId: string) => void;
   onViewEntityGraph?: (path: string) => void;
   onOpenCalendar?: (path: string) => void;
   /** Navigate the host app to open `path` in the Vault view — wired through
@@ -25,13 +26,14 @@ interface VaultViewProps {
   onOpenTable?: (path: string) => void;
 }
 
-export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultViewProps) {
+export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat, onNavigateToSession, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultViewProps) {
   return (
     <div className="vault-view vault-view--editor-only">
       <VaultEditorPanel
         selectedPath={selectedPath}
         onDispatchToChat={onDispatchToChat}
         onOpenInChat={onOpenInChat}
+        onNavigateToSession={onNavigateToSession}
         onViewEntityGraph={onViewEntityGraph}
         onOpenCalendar={onOpenCalendar}
         onOpenInVault={onOpenInVault}

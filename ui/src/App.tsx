@@ -361,13 +361,13 @@ export default function App() {
     return () => sub.close();
   }, [ackPlayer, toast, tSettings, bumpSettingsRevision]);
 
-  const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string) => {
+  const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string, model?: string) => {
     setChatStates((prev) => {
       const next = new Map(prev);
       next.set(sessionId, {
         ...emptyState(),
-        historyLoaded: true, // skip GET /sessions — the only "message" is the hidden seed
-        selectedModel: chatSession.computeSeedModel(),
+        historyLoaded: true,
+        selectedModel: chatSession.computeSeedModel(model),
       });
       return next;
     });
@@ -377,6 +377,11 @@ export default function App() {
     setSessionsRevision((r) => r + 1);
     void title; // title was set server-side on dispatch
   }, [setChatStates, setActiveSession, setSessionsRevision, pendingAutoSend, chatSession]);
+
+  const handleNavigateToSession = useCallback((sessionId: string) => {
+    _handleSessionSelect(sessionId);
+    setView("chat");
+  }, [_handleSessionSelect]);
 
   // Poll for GraphRAG single-file indexing status. Fires when a file is
   // submitted for indexing via KnowledgeView; survives navigation because
@@ -615,7 +620,7 @@ export default function App() {
           }
         />
         {backendUp === false && (
-          <div style={{ padding: "6px 12px", background: "#b91c1c", color: "white", fontSize: 13, textAlign: "center" }}>
+          <div style={{ padding: "6px 12px", background: "var(--bad)", color: "var(--fg-on-status)", fontSize: 13, textAlign: "center" }}>
             Backend unreachable — check that <code>nexus serve</code> is running on{" "}
             {import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989"}.
           </div>
@@ -705,6 +710,7 @@ export default function App() {
               selectedPath={vaultSelectedPath}
               onDispatchToChat={handleDispatchToChat}
               onOpenInChat={handleOpenInChat}
+              onNavigateToSession={handleNavigateToSession}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
               onOpenInVault={handleOpenInVault}
@@ -716,6 +722,7 @@ export default function App() {
                 selectedPath={kanbanSelectedPath}
                 onDispatchToChat={handleDispatchToChat}
                 onOpenInChat={handleOpenInChat}
+                onNavigateToSession={handleNavigateToSession}
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
                 onOpenInVault={handleOpenInVault}
@@ -749,6 +756,7 @@ export default function App() {
                   selectedPath={dataSelectedPath}
                   onDispatchToChat={handleDispatchToChat}
                   onOpenInChat={handleOpenInChat}
+                  onNavigateToSession={handleNavigateToSession}
                   onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                   onOpenCalendar={handleOpenCalendar}
                   onOpenTable={(p) => {

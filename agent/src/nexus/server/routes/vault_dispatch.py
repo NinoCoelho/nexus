@@ -27,6 +27,9 @@ def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | Non
     falling back to the agent's configured default when the request is
     missing or unavailable.
 
+    Handles ``provider/model`` format by also checking the model part
+    alone when the full string isn't in the registry.
+
     Returns ``None`` when no usable model is known (caller lets the agent
     loop pick whatever default it has wired up).
     """
@@ -34,8 +37,21 @@ def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | Non
         requested = requested.strip() or None
     pr = getattr(agent_, "_provider_registry", None)
     available = pr.available_model_ids() if pr is not None else []
-    if requested and (not available or requested in available):
-        return requested
+
+    def _match(req: str | None) -> str | None:
+        if not req:
+            return None
+        if not available or req in available:
+            return req
+        if "/" in req:
+            short = req.rsplit("/", 1)[-1]
+            if short in available:
+                return short
+        return None
+
+    hit = _match(requested)
+    if hit:
+        return hit
     cfg = getattr(agent_, "_nexus_cfg", None)
     default = (cfg.agent.default_model if cfg and getattr(cfg, "agent", None) else None) or None
     if requested:
@@ -43,8 +59,9 @@ def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | Non
             "dispatch: requested model %r not in available %s; falling back",
             requested, available,
         )
-    if default and (not available or default in available):
-        return default
+    hit = _match(default)
+    if hit:
+        return hit
     if available:
         return available[0]
     return None
@@ -401,9 +418,9 @@ async def _dispatch_impl(
                 "dispatch: could not link session to event", exc_info=True,
             )
 
-    if mode == "background":
-        resolved_model = _resolve_dispatch_model(lane_model, a)
+    resolved_model = _resolve_dispatch_model(lane_model, a)
 
+    if mode == "background":
         async def _bg_turn() -> None:
             await _run_background_agent_turn(
                 session_id=session.id,
@@ -420,11 +437,6 @@ async def _dispatch_impl(
         from ..kanban_queue import get_queue
         get_queue().submit(path, event_id or card_id, _bg_turn)
 
-        return {
-            "session_id": session.id, "path": path, "card_id": card_id,
-            "event_id": event_id, "mode": mode, "model": resolved_model,
-        }
-
     return {
         "session_id": session.id,
         "seed_message": seed_message,
@@ -432,6 +444,7 @@ async def _dispatch_impl(
         "card_id": card_id,
         "event_id": event_id,
         "mode": mode,
+        "model": resolved_model,
     }
 
 
@@ -486,6 +499,41 @@ def _compose_database_context_seed(folder: str) -> str:
         "via `dashboard_manage.add_operation`."
     )
     return "\n".join(parts)
+
+
+@router.get("/vault/dispatch/sessions")
+async def vault_dispatch_sessions(
+    path: str = "",
+    card_id: str = "",
+    store: SessionStore = Depends(get_sessions),
+) -> list[dict[str, Any]]:
+    """Return all sessions ever dispatched for a specific kanban card.
+
+    Queries the ``sessions.context`` column for the standard dispatch pattern
+    ``"Dispatched from vault file: <path> (card <card_id>)"`` and returns
+    ``[{id, title, model, updated_at}]`` ordered newest-first.
+    """
+    if not path or not card_id:
+        return []
+    prefix = f"Dispatched from vault file: {path} (card {card_id})"
+    conn = store._connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, COALESCE(s.title, 'New session'), s.model, s.updated_at
+            FROM sessions s
+            WHERE s.context = ?
+            ORDER BY s.updated_at DESC
+            LIMIT 50
+            """,
+            (prefix,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r[0], "title": r[1], "model": r[2], "updated_at": r[3]}
+        for r in rows
+    ]
 
 
 @router.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)

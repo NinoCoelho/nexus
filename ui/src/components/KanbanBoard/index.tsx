@@ -22,6 +22,7 @@ import {
   deleteVaultKanbanCard,
   deleteVaultKanbanLane,
   dispatchFromVault,
+  fetchCardSessions,
   getVaultKanban,
   patchVaultKanbanCard,
   patchVaultKanbanLane,
@@ -30,10 +31,12 @@ import {
   type KanbanCard,
   type KanbanLane,
 } from "../../api";
+import type { CardSession } from "../../api/dispatch";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
 import "../KanbanBoard.css";
 import KanbanLaneColumn from "./KanbanLaneColumn";
 import KanbanFilterBar from "./KanbanFilterBar";
+import SessionPickerModal from "./SessionPickerModal";
 import { type BoardFilters } from "./utils";
 
 interface Props {
@@ -43,14 +46,16 @@ interface Props {
    * The chat view should POST the seed_message to /chat/stream — it
    * contains a hidden-seed marker the chat bubble renderer filters out.
    */
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
+  /** Navigate to an existing chat session (no new seed/auto-send). */
+  onNavigateToSession?: (sessionId: string) => void;
   /** Navigate the host app to open `path` in the Vault view — forwarded to
    *  card detail/activity modals so vault links opened from there keep
    *  the "Open in Vault" affordance in their preview header. */
   onOpenInVault?: (path: string) => void;
 }
 
-export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props) {
+export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, onOpenInVault }: Props) {
   const { t } = useTranslation("kanban");
   const [board, setBoard] = useState<BoardT | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +68,7 @@ export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props
   const [newCardLane, setNewCardLane] = useState<string | null>(null);
   const [activityCard, setActivityCard] = useState<KanbanCard | null>(null);
   const [editLane, setEditLane] = useState<KanbanLane | null>(null);
+  const [sessionPicker, setSessionPicker] = useState<{ card: KanbanCard; sessions: CardSession[] } | null>(null);
   const [filters, setFilters] = useState<BoardFilters>({ text: "", label: "", priority: "", assignee: "" });
   const [showFilters, setShowFilters] = useState(false);
 
@@ -185,11 +191,31 @@ export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props
   };
 
   const handleOpenInChat = async (card: KanbanCard) => {
+    if (!card.session_id) {
+      handleNewDispatch(card);
+      return;
+    }
+    try {
+      const sessions = await fetchCardSessions(path, card.id);
+      if (sessions.length === 0) {
+        handleNewDispatch(card);
+        return;
+      }
+      if (sessions.length === 1) {
+        onNavigateToSession?.(sessions[0].id);
+        return;
+      }
+      setSessionPicker({ card, sessions });
+    } catch {
+      handleNewDispatch(card);
+    }
+  };
+
+  const handleNewDispatch = async (card: KanbanCard) => {
     try {
       const res = await dispatchFromVault({ path, card_id: card.id, mode: "chat-hidden" });
       if (res.seed_message) {
-        onOpenInChat?.(res.session_id, res.seed_message, card.title);
-        // Pick up the linked session_id the backend stamped on the card.
+        onOpenInChat?.(res.session_id, res.seed_message, card.title, res.model ?? undefined);
         reload();
       }
     } catch { /* ignore */ }
@@ -360,6 +386,14 @@ export default function KanbanBoard({ path, onOpenInChat, onOpenInVault }: Props
           onClose={() => setNewCardLane(null)}
           onSaved={() => { setNewCardLane(null); reload(); }}
           onOpenInVault={onOpenInVault}
+        />
+      )}
+      {sessionPicker && (
+        <SessionPickerModal
+          sessions={sessionPicker.sessions}
+          onSelect={(sid) => { setSessionPicker(null); onNavigateToSession?.(sid); }}
+          onNewSession={() => { const card = sessionPicker.card; setSessionPicker(null); void handleNewDispatch(card); }}
+          onCancel={() => setSessionPicker(null)}
         />
       )}
     </div>
