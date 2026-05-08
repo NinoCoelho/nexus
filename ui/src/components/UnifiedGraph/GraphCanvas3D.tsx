@@ -263,11 +263,12 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     const isSelected = node.id === selectedId;
     const radius = (1.6 + Math.log(node.degree + 1) * 0.7) + (node.radiusBoost ?? 0);
     const baseColor = node.color ?? "#7a9e7e";
-    // Visual priority: selected → find-match → search-match → default.
+    const cs = getComputedStyle(document.documentElement);
+    const fg = cs.getPropertyValue("--fg").trim() || "#ece8e1";
     const initial = isSelected
       ? "#ffd06a"
       : isFindMatch ? "#5cf0ff"
-      : isMatch ? "#ffffff"
+      : isMatch ? fg
       : baseColor;
     const emissiveIntensity = isSelected ? 0.9 : isFindMatch ? 1.2 : isMatch ? 0.7 : 0;
 
@@ -292,7 +293,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
       pulseRef.current.set(node.id, {
         mat: material,
         baseColor: new THREE.Color(baseColor),
-        matchColor: new THREE.Color("#ffffff"),
+        matchColor: new THREE.Color(fg),
       });
       pulseFindRef.current.delete(node.id);
     } else {
@@ -312,7 +313,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     }
 
     const label = node.label.length > 28 ? node.label.slice(0, 27) + "…" : node.label;
-    const sprite = makeTextSprite(label, isMatch || isFindMatch || isSelected);
+    const sprite = makeTextSprite(label);
     sprite.position.set(0, (isSelected ? radius + 1 : radius) + 1.5, 0);
     group.add(sprite);
     return group;

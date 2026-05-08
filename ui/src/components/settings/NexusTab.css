@@ -40,7 +40,7 @@
 }
 
 .nexus-tab-tier-free {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--fg-dim);
   border: 1px solid var(--border);
 }
@@ -76,7 +76,7 @@
 }
 
 .nexus-tab-manage-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
 .nexus-tab-manage-btn:active {
@@ -207,7 +207,7 @@
   width: 100%;
   height: 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
   overflow: hidden;
 }
 
@@ -221,11 +221,11 @@
 }
 
 .nexus-tab-bar-warn .nexus-tab-bar-fill {
-  background: #d3a534;
+  background: var(--warn);
 }
 
 .nexus-tab-bar-high .nexus-tab-bar-fill {
-  background: #d35450;
+  background: var(--bad);
 }
 
 .nexus-tab-usage-meta {

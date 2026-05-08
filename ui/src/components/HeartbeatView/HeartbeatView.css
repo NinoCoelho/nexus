@@ -19,16 +19,14 @@
   gap: 16px;
 }
 
-/* ── scheduler bar ────────────────────────────────────────────────────── */
-
 .hb-scheduler-bar {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: var(--surface, rgba(255,255,255,0.04));
-  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   font-size: 13px;
 }
 
@@ -39,32 +37,32 @@
   flex-shrink: 0;
 }
 
-.hb-scheduler-dot--running { background: var(--ok, #4caf80); }
-.hb-scheduler-dot--stopped { background: var(--bad, #d84f4f); }
+.hb-scheduler-dot--running { background: var(--ok); }
+.hb-scheduler-dot--stopped { background: var(--bad); }
 
 .hb-scheduler-label {
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   flex: 1;
 }
 
 .hb-scheduler-label strong {
-  color: var(--text, #eee);
+  color: var(--fg);
 }
 
 .hb-btn {
   padding: 4px 10px;
   border-radius: 6px;
-  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .hb-btn:hover {
-  background: var(--surface, rgba(255,255,255,0.06));
-  color: var(--text, #eee);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
 }
 
 .hb-btn--accent {
@@ -76,8 +74,6 @@
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-/* ── heartbeat cards ──────────────────────────────────────────────────── */
-
 .hb-cards {
   display: flex;
   flex-direction: column;
@@ -87,8 +83,8 @@
 .hb-card {
   padding: 14px 16px;
   border-radius: 8px;
-  background: var(--surface, rgba(255,255,255,0.04));
-  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -107,30 +103,30 @@
   flex-shrink: 0;
 }
 
-.hb-card-health--healthy { background: var(--ok, #4caf80); }
-.hb-card-health--error   { background: var(--bad, #d84f4f); }
-.hb-card-health--idle    { background: var(--warn, #f0ad4e); }
-.hb-card-health--unknown { background: var(--text-muted, #888); }
+.hb-card-health--healthy { background: var(--ok); }
+.hb-card-health--error   { background: var(--bad); }
+.hb-card-health--idle    { background: var(--warn); }
+.hb-card-health--unknown { background: var(--fg-dim); }
 
 .hb-card-name {
   font-weight: 600;
   font-size: 14px;
-  color: var(--text, #eee);
+  color: var(--fg);
   flex: 1;
 }
 
 .hb-card-schedule {
   font-size: 12px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   font-family: monospace;
   padding: 2px 6px;
   border-radius: 4px;
-  background: rgba(255,255,255,0.04);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
 
 .hb-card-desc {
   font-size: 13px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
 }
 
 .hb-card-meta {
@@ -138,16 +134,16 @@
   align-items: center;
   gap: 16px;
   font-size: 12px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   flex-wrap: wrap;
 }
 
 .hb-card-error {
   font-size: 12px;
-  color: var(--bad, #d84f4f);
+  color: var(--bad);
   padding: 4px 8px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--bad, #d84f4f) 8%, transparent);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
 }
 
 .hb-card-actions {
@@ -157,30 +153,26 @@
   margin-left: auto;
 }
 
-/* ── section header ──────────────────────────────────────────────────── */
-
 .hb-section-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding-bottom: 4px;
-  border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+  border-bottom: 1px solid var(--border);
 }
 
 .hb-section-header h3 {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text, #eee);
+  color: var(--fg);
   margin: 0;
   flex: 1;
 }
 
-/* ── tabs ─────────────────────────────────────────────────────────────── */
-
 .hb-tabs {
   display: flex;
   gap: 2px;
-  background: var(--surface, rgba(255,255,255,0.04));
+  background: var(--bg-panel);
   border-radius: 6px;
   padding: 2px;
 }
@@ -190,22 +182,20 @@
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .hb-tab--active {
-  background: rgba(255,255,255,0.08);
-  color: var(--text, #eee);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
 }
 
 .hb-tab:hover:not(.hb-tab--active) {
-  color: var(--text, #eee);
+  color: var(--fg);
 }
-
-/* ── event rows ───────────────────────────────────────────────────────── */
 
 .hb-event-list {
   display: flex;
@@ -219,19 +209,19 @@
   gap: 10px;
   padding: 10px 14px;
   border-radius: 6px;
-  border: 1px solid var(--border, rgba(255,255,255,0.06));
+  border: 1px solid var(--border);
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .hb-event-row:hover {
-  background: rgba(255,255,255,0.03);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
 }
 
 .hb-event-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text, #eee);
+  color: var(--fg);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -241,22 +231,20 @@
 
 .hb-event-calendar {
   font-size: 11px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   padding: 2px 6px;
   border-radius: 4px;
-  background: rgba(255,255,255,0.04);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
   white-space: nowrap;
 }
 
 .hb-event-time {
   font-size: 12px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   white-space: nowrap;
   min-width: 70px;
   text-align: right;
 }
-
-/* ── status badge (kanban-style) ──────────────────────────────────────── */
 
 .hb-status-badge {
   width: 22px;
@@ -280,23 +268,23 @@
 }
 
 .hb-status-badge--done {
-  color: var(--ok, #4caf80);
-  border-color: color-mix(in srgb, var(--ok, #4caf80) 45%, transparent);
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
 }
 
 .hb-status-badge--failed {
-  color: var(--bad, #d84f4f);
-  border-color: color-mix(in srgb, var(--bad, #d84f4f) 45%, transparent);
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
 }
 
 .hb-status-badge--stop {
-  color: var(--bad, #d84f4f);
-  border-color: color-mix(in srgb, var(--bad, #d84f4f) 45%, transparent);
-  background: color-mix(in srgb, var(--bad, #d84f4f) 10%, transparent);
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
 }
 
 .hb-status-badge--stop:hover {
-  background: color-mix(in srgb, var(--bad, #d84f4f) 25%, transparent);
+  background: color-mix(in srgb, var(--bad) 25%, transparent);
 }
 
 .hb-status-badge--retry {
@@ -332,33 +320,31 @@
   to { transform: rotate(360deg); }
 }
 
-/* ── log entry rows ───────────────────────────────────────────────────── */
-
 .hb-log-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
   border-radius: 6px;
-  border: 1px solid var(--border, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .hb-log-row:hover {
-  background: rgba(255,255,255,0.03);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
 }
 
 .hb-log-ts {
   font-size: 11px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   font-family: monospace;
   min-width: 130px;
 }
 
 .hb-log-title {
   font-size: 13px;
-  color: var(--text, #eee);
+  color: var(--fg);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -368,14 +354,14 @@
 
 .hb-log-duration {
   font-size: 11px;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   min-width: 50px;
   text-align: right;
 }
 
 .hb-log-error {
   font-size: 11px;
-  color: var(--bad, #d84f4f);
+  color: var(--bad);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -383,16 +369,12 @@
   white-space: nowrap;
 }
 
-/* ── empty state ──────────────────────────────────────────────────────── */
-
 .hb-empty {
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
   font-size: 13px;
   padding: 24px;
   text-align: center;
 }
-
-/* ── small action buttons in event rows ────────────────────────────── */
 
 .hb-event-actions {
   display: flex;
@@ -414,10 +396,10 @@
   transition: all 0.15s;
   background: transparent;
   padding: 0;
-  color: var(--text-muted, #888);
+  color: var(--fg-dim);
 }
 
 .hb-icon-btn:hover {
-  background: rgba(255,255,255,0.06);
-  color: var(--text, #eee);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
 }

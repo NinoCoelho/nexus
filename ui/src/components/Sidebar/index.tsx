@@ -20,7 +20,6 @@ import SessionContextMenu from "./SessionContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
-import BrightnessKnob from "../BrightnessKnob";
 import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
@@ -362,14 +361,13 @@ export default function Sidebar({
         <div className="sidebar-spacer" />
       )}
 
-      {/* Settings + always-accessible brightness knob */}
+      {/* Settings */}
       <div className="sidebar-bottom">
         <NexusUsageGauges collapsed={collapsed} onOpenSettings={onOpenSettings} />
         <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? t("sidebar:settings") : undefined}>
           <span className="sidebar-nav-icon"><IconGear /></span>
           {!collapsed && <span className="sidebar-nav-label">{t("sidebar:settings")}</span>}
         </button>
-        <BrightnessKnob collapsed={collapsed} />
       </div>
 
       {/* Floating context menu — position:fixed so it escapes the row's

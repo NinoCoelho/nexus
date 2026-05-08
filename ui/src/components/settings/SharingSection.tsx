@@ -201,14 +201,14 @@ export default function SharingSection() {
                   lineHeight: 1.5,
                 }}
               >
-                <strong style={{ color: "#ffb84d" }}>⚠ {t("tunnel:sharing.active.warning")}</strong>{" "}
+                <strong style={{ color: "var(--warn)" }}>⚠ {t("tunnel:sharing.active.warning")}</strong>{" "}
                 {t("tunnel:sharing.active.warningBody")}
               </div>
               <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
                 <canvas
                   ref={qrCanvasRef}
                   style={{
-                    background: "#fff",
+                    background: "var(--bg-panel)",
                     borderRadius: 4,
                     flexShrink: 0,
                   }}
@@ -233,7 +233,7 @@ export default function SharingSection() {
                         wordBreak: "break-all",
                         userSelect: "all",
                         padding: "5px 7px",
-                        background: "var(--code-bg, #222)",
+                        background: "var(--code-bg, var(--bg-inset))",
                         borderRadius: 4,
                       }}
                     >
@@ -252,7 +252,7 @@ export default function SharingSection() {
                           fontSize: 22,
                           letterSpacing: 4,
                           padding: "8px 12px",
-                          background: "var(--code-bg, #222)",
+                          background: "var(--code-bg, var(--bg-inset))",
                           borderRadius: 6,
                           textAlign: "center",
                           userSelect: "all",
@@ -272,7 +272,7 @@ export default function SharingSection() {
                         border: "1px solid rgba(80, 200, 120, 0.35)",
                       }}
                     >
-                      <strong style={{ color: "#5fd38a" }}>✓ {t("tunnel:sharing.active.paired")}</strong>{" "}
+                      <strong style={{ color: "var(--ok)" }}>✓ {t("tunnel:sharing.active.paired")}</strong>{" "}
                       {t("tunnel:sharing.active.pairedBody")}
                     </div>
                   ) : null}

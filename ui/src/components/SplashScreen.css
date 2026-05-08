@@ -94,7 +94,7 @@
   font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.32);
+  color: color-mix(in srgb, var(--fg) 32%, transparent);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   animation: nx-splash-hint 800ms ease-out 1100ms both;
 }

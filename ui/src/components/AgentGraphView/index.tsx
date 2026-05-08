@@ -145,7 +145,7 @@ export default function AgentGraphView({ onOpenSkill, onSelectSession }: Props) 
     const group = new THREE.Group();
     group.add(mesh);
     const label = node.label.length > 28 ? node.label.slice(0, 27) + "…" : node.label;
-    const sprite = makeTextSprite(label, isSelected);
+    const sprite = makeTextSprite(label);
     sprite.position.set(0, radius + 1.5, 0);
     group.add(sprite);
     return group;
@@ -259,7 +259,7 @@ export default function AgentGraphView({ onOpenSkill, onSelectSession }: Props) 
   );
 }
 
-function makeTextSprite(text: string, highlighted: boolean): THREE.Sprite {
+function makeTextSprite(text: string): THREE.Sprite {
   const padding = 6;
   const fontSize = 22;
   const measure = document.createElement("canvas").getContext("2d")!;
@@ -269,10 +269,13 @@ function makeTextSprite(text: string, highlighted: boolean): THREE.Sprite {
   canvas.width = Math.ceil(textWidth + padding * 2);
   canvas.height = fontSize + padding * 2;
   const ctx = canvas.getContext("2d")!;
+  const cs = getComputedStyle(document.documentElement);
+  const fg = cs.getPropertyValue("--fg").trim() || "#ece8e1";
+  const bgPanel = cs.getPropertyValue("--bg-panel").trim() || "rgba(29, 32, 37, 0.85)";
   ctx.font = `${fontSize}px system-ui, sans-serif`;
-  ctx.fillStyle = "rgba(29, 32, 37, 0.85)";
+  ctx.fillStyle = bgPanel;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = highlighted ? "#ffffff" : "#ece8e1";
+  ctx.fillStyle = fg;
   ctx.textBaseline = "top";
   ctx.fillText(text, padding, padding);
   const texture = new THREE.CanvasTexture(canvas);
