@@ -69,8 +69,9 @@ _UUID_RE = re.compile(
 
 # Fenced code blocks. We catch the LANGUAGE so mermaid/dot/sql/etc. can
 # get a more specific announcement than just "a code block follows".
+# Handles both ``` and ~~~ delimiters, with or without trailing newline.
 _FENCED_RE = re.compile(
-    r"```(?P<lang>\w*)\s*\n.*?\n```",
+    r"(?P<open>```|~~~)(?P<lang>\w*)[^\n]*\n.*?\n?(?P=open)",
     flags=re.DOTALL,
 )
 
@@ -154,8 +155,36 @@ def _strip_markdown(text: str) -> str:
     so asterisks / hashes / pipes don't leak through to the synthesizer.
     """
 
+    # YAML frontmatter (--- ... ---) at the top of vault files.
+    text = re.compile(r"^---\r?\n[\s\S]*?\r?\n---\r?\n?").sub("", text)
+
     # HTML comments (used by Nexus for nx:* markers).
     text = re.compile(r"<!--[\s\S]*?-->").sub("", text)
+
+    # Math blocks ($$ ... $$) → spoken placeholder.
+    text = re.compile(r"\$\$[\s\S]*?\$\$").sub(
+        "(an equation)", text,
+    )
+
+    # Indented code blocks — 2+ consecutive lines starting with 4+ spaces
+    # or a tab. Replace with a short placeholder.
+    text = re.compile(
+        r"(?:^(?: {4}|\t)[^\n]*\n?){2,}", flags=re.MULTILINE,
+    ).sub("(a code block follows)", text)
+
+    # Footnote references [^1] → remove.
+    text = re.compile(r"\[\^[^\]]+\]").sub("", text)
+    # Footnote definitions (at start of line) → remove whole line.
+    text = re.compile(r"^\[\^[^\]]+\]:\s*[^\n]*\n?", flags=re.MULTILINE).sub(
+        "", text,
+    )
+
+    # Task list markers: - [x] / - [ ] → "done: " or "".
+    def _task_list(m: re.Match[str]) -> str:
+        return "done: " if re.search(r"\[[xX]\]", m.group(0)) else ""
+    text = re.compile(
+        r"^\s*[-*+]\s+\[[ xX]\]\s*", flags=re.MULTILINE,
+    ).sub(_task_list, text)
 
     # Images: ![alt](url) → alt
     text = re.compile(r"!\[([^\]]*)\]\([^)]*\)").sub(r"\1", text)
@@ -168,6 +197,9 @@ def _strip_markdown(text: str) -> str:
 
     # Inline code → just the contents.
     text = re.compile(r"`([^`]+)`").sub(r"\1", text)
+
+    # Escape sequences (\* \# etc.) → just the char.
+    text = re.compile(r"""\\([\\`*_{}[\]()#+\-.!~|>])""").sub(r"\1", text)
 
     # Headings (# ## ### …) — drop the leading hashes.
     text = re.compile(r"^#{1,6}\s+", flags=re.MULTILINE).sub("", text)
