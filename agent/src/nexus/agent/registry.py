@@ -32,12 +32,17 @@ class ProviderRegistry:
             raise KeyError(f"Provider {provider_name!r} not available")
         return self._providers[provider_name], model_name
 
-    def available_model_ids(self, exclude_nonfunctional: bool = False) -> list[str]:
-        """Return registered model IDs, optionally filtered to those whose
-        providers passed the key check at registration time."""
+    def available_model_ids(
+        self,
+        exclude_nonfunctional: bool = False,
+        exclude: set[str] | None = None,
+    ) -> list[str]:
+        """Return registered model IDs, optionally filtering out specific
+        model IDs (e.g. the vision-role model that should never appear in
+        chat model pickers or dispatch fallbacks)."""
         return [
             mid for mid, (pname, _) in self._model_map.items()
-            if pname in self._providers
+            if pname in self._providers and (not exclude or mid not in exclude)
         ]
 
     async def aclose(self) -> None:

@@ -412,7 +412,9 @@ def _wizard_apply_models(cfg: Any, provider_name: str, models: list[str]) -> Non
     # If the agent has no default yet and we just added a model, adopt it
     # so the chat view becomes immediately usable. Mirrors POST /models.
     if not cfg.agent.default_model and cfg.models:
-        cfg.agent.default_model = cfg.models[0].id
+        vision = getattr(getattr(cfg, "agent", None), "vision_model", "") or ""
+        non_vision = [m for m in cfg.models if m.id != vision]
+        cfg.agent.default_model = (non_vision or cfg.models)[0].id
 
 
 @router.post("/providers/wizard")

@@ -30,13 +30,20 @@ def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | Non
     Handles ``provider/model`` format by also checking the model part
     alone when the full string isn't in the registry.
 
+    The vision-role model (``cfg.agent.vision_model``) is always excluded
+    from the available list so it is never picked as a chat dispatch
+    target — it should only be called by the OCR tool.
+
     Returns ``None`` when no usable model is known (caller lets the agent
     loop pick whatever default it has wired up).
     """
     if requested:
         requested = requested.strip() or None
     pr = getattr(agent_, "_provider_registry", None)
-    available = pr.available_model_ids() if pr is not None else []
+    cfg = getattr(agent_, "_nexus_cfg", None)
+    vision_id = (getattr(cfg, "agent", None) and cfg.agent.vision_model) or ""
+    exclude = {vision_id} if vision_id else None
+    available = pr.available_model_ids(exclude=exclude) if pr is not None else []
 
     def _match(req: str | None) -> str | None:
         if not req:
@@ -52,7 +59,6 @@ def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | Non
     hit = _match(requested)
     if hit:
         return hit
-    cfg = getattr(agent_, "_nexus_cfg", None)
     default = (cfg.agent.default_model if cfg and getattr(cfg, "agent", None) else None) or None
     if requested:
         log.warning(

@@ -127,13 +127,15 @@ def _resolve_classifier(agent_: Agent) -> tuple[LLMProvider, str]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="LLM provider registry unavailable; configure a model in Settings first",
         )
-    available = pr.available_model_ids(exclude_nonfunctional=True)
+    cfg = getattr(agent_, "_nexus_cfg", None)
+    vision_id = (getattr(cfg, "agent", None) and cfg.agent.vision_model) or ""
+    exclude = {vision_id} if vision_id else None
+    available = pr.available_model_ids(exclude=exclude)
     if not available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="no functional models configured; add one in Settings → Providers",
         )
-    cfg = getattr(agent_, "_nexus_cfg", None)
     default = getattr(getattr(cfg, "agent", None), "default_model", None) if cfg else None
     model_id = default if (default and default in available) else available[0]
     try:

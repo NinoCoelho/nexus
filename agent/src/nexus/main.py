@@ -65,7 +65,9 @@ def build_app():
     try:
         default_provider, _ = provider_registry.get_for_model(cfg.agent.default_model)
     except KeyError:
-        available = provider_registry.available_model_ids()
+        vision_id = (getattr(cfg, "agent", None) and cfg.agent.vision_model) or ""
+        exclude = {vision_id} if vision_id else None
+        available = provider_registry.available_model_ids(exclude=exclude)
         if available:
             # Prefer Nexus-tier models when present (nexus > demo), since
             # signed-in users always have one of those registered. Falls
