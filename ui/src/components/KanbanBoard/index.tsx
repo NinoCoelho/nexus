@@ -304,29 +304,29 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
         <div className="kanban-board-title">
           {board.title}
           {board.board_prompt && (
-            <button
-              className="kanban-icon-btn"
+            <span
               title={t("kanban:board.boardPromptIndicator")}
-              onClick={() => setEditBoard(true)}
               style={{
-                background: "none",
-                border: "none",
                 color: "var(--accent)",
-                cursor: "pointer",
-                fontSize: 14,
-                marginLeft: 6,
-                padding: "0 2px",
+                fontSize: 13,
+                marginLeft: 4,
+                opacity: 0.7,
                 verticalAlign: "middle",
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="8" cy="8" r="3" />
-                <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" />
-              </svg>
-            </button>
+              &#9888;
+            </span>
           )}
         </div>
         <div className="kanban-board-header-actions">
+          <button
+            className="kanban-pill"
+            onClick={() => setEditBoard(true)}
+            title={t("kanban:board.boardSettings")}
+            style={board.board_prompt ? { color: "var(--accent)" } : undefined}
+          >
+            {t("kanban:board.boardSettings")}
+          </button>
           <button
             className="kanban-pill"
             onClick={() => setShowFilters((v) => !v)}

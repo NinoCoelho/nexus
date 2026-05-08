@@ -12,7 +12,8 @@
     "boardPromptDescription": "O prompt do quadro é adicionado antes de qualquer prompt de coluna em cada despacho. Use para definir personalidade, comportamento e instruções gerais para todos os cartões deste quadro.",
     "boardPromptLabel": "Prompt do quadro",
     "boardPromptPlaceholder": "ex. Você é um assistente de escrita criativa. Seja imaginativo, use linguagem vívida e sugira ideias ousadas.",
-    "boardPromptIndicator": "Prompt do quadro definido — clique para editar",
+    "boardPromptIndicator": "Prompt do quadro definido",
+    "boardSettings": "Configurações",
     "cancel": "Cancelar",
     "save": "Salvar",
     "saving": "Salvando..."
