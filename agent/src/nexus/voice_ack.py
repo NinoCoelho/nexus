@@ -69,28 +69,56 @@ _START_PROMPT_PT = (
 )
 
 _COMPLETE_PROMPT_EN = (
-    "Summarize the text below into ONE spoken sentence (at most 45 words). "
-    "Highlight the single main result or finding. Plain spoken English. "
-    "No markdown, no closing pleasantries, no headers, no bullets.\n"
+    "You are a voice assistant. The user just watched you work through a "
+    "problem and can SEE your full written reply on screen. They need the "
+    "CONCLUSION spoken aloud — the final answer, the key number, the "
+    "decision, or the single takeaway. Do NOT narrate or rehash what you "
+    "did — they watched it happen.\n\n"
+    "Rules:\n"
+    "- ONE spoken sentence, at most 30 words\n"
+    "- State the bottom-line result: the answer, the fix, the recommendation\n"
+    "- If the reply is a list, name only the top item or the count\n"
+    "- If it's a question answered, just give the answer\n"
+    "- If it's work done, state the outcome ('Done — X was updated', 'Found 3 issues')\n"
+    "- Plain spoken English, no formatting symbols\n"
     "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
     "or any formatting symbols. Use only plain words and basic punctuation "
     "(period, comma, question mark, exclamation mark).\n\n{full_reply}"
 )
 
 _COMPLETE_PROMPT_PT = (
-    "Resuma o texto abaixo em UMA frase falada (no máximo 45 palavras). "
-    "Destaque o principal resultado ou descoberta. Português brasileiro "
-    "falado. Sem markdown, sem despedidas, sem títulos, sem marcadores.\n"
+    "Você é um assistente de voz. O usuário acabou de assistir você "
+    "trabalhar num problema e PODE VER a resposta completa na tela. Ele "
+    "precisa ouvir a CONCLUSÃO — a resposta final, o número-chave, a "
+    "decisão ou o principal resultado. NÃO narre ou repita o que você "
+    "fez — ele viu acontecer.\n\n"
+    "Regras:\n"
+    "- UMA frase falada, no máximo 30 palavras\n"
+    "- Diga o resultado final: a resposta, a correção, a recomendação\n"
+    "- Se a resposta é uma lista, cite só o principal ou a quantidade\n"
+    "- Se é uma pergunta respondida, dê só a resposta\n"
+    "- Se é trabalho feito, state o resultado ('Pronto — X foi atualizado', 'Encontrei 3 problemas')\n"
+    "- Português brasileiro falado, sem símbolos de formatação\n"
     "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
     "símbolo de formatação. Use apenas palavras e pontuação básica "
     "(ponto, vírgula, ponto de interrogação, ponto de exclamação).\n\n{full_reply}"
 )
 
 _SUMMARIZE_PROMPT_EN = (
-    "Summarize the following text into 1-2 short paragraphs (under "
-    "200 words total). Your output will be read aloud by a text-to-speech "
-    "engine, so it must be pure spoken English with ZERO formatting symbols.\n\n"
+    "You are converting a written message into speech for someone who can "
+    "already SEE the full text on their screen. They clicked 'listen' to "
+    "hear the CONCLUSION — not a walkthrough of what they already read.\n\n"
+    "Produce 1-2 spoken paragraphs (under 150 words) that deliver the "
+    "BOTTOM LINE:\n"
+    "- What was the answer or result?\n"
+    "- What action should they take?\n"
+    "- What is the key insight or decision?\n\n"
     "RULES:\n"
+    "- Skip the journey — give the destination\n"
+    "- Do NOT re-list steps, code, or intermediate reasoning\n"
+    "- If the text contains a clear answer, lead with it\n"
+    "- If it's a comparison, state the recommendation\n"
+    "- If it's an explanation, give the takeaway\n"
     "- No bullets, no markdown, no headers, no code blocks\n"
     "- No asterisks (*), hashes (#), backticks (`), dashes (-), pipes (|), "
     "angle brackets (<>), underscores (_), tildes (~), brackets ([) or braces ({)\n"
@@ -102,11 +130,20 @@ _SUMMARIZE_PROMPT_EN = (
 )
 
 _SUMMARIZE_PROMPT_PT = (
-    "Resuma o texto a seguir em um a dois parágrafos curtos (no total menos de "
-    "duzentas palavras). Sua saída será lida em voz alta por um sintetizador de "
-    "fala, então deve ser português brasileiro falado puro com ZERO símbolos de "
-    "formatação.\n\n"
+    "Você está convertendo uma mensagem escrita em fala para alguém que "
+    "JÁ PODE VER o texto completo na tela. A pessoa clicou em 'ouvir' para "
+    "ouvir a CONCLUSÃO — não um resumo do que já leu.\n\n"
+    "Produza 1-2 parágrafos falados (menos de 150 palavras no total) com "
+    "a CONCLUSÃO:\n"
+    "- Qual foi a resposta ou resultado?\n"
+    "- Que ação deve ser tomada?\n"
+    "- Qual é o principal insight ou decisão?\n\n"
     "REGRAS:\n"
+    "- Pule o caminho — dê o destino\n"
+    "- NÃO rele liste passos, código ou raciocínio intermediário\n"
+    "- Se o texto tem uma resposta clara, comece por ela\n"
+    "- Se é uma comparação, dê a recomendação\n"
+    "- Se é uma explicação, dê a conclusão\n"
     "- Sem marcadores, sem markdown, sem títulos, sem blocos de código\n"
     "- Sem asteriscos, cerquilhas, crases, traços, pipes, sinais de maior/menor, "
     "sublinhados, tils, colchetes ou chaves\n"
@@ -118,17 +155,19 @@ _SUMMARIZE_PROMPT_PT = (
 )
 
 # Last-ditch retry prompts when the structured complete-ack prompt comes
-# back empty. Plain "summarize this" works on weaker local models that
+# back empty. Plain "give the conclusion" works on weaker local models that
 # choke on multi-section instructions.
 _SIMPLE_SUMMARY_PROMPT_EN = (
-    "Summarize this text in 1 short spoken sentence, at most 45 words. "
-    "Plain English, no markdown. No asterisks, hashes, backticks, or "
-    "formatting symbols.\n\n{reply}"
+    "Give the CONCLUSION of this text in 1 short spoken sentence, at most "
+    "45 words — the final answer, result, or takeaway. Not a summary — "
+    "the bottom line. Plain English, no markdown. No asterisks, hashes, "
+    "backticks, or formatting symbols.\n\n{reply}"
 )
 _SIMPLE_SUMMARY_PROMPT_PT = (
-    "Resuma este texto em 1 frase curta falada, no máximo 45 palavras. "
-    "Português simples, sem markdown. Sem asteriscos, cerquilhas, crases "
-    "ou símbolos de formatação.\n\n{reply}"
+    "Dê a CONCLUSÃO deste texto em 1 frase curta falada, no máximo 45 "
+    "palavras — a resposta final, resultado ou principal ponto. Não um "
+    "resumo — a conclusão. Português simples, sem markdown. Sem "
+    "asteriscos, cerquilhas, crases ou símbolos de formatação.\n\n{reply}"
 )
 
 

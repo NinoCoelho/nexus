@@ -275,7 +275,7 @@ async def test_completion_ack_uses_simple_retry_when_structured_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """First attempt uses the structured prompt; if empty, retry with a
-    simpler 'summarize this' prompt that weak local models handle better."""
+    simpler 'give the conclusion' prompt that weak local models handle better."""
     _patch_synth_to_silent(monkeypatch)
     store = _StubStore()
     cfg = default_config()
@@ -306,7 +306,7 @@ async def test_completion_ack_uses_simple_retry_when_structured_empty(
     await emit_completion_ack(agent=agent, store=store, trigger=trigger, cfg=cfg)
     assert len(seen_prompts) == 2
     # Second prompt is the SIMPLE one — much shorter than structured.
-    assert "Summarize this text" in seen_prompts[1] or "Resuma este texto" in seen_prompts[1]
+    assert "Give the CONCLUSION" in seen_prompts[1] or "Dê a CONCLUSÃO" in seen_prompts[1]
     _, _, data = store.published[0]
     assert "Vault was updated" in data["transcript"]
 
