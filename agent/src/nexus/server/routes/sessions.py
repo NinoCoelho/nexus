@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from ...agent.loop.overflow import known_context_window as _known_context_window, KNOWN_WINDOWS as _KNOWN_WINDOWS
 from ...i18n import t
 from ..deps import get_agent, get_locale, get_sessions
 from ..schemas import CompactRequest, TruncateRequest
@@ -251,35 +252,6 @@ async def get_session_trajectories(
     records = _trajectory_logger.find_for_session(session_id, limit=max(1, min(limit, 200)))
     return {"enabled": True, "records": records}
 
-
-_KNOWN_WINDOWS: dict[str, int] = {
-    "gemini-2.5-flash": 1_048_576,
-    "gemini-2.5-pro": 1_048_576,
-    "gemini-2.0-flash": 1_048_576,
-    "gpt-4o": 128_000,
-    "gpt-4o-mini": 128_000,
-    "gpt-4.1": 1_047_576,
-    "gpt-4.1-mini": 1_047_576,
-    "gpt-4.1-nano": 1_047_576,
-    "o3": 200_000,
-    "o4-mini": 200_000,
-    "claude-sonnet-4-20250514": 200_000,
-    "claude-3.5-sonnet": 200_000,
-    "claude-3.7-sonnet": 200_000,
-    "glm-4.7": 128_000,
-    "glm-5": 128_000,
-    "glm-5.1": 128_000,
-    "deepseek-r1": 128_000,
-    "deepseek-chat": 128_000,
-    "nexus": 200_000,
-}
-
-
-def _known_context_window(model: str) -> int:
-    if not model:
-        return 0
-    name = model.split("/")[-1]
-    return _KNOWN_WINDOWS.get(name, 0)
 
 
 @router.get("/sessions/{session_id}/usage")

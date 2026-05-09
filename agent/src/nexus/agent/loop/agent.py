@@ -20,7 +20,7 @@ from .helpers import (
     _from_loom_message,
     _to_loom_message,
 )
-from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES
+from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES, known_context_window
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -205,17 +205,14 @@ class Agent:
         self._handlers.notify_user = value
 
     def _context_window_for(self, model_id: str | None) -> int:
-        """Lookup the configured context window for a model id.
-
-        Returns 0 when unknown — the overflow checker treats that as
-        "skip the check" so this stays a strictly opt-in safety net.
-        """
         cfg = self._nexus_cfg
-        if not (cfg and model_id):
-            return 0
-        for m in getattr(cfg, "models", []) or []:
-            if getattr(m, "id", None) == model_id:
-                return int(getattr(m, "context_window", 0) or 0)
+        if cfg and model_id:
+            for m in getattr(cfg, "models", []) or []:
+                if getattr(m, "id", None) == model_id:
+                    return int(getattr(m, "context_window", 0) or 0)
+            fallback = known_context_window(model_id)
+            if fallback > 0:
+                return fallback
         return 0
 
     def _log_llm_error(
