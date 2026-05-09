@@ -7,6 +7,7 @@ interface Props {
   sessionId: string | null;
   onCompact: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<CompactResult | undefined>;
   compacting?: boolean;
+  polledPct?: number;
 }
 
 const ZONE_COLORS: Record<string, string> = {
@@ -23,7 +24,7 @@ function fmtTok(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-export default function ContextDropdown({ sessionId, onCompact, compacting }: Props) {
+export default function ContextDropdown({ sessionId, onCompact, compacting, polledPct }: Props) {
   const [open, setOpen] = useState(false);
   const [stats, setStats] = useState<ContextStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -101,7 +102,7 @@ export default function ContextDropdown({ sessionId, onCompact, compacting }: Pr
   );
 
   const zone = stats?.context_zone ?? "unknown";
-  const pct = Math.round((stats?.context_pct ?? 0) * 100);
+  const displayPct = polledPct != null ? polledPct : Math.round((stats?.context_pct ?? 0) * 100);
 
   return (
     <>
@@ -113,7 +114,7 @@ export default function ContextDropdown({ sessionId, onCompact, compacting }: Pr
         tabIndex={0}
         aria-expanded={open}
       >
-        {pct}%
+        {displayPct}%
       </div>
       {open && (
         <div
@@ -138,7 +139,7 @@ export default function ContextDropdown({ sessionId, onCompact, compacting }: Pr
                   <div
                     className="ctx-dropdown-gauge-fill"
                     style={{
-                      width: `${Math.min(pct, 100)}%`,
+                      width: `${Math.min(displayPct, 100)}%`,
                       background: ZONE_COLORS[zone],
                     }}
                   />

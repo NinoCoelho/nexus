@@ -60,7 +60,7 @@ export default function AgentStatusBar({ usage, thinking, selectedModel, session
             style={{ background: ZONE_COLORS[ctxZone] }}
           />
           {sessionId && onCompact ? (
-            <ContextDropdown sessionId={sessionId} onCompact={onCompact} compacting={compacting} />
+            <ContextDropdown sessionId={sessionId} onCompact={onCompact} compacting={compacting} polledPct={Math.round(ctxPct * 100)} />
           ) : (
             <span>{Math.round(ctxPct * 100)}%</span>
           )}
