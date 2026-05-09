@@ -49,7 +49,7 @@ _EMOJI_RE = re.compile(
 )
 
 
-_URL_RE = re.compile(r"https?://[^\s\)\]<>]+", flags=re.IGNORECASE)
+_URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\)\]<>\"']+", flags=re.IGNORECASE)
 
 
 # Long hex strings: md5 (32), sha1 (40), sha256 (64), most session IDs,
@@ -92,8 +92,12 @@ def _strip_emojis(text: str) -> str:
 
 def _replace_urls(text: str) -> str:
     def _r(m: re.Match[str]) -> str:
+        raw = m.group(0)
+        scheme = raw.split("://", 1)[0].lower() if "://" in raw else ""
+        if scheme == "vault":
+            return "the vault"
         try:
-            host = urlparse(m.group(0)).hostname or ""
+            host = urlparse(raw).hostname or ""
         except Exception:  # noqa: BLE001
             host = ""
         return f"link to {host}" if host else "link"
@@ -225,6 +229,9 @@ def _strip_markdown(text: str) -> str:
 
     # Any stray pipes left over from non-table contexts.
     text = text.replace("|", " ")
+
+    # Arrow symbols → spoken "to" (common in kanban lanes, flow diagrams).
+    text = re.compile(r"\s*→\s*").sub(" to ", text)
 
     return text
 
@@ -394,6 +401,10 @@ def normalize_for_speech(text: str, lang: str | None = None) -> str:
     text = _strip_markdown(text)
     text = _strip_emojis(text)
     text = _replace_urls(text)
+    # Ellipsis and stray slashes AFTER URL replacement so we don't mangle
+    # the "https://" inside a URL that hasn't been collapsed yet.
+    text = re.compile(r"\.{3,}|…").sub(".", text)
+    text = re.compile(r"//+").sub(" ", text)
     # Hashes / UUIDs run AFTER url replacement (so we don't try to "hash"
     # the path of a URL we already collapsed) and BEFORE number expansion
     # (so num2words doesn't try to spell out a 32-digit hex string).

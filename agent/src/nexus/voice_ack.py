@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from .config_file import NexusConfig, load as load_config
 from .tts import TTSError, synthesize
+from .tts.normalize import normalize_for_speech
 
 if TYPE_CHECKING:
     from .agent.loop import Agent
@@ -340,10 +341,11 @@ async def _publish(
 ) -> None:
     from .server.events import SessionEvent
 
+    clean_transcript = normalize_for_speech(transcript)
     audio_b64: str | None = None
     audio_mime: str = ""
     try:
-        result = await synthesize(transcript, cfg=cfg.tts)
+        result = await synthesize(clean_transcript, cfg=cfg.tts)
     except TTSError as exc:
         log.warning("[voice_ack/%s] Piper synth failed: %s — UI will fall back to Web Speech",
                     kind, exc)
@@ -358,7 +360,7 @@ async def _publish(
                     kind, len(result.audio), result.mime)
     payload = {
         "kind": kind,
-        "transcript": transcript,
+        "transcript": clean_transcript,
         "audio_b64": audio_b64,
         "audio_mime": audio_mime,
         # Carried for the UI's Web Speech fallback when audio_b64 is null —

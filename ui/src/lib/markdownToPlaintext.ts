@@ -122,8 +122,18 @@ export function markdownToPlaintext(input: string): string {
   // Horizontal rules
   s = s.replace(/^[-*_]{3,}\s*$/gm, "");
 
+  // Ellipsis (... or …) → period.
+  s = s.replace(/\.{3,}|…/g, ".");
+
+  // Double/triple slashes (//, ///) — code comments, file paths. URLs
+  // already replaced above.
+  s = s.replace(/\/\/+/g, " ");
+
   // Any stray pipes left over from non-table contexts.
   s = s.replace(/\|/g, " ");
+
+  // Arrow symbols → "to" (kanban lanes, flow diagrams).
+  s = s.replace(/\s*→\s*/g, " to ");
 
   // Collapse whitespace.
   s = s.replace(/\n{3,}/g, "\n\n").trim();
