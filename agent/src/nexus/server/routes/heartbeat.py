@@ -122,6 +122,7 @@ async def heartbeat_events(request: Request) -> dict:
                 "fire_every_min": ev.fire_every_min,
                 "assignee": ev.assignee,
                 "model": ev.model,
+                "remind_before_min": ev.remind_before_min,
                 "calendar_path": summary.path,
                 "calendar_title": cal.title,
                 "calendar_tz": cal.timezone,

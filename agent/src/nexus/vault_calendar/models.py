@@ -47,10 +47,11 @@ class Event:
     # Specific model id to use when the agent runs this event. Falls back to
     # the calendar's ``default_model``, then the agent's configured default.
     model: str | None = None
-    # Who/what runs this event. ``"agent"`` opts in to heartbeat-driven
-    # dispatch; anything else (including None) makes it a plain calendar
-    # entry that never fires. Free-form values are reserved for future
-    # human-attendee tracking.
+    # Who/what runs this event. Comma-separated roles:
+    #   "agent"      — heartbeat-driven agent dispatch
+    #   "user"       — alarm notification to the user
+    #   "agent,user" — both
+    # None or ""    — plain calendar entry (no auto-fire, no alarm).
     assignee: str | None = None
     # Per-occurrence completion log for recurring events. Stores UTC ISO
     # ``occurrence_start`` strings. Lets one instance of a recurring event
@@ -59,6 +60,31 @@ class Event:
     # an entry here means "skip this occurrence." Always empty for
     # non-recurring events.
     completed_occurrences: list[str] = field(default_factory=list)
+    # Minutes before event start to fire the user alarm. None = no alarm.
+    # 0 = alarm fires exactly at event start time.
+    remind_before_min: int | None = None
+
+    @property
+    def is_agent_assigned(self) -> bool:
+        if not self.assignee:
+            return False
+        return "agent" in (a.strip() for a in self.assignee.split(","))
+
+    @property
+    def has_user_alarm(self) -> bool:
+        if not self.assignee:
+            return False
+        return "user" in (a.strip() for a in self.assignee.split(","))
+
+    @property
+    def alarm_lead_seconds(self) -> int:
+        if self.remind_before_min is None:
+            return 0
+        return self.remind_before_min * 60
+
+    @property
+    def has_fire_window(self) -> bool:
+        return bool(self.all_day and self.fire_from and self.fire_to and self.fire_every_min)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -90,15 +116,9 @@ class Event:
             out["assignee"] = self.assignee
         if self.completed_occurrences:
             out["completed_occurrences"] = list(self.completed_occurrences)
+        if self.remind_before_min is not None:
+            out["remind_before_min"] = self.remind_before_min
         return out
-
-    @property
-    def is_agent_assigned(self) -> bool:
-        return self.assignee == ASSIGNEE_AGENT
-
-    @property
-    def has_fire_window(self) -> bool:
-        return bool(self.all_day and self.fire_from and self.fire_to and self.fire_every_min)
 
 
 @dataclass

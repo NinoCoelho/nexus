@@ -1,0 +1,130 @@
+.alarm-stack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 10px;
+  max-width: 380px;
+  pointer-events: none;
+}
+
+.alarm-card {
+  pointer-events: auto;
+  background: var(--bg-surface, #1a1a2e);
+  border: 1px solid var(--border, #2a2a3e);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: alarm-slide-in 0.3s ease-out;
+}
+
+.alarm-card--overdue {
+  border-color: var(--danger, #e53e3e);
+  box-shadow: 0 0 20px rgba(229, 62, 62, 0.3), 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes alarm-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes alarm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.alarm-card--overdue .alarm-countdown {
+  animation: alarm-pulse 1s ease-in-out infinite;
+}
+
+.alarm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.alarm-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  color: var(--accent, #6366f1);
+}
+
+.alarm-card--overdue .alarm-icon {
+  color: var(--danger, #e53e3e);
+}
+
+.alarm-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg, #e2e8f0);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alarm-countdown {
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  padding: 8px 0;
+  color: var(--fg, #e2e8f0);
+  font-variant-numeric: tabular-nums;
+}
+
+.alarm-card--overdue .alarm-countdown {
+  color: var(--danger, #e53e3e);
+}
+
+.alarm-meta {
+  font-size: 12px;
+  color: var(--fg-faint, #718096);
+  margin-bottom: 12px;
+}
+
+.alarm-meta span + span::before {
+  content: " · ";
+}
+
+.alarm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.alarm-actions button {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #2a2a3e);
+  background: var(--bg-surface, #1a1a2e);
+  color: var(--fg, #e2e8f0);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.alarm-actions button:hover {
+  background: var(--bg-hover, #2a2a3e);
+  border-color: var(--fg-faint, #718096);
+}
+
+.alarm-actions .alarm-btn--dismiss {
+  background: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  color: #fff;
+  font-weight: 600;
+}
+
+.alarm-actions .alarm-btn--dismiss:hover {
+  filter: brightness(1.1);
+}

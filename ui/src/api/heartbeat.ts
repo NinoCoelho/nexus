@@ -37,6 +37,7 @@ export interface HeartbeatEvent {
   fire_every_min: number | null;
   assignee: string | null;
   model: string | null;
+  remind_before_min: number | null;
   calendar_path: string;
   calendar_title: string;
   calendar_tz: string;

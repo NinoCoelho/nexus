@@ -270,6 +270,19 @@ export interface VoiceAckPayload {
   speed: number;
 }
 
+export type CalendarAlarmPayload = {
+  type: "calendar_alarm";
+  event_id: string;
+  title: string;
+  body?: string | null;
+  start: string;
+  calendar_title?: string;
+  path: string;
+  countdown_seconds: number;
+  is_overdue: boolean;
+  occurrence_start: string;
+};
+
 export type SessionEvent =
   | { kind: "iter"; data: { n: number } }
   | { kind: "delta"; data: { text: string } }
@@ -280,6 +293,7 @@ export type SessionEvent =
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
   | { kind: "calendar_alert"; data: CalendarAlertPayload }
+  | { kind: "calendar_alarm"; data: CalendarAlarmPayload }
   | { kind: "voice_ack"; data: VoiceAckPayload }
   // Fired by the backend's nexus status_watcher when the signed-in
   // user's tier (and therefore the available Nexus model list) changes.

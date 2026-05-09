@@ -492,6 +492,7 @@ def create_app(
             from ..calendar_runtime import (
                 set_dispatcher as _set_cal_dispatcher,
                 set_notifier as _set_cal_notifier,
+                set_alarm_store as _set_cal_alarm_store,
             )
             from ..heartbeat_drivers import DRIVERS_DIR
             from pathlib import Path
@@ -583,6 +584,10 @@ def create_app(
             from ..heartbeat_log import HeartbeatLogStore
             log_store = HeartbeatLogStore(db_path)
 
+            from ..alarm_store import AlarmStore
+            alarm_store = AlarmStore(db_path)
+            _set_cal_alarm_store(alarm_store)
+
             async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
                 from loom.loop import AgentTurn
                 return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
@@ -595,6 +600,7 @@ def create_app(
             app.state.heartbeat_registry = registry
             app.state.heartbeat_store = store
             app.state.heartbeat_log_store = log_store
+            app.state.alarm_store = alarm_store
 
             from loom.heartbeat import HeartbeatManager
 

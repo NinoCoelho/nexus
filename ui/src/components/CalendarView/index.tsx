@@ -161,6 +161,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_every_min: draft.fire_every_min ?? undefined,
           model: draft.model ?? undefined,
           assignee: draft.assignee ?? undefined,
+          remind_before_min: draft.remind_before_min ?? undefined,
         });
       } else {
         const ev = modal.event;
@@ -184,6 +185,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_every_min: draft.fire_every_min,
           model: draft.model,
           assignee: draft.assignee,
+          remind_before_min: draft.remind_before_min,
         };
 
         // For a single occurrence of a recurring event, route "done" through

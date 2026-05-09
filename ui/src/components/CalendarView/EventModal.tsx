@@ -26,6 +26,7 @@ export interface EventDraft {
   fire_every_min: number | null;
   model: string | null;
   assignee: string | null;
+  remind_before_min: number | null;
 }
 
 interface Props {
@@ -62,7 +63,13 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
     ev?.fire_every_min ? String(ev.fire_every_min) : "",
   );
   const [model, setModel] = useState(ev?.model ?? "");
-  const [assignedToAgent, setAssignedToAgent] = useState(ev?.assignee === "agent");
+  const assignedToAgent = ev?.assignee?.includes("agent") ?? false;
+  const hasUserAlarm = ev?.assignee?.includes("user") ?? false;
+  const [assignedAgent, setAssignedAgent] = useState(assignedToAgent);
+  const [assignedUser, setAssignedUser] = useState(hasUserAlarm);
+  const [remindBefore, setRemindBefore] = useState<string>(
+    ev?.remind_before_min != null ? String(ev.remind_before_min) : "",
+  );
   const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   useEffect(() => {
@@ -75,14 +82,14 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
 
   useEffect(() => {
     let cancelled = false;
-    if (!assignedToAgent) return;
+    if (!assignedAgent) return;
     getRouting()
       .then((r) => {
         if (!cancelled) setAvailableModels(r.available_models ?? []);
       })
       .catch(() => { /* offline: leave list empty, falls back to free-text input */ });
     return () => { cancelled = true; };
-  }, [assignedToAgent]);
+  }, [assignedAgent]);
 
   function handleSave() {
     if (!title.trim()) return;
@@ -96,20 +103,25 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
       endIso = hasEnd ? fromLocalInputValue(endLocal) : null;
     }
     const fireEveryNum = fireEvery.trim() ? Math.max(1, Math.min(1440, parseInt(fireEvery, 10))) : NaN;
+    const roles: string[] = [];
+    if (assignedAgent) roles.push("agent");
+    if (assignedUser) roles.push("user");
+    const remindNum = remindBefore.trim() ? Math.max(0, parseInt(remindBefore, 10)) : NaN;
     onSave({
       title: title.trim(),
       body,
       startIso,
       endIso,
       status,
-      trigger: assignedToAgent ? trigger : "",
+      trigger: assignedAgent ? trigger : "",
       rrule: rrule.trim(),
       all_day: allDay,
-      fire_from: assignedToAgent && allDay && fireFrom ? fireFrom : null,
-      fire_to: assignedToAgent && allDay && fireTo ? fireTo : null,
-      fire_every_min: assignedToAgent && allDay && !Number.isNaN(fireEveryNum) ? fireEveryNum : null,
-      model: assignedToAgent && model.trim() ? model.trim() : null,
-      assignee: assignedToAgent ? "agent" : null,
+      fire_from: assignedAgent && allDay && fireFrom ? fireFrom : null,
+      fire_to: assignedAgent && allDay && fireTo ? fireTo : null,
+      fire_every_min: assignedAgent && allDay && !Number.isNaN(fireEveryNum) ? fireEveryNum : null,
+      model: assignedAgent && model.trim() ? model.trim() : null,
+      assignee: roles.length > 0 ? roles.join(",") : null,
+      remind_before_min: assignedUser && !Number.isNaN(remindNum) ? remindNum : null,
     });
   }
 
@@ -173,18 +185,46 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
             ))}
           </select>
 
-          <span className="cal-modal-grid-label">Assign agent</span>
+          <span className="cal-modal-grid-label">Auto-run agent</span>
           <span>
             <input
               type="checkbox"
-              checked={assignedToAgent}
-              onChange={(e) => setAssignedToAgent(e.target.checked)}
+              checked={assignedAgent}
+              onChange={(e) => setAssignedAgent(e.target.checked)}
               title="When checked, the agent runs at fire time with the notes below as context."
+            />
+          </span>
+
+          <span className="cal-modal-grid-label">Notify me</span>
+          <span>
+            <input
+              type="checkbox"
+              checked={assignedUser}
+              onChange={(e) => setAssignedUser(e.target.checked)}
+              title="When checked, you'll get an alarm notification at the scheduled time."
             />
           </span>
         </div>
 
-        {assignedToAgent && (
+        {assignedUser && (
+          <fieldset className="cal-modal-fieldset">
+            <legend>Alarm settings</legend>
+            <div className="cal-modal-grid">
+              <span className="cal-modal-grid-label">Remind before</span>
+              <select value={remindBefore} onChange={(e) => setRemindBefore(e.target.value)}>
+                <option value="">At start time</option>
+                <option value="0">0 min (at start)</option>
+                <option value="5">5 min before</option>
+                <option value="10">10 min before</option>
+                <option value="15">15 min before</option>
+                <option value="30">30 min before</option>
+                <option value="60">1 hour before</option>
+              </select>
+            </div>
+          </fieldset>
+        )}
+
+        {assignedAgent && (
           <fieldset className="cal-modal-fieldset">
             <legend>Agent settings</legend>
 
@@ -270,7 +310,7 @@ export default function EventModal({ initial, onSave, onDelete, onClose, onOpenI
           {onDelete && ev && (
             <button className="danger" onClick={onDelete}>Delete</button>
           )}
-          {onFireNow && ev && assignedToAgent && (status === "missed" || status === "scheduled") && (
+          {onFireNow && ev && assignedAgent && (status === "missed" || status === "scheduled") && (
             <button onClick={onFireNow}>Fire now</button>
           )}
           {onOpenInChat && ev && (
