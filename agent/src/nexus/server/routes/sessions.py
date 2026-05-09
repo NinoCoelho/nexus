@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from ...i18n import t
@@ -112,7 +112,9 @@ async def list_sessions(
     limit: int = 50,
     include_hidden: bool = False,
     store: SessionStore = Depends(get_sessions),
+    response: Response = None,
 ) -> list[dict]:
+    response.headers["Cache-Control"] = "no-cache"
     summaries = store.list(limit=limit, include_hidden=include_hidden)
     return [
         {

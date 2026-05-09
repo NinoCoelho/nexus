@@ -136,7 +136,7 @@ export async function getHealth(): Promise<{ ok: boolean }> {
 }
 
 export async function getSessions(limit = 50): Promise<SessionSummary[]> {
-  const res = await fetch(`${BASE}/sessions?limit=${limit}`);
+  const res = await fetch(`${BASE}/sessions?limit=${limit}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Sessions error: ${res.status}`);
   return res.json();
 }

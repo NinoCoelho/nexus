@@ -72,6 +72,7 @@ export function useSessionActions({
       await deleteSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (id === activeSessionId) onActiveSessionDeleted();
+      onSessionsRevisionBump();
     } catch { /* ignore */ }
     setMenuNull();
   };
