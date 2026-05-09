@@ -12,7 +12,7 @@ import { parseHistoryTimestamp, type ChatState } from "../types/chat";
 
 type SetChatStates = React.Dispatch<React.SetStateAction<Map<string, ChatState>>>;
 
-const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed)\]\s*/;
+const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed|budget_exceeded)\]\s*/;
 
 export async function loadSessionHistory(
   id: string,

@@ -230,10 +230,25 @@ export async function truncateSession(sessionId: string, beforeSeq: number): Pro
   if (!res.ok) throw new Error(`Truncate error: ${res.status}`);
 }
 
-export async function compactSession(sessionId: string): Promise<{ compacted: number; saved_bytes: number }> {
+export interface CompactResult {
+  compacted: number;
+  saved_bytes: number;
+  summarized: boolean;
+  summarized_messages: number;
+  messages_before: number;
+  messages_after: number;
+  tokens_before: number;
+  tokens_after: number;
+  zone_after: string;
+  still_overflowed: boolean;
+  budget_exceeded: boolean;
+}
+
+export async function compactSession(sessionId: string, model?: string): Promise<CompactResult> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/compact`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(model ? { model } : {}),
   });
   if (!res.ok) throw new Error(`Compact error: ${res.status}`);
   return res.json();

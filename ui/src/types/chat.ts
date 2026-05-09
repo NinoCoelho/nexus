@@ -116,6 +116,7 @@ const REASON_TO_BANNER: Record<string, string> = {
   iteration_limit: "Agent stopped after hitting the per-turn iteration limit.",
   llm_error: "Provider error.",
   hook_error: "Pre-call hook failed before the model was invoked.",
+  budget_exceeded: "Your API budget has been exceeded. Top up your credits or switch providers to continue.",
 };
 
 /** Decide whether an upstream-extracted message is meaty enough to show
@@ -250,6 +251,6 @@ export interface UseChatSessionResult {
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
   computeSeedModel: (preferred?: string) => string;
-  handleCompact: () => Promise<{ compacted: number; saved_bytes: number } | undefined>;
+  handleCompact: () => Promise<import("../api/sessions").CompactResult | undefined>;
   handleRemoveLast: () => Promise<void>;
 }

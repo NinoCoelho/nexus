@@ -10,17 +10,62 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from ...i18n import t
-from ..deps import get_locale, get_sessions
+from ..deps import get_agent, get_locale, get_sessions
 from ..schemas import CompactRequest, TruncateRequest
 from ..session_store import SessionStore
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_PARTIAL_PREFIXES = (
+    "[context_overflow]",
+    "[message_too_large]",
+    "[empty_response]",
+    "[llm_error]",
+    "[crashed]",
+    "[upstream_timeout]",
+    "[interrupted]",
+    "[cancelled]",
+    "[rate_limited]",
+    "[iteration_limit]",
+    "[budget_exceeded]",
+)
+
+
+def _clear_partial_prefixes(history: list[Any]) -> list[Any]:
+    from ...agent.llm import ChatMessage, Role
+
+    out: list[Any] = []
+    for msg in history:
+        if (
+            isinstance(msg, ChatMessage)
+            and msg.role == Role.ASSISTANT
+            and msg.content
+        ):
+            stripped = msg.content.strip()
+            for prefix in _PARTIAL_PREFIXES:
+                if stripped == prefix or stripped.startswith(prefix + " "):
+                    new_content = stripped[len(prefix):].strip()
+                    out.append(
+                        ChatMessage(
+                            role=msg.role,
+                            content=new_content,
+                            tool_calls=msg.tool_calls,
+                            tool_call_id=msg.tool_call_id,
+                            name=msg.name,
+                        )
+                    )
+                    break
+            else:
+                out.append(msg)
+        else:
+            out.append(msg)
+    return out
 
 
 def _session_markdown(session: Any, sessions: SessionStore, include_frontmatter: bool = True) -> str:
@@ -387,37 +432,72 @@ async def rollback_last_message(
 @router.post("/sessions/{session_id}/compact")
 async def compact_session(
     session_id: str,
+    request: Request,
     body: CompactRequest | None = None,
     store: SessionStore = Depends(get_sessions),
     locale: str = Depends(get_locale),
 ) -> dict:
-    """Compact oversized tool results in a session's history.
+    """Compact oversized tool results and summarize older turns.
 
-    Triggered by the UI's "Compact history" button when a turn fails with
-    ``context_overflow`` (or proactively from the chat menu). Returns a
-    report so the UI can show "saved 1.2 MB across 3 messages".
+    Runs the full pipeline: auto-compact (tool result compression) followed
+    by LLM summarization of older turns when the session is still in
+    orange/red zone. Also clears partial-turn banners (``[context_overflow]``
+    etc.) so the UI doesn't re-show them after reload.
     """
-    from ...agent.loop.compact import compact_history
+    from ...agent.loop.compact import compact_and_summarize
+    from ...agent.loop import Agent
 
+    agent: Agent = get_agent(request)
     session = store.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
-    body = body or CompactRequest()
-    new_history, report = compact_history(
+
+    model_id = body.model if body and body.model else None
+    if not model_id:
+        cfg = getattr(request.app.state, "mutable_state", {}).get("cfg")
+        model_id = getattr(getattr(cfg, "agent", None), "default_model", None) or None
+    provider, upstream_model = agent._resolve_provider(model_id)
+    context_window = agent._context_window_for(upstream_model or model_id)
+    if context_window == 0 and (upstream_model or model_id) in _KNOWN_WINDOWS:
+        context_window = _KNOWN_WINDOWS[upstream_model or model_id]
+
+    new_history, report = await compact_and_summarize(
         session.history,
-        threshold_bytes=body.threshold_bytes,
-        head_keep=body.head_keep_bytes,
-        sample_rows=body.csv_sample_rows,
+        context_window=context_window,
+        session_id=session_id,
+        model_id=upstream_model or model_id,
+        provider=provider,
     )
-    if report.compacted > 0:
+
+    log.info(
+        "compact session=%s: model=%s ctx_window=%d "
+        "compacted=%d summarized=%s tokens=%d->%d zone=%s still_overflowed=%s",
+        session_id, upstream_model or model_id, context_window,
+        report.compact_report.compacted, report.summarized,
+        report.tokens_before, report.tokens_after,
+        report.zone_after, report.still_overflowed,
+    )
+
+    if report.compact_report.compacted > 0 or report.summarized:
+        new_history = _clear_partial_prefixes(new_history)
         store.replace_history(session_id, new_history)
+
     return {
-        "inspected_tool_messages": report.inspected,
-        "compacted": report.compacted,
-        "skipped_already_compacted": report.skipped_already_compacted,
-        "bytes_before": report.bytes_before,
-        "bytes_after": report.bytes_after,
-        "saved_bytes": report.saved_bytes,
+        "inspected_tool_messages": report.compact_report.inspected,
+        "compacted": report.compact_report.compacted,
+        "skipped_already_compacted": report.compact_report.skipped_already_compacted,
+        "bytes_before": report.compact_report.bytes_before,
+        "bytes_after": report.compact_report.bytes_after,
+        "saved_bytes": report.compact_report.saved_bytes,
+        "summarized": report.summarized,
+        "summarized_messages": report.summarized_messages,
+        "messages_before": report.messages_before,
+        "messages_after": report.messages_after,
+        "tokens_before": report.tokens_before,
+        "tokens_after": report.tokens_after,
+        "zone_after": report.zone_after,
+        "still_overflowed": report.still_overflowed,
+        "budget_exceeded": report.budget_exceeded,
     }
 
 

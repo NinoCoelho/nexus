@@ -61,6 +61,7 @@
     "rateLimited": "Rate limit hit — the turn has been paused. Resume after the cooldown.",
     "contextOverflow": "This conversation is getting too long for the model to keep track of everything.",
     "messageTooLarge": "This message is too large to send.",
+    "budgetExceeded": "Your API budget has been exceeded. Top up your credits or switch providers to continue.",
     "proceed": "How do you want to proceed?",
     "continue": "Continue",
     "retry": "Retry",

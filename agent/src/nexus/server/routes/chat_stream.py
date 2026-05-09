@@ -524,30 +524,41 @@ async def chat_stream_route(
                     yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
         except (LLMTransportError, MalformedOutputError) as exc:
             partial_status = "llm_error"
+            detail = str(exc)
+            reason = None
+            retryable = None
+            status_code = getattr(exc, "status_code", None)
             try:
-                from ...error_classifier import classify_api_error as _c
-                _reason = _c(exc).reason.value
-                if _reason == "timeout":
-                    partial_status = "upstream_timeout"
+                from ...error_classifier import classify_api_error, is_budget_exceeded, budget_exceeded_detail
+                if is_budget_exceeded(exc):
+                    partial_status = "budget_exceeded"
+                    reason = "budget_exceeded"
+                    retryable = False
+                    bd = budget_exceeded_detail(exc)
+                    if bd:
+                        detail = bd
+                else:
+                    _reason = classify_api_error(exc).reason.value
+                    if _reason == "timeout":
+                        partial_status = "upstream_timeout"
             except Exception:  # noqa: BLE001
                 pass
             log.warning(
                 "chat_stream LLM call failed: %s (status=%s)",
                 exc, getattr(exc, "status_code", None),
             )
-            detail = str(exc)
-            reason = None
-            retryable = None
-            status_code = getattr(exc, "status_code", None)
-            try:
-                from ...error_classifier import classify_api_error
-                classified = classify_api_error(exc)
-                reason = classified.reason.value
-                retryable = classified.retryable
-                if classified.user_facing_summary:
-                    detail = f"{classified.user_facing_summary} ({detail})"
-            except Exception:
-                pass
+            if not detail or detail == str(exc):
+                detail = str(exc)
+            if reason is None:
+                try:
+                    from ...error_classifier import classify_api_error
+                    classified = classify_api_error(exc)
+                    reason = classified.reason.value
+                    retryable = classified.retryable
+                    if classified.user_facing_summary:
+                        detail = f"{classified.user_facing_summary} ({detail})"
+                except Exception:
+                    pass
             try:
                 store.log_error(
                     session.id,

@@ -363,6 +363,12 @@ async def chat(
             attachments=attachment_parts or None,
         )
     except LLMTransportError as exc:
+        from ...error_classifier import is_budget_exceeded, budget_exceeded_detail
+        if is_budget_exceeded(exc):
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=budget_exceeded_detail(exc) or "API budget has been exceeded.",
+            )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except MalformedOutputError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))

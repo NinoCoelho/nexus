@@ -380,8 +380,9 @@ export function useChatSession(
     const sid = activeSession;
     if (!sid) return;
     try {
-      const result = await compactSession(sid);
       const state = chatStates.get(activeKey) ?? emptyState();
+      const model = state.selectedModel || undefined;
+      const result = await compactSession(sid, model);
       if (state.thinking) return;
       await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
       return result;

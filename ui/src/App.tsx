@@ -197,8 +197,35 @@ export default function App() {
     handleInputChange, handleAttachmentsChange, handleModelChange,
     handleSessionSelect: _handleSessionSelect,
     handleNewChat: _handleNewChat,
-    handleCompact, handleRemoveLast,
+    handleCompact: _handleCompact, handleRemoveLast,
   } = chatSession;
+
+  const handleCompact = useCallback(async () => {
+    try {
+      const result = await _handleCompact();
+      if (!result) return;
+      if (result.budget_exceeded) {
+        toast.error("Your API budget has been exceeded. Top up your credits or switch providers to continue.");
+        return;
+      }
+      const reduced = result.tokens_before > result.tokens_after;
+      if (result.summarized) {
+        const msg = reduced && !result.still_overflowed
+          ? `Compacted and summarized ${result.summarized_messages} older turns. Context reduced by ${Math.round((1 - result.tokens_after / result.tokens_before) * 100)}%.`
+          : `Summarized ${result.summarized_messages} older turns. Context is still tight — try compacting again or start a new session.`;
+        (reduced && !result.still_overflowed ? toast.success : toast.warning)(msg);
+      } else if (result.compacted > 0) {
+        const kb = Math.round(result.saved_bytes / 1024);
+        toast.success(`Compacted ${result.compacted} tool results, freed ${kb} KB.`);
+      } else if (result.still_overflowed) {
+        toast.warning("Unable to reduce context further. Try removing the last message or starting a new session.");
+      } else {
+        toast.info("History is already compact — nothing to reduce.");
+      }
+    } catch {
+      toast.error("Compact failed. Try removing the last message or starting a new session.");
+    }
+  }, [_handleCompact, toast]);
 
   // Seed the __new__ slot's selectedModel whenever routing info loads so
   // the model picker is pre-filled on first render.

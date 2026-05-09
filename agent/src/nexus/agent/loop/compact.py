@@ -22,11 +22,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ..llm.types import ChatMessage, Role
+
+if TYPE_CHECKING:
+    from ..llm import LLMProvider
 
 log = logging.getLogger(__name__)
 
@@ -268,3 +271,107 @@ def auto_compact(
         bytes_after=bytes_after,
         skipped_already_compacted=skipped,
     )
+
+
+@dataclass
+class CompactAndSummarizeReport:
+    compact_report: CompactionReport = field(default_factory=lambda: CompactionReport(0, 0, 0, 0, 0))
+    summarized: bool = False
+    summarized_messages: int = 0
+    messages_before: int = 0
+    messages_after: int = 0
+    tokens_before: int = 0
+    tokens_after: int = 0
+    zone_after: str = "green"
+    still_overflowed: bool = False
+    budget_exceeded: bool = False
+
+
+async def compact_and_summarize(
+    history: list[ChatMessage],
+    *,
+    context_window: int,
+    session_id: str | None = None,
+    model_id: str | None = None,
+    provider: LLMProvider | None = None,
+) -> tuple[list[ChatMessage], CompactAndSummarizeReport]:
+    from .zones import classify_zone
+    from .summarize import summarize_older_turns
+
+    report = CompactAndSummarizeReport(
+        messages_before=len(history),
+    )
+
+    est_tokens = _estimate_for(history)
+    report.tokens_before = est_tokens
+
+    effective_window = context_window if context_window > 0 else 32_000
+
+    result = list(history)
+
+    compacted_result, compact_report = auto_compact(result)
+    report.compact_report = compact_report
+    if compact_report.compacted > 0:
+        log.info(
+            "compact_and_summarize: auto_compact compacted=%d saved=%d bytes",
+            compact_report.compacted, compact_report.saved_bytes,
+        )
+        result = compacted_result
+
+    re_tokens = _estimate_for(result)
+    zone = classify_zone(re_tokens, effective_window)
+
+    if zone in ("orange", "red") and provider is not None:
+        try:
+            summary, recent = await summarize_older_turns(
+                result, provider,
+                model_id=model_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            from ...error_classifier import is_budget_exceeded
+            if is_budget_exceeded(exc):
+                report.budget_exceeded = True
+                log.warning("compact_and_summarize: budget exceeded during summarization")
+            else:
+                log.warning("compact_and_summarize: summarization failed", exc_info=True)
+        if summary:
+            from .summarize import _SUMMARY_PREFIX
+            summary_msg = ChatMessage(
+                role=Role.SYSTEM,
+                content=f"{_SUMMARY_PREFIX} — auto-generated summary]\n{summary}",
+            )
+            report.summarized = True
+            report.summarized_messages = len(result) - len(recent)
+            result = [summary_msg] + recent
+            log.info(
+                "compact_and_summarize: summarized %d old messages into %d chars",
+                report.summarized_messages, len(summary),
+            )
+
+    final_tokens = _estimate_for(result)
+    final_zone = classify_zone(final_tokens, effective_window)
+
+    report.messages_after = len(result)
+    report.tokens_after = final_tokens
+    report.zone_after = final_zone
+    from .overflow import _OUTPUT_HEADROOM_TOKENS
+    report.still_overflowed = final_tokens > effective_window - _OUTPUT_HEADROOM_TOKENS
+
+    return result, report
+
+
+def _estimate_for(messages: list[ChatMessage]) -> int:
+    from .overflow import estimate_tokens
+
+    class _Msg:
+        pass
+
+    compat = []
+    for m in messages:
+        o = _Msg()
+        o.content = m.content
+        o.role = m.role
+        o.tool_calls = getattr(m, "tool_calls", None)
+        compat.append(o)
+    return estimate_tokens(compat) if compat else 0

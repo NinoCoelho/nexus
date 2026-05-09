@@ -17,6 +17,7 @@ export const PARTIAL_CAN_CONTINUE: Record<NonNullable<Message["partial"]>["statu
   rate_limited: true,
   context_overflow: false,
   message_too_large: false,
+  budget_exceeded: false,
 };
 
 const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
@@ -31,6 +32,7 @@ const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
   rate_limited: "chat:partial.rateLimited",
   context_overflow: "chat:partial.contextOverflow",
   message_too_large: "chat:partial.messageTooLarge",
+  budget_exceeded: "chat:partial.budgetExceeded",
 };
 
 export function PartialTurnActions({

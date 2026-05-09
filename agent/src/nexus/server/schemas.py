@@ -101,6 +101,7 @@ class CompactRequest(BaseModel):
     threshold_bytes: int = 32 * 1024
     head_keep_bytes: int = 2 * 1024
     csv_sample_rows: int = 5
+    model: str | None = None
 
 
 class ModelRolePayload(BaseModel):

@@ -70,7 +70,8 @@ export interface Message {
       | "upstream_timeout"
       | "rate_limited"
       | "context_overflow"
-      | "message_too_large";
+      | "message_too_large"
+      | "budget_exceeded";
     detail?: string;
     actions?: string[];
   };
