@@ -269,6 +269,7 @@ _KNOWN_WINDOWS: dict[str, int] = {
     "glm-5.1": 128_000,
     "deepseek-r1": 128_000,
     "deepseek-chat": 128_000,
+    "nexus": 200_000,
 }
 
 
