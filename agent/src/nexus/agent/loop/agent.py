@@ -20,9 +20,7 @@ from .helpers import (
     _from_loom_message,
     _to_loom_message,
 )
-from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES, estimate_tokens
-from .zones import classify_zone
-from .compact import compact_and_summarize
+from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -358,37 +356,6 @@ class Agent:
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         effective_window = ctx_window if ctx_window > 0 else _DEFAULT_MAX_MESSAGES * 200
-
-        if stripped_history:
-            est_tokens = estimate_tokens([_to_loom_message(m) for m in stripped_history])
-            zone = classify_zone(est_tokens, effective_window)
-            if zone in ("yellow", "orange", "red"):
-                provider, upstream_model = self._resolve_provider(model_id)
-                stripped_history, cs_report = await compact_and_summarize(
-                    stripped_history,
-                    context_window=ctx_window,
-                    session_id=session_id,
-                    model_id=upstream_model or model_id,
-                    provider=provider,
-                )
-                if cs_report.still_overflowed and self._sessions is not None and session_id:
-                    try:
-                        child = self._sessions.create_child(
-                            parent_session_id=session_id,
-                            title="Auto-forked session",
-                            hidden=True,
-                        )
-                        summary_content = "\n".join(
-                            (m.content or "")[:500] for m in stripped_history[:5]
-                            if m.role in (Role.USER, Role.SYSTEM)
-                        )
-                        self._sessions.get_or_create(child.id, context=summary_content[:2000])
-                        log.warning(
-                            "auto-fork: session %s exceeded red zone, created child %s",
-                            session_id, child.id,
-                        )
-                    except Exception:
-                        log.debug("auto-fork failed", exc_info=True)
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
 

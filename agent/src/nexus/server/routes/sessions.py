@@ -359,6 +359,109 @@ async def get_session_usage(
     }
 
 
+@router.get("/sessions/{session_id}/context-stats")
+async def get_context_stats(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
+) -> dict:
+    """Return detailed context usage breakdown for the context dropdown.
+
+    Includes per-role token estimates, per-tool stats, and a hint about
+    which compaction strategy would help most.
+    """
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
+
+    history = session.history or []
+
+    from ...agent.loop.overflow import _chars_per_token
+    from ...agent.loop.zones import classify_zone
+    from ...config_file import load as load_config
+
+    model = ""
+    row = store._loom._db.execute(
+        "SELECT model FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if row:
+        model = row[0] or ""
+
+    context_window_tokens = 0
+    cfg = load_config()
+    for entry in cfg.models:
+        if entry.id == model or entry.model_name == model:
+            context_window_tokens = int(entry.context_window or 0)
+            break
+    if context_window_tokens == 0:
+        context_window_tokens = _known_context_window(model)
+    effective_window = context_window_tokens if context_window_tokens > 0 else 128_000
+
+    role_tokens: dict[str, int] = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
+    role_counts: dict[str, int] = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
+    tool_stats: dict[str, dict] = {}
+
+    import json as _json
+
+    for msg in history:
+        role_val = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        role_key = role_val.lower()
+        if role_key not in role_tokens:
+            role_key = "system"
+
+        content = msg.content or ""
+        if not isinstance(content, str):
+            try:
+                content = _json.dumps(content, ensure_ascii=False)
+            except (TypeError, ValueError):
+                content = str(content)
+
+        chars_per = _chars_per_token(content) if content else 4
+        msg_tokens = (len(content) // chars_per + 4) if content else 4
+
+        tcs = getattr(msg, "tool_calls", None)
+        if tcs:
+            try:
+                tc_text = _json.dumps(tcs, default=str, ensure_ascii=False)
+            except (TypeError, ValueError):
+                tc_text = ""
+            msg_tokens += len(tc_text) // 3 if tc_text else 0
+
+        role_tokens[role_key] += msg_tokens
+        role_counts[role_key] += 1
+
+        if role_key == "tool" and getattr(msg, "name", None):
+            tool_name = msg.name
+            if tool_name not in tool_stats:
+                tool_stats[tool_name] = {"name": tool_name, "call_count": 0, "estimated_tokens": 0}
+            tool_stats[tool_name]["call_count"] += 1
+            tool_stats[tool_name]["estimated_tokens"] += msg_tokens
+
+    total_tokens = sum(role_tokens.values())
+    zone = classify_zone(total_tokens, effective_window)
+
+    tool_token_total = role_tokens.get("tool", 0)
+    if total_tokens > 0 and tool_token_total / total_tokens > 0.4:
+        compaction_hint = "tools_only"
+    elif total_tokens > 0 and (role_tokens.get("user", 0) + role_tokens.get("assistant", 0)) / total_tokens > 0.5:
+        compaction_hint = "summarize"
+    elif zone != "green":
+        compaction_hint = "full"
+    else:
+        compaction_hint = "none_needed"
+
+    return {
+        "context_window_tokens": context_window_tokens,
+        "estimated_context_tokens": total_tokens,
+        "context_pct": round(min(total_tokens / effective_window, 1.0), 4) if effective_window else 0,
+        "context_zone": zone,
+        "token_breakdown": role_tokens,
+        "message_counts": role_counts,
+        "tool_stats": sorted(tool_stats.values(), key=lambda x: x["estimated_tokens"], reverse=True),
+        "compaction_hint": compaction_hint,
+    }
+
+
 @router.patch("/sessions/{session_id}/messages/{seq}/feedback", status_code=status.HTTP_204_NO_CONTENT)
 async def set_message_feedback(
     session_id: str,
@@ -440,12 +543,16 @@ async def compact_session(
     store: SessionStore = Depends(get_sessions),
     locale: str = Depends(get_locale),
 ) -> dict:
-    """Compact oversized tool results and summarize older turns.
+    """Compact oversized tool results and/or summarize older turns.
 
-    Runs the full pipeline: auto-compact (tool result compression) followed
-    by LLM summarization of older turns when the session is still in
-    orange/red zone. Also clears partial-turn banners (``[context_overflow]``
-    etc.) so the UI doesn't re-show them after reload.
+    Strategy controlled by ``body.strategy``:
+      - ``auto`` (default): tools + summarize when zone >= yellow.
+      - ``tools_only``: only compress oversized tool results.
+      - ``summarize_only``: only LLM summarization of older turns.
+      - ``aggressive``: lower thresholds + summarization.
+
+    Also clears partial-turn banners (``[context_overflow]`` etc.) so the
+    UI doesn't re-show them after reload.
     """
     from ...agent.loop.compact import compact_and_summarize
     from ...agent.loop import Agent
@@ -455,6 +562,8 @@ async def compact_session(
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
 
+    strategy = body.strategy if body else "auto"
+    force_summarize = body.force_summarize if body else False
     model_id = body.model if body and body.model else None
     if not model_id:
         cfg = getattr(request.app.state, "mutable_state", {}).get("cfg")
@@ -470,6 +579,8 @@ async def compact_session(
         session_id=session_id,
         model_id=upstream_model or model_id,
         provider=provider,
+        strategy=strategy,
+        force_summarize=force_summarize,
     )
 
     log.info(

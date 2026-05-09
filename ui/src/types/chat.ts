@@ -251,6 +251,6 @@ export interface UseChatSessionResult {
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
   computeSeedModel: (preferred?: string) => string;
-  handleCompact: () => Promise<import("../api/sessions").CompactResult | undefined>;
+  handleCompact: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<import("../api/sessions").CompactResult | undefined>;
   handleRemoveLast: () => Promise<void>;
 }

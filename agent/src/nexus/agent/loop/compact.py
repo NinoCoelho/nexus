@@ -294,6 +294,8 @@ async def compact_and_summarize(
     session_id: str | None = None,
     model_id: str | None = None,
     provider: LLMProvider | None = None,
+    strategy: str = "auto",
+    force_summarize: bool = False,
 ) -> tuple[list[ChatMessage], CompactAndSummarizeReport]:
     from .zones import classify_zone
     from .summarize import summarize_older_turns
@@ -309,19 +311,35 @@ async def compact_and_summarize(
 
     result = list(history)
 
-    compacted_result, compact_report = auto_compact(result)
-    report.compact_report = compact_report
-    if compact_report.compacted > 0:
-        log.info(
-            "compact_and_summarize: auto_compact compacted=%d saved=%d bytes",
-            compact_report.compacted, compact_report.saved_bytes,
+    run_tools = strategy in ("auto", "tools_only", "aggressive")
+    run_summarize = strategy in ("auto", "summarize_only", "aggressive") or force_summarize
+
+    aggressive = strategy == "aggressive"
+
+    if run_tools:
+        tool_threshold = 4 * 1024 if aggressive else _AUTO_COMPACT_THRESHOLD_BYTES
+        tool_head = 512 if aggressive else _AUTO_COMPACT_HEAD_KEEP
+        tool_rows = 2 if aggressive else _AUTO_COMPACT_SAMPLE_ROWS
+
+        compacted_result, compact_report = auto_compact(
+            result,
+            threshold_bytes=tool_threshold,
+            head_keep=tool_head,
+            sample_rows=tool_rows,
         )
-        result = compacted_result
+        report.compact_report = compact_report
+        if compact_report.compacted > 0:
+            log.info(
+                "compact_and_summarize: auto_compact compacted=%d saved=%d bytes",
+                compact_report.compacted, compact_report.saved_bytes,
+            )
+            result = compacted_result
 
     re_tokens = _estimate_for(result)
     zone = classify_zone(re_tokens, effective_window)
 
-    if zone in ("orange", "red") and provider is not None:
+    should_summarize = run_summarize and (zone in ("yellow", "orange", "red") or force_summarize)
+    if should_summarize and provider is not None:
         try:
             summary, recent = await summarize_older_turns(
                 result, provider,
@@ -335,19 +353,20 @@ async def compact_and_summarize(
                 log.warning("compact_and_summarize: budget exceeded during summarization")
             else:
                 log.warning("compact_and_summarize: summarization failed", exc_info=True)
-        if summary:
-            from .summarize import _SUMMARY_PREFIX
-            summary_msg = ChatMessage(
-                role=Role.SYSTEM,
-                content=f"{_SUMMARY_PREFIX} — auto-generated summary]\n{summary}",
-            )
-            report.summarized = True
-            report.summarized_messages = len(result) - len(recent)
-            result = [summary_msg] + recent
-            log.info(
-                "compact_and_summarize: summarized %d old messages into %d chars",
-                report.summarized_messages, len(summary),
-            )
+        else:
+            if summary:
+                from .summarize import _SUMMARY_PREFIX
+                summary_msg = ChatMessage(
+                    role=Role.SYSTEM,
+                    content=f"{_SUMMARY_PREFIX} — auto-generated summary]\n{summary}",
+                )
+                report.summarized = True
+                report.summarized_messages = len(result) - len(recent)
+                result = [summary_msg] + recent
+                log.info(
+                    "compact_and_summarize: summarized %d old messages into %d chars",
+                    report.summarized_messages, len(summary),
+                )
 
     final_tokens = _estimate_for(result)
     final_zone = classify_zone(final_tokens, effective_window)

@@ -32,9 +32,9 @@ def handle_context_status(args: dict[str, Any]) -> str:
 
     recommendations = {
         "green": "Context is healthy. Continue as normal.",
-        "yellow": "Context is filling up. Consider using spawn_subagents for independent tasks, or vault_write to persist intermediate results.",
-        "orange": "Context is running low. Use fork_session to start a new phase, or spawn_subagents for remaining work. Persist important results to the vault.",
-        "red": "Context is critically full. Immediately fork_session or summarize. Risk of empty responses or truncation.",
+        "yellow": "Context is filling up. The user can compact from the context indicator in the status bar. Consider using spawn_subagents for independent tasks, or vault_write to persist intermediate results.",
+        "orange": "Context is running low. Inform the user that they can compact from the context indicator. Use fork_session to start a new phase, or spawn_subagents for remaining work.",
+        "red": "Context is critically full. Inform the user they should compact or start a new session. Risk of empty responses or truncation.",
     }
 
     return json.dumps({

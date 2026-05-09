@@ -244,13 +244,33 @@ export interface CompactResult {
   budget_exceeded: boolean;
 }
 
-export async function compactSession(sessionId: string, model?: string): Promise<CompactResult> {
+export async function compactSession(
+  sessionId: string,
+  options?: { model?: string; strategy?: string; force_summarize?: boolean },
+): Promise<CompactResult> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/compact`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(model ? { model } : {}),
+    body: JSON.stringify(options ?? {}),
   });
   if (!res.ok) throw new Error(`Compact error: ${res.status}`);
+  return res.json();
+}
+
+export interface ContextStats {
+  context_window_tokens: number;
+  estimated_context_tokens: number;
+  context_pct: number;
+  context_zone: "green" | "yellow" | "orange" | "red" | "unknown";
+  token_breakdown: { user: number; assistant: number; tool: number; system: number };
+  message_counts: { user: number; assistant: number; tool: number; system: number };
+  tool_stats: { name: string; call_count: number; estimated_tokens: number }[];
+  compaction_hint: "none_needed" | "tools_only" | "summarize" | "full";
+}
+
+export async function getContextStats(sessionId: string): Promise<ContextStats> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/context-stats`);
+  if (!res.ok) throw new Error(`Context stats error: ${res.status}`);
   return res.json();
 }
 

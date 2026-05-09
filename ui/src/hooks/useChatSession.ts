@@ -376,13 +376,13 @@ export function useChatSession(
     void send(`${HIDDEN_SEED_MARKER}retry: ${targetUser.content}`);
   }, [activeKey, chatStates, send]);
 
-  const handleCompact = useCallback(async () => {
+  const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
     const sid = activeSession;
     if (!sid) return;
     try {
       const state = chatStates.get(activeKey) ?? emptyState();
       const model = state.selectedModel || undefined;
-      const result = await compactSession(sid, model);
+      const result = await compactSession(sid, { model, ...options });
       if (state.thinking) return;
       await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
       return result;

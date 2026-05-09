@@ -1,10 +1,15 @@
 import type { SessionUsage } from "../api";
+import type { CompactResult } from "../api/sessions";
+import ContextDropdown from "./ContextDropdown";
 import "./AgentStatusBar.css";
 
 interface Props {
   usage: SessionUsage | null;
   thinking?: boolean;
   selectedModel?: string;
+  sessionId?: string | null;
+  onCompact?: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<CompactResult | undefined>;
+  compacting?: boolean;
 }
 
 function fmtTokens(n: number): string {
@@ -26,7 +31,7 @@ const ZONE_COLORS: Record<string, string> = {
   red: "#ef4444",
 };
 
-export default function AgentStatusBar({ usage, thinking, selectedModel }: Props) {
+export default function AgentStatusBar({ usage, thinking, selectedModel, sessionId, onCompact, compacting }: Props) {
   if (!usage) return null;
   const { input_tokens, output_tokens, tool_call_count } = usage;
   const total = input_tokens + output_tokens;
@@ -54,7 +59,11 @@ export default function AgentStatusBar({ usage, thinking, selectedModel }: Props
             className="agent-status-ctx-dot"
             style={{ background: ZONE_COLORS[ctxZone] }}
           />
-          {Math.round(ctxPct * 100)}%
+          {sessionId && onCompact ? (
+            <ContextDropdown sessionId={sessionId} onCompact={onCompact} compacting={compacting} />
+          ) : (
+            <span>{Math.round(ctxPct * 100)}%</span>
+          )}
         </span>
       )}
       {total > 0 && (

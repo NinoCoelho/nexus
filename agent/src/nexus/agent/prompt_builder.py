@@ -254,7 +254,9 @@ When planning a task with 3+ steps:
 3. Use `vault_write` for large outputs — don't keep them in chat.
 4. Check `context_status` if you've been running many tool calls.
 
-Never let context grow past the orange zone without taking action.
+If context is high, inform the user. They can compact via the context
+indicator in the status bar. Never refuse to work due to context —
+keep executing and let the user decide when to compact.
 """
 
 

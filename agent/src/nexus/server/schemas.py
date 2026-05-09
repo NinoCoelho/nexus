@@ -92,15 +92,19 @@ class TruncateRequest(BaseModel):
 
 
 class CompactRequest(BaseModel):
-    """Replace oversized tool messages in a session's history with summaries.
+    """Replace oversized tool messages and/or summarize older turns.
 
-    Only TOOL-role messages above ``threshold_bytes`` are rewritten.
-    Assistant/user messages are preserved verbatim.
+    ``strategy`` controls what runs:
+      - ``auto`` (default): tool compaction + LLM summarization when zone >= yellow.
+      - ``tools_only``: only compress oversized tool results.
+      - ``summarize_only``: only LLM summarization of older turns.
+      - ``aggressive``: lower thresholds (4 KB/512 B) + summarization.
+
+    ``force_summarize`` runs LLM summarization regardless of zone.
     """
 
-    threshold_bytes: int = 32 * 1024
-    head_keep_bytes: int = 2 * 1024
-    csv_sample_rows: int = 5
+    strategy: str = "auto"
+    force_summarize: bool = False
     model: str | None = None
 
 

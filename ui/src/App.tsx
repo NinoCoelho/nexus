@@ -36,6 +36,9 @@ import { useSettings } from "./hooks/useSettings";
 import { useNexusAccount } from "./hooks/useNexusAccount";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
+import { useCalendarAlarms } from "./hooks/useCalendarAlarms";
+import AlarmNotification from "./components/AlarmNotification";
+import "./components/AlarmNotification.css";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
 import { useVoiceAckPlayer } from "./hooks/useVoiceAckPlayer";
 import { subscribeGlobalNotifications } from "./api/chat";
@@ -200,28 +203,14 @@ export default function App() {
     handleCompact: _handleCompact, handleRemoveLast,
   } = chatSession;
 
-  const handleCompact = useCallback(async () => {
+  const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
     try {
-      const result = await _handleCompact();
+      const result = await _handleCompact(options);
       if (!result) return;
       if (result.budget_exceeded) {
         toast.error("Your API budget has been exceeded. Top up your credits or switch providers to continue.");
-        return;
       }
-      const reduced = result.tokens_before > result.tokens_after;
-      if (result.summarized) {
-        const msg = reduced && !result.still_overflowed
-          ? `Compacted and summarized ${result.summarized_messages} older turns. Context reduced by ${Math.round((1 - result.tokens_after / result.tokens_before) * 100)}%.`
-          : `Summarized ${result.summarized_messages} older turns. Context is still tight — try compacting again or start a new session.`;
-        (reduced && !result.still_overflowed ? toast.success : toast.warning)(msg);
-      } else if (result.compacted > 0) {
-        const kb = Math.round(result.saved_bytes / 1024);
-        toast.success(`Compacted ${result.compacted} tool results, freed ${kb} KB.`);
-      } else if (result.still_overflowed) {
-        toast.warning("Unable to reduce context further. Try removing the last message or starting a new session.");
-      } else {
-        toast.info("History is already compact — nothing to reduce.");
-      }
+      return result;
     } catch {
       toast.error("Compact failed. Try removing the last message or starting a new session.");
     }
@@ -320,6 +309,10 @@ export default function App() {
   }, []);
 
   useCalendarAlerts({ onOpenCalendar: handleOpenCalendar });
+
+  const { alarms, dismiss: dismissAlarm, snooze: snoozeAlarm } = useCalendarAlarms({
+    onOpenCalendar: handleOpenCalendar,
+  });
 
   const handleViewEntityGraph = useCallback((mode: "file" | "folder", path: string) => {
     setGraphSourceFilter({ mode, path });
@@ -481,34 +474,6 @@ export default function App() {
 
   const sessionUsage = useSessionUsage(activeSession, activeState.thinking);
 
-  const lastPromptedZoneRef = useRef<string>("green");
-  useEffect(() => {
-    if (!sessionUsage || activeState.thinking) return;
-    const zone = sessionUsage.context_zone;
-    if (!zone || zone === "unknown" || zone === "green") {
-      lastPromptedZoneRef.current = "green";
-      return;
-    }
-    if (zone === lastPromptedZoneRef.current) return;
-    lastPromptedZoneRef.current = zone;
-    if (zone === "red") {
-      toast.warning("Conversation is very long — you may hit the context limit soon.", {
-        duration: 12000,
-        action: { label: "Compact now", onClick: () => { void handleCompact(); } },
-      });
-    } else if (zone === "orange") {
-      toast.warning("Your conversation is getting long. Compact to keep things running smoothly.", {
-        duration: 8000,
-        action: { label: "Compact now", onClick: () => { void handleCompact(); } },
-      });
-    } else if (zone === "yellow") {
-      toast.info("Context is filling up. Consider compacting soon.", {
-        duration: 6000,
-        action: { label: "Compact now", onClick: () => { void handleCompact(); } },
-      });
-    }
-  }, [sessionUsage, activeState.thinking, handleCompact]);
-
   const handleSpawnSessionFromEntity = useCallback((entityId: number, entityName: string) => {
     void entityId;
     _handleNewChat();
@@ -622,6 +587,9 @@ export default function App() {
                   usage={sessionUsage}
                   thinking={activeState.thinking}
                   selectedModel={activeState.selectedModel}
+                  sessionId={activeSession}
+                  onCompact={handleCompact}
+                  compacting={activeState.thinking}
                 />
               : null
           }
@@ -881,6 +849,13 @@ export default function App() {
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+
+      <AlarmNotification
+        alarms={alarms}
+        onDismiss={dismissAlarm}
+        onSnooze={snoozeAlarm}
+        onOpen={handleOpenCalendar}
+      />
     </div>
   );
 }
