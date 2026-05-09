@@ -155,7 +155,7 @@
   }
 
   /* Chat content: drop the desktop max-width pinning. */
-  .chat-view, .chat-view * { max-width: 100% !important; }
+  .message-list > * { max-width: 100% !important; }
 
   /* Drag handles + resizers don't make sense on touch. */
   .resize-handle, .vault-tree-resize-handle { display: none !important; }
