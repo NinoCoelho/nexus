@@ -38,7 +38,14 @@
   "card": {
     "deleteTitle": "Delete card",
     "deleteMessage": "This card will be removed from the board.",
-    "deleteConfirm": "Delete"
+    "deleteConfirm": "Delete",
+    "ctxOpenChat": "Open in chat",
+    "ctxViewActivity": "View activity",
+    "ctxCancel": "Cancel agent",
+    "ctxRetry": "Retry",
+    "ctxReRun": "Re-run",
+    "ctxMoveTo": "Move to…",
+    "ctxDelete": "Delete card"
   },
   "filter": {
     "textPlaceholder": "Search cards…",

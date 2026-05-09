@@ -38,7 +38,14 @@
   "card": {
     "deleteTitle": "Excluir cartão",
     "deleteMessage": "Este cartão será removido do quadro.",
-    "deleteConfirm": "Excluir"
+    "deleteConfirm": "Excluir",
+    "ctxOpenChat": "Abrir no chat",
+    "ctxViewActivity": "Ver atividade",
+    "ctxCancel": "Cancelar agente",
+    "ctxRetry": "Tentar novamente",
+    "ctxReRun": "Executar novamente",
+    "ctxMoveTo": "Mover para…",
+    "ctxDelete": "Excluir cartão"
   },
   "filter": {
     "textPlaceholder": "Buscar cartões…",

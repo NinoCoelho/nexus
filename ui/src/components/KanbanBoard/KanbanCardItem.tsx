@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { KanbanCard } from "../../api";
 import MarkdownView from "../MarkdownView";
 import { dueBadge, PRIORITY_CLASS } from "./utils";
+
+interface LaneOption {
+  id: string;
+  title: string;
+}
 
 interface Props {
   card: KanbanCard;
@@ -9,6 +15,7 @@ interface Props {
   dragCardId: string | null;
   dragOver: { lane: string; index: number } | null;
   laneId: string;
+  allLanes: LaneOption[];
   onDragStart: () => void;
   onDragEnd: () => void;
   onDragOver: (e: React.DragEvent, i: number) => void;
@@ -19,6 +26,7 @@ interface Props {
   onViewActivity: () => void;
   onCancel: () => void;
   onRetry: () => void;
+  onMoveCard: (targetLaneId: string) => void;
 }
 
 type StatusVariant = "idle" | "confirm-stop" | "confirm-retry";
@@ -29,6 +37,7 @@ export default function KanbanCardItem({
   dragCardId,
   dragOver,
   laneId,
+  allLanes,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -39,10 +48,14 @@ export default function KanbanCardItem({
   onViewActivity,
   onCancel,
   onRetry,
+  onMoveCard,
 }: Props) {
+  const { t } = useTranslation("kanban");
   const due = dueBadge(card.due);
   const isDragging = dragCardId === card.id;
   const [variant, setVariant] = useState<StatusVariant>("idle");
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [moveSubOpen, setMoveSubOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resetVariant = useCallback(() => {
@@ -187,6 +200,36 @@ export default function KanbanCardItem({
     return "";
   };
 
+  const closeCtx = useCallback(() => {
+    setCtxMenu(null);
+    setMoveSubOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtx(); };
+    const onClick = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(".kanban-card-ctx")) closeCtx();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("click", onClick);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("click", onClick);
+    };
+  }, [ctxMenu, closeCtx]);
+
+  const otherLanes = allLanes.filter((l) => l.id !== laneId);
+
+  const menuWidth = 190;
+  const subWidth = 160;
+  const menuHeight = 260;
+  const ctxLeft = Math.min(ctxMenu?.x ?? 0, window.innerWidth - menuWidth - 8);
+  const ctxTop = Math.min(ctxMenu?.y ?? 0, window.innerHeight - menuHeight);
+  const subLeft = ctxLeft + menuWidth + 2 + subWidth > window.innerWidth
+    ? ctxLeft - subWidth - 2
+    : ctxLeft + menuWidth + 2;
+
   return (
     <div
       className={`kanban-card${isDragging ? " kanban-card--dragging" : ""}`}
@@ -211,6 +254,12 @@ export default function KanbanCardItem({
       onClick={(e) => {
         if ((e.target as HTMLElement).closest(".kanban-card-actions")) return;
         onClick();
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setCtxMenu({ x: e.clientX, y: e.clientY });
+        setMoveSubOpen(false);
       }}
     >
       <div className="kanban-card-title">
@@ -266,6 +315,60 @@ export default function KanbanCardItem({
           title="Delete card"
         >×</button>
       </div>
+      {ctxMenu && (
+        <div className="kanban-card-ctx" style={{ top: ctxTop, left: ctxLeft, width: menuWidth }}>
+          <button className="kanban-ctx-item" onClick={() => { closeCtx(); onOpenInChat(); }}>
+            {t("card.ctxOpenChat")}
+          </button>
+          {(card.status === "done" || card.status === "failed") && (
+            <button className="kanban-ctx-item" onClick={() => { closeCtx(); onViewActivity(); }}>
+              {t("card.ctxViewActivity")}
+            </button>
+          )}
+          {card.status === "running" && (
+            <button className="kanban-ctx-item" onClick={() => { closeCtx(); onCancel(); }}>
+              {t("card.ctxCancel")}
+            </button>
+          )}
+          {(card.status === "failed" || card.status === "done") && (
+            <button className="kanban-ctx-item" onClick={() => { closeCtx(); onRetry(); }}>
+              {card.status === "done" ? t("card.ctxReRun") : t("card.ctxRetry")}
+            </button>
+          )}
+          {otherLanes.length > 0 && (
+            <>
+              <div className="kanban-ctx-divider" />
+              <div
+                className="kanban-ctx-item kanban-ctx-move-trigger"
+                onMouseEnter={() => setMoveSubOpen(true)}
+                onMouseLeave={() => setMoveSubOpen(false)}
+              >
+                <span>{t("card.ctxMoveTo")}</span>
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ marginLeft: "auto" }}>
+                  <path d="M6 4l6 4-6 4z" />
+                </svg>
+                {moveSubOpen && (
+                  <div className="kanban-ctx-sub" style={{ top: ctxTop, left: subLeft }}>
+                    {otherLanes.map((lane) => (
+                      <button
+                        key={lane.id}
+                        className="kanban-ctx-item"
+                        onClick={(e) => { e.stopPropagation(); closeCtx(); onMoveCard(lane.id); }}
+                      >
+                        {lane.title}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          <div className="kanban-ctx-divider" />
+          <button className="kanban-ctx-item kanban-ctx-item--danger" onClick={() => { closeCtx(); onDelete(); }}>
+            {t("card.ctxDelete")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

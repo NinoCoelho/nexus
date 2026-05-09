@@ -296,6 +296,15 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
     } catch { /* ignore */ }
   };
 
+  const handleMoveCard = async (cardId: string, targetLaneId: string) => {
+    try {
+      const targetLane = board?.lanes.find((l) => l.id === targetLaneId);
+      const position = targetLane?.cards.length ?? 0;
+      await patchVaultKanbanCard(path, cardId, { lane: targetLaneId, position });
+      reload();
+    } catch { /* ignore */ }
+  };
+
   const hasActiveFilters = !!(filters.text || filters.label || filters.priority || filters.assignee);
 
   return (
@@ -346,6 +355,7 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
             lane={lane}
             laneIndex={idx}
             isLastLane={idx === board.lanes.length - 1}
+            allLanes={board.lanes.map((l) => ({ id: l.id, title: l.title }))}
             dragCard={dragCard}
             dragLane={dragLane}
             dragOver={dragOver}
@@ -368,6 +378,7 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
             onDeleteCard={handleDeleteCard}
             onCancelCard={handleCancelCard}
             onRetryCard={handleRetryCard}
+            onMoveCard={(cardId, targetLaneId) => void handleMoveCard(cardId, targetLaneId)}
           />
         ))}
       </div>

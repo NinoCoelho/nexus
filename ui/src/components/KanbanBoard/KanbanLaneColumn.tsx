@@ -7,6 +7,7 @@ interface Props {
   lane: KanbanLane;
   laneIndex: number;
   isLastLane: boolean;
+  allLanes: { id: string; title: string }[];
   dragCard: string | null;
   dragLane: string | null;
   dragOver: { lane: string; index: number } | null;
@@ -29,12 +30,14 @@ interface Props {
   onDeleteCard: (cardId: string) => void;
   onCancelCard: (cardId: string) => void;
   onRetryCard: (cardId: string) => void;
+  onMoveCard: (cardId: string, targetLaneId: string) => void;
 }
 
 export default function KanbanLaneColumn({
   lane,
   laneIndex,
   isLastLane,
+  allLanes,
   dragCard,
   dragLane,
   dragOver,
@@ -56,6 +59,7 @@ export default function KanbanLaneColumn({
   onDeleteCard,
   onCancelCard,
   onRetryCard,
+  onMoveCard,
 }: Props) {
   const { t } = useTranslation("kanban");
   const isLaneDragging = dragLane === lane.id;
@@ -134,6 +138,7 @@ export default function KanbanLaneColumn({
             dragCardId={dragCard}
             dragOver={dragOver}
             laneId={lane.id}
+            allLanes={allLanes}
             onDragStart={() => onSetDragCard(card.id)}
             onDragEnd={() => { onSetDragCard(null); onSetDragOver(null); }}
             onDragOver={(_e, insertIdx) => onSetDragOver({ lane: lane.id, index: insertIdx })}
@@ -144,6 +149,7 @@ export default function KanbanLaneColumn({
             onViewActivity={() => onOpenCardActivity(card)}
             onCancel={() => onCancelCard(card.id)}
             onRetry={() => onRetryCard(card.id)}
+            onMoveCard={(targetLaneId) => onMoveCard(card.id, targetLaneId)}
           />
         ))}
         <button
