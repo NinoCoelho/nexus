@@ -20,7 +20,7 @@ from .helpers import (
     _from_loom_message,
     _to_loom_message,
 )
-from .overflow import check_overflow, check_message_count, OverflowCheck, _DEFAULT_MAX_MESSAGES, known_context_window
+from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -352,7 +352,7 @@ class Agent:
             stripped_history = _strip_dead_placeholders(history)
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
-        effective_window = ctx_window if ctx_window > 0 else _DEFAULT_MAX_MESSAGES * 200
+        effective_window = ctx_window if ctx_window > 0 else _DEFAULT_FALLBACK_WINDOW
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
 
@@ -374,15 +374,7 @@ class Agent:
         # endless retry loop.
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         check = check_overflow(loom_messages, context_window=ctx_window)
-        msg_limit_exceeded = check_message_count(loom_messages)
-        if check.overflowed or msg_limit_exceeded:
-            if msg_limit_exceeded and not check.overflowed:
-                check = OverflowCheck(
-                    True, check.estimated_input_tokens, ctx_window,
-                    check.headroom,
-                    f"Message count ({len(loom_messages)}) exceeds safety limit "
-                    f"({_DEFAULT_MAX_MESSAGES}). Compact the history or start a new session.",
-                )
+        if check.overflowed:
             self._log_llm_error(
                 session_id=session_id,
                 error_type="context_overflow",
