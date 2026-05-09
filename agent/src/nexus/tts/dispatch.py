@@ -1,7 +1,7 @@
 """Resolve the right Piper voice for a chunk of text and synthesize it.
 
 The engine is fixed (Piper). For every utterance we run ``langdetect``
-over the text and map the detected ISO code to one of the two bundled
+over the text and map the detected ISO code to one of the bundled
 voices (English / Portuguese). Anything we don't have a mapping for
 falls back to English. No manual override knobs in the UI.
 """
@@ -28,6 +28,9 @@ DEFAULT_VOICES: dict[str, str] = {
 }
 _FALLBACK_VOICE = DEFAULT_VOICES["en"]
 _DEFAULT_SPEED = 1.0
+_VOICE_SPEEDS: dict[str, float] = {
+    "en_US-bryce-medium": 1.0 / 0.7,
+}
 
 
 def _voice_for_language(lang: str | None) -> str:
@@ -79,7 +82,7 @@ async def synthesize(
     # number/date expansion in normalize_for_speech, so they can't disagree.
     lang_code = _detect_language(text) or ""
     chosen_voice = voice or _voice_for_language(lang_code)
-    chosen_speed = speed if speed is not None else _DEFAULT_SPEED
+    chosen_speed = speed if speed is not None else _VOICE_SPEEDS.get(chosen_voice, _DEFAULT_SPEED)
     spoken_text = normalize_for_speech(text, lang=lang_code)
     return await _piper.synthesize(spoken_text.strip(), chosen_voice, chosen_speed, cfg)
 

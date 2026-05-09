@@ -218,8 +218,9 @@ class TTSConfig(BaseModel):
     """Voice output settings — intentionally minimal.
 
     The engine is fixed (bundled Piper). The two default voices
-    (en_US-bryce-medium, pt_BR-faber-medium) auto-download on first daemon
-    start. Language is auto-detected per utterance via ``langdetect``.
+    (en_GB-northern_english_male-medium, pt_BR-faber-medium) auto-download
+    on first daemon start. Language is auto-detected per utterance via
+    ``langdetect``.
     """
     # Master switch. When False, click-to-listen buttons hide and no
     # spoken acknowledgments fire.

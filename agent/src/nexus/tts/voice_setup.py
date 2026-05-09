@@ -1,6 +1,7 @@
 """First-run setup for the bundled Piper voices.
 
-The two default voices (``en_US-bryce-medium``, ``pt_BR-faber-medium``) are
+The two default voices (``en_GB-northern_english_male-medium``,
+``pt_BR-faber-medium``) are
 ~63 MB each. We download them in the background on first daemon start
 so the user gets a "feels embedded" experience: by the time they click
 Play in settings or send a voice message, synthesis is instant.

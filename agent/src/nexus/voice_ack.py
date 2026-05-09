@@ -88,18 +88,33 @@ _COMPLETE_PROMPT_PT = (
 
 _SUMMARIZE_PROMPT_EN = (
     "Summarize the following text into 1-2 short paragraphs (under "
-    "200 words total). Plain spoken language for audio. No bullets, "
-    "no markdown, no headers. REPLY IN ENGLISH.\n"
-    "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
-    "or any formatting symbols. Use only plain words and basic punctuation.\n\n{text}"
+    "200 words total). Your output will be read aloud by a text-to-speech "
+    "engine, so it must be pure spoken English with ZERO formatting symbols.\n\n"
+    "RULES:\n"
+    "- No bullets, no markdown, no headers, no code blocks\n"
+    "- No asterisks (*), hashes (#), backticks (`), dashes (-), pipes (|), "
+    "angle brackets (<>), underscores (_), tildes (~), brackets ([) or braces ({)\n"
+    "- No URLs, no file paths, no HTML tags\n"
+    "- No numbers written as digits — spell them out (e.g. 'three' not '3')\n"
+    "- Use only plain words, commas, periods, question marks and exclamation marks\n"
+    "- Write as if you are speaking to someone naturally\n"
+    "- REPLY IN ENGLISH\n\n{text}"
 )
 
 _SUMMARIZE_PROMPT_PT = (
-    "Resuma o texto a seguir em 1-2 parágrafos curtos (no total menos de "
-    "200 palavras). Linguagem falada simples, para áudio. Sem marcadores, "
-    "sem markdown, sem títulos. RESPONDA EM PORTUGUÊS BRASILEIRO.\n"
-    "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
-    "símbolo de formatação. Use apenas palavras e pontuação básica.\n\n{text}"
+    "Resuma o texto a seguir em um a dois parágrafos curtos (no total menos de "
+    "duzentas palavras). Sua saída será lida em voz alta por um sintetizador de "
+    "fala, então deve ser português brasileiro falado puro com ZERO símbolos de "
+    "formatação.\n\n"
+    "REGRAS:\n"
+    "- Sem marcadores, sem markdown, sem títulos, sem blocos de código\n"
+    "- Sem asteriscos, cerquilhas, crases, traços, pipes, sinais de maior/menor, "
+    "sublinhados, tils, colchetes ou chaves\n"
+    "- Sem URLs, caminhos de arquivo ou tags HTML\n"
+    "- Sem números em dígitos — escreva por extenso (ex: 'três' não '3')\n"
+    "- Use apenas palavras, vírgulas, pontos, pontos de interrogação e exclamação\n"
+    "- Escreva como se estivesse falando com alguém naturalmente\n"
+    "- RESPONDA EM PORTUGUÊS BRASILEIRO\n\n{text}"
 )
 
 # Last-ditch retry prompts when the structured complete-ack prompt comes

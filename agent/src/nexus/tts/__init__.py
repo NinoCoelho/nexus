@@ -1,8 +1,8 @@
 """Text-to-speech — bundled Piper engine, no third-party providers.
 
 Two default voices auto-download to ~/.nexus/tts/piper on first daemon
-start: ``en_US-bryce-medium`` and ``pt_BR-faber-medium``. Language detection
-(via ``langdetect``) picks between them per-utterance.
+start: ``en_GB-northern_english_male-medium`` and ``pt_BR-faber-medium``.
+Language detection (via ``langdetect``) picks between them per-utterance.
 """
 
 from __future__ import annotations
