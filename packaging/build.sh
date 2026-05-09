@@ -376,6 +376,18 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   fi
 fi
 
+if [[ "$NOTARIZE" -eq 1 && -n "$INSTALLER_IDENTITY" ]]; then
+  echo "==> Submitting .pkg for notarization (this may take several minutes)"
+  xcrun notarytool submit "$PKG" \
+    --apple-id "$NOTARY_APPLE_ID" \
+    --team-id "$NOTARY_TEAM_ID" \
+    --password "$NOTARY_PASSWORD" \
+    --wait
+
+  echo "==> Stapling notarization ticket to .pkg"
+  xcrun stapler staple "$PKG"
+fi
+
 echo "==> Done: $APP"
 du -sh "$APP"
 du -sh "$PKG"
