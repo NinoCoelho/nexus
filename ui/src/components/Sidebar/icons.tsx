@@ -107,3 +107,12 @@ export function IconHeartbeat() {
     </svg>
   );
 }
+
+export function IconDream() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 14 C2 14, 6 2, 10 10 C14 18, 18 6, 18 6" />
+      <circle cx="17" cy="4" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

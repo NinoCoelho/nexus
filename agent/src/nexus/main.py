@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from .agent.registry import build_registry
 from .redact import install_redaction
 from .server.app import create_app
 from .skills.registry import SkillRegistry
+
+_PORT_FILE = Path.home() / ".nexus" / "port"
 
 
 _NEXUS_USER_DEFAULT = """\
@@ -121,8 +124,63 @@ def build_app():
 app = build_app()
 
 
+def _write_port_file() -> None:
+    _PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PORT_FILE.write_text(str(PORT))
+    atexit.register(lambda: _PORT_FILE.unlink(missing_ok=True))
+
+
 def main() -> None:
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "dream":
+        _run_dream()
+        return
+    _write_port_file()
     uvicorn.run("nexus.main:app", host="127.0.0.1", port=PORT, reload=False)
+
+
+def _run_dream() -> None:
+    import asyncio
+    from .dream.engine import run_dream, close_store
+
+    cfg = apply_env_overlay(load_config())
+    dream_cfg = getattr(cfg, "dream", None)
+    if dream_cfg is None or not dream_cfg.enabled:
+        print("Dreaming is disabled. Enable it in ~/.nexus/config.toml with [dream] enabled = true")
+        return
+
+    provider, upstream_model = _resolve_dream_provider(cfg)
+
+    result = asyncio.run(run_dream(provider=provider, model_id=upstream_model, cfg=cfg))
+    if result.error:
+        print(f"Dream run #{result.run_id} failed: {result.error}")
+    else:
+        c = result.consolidation
+        print(f"Dream run #{result.run_id} completed (depth={result.depth}, duration={result.duration_ms / 1000:.1f}s)")
+        if c:
+            print(f"  Consolidation: {c.merges} merges, {c.updates} updates, {c.deletes} deletes")
+    close_store()
+
+
+def _resolve_dream_provider(cfg):
+    from .agent.registry import build_registry
+    from .agent.llm import OpenAIProvider, StaticBearerAuth
+    from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+
+    registry = build_registry(cfg)
+    try:
+        provider, upstream = registry.get_for_model(cfg.agent.default_model)
+        return provider, upstream
+    except KeyError:
+        available = registry.available_model_ids()
+        if available:
+            provider, upstream = registry.get_for_model(available[0])
+            return provider, upstream
+    return OpenAIProvider(
+        base_url=LLM_BASE_URL,
+        auth=StaticBearerAuth(LLM_API_KEY),
+        model=LLM_MODEL,
+    ), None
 
 
 if __name__ == "__main__":

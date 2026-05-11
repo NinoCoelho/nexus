@@ -165,6 +165,10 @@ def _strip_markdown(text: str) -> str:
     # HTML comments (used by Nexus for nx:* markers).
     text = re.compile(r"<!--[\s\S]*?-->").sub("", text)
 
+    # HTML tags — LLM summaries sometimes wrap output in <p>…</p>,
+    # and scraped web content can contain <br>, <em>, etc.
+    text = re.compile(r"<[^>]+>").sub(" ", text)
+
     # Math blocks ($$ ... $$) → spoken placeholder.
     text = re.compile(r"\$\$[\s\S]*?\$\$").sub(
         "(an equation)", text,
@@ -233,6 +237,24 @@ def _strip_markdown(text: str) -> str:
     # Arrow symbols → spoken "to" (common in kanban lanes, flow diagrams).
     text = re.compile(r"\s*→\s*").sub(" to ", text)
 
+    return text
+
+
+def _strip_remaining_symbols(text: str) -> str:
+    """Remove residual symbols that Piper reads character-by-character.
+
+    Runs late in the pipeline — after URLs, dates, code blocks, and
+    markdown have already been collapsed. Anything left here is almost
+    certainly a programming artefact (path slash, CSS hash, etc.).
+
+    Slashes between digits are preserved so unsupported-language dates
+    (e.g. 12/07 for lang="fr") survive intact.
+    """
+    text = re.compile(r"\s*[—–]\s*").sub(", ", text)
+    text = re.compile(r"(?<!\d)\s*/\s*(?!\d)").sub(" ", text)
+    text = text.replace("#", " ")
+    text = text.replace("@", " ")
+    text = text.replace("_", " ")
     return text
 
 
@@ -413,6 +435,7 @@ def normalize_for_speech(text: str, lang: str | None = None) -> str:
         text = _expand_dates(text, L)
         text = _expand_times(text, L)
         text = _expand_numbers(text, L)
+    text = _strip_remaining_symbols(text)
     text = _collapse_whitespace(text)
     return text
 

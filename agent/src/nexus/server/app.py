@@ -42,7 +42,8 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
-    "/transcribe", "/audio", "/health", "/heartbeat",
+    "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
+    "/dream",
 )
 
 
@@ -634,6 +635,11 @@ def create_app(
                 log.exception("local_llm stop_all failed")
             from ..agent.memory import close_memory_store
             close_memory_store()
+            try:
+                from ..dream.engine import close_store as _close_dream_store
+                _close_dream_store()
+            except Exception:
+                log.exception("dream store close failed")
             await agent.aclose()
 
     # Single-user app, not a third-party API — disable FastAPI's auto-generated
@@ -707,6 +713,8 @@ def create_app(
     from .routes.nexus_account import router as nexus_account_router
     from .routes.webhook import router as webhook_router
     from .routes.heartbeat import router as heartbeat_router
+    from .routes.cookies import router as cookies_router
+    from .routes.dream import router as dream_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -740,6 +748,8 @@ def create_app(
     app.include_router(nexus_account_router)
     app.include_router(webhook_router)
     app.include_router(heartbeat_router)
+    app.include_router(cookies_router)
+    app.include_router(dream_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

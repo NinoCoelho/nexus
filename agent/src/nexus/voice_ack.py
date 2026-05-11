@@ -526,10 +526,11 @@ async def emit_user_notification(
     # Text-mode: publish the same event but with no audio bytes. The UI
     # surfaces it as a toast; the player short-circuits on audio_b64=None
     # AND the user wasn't listening anyway.
+    clean_text = normalize_for_speech(text)
     from .server.events import SessionEvent
     store.publish(session_id, SessionEvent(kind="voice_ack", data={
         "kind": "notify",
-        "transcript": text,
+        "transcript": clean_text,
         "audio_b64": None,
         "audio_mime": "",
         "voice": "",

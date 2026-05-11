@@ -18,6 +18,7 @@ import UnifiedGraphView from "./components/UnifiedGraphView";
 import DatabaseSchemaView from "./components/DatabaseSchemaView";
 import DataDashboardView from "./components/DataDashboardView";
 import HeartbeatView from "./components/HeartbeatView";
+import DreamView from "./components/DreamView";
 import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
@@ -131,7 +132,7 @@ export default function App() {
       if (window.location.hash === "#/database") {
         window.history.replaceState(null, "", "#/data");
       }
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat)$/);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat|dream)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();
@@ -809,6 +810,9 @@ export default function App() {
                 onOpenInVault={handleOpenInVault}
               />
             )}
+          </div>
+          <div className="view-pane" style={{ display: view === "dream" ? "flex" : "none" }}>
+            {view === "dream" && <DreamView />}
           </div>
         </main>
       </div>

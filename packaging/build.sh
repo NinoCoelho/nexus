@@ -314,6 +314,14 @@ cp -R "$STAGE/ui"              "$RES/ui"
 cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
 [[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"
 
+if [[ -d "$REPO_ROOT/extension" ]]; then
+  echo "==> Staging Chrome extension"
+  mkdir -p "$RES/extension"
+  /usr/bin/rsync -a \
+    --exclude='.DS_Store' \
+    "$REPO_ROOT/extension/" "$RES/extension/"
+fi
+
 if [[ "$SKIP_SIGN" -eq 0 ]]; then
   if [[ -n "$SIGN_IDENTITY" ]]; then
     echo "==> Codesigning nested binaries with Developer ID: $SIGN_IDENTITY"

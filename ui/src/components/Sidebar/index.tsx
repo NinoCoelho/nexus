@@ -13,7 +13,7 @@ import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
 import DatabaseListPanel from "../DatabaseListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -23,7 +23,7 @@ import { BrandMark } from "../BrandMark";
 import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream";
 
 interface Props {
   view: View;
@@ -83,6 +83,7 @@ export default function Sidebar({
       { id: "data" as View,     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
       { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
       { id: "heartbeat" as View, label: "Heartbeat", Icon: IconHeartbeat },
+      { id: "dream" as View, label: "Dream", Icon: IconDream },
       { id: "insights" as View, label: t("sidebar:viewNames.insights"), Icon: IconInsights },
     ],
   };

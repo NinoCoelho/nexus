@@ -26,3 +26,5 @@ export * from "./notifications";
 export * from "./tunnel";
 export * from "./nexusAccount";
 export * from "./heartbeat";
+export * from "./cookies";
+export * from "./dream";

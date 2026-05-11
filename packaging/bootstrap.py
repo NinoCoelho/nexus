@@ -401,6 +401,109 @@ def _stop_proc(proc: subprocess.Popen | None) -> None:
         pass
 
 
+def _seed_extension(here: Path) -> Path | None:
+    """Copy the bundled Chrome extension to ~/.nexus/extension/.
+
+    Re-copies when the bundle version differs (tracked via
+    ``~/.nexus/extension/.bundled-version``). Returns the seeded
+    directory path, or None if no extension is bundled.
+    """
+    src = here / "extension"
+    if not src.is_dir() or not (src / "manifest.json").is_file():
+        return None
+
+    dest = NEXUS_HOME / "extension"
+    version_marker = dest / ".bundled-version"
+
+    bundle_version = (here / "extension" / "manifest.json").read_text().strip()
+    current_version = ""
+    if version_marker.is_file():
+        try:
+            current_version = version_marker.read_text().strip()
+        except OSError:
+            pass
+
+    if current_version == bundle_version and (dest / "manifest.json").is_file():
+        return dest
+
+    import shutil as _shutil
+
+    if dest.is_dir():
+        _shutil.rmtree(dest)
+    _shutil.copytree(src, dest)
+    try:
+        version_marker.write_text(bundle_version)
+    except OSError:
+        pass
+    log.info("[bootstrap] seeded extension to %s", dest)
+    return dest
+
+
+def _install_cookie_native_host(ext_dir: Path) -> None:
+    """Install the Chrome native messaging host for the cookie export extension.
+
+    Copies the NMH manifest + Python host script from the extension
+    directory into ``~/.nexus/native-host/`` and symlinks the manifest into
+    Chrome's NativeMessagingHosts directory. Safe to run repeatedly — skips if
+    the symlink already points at the right file.
+    """
+    nmh_src = ext_dir / "native-host"
+    manifest_tmpl = nmh_src / "com.nexus.cookies.json.tmpl"
+    host_script = nmh_src / "nexus_cookie_host.py"
+    if not manifest_tmpl.is_file() or not host_script.is_file():
+        return
+
+    dest_dir = NEXUS_HOME / "native-host"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil as _shutil
+
+    host_dst = dest_dir / "nexus_cookie_host.py"
+    _shutil.copy2(host_script, host_dst)
+    try:
+        host_dst.chmod(host_dst.stat().st_mode | 0o111)
+    except OSError:
+        pass
+
+    manifest_text = manifest_tmpl.read_text()
+    manifest_text = manifest_text.replace("HOST_SCRIPT_PATH", str(host_dst))
+    manifest_dst = dest_dir / "com.nexus.cookies.json"
+    manifest_dst.write_text(manifest_text)
+
+    nmh_dirs: list[Path] = []
+    if sys.platform == "darwin":
+        nmh_dirs.append(
+            Path.home() / "Library" / "Application Support" / "Google" / "Chrome" / "NativeMessagingHosts"
+        )
+        for profile in ("Chrome Dev", "Chrome Beta", "Chromium"):
+            nmh_dirs.append(
+                Path.home() / "Library" / "Application Support" / "Google" / profile / "NativeMessagingHosts"
+            )
+    elif sys.platform.startswith("linux"):
+        nmh_dirs.append(
+            Path.home() / ".config" / "google-chrome" / "NativeMessagingHosts"
+        )
+        nmh_dirs.append(
+            Path.home() / ".config" / "chromium" / "NativeMessagingHosts"
+        )
+
+    for nmh_dir in nmh_dirs:
+        if not nmh_dir.is_dir():
+            continue
+        link = nmh_dir / "com.nexus.cookies.json"
+        try:
+            if link.is_symlink():
+                if link.resolve() == manifest_dst.resolve():
+                    continue
+                link.unlink()
+            elif link.exists():
+                link.unlink()
+            link.symlink_to(manifest_dst)
+            log.info("[bootstrap] NMH symlinked to %s", nmh_dir)
+        except OSError:
+            pass
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     here = Path(__file__).resolve().parent
@@ -453,6 +556,12 @@ def main() -> int:
     if skills_dir.is_dir():
         os.environ.setdefault("NEXUS_BUILTIN_SKILLS_DIR", str(skills_dir))
 
+    try:
+        ext_dir = _seed_extension(here)
+        if ext_dir is not None:
+            _install_cookie_native_host(ext_dir)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[bootstrap] could not set up cookie extension: %s", e)
     llama_proc, llama_port, llama_model = _start_llama(here)
     if llama_proc is not None:
         atexit.register(_stop_proc, llama_proc)

@@ -55,8 +55,9 @@ def test_session_id_hash_replaced_en() -> None:
     )
     assert "identifier" in out
     assert "251b95a60cb141c092c0025063743909" not in out
-    # The label survives so the listener still has context.
-    assert "session_id" in out
+    # The label survives (underscores stripped for speech) so the
+    # listener still has context.
+    assert "session id" in out
 
 
 def test_session_id_hash_replaced_pt() -> None:
@@ -265,3 +266,55 @@ def test_unknown_language_only_runs_safe_passes() -> None:
     # Numbers untouched (no fr handler in our table)
     assert "1250" in out
     assert "12/07" in out
+
+
+# ── Remaining-symbol stripping ──────────────────────────────────────────────
+
+
+def test_path_slashes_removed() -> None:
+    out = normalize_for_speech("Saved to boards/research-pipeline.md", lang="en")
+    assert "/" not in out
+    assert "boards" in out
+    assert "research" in out
+
+
+def test_date_slashes_preserved_for_unsupported_lang() -> None:
+    out = normalize_for_speech("Fecha 12/07", lang="fr")
+    assert "12/07" in out
+
+
+def test_date_slashes_consumed_for_en() -> None:
+    out = normalize_for_speech("Meeting on 12/07", lang="en")
+    assert "/" not in out
+    assert "July" in out or "December" in out
+
+
+def test_em_dash_replaced() -> None:
+    out = normalize_for_speech("Done — all files updated", lang="en")
+    assert "—" not in out
+    assert "Done" in out
+
+
+def test_en_dash_replaced() -> None:
+    out = normalize_for_speech("Pages 10–20", lang="en")
+    assert "–" not in out
+
+
+def test_bare_hash_removed() -> None:
+    out = normalize_for_speech("Target textarea#editor", lang="en")
+    assert "#" not in out
+    assert "textarea" in out
+    assert "editor" in out
+
+
+def test_at_sign_removed() -> None:
+    out = normalize_for_speech("Sent to @user", lang="en")
+    assert "@" not in out
+    assert "user" in out
+
+
+def test_underscore_removed() -> None:
+    out = normalize_for_speech("Ran skill_article_drafter", lang="en")
+    assert "_" not in out
+    assert "skill" in out
+    assert "drafter" in out

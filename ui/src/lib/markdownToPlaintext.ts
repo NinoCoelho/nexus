@@ -23,6 +23,9 @@ export function markdownToPlaintext(input: string): string {
   // HTML comments (used by Nexus for nx:* markers).
   s = s.replace(/<!--[\s\S]*?-->/g, "");
 
+  // HTML tags — LLM summaries sometimes wrap output in <p>…</p>.
+  s = s.replace(/<[^>]+>/g, " ");
+
   // Math blocks ($$...$$) → spoken placeholder.
   s = s.replace(/\$\$[\s\S]*?\$\$/g, "(an equation)");
 

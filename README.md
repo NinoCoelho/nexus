@@ -16,6 +16,7 @@
 - **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
+- **Dreaming** — scheduled background agent that consolidates memories, extracts cross-session insights, refines skills, and rehearses scenarios during idle time. Dream journal, manual triggers, and staged skill-suggestion review in the UI.
 - **Packaged desktop apps** — ships as `Nexus.app` (macOS) and `Nexus.exe` (Windows) with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh machine. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
 
 ---
@@ -191,6 +192,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Docker Image** | Single multi-stage `Dockerfile` + `docker-compose.yml` — backend + bundled UI on one port, persistent state on a named volume, loopback auth model preserved via an internal `socat` proxy |
 | **Skills From Git** | `nexus skills install <git-url-or-path>` |
 | **ACP Bridge** | Optional Agent Communication Protocol over WebSocket with Ed25519 device auth |
+| **Dreaming** | Scheduled background agent consolidates memories, extracts insights, refines skills, rehearses scenarios. Four-phase cycle (consolidation → insight → skill refinement → rehearsal) with progressive depth, token budget, and a Dream Journal UI |
 
 ---
 
@@ -488,6 +490,64 @@ The `dispatch_card` and `kanban_query` tools let the agent operate on boards dir
 - **Intra-day fire window**: `all_day=true` + `fire_from` + `fire_to` + `fire_every_min` repeats inside a local time window without flipping status.
 - Fired events flow through the same vault-dispatch pipeline as kanban cards, so the spawned session id is stamped back into the markdown atomically.
 
+### Dreaming (Background Agent)
+
+A scheduled background agent — the agent's "subconscious" — runs during idle periods to consolidate memories, surface cross-session insights, refine skills, and rehearse scenarios.
+
+```mermaid
+graph TB
+    subgraph "Dream Cycle"
+        SCHED["HeartbeatScheduler (60s tick)"]
+        ENGINE["Dream Engine"]
+        P1["Phase 1: Consolidation"]
+        P2["Phase 2: Insight Extraction"]
+        P3["Phase 3: Skill Refinement"]
+        P4["Phase 4: Scenario Rehearsal"]
+        JOURNAL["Dream Journal (vault/dreams/)"]
+    end
+
+    subgraph "Shared State"
+        VAULT["Vault + Memory"]
+        SKILLS["Skills"]
+        SESSIONS["Sessions DB"]
+    end
+
+    subgraph "UI"
+        DVIEW["Dream View (Status / Journal / Suggestions / History)"]
+    end
+
+    SCHED --> ENGINE
+    ENGINE --> P1 --> P2 --> P3 --> P4
+    P1 & P2 & P3 & P4 --> JOURNAL
+    P1 --> VAULT
+    P2 --> VAULT
+    P3 --> SKILLS
+    P4 --> VAULT
+    ENGINE --> SESSIONS
+    ENGINE --> DVIEW
+```
+
+**Four-phase cycle** (progressive depth):
+
+| Phase | Depth | What it does |
+|---|---|---|
+| **Consolidation** | light (always) | Reads memory notes + recent vault files, deduplicates, resolves contradictions, converts relative dates |
+| **Insight Extraction** | medium+ | Analyzes cross-session patterns, recurring themes, user preferences → writes insight notes |
+| **Skill Refinement** | deep | Identifies repeated multi-step workflows not covered by existing skills → drafts skill suggestions |
+| **Scenario Rehearsal** | deep | Pre-computes context for likely future tasks → caches speculative notes (24h expiry) |
+
+**Key safety mechanisms:**
+
+- **Concurrency lock** — only one dream runs at a time.
+- **Token budget** — daily spend limit with graceful degradation (phases skip as budget depletes).
+- **Guard rails** — all writes go through existing vault + skill guard infrastructure.
+- **Skill suggestions** — staged for user review, not auto-created.
+- **Kill switch** — hard timeout via `max_duration_seconds`.
+
+**Dream Journal:** every run writes a structured entry to `vault/dreams/YYYY-MM-DD.md` with phases run, token spend, duration, and results.
+
+**Prompt builder integration:** `_memory_summary()` includes "Recent Dream Insights" so the waking agent naturally references dream output.
+
 ### Human-in-the-Loop (HITL)
 
 Two SSE channels per session:
@@ -767,6 +827,7 @@ nexus/
 │       ├── local_llm/                  # llama.cpp lifecycle, HF search, downloads
 │       ├── heartbeat_drivers/
 │       │   └── calendar_trigger/       # Vault calendar event firing
+│       ├── dream/                      # Dream system (engine, consolidation, insight, skill_refine, rehearse, journal, state)
 │       ├── calendar_runtime.py
 │       ├── agent/
 │       │   ├── loop/                   # Façade over loom.loop.Agent
@@ -790,6 +851,7 @@ nexus/
 │       │       ├── providers.py / models.py / config.py / settings.py
 │       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
 │       │       ├── insights.py / graph.py
+│       │       ├── dream.py                 # Dream status, trigger, journal, suggestions
 │       ├── skills/                     # SkillRegistry + SkillManager + guard
 │       ├── tools/                      # vault, kanban, kanban_query, calendar, datatable, csv,
 │       │                               # visualize, dispatch_card, ontology, memory, http, acp
@@ -815,6 +877,7 @@ nexus/
 │           ├── CalendarView/                # MonthGrid + WeekGrid + RepeatPicker + EventModal
 │           ├── GraphView.tsx + AgentGraphView.tsx + SubgraphCanvas3D.tsx
 │           ├── InsightsView.tsx
+│           ├── DreamView/                     # Dream status, journal, suggestions, run history
 │           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid
 │           ├── BrandMark.tsx + SplashScreen.tsx
 │           ├── SettingsDrawer.tsx
@@ -1087,6 +1150,7 @@ nexus sessions list | show <id> | export <id> | import <path> | edit <id> | stat
 nexus vault     ls | search <q> | reindex | tags | backlinks <path>
 nexus kanban    boards | list [--board default]
 nexus insights  [--days 30] [--json]
+nexus dream     [--depth light|medium|deep]     # Manual dream trigger
 nexus backup    create [--out <path>] | restore <path>
 ```
 
@@ -1214,6 +1278,19 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/routing` | GET / PUT | Routing config |
 | `/settings` | GET / POST | YOLO mode + preferences |
 
+### Dream
+
+| Route | Method | Description |
+|---|---|---|
+| `/dream/status` | GET | Enabled state, running flag, last run, budget |
+| `/dream/trigger` | POST | Manual dream trigger (`?depth=light\|medium\|deep`) |
+| `/dream/journal` | GET | List journal entries |
+| `/dream/journal/{date}` | GET | Read journal entry |
+| `/dream/suggestions` | GET | List staged skill suggestions |
+| `/dream/suggestions/{filename}/accept` | POST | Accept suggestion (creates skill) |
+| `/dream/suggestions/{filename}` | DELETE | Dismiss suggestion |
+| `/dream/runs` | GET | Run history |
+
 ### Misc
 
 | Route | Method | Description |
@@ -1296,6 +1373,18 @@ max_content_bytes = 102400
 # into a private git work-tree at ~/.nexus/.vault-history.
 [vault.history]
 enabled = false
+
+# Dream system — scheduled background agent for memory consolidation,
+# insight extraction, skill refinement, and scenario rehearsal.
+# Disabled by default; flip to true to enable.
+[dream]
+enabled = true
+schedule_cron = "0 3 * * *"          # 3 AM daily
+model_id = ""                         # blank = use default model
+context_budget_tokens = 8000          # max input context per phase
+max_output_tokens = 4000              # max dream output per phase
+max_duration_seconds = 300            # hard timeout per run
+daily_token_budget = 500000           # cumulative token spend limit
 ```
 
 ### Environment Variable Override
@@ -1323,6 +1412,7 @@ export NEXUS_LLM_MODEL="gpt-4o"
 ├── .vault-history/      # Git work-tree of vault mutations (only if [vault.history] enabled)
 ├── graphrag/            # Vault-wide GraphRAG store (entities + relations + embeddings)
 ├── skills/              # Agent skills
+├── dream_state.sqlite   # Dream run history, budget tracking, explored territory
 ├── local_llm/           # Downloaded GGUFs
 ├── push/                # VAPID keys + subscriptions
 ├── nexus-daemon.pid

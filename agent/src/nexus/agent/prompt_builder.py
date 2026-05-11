@@ -60,6 +60,28 @@ def _migrate_legacy_memory() -> None:
 
 _DATE_DIR_RE = re.compile(r"/\d{4}/\d{2}/\d{2}/")
 
+_DREAM_INSIGHTS_DIR = _MEMORY_DIR / "dream-insights"
+_DREAM_INSIGHTS_MAX = 3
+
+
+def _dream_insights_block() -> str:
+    if not _DREAM_INSIGHTS_DIR.exists():
+        return ""
+    files = sorted(_DREAM_INSIGHTS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = files[:_DREAM_INSIGHTS_MAX]
+    if not files:
+        return ""
+    lines = ["### Recent Dream Insights", ""]
+    for f in files:
+        content = f.read_text(encoding="utf-8")
+        body = content
+        if "---" in content:
+            parts = content.split("---", 2)
+            body = parts[2].strip() if len(parts) >= 3 else content
+        preview = body[:150].strip()
+        lines.append(f"- {preview}")
+    return "\n".join(lines)
+
 
 def _memory_summary() -> str:
     """Return a ## Memory block with previews of the most recently modified notes."""
@@ -81,6 +103,12 @@ def _memory_summary() -> str:
         lines.append(block)
         lines.append("")
         total += len(block)
+
+    dream_insights = _dream_insights_block()
+    if dream_insights and total + len(dream_insights) <= _MEMORY_MAX_TOTAL:
+        lines.append(dream_insights)
+        lines.append("")
+
     if len(lines) <= 2:
         return ""
     return "\n".join(lines)

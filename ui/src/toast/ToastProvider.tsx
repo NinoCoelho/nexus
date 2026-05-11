@@ -8,6 +8,7 @@
  * oldest is evicted when the limit is hit.
  */
 
+import React from "react";
 import {
   createContext,
   useCallback,
@@ -59,6 +60,8 @@ export interface ToastAPI {
 
 const DEFAULT_DURATION = 4000;
 const MAX_TOASTS = 5;
+
+const _stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -134,6 +137,7 @@ interface ToastCardProps {
 }
 
 function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardProps) {
+  const lines = toast.message.split(/(?<=\.)\s+/);
   return (
     <div
       role="status"
@@ -146,7 +150,14 @@ function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardPr
         <KindIcon kind={toast.kind} />
       </span>
       <div className="toast-body">
-        <span className="toast-message">{toast.message}</span>
+        <span className="toast-message">
+          {lines.map((line, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <br />}
+              {line}
+            </React.Fragment>
+          ))}
+        </span>
         {toast.detail && <span className="toast-detail">{toast.detail}</span>}
       </div>
       {toast.action && (
@@ -206,11 +217,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const show = useCallback((kind: ToastKind, message: string, opts: ToastOptions = {}): string => {
     const id = nextId();
     const duration = opts.duration ?? DEFAULT_DURATION;
+    const clean = _stripHtml(message);
     const newToast: Toast = {
       id,
       kind,
-      message,
-      detail: opts.detail,
+      message: clean,
+      detail: opts.detail ? _stripHtml(opts.detail) : opts.detail,
       duration,
       action: opts.action,
       exiting: false,

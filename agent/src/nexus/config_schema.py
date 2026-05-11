@@ -273,6 +273,18 @@ class LocationConfig(BaseModel):
     disabled: bool = False
 
 
+class DreamConfig(BaseModel):
+    enabled: bool = True
+    schedule_cron: str = "0 3 * * *"
+    min_sessions_since_last: int = 5
+    model_id: str = ""
+    context_budget_tokens: int = 8000
+    max_output_tokens: int = 4000
+    max_duration_seconds: int = 300
+    daily_token_budget: int = 500000
+    write_mode: Literal["direct", "stage"] = "direct"
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -286,6 +298,7 @@ class NexusConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     nexus_account: NexusAccountConfig = Field(default_factory=NexusAccountConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
+    dream: DreamConfig = Field(default_factory=DreamConfig)
 
 
 # Fresh install starts with providers configured but NO models.

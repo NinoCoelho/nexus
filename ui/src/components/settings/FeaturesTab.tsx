@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type KnowledgeStats, type Model } from "../../api";
+import CookiesSection from "./CookiesSection";
 import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
@@ -145,6 +146,8 @@ export default function FeaturesTab({ graphStats, models }: Props) {
       </SettingsSection>
 
       <SharingSection />
+
+      <CookiesSection />
 
       <ReindexModal open={reindexOpen} onClose={() => setReindexOpen(false)} />
     </>

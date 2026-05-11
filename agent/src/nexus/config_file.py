@@ -35,6 +35,7 @@ from .config_schema import (  # noqa: F401
     VaultConfig,
     UIConfig,
     LocationConfig,
+    DreamConfig,
     NexusAccountConfig,
     NexusConfig,
     default_config,
@@ -173,6 +174,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "lon": cfg.location.lon,
             "disabled": cfg.location.disabled,
         },
+        "dream": cfg.dream.model_dump(),
     }
     for m in cfg.models:
         md: dict[str, Any] = {
@@ -338,11 +340,12 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     ui = UIConfig(**ui_raw)
     nexus_account = NexusAccountConfig(**dict(raw.get("nexus_account", {})))
     location = LocationConfig(**dict(raw.get("location", {})))
+    dream = DreamConfig(**dict(raw.get("dream", {})))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
-        nexus_account=nexus_account, location=location,
+        nexus_account=nexus_account, location=location, dream=dream,
     )
 
 
