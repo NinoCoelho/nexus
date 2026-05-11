@@ -92,7 +92,6 @@ def build_tool_registry(
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
-    from nexus.tools.image_gen_tool import GENERATE_IMAGE_TOOL, handle_image_gen_tool
     from nexus.tools.ocr_tool import OCR_IMAGE_TOOL, handle_ocr_image_tool
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
@@ -262,12 +261,6 @@ def build_tool_registry(
         return handle_visualize_tool(args)
 
     registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
-
-    # generate_image — OpenAI gpt-image-1 + Gemini nano banana
-    async def _generate_image(args: dict) -> str:
-        return await handle_image_gen_tool(args)
-
-    registry.register(_SimpleToolHandler(GENERATE_IMAGE_TOOL, _generate_image))
 
     # ocr_image — extract text from a vault image / scanned PDF using the
     # engine declared under [ocr] in config.toml. Always advertised so
