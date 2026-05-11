@@ -7,9 +7,10 @@ All endpoint implementations live in ``server/routes/``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -267,12 +268,70 @@ def create_app(
         session_store=sessions,
         yolo_mode_getter=lambda: settings_store.get().yolo_mode,
     )
+
+    def _make_terminal_output_callback(
+        session_store: Any,
+        proc_registry: dict[str, asyncio.subprocess.Process],
+    ) -> Callable[[str, str], Awaitable[None]]:
+        async def _on_terminal_output(stdout: str, stderr: str) -> None:
+            session_id = CURRENT_SESSION_ID.get()
+            if session_id is None:
+                return
+            session_store.publish(
+                session_id,
+                SessionEvent(
+                    kind="terminal_output",
+                    data={
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "call_id": getattr(_on_terminal_output, "_call_id", ""),
+                    },
+                ),
+            )
+        return _on_terminal_output
+
+    def _make_proc_register(
+        proc_registry: dict[str, asyncio.subprocess.Process],
+    ) -> Callable[[asyncio.subprocess.Process], None]:
+        def _register(proc: asyncio.subprocess.Process) -> None:
+            session_id = CURRENT_SESSION_ID.get() or ""
+            call_id = ""
+            handler = agent._terminal_handler
+            if handler is not None and hasattr(handler, "_on_output"):
+                cb = handler._on_output
+                call_id = getattr(cb, "_call_id", "")
+            if not call_id:
+                return
+            key = f"{session_id}:{call_id}"
+            proc_registry[key] = proc
+        return _register
+
+    def _make_proc_unregister(
+        proc_registry: dict[str, asyncio.subprocess.Process],
+    ) -> Callable[[], None]:
+        def _unregister() -> None:
+            session_id = CURRENT_SESSION_ID.get() or ""
+            call_id = ""
+            handler = agent._terminal_handler
+            if handler is not None and hasattr(handler, "_on_output"):
+                cb = handler._on_output
+                call_id = getattr(cb, "_call_id", "")
+            if not call_id:
+                return
+            proc_registry.pop(f"{session_id}:{call_id}", None)
+        return _unregister
+
     # Late-bind the handler onto the agent. Constructed-outside-the-app
     # callers (``main.py``) don't know about HITL; constructing the
     # handler here keeps all the server-side wiring in one place.
     # The terminal tool is loom-native (loom.tools.terminal.TerminalTool)
     # and reads its session id from the shared CURRENT_SESSION_ID ContextVar.
     from loom.tools.terminal import TerminalTool
+
+    # Process registry for live terminal monitoring / kill support.
+    # Keyed by "session_id:tool_call_id" so the kill endpoint and the
+    # streaming callback can locate the running subprocess.
+    _terminal_procs: dict[str, asyncio.subprocess.Process] = {}
 
     agent._ask_user_handler = ask_user_handler
     agent._terminal_handler = TerminalTool(
@@ -380,6 +439,28 @@ def create_app(
                     _local_mgr.cleanup_stale_config()
             except Exception:
                 log.exception("local_llm restart failed")
+
+        # ── OCR model migration + startup ──────────────────────────────────
+        # Migrate chandra from models/llm/ to ocr-model/ if it was installed
+        # before this refactor, then start the dedicated OCR server.
+        try:
+            from ..ocr_server import (
+                migrate_from_local_llm,
+                cleanup_config_entries,
+                download_if_missing,
+                start as ocr_start,
+            )
+
+            def _ocr_bootstrap() -> None:
+                migrated = migrate_from_local_llm()
+                if migrated:
+                    cleanup_config_entries()
+                download_if_missing()
+                ocr_start()
+
+            await asyncio.to_thread(_ocr_bootstrap)
+        except Exception:
+            log.exception("[ocr_server] bootstrap failed")
         # ── nexus status watcher ─────────────────────────────────────────────
         # Polls https://www.nexus-model.us/api/status with the user's stored
         # apiKey. On model-list changes we re-register provider models and
@@ -633,6 +714,11 @@ def create_app(
                 _local_mgr.stop_all()
             except Exception:
                 log.exception("local_llm stop_all failed")
+            try:
+                from ..ocr_server import stop as _ocr_stop
+                _ocr_stop()
+            except Exception:
+                log.exception("[ocr_server] stop failed")
             from ..agent.memory import close_memory_store
             close_memory_store()
             try:
@@ -663,6 +749,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -675,6 +762,7 @@ def create_app(
     app.state.mutable_state = mutable_state
     app.state.graphrag_cfg = graphrag_cfg
     app.state.ask_user_handler = ask_user_handler
+    app.state.terminal_procs = _terminal_procs
 
     from .kanban_queue import init_queue
     init_queue()

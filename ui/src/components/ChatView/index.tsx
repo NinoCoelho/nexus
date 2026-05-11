@@ -35,6 +35,8 @@ export interface TimelineStep {
   result_preview?: string;
   status?: "pending" | "done" | "error";
   text?: string;
+  live_output?: string;
+  call_id?: string;
 }
 
 export interface Message {

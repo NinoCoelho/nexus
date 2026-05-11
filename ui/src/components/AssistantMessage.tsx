@@ -220,7 +220,7 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
             </span>
           </div>
         )}
-        <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} />
+        <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} sessionId={sessionId} />
         <div className="asst-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

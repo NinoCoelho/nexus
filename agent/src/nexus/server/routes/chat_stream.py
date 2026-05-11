@@ -399,6 +399,8 @@ async def chat_stream_route(
                         payload["args"] = event["args"]
                     if "result_preview" in event:
                         payload["result_preview"] = event["result_preview"]
+                    if "call_id" in event:
+                        payload["call_id"] = event["call_id"]
                     # Keep a running tool trace so a mid-turn abort still
                     # leaves badges in persisted history.
                     if etype == "tool_exec_start":

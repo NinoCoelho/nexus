@@ -76,7 +76,7 @@ export function applyThinkingEvent(
 export function applyToolEvent(
   setChatStates: SetChatStates,
   key: string,
-  event: { name: string; args?: unknown; result_preview?: string | null },
+  event: { name: string; args?: unknown; result_preview?: string | null; call_id?: string },
 ) {
   setChatStates((prev) => {
     const next = new Map(prev);
@@ -115,7 +115,7 @@ export function applyToolEvent(
         tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, result: event.result_preview, result_preview: typeof event.result_preview === "string" ? event.result_preview : undefined, status: "done" });
       }
     } else {
-      tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, status: "pending" });
+      tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, status: "pending", call_id: event.call_id });
       sounds.agentStep();
     }
     // A tool event means a fresh LLM iteration produced output — clear

@@ -530,6 +530,28 @@ async def chat_cancel(
     return {"ok": True, "cancelled": cancelled}
 
 
+@router.post("/chat/{session_id}/terminal/{call_id}/kill")
+async def kill_terminal(
+    session_id: str,
+    call_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    from loom.tools.terminal import kill_proc_group
+
+    proc_registry: dict[str, asyncio.subprocess.Process] | None = getattr(
+        request.app.state, "terminal_procs", None
+    )
+    if proc_registry is None:
+        raise HTTPException(status_code=404, detail="no terminal registry")
+    key = f"{session_id}:{call_id}"
+    proc = proc_registry.get(key)
+    if proc is None:
+        raise HTTPException(status_code=404, detail="no running terminal process")
+    kill_proc_group(proc)
+    proc_registry.pop(key, None)
+    return {"ok": True}
+
+
 @router.get("/chat/{session_id}/events")
 async def chat_events(session_id: str, store: SessionStore = Depends(get_sessions)) -> StreamingResponse:
     """SSE stream of in-turn events for one session. The UI opens

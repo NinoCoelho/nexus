@@ -11,6 +11,7 @@ import React, { useState } from "react";
 import type { TraceEvent } from "../api";
 import type { TimelineStep } from "./ChatView";
 import StepDetailModal from "./StepDetailModal";
+import TerminalLiveModal from "./TerminalLiveModal";
 import "./ActivityTimeline.css";
 
 const SKIP_TOOLS = new Set(["_meta", "iter", "reply"]);
@@ -191,10 +192,12 @@ interface Props {
   steps?: TimelineStep[];
   trace?: TraceEvent[];
   streaming: boolean;
+  sessionId?: string | null;
 }
 
-export default function ActivityTimeline({ steps, trace, streaming }: Props) {
+export default function ActivityTimeline({ steps, trace, streaming, sessionId }: Props) {
   const [activeGroup, setActiveGroup] = useState<CoalescedStep | null>(null);
+  const [liveTerminal, setLiveTerminal] = useState<TimelineStep | null>(null);
 
   if (!steps || steps.length === 0) return null;
 
@@ -255,12 +258,17 @@ export default function ActivityTimeline({ steps, trace, streaming }: Props) {
             ? `${label} ×${count}${group.sub ? ` · ${group.sub}` : ""}`
             : `${label}${group.sub ? ` · ${group.sub}` : ""}`;
 
+          const isLiveTerminal = group.tool === "terminal" && group.status === "pending" && !!streaming;
+          const handleClick = isLiveTerminal && group.steps[0]
+            ? () => setLiveTerminal(group.steps[0])
+            : () => setActiveGroup(group);
+
           return (
             <React.Fragment key={`g-${idx}`}>
               {idx > 0 && <div className="at-line" />}
               <button
                 className={`at-badge ${statusClass}`}
-                onClick={() => setActiveGroup(group)}
+                onClick={handleClick}
                 title={tooltip}
                 type="button"
               >
@@ -277,6 +285,13 @@ export default function ActivityTimeline({ steps, trace, streaming }: Props) {
           group={activeGroup}
           trace={trace}
           onClose={() => setActiveGroup(null)}
+        />
+      )}
+      {liveTerminal && sessionId && (
+        <TerminalLiveModal
+          step={liveTerminal}
+          sessionId={sessionId}
+          onClose={() => setLiveTerminal(null)}
         />
       )}
     </>

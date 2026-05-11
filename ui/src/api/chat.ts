@@ -26,7 +26,7 @@ export interface ChatResponse {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; args?: unknown; result_preview?: string }
+  | { type: "tool"; name: string; args?: unknown; result_preview?: string; call_id?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
   | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
@@ -141,6 +141,7 @@ export async function chatStream(
             name: parsed.name as string,
             args: parsed.args,
             result_preview: parsed.result_preview as string | undefined,
+            call_id: parsed.call_id as string | undefined,
           });
         } else if (eventName === "done") {
           const usage = parsed.usage as Record<string, unknown> | undefined;
@@ -289,6 +290,7 @@ export type SessionEvent =
   | { kind: "tool_call"; data: { name: string; args: unknown } }
   | { kind: "tool_result"; data: { name: string; preview: string } }
   | { kind: "reply"; data: { text: string } }
+  | { kind: "terminal_output"; data: { stdout: string; stderr: string; call_id: string } }
   | { kind: "user_request"; data: UserRequestPayload }
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
@@ -341,6 +343,7 @@ export function subscribeSessionEvents(
     "tool_call",
     "tool_result",
     "reply",
+    "terminal_output",
     "user_request",
     "user_request_auto",
     "user_request_cancelled",
@@ -612,4 +615,15 @@ export async function respondToUserRequest(
     return;
   }
   throw new Error(`Respond error: ${res.status}`);
+}
+
+export async function killTerminalProc(
+  session_id: string,
+  call_id: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/terminal/${encodeURIComponent(call_id)}/kill`,
+    { method: "POST" },
+  );
+  return res.json();
 }

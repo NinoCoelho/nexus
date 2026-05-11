@@ -634,6 +634,12 @@ class Agent:
                         )
                     except Exception:  # noqa: BLE001
                         log.exception("set_pending_tool_call failed")
+                # Stash the call_id on the terminal output callback so the
+                # process registry can key by it and the SSE event carries it.
+                if tool_name == "terminal" and self._handlers is not None:
+                    th = self._handlers.terminal
+                    if th is not None and hasattr(th, "_on_output") and th._on_output is not None:
+                        th._on_output._call_id = tool_call_id
                 # Mirror to the trace bus so off-stream subscribers see
                 # tool steps live, not only on turn completion.
                 self._on_event("tool_call", {"name": tool_name, "args": tool_args})
@@ -641,6 +647,7 @@ class Agent:
                     "type": "tool_exec_start",
                     "name": tool_name,
                     "args": tool_args,
+                    "call_id": tool_call_id,
                 }
 
             elif etype == "tool_exec_result":
