@@ -177,6 +177,9 @@ async def chat_stream_route(
                 if entry.id == effective_model or entry.model_name == effective_model:
                     ctx_window = int(entry.context_window or 0)
                     break
+            if ctx_window == 0:
+                from ...agent.loop.overflow import known_context_window as _kcw
+                ctx_window = _kcw(effective_model)
             if ctx_window > 0 and pre_turn_history:
                 history_tokens = _est_tok(pre_turn_history)
                 incoming_tokens = _est_tok([

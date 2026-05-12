@@ -11,33 +11,24 @@ gracefully — no engine configured / dep not installed / engine raised →
 returns an empty :class:`OcrResult` and the tool surfaces a helpful
 "configure the Vision role" error instead of crashing.
 
-Engines:
+Resolution order:
 
-* ``llm`` — talks to a vision-capable OpenAI-compatible endpoint (the
-  recommended path for ``datalab-to/chandra-ocr-2`` served behind
-  llama.cpp / vLLM / LM Studio / HF Inference Endpoints). Reuses
-  ``[providers.<id>]`` credentials. No new Python deps in the agent
-  process.
-* ``rapidocr`` — pure-Python ONNX runtime. Install with
-  ``uv sync --extra ocr``.
-* ``tesseract`` — system ``tesseract`` binary via ``pytesseract``.
+1. **External vision model** (``cfg.agent.vision_model`` set by user in
+   Settings) — any cloud or local model with vision capability.
+2. **Bundled OCR server** — a dedicated chandra-ocr-2 llama-server
+   managed by ``ocr_server.py``, auto-downloaded on first use. Invisible
+   to the model picker and provider registry.
+3. **rapidocr** — pure-Python ONNX runtime. Install with
+   ``uv sync --extra ocr``.
+4. **tesseract** — system ``tesseract`` binary via ``pytesseract``.
 
-Routing: the user marks one ``[[models]]`` entry as the **vision** role
-through the settings UI (the same place ``default`` / ``embedding`` /
-``extraction`` are picked). That writes ``agent.vision_model`` in
-``config.toml``; ``ocr.py`` resolves it to ``(provider, model_name)`` at
-call time. Empty = no model wired up; OCR is then either disabled or
-served by an explicit ``[ocr] engine`` override.
+An explicit ``[ocr] engine`` in config.toml overrides the auto-routing
+above (useful for power users who want rapidocr/tesseract exclusively).
 
-Example config (after picking the model in Settings → Models →
-"Vision")::
+Example config::
 
-    [agent]
-    vision_model = "local-chandra-ocr-2/chandra-ocr-2"
-
-    [ocr]                     # (optional) overrides — the role pick alone
-                              # is enough when you only want LLM-based OCR.
-    engine = ""               # "" = use the vision-role model.
+    [ocr]                     # (optional) overrides.
+    engine = ""               # "" = auto (bundled chandra or external vision model).
                               # "rapidocr" / "tesseract" force a local engine.
     fallback = ""             # used when primary fails
     timeout_seconds = 120
@@ -125,23 +116,32 @@ def _resolve_vision_model() -> tuple[str, str] | None:
 
 
 def is_configured() -> bool:
-    """True when OCR can run — either an explicit ``[ocr] engine`` is set
-    OR a model has been picked as the ``vision`` role.
+    """True when OCR can run — any of:
+
+    * explicit ``[ocr] engine`` is set
+    * a model has been picked as the ``vision`` role (external)
+    * the bundled OCR server is installed
     """
     if (_read_ocr_section().get("engine") or "").strip():
         return True
-    return _resolve_vision_model() is not None
+    if _resolve_vision_model() is not None:
+        return True
+    from . import ocr_server
+    return ocr_server.is_installed()
 
 
 def configured_engine() -> str:
     """Effective engine name. Returns ``[ocr] engine`` when explicit,
-    ``"llm"`` when a vision-role model auto-routes, or ``""`` when
-    nothing is configured.
+    ``"llm"`` when an external vision-role model or the bundled OCR
+    server is available, or ``""`` when nothing is configured.
     """
     explicit = (_read_ocr_section().get("engine") or "").strip().lower()
     if explicit:
         return explicit
     if _resolve_vision_model() is not None:
+        return "llm"
+    from . import ocr_server
+    if ocr_server.is_installed():
         return "llm"
     return ""
 
@@ -159,11 +159,12 @@ async def ocr_image(data: bytes, mime: str) -> OcrResult:
     section = _read_ocr_section()
     primary = (section.get("engine") or "").strip().lower()
     fallback = (section.get("fallback") or "").strip().lower()
-    # When the user hasn't set [ocr] engine but picked a vision-role
-    # model in the UI, auto-route to the LLM engine — the model is
-    # resolved in _ocr_via_llm.
     if not primary and _resolve_vision_model() is not None:
         primary = "llm"
+    if not primary:
+        from . import ocr_server
+        if ocr_server.is_installed():
+            primary = "llm"
 
     seen: set[str] = set()
     for engine in (primary, fallback):
@@ -200,29 +201,84 @@ async def _dispatch(
 async def _ocr_via_llm(data: bytes, mime: str, section: dict[str, Any]) -> str:
     """Call a vision LLM over OpenAI-compat chat/completions.
 
-    Resolves the provider's credentials via the same precedence the LLM
-    provider registry uses (``credential_ref`` → ``use_inline_key`` →
-    ``api_key_env``). The chandra path runs vLLM with ``--api-key`` empty
-    or anonymous, so a missing key is fine.
+    Resolution order:
+    1. External vision model (``cfg.agent.vision_model``) via provider registry.
+    2. Bundled OCR server (``ocr_server``) — auto-managed chandra-ocr-2.
     """
+    import httpx as _httpx
+
+    prompt = (section.get("prompt") or _DEFAULT_PROMPT).strip()
+    timeout = float(section.get("timeout_seconds") or 120.0)
+
+    resolved = _resolve_vision_model()
+    if resolved is not None:
+        provider_id, model = resolved
+        return await _call_external_llm(
+            data, mime, prompt, timeout, provider_id, model, section,
+        )
+
+    from . import ocr_server
+    url = ocr_server.base_url()
+    if url is None:
+        if ocr_server.is_installed():
+            ocr_server.start()
+            url = ocr_server.base_url()
+        if url is None:
+            log.warning("ocr.llm: no vision model or bundled OCR server available")
+            return ""
+
+    b64 = base64.b64encode(data).decode("ascii")
+    payload = {
+        "model": "chandra-ocr-2",
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime or 'image/png'};base64,{b64}"
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+
+    async with _httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            f"{url}/chat/completions", json=payload, headers=headers
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    choice = (body.get("choices") or [{}])[0]
+    content = (choice.get("message") or {}).get("content") or ""
+    if isinstance(content, list):
+        content = "".join(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+        )
+    return str(content).strip()
+
+
+async def _call_external_llm(
+    data: bytes,
+    mime: str,
+    prompt: str,
+    timeout: float,
+    provider_id: str,
+    model: str,
+    section: dict[str, Any],
+) -> str:
+    """Call an externally configured vision model via the provider registry."""
     import os as _os
 
     import httpx as _httpx
 
     from . import secrets as _secrets
     from .config_file import load as load_config
-
-    prompt = (section.get("prompt") or _DEFAULT_PROMPT).strip()
-    timeout = float(section.get("timeout_seconds") or 120.0)
-
-    resolved = _resolve_vision_model()
-    if resolved is None:
-        log.warning(
-            "ocr.llm: no model configured. Pick a model as the "
-            '"Vision" role in Settings → Models.'
-        )
-        return ""
-    provider_id, model = resolved
 
     cfg = load_config()
     pcfg = cfg.providers.get(provider_id)
@@ -274,7 +330,6 @@ async def _ocr_via_llm(data: bytes, mime: str, section: dict[str, Any]) -> str:
     choice = (body.get("choices") or [{}])[0]
     content = (choice.get("message") or {}).get("content") or ""
     if isinstance(content, list):
-        # Some providers return multipart content even for text replies.
         content = "".join(
             p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
         )

@@ -181,32 +181,18 @@ async def start_model(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
+    try:
+        from ...ocr_server import pause as _ocr_pause
+        _ocr_pause()
+    except Exception:
+        pass
+
     model_id = manager.add_to_config(
         handle.slug, handle.port,
         is_embedding=handle.is_embedding,
         is_vision=handle.is_vision,
         context_window=ctx_size,
     )
-
-    # Auto-mark as the Vision role when a vision-capable local model
-    # comes up and the user hasn't picked one yet — chat-side OCR via
-    # ocr_image then "just works" without a manual click.
-    try:
-        from ...config_file import load as load_cfg, save as save_cfg
-
-        cfg = load_cfg()
-        if (
-            handle.is_vision
-            and not handle.is_embedding
-            and not (cfg.agent.vision_model or "").strip()
-        ):
-            cfg.agent.vision_model = model_id
-            save_cfg(cfg)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning(
-            "auto-mark Vision after start failed", exc_info=True,
-        )
 
     try:
         from ...config_file import load as load_cfg
@@ -235,6 +221,12 @@ async def stop_model(
     slug = manager.slugify(Path(body.filename).stem)
     manager.stop(body.filename)
     manager.remove_from_config(slug)
+
+    try:
+        from ...ocr_server import resume as _ocr_resume
+        _ocr_resume()
+    except Exception:
+        pass
 
     try:
         from ...config_file import load as load_cfg

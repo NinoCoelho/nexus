@@ -106,8 +106,8 @@ async def run_insight_extraction(
         return InsightResult(errors=["LLM call failed"])
 
     raw = response.content.strip()
-    tokens_in = getattr(response, "input_tokens", 0) or 0
-    tokens_out = getattr(response, "output_tokens", 0) or 0
+    tokens_in = response.usage.input_tokens
+    tokens_out = response.usage.output_tokens
     parsed = _extract_json(raw)
     if parsed is None:
         log.warning("dream/insight: failed to parse LLM output as JSON")
@@ -128,7 +128,7 @@ async def run_insight_extraction(
             continue
 
         content_hash = _hash_insight(title, body)
-        if state_store.has_explored(content_hash):
+        if _insight_exists(title):
             log.debug("dream/insight: skipping duplicate insight '%s'", title)
             continue
 
@@ -278,8 +278,14 @@ def _hash_insight(title: str, body: str) -> str:
 def _extract_json(text: str) -> dict[str, Any] | None:
     if not text:
         return None
-    fence = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
-    candidate = fence.group(1) if fence else text
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        first_nl = candidate.find("\n")
+        if first_nl >= 0:
+            candidate = candidate[first_nl + 1:]
+        last_fence = candidate.rfind("```")
+        if last_fence > 0:
+            candidate = candidate[:last_fence]
     candidate = candidate.strip()
     if not candidate:
         return None

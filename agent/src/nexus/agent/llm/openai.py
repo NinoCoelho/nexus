@@ -203,7 +203,7 @@ class OpenAIProvider(LLMProvider):
         base_url: str,
         auth: AuthStrategy,
         model: str = "",
-        read_timeout: float | None = None,
+         read_timeout: float | None = 600,
         temperature: float = 0.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
@@ -224,11 +224,11 @@ class OpenAIProvider(LLMProvider):
         self._strict_compat = any(h in self._base_url for h in self._STRICT_COMPAT_HOSTS)
         # Local reasoning models (GLM-4.7-flash, DeepSeek-R1, Qwen-QwQ, …) can
         # spend many minutes on the chain-of-thought before emitting any
-        # `delta.content`. A 120s read timeout truncates them mid-thought; we
-        # keep the connect timeout tight but let the read side run unbounded
-        # by default. Callers that issue non-streaming batch requests
-        # (e.g. GraphRAG extraction) should pass an explicit ``read_timeout``
-        # to bound a hung Ollama from blocking the event loop indefinitely.
+        # `delta.content`. A 120s read timeout truncates them mid-thought; the
+        # default of 600s (10 min) is generous enough for extended reasoning
+        # while still preventing a hung provider from freezing the daemon
+        # indefinitely. Pass a lower ``read_timeout`` for batch callers
+        # (e.g. GraphRAG extraction).
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=60.0, pool=10.0)
         )

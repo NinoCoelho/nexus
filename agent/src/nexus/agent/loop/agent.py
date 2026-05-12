@@ -206,13 +206,14 @@ class Agent:
 
     def _context_window_for(self, model_id: str | None) -> int:
         cfg = self._nexus_cfg
-        if cfg and model_id:
+        resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)
+        if cfg and resolved:
             for m in getattr(cfg, "models", []) or []:
-                if getattr(m, "id", None) == model_id:
+                if getattr(m, "id", None) == resolved:
                     cw = int(getattr(m, "context_window", 0) or 0)
                     if cw > 0:
                         return cw
-            fallback = known_context_window(model_id)
+            fallback = known_context_window(resolved)
             if fallback > 0:
                 return fallback
         return 0

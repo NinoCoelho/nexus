@@ -18,6 +18,33 @@ description: Use this whenever you need to create HTML-based video compositions 
 - **Not a replacement for FFmpeg post-processing.** Use `silence-cutter`, `audio-polish`, `video-zoom`, `music-selector` for those steps.
 - **Not for simple concat/trim.** Use FFmpeg directly for that.
 
+## MANDATORY RULES (violation = broken render)
+
+These rules are non-negotiable. Violating any one produces a silently broken render (blank frames, static output, missing content).
+
+1. **Every timed element MUST have `class="clip"`.** Any element with `data-start`/`data-duration` — `<video>`, `<audio>`, `<img>`, `<div>` — gets `class="clip"`. Without it, the Hyperframes runtime cannot manage element visibility. Elements will be always-visible or always-hidden, producing blank frames.
+
+2. **Register every timeline on `window.__timelines`.** After creating a GSAP timeline, you MUST register it:
+   ```js
+   window.__timelines = window.__timelines || {};
+   var tl = gsap.timeline({ paused: true });
+   // ... tweens ...
+   window.__timelines["YOUR-COMPOSITION-ID"] = tl;
+   ```
+   The key MUST exactly match the `data-composition-id` attribute on the root element. Mismatched keys = no animation = static output.
+
+3. **Always use `gsap.fromTo()`, never `gsap.from()` alone.** Hyperframes seeks to individual frames in any order. `gsap.from()` relies on the element's current CSS state during seek — which is unpredictable. `fromTo()` with explicit start AND end states is the only reliable method.
+
+4. **`<video>` must be `muted playsinline` with audio on a separate `<audio>` element.** Never put audio on a `<video>` inside a Hyperframes composition.
+
+5. **Never animate `<video>` dimensions directly.** GSAP animating `width`, `height`, `top`, `left` on a `<video>` element causes browsers to stop rendering frames. Wrap the video in a `<div>` and animate the wrapper instead.
+
+6. **Never call `video.play()` / `audio.play()` / `audio.currentTime`.** The framework owns all media playback. It reads `data-start`, `data-media-start`, and `data-volume` to control when and how media plays.
+
+7. **No network fetches, no nondeterministic logic.** No `@import url()` for fonts, no `Math.random()`, no `Date.now()`, no `performance.now()`, no `setInterval`/`setTimeout`. Same input must produce identical output every render.
+
+8. **Run `npm run check` after every edit.** This runs lint + validate + inspect. It catches missing `class="clip"`, timeline registration errors, duplicate IDs, and timing conflicts. Never skip this step.
+
 ## Prerequisites
 
 - Node.js >= 22
@@ -62,51 +89,111 @@ Then use `video-dense.mp4` in the composition. Skip this step only for sources a
 Compositions are plain HTML with `data-` attributes. No React, no build step.
 
 ```html
-<div id="root" data-composition-id="demo"
-     data-start="0" data-width="1920" data-height="1080">
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080">
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 1920px; height: 1080px;
+      overflow: hidden; background: #000;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"
+       data-composition-id="demo"
+       data-start="0"
+       data-duration="5"
+       data-width="1920"
+       data-height="1080">
 
-  <video id="clip-1" data-start="0" data-duration="5"
-         data-track-index="0" src="intro-dense.mp4" muted playsinline></video>
+    <video id="clip-1" class="clip"
+           data-start="0" data-duration="5" data-track-index="0"
+           src="intro-dense.mp4" muted playsinline></video>
 
-  <h1 id="title" class="clip"
-      data-start="1" data-duration="4" data-track-index="1"
-      style="font-size: 72px; color: white;">
-    Welcome to Hyperframes
-  </h1>
+    <h1 id="title" class="clip"
+        data-start="1" data-duration="4" data-track-index="1"
+        style="position:absolute; top:400px; left:0; width:1920px;
+               text-align:center; font-size:72px; color:white;">
+      Welcome to Hyperframes
+    </h1>
 
-  <audio id="bg-music" data-start="0" data-duration="5"
-         data-track-index="2" data-volume="0.5" src="music.wav"></audio>
-</div>
+    <audio id="bg-music" class="clip"
+           data-start="0" data-duration="5" data-track-index="2"
+           data-volume="0.5" src="music.wav"></audio>
+  </div>
+
+  <script>
+    window.__timelines = window.__timelines || {};
+    var tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#title",
+      { opacity: 0, y: 50 },
+      { opacity: 1, y: 0, duration: 1, ease: "power2.out" },
+      1
+    );
+
+    window.__timelines["demo"] = tl;
+  </script>
+</body>
+</html>
 ```
 
 Key data attributes:
-- `data-composition-id` — unique ID for the composition
-- `data-start` — start time in seconds
-- `data-duration` — duration in seconds
-- `data-track-index` — layer ordering (higher = on top)
+- `data-composition-id` — unique ID for the composition (used as `window.__timelines` key)
+- `data-start` — start time in seconds (or a clip ID for relative timing: `"intro + 2"`)
+- `data-duration` — duration in seconds. Required on images/divs. Video/audio defaults to source duration.
+- `data-track-index` — layer ordering (higher = on top). Same-track clips cannot overlap.
 - `data-volume` — audio volume (0-1)
 
-### 5. Add animations with GSAP
+### 5. Timeline registration and duration
 
-Hyperframes uses GSAP for seekable, frame-accurate animations. Register timelines so the engine can seek to any frame:
+**Timeline registration is mandatory.** The Hyperframes engine reads `window.__timelines` to find animations. Without it, the composition renders as a static frame.
 
-```html
-<script>
-  gsap.timeline({ paused: true })
-    .from("#title", { opacity: 0, y: 50, duration: 1 })
-    .to("#title", { opacity: 1, y: 0, duration: 1 });
-</script>
+```js
+// 1. Create a paused timeline
+var tl = gsap.timeline({ paused: true });
+
+// 2. Add tweens using the position parameter (3rd arg) for absolute timing
+tl.fromTo("#el", { opacity: 0 }, { opacity: 1, duration: 0.5 }, 1.5);
+
+// 3. Register using the EXACT data-composition-id value
+window.__timelines = window.__timelines || {};
+window.__timelines["demo"] = tl;
 ```
 
-GSAP timelines are seekable (no wall-clock dependency) — every frame is independently captured. Same input = identical output.
+**Composition duration** equals the GSAP timeline duration. If your last animation ends at 8 seconds but a video plays for 60 seconds, the composition will only be 8 seconds long. Extend the timeline:
 
-### 6. Preview in browser
+```js
+// Extend timeline to 60 seconds without affecting any elements
+tl.set({}, {}, 60);
+```
+
+Alternatively, set `data-duration` on the root composition div — it takes precedence over timeline duration.
+
+### 6. ALWAYS lint after editing
+
+```bash
+npm run check
+```
+
+This runs `lint + validate + inspect`. Fix all errors before rendering. The linter catches:
+- Missing `class="clip"` on timed elements
+- Timeline key mismatches
+- Duplicate IDs
+- Overlapping clips on the same track
+
+### 7. Preview in browser
 
 ```bash
 npx hyperframes preview      # opens browser with live reload
 ```
 
-### 7. Render to MP4
+### 8. Render to MP4
 
 ```bash
 npx hyperframes render --output output.mp4
@@ -114,7 +201,7 @@ npx hyperframes render --output output.mp4
 
 Deterministic, frame-by-frame capture via headless Chrome + FFmpeg.
 
-### 8. Media preprocessing (built-in)
+### 9. Media preprocessing (built-in)
 
 Hyperframes CLI includes asset preprocessing — no external tools needed:
 
@@ -129,7 +216,7 @@ npx hyperframes transcribe --input video.mp4 --output transcript.json
 npx hyperframes remove-background --input image.png --output transparent.png
 ```
 
-### 9. Integration with HeyGen headshot pipeline
+### 10. Integration with HeyGen headshot pipeline
 
 Use Hyperframes to add overlays/transitions on top of HeyGen avatar videos:
 
@@ -160,12 +247,80 @@ heygen-headshot → raw avatar video (.mp4)
 In the composition HTML, reference the HeyGen output as a `<video>` source:
 
 ```html
-<video id="avatar" data-start="0" data-duration="60"
+<video id="avatar" class="clip" data-start="0" data-duration="60"
        data-track-index="0" src="headshot-polished.mp4" muted playsinline></video>
-<div id="lower-third" data-start="3" data-duration="5" data-track-index="1"
+<div id="lower-third" class="clip" data-start="3" data-duration="5" data-track-index="1"
      style="position: absolute; bottom: 20%; left: 5%; ...">
-  Speaker Name
+  Pastor Nino Coelho
 </div>
+```
+
+## Minimal composition template
+
+Copy-paste this as a starting point. It passes `npm run check` with zero errors.
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080">
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+    .scene {
+      position: absolute; top: 0; left: 0;
+      width: 1920px; height: 1080px; overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="main"
+       data-composition-id="main"
+       data-start="0"
+       data-duration="10"
+       data-width="1920"
+       data-height="1080">
+
+    <div id="s1" class="scene clip" data-start="0" data-duration="5" data-track-index="0">
+      <h1 id="s1-title" style="font-size:72px; color:#fff; text-align:center;
+         padding-top:400px;">Scene 1</h1>
+    </div>
+
+    <div id="s2" class="scene clip" data-start="5" data-duration="5" data-track-index="0"
+         style="opacity:0;">
+      <h1 id="s2-title" style="font-size:72px; color:#fff; text-align:center;
+         padding-top:400px;">Scene 2</h1>
+    </div>
+  </div>
+
+  <script>
+    window.__timelines = window.__timelines || {};
+    var tl = gsap.timeline({ paused: true });
+
+    // Scene 1 entrance
+    tl.fromTo("#s1-title",
+      { opacity: 0, y: 40 },
+      { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" },
+      0.2
+    );
+
+    // Scene 1 → Scene 2 transition
+    tl.to("#s1", { opacity: 0, duration: 0.5, ease: "power1.inOut" }, 4.5);
+    tl.fromTo("#s2", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.inOut" }, 4.5);
+
+    // Scene 2 entrance
+    tl.fromTo("#s2-title",
+      { opacity: 0, y: 40 },
+      { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" },
+      5.2
+    );
+
+    window.__timelines["main"] = tl;
+  </script>
+</body>
+</html>
 ```
 
 ## Prompting patterns for Hyperframes
@@ -182,9 +337,9 @@ over a dark background, warm amber accents, and subtle background music.
 ```
 
 ```
-Make a 45-second talking-head video (9:16) using /hyperframes, with:
+Make a 45-second pastoral talking-head video (9:16) using /hyperframes, with:
 - Base layer: polished headshot video
-- Hook text at 1s: key topic phrase (bouncy entrance)
+- Hook text at 1s: "LIDERANÇA SEM EGO" (bouncy entrance)
 - Lower third at 3s: speaker name + series title (slide from left)
 - Cinematic flash transition at 15s
 - Second hook: key phrase from the script
@@ -373,10 +528,10 @@ ffmpeg -y -i footage.mov \
 ### HTML overlay with screen blend
 
 ```html
-<div id="vt1" style="position:absolute;inset:0;z-index:45;opacity:0;
-     mix-blend-mode:screen;pointer-events:none">
-  <video data-start="3.3" data-duration="0.83" data-track-index="40"
-         src="assets/vtrans-burn.mp4" muted playsinline
+<div id="vt1" class="clip" style="position:absolute;inset:0;z-index:45;opacity:0;
+     mix-blend-mode:screen;pointer-events:none"
+     data-start="3.3" data-duration="0.83" data-track-index="40">
+  <video src="assets/vtrans-burn.mp4" muted playsinline
          style="width:1080px;height:1920px;object-fit:cover"></video>
 </div>
 ```
@@ -466,7 +621,6 @@ Reading time: career/experience cards with a paragraph need **4–5 seconds** ho
 
 ## Gotchas
 
-- **Use `fromTo()`, never `from()`.** Hyperframes seeks to individual frames in any order. `gsap.from()` relies on the element's CSS state at that moment — which may not be what you expect during seek. `fromTo()` with explicit start/end states is the only reliable method. Using `from()` will produce blank or invisible frames in the rendered output.
 - **Music fade requires FFmpeg post-processing.** GSAP `attr: { "data-volume": 0 }` does NOT work — Hyperframes reads `data-volume` as a static attribute per seek, not an animated property. Always use `ffmpeg -af "afade=t=out:st=X:d=Y"` after render.
 - **Dense keyframes required for video sources.** HeyGen output, screen recordings, and most downloaded videos have sparse keyframes (up to 10s apart). Hyperframes renders frame-by-frame and needs every frame seekable. **Always re-encode with `-g 30 -keyint_min 30`** before adding to a composition. Without this, you'll see frame freezing.
 - **Non-blocking 404s during render are harmless.** You'll see `[non-blocking] Failed to load resource: 404` — the engine probing for optional assets. Ignore them.

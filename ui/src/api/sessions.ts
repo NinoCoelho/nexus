@@ -176,14 +176,13 @@ export async function sessionToVault(
   return res.json();
 }
 
-export async function patchSession(id: string, patch: { title?: string }): Promise<SessionDetail> {
+export async function patchSession(id: string, patch: { title?: string }): Promise<void> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Session patch error: ${res.status}`);
-  return res.json();
 }
 
 export interface SessionUsage {

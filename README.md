@@ -164,12 +164,13 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Sub-Agent Fan-Out** | `spawn_subagents` runs N agent loops in parallel with fresh contexts; recursion is bounded |
 | **Persistent User Identity** | Loom `USER.md` is injected into the system prompt every turn; agent-edited via the `edit_profile` tool (permission-gated) |
 | **Chat Slash Commands** | `/compact`, `/clear`, `/title`, `/usage`, `/help` — local-only fast paths handled before the LLM call |
+| **Context Management** | Header dropdown showing live context usage (color-coded zone), token breakdown by role, per-tool stats, and three compaction strategies (auto / summarize / aggressive) |
 | **Output Token Caps** | Per-model `max_output_tokens` with `[agent].default_max_output_tokens` fallback |
 | **Multi-Provider LLMs** | Any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, Groq, vLLM) plus native Anthropic and local Ollama / llama.cpp |
 | **Bundled Local LLM** | Ship-and-run Qwen2.5-3B-Instruct via llama.cpp; UI for searching / downloading / activating Hugging Face GGUFs. Fresh installs (and the macOS `.app`) auto-seed a default demo model so the agent works out of the box |
 | **Reasoning Stream** | Streams `thinking` events from reasoning-capable models into a collapsible block above each assistant turn |
 | **Vault Knowledge Base** | Markdown files + FTS5 search + tag index + backlinks graph + GraphRAG semantic recall |
-| **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions) |
+| **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions). Configurable display settings (node size, link distance, particle speed, etc.) persisted in localStorage |
 | **Kanban Boards** | Vault-native (`kanban-plugin: basic`) — boards are markdown files; cards can dispatch chat sessions. Top-level **Kanban** view in the sidebar lists every board across the vault for fast switching |
 | **Calendar** | Vault-native iCal-style events with RRULE recurrence, MonthGrid + WeekGrid views, RepeatPicker |
 | **Calendar Triggers** | Heartbeat driver fires events on schedule into agent turns; supports single-shot and intra-day fire windows |
@@ -192,6 +193,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Docker Image** | Single multi-stage `Dockerfile` + `docker-compose.yml` — backend + bundled UI on one port, persistent state on a named volume, loopback auth model preserved via an internal `socat` proxy |
 | **Skills From Git** | `nexus skills install <git-url-or-path>` |
 | **ACP Bridge** | Optional Agent Communication Protocol over WebSocket with Ed25519 device auth |
+| **Cookie Export Extension** | Chrome extension exports browser cookies to Nexus for authenticated web scraping; `nexus cookies setup-chrome` installs the native messaging host |
 | **Dreaming** | Scheduled background agent consolidates memories, extracts insights, refines skills, rehearses scenarios. Four-phase cycle (consolidation → insight → skill refinement → rehearsal) with progressive depth, token budget, and a Dream Journal UI |
 
 ---
@@ -475,7 +477,7 @@ The vault is more than markdown — Nexus parses several frontmatter shapes to p
 
 | View | Frontmatter trigger | Notes |
 |---|---|---|
-| **Kanban** | `kanban-plugin: basic` | Obsidian-compatible. Lanes = `## H2`, cards = `### H3` with `<!-- nx:id=<uuid> -->`. Cards can dispatch chat sessions and link the session id back. |
+| **Kanban** | `kanban-plugin: basic` | Obsidian-compatible. Lanes = `## H2`, cards = `### H3` with `<!-- nx:id=<uuid> -->`. Cards can dispatch chat sessions and link the session id back. Right-click context menu: Open in chat, View Activity, Cancel/Retry, Move to lane submenu, Delete. |
 | **Calendar** | `nx-calendar: true` events under a calendar root | iCal RRULE recurrence; MonthGrid + WeekGrid; EventModal + RepeatPicker UI. |
 | **DataTable** | `nx-datatable: true` | DuckDB-backed CRUD with column types, filters, and inline cell editing. |
 | **CSV** | file extension `.csv` | First-class editor inside `VaultEditorPanel`. |
@@ -489,6 +491,16 @@ The `dispatch_card` and `kanban_query` tools let the agent operate on boards dir
 - **Single-shot**: `scheduled → triggered → done`. RRULE recurrences re-fire on each occurrence; only `cancelled` opts out. Per-occurrence dedup via a `fired_events` state map.
 - **Intra-day fire window**: `all_day=true` + `fire_from` + `fire_to` + `fire_every_min` repeats inside a local time window without flipping status.
 - Fired events flow through the same vault-dispatch pipeline as kanban cards, so the spawned session id is stamped back into the markdown atomically.
+
+#### Calendar Alarms
+
+When a calendar event's start time approaches, the system creates a ringing alarm persisted in `alarm_store.py` (SQLite-backed, per-occurrence). The UI receives `calendar_alarm` SSE events and renders a stack of alarm cards (`AlarmNotification.tsx`) with:
+
+- Event title, countdown timer (ticking live), start time, calendar name.
+- Overdue styling when countdown hits zero.
+- Actions: Snooze 5m / 15m, Open (navigate to calendar file), Dismiss.
+
+API endpoints for alarm management: `GET /vault/calendar/alarms`, `POST …/alarm/ack`, `POST …/alarm/snooze`.
 
 ### Dreaming (Background Agent)
 
@@ -702,6 +714,31 @@ State is **in-memory only**; restarting the daemon resets the tunnel to off, whi
 
 `POST /transcribe` accepts audio and returns text. The UI provides a live waveform + timer + cancel during recording. Backed by either a local model or a remote provider, configurable in Settings.
 
+### Voice Acknowledgments (Spoken Acks)
+
+When a voice message arrives, the server generates a short spoken acknowledgment (max 7 words) so the user gets instant audio feedback before the agent loop runs. When the agent finishes, a concise spoken summary (max 15 words) of the result is synthesized. Both are gated by `[tts].ack_enabled`.
+
+Audio is synthesized server-side through the bundled Piper engine; the event carries base64 WAV bytes that the UI decodes and plays. The ack uses a dedicated fast model (`[tts].ack_model`, falls back to the default model) to keep latency low. Language is auto-detected per utterance via `langdetect`, or overridden by `[tts].voice_language`.
+
+Two ack modes via `[tts].ack_mode`:
+- `"voice"` (default) — acks only fire on voice-input turns.
+- `"always"` — the agent speaks its completion summary on every turn, even keyboard input. Useful for hands-free / accessibility use.
+
+### Cookie Export Extension
+
+A Manifest V3 Chrome extension (`extension/`) exports browser cookies to the Nexus server for authenticated web scraping. The extension popup lists cookie domains with counts; the user selects domains and clicks "Export selected," which POSTs to `/cookies/import`. Cookies are stored in Netscape format at `~/.nexus/cookies/<domain>.cookies.txt` — the same format read by the Playwright-based web scraper.
+
+Port discovery is automatic: the extension tries native messaging first (`com.nexus.cookies`), then probes ports 18989–18999 for a `/health` response.
+
+Setup:
+
+```bash
+nexus cookies setup-chrome              # install native messaging host
+# Then: Chrome → chrome://extensions → Developer mode → Load unpacked → extension/
+```
+
+The Settings drawer also shows a Cookies section with domain summary, per-domain remove buttons, and setup instructions.
+
 ### Session Persistence & Sharing
 
 ```mermaid
@@ -782,6 +819,12 @@ graph TB
 
     CONTENT --> CHAT & VAULT & KANBAN & GRAPH & INSIGHTS & AGENTG
 
+    DREAM["DreamView (status / journal / suggestions / history)"]
+    ALARM["AlarmNotification (calendar alarm stack)"]
+    CTXDRP["ContextDropdown (zone gauge + strategies)"]
+
+    CONTENT --> DREAM & ALARM & CTXDRP
+
     SKILLD["SkillDrawer"]
     SETTD["SettingsDrawer (providers / models / advanced)"]
     APPROVE["ApprovalDialog (HITL)"]
@@ -802,7 +845,7 @@ Frontend design decisions:
 | **3D graph** | force-graph + custom physics; 2D fallback |
 | **Mobile** | Capacitor-friendly responsive layout; iOS Xcode project under `ui/ios/` |
 | **Splash** | `SplashScreen` + `BrandMark` shown on first load (one chime, sessionStorage-gated) |
-| **Theming** | Adaptive theme system with continuous brightness knob; tokens in `ui/src/tokens.css` |
+| **Theming** | Dark/light mode toggle + named themes (mermaidcore, neutrals, neon, biophilic); tokens in `ui/src/tokens.css` |
 
 ---
 
@@ -896,8 +939,12 @@ nexus/
 ├── docker-compose.yml                  # Single-service compose recipe
 ├── docker/entrypoint.sh                # socat → loopback uvicorn launcher
 ├── .dockerignore
+├── extension/                        # Chrome cookie export extension (Manifest V3)
+│   ├── manifest.json
+│   ├── popup.html / popup.js / popup.css
+│   └── native-host/                 # Native messaging host + manifest template
 ├── CLAUDE.md
-└── LICENSE                             # Apache 2.0
+└── LICENSE                             # BSL 1.1 (→ Apache 2.0 on 2030-05-04)
 ```
 
 ---
@@ -1139,6 +1186,7 @@ nexus config init | show | path
 nexus providers list | add <name> --base-url <url> [--key-env <VAR>] | remove <name>
 nexus models    list | add <id> --provider <p> --model <name> [--tags ...] | remove <id> | set-default <id>
 nexus skills    list | view <name> | install <git-url-or-path> | remove <name>
+nexus cookies   setup-chrome [--extension-id <id>]
 nexus version
 nexus doctor
 ```
@@ -1150,7 +1198,6 @@ nexus sessions list | show <id> | export <id> | import <path> | edit <id> | stat
 nexus vault     ls | search <q> | reindex | tags | backlinks <path>
 nexus kanban    boards | list [--board default]
 nexus insights  [--days 30] [--json]
-nexus dream     [--depth light|medium|deep]     # Manual dream trigger
 nexus backup    create [--out <path>] | restore <path>
 ```
 
@@ -1216,6 +1263,9 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/vault/backlinks` | GET | Backlinks |
 | `/vault/dispatch` | POST | Spawn session from file/card |
 | `/vault/calendar*` | GET / POST / PATCH / DELETE | Calendar events + RRULE + manual fire |
+| `/vault/calendar/alarms` | GET | List ringing alarms |
+| `/vault/calendar/events/{id}/alarm/ack` | POST | Acknowledge alarm |
+| `/vault/calendar/events/{id}/alarm/snooze` | POST | Snooze alarm (body: `{minutes: N}`) |
 | `/vault/csv*` | GET / POST / PATCH / DELETE | CSV editor |
 | `/vault/history/status` | GET | Git-backed history enabled? |
 | `/vault/history/enable` / `/disable` | POST | Toggle history layer (initializes `~/.nexus/.vault-history`) |
@@ -1253,6 +1303,14 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/local/download` / `/downloads` | POST / GET | Download mgmt |
 | `/local/activate` | POST | Set active model |
 | `/local/start` / `/local/stop` | POST | llama.cpp lifecycle |
+
+### Cookies
+
+| Route | Method | Description |
+|---|---|---|
+| `/cookies/import` | POST | Import cookies from browser extension |
+| `/cookies` | GET | List stored cookie domains |
+| `/cookies/{domain}` | DELETE | Remove cookies for a domain |
 
 ### Tunnel & Notifications
 
@@ -1385,6 +1443,15 @@ context_budget_tokens = 8000          # max input context per phase
 max_output_tokens = 4000              # max dream output per phase
 max_duration_seconds = 300            # hard timeout per run
 daily_token_budget = 500000           # cumulative token spend limit
+
+# Voice output (TTS via bundled Piper). Acks are spoken confirmations
+# for voice-input turns (start + completion).
+[tts]
+enabled = true                         # master switch; hides TTS buttons when false
+ack_enabled = true                     # spoken acks for voice turns
+ack_mode = "voice"                     # "voice" = only voice turns | "always" = every turn
+ack_model = ""                         # fast model for ack LLM calls (blank = default)
+voice_language = ""                    # override auto-detection (e.g. "pt", "en")
 ```
 
 ### Environment Variable Override
@@ -1415,6 +1482,9 @@ export NEXUS_LLM_MODEL="gpt-4o"
 ├── dream_state.sqlite   # Dream run history, budget tracking, explored territory
 ├── local_llm/           # Downloaded GGUFs
 ├── push/                # VAPID keys + subscriptions
+├── cookies/              # Exported browser cookies (Netscape format, per domain)
+├── native-host/          # Chrome native messaging host for cookie extension
+├── tts/                  # Downloaded Piper ONNX voice files
 ├── nexus-daemon.pid
 └── nexus-daemon.log
 ```
@@ -1425,20 +1495,11 @@ API keys are referenced by environment variable name (`api_key_env`), never stor
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+Licensed under the [Business Source License 1.1](LICENSE). The BSL permits non-production use, evaluation, and development. Production use that competes with the Licensor's own managed offering requires a commercial license. On the change date (2030-05-04) the license converts to Apache 2.0.
 
 ```
 Copyright 2024 Nino Coelho
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Business Source License 1.1
+See LICENSE for full terms.
 ```

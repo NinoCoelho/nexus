@@ -87,16 +87,4 @@ export const CATALOG: CatalogEntry[] = [
     repo_id: "unsloth/GLM-4.7-Flash-GGUF",
     filename: "GLM-4.7-Flash-Q4_K_M.gguf",
   },
-  {
-    id: "chandra-ocr-2",
-    title: "Chandra OCR",
-    description: "Reads text from screenshots, photos, and scanned PDFs.",
-    badges: ["OCR", "Vision"],
-    approx_size_gb: 5.5,
-    min_ram_gb: 12,
-    repo_id: "prithivMLmods/chandra-ocr-2-GGUF",
-    filename: "chandra-ocr-2.Q8_0.gguf",
-    mmproj_filename: "chandra-ocr-2.mmproj-q8_0.gguf",
-    role: "vision",
-  },
 ];
