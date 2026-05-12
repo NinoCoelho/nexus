@@ -48,8 +48,8 @@ KNOWN_WINDOWS: dict[str, int] = {
     "claude-3.5-sonnet": 200_000,
     "claude-3.7-sonnet": 200_000,
     "glm-4.7": 128_000,
-    "glm-5": 128_000,
-    "glm-5.1": 128_000,
+    "glm-5": 200_000,
+    "glm-5.1": 200_000,
     "deepseek-r1": 128_000,
     "deepseek-chat": 128_000,
     "nexus": 200_000,
@@ -60,7 +60,13 @@ def known_context_window(model: str) -> int:
     if not model:
         return 0
     name = model.split("/")[-1]
-    return KNOWN_WINDOWS.get(name, 0)
+    exact = KNOWN_WINDOWS.get(name, 0)
+    if exact:
+        return exact
+    for key, window in KNOWN_WINDOWS.items():
+        if key in name:
+            return window
+    return 0
 
 # Tunable chars/token ratios.
 _CHARS_PER_TOKEN_ASCII = 4

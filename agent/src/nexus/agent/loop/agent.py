@@ -209,7 +209,9 @@ class Agent:
         if cfg and model_id:
             for m in getattr(cfg, "models", []) or []:
                 if getattr(m, "id", None) == model_id:
-                    return int(getattr(m, "context_window", 0) or 0)
+                    cw = int(getattr(m, "context_window", 0) or 0)
+                    if cw > 0:
+                        return cw
             fallback = known_context_window(model_id)
             if fallback > 0:
                 return fallback

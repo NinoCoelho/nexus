@@ -120,7 +120,9 @@ def build_loom_agent(
         if nexus_cfg and getattr(nexus_cfg, "models", None):
             for entry in nexus_cfg.models:
                 if entry.id == model_id or entry.model_name == model_id:
-                    return int(getattr(entry, "context_window", 0) or 0)
+                    cw = int(getattr(entry, "context_window", 0) or 0)
+                    if cw > 0:
+                        return cw
         from .overflow import known_context_window
         fallback = known_context_window(model_id)
         return fallback if fallback > 0 else 0
