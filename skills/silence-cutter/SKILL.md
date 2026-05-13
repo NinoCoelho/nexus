@@ -20,9 +20,9 @@ nexus_authored_by: builtin
 ```bash
 command -v ffmpeg  >/dev/null || { echo "missing: ffmpeg — install with: brew install ffmpeg (macOS) | apt-get install ffmpeg (Debian/Ubuntu)"; exit 1; }
 command -v ffprobe >/dev/null || { echo "missing: ffprobe (ships with ffmpeg)"; exit 1; }
-# webrtcvad is only needed for Mode 1 (VAD). Modes 2 and 3 work without it.
-python3 -c "import webrtcvad" 2>/dev/null || echo "note: webrtcvad not installed — Mode 1 will fail. Install with: pip install webrtcvad"
 ```
+
+This skill has an isolated Python environment managed by Nexus (provides `webrtcvad` for Mode 1). After calling `skill_view(name="silence-cutter")`, use the `python.path` from the response to run scripts. Modes 2 and 3 work without the venv.
 
 The 3 scripts ship inside this skill at `scripts/`. Reference them by skill-relative path. The agent's tools resolve the skill directory through `skill_view`; if running a script directly, use the absolute path `<skill-dir>/scripts/<name>.py`.
 
@@ -33,7 +33,7 @@ The 3 scripts ship inside this skill at `scripts/`. Reference them by skill-rela
 WebRTC VAD on 16 kHz mono PCM. Better at phrase boundaries than pure silence detection.
 
 ```bash
-python3 scripts/vad_cut.py --input raw.mp4 --output cut.mp4
+"$SKILL_PYTHON" scripts/vad_cut.py --input raw.mp4 --output cut.mp4
 ```
 
 | Param | Default | What it does |

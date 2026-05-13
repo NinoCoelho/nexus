@@ -21,18 +21,15 @@ Run this preflight before transcription. If anything is missing, surface the ins
 
 ```bash
 command -v ffmpeg >/dev/null || { echo "missing: ffmpeg -- install with: brew install ffmpeg (macOS) | apt-get install ffmpeg (Debian/Ubuntu)"; exit 1; }
-PYCAPS_ENV="$HOME/.venvs/pycaps"
-if [ ! -d "$PYCAPS_ENV" ]; then
-  echo "missing: pycaps venv at $PYCAPS_ENV -- create with: python3 -m venv $PYCAPS_ENV && source $PYCAPS_ENV/bin/activate && pip install faster-whisper"
-  exit 1
-fi
 ```
+
+This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="video-caption-writer")`, use the `python.path` from the response — it includes `faster-whisper`.
 
 ## Steps
 
 ### 1. Transcribe the video
 ```bash
-source ~/.venvs/pycaps/bin/activate && python3 -c "
+"$SKILL_PYTHON" -c "
 from faster_whisper import WhisperModel
 model = WhisperModel('base', device='cpu', compute_type='float32')
 segments, info = model.transcribe('video.mp4', vad_filter=True)

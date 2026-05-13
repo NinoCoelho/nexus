@@ -169,8 +169,7 @@ npx remotion still BeatVideo --frame=30 --scale=0.25
 ### 5. Add captions (post-render)
 
 ```bash
-source ~/.venvs/pycaps/bin/activate
-pycaps render --input output/raw_video.mp4 --template redpill --faster-whisper
+"$SKILL_PYTHON" -m pycaps render --input output/raw_video.mp4 --template redpill --faster-whisper
 ```
 
 ## Gotchas
@@ -181,4 +180,4 @@ pycaps render --input output/raw_video.mp4 --template redpill --faster-whisper
 - **Static files** — Remotion `public/` accessed via `staticFile()`. Never raw paths.
 - **Build step required** — Remotion needs a bundler. No plain HTML authoring like Hyperframes.
 - **Remotion license** — source-available, NOT open source. Requires paid license above small-team thresholds. Consider `hyperframes` (Apache 2.0) for open-source needs.
-- **pycaps requires Python 3.10+** — use venv at `~/.venvs/pycaps`. System is 3.9.6.
+- **pycaps requires Python 3.10+** — this skill's managed venv uses `python_version: "3.12"` to ensure compatibility.

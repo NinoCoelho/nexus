@@ -13,9 +13,12 @@ Scrapling is an adaptive Web Scraping framework that handles everything from a s
 
 ## Prerequisites
 
+This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="web-scrape")`, use the `python.path` from the response to run Python scripts that import `scrapling`.
+
+First-time setup also requires the Scrapling browser dependencies:
+
 ```bash
-pip install "scrapling[all]"
-scrapling install --force   # downloads browser dependencies
+"$SKILL_PYTHON" -m scrapling install --force
 ```
 
 ## Decision: Which Fetcher?

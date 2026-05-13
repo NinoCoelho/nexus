@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -25,6 +26,12 @@ _BUNDLED_SKILLS_DIR = Path(__file__).parent.parent.parent.parent.parent / "skill
 _SEEDED_MARKER = ".seeded-builtins.json"
 
 
+def _file_hash(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
 def _bundled_skills_dir() -> Path:
     override = os.environ.get("NEXUS_BUILTIN_SKILLS_DIR")
     if override:
@@ -40,6 +47,7 @@ class SkillRegistry:
         self._by_name: dict[str, Skill] = {}
         self._ensure_dir()
         self._seed_new_builtins()
+        self._sync_builtins()
         self.reload()
 
     def _ensure_dir(self) -> None:
@@ -73,11 +81,64 @@ class SkillRegistry:
                 shutil.copytree(child, dest, dirs_exist_ok=True)
                 _write_meta(dest, trust="builtin")
                 log.info("seeded builtin skill: %s", name)
+                _seed_venv(dest, name)
             seeded.add(name)
             changed = True
 
         if changed or self._load_seeded_marker() is None:
             self._write_seeded_marker(seeded)
+
+    def _sync_builtins(self) -> None:
+        """Sync files from bundled builtins into already-installed skills.
+
+        Compares ``requirements.txt`` (and other managed files) between the
+        bundled source and the installed copy.  If the bundled version differs,
+        the file is re-copied and the skill's venv is re-synced.  SKILL.md
+        and user-authored files (scripts/, references/, etc.) are **not**
+        touched — users may have local edits.
+        """
+        bundled = _bundled_skills_dir()
+        if not bundled.is_dir():
+            return
+
+        meta = self._load_seeded_marker()
+        if meta is None:
+            return
+
+        from .venv_manager import ensure_venv
+
+        for child in bundled.iterdir():
+            if not (child / "SKILL.md").is_file():
+                continue
+            name = child.name
+            if name not in meta:
+                continue
+            dest = self._dir / name
+            if not dest.is_dir():
+                continue
+
+            req_src = child / "requirements.txt"
+            req_dst = dest / "requirements.txt"
+            if not req_src.is_file():
+                continue
+
+            src_hash = _file_hash(req_src)
+            dst_hash = _file_hash(req_dst) if req_dst.is_file() else None
+
+            if src_hash == dst_hash:
+                continue
+
+            shutil.copy2(req_src, req_dst)
+            log.info("synced requirements.txt for builtin skill: %s", name)
+
+            try:
+                skill = _load_skill(dest)
+            except Exception:
+                continue
+            try:
+                ensure_venv(name, dest, skill.python_version)
+            except Exception as exc:
+                log.warning("failed to sync venv for %s: %s", name, exc)
 
     def _seeded_marker_path(self) -> Path:
         return self._dir / _SEEDED_MARKER
@@ -136,6 +197,10 @@ def _load_skill(skill_dir: Path) -> Skill:
     if not _NAME_RE.match(name):
         raise ValueError(f"invalid skill name: {name!r}")
     requires_keys = _parse_requires_keys(post.metadata.get("requires_keys"))
+    python_version: str | None = post.metadata.get("python_version")
+    if python_version is not None:
+        python_version = str(python_version)
+    has_requirements = (skill_dir / "requirements.txt").is_file()
     meta = _read_meta(skill_dir)
     trust = meta.get("trust", "user")
     derived_from = _parse_derived_from(meta.get("derived_from"))
@@ -147,6 +212,8 @@ def _load_skill(skill_dir: Path) -> Skill:
         trust=trust,
         requires_keys=requires_keys,
         derived_from=derived_from,
+        python_version=python_version,
+        has_requirements=has_requirements,
     )
 
 
@@ -229,3 +296,25 @@ def _write_meta(skill_dir: Path, **kwargs: Any) -> None:
     existing = _read_meta(skill_dir)
     existing.update(kwargs)
     meta_path.write_text(json.dumps(existing, indent=2))
+
+
+def _seed_venv(skill_dir: Path, name: str) -> None:
+    """Eagerly create a per-skill venv during seeding if requirements.txt exists."""
+    req = skill_dir / "requirements.txt"
+    if not req.is_file():
+        return
+    try:
+        post = frontmatter.loads((skill_dir / "SKILL.md").read_text())
+    except Exception:
+        post = None
+    python_version = None
+    if post is not None:
+        pv = post.metadata.get("python_version")
+        if pv is not None:
+            python_version = str(pv)
+    from .venv_manager import ensure_venv
+
+    try:
+        ensure_venv(name, skill_dir, python_version)
+    except Exception as exc:
+        log.warning("failed to create venv for seeded skill %s: %s", name, exc)

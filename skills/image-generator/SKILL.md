@@ -20,19 +20,16 @@ Run this preflight before the steps below. If anything is missing, surface the i
 
 ```bash
 command -v python3 >/dev/null || { echo "missing: python3"; exit 1; }
-ERNIE_ENV="$HOME/ernie-env"
-if [ ! -d "$ERNIE_ENV" ]; then
-  echo "missing: ERNIE venv at $ERNIE_ENV — create with: python3 -m venv $ERNIE_ENV && source $ERNIE_ENV/bin/activate && pip install torch diffusers Pillow"
-  exit 1
-fi
 ```
+
+This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="image-generator")`, use the `python.path` from the response — it includes `torch`, `diffusers`, and `Pillow`.
 
 ## Steps
 
-1. **Activate the venv and run the generation script:**
+1. **Run the generation script using the skill's Python:**
 
 ```bash
-source ~/ernie-env/bin/activate && nohup python3 -c "
+"$SKILL_PYTHON" -c "
 import torch, os, sys
 from diffusers import ErnieImagePipeline
 

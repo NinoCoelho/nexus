@@ -106,7 +106,7 @@ async with CDP(tab_ws_url) as cdp:
 ## Gotchas
 - **Profile persistence**: The Chrome profile at `~/.nexus/chrome-profile/` persists cookies, logins, and localStorage across sessions. This is intentional — once you log in, you stay logged in.
 - **Port 9223**: Fixed to avoid collision with the user's main Chrome on 9222. If 9223 is also taken, set `CDP_PORT` env var.
-- **websockets library**: Requires `websockets` Python package (v15+ installed). If missing: `pip install websockets`.
+- **websockets library**: This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="chrome-devtools")`, use the `python.path` from the response — it includes `websockets>=15`.
 - **Headless mode**: Not used — the user needs to see the browser to log in. If headless is needed, add `--headless=new` to `launch()`.
 - **Only one CDP connection per target**: If you get "target closed" errors, the previous websocket session didn't close cleanly. Retry.
 - **Large pages**: The DOM snapshot can produce huge output. Always limit with `max_length` param.

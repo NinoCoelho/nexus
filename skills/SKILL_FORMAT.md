@@ -6,8 +6,9 @@ when the agent picks up the skill.
 
 ```
 my-skill/
-├── SKILL.md          # required — frontmatter + body
-└── (any extra files) # optional — read by the skill via tools
+├── SKILL.md              # required — frontmatter + body
+├── requirements.txt      # optional — Python deps (isolated venv auto-created)
+└── (any extra files)     # optional — read by the skill via tools
 ```
 
 ## Frontmatter (required)
@@ -89,3 +90,34 @@ custom Python venvs, the body **must** start with a pre-flight block
 that runs `command -v <tool> >/dev/null || { echo "missing: <tool>";
 exit 1; }` and includes brew/apt/pip install hints. The agent
 surfaces the failure to the user without aborting the session.
+
+## Python dependencies (managed venvs)
+
+If a skill ships a `requirements.txt` at its root, Nexus automatically
+creates an isolated virtual environment under `~/.nexus/venvs/<skill-name>/`.
+The venv is created at seed/install time and re-synced whenever
+`requirements.txt` changes.
+
+```yaml
+---
+name: my-skill
+description: ...
+python_version: "3.11"        # optional — pin a specific Python version
+---
+```
+
+The agent discovers the venv path via `skill_view(name="my-skill")`,
+which returns a `python.path` field like
+`~/.nexus/venvs/my-skill/bin/python3`. The agent uses this path to
+run the skill's scripts instead of bare `python3`.
+
+**Portability:** The skill folder (under `~/.nexus/skills/`) stays
+self-contained — only `SKILL.md`, `requirements.txt`, and `scripts/`
+are migrated. The venv is a derived artifact recreated from the
+manifest on the target host.
+
+To manually trigger venv creation or re-sync:
+
+```
+skill_manage(action="ensure_venv", name="my-skill")
+```

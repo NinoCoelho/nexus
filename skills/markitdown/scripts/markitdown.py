@@ -41,29 +41,17 @@ def log(msg: str, *, quiet: bool = False) -> None:
 
 
 def ensure_markitdown(*, allow_install: bool, quiet: bool):
-    """Import MarkItDown, pip-installing markitdown[all] on first failure."""
+    """Import MarkItDown from the skill's managed venv."""
     try:
         from markitdown import MarkItDown  # type: ignore[import]
 
         return MarkItDown
     except ImportError:
-        if not allow_install:
-            raise
-
-    log("markitdown not installed — running `pip install markitdown[all]` …", quiet=quiet)
-    cmd = [sys.executable, "-m", "pip", "install", "--quiet", "markitdown[all]"]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
         raise SystemExit(
-            "failed to install markitdown — try `uv pip install 'markitdown[all]'` "
-            "manually or pass --no-install"
+            "markitdown not installed — run "
+            "`skill_manage(action=\"ensure_venv\", name=\"markitdown\")` "
+            "to create the skill's isolated Python environment."
         )
-
-    from markitdown import MarkItDown  # type: ignore[import]
-
-    return MarkItDown
 
 
 def is_url(s: str) -> bool:

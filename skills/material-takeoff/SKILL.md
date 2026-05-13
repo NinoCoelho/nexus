@@ -26,11 +26,9 @@ Check the file extension and probe the file:
 .xlsx → Convert to CSV or read via openpyxl, then import
 ```
 
-### 2. Install dependencies (if needed)
+### 2. Dependencies
 
-```bash
-uv pip install ifcopenshell ezdxf pymupdf openpyxl
-```
+This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="material-takeoff")`, use the `python.path` from the response to run scripts that import `ifcopenshell`, `ezdxf`, `pymupdf`, or `openpyxl`.
 
 For DWG files that ezdxf can't read, install QCAD:
 ```bash

@@ -430,9 +430,15 @@ def build_system_prompt(
             "its steps. Skill names use hyphens (e.g. `deep-research`); never "
             "call a skill name as a tool."
         )
+        parts.append(
+            "Skills marked with [venv] have isolated Python environments — "
+            "always use the python path shown by `skill_view` for their scripts."
+        )
         parts.append("")
         for name, desc in descs:
-            parts.append(f"- **{name}** — {desc}")
+            skill = registry.get(name)
+            tag = " [venv]" if skill.has_requirements else ""
+            parts.append(f"- **{name}**{tag} — {desc}")
     else:
         parts.append("## Available skills")
         parts.append("")

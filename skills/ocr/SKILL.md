@@ -16,9 +16,10 @@ nexus_authored_by: builtin
 
 ## Prerequisites
 
+This skill has an isolated Python environment managed by Nexus (provides `rapidocr-onnxruntime`, `Pillow`, `numpy`, `pdf2image`). After calling `skill_view(name="ocr")`, use the `python.path` from the response (referred to as `$SKILL_PYTHON` below).
+
 ```bash
 command -v tesseract >/dev/null || { echo "missing: tesseract — install with: brew install tesseract (macOS) | apt-get install tesseract-ocr (Debian/Ubuntu)"; exit 1; }
-python3 -c "import pytesseract, pdf2image, PIL" 2>/dev/null || { echo "missing: pip install pytesseract pdf2image Pillow"; exit 1; }
 ```
 
 For non-English OCR, additional language packs are needed:

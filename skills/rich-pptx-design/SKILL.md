@@ -224,8 +224,7 @@ Then inspect with a visual QA prompt covering overlapping elements, text overflo
 
 ## Dependencies
 
-- `pip install "markitdown[pptx]"` -- text extraction
-- `pip install Pillow` -- thumbnail grids
+This skill has an isolated Python environment managed by Nexus (provides `markitdown[pptx]` + `Pillow`). After calling `skill_view(name="rich-pptx-design")`, use the `python.path` from the response.
 - `npm install -g pptxgenjs` -- creating from scratch
 - LibreOffice (`soffice`) -- PDF conversion
 - Poppler (`pdftoppm`) -- PDF to images

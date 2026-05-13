@@ -20,14 +20,9 @@ Run this preflight before the steps below. If anything is missing, surface the i
 
 ```bash
 command -v ffmpeg  >/dev/null || { echo "missing: ffmpeg — install with: brew install ffmpeg (macOS) | apt-get install ffmpeg (Debian/Ubuntu)"; exit 1; }
-DEMUCS=$(command -v demucs || true)
-if [ -z "$DEMUCS" ]; then
-  echo "missing: demucs — install with: pip install demucs (or: pipx install demucs)"
-  exit 1
-fi
 ```
 
-`$DEMUCS` resolves to whatever path the user has (Homebrew, pipx, system pip, venv). The first run also downloads the htdemucs model (~80MB) into `~/.cache/torch/hub/checkpoints/`.
+This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="voice-isolate")`, use the `python.path` from the response to run demucs. The first `ensure_venv` also downloads the htdemucs model (~80MB) into `~/.cache/torch/hub/checkpoints/`.
 
 ## Steps
 
@@ -40,7 +35,7 @@ ffmpeg -y -i input.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 /tmp/demucs-input.w
 ### 2. Run demucs (htdemucs model, two-stem mode)
 
 ```bash
-"$DEMUCS" --two-stem=vocals -o /tmp/demucs-output /tmp/demucs-input.wav
+"$SKILL_PYTHON" -m demucs --two-stem=vocals -o /tmp/demucs-output /tmp/demucs-input.wav
 ```
 
 Output lands at `/tmp/demucs-output/htdemucs/<basename>/`:

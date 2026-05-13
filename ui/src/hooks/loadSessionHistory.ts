@@ -186,10 +186,15 @@ export async function loadSessionHistory(
       // exist for this session already, preserve them; only seed history
       // for sessions we haven't loaded yet.
       if (!forceRefresh && cur && cur.historyLoaded) return prev;
+      // If history shows the last message is from the user with no assistant
+      // reply after it, the turn never completed on the server. Force thinking
+      // off so the UI doesn't show a stuck spinner after a server restart.
+      const lastFiltered = filtered[filtered.length - 1];
+      const neverReplied = lastFiltered?.role === "user";
       const seedModel = computeSeedModel(cur?.selectedModel);
       next.set(id, {
         messages: filtered,
-        thinking: cur?.thinking ?? false,
+        thinking: neverReplied ? false : (cur?.thinking ?? false),
         input: cur?.input ?? "",
         historyLoaded: true,
         attachments: cur?.attachments ?? [],

@@ -62,3 +62,5 @@ class Skill(BaseModel):
     trust: Literal["builtin", "user", "agent"] = "user"
     requires_keys: tuple[KeyRequirement, ...] = ()
     derived_from: DerivedFrom | None = None
+    python_version: str | None = None
+    has_requirements: bool = False

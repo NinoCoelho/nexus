@@ -29,8 +29,9 @@ The carousel builder is a thin layer on top of `pdf-maker.py`. All rendering, fo
 
 ## Prerequisites
 
+This skill has an isolated Python environment managed by Nexus (provides `Pillow` + `fpdf2`). After calling `skill_view(name="carousel-pdf-builder")`, use the `python.path` from the response (referred to as `$SKILL_PYTHON` below).
+
 ```bash
-python3 -c "import PIL; import fpdf; print('OK')" || { echo "missing: pip install Pillow fpdf2"; exit 1; }
 ls ~/.nexus/fonts/Inter-ExtraBold.ttf ~/.nexus/fonts/Montserrat-Regular.ttf 2>/dev/null || { echo "missing: Inter + Montserrat fonts at ~/.nexus/fonts/"; exit 1; }
 ls ~/.nexus/vault/scripts/pdf-maker.py 2>/dev/null || { echo "missing: pdf-maker.py in vault scripts"; exit 1; }
 ```
@@ -40,7 +41,6 @@ ls ~/.nexus/vault/scripts/pdf-maker.py 2>/dev/null || { echo "missing: pdf-maker
 ### 1. Verify dependencies
 
 ```bash
-python3 -c "import PIL; import fpdf; print('OK')"
 ls ~/.nexus/fonts/Inter-ExtraBold.ttf ~/.nexus/fonts/Montserrat-Regular.ttf
 ls ~/.nexus/vault/scripts/pdf-maker.py
 ```
@@ -48,7 +48,7 @@ ls ~/.nexus/vault/scripts/pdf-maker.py
 ### 2. Run
 
 ```bash
-python3 ~/.nexus/vault/scripts/carousel-pdf-builder.py <carousel.md> [options]
+"$SKILL_PYTHON" ~/.nexus/vault/scripts/carousel-pdf-builder.py <carousel.md> [options]
 ```
 
 **Options:**
@@ -73,13 +73,13 @@ python3 ~/.nexus/vault/scripts/carousel-pdf-builder.py <carousel.md> [options]
 **Examples:**
 ```bash
 # Default
-python3 carousel-pdf-builder.py carousel.md --auto-bg
+"$SKILL_PYTHON" carousel-pdf-builder.py carousel.md --auto-bg
 
 # Magazine-style opinion piece
-python3 carousel-pdf-builder.py carousel.md --style editorial --auto-bg
+"$SKILL_PYTHON" carousel-pdf-builder.py carousel.md --style editorial --auto-bg
 
 # Sturdy data analysis
-python3 carousel-pdf-builder.py carousel.md --style bold-slab --auto-bg --theme noir
+"$SKILL_PYTHON" carousel-pdf-builder.py carousel.md --style bold-slab --auto-bg --theme noir
 ```
 
 ### 3. AI-designed carousel (recommended -- maximum visual variety)
@@ -87,7 +87,7 @@ python3 carousel-pdf-builder.py carousel.md --style bold-slab --auto-bg --theme 
 When the coordinator produces a design spec via the `carousel-designer` skill:
 
 ```bash
-python3 ~/.nexus/vault/scripts/carousel-pdf-builder.py carousel.md \
+"$SKILL_PYTHON" ~/.nexus/vault/scripts/carousel-pdf-builder.py carousel.md \
   --design-spec carousel-design-spec.json --auto-bg
 ```
 
