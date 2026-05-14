@@ -74,6 +74,23 @@ export interface NexusAccountConfig {
   auto_upgrade_default: boolean;
 }
 
+export interface McpServerConfig {
+  transport: "stdio" | "sse" | "streamable-http";
+  command: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  enabled: boolean;
+}
+
+export interface McpConfig {
+  servers: Record<string, McpServerConfig>;
+  server_enabled: boolean;
+  server_port: number;
+  server_expose: string[];
+  server_auth_token: string;
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
@@ -83,6 +100,7 @@ export interface Config {
   search?: SearchConfig;
   ui?: UIConfig;
   nexus_account?: NexusAccountConfig;
+  mcp?: McpConfig;
 }
 
 // Patch payload — every nested object is independently partial because the
@@ -95,6 +113,13 @@ export interface ConfigPatch {
   tts?: Partial<TTSConfig>;
   search?: Partial<SearchConfig>;
   ui?: Partial<UIConfig>;
+  mcp?: {
+    servers?: Record<string, Partial<McpServerConfig> | null>;
+    server_enabled?: boolean;
+    server_port?: number;
+    server_expose?: string[];
+    server_auth_token?: string;
+  };
 }
 
 export async function getConfig(): Promise<Config> {

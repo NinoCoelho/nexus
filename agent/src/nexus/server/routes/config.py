@@ -83,6 +83,25 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
         "ack_model": tts.ack_model,
         "voices_dir": tts.voices_dir,
     }
+    mcp = getattr(cfg, "mcp", None)
+    if mcp is not None:
+        out["mcp"] = {
+            "servers": {
+                name: {
+                    "transport": entry.transport,
+                    "command": entry.command,
+                    "env": entry.env,
+                    "url": entry.url,
+                    "headers": entry.headers,
+                    "enabled": entry.enabled,
+                }
+                for name, entry in mcp.servers.items()
+            },
+            "server_enabled": mcp.server_enabled,
+            "server_port": mcp.server_port,
+            "server_expose": mcp.server_expose,
+            "server_auth_token": "***" if mcp.server_auth_token else "",
+        }
     return out
 
 
@@ -174,12 +193,30 @@ async def patch_config(
     if "tts" in body:
         existing = raw.get("tts", {}) or {}
         patch = body["tts"] or {}
-        # TTSConfig only accepts enabled / ack_enabled / voices_dir now.
-        # Drop everything else silently so old UI clients (or stale
-        # browser caches) don't break the merge.
         ALLOWED = {"enabled", "ack_enabled", "ack_mode", "ack_model", "voice_language", "voices_dir"}
         clean = {k: v for k, v in patch.items() if k in ALLOWED}
         raw["tts"] = {**existing, **clean}
+    if "mcp" in body:
+        existing = raw.get("mcp", {}) or {}
+        patch = body["mcp"] or {}
+        merged_mcp: dict[str, Any] = {**existing}
+        if "servers" in patch:
+            merged_servers = {**(existing.get("servers") or {})}
+            for sname, sdata in (patch["servers"] or {}).items():
+                if sdata is None:
+                    merged_servers.pop(sname, None)
+                else:
+                    merged_servers[sname] = {
+                        **(merged_servers.get(sname) or {}),
+                        **sdata,
+                    }
+            merged_mcp["servers"] = merged_servers
+        for scalar_key in ("server_enabled", "server_port", "server_auth_token"):
+            if scalar_key in patch:
+                merged_mcp[scalar_key] = patch[scalar_key]
+        if "server_expose" in patch:
+            merged_mcp["server_expose"] = patch["server_expose"]
+        raw["mcp"] = merged_mcp
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)
