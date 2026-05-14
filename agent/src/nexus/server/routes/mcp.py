@@ -116,3 +116,21 @@ async def render_prompt(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/app/{server_name}")
+async def fetch_app_resource(server_name: str, uri: str, request: Request) -> dict[str, Any]:
+    """Fetch an MCP App HTML resource from a connected server.
+
+    The UI calls this when a tool result contains ``_meta.ui.resourceUri``
+    pointing to a ``ui://`` resource. The backend reads the resource from
+    the MCP server and returns the HTML for the sandboxed iframe.
+    """
+    mgr = _get_manager(request)
+    try:
+        content = await mgr.read_resource(server_name, uri)
+        return {"ok": True, "html": content, "server": server_name, "uri": uri}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e

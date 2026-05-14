@@ -1,6 +1,9 @@
 // StepDetailModal — terminal, HTTP, KV-table, and FormattedResult dispatching renderers.
 
+import { useEffect, useState } from "react";
 import type { TraceEvent } from "../../api";
+import { fetchMcpAppResource } from "../../api/mcp";
+import McpAppSandbox from "../McpAppSandbox";
 import MarkdownView from "../MarkdownView";
 import {
   tryParseJson, isTerminalResult, isHttpResult, isMarkdownLike,
@@ -10,6 +13,28 @@ import {
   VaultReadResult, VaultListResult, VaultSearchResult,
   VaultTagsResult, VaultBacklinksResult,
 } from "./VaultResultRenderers";
+
+// MCP App renderer — fetches HTML from the MCP server and renders in sandboxed iframe
+function McpAppRenderer({ serverName, resourceUri, toolResult }: { serverName: string; resourceUri: string; toolResult: unknown }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMcpAppResource(serverName, resourceUri)
+      .then((res) => {
+        if (!cancelled) setHtml(res.html);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load MCP App");
+      });
+    return () => { cancelled = true; };
+  }, [serverName, resourceUri]);
+
+  if (error) return <div className="sdm-log-result" style={{ color: "var(--color-error, #c53030)" }}>MCP App: {error}</div>;
+  if (!html) return <div className="sdm-log-result">Loading MCP App…</div>;
+  return <McpAppSandbox html={html} toolResult={toolResult} />;
+}
 
 export function TerminalOutput({ data }: { data: TerminalResult }) {
   return (
@@ -124,6 +149,17 @@ export function FormattedResult({ tool, result, trace, stepIdx }: { tool?: strin
 
   if (parsed && isTerminalResult(parsed)) return <TerminalOutput data={parsed} />;
   if (parsed && isHttpResult(parsed)) return <HttpOutput data={parsed} />;
+
+  // MCP App — tool name is namespaced (server__tool); check for _meta.ui.resourceUri
+  if (tool && tool.includes("__") && parsed && typeof parsed === "object") {
+    const meta = (parsed as Record<string, unknown>)._meta as Record<string, unknown> | undefined;
+    const ui = meta?.ui as Record<string, unknown> | undefined;
+    const resourceUri = ui?.resourceUri as string | undefined;
+    if (resourceUri) {
+      const serverName = tool.split("__")[0];
+      return <McpAppRenderer serverName={serverName} resourceUri={resourceUri} toolResult={parsed} />;
+    }
+  }
 
   // Vault read — render content as markdown
   if (tool === "vault_read" && parsed && typeof parsed === "object") {

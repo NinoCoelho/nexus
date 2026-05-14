@@ -34,3 +34,14 @@ export async function refreshMcpTools(): Promise<{
   if (!res.ok) throw new Error(`refreshMcpTools: ${res.status}`);
   return res.json();
 }
+
+export async function fetchMcpAppResource(
+  serverName: string,
+  uri: string,
+): Promise<{ ok: boolean; html: string; server: string; uri: string }> {
+  const res = await fetch(
+    `${BASE}/mcp/app/${encodeURIComponent(serverName)}?uri=${encodeURIComponent(uri)}`,
+  );
+  if (!res.ok) throw new Error(`fetchMcpAppResource: ${res.status}`);
+  return res.json();
+}
