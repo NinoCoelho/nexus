@@ -285,6 +285,19 @@ class DreamConfig(BaseModel):
     write_mode: Literal["direct", "stage"] = "direct"
 
 
+class McpServerEntry(BaseModel):
+    transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
+    command: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class McpConfig(BaseModel):
+    servers: dict[str, McpServerEntry] = Field(default_factory=dict)
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -299,6 +312,7 @@ class NexusConfig(BaseModel):
     nexus_account: NexusAccountConfig = Field(default_factory=NexusAccountConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
 
 
 # Fresh install starts with providers configured but NO models.

@@ -44,7 +44,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
-    "/dream",
+    "/dream", "/mcp",
 )
 
 
@@ -695,6 +695,20 @@ def create_app(
         except Exception:
             log.exception("heartbeat / calendar bootstrap failed")
 
+        # ── MCP server connections ────────────────────────────────────────
+        mcp_manager = None
+        try:
+            from ..mcp_lifecycle import build_mcp_manager, start_mcp
+            mcp_mgr = build_mcp_manager(nexus_cfg)
+            if mcp_mgr is not None:
+                tool_reg = getattr(agent._loom, "_tools", None)
+                if tool_reg is not None:
+                    await start_mcp(mcp_mgr, tool_reg)
+                    mcp_manager = mcp_mgr
+                    app.state.mcp_manager = mcp_manager
+        except Exception:
+            log.exception("MCP bootstrap failed")
+
         try:
             yield
         finally:
@@ -726,6 +740,12 @@ def create_app(
                 _close_dream_store()
             except Exception:
                 log.exception("dream store close failed")
+            if mcp_manager is not None:
+                try:
+                    from ..mcp_lifecycle import stop_mcp
+                    await stop_mcp(mcp_manager)
+                except Exception:
+                    log.exception("MCP shutdown failed")
             await agent.aclose()
 
     # Single-user app, not a third-party API — disable FastAPI's auto-generated
@@ -803,6 +823,7 @@ def create_app(
     from .routes.heartbeat import router as heartbeat_router
     from .routes.cookies import router as cookies_router
     from .routes.dream import router as dream_router
+    from .routes.mcp import router as mcp_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -838,6 +859,7 @@ def create_app(
     app.include_router(heartbeat_router)
     app.include_router(cookies_router)
     app.include_router(dream_router)
+    app.include_router(mcp_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

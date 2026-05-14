@@ -22,7 +22,7 @@ dependencies = [
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "pt-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_sm-3.8.0/pt_core_news_sm-3.8.0-py3-none-any.whl",
     "faster-whisper>=1.0",
-    "loom-framework[anthropic,acp,tui,graphrag,search,scrape]",
+    "loom-framework[anthropic,acp,mcp,tui,graphrag,search,scrape]",
     "huggingface_hub>=0.24",
     "duckdb>=1.0",
     # DuckDB needs pytz at runtime to materialize TIMESTAMP WITH TIME ZONE

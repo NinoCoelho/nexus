@@ -37,6 +37,8 @@ from .config_schema import (  # noqa: F401
     LocationConfig,
     DreamConfig,
     NexusAccountConfig,
+    McpServerEntry,
+    McpConfig,
     NexusConfig,
     default_config,
 )
@@ -175,6 +177,19 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "disabled": cfg.location.disabled,
         },
         "dream": cfg.dream.model_dump(),
+        "mcp": {
+            "servers": {
+                name: {
+                    "transport": entry.transport,
+                    "command": entry.command,
+                    "env": entry.env,
+                    "url": entry.url,
+                    "headers": entry.headers,
+                    "enabled": entry.enabled,
+                }
+                for name, entry in cfg.mcp.servers.items()
+            },
+        },
     }
     for m in cfg.models:
         md: dict[str, Any] = {
@@ -341,11 +356,19 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     nexus_account = NexusAccountConfig(**dict(raw.get("nexus_account", {})))
     location = LocationConfig(**dict(raw.get("location", {})))
     dream = DreamConfig(**dict(raw.get("dream", {})))
+    mcp_raw = dict(raw.get("mcp", {}))
+    mcp_servers: dict[str, McpServerEntry] = {}
+    for sname, sdata in mcp_raw.get("servers", {}).items():
+        sdata = dict(sdata)
+        sdata.setdefault("enabled", True)
+        mcp_servers[sname] = McpServerEntry(**sdata)
+    mcp = McpConfig(servers=mcp_servers)
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
         nexus_account=nexus_account, location=location, dream=dream,
+        mcp=mcp,
     )
 
 
