@@ -48,8 +48,13 @@ def build_mcp_manager(nexus_cfg: Any) -> McpManager | None:
 async def start_mcp(
     manager: McpManager,
     tool_registry: Any,
+    agent: Any | None = None,
 ) -> list[McpToolHandler]:
-    """Connect all MCP servers and register discovered tools."""
+    """Connect all MCP servers and register discovered tools.
+
+    If *agent* is provided, wires sampling (LLM) and elicitation (HITL)
+    callbacks so MCP servers can request completions and user input.
+    """
     await manager.__aenter__()
     handlers = await manager.all_tool_handlers()
     for handler in handlers:
@@ -64,6 +69,11 @@ async def start_mcp(
         len(handlers),
     )
     manager._cached_handlers = handlers
+
+    if agent is not None:
+        _wire_sampling(manager, agent)
+        _wire_elicitation(manager, agent)
+
     return handlers
 
 
@@ -96,3 +106,71 @@ async def stop_mcp(manager: McpManager) -> None:
     """Gracefully close all MCP server connections."""
     await manager.__aexit__(None, None, None)
     log.info("[mcp] all connections closed")
+
+
+def _wire_sampling(manager: McpManager, agent: Any) -> None:
+    """Wire MCP sampling requests to the agent's LLM provider."""
+    import json
+
+    async def _sampling(**kwargs: Any) -> str:
+        messages = kwargs.get("messages", [])
+        max_tokens = kwargs.get("max_tokens", 256)
+        system_prompt = kwargs.get("system_prompt", "")
+        from loom.types import ChatMessage, Role
+
+        loom_messages: list[ChatMessage] = []
+        if system_prompt:
+            loom_messages.append(ChatMessage(role=Role.SYSTEM, content=system_prompt))
+        for msg in messages:
+            role = Role.USER if msg.get("role") == "user" else Role.ASSISTANT
+            content = msg.get("content", "")
+            if isinstance(content, dict):
+                content = content.get("text", json.dumps(content))
+            loom_messages.append(ChatMessage(role=role, content=content))
+        try:
+            provider = agent._nexus_provider
+            result = await provider.chat(loom_messages, max_tokens=max_tokens)
+            return result
+        except Exception as e:
+            log.exception("[mcp] sampling failed")
+            return f"[sampling error: {e}]"
+
+    manager.sampling_fn = _sampling
+
+
+def _wire_elicitation(manager: McpManager, agent: Any) -> None:
+    """Wire MCP elicitation requests to the agent's HITL system."""
+    import json
+
+    async def _elicitation(message: str, schema: dict) -> dict | None:
+        ask_user = getattr(agent._handlers, "ask_user", None)
+        if ask_user is None:
+            log.warning("[mcp] elicitation requested but no ask_user handler wired")
+            return None
+        fields_desc = ""
+        props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        for fname, fdef in props.items():
+            req = " (required)" if fname in required else ""
+            desc = fdef.get("description", "")
+            fields_desc += f"\n- {fname}: {desc}{req}"
+        prompt = (
+            f"MCP server is requesting input:\n\n"
+            f"{message}\n\n"
+            f"Fields:{fields_desc}\n\n"
+            f"Respond with a JSON object containing the requested fields."
+        )
+        try:
+            result = await ask_user.invoke({
+                "kind": "text",
+                "message": prompt,
+            })
+            answer = getattr(result, "answer", None) or ""
+            if answer.startswith("{"):
+                return json.loads(answer)
+            return {"response": answer}
+        except Exception:
+            log.exception("[mcp] elicitation failed")
+            return None
+
+    manager.elicitation_fn = _elicitation

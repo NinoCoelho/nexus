@@ -703,7 +703,7 @@ def create_app(
             if mcp_mgr is not None:
                 tool_reg = getattr(agent._loom, "_tools", None)
                 if tool_reg is not None:
-                    await start_mcp(mcp_mgr, tool_reg)
+                    await start_mcp(mcp_mgr, tool_reg, agent=agent)
                     mcp_manager = mcp_mgr
                     app.state.mcp_manager = mcp_manager
         except Exception:
