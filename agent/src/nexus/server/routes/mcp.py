@@ -1,7 +1,7 @@
 """MCP server management API routes.
 
-Provides read-only status and reconnect/refresh endpoints for connected
-MCP servers.
+Provides read-only status, reconnect/refresh endpoints for connected
+MCP servers, and access to MCP resources and prompt templates.
 """
 
 from __future__ import annotations
@@ -68,3 +68,51 @@ async def refresh_all_tools(request: Request) -> dict[str, Any]:
     from ..mcp_lifecycle import refresh_mcp_tools
     handlers = await refresh_mcp_tools(mgr, tool_reg)
     return {"ok": True, "tool_count": len(handlers), "servers": mgr.connected_servers}
+
+
+@router.get("/resources")
+async def list_resources(request: Request) -> list[dict[str, Any]]:
+    mgr = _get_manager(request)
+    try:
+        return await mgr.all_resource_specs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/resources/{server_name}")
+async def read_resource(server_name: str, uri: str, request: Request) -> dict[str, Any]:
+    mgr = _get_manager(request)
+    try:
+        content = await mgr.read_resource(server_name, uri)
+        return {"ok": True, "content": content, "server": server_name, "uri": uri}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/prompts")
+async def list_prompts(request: Request) -> list[dict[str, Any]]:
+    mgr = _get_manager(request)
+    try:
+        return await mgr.all_prompt_specs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/prompts/{server_name}/{prompt_name}")
+async def render_prompt(
+    server_name: str,
+    prompt_name: str,
+    request: Request,
+) -> dict[str, Any]:
+    mgr = _get_manager(request)
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    args = body.get("arguments") if isinstance(body, dict) else None
+    try:
+        content = await mgr.get_prompt(server_name, prompt_name, args)
+        return {"ok": True, "content": content, "server": server_name, "prompt": prompt_name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
