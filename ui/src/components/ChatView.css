@@ -18,17 +18,18 @@
 
 /* Inner centering for messages */
 .message-list > * {
-  max-width: 860px;
+  max-width: 94vw;
   width: 100%;
   margin: 0 auto;
   padding: 0 24px;
   box-sizing: border-box;
 }
 
-.message-list > .asst-msg {
-  max-width: 98vw;
+.message-list > * > .asst-msg {
+  max-width: none;
+  width: 100%;
   margin: 0;
-  padding: 0 12px;
+  padding: 0;
 }
 
 .chat-empty {
