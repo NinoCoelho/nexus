@@ -120,12 +120,7 @@ async def render_prompt(
 
 @router.get("/app/{server_name}")
 async def fetch_app_resource(server_name: str, uri: str, request: Request) -> dict[str, Any]:
-    """Fetch an MCP App HTML resource from a connected server.
-
-    The UI calls this when a tool result contains ``_meta.ui.resourceUri``
-    pointing to a ``ui://`` resource. The backend reads the resource from
-    the MCP server and returns the HTML for the sandboxed iframe.
-    """
+    """Fetch an MCP App HTML resource from a connected server."""
     mgr = _get_manager(request)
     try:
         content = await mgr.read_resource(server_name, uri)
@@ -134,3 +129,17 @@ async def fetch_app_resource(server_name: str, uri: str, request: Request) -> di
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/test")
+async def test_mcp_connection(request: Request) -> dict[str, Any]:
+    """Test a single MCP server config by connecting, listing tools, then disconnecting.
+
+    Accepts a JSON body with the server configuration. Does NOT persist anything.
+    """
+    body = await request.json()
+    from ..mcp_lifecycle import test_mcp_connection
+    try:
+        return await test_mcp_connection(body)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tool_count": 0, "tools": []}

@@ -1,8 +1,8 @@
 /**
- * IntegrationsTab — MCP server management with add wizard.
+ * IntegrationsTab — MCP server management with one-box paste wizard.
  *
- * Shows configured MCP servers with connection status, and provides a
- * step-by-step wizard to add new servers without editing config.toml.
+ * User pastes whatever the MCP server docs give them (JSON, URL, npx command),
+ * Nexus parses it, asks for missing credentials, tests, and saves.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -10,73 +10,195 @@ import { useTranslation } from "react-i18next";
 import {
   listMcpServers,
   reconnectMcpServer,
-  refreshMcpTools,
+  testMcpServer,
   type McpServerStatus,
+  type McpTestResult,
 } from "../../api/mcp";
-import {
-  getConfig,
-  patchConfig,
-  type McpServerConfig,
-  type McpConfig,
-} from "../../api/config";
+import { getConfig, patchConfig, type McpConfig } from "../../api/config";
 import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
 import SettingsSection from "./SettingsSection";
 
-type WizardStep = "choose-type" | "enter-details" | "confirm";
+// ── Smart parser ──────────────────────────────────────────────────────────
 
-interface WizardState {
-  step: WizardStep;
+interface ParsedServer {
   name: string;
   transport: "stdio" | "sse" | "streamable-http";
+  command: string[];
   url: string;
-  command: string;
   env: Record<string, string>;
-  enabled: boolean;
+  headers: Record<string, string>;
+  /** Env vars whose values look like placeholders (empty, <YOUR_TOKEN>, etc.) */
+  missing: string[];
 }
 
-const INITIAL_WIZARD: WizardState = {
-  step: "choose-type",
-  name: "",
-  transport: "streamable-http",
-  url: "",
-  command: "",
-  env: {},
-  enabled: true,
-};
+const PLACEHOLDER_RE = /<[^>]+>|YOUR_|PLACEHOLDER|_HERE$|insert_|\[.*\]|^$/i;
 
-const POPULAR_SERVERS: { label: string; transport: "stdio" | "streamable-http"; command?: string; url?: string }[] = [
-  { label: "Filesystem", transport: "stdio", command: "npx -y @modelcontextprotocol/server-filesystem" },
-  { label: "GitHub", transport: "stdio", command: "npx -y @modelcontextprotocol/server-github" },
-  { label: "Postgres", transport: "stdio", command: "npx -y @modelcontextprotocol/server-postgres" },
-  { label: "Brave Search", transport: "stdio", command: "npx -y @modelcontextprotocol/server-brave-search" },
-  { label: "Memory", transport: "stdio", command: "npx -y @modelcontextprotocol/server-memory" },
-  { label: "Custom URL…", transport: "streamable-http" },
-  { label: "Custom command…", transport: "stdio" },
-];
+function serverNameFromCommand(cmd: string[]): string {
+  const joined = cmd.join(" ");
+  const m = joined.match(/@modelcontextprotocol\/server-([a-z0-9-]+)/);
+  if (m) return m[1];
+  const m2 = joined.match(/@[^/]+\/server-([a-z0-9-]+)/);
+  if (m2) return m2[1];
+  const m3 = joined.match(/\/([a-z0-9-]+)(?:\s|$)/);
+  if (m3) return m3[1];
+  return "server";
+}
+
+function serverNameFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const parts = u.hostname.split(".");
+    if (parts[0] === "mcp" || parts[0] === "api") return parts[1] || parts[0];
+    return parts[0];
+  } catch {
+    return "server";
+  }
+}
+
+function parseEnvBlock(env: Record<string, string>): { env: Record<string, string>; missing: string[] } {
+  const missing: string[] = [];
+  const resolved: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (!v || PLACEHOLDER_RE.test(v)) {
+      missing.push(k);
+      resolved[k] = "";
+    } else {
+      resolved[k] = v;
+    }
+  }
+  return { env: resolved, missing };
+}
+
+export function parseMcpConfig(input: string): ParsedServer[] {
+  const trimmed = input.trim();
+
+  // 1. Try as JSON
+  try {
+    const obj = JSON.parse(trimmed);
+    return parseJsonObj(obj);
+  } catch {
+    // not JSON, try other formats
+  }
+
+  // 2. Bare URL
+  if (/^https?:\/\//i.test(trimmed)) {
+    return [{
+      name: serverNameFromUrl(trimmed),
+      transport: "streamable-http",
+      command: [],
+      url: trimmed,
+      env: {},
+      headers: {},
+      missing: [],
+    }];
+  }
+
+  // 3. npx/uvx/docker command string
+  if (/^(npx|uvx|docker|node|python|bun)\s/i.test(trimmed)) {
+    const parts = trimmed.split(/\s+/);
+    return [{
+      name: serverNameFromCommand(parts),
+      transport: "stdio",
+      command: parts,
+      url: "",
+      env: {},
+      headers: {},
+      missing: [],
+    }];
+  }
+
+  // 4. Give up
+  return [];
+}
+
+function parseJsonObj(obj: Record<string, unknown>): ParsedServer[] {
+  const results: ParsedServer[] = [];
+
+  // Unwrap common wrappers: { mcpServers: ... } or { servers: ... } or { mcp: { servers: ... } }
+  let serversObj: Record<string, unknown> | undefined;
+  if (obj.mcpServers && typeof obj.mcpServers === "object") {
+    serversObj = obj.mcpServers as Record<string, unknown>;
+  } else if (obj.servers && typeof obj.servers === "object") {
+    serversObj = obj.servers as Record<string, unknown>;
+  } else if (obj.mcp && typeof obj.mcp === "object" && (obj.mcp as Record<string, unknown>).servers) {
+    serversObj = (obj.mcp as Record<string, unknown>).servers as Record<string, unknown>;
+  }
+
+  if (serversObj) {
+    for (const [name, val] of Object.entries(serversObj)) {
+      if (val && typeof val === "object") {
+        results.push(parseSingleServer(name, val as Record<string, unknown>));
+      }
+    }
+    return results;
+  }
+
+  // Might be a single server object (has command or url or type)
+  if (obj.command || obj.url || obj.type) {
+    return [parseSingleServer("server", obj)];
+  }
+
+  return results;
+}
+
+function parseSingleServer(name: string, obj: Record<string, unknown>): ParsedServer {
+  const command = obj.command
+    ? [String(obj.command), ...(Array.isArray(obj.args) ? obj.args.map(String) : [])]
+    : [];
+  const url = String(obj.url || "");
+  const rawEnv = (obj.env && typeof obj.env === "object") ? obj.env as Record<string, string> : {};
+  const headers = (obj.headers && typeof obj.headers === "object") ? obj.headers as Record<string, string> : {};
+  const { env, missing } = parseEnvBlock(rawEnv);
+
+  let transport: ParsedServer["transport"] = "stdio";
+  if (obj.type === "http" || obj.type === "sse" || obj.type === "streamable-http") {
+    transport = obj.type as ParsedServer["transport"];
+  } else if (url && !command.length) {
+    transport = "streamable-http";
+  }
+
+  const resolvedName = name === "server" && command.length
+    ? serverNameFromCommand(command)
+    : name === "server" && url
+    ? serverNameFromUrl(url)
+    : name;
+
+  return { name: resolvedName, transport, command, url, env, headers, missing };
+}
+
+// ── Component ─────────────────────────────────────────────────────────────
+
+type Phase = "idle" | "parsed" | "testing" | "tested" | "saving";
 
 export default function IntegrationsTab() {
   const { t } = useTranslation("settings");
   const toast = useToast();
 
   const [servers, setServers] = useState<McpServerStatus[]>([]);
-  const [configServers, setConfigServers] = useState<Record<string, McpServerConfig>>({});
+  const [configServers, setConfigServers] = useState<Record<string, Record<string, unknown>>>({});
   const [loading, setLoading] = useState(true);
   const [reconnecting, setReconnecting] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
-  // Wizard state
+  // Wizard
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [wizard, setWizard] = useState<WizardState>({ ...INITIAL_WIZARD });
+  const [pasteText, setPasteText] = useState("");
+  const [parsed, setParsed] = useState<ParsedServer[]>([]);
+  const [creds, setCreds] = useState<Record<string, string>>({});
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [testResult, setTestResult] = useState<McpTestResult | null>(null);
+  const [testIdx, setTestIdx] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
       const [statusList, cfg] = await Promise.all([
-        listMcpServers().catch(() => [] as McpServerStatus[]),
+        listMcpServers().catch((): McpServerStatus[] => []),
         getConfig(),
       ]);
       setServers(statusList);
-      setConfigServers((cfg.mcp as McpConfig | undefined)?.servers ?? {});
+      const mcfg = (cfg.mcp as McpConfig | undefined)?.servers;
+      setConfigServers(mcfg ? JSON.parse(JSON.stringify(mcfg)) : {});
     } catch {
       setServers([]);
     } finally {
@@ -88,33 +210,118 @@ export default function IntegrationsTab() {
     refresh();
   }, [refresh]);
 
-  // ── CRUD ──────────────────────────────────────────────────────────────
+  // ── Wizard logic ────────────────────────────────────────────────────
 
-  async function saveServer(name: string, config: McpServerConfig) {
+  function startWizard() {
+    setPasteText("");
+    setParsed([]);
+    setCreds({});
+    setPhase("idle");
+    setTestResult(null);
+    setTestIdx(0);
+    setWizardOpen(true);
+  }
+
+  function handlePaste(text: string) {
+    setPasteText(text);
+    if (!text.trim()) {
+      setParsed([]);
+      setPhase("idle");
+      return;
+    }
+    const results = parseMcpConfig(text);
+    if (results.length > 0) {
+      setParsed(results);
+      setTestIdx(0);
+      // Collect all missing creds across servers
+      const allMissing: Record<string, string> = {};
+      for (const s of results) {
+        for (const k of s.missing) {
+          allMissing[k] = creds[k] ?? "";
+        }
+      }
+      setCreds(allMissing);
+      setPhase("parsed");
+      setTestResult(null);
+    } else {
+      setParsed([]);
+      setPhase("idle");
+    }
+  }
+
+  function credKey(idx: number, envVar: string) {
+    return `${idx}:${envVar}`;
+  }
+
+  function updateCred(key: string, value: string) {
+    setCreds((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleTest() {
+    setPhase("testing");
+    // Test first server only
+    const server = parsed[0];
+    if (!server) { setPhase("parsed"); return; }
+
+    const testConfig: Record<string, unknown> = {
+      transport: server.transport,
+      command: server.command,
+      url: server.url,
+      headers: server.headers,
+      env: { ...server.env },
+    };
+    // Fill in creds
+    for (const k of server.missing) {
+      (testConfig.env as Record<string, string>)[k] = creds[credKey(0, k)] || "";
+    }
+    const result = await testMcpServer(testConfig);
+    setTestResult(result);
+    setPhase("tested");
+  }
+
+  async function handleSave() {
+    setPhase("saving");
     try {
-      await patchConfig({
-        mcp: { servers: { [name]: config } },
-      });
-      toast.success(`MCP server "${name}" saved. Restart the server to apply.`);
+      const serversPatch: Record<string, Record<string, unknown> | null> = {};
+      for (let i = 0; i < parsed.length; i++) {
+        const s = parsed[i];
+        const env = { ...s.env };
+        for (const k of s.missing) {
+          env[k] = creds[credKey(i, k)] || "";
+        }
+        serversPatch[s.name] = {
+          transport: s.transport,
+          command: s.command,
+          url: s.url,
+          env,
+          headers: s.headers,
+          enabled: true,
+        };
+      }
+      await patchConfig({ mcp: { servers: serversPatch } });
+      toast.success(
+        parsed.length === 1
+          ? `"${parsed[0].name}" saved. Restart to connect.`
+          : `${parsed.length} servers saved. Restart to connect.`,
+      );
       setWizardOpen(false);
       await refresh();
     } catch (e) {
-      toast.error("Failed to save server", {
-        detail: e instanceof Error ? e.message : undefined,
-      });
+      toast.error("Failed to save", { detail: e instanceof Error ? e.message : undefined });
+      setPhase("tested");
     }
   }
+
+  // ── Server list CRUD ────────────────────────────────────────────────
 
   async function deleteServer(name: string) {
     setConfirmDelete(null);
     try {
       await patchConfig({ mcp: { servers: { [name]: null } } });
-      toast.success(`MCP server "${name}" removed. Restart the server to apply.`);
+      toast.success(`"${name}" removed. Restart to apply.`);
       await refresh();
     } catch (e) {
-      toast.error("Failed to delete server", {
-        detail: e instanceof Error ? e.message : undefined,
-      });
+      toast.error("Failed to delete", { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -124,9 +331,7 @@ export default function IntegrationsTab() {
       toast.success(enabled ? `"${name}" enabled` : `"${name}" disabled`);
       await refresh();
     } catch (e) {
-      toast.error("Failed to update server", {
-        detail: e instanceof Error ? e.message : undefined,
-      });
+      toast.error("Failed to update", { detail: e instanceof Error ? e.message : undefined });
     }
   }
 
@@ -142,64 +347,13 @@ export default function IntegrationsTab() {
     }
   }
 
-  async function handleRefresh() {
-    try {
-      await refreshMcpTools();
-      await refresh();
-    } catch {
-      // swallow
-    }
-  }
-
-  // ── Wizard handlers ───────────────────────────────────────────────────
-
-  function startWizard() {
-    setWizard({ ...INITIAL_WIZARD });
-    setWizardOpen(true);
-  }
-
-  function pickTemplate(tpl: (typeof POPULAR_SERVERS)[number]) {
-    setWizard({
-      ...wizard,
-      step: "enter-details",
-      transport: tpl.transport,
-      command: tpl.command ?? "",
-      url: tpl.url ?? "",
-      name: wizard.name || tpl.label.toLowerCase().replace(/[^a-z0-9]/g, "-"),
-    });
-  }
-
-  function wizardNext() {
-    if (wizard.step === "enter-details") {
-      setWizard({ ...wizard, step: "confirm" });
-    }
-  }
-
-  function wizardBack() {
-    if (wizard.step === "confirm") {
-      setWizard({ ...wizard, step: "enter-details" });
-    } else {
-      setWizard({ ...wizard, step: "choose-type" });
-    }
-  }
-
-  function wizardSave() {
-    const parts = wizard.command.trim().split(/\s+/);
-    saveServer(wizard.name, {
-      transport: wizard.transport,
-      command: wizard.transport === "stdio" ? parts : [],
-      url: wizard.transport !== "stdio" ? wizard.url : "",
-      env: {},
-      headers: {},
-      enabled: wizard.enabled,
-    });
-  }
-
   // ── Render ────────────────────────────────────────────────────────────
 
   if (loading) return <p className="settings-loading">Loading…</p>;
 
   const allNames = new Set([...Object.keys(configServers), ...servers.map((s) => s.name)]);
+  const currentServer = parsed[testIdx];
+  const currentMissing = currentServer?.missing ?? [];
 
   return (
     <>
@@ -207,13 +361,13 @@ export default function IntegrationsTab() {
         title={t("integrations.title", { defaultValue: "MCP Servers" })}
         description={t("integrations.description", {
           defaultValue:
-            "Connect external tool servers via the Model Context Protocol. This lets your agent use tools from services like GitHub, file systems, databases, and more.",
+            "Connect external tool servers via the Model Context Protocol. Paste a config from any MCP server's docs and Nexus handles the rest.",
         })}
       >
         <button
           type="button"
           className="settings-btn settings-btn--primary"
-          style={{ marginBottom: "0.75rem" }}
+          style={{ marginBottom: "0.5rem" }}
           onClick={startWizard}
         >
           + Add server
@@ -221,7 +375,7 @@ export default function IntegrationsTab() {
 
         {allNames.size === 0 && (
           <p className="s-field__hint">
-            No MCP servers configured yet. Click "Add server" to connect external tools and data sources to your agent.
+            No servers yet. Add one to give your agent access to external tools like GitHub, databases, file systems, and more.
           </p>
         )}
 
@@ -229,256 +383,174 @@ export default function IntegrationsTab() {
           const cfg = configServers[name];
           const status = servers.find((s) => s.name === name);
           const connected = status?.connected ?? false;
-          const isEnabled = cfg?.enabled ?? true;
+          const isEnabled = (cfg as Record<string, unknown> | undefined)?.enabled !== false;
 
           return (
-            <div
-              key={name}
-              className="s-card"
-              style={{ marginBottom: "0.5rem", opacity: isEnabled ? 1 : 0.5 }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                  <strong>{name}</strong>
-                  <span
-                    style={{
-                      padding: "0.1rem 0.4rem",
-                      borderRadius: "4px",
-                      fontSize: "0.7rem",
-                      background: connected ? "var(--color-success-bg, #e6f9e6)" : "var(--color-error-bg, #fde8e8)",
-                      color: connected ? "var(--color-success, #1a7f1a)" : "var(--color-error, #c53030)",
-                    }}
-                  >
-                    {connected ? "Connected" : isEnabled ? "Disconnected" : "Disabled"}
+            <div key={name} className="mcp-server-card" style={{ opacity: isEnabled ? 1 : 0.5 }}>
+              <div className="mcp-server-card__row">
+                <div className="mcp-server-card__info">
+                  <strong className="mcp-server-card__name">{name}</strong>
+                  <span className={`mcp-status-dot mcp-status-dot--${connected ? "ok" : isEnabled ? "off" : "dim"}`} />
+                  <span className="mcp-server-card__label">
+                    {connected ? "Connected" : isEnabled ? "Not connected" : "Disabled"}
                   </span>
-                  <span style={{ fontSize: "0.75rem", color: "var(--color-muted, #888)" }}>
-                    {cfg?.transport === "stdio" ? "Local" : "Remote"}
+                  <span className="mcp-server-card__transport">
+                    {(cfg as Record<string, unknown> | undefined)?.transport === "stdio" ? "Local" : "Remote"}
                   </span>
-                  {status?.tool_count != null && status.tool_count > 0 && (
-                    <span style={{ fontSize: "0.75rem", color: "var(--color-muted, #888)" }}>
-                      {status.tool_count} tool{status.tool_count !== 1 ? "s" : ""}
-                    </span>
-                  )}
                 </div>
-                <div style={{ display: "flex", gap: "0.35rem", flexShrink: 0 }}>
+                <div className="mcp-server-card__actions">
                   {connected && (
                     <button
-                      className="s-btn s-btn--sm"
+                      className="settings-btn settings-btn--ghost"
                       disabled={reconnecting === name}
-                      onClick={() => handleReconnect(name)}
+                      onClick={() => void handleReconnect(name)}
                     >
                       {reconnecting === name ? "…" : "Reconnect"}
                     </button>
                   )}
                   <button
-                    className="s-btn s-btn--sm"
-                    onClick={() => toggleServer(name, !isEnabled)}
+                    className="settings-btn settings-btn--ghost"
+                    onClick={() => void toggleServer(name, !isEnabled)}
                   >
                     {isEnabled ? "Disable" : "Enable"}
                   </button>
                   <button
-                    className="s-btn s-btn--sm"
-                    style={{ color: "var(--color-error, #c53030)" }}
+                    className="settings-btn settings-btn--ghost settings-btn--danger"
                     onClick={() => setConfirmDelete(name)}
                   >
                     Remove
                   </button>
                 </div>
               </div>
-              {cfg?.transport === "stdio" && cfg.command?.length > 0 && (
-                <div style={{ marginTop: "0.3rem", fontSize: "0.75rem", color: "var(--color-muted, #888)", fontFamily: "monospace" }}>
-                  {cfg.command.join(" ")}
-                </div>
-              )}
-              {cfg?.transport !== "stdio" && cfg?.url && (
-                <div style={{ marginTop: "0.3rem", fontSize: "0.75rem", color: "var(--color-muted, #888)", fontFamily: "monospace" }}>
-                  {cfg.url}
-                </div>
-              )}
-              {status?.tools && status.tools.length > 0 && (
-                <div style={{ marginTop: "0.3rem", fontSize: "0.7rem", color: "var(--color-muted, #999)" }}>
-                  {status.tools.join(", ")}
+              {(status?.tool_count ?? 0) > 0 && (
+                <div className="mcp-server-card__tools">
+                  {status!.tools!.slice(0, 8).join(", ")}
+                  {status!.tools!.length > 8 ? `… +${status!.tools!.length - 8} more` : ""}
                 </div>
               )}
             </div>
           );
         })}
-
-        {allNames.size > 0 && (
-          <button className="s-btn" style={{ marginTop: "0.5rem" }} onClick={() => void handleRefresh()}>
-            Refresh all tools
-          </button>
-        )}
-
-        <p className="s-field__hint" style={{ marginTop: "0.75rem" }}>
-          Changes are saved to your config and take effect after restarting the server.
-        </p>
       </SettingsSection>
 
-      {/* ── Add Server Wizard ──────────────────────────────────────────── */}
+      {/* ── Add Server Wizard ────────────────────────────────────────── */}
       {wizardOpen && (
         <div className="modal-backdrop" onClick={() => setWizardOpen(false)}>
           <div
             className="modal-dialog"
-            style={{ maxWidth: "520px" }}
+            style={{ maxWidth: "560px" }}
             onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setWizardOpen(false);
-            }}
+            onKeyDown={(e) => { if (e.key === "Escape") setWizardOpen(false); }}
           >
-            <div className="modal-title">
-              {wizard.step === "choose-type" && "Add MCP Server"}
-              {wizard.step === "enter-details" && "Configure Server"}
-              {wizard.step === "confirm" && "Confirm & Save"}
+            <div className="modal-title">Add MCP Server</div>
+
+            {/* Paste box — always visible */}
+            <div className="s-field">
+              <label className="s-field__label">Paste server config</label>
+              <p className="s-field__hint">
+                Paste the JSON block from the server's docs, or just the URL or command.
+              </p>
+              <textarea
+                className="settings-input"
+                style={{ fontFamily: "monospace", fontSize: "12px", minHeight: "80px", resize: "vertical" }}
+                value={pasteText}
+                placeholder={'Paste here — e.g.:\n{\n  "mcpServers": {\n    "github": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-github"],\n      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "..." }\n    }\n  }\n}\n\nOr just: https://mcp.example.com/mcp\nOr: npx -y @modelcontextprotocol/server-filesystem /tmp'}
+                autoFocus
+                onChange={(e) => handlePaste(e.target.value)}
+              />
             </div>
 
-            {/* Step 1: Choose type */}
-            {wizard.step === "choose-type" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                <p className="s-field__hint" style={{ marginBottom: "0.5rem" }}>
-                  Choose a server type or start from scratch. MCP servers give your agent access to external tools and data.
-                </p>
-                {POPULAR_SERVERS.map((tpl) => (
-                  <button
-                    key={tpl.label}
-                    className="s-btn"
-                    style={{ textAlign: "left", width: "100%", justifyContent: "flex-start" }}
-                    onClick={() => pickTemplate(tpl)}
-                  >
-                    {tpl.label}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Step 2: Enter details */}
-            {wizard.step === "enter-details" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                <div className="s-field">
-                  <label className="s-field__label">Server name</label>
-                  <p className="s-field__hint">A short name to identify this server (lowercase, no spaces).</p>
-                  <input
-                    type="text"
-                    className="settings-input"
-                    value={wizard.name}
-                    placeholder="my-server"
-                    autoFocus
-                    onChange={(e) => setWizard({ ...wizard, name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })}
-                  />
+            {/* Parsed result */}
+            {parsed.length > 0 && currentServer && (
+              <>
+                <div className="mcp-parsed-summary">
+                  <span className="mcp-parsed-badge">
+                    {parsed.length > 1 ? `${parsed.length} servers detected` : "Detected"}
+                  </span>
+                  {" "}
+                  <strong>{currentServer.name}</strong>
+                  {" — "}
+                  {currentServer.transport === "stdio"
+                    ? `Local (${currentServer.command.slice(0, 2).join(" ")})`
+                    : `Remote (${currentServer.url})`}
                 </div>
 
-                {wizard.transport === "stdio" ? (
-                  <div className="s-field">
-                    <label className="s-field__label">Command</label>
-                    <p className="s-field__hint">
-                      The command to start the MCP server. This usually looks like{" "}
-                      <code>npx -y @modelcontextprotocol/server-*</code>.
+                {/* Credential inputs */}
+                {currentMissing.length > 0 && (
+                  <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    <p className="s-field__hint" style={{ margin: 0 }}>
+                      This server needs the following credentials:
                     </p>
-                    <input
-                      type="text"
-                      className="settings-input"
-                      value={wizard.command}
-                      placeholder="npx -y @modelcontextprotocol/server-filesystem /path/to/dir"
-                      onChange={(e) => setWizard({ ...wizard, command: e.target.value })}
-                    />
-                  </div>
-                ) : (
-                  <div className="s-field">
-                    <label className="s-field__label">Server URL</label>
-                    <p className="s-field__hint">The HTTP URL of the remote MCP server.</p>
-                    <input
-                      type="url"
-                      className="settings-input"
-                      value={wizard.url}
-                      placeholder="http://localhost:3000/mcp"
-                      onChange={(e) => setWizard({ ...wizard, url: e.target.value })}
-                    />
+                    {currentMissing.map((envVar) => (
+                      <div key={envVar} className="s-field">
+                        <label className="s-field__label" style={{ fontSize: "12px" }}>
+                          {envVar}
+                        </label>
+                        <input
+                          type="password"
+                          className="settings-input"
+                          value={creds[credKey(testIdx, envVar)] ?? ""}
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          placeholder="Enter value…"
+                          onChange={(e) => updateCred(credKey(testIdx, envVar), e.target.value)}
+                        />
+                      </div>
+                    ))}
                   </div>
                 )}
 
-                <div className="s-field">
-                  <label className="s-field__label">Type</label>
-                  <select
-                    className="settings-input"
-                    value={wizard.transport}
-                    onChange={(e) => setWizard({ ...wizard, transport: e.target.value as WizardState["transport"] })}
-                  >
-                    <option value="stdio">Local (command)</option>
-                    <option value="streamable-http">Remote (URL)</option>
-                    <option value="sse">Remote (SSE)</option>
-                  </select>
-                </div>
-              </div>
-            )}
+                {/* Test result */}
+                {testResult && (
+                  <div className={`mcp-test-result mcp-test-result--${testResult.ok ? "ok" : "bad"}`}>
+                    {testResult.ok
+                      ? `Connected! ${testResult.tool_count} tool${testResult.tool_count !== 1 ? "s" : ""} found.`
+                      : `Connection failed: ${testResult.error}`}
+                  </div>
+                )}
 
-            {/* Step 3: Confirm */}
-            {wizard.step === "confirm" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                <p style={{ fontSize: "0.85rem" }}>
-                  This will add a new MCP server with the following settings:
-                </p>
-                <div
-                  style={{
-                    background: "var(--color-bg-subtle, #f5f5f5)",
-                    borderRadius: "6px",
-                    padding: "0.75rem",
-                    fontSize: "0.85rem",
-                    fontFamily: "monospace",
-                  }}
-                >
-                  <div><strong>Name:</strong> {wizard.name}</div>
-                  <div><strong>Transport:</strong> {wizard.transport}</div>
-                  {wizard.transport === "stdio" ? (
-                    <div><strong>Command:</strong> {wizard.command}</div>
-                  ) : (
-                    <div><strong>URL:</strong> {wizard.url}</div>
+                {/* Actions */}
+                <div className="modal-actions" style={{ marginTop: "0.75rem" }}>
+                  <button className="modal-btn" onClick={() => setWizardOpen(false)}>
+                    Cancel
+                  </button>
+                  {(phase === "parsed" || phase === "testing") && (
+                    <button
+                      className="modal-btn"
+                      disabled={phase === "testing" || currentMissing.some((k) => !creds[credKey(testIdx, k)])}
+                      onClick={() => void handleTest()}
+                    >
+                      {phase === "testing" ? "Testing…" : "Test connection"}
+                    </button>
+                  )}
+                  {(phase === "tested" || (phase === "parsed" && currentMissing.length === 0)) && (
+                    <button
+                      className="modal-btn modal-btn--primary"
+                      onClick={() => void handleSave()}
+                    >
+                      Save
+                    </button>
                   )}
                 </div>
-                <p className="s-field__hint">
-                  You may need to set environment variables (API keys) for some servers. Add them in the Credentials tab if needed.
-                </p>
-              </div>
+              </>
             )}
 
-            <div className="modal-actions" style={{ marginTop: "1rem" }}>
-              {wizard.step !== "choose-type" && (
-                <button className="modal-btn" onClick={wizardBack}>
-                  Back
-                </button>
-              )}
-              <button className="modal-btn" onClick={() => setWizardOpen(false)}>
-                Cancel
-              </button>
-              {wizard.step === "enter-details" && (
-                <button
-                  className="modal-btn modal-btn--primary"
-                  disabled={!wizard.name || (wizard.transport === "stdio" ? !wizard.command : !wizard.url)}
-                  onClick={wizardNext}
-                >
-                  Next
-                </button>
-              )}
-              {wizard.step === "confirm" && (
-                <button
-                  className="modal-btn modal-btn--primary"
-                  disabled={!wizard.name}
-                  onClick={wizardSave}
-                >
-                  Save
-                </button>
-              )}
-            </div>
+            {parsed.length === 0 && pasteText.trim() && (
+              <p className="s-field__hint" style={{ marginTop: "0.5rem" }}>
+                Couldn't parse that. Try pasting the JSON config from the MCP server's documentation, a URL, or an npx command.
+              </p>
+            )}
           </div>
         </div>
       )}
 
-      {/* ── Delete Confirm ─────────────────────────────────────────────── */}
+      {/* ── Delete confirm ───────────────────────────────────────────── */}
       {confirmDelete && (
         <Modal
           kind="confirm"
           danger
           title={`Remove "${confirmDelete}"?`}
-          message="This will remove the MCP server from your configuration. You can always add it again later."
+          message="This removes the server from your config. You can always add it again later."
           confirmLabel="Remove"
           onCancel={() => setConfirmDelete(null)}
           onSubmit={() => void deleteServer(confirmDelete)}

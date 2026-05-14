@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from loom.mcp.client import McpClient
 from loom.mcp.config import McpServerConfig
 from loom.mcp.handler import McpToolHandler
 from loom.mcp.manager import McpManager
@@ -106,6 +107,52 @@ async def stop_mcp(manager: McpManager) -> None:
     """Gracefully close all MCP server connections."""
     await manager.__aexit__(None, None, None)
     log.info("[mcp] all connections closed")
+
+
+async def test_mcp_connection(config: dict[str, Any]) -> dict[str, Any]:
+    """Test an MCP server config by connecting, listing tools, disconnecting.
+
+    Accepts a raw dict with transport/command/url/env/headers. Returns
+    ok/tool_count/tools/error. Does NOT persist anything.
+    """
+    transport = config.get("transport", "stdio")
+    command = config.get("command") or []
+    url = config.get("url") or ""
+    env = config.get("env") or {}
+    headers = config.get("headers") or {}
+    name = config.get("name", "test")
+
+    if transport == "stdio" and isinstance(command, str):
+        command = command.split()
+    if transport != "stdio" and isinstance(command, list) and not url:
+        url = ""
+    if transport == "stdio" and not command:
+        return {"ok": False, "error": "Command is required for stdio transport", "tool_count": 0, "tools": []}
+    if transport != "stdio" and not url:
+        return {"ok": False, "error": "URL is required for remote transport", "tool_count": 0, "tools": []}
+
+    cfg = McpServerConfig(
+        name=name,
+        transport=transport,
+        command=command or None,
+        env=env,
+        url=url or None,
+        headers=headers,
+    )
+    try:
+        client = McpClient(cfg)
+        async with client:
+            handlers = await client.list_tools()
+            tools = [h.tool.name for h in handlers]
+            return {
+                "ok": True,
+                "tool_count": len(tools),
+                "tools": tools,
+                "error": None,
+            }
+    except Exception as e:
+        log.warning("[mcp] test connection failed: %s", e)
+        return {"ok": False, "error": str(e), "tool_count": 0, "tools": []}
 
 
 def start_mcp_server(

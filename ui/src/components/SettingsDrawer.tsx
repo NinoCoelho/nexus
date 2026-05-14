@@ -55,7 +55,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     { id: "models", label: t("settings:tabs.models") },
     { id: "credentials", label: t("settings:tabs.credentials") },
     { id: "features", label: t("settings:tabs.features") },
-    { id: "integrations", label: t("settings:tabs.integrations", { defaultValue: "Integrations" }) },
+    { id: "integrations", label: t("settings:tabs.integrations", { defaultValue: "MCP" }) },
     { id: "advanced", label: t("settings:tabs.advanced") },
   ];
 
