@@ -31,6 +31,7 @@ import AdvancedTab from "./settings/AdvancedTab";
 import CredentialsTab from "./settings/CredentialsTab";
 import DefaultModelStrip from "./settings/DefaultModelStrip";
 import FeaturesTab from "./settings/FeaturesTab";
+import IntegrationsTab from "./settings/IntegrationsTab";
 import ModelsTab from "./settings/ModelsTab";
 import NexusTab from "./settings/NexusTab";
 import QuickStartTab from "./settings/QuickStartTab";
@@ -43,7 +44,7 @@ interface Props {
   onClose: () => void;
 }
 
-type TabId = "nexus" | "quick" | "models" | "credentials" | "features" | "advanced";
+type TabId = "nexus" | "quick" | "models" | "credentials" | "features" | "integrations" | "advanced";
 
 export default function SettingsDrawer({ open, onClose }: Props) {
   const { t } = useTranslation("settings");
@@ -54,6 +55,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     { id: "models", label: t("settings:tabs.models") },
     { id: "credentials", label: t("settings:tabs.credentials") },
     { id: "features", label: t("settings:tabs.features") },
+    { id: "integrations", label: t("settings:tabs.integrations", { defaultValue: "Integrations" }) },
     { id: "advanced", label: t("settings:tabs.advanced") },
   ];
 
@@ -151,6 +153,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           )}
           {active === "credentials" && <CredentialsTab />}
           {active === "features" && <FeaturesTab graphStats={graphStats} models={models} />}
+          {active === "integrations" && <IntegrationsTab />}
           {active === "advanced" && (
             <AdvancedTab hitl={hitl} onHitlChanged={setHitl} />
           )}
