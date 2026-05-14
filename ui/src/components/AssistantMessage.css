@@ -352,3 +352,10 @@
 @keyframes asst-reconnecting-spin {
   to { transform: rotate(360deg); }
 }
+
+.asst-inline-resource {
+  margin: 6px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 100%;
+}

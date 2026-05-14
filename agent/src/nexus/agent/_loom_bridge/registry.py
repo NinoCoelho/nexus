@@ -90,6 +90,9 @@ def build_tool_registry(
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
     from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
+    from nexus.tools.show_kanban_tool import SHOW_KANBAN_TOOL, handle_show_kanban
+    from nexus.tools.show_dashboard_widget_tool import SHOW_DASHBOARD_WIDGET_TOOL, handle_show_dashboard_widget
+    from nexus.tools.show_data_table_tool import SHOW_DATA_TABLE_TOOL, handle_show_data_table
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
     from nexus.tools.ocr_tool import OCR_IMAGE_TOOL, handle_ocr_image_tool
@@ -249,6 +252,24 @@ def build_tool_registry(
         return handle_dashboard_tool(args)
 
     registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
+
+    # show_kanban — render kanban board as inline MCP App
+    async def _show_kanban(args: dict) -> str:
+        return await handle_show_kanban(args)
+
+    registry.register(_SimpleToolHandler(SHOW_KANBAN_TOOL, _show_kanban))
+
+    # show_dashboard_widget — render chart widget as inline MCP App
+    async def _show_dashboard_widget(args: dict) -> str:
+        return await handle_show_dashboard_widget(args)
+
+    registry.register(_SimpleToolHandler(SHOW_DASHBOARD_WIDGET_TOOL, _show_dashboard_widget))
+
+    # show_data_table — render data table as inline MCP App
+    async def _show_data_table(args: dict) -> str:
+        return await handle_show_data_table(args)
+
+    registry.register(_SimpleToolHandler(SHOW_DATA_TABLE_TOOL, _show_data_table))
 
     # vault_csv — DuckDB analytics over CSV/TSV files
     async def _csv(args: dict) -> str:

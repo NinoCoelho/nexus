@@ -10,16 +10,24 @@ import { useTranslation } from "react-i18next";
 import {
   listMcpServers,
   reconnectMcpServer,
+  reloadMcpServers,
   testMcpServer,
   type McpServerStatus,
   type McpTestResult,
 } from "../../api/mcp";
 import { getConfig, patchConfig, type McpConfig } from "../../api/config";
+import { listCredentials, setCredential } from "../../api/credentials";
 import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
 import SettingsSection from "./SettingsSection";
+import { invalidateToolMetaCache } from "../StepDetailModal/ResultRenderers";
 
 // ── Smart parser ──────────────────────────────────────────────────────────
+
+interface UrlMissing {
+  param: string;
+  credName: string;
+}
 
 interface ParsedServer {
   name: string;
@@ -30,6 +38,8 @@ interface ParsedServer {
   headers: Record<string, string>;
   /** Env vars whose values look like placeholders (empty, <YOUR_TOKEN>, etc.) */
   missing: string[];
+  /** Credential params detected in the URL query string. */
+  urlMissing: UrlMissing[];
 }
 
 const PLACEHOLDER_RE = /<[^>]+>|YOUR_|PLACEHOLDER|_HERE$|insert_|\[.*\]|^$/i;
@@ -54,6 +64,31 @@ function serverNameFromUrl(url: string): string {
   } catch {
     return "server";
   }
+}
+
+function makeCredName(serverName: string, paramName: string): string {
+  const prefix = serverName.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const norm = paramName.toLowerCase().replace(/-/g, "_");
+  if (["apikey", "api_key", "key", "api-key"].includes(norm)) return `${prefix}_API_KEY`;
+  if (["token", "access_token", "auth_token", "bearer_token"].includes(norm)) return `${prefix}_TOKEN`;
+  if (["secret", "client_secret", "api_secret"].includes(norm)) return `${prefix}_SECRET`;
+  return `${prefix}_${norm.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+function extractUrlPlaceholders(url: string, serverName: string): { url: string; urlMissing: UrlMissing[] } {
+  const urlMissing: UrlMissing[] = [];
+  try {
+    const u = new URL(url);
+    for (const [key, value] of [...u.searchParams.entries()]) {
+      if (!value || PLACEHOLDER_RE.test(value)) {
+        const credName = makeCredName(serverName, key);
+        u.searchParams.set(key, `$${credName}`);
+        urlMissing.push({ param: key, credName });
+      }
+    }
+    if (urlMissing.length) return { url: u.toString(), urlMissing };
+  } catch { /* not a valid URL */ }
+  return { url, urlMissing };
 }
 
 function parseEnvBlock(env: Record<string, string>): { env: Record<string, string>; missing: string[] } {
@@ -83,14 +118,18 @@ export function parseMcpConfig(input: string): ParsedServer[] {
 
   // 2. Bare URL
   if (/^https?:\/\//i.test(trimmed)) {
+    const serverName = serverNameFromUrl(trimmed);
+    const { url, urlMissing } = extractUrlPlaceholders(trimmed, serverName);
+    const transport = /\/sse\/?$/.test(trimmed) ? "sse" : "streamable-http";
     return [{
-      name: serverNameFromUrl(trimmed),
-      transport: "streamable-http",
+      name: serverName,
+      transport: transport as "sse" | "streamable-http",
       command: [],
-      url: trimmed,
+      url,
       env: {},
       headers: {},
       missing: [],
+      urlMissing,
     }];
   }
 
@@ -105,6 +144,7 @@ export function parseMcpConfig(input: string): ParsedServer[] {
       env: {},
       headers: {},
       missing: [],
+      urlMissing: [],
     }];
   }
 
@@ -146,10 +186,24 @@ function parseSingleServer(name: string, obj: Record<string, unknown>): ParsedSe
   const command = obj.command
     ? [String(obj.command), ...(Array.isArray(obj.args) ? obj.args.map(String) : [])]
     : [];
-  const url = String(obj.url || "");
+  let url = String(obj.url || "");
   const rawEnv = (obj.env && typeof obj.env === "object") ? obj.env as Record<string, string> : {};
   const headers = (obj.headers && typeof obj.headers === "object") ? obj.headers as Record<string, string> : {};
   const { env, missing } = parseEnvBlock(rawEnv);
+
+  const resolvedName = name === "server" && command.length
+    ? serverNameFromCommand(command)
+    : name === "server" && url
+    ? serverNameFromUrl(url)
+    : name;
+
+  // Detect placeholder values in URL query params
+  let urlMissing: UrlMissing[] = [];
+  if (url) {
+    const extracted = extractUrlPlaceholders(url, resolvedName);
+    url = extracted.url;
+    urlMissing = extracted.urlMissing;
+  }
 
   let transport: ParsedServer["transport"] = "stdio";
   if (obj.type === "http" || obj.type === "sse" || obj.type === "streamable-http") {
@@ -158,13 +212,39 @@ function parseSingleServer(name: string, obj: Record<string, unknown>): ParsedSe
     transport = "streamable-http";
   }
 
-  const resolvedName = name === "server" && command.length
-    ? serverNameFromCommand(command)
-    : name === "server" && url
-    ? serverNameFromUrl(url)
-    : name;
+  return { name: resolvedName, transport, command, url, env, headers, missing, urlMissing };
+}
 
-  return { name: resolvedName, transport, command, url, env, headers, missing };
+// ── Auth error detection ──────────────────────────────────────────────────
+
+function looksLikeAuthError(error: string | null): boolean {
+  if (!error) return false;
+  const lower = error.toLowerCase();
+  return [
+    "401", "403", "unauthorized", "forbidden", "authentication",
+    "invalid api", "invalid key", "api key required", "access denied",
+    "not authenticated", "auth failed", "credential",
+  ].some((p) => lower.includes(p));
+}
+
+const CRED_PARAM_NAMES = new Set([
+  "apikey", "api_key", "key", "token", "access_token",
+  "secret", "auth", "password", "api-key", "bearer",
+]);
+
+function detectUrlCredParams(url: string, serverName: string): UrlMissing[] {
+  const result: UrlMissing[] = [];
+  try {
+    const u = new URL(url);
+    for (const [key, value] of [...u.searchParams.entries()]) {
+      const normKey = key.toLowerCase().replace(/-/g, "_");
+      if (CRED_PARAM_NAMES.has(normKey) && !value.startsWith("$")) {
+        const credName = makeCredName(serverName, key);
+        result.push({ param: key, credName });
+      }
+    }
+  } catch { /* not a valid URL */ }
+  return result;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -189,6 +269,7 @@ export default function IntegrationsTab() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [testResult, setTestResult] = useState<McpTestResult | null>(null);
   const [testIdx, setTestIdx] = useState(0);
+  const [existingCreds, setExistingCreds] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     try {
@@ -212,7 +293,7 @@ export default function IntegrationsTab() {
 
   // ── Wizard logic ────────────────────────────────────────────────────
 
-  function startWizard() {
+  async function startWizard() {
     setPasteText("");
     setParsed([]);
     setCreds({});
@@ -220,6 +301,12 @@ export default function IntegrationsTab() {
     setTestResult(null);
     setTestIdx(0);
     setWizardOpen(true);
+    try {
+      const all = await listCredentials();
+      setExistingCreds(new Set(all.map((c) => c.name)));
+    } catch {
+      setExistingCreds(new Set());
+    }
   }
 
   function handlePaste(text: string) {
@@ -233,11 +320,14 @@ export default function IntegrationsTab() {
     if (results.length > 0) {
       setParsed(results);
       setTestIdx(0);
-      // Collect all missing creds across servers
       const allMissing: Record<string, string> = {};
-      for (const s of results) {
+      for (let i = 0; i < results.length; i++) {
+        const s = results[i];
         for (const k of s.missing) {
-          allMissing[k] = creds[k] ?? "";
+          allMissing[credKey(i, k)] = creds[credKey(i, k)] ?? "";
+        }
+        for (const um of s.urlMissing) {
+          allMissing[credKey(i, um.credName)] = creds[credKey(i, um.credName)] ?? "";
         }
       }
       setCreds(allMissing);
@@ -249,8 +339,8 @@ export default function IntegrationsTab() {
     }
   }
 
-  function credKey(idx: number, envVar: string) {
-    return `${idx}:${envVar}`;
+  function credKey(idx: number, key: string) {
+    return `${idx}:${key}`;
   }
 
   function updateCred(key: string, value: string) {
@@ -259,35 +349,97 @@ export default function IntegrationsTab() {
 
   async function handleTest() {
     setPhase("testing");
-    // Test first server only
     const server = parsed[0];
     if (!server) { setPhase("parsed"); return; }
+
+    let testUrl = server.url;
+    for (const um of server.urlMissing) {
+      if (existingCreds.has(um.credName)) continue;
+      const value = creds[credKey(0, um.credName)] || "";
+      testUrl = testUrl.replace(`$${um.credName}`, value);
+    }
+
+    const testEnv: Record<string, string> = { ...server.env };
+    for (const k of server.missing) {
+      if (existingCreds.has(k)) {
+        testEnv[k] = `$${k}`;
+      } else {
+        testEnv[k] = creds[credKey(0, k)] || "";
+      }
+    }
 
     const testConfig: Record<string, unknown> = {
       transport: server.transport,
       command: server.command,
-      url: server.url,
+      url: testUrl,
       headers: server.headers,
-      env: { ...server.env },
+      env: testEnv,
     };
-    // Fill in creds
-    for (const k of server.missing) {
-      (testConfig.env as Record<string, string>)[k] = creds[credKey(0, k)] || "";
+    try {
+      const result = await testMcpServer(testConfig);
+      setTestResult(result);
+      setPhase("tested");
+
+      if (
+        !result.ok
+        && looksLikeAuthError(result.error)
+        && server.urlMissing.length === 0
+        && server.missing.length === 0
+      ) {
+        const detected = detectUrlCredParams(server.url, server.name);
+        if (detected.length > 0) {
+          const updated = { ...server };
+          try {
+            const u = new URL(updated.url);
+            for (const d of detected) {
+              u.searchParams.set(d.param, `$${d.credName}`);
+            }
+            updated.url = u.toString();
+          } catch { /* keep url as-is */ }
+          updated.urlMissing = detected;
+          setParsed([updated]);
+          setCreds((prev) => {
+            const next = { ...prev };
+            for (const d of detected) {
+              next[credKey(0, d.credName)] = prev[credKey(0, d.credName)] ?? "";
+            }
+            return next;
+          });
+        }
+      }
+    } catch (e) {
+      setTestResult({ ok: false, tool_count: 0, tools: [], error: e instanceof Error ? e.message : String(e) });
+      setPhase("tested");
     }
-    const result = await testMcpServer(testConfig);
-    setTestResult(result);
-    setPhase("tested");
   }
 
   async function handleSave() {
     setPhase("saving");
     try {
+      for (let i = 0; i < parsed.length; i++) {
+        const s = parsed[i];
+        for (const k of s.missing) {
+          if (existingCreds.has(k)) continue;
+          const value = creds[credKey(i, k)] || "";
+          if (value) {
+            await setCredential(k, value, { kind: "generic" });
+          }
+        }
+        for (const um of s.urlMissing) {
+          if (existingCreds.has(um.credName)) continue;
+          const value = creds[credKey(i, um.credName)] || "";
+          if (value) {
+            await setCredential(um.credName, value, { kind: "generic" });
+          }
+        }
+      }
+
       const serversPatch: Record<string, Record<string, unknown> | null> = {};
       for (let i = 0; i < parsed.length; i++) {
         const s = parsed[i];
         const env = { ...s.env };
         for (const k of s.missing) {
-          env[k] = creds[credKey(i, k)] || "";
+          env[k] = `$${k}`;
         }
         serversPatch[s.name] = {
           transport: s.transport,
@@ -299,11 +451,21 @@ export default function IntegrationsTab() {
         };
       }
       await patchConfig({ mcp: { servers: serversPatch } });
-      toast.success(
-        parsed.length === 1
-          ? `"${parsed[0].name}" saved. Restart to connect.`
-          : `${parsed.length} servers saved. Restart to connect.`,
-      );
+      invalidateToolMetaCache();
+      try {
+        const reloadResult = await reloadMcpServers();
+        toast.success(
+          parsed.length === 1
+            ? `"${parsed[0].name}" saved and connected (${reloadResult.tool_count} tools).`
+            : `${parsed.length} servers saved and connected (${reloadResult.tool_count} tools).`,
+        );
+      } catch {
+        toast.success(
+          parsed.length === 1
+            ? `"${parsed[0].name}" saved. Reopen to connect.`
+            : `${parsed.length} servers saved. Reopen to connect.`,
+        );
+      }
       setWizardOpen(false);
       await refresh();
     } catch (e) {
@@ -353,7 +515,14 @@ export default function IntegrationsTab() {
 
   const allNames = new Set([...Object.keys(configServers), ...servers.map((s) => s.name)]);
   const currentServer = parsed[testIdx];
-  const currentMissing = currentServer?.missing ?? [];
+  const currentMissing = (currentServer?.missing ?? []).filter((k) => !existingCreds.has(k));
+  const currentExistingEnv = (currentServer?.missing ?? []).filter((k) => existingCreds.has(k));
+  const currentUrlMissing = (currentServer?.urlMissing ?? []).filter((um) => !existingCreds.has(um.credName));
+  const currentExistingUrl = (currentServer?.urlMissing ?? []).filter((um) => existingCreds.has(um.credName));
+  const hasAnyCreds = currentMissing.length > 0 || currentUrlMissing.length > 0;
+  const allCredsFilled =
+    currentMissing.every((k) => !!creds[credKey(testIdx, k)])
+    && currentUrlMissing.every((um) => !!creds[credKey(testIdx, um.credName)]);
 
   return (
     <>
@@ -475,7 +644,7 @@ export default function IntegrationsTab() {
                     : `Remote (${currentServer.url})`}
                 </div>
 
-                {/* Credential inputs */}
+                {/* Credential inputs — env vars */}
                 {currentMissing.length > 0 && (
                   <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                     <p className="s-field__hint" style={{ margin: 0 }}>
@@ -500,6 +669,58 @@ export default function IntegrationsTab() {
                   </div>
                 )}
 
+                {/* Already-stored env creds */}
+                {currentExistingEnv.length > 0 && (
+                  <div style={{ marginTop: "0.25rem", display: "flex", flexWrap: "wrap", gap: "0.25rem 0.75rem" }}>
+                    {currentExistingEnv.map((envVar) => (
+                      <span key={envVar} className="s-field__hint" style={{ margin: 0 }}>
+                        {envVar}: <em>already stored</em>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Credential inputs — URL query params */}
+                {currentUrlMissing.length > 0 && (
+                  <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    <p className="s-field__hint" style={{ margin: 0 }}>
+                      {currentMissing.length > 0
+                        ? "And credentials detected in the URL:"
+                        : "This server needs credentials detected in the URL:"}
+                    </p>
+                    {currentUrlMissing.map((um) => (
+                      <div key={um.credName} className="s-field">
+                        <label className="s-field__label" style={{ fontSize: "12px" }}>
+                          {um.param}
+                          <span style={{ opacity: 0.5, marginLeft: "0.5rem" }}>
+                            → saved as {um.credName}
+                          </span>
+                        </label>
+                        <input
+                          type="password"
+                          className="settings-input"
+                          value={creds[credKey(testIdx, um.credName)] ?? ""}
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          placeholder="Enter secret…"
+                          onChange={(e) => updateCred(credKey(testIdx, um.credName), e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Already-stored URL creds */}
+                {currentExistingUrl.length > 0 && (
+                  <div style={{ marginTop: "0.25rem", display: "flex", flexWrap: "wrap", gap: "0.25rem 0.75rem" }}>
+                    {currentExistingUrl.map((um) => (
+                      <span key={um.credName} className="s-field__hint" style={{ margin: 0 }}>
+                        {um.param}: <em>already stored</em>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 {/* Test result */}
                 {testResult && (
                   <div className={`mcp-test-result mcp-test-result--${testResult.ok ? "ok" : "bad"}`}>
@@ -514,16 +735,16 @@ export default function IntegrationsTab() {
                   <button className="modal-btn" onClick={() => setWizardOpen(false)}>
                     Cancel
                   </button>
-                  {(phase === "parsed" || phase === "testing") && (
+                  {phase !== "saving" && (
                     <button
                       className="modal-btn"
-                      disabled={phase === "testing" || currentMissing.some((k) => !creds[credKey(testIdx, k)])}
+                      disabled={phase === "testing" || (hasAnyCreds && !allCredsFilled)}
                       onClick={() => void handleTest()}
                     >
                       {phase === "testing" ? "Testing…" : "Test connection"}
                     </button>
                   )}
-                  {(phase === "tested" || (phase === "parsed" && currentMissing.length === 0)) && (
+                  {(phase === "tested" || (phase === "parsed" && !hasAnyCreds)) && (
                     <button
                       className="modal-btn modal-btn--primary"
                       onClick={() => void handleSave()}

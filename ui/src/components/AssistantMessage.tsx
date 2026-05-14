@@ -23,6 +23,8 @@ import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
 import { VaultLink, asVaultPath, linkifyVaultPaths, vaultUrlTransform } from "./vaultLink";
 import { useTTS } from "../hooks/useTTS";
+import { InternalResourceRenderer } from "./StepDetailModal/ResultRenderers";
+import { tryParseJson } from "./StepDetailModal/types";
 const LazyChartBlock = lazy(() => import("./ChartBlock"));
 import "./AssistantMessage.css";
 
@@ -132,6 +134,26 @@ function fmt(d: Date) {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+const INLINE_TOOLS = new Set(["show_kanban", "show_dashboard_widget", "show_data_table"]);
+
+function inlineResourcesFromTrace(trace?: TraceEvent[]): { uri: string; toolResult: unknown }[] {
+  if (!trace) return [];
+  const out: { uri: string; toolResult: unknown }[] = [];
+  for (const ev of trace) {
+    const tool = ev.tool ?? ((ev as unknown as Record<string, unknown>).name as string | undefined);
+    const result = ev.result ?? (ev as unknown as Record<string, unknown>).preview;
+    if (!tool || !INLINE_TOOLS.has(tool) || result == null) continue;
+    const parsed = tryParseJson(result);
+    if (parsed && typeof parsed === "object") {
+      const uri = (parsed as Record<string, unknown>).resourceUri as string | undefined;
+      if (uri && uri.startsWith("ui://nexus/")) {
+        out.push({ uri, toolResult: parsed });
+      }
+    }
+  }
+  return out;
+}
+
 export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking, reconnecting }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
@@ -221,6 +243,11 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
           </div>
         )}
         <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} sessionId={sessionId} />
+        {inlineResourcesFromTrace(trace).map((r, i) => (
+          <div key={`inline-res-${i}`} className="asst-inline-resource">
+            <InternalResourceRenderer resourceUri={r.uri} toolResult={r.toolResult} />
+          </div>
+        ))}
         <div className="asst-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

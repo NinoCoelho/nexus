@@ -33,6 +33,7 @@ from ..schemas import (
     SkillDetail,
     SkillInfo,
 )
+from ._sse import keepalive
 from ...skills.types import Skill as _SkillModel
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
@@ -574,10 +575,11 @@ async def chat_events(session_id: str, store: SessionStore = Depends(get_session
     """
 
     async def stream() -> AsyncIterator[bytes]:
-        # Opening comment keeps intermediate proxies from buffering
-        # the connection while we wait for the first real event.
         yield b": subscribed\n\n"
-        async for event in store.subscribe(session_id):
+        async for event in keepalive(store.subscribe(session_id), interval=20.0):
+            if event is None:
+                yield b": ping\n\n"
+                continue
             yield event.to_sse()
 
     return StreamingResponse(

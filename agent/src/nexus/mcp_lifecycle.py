@@ -17,6 +17,8 @@ from loom.mcp.config import McpServerConfig
 from loom.mcp.handler import McpToolHandler
 from loom.mcp.manager import McpManager
 
+from .secrets_substitute import resolve as _resolve_secrets
+
 log = logging.getLogger(__name__)
 
 
@@ -36,9 +38,9 @@ def build_mcp_manager(nexus_cfg: Any) -> McpManager | None:
             name=name,
             transport=entry.transport,
             command=entry.command or None,
-            env=entry.env,
-            url=entry.url or None,
-            headers=entry.headers,
+            env=_resolve_secrets(entry.env),
+            url=_resolve_secrets(entry.url) or None,
+            headers=_resolve_secrets(entry.headers),
         )
         configs.append(cfg)
     if not configs:
@@ -117,9 +119,9 @@ async def test_mcp_connection(config: dict[str, Any]) -> dict[str, Any]:
     """
     transport = config.get("transport", "stdio")
     command = config.get("command") or []
-    url = config.get("url") or ""
-    env = config.get("env") or {}
-    headers = config.get("headers") or {}
+    url = _resolve_secrets(config.get("url") or "")
+    env = _resolve_secrets(config.get("env") or {})
+    headers = _resolve_secrets(config.get("headers") or {})
     name = config.get("name", "test")
 
     if transport == "stdio" and isinstance(command, str):
