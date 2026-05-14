@@ -2,9 +2,11 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   font-size: 11px;
   color: var(--fg-faint);
+  max-width: 100%;
+  min-width: 0;
 }
 
 .agent-status-pill {
