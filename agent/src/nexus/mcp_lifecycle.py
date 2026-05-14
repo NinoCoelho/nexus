@@ -108,6 +108,46 @@ async def stop_mcp(manager: McpManager) -> None:
     log.info("[mcp] all connections closed")
 
 
+def start_mcp_server(
+    nexus_cfg: Any,
+    tool_registry: Any,
+) -> Any | None:
+    """Optionally start an MCP server exposing Nexus tools to external hosts.
+
+    Returns the bridge instance if started, None otherwise.
+    The bridge runs in a background thread serving Streamable HTTP.
+    """
+    mcp_cfg = getattr(nexus_cfg, "mcp", None)
+    if mcp_cfg is None or not getattr(mcp_cfg, "server_enabled", False):
+        return None
+    try:
+        from loom.mcp.server_bridge import McpServerBridge
+    except ImportError:
+        log.warning("[mcp-server] mcp package not installed — skipping MCP server mode")
+        return None
+
+    expose = getattr(mcp_cfg, "server_expose", None) or None
+    port = getattr(mcp_cfg, "server_port", 18990)
+
+    bridge = McpServerBridge(
+        tool_registry,
+        name="nexus",
+        expose=expose,
+    )
+    import threading
+
+    def _run() -> None:
+        try:
+            bridge.run(host="127.0.0.1", port=port)
+        except Exception:
+            log.exception("[mcp-server] failed")
+
+    thread = threading.Thread(target=_run, daemon=True, name="mcp-server")
+    thread.start()
+    log.info("[mcp-server] started on 127.0.0.1:%d (expose=%s)", port, expose or "all")
+    return bridge
+
+
 def _wire_sampling(manager: McpManager, agent: Any) -> None:
     """Wire MCP sampling requests to the agent's LLM provider."""
     import json

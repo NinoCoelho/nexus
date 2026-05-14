@@ -296,6 +296,10 @@ class McpServerEntry(BaseModel):
 
 class McpConfig(BaseModel):
     servers: dict[str, McpServerEntry] = Field(default_factory=dict)
+    server_enabled: bool = False
+    server_port: int = 18990
+    server_expose: list[str] = Field(default_factory=list)
+    server_auth_token: str = ""
 
 
 class NexusConfig(BaseModel):

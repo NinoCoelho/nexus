@@ -189,6 +189,10 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 }
                 for name, entry in cfg.mcp.servers.items()
             },
+            "server_enabled": cfg.mcp.server_enabled,
+            "server_port": cfg.mcp.server_port,
+            "server_expose": cfg.mcp.server_expose,
+            "server_auth_token": cfg.mcp.server_auth_token,
         },
     }
     for m in cfg.models:

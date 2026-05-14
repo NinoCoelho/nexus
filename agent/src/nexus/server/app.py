@@ -697,6 +697,7 @@ def create_app(
 
         # ── MCP server connections ────────────────────────────────────────
         mcp_manager = None
+        mcp_server_bridge = None
         try:
             from ..mcp_lifecycle import build_mcp_manager, start_mcp
             mcp_mgr = build_mcp_manager(nexus_cfg)
@@ -708,6 +709,15 @@ def create_app(
                     app.state.mcp_manager = mcp_manager
         except Exception:
             log.exception("MCP bootstrap failed")
+
+        # ── MCP server mode (expose tools to external hosts) ─────────────
+        try:
+            from ..mcp_lifecycle import start_mcp_server
+            tool_reg = getattr(agent._loom, "_tools", None)
+            if tool_reg is not None:
+                mcp_server_bridge = start_mcp_server(nexus_cfg, tool_reg)
+        except Exception:
+            log.exception("MCP server mode failed")
 
         try:
             yield
