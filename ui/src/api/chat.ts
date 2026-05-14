@@ -31,7 +31,11 @@ export type StreamEvent =
   | { type: "limit_reached"; iterations: number }
   | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
   | { type: "paused_for_cooldown"; retry_after: string; estimated_seconds: number; reason: string }
-  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[] };
+  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[] }
+  | { type: "subagent_start"; name: string; index: number; total: number; child_session_id: string }
+  | { type: "subagent_delta"; child_session_id: string; text: string }
+  | { type: "subagent_tool"; child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string }
+  | { type: "subagent_done"; child_session_id: string; result_preview?: string; error?: string };
 
 /**
  * One file attached to a chat message. The UI uploads the file to the vault
@@ -297,8 +301,12 @@ export type SessionEvent =
   | { kind: "calendar_alert"; data: CalendarAlertPayload }
   | { kind: "calendar_alarm"; data: CalendarAlarmPayload }
   | { kind: "voice_ack"; data: VoiceAckPayload }
-  // Fired by the backend's nexus status_watcher when the signed-in
-  // user's tier (and therefore the available Nexus model list) changes.
+  | { kind: "subagent_start"; data: { name: string; index: number; total: number; child_session_id: string } }
+  | { kind: "subagent_delta"; data: { child_session_id: string; text: string } }
+  | { kind: "subagent_tool"; data: { child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string } }
+  | { kind: "subagent_done"; data: { child_session_id: string; result_preview?: string; error?: string } }
+  | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; extra?: Record<string, unknown> } }
+  | { kind: "job_done"; data: { job_id: string; type: string } }
   | {
       kind: "nexus_tier_changed";
       data: {
@@ -309,8 +317,6 @@ export type SessionEvent =
         tier?: string;
       };
     }
-  // Terminal signal for ephemeral runs (e.g. dashboard operations) so the
-  // caller can flip its UI state without inspecting persisted history.
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */
@@ -349,6 +355,10 @@ export function subscribeSessionEvents(
     "user_request_cancelled",
     "voice_ack",
     "op_done",
+    "subagent_start",
+    "subagent_delta",
+    "subagent_tool",
+    "subagent_done",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {
@@ -467,6 +477,8 @@ function openGlobalNotifSource(): void {
     "calendar_alert",
     "voice_ack",
     "nexus_tier_changed",
+    "job_started",
+    "job_done",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {

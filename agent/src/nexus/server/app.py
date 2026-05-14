@@ -44,7 +44,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
-    "/dream", "/mcp",
+    "/dream", "/mcp", "/jobs",
 )
 
 
@@ -218,6 +218,7 @@ from ..agent.context import CURRENT_SESSION_ID
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
 from .events import SessionEvent
+from .job_tracker import JobTracker
 from .session_store import SessionStore
 from .settings import SettingsStore
 
@@ -254,6 +255,13 @@ def create_app(
     """
     sessions = sessions or SessionStore()
     settings_store = settings_store or SettingsStore()
+    job_tracker = JobTracker()
+
+    def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
+        sessions.publish(
+            "__jobs__",
+            SessionEvent(kind=kind, data=data),
+        )
 
     # Mutable dict passed by reference into all route handlers that need to
     # read or update cfg/prov_reg (config, providers, models, routing).
@@ -615,6 +623,13 @@ def create_app(
                     calendar_path=path,
                 )
                 _t0 = _time.monotonic()
+                _cal_job_id = job_tracker.start(
+                    type="calendar",
+                    label=event_title or "Calendar trigger",
+                    session_id=None,
+                    extra={"event_id": event_id, "calendar_path": path},
+                    publish_fn=_publish_job_event,
+                )
                 try:
                     result = await _cal_dispatch(
                         path=path, card_id=None, event_id=event_id,
@@ -636,6 +651,8 @@ def create_app(
                         duration_ms=int((_time.monotonic() - _t0) * 1000),
                     )
                     raise
+                finally:
+                    job_tracker.done(_cal_job_id, publish_fn=_publish_job_event)
             _set_cal_dispatcher(_calendar_dispatcher)
 
             # Notifier — fire-and-forget calendar_alert publishes onto the
@@ -793,6 +810,7 @@ def create_app(
     app.state.graphrag_cfg = graphrag_cfg
     app.state.ask_user_handler = ask_user_handler
     app.state.terminal_procs = _terminal_procs
+    app.state.job_tracker = job_tracker
 
     from .kanban_queue import init_queue
     init_queue()
@@ -834,6 +852,7 @@ def create_app(
     from .routes.cookies import router as cookies_router
     from .routes.dream import router as dream_router
     from .routes.mcp import router as mcp_router
+    from .routes.jobs import router as jobs_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -870,6 +889,7 @@ def create_app(
     app.include_router(cookies_router)
     app.include_router(dream_router)
     app.include_router(mcp_router)
+    app.include_router(jobs_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent
@@ -888,18 +908,21 @@ def create_app(
     # internally so the parent's context only sees the final assistant text.
     from ..agent.context import SUBAGENT_DEPTH
 
+    def _truncate_preview(val: Any, limit: int = 200) -> str:
+        s = str(val) if val is not None else ""
+        return s[:limit] + ("\u2026" if len(s) > limit else "")
+
     async def _run_one_subagent(
         task: dict[str, Any],
         *,
         parent_session_id: str,
         depth: int,
+        task_index: int,
+        total_tasks: int,
     ) -> dict[str, Any]:
+        task_name = task.get("name") or f"Task {task_index + 1}"
         prompt = task.get("prompt") or ""
         model_id = task.get("model_id") or None
-        # Build a fresh Agent that mirrors the parent's provider/registry/cfg
-        # but defaults all HITL + dispatch + subagent handlers to None. This
-        # is what restricts the sub-agent's tool surface without rebuilding
-        # a separate ToolRegistry.
         sub = Agent(
             provider=agent._nexus_provider,
             registry=agent._registry,
@@ -909,10 +932,24 @@ def create_app(
             permissions=agent._permissions,
         )
         sub._sessions = sessions
-        # Persist the child session row up front so cleanup queries can find
-        # it even if the run crashes mid-stream.
         child = sessions.create_child(parent_session_id=parent_session_id, hidden=True)
         child_id = child.id
+
+        job_id = job_tracker.start(
+            type="subagent",
+            label=task_name,
+            session_id=parent_session_id,
+            extra={"child_session_id": child_id, "index": task_index, "total": total_tasks},
+            publish_fn=_publish_job_event,
+        )
+
+        sessions.publish(
+            parent_session_id,
+            SessionEvent(
+                kind="subagent_start",
+                data={"name": task_name, "index": task_index, "total": total_tasks, "child_session_id": child_id},
+            ),
+        )
 
         depth_token = SUBAGENT_DEPTH.set(depth + 1)
         sid_token = CURRENT_SESSION_ID.set(child_id)
@@ -929,11 +966,44 @@ def create_app(
                 ):
                     etype = event.get("type")
                     if etype == "delta":
-                        final_text += event.get("text", "") or ""
+                        chunk = event.get("text", "") or ""
+                        final_text += chunk
+                        sessions.publish(
+                            parent_session_id,
+                            SessionEvent(
+                                kind="subagent_delta",
+                                data={"child_session_id": child_id, "text": chunk},
+                            ),
+                        )
+                    elif etype in ("tool_exec_start", "tool_exec_result"):
+                        tool_data: dict[str, Any] = {"child_session_id": child_id}
+                        if etype == "tool_exec_start":
+                            tool_data["name"] = event.get("name", "")
+                            tool_data["args_preview"] = _truncate_preview(event.get("args"))
+                            tool_data["status"] = "pending"
+                            if event.get("call_id"):
+                                tool_data["call_id"] = event["call_id"]
+                        else:
+                            tool_data["name"] = event.get("name", "")
+                            tool_data["result_preview"] = _truncate_preview(event.get("result_preview"))
+                            tool_data["status"] = "done"
+                        sessions.publish(
+                            parent_session_id,
+                            SessionEvent(kind="subagent_tool", data=tool_data),
+                        )
+                        if etype == "done":
+                            final_messages = event.get("messages")
                     elif etype == "done":
                         final_messages = event.get("messages")
                     elif etype == "error":
                         error = str(event.get("message") or "subagent error")
+                        sessions.publish(
+                            parent_session_id,
+                            SessionEvent(
+                                kind="subagent_done",
+                                data={"child_session_id": child_id, "error": error},
+                            ),
+                        )
             except Exception as exc:
                 log.exception("subagent run crashed (child=%s)", child_id)
                 error = f"subagent crashed: {exc!r}"
@@ -945,6 +1015,15 @@ def create_app(
                     sessions.replace_history(child_id, final_messages)
                 except Exception:
                     log.exception("subagent: persist final history failed (child=%s)", child_id)
+            job_tracker.done(job_id, publish_fn=_publish_job_event)
+            if error is None:
+                sessions.publish(
+                    parent_session_id,
+                    SessionEvent(
+                        kind="subagent_done",
+                        data={"child_session_id": child_id, "result_preview": final_text[:200]},
+                    ),
+                )
         return {"session_id": child_id, "result": final_text, "error": error}
 
     async def _subagent_runner(
@@ -954,9 +1033,16 @@ def create_app(
         depth: int,
     ) -> list[dict[str, Any]]:
         import asyncio as _asyncio
+        total = len(tasks)
         return await _asyncio.gather(*[
-            _run_one_subagent(t, parent_session_id=parent_session_id, depth=depth)
-            for t in tasks
+            _run_one_subagent(
+                t,
+                parent_session_id=parent_session_id,
+                depth=depth,
+                task_index=i,
+                total_tasks=total,
+            )
+            for i, t in enumerate(tasks)
         ])
 
     agent._handlers.subagent_runner = _subagent_runner

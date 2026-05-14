@@ -17,8 +17,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from ..deps import get_agent, get_sessions
+from ..deps import get_agent, get_sessions, get_job_tracker
 from ..schemas import ChatRequest
+from ._sse import keepalive
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
@@ -30,6 +31,7 @@ from ...voice_ack import (
     emit_start_ack,
 )
 from ..session_store import SessionStore
+from ..job_tracker import JobTracker
 
 # Shared with chat.py — the cancel endpoint in chat.py mutates these same dicts
 # at runtime (imported once at module load; Python module objects are singletons).
@@ -46,8 +48,13 @@ async def chat_stream_route(
     request: Request,
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
+    tracker: JobTracker = Depends(get_job_tracker),
 ) -> StreamingResponse:
     from fastapi import HTTPException, status as _status
+
+    def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
+        from ..events import SessionEvent
+        store.publish("__jobs__", SessionEvent(kind=kind, data=data))
 
     # Server-side secret backstop. The UI's pre-send modal is the primary
     # control; this catches messages that bypass the UI (curl, scripts) or
@@ -110,6 +117,13 @@ async def chat_stream_route(
         current = asyncio.current_task()
         if current is not None:
             _inflight_turns[session.id] = current
+
+        turn_job_id = tracker.start(
+            type="chat_turn",
+            label=req.message[:80] if req.message else "Turn",
+            session_id=session.id,
+            publish_fn=_publish_job_event,
+        )
 
         # Slash-command fast path: handle /compact, /clear, /title, /usage,
         # /help (and any future commands in the SLASH_COMMANDS registry)
@@ -335,14 +349,20 @@ async def chat_stream_route(
         completion_task: asyncio.Task | None = None
 
         try:
-            async for event in a.run_turn_stream(
-                req.message,
-                history=session.history,
-                context=session.context,
-                session_id=session.id,
-                model_id=resolved_model_id,
-                attachments=attachment_parts or None,
+            async for event in keepalive(
+                a.run_turn_stream(
+                    req.message,
+                    history=session.history,
+                    context=session.context,
+                    session_id=session.id,
+                    model_id=resolved_model_id,
+                    attachments=attachment_parts or None,
+                ),
+                interval=15.0,
             ):
+                if event is None:
+                    yield ": ping\n\n"
+                    continue
                 etype = event.get("type")
 
                 if etype == "delta":
@@ -619,6 +639,7 @@ async def chat_stream_route(
                 accumulated_tools=accumulated_tools,
                 partial_status=partial_status,
             )
+            tracker.done(turn_job_id, publish_fn=_publish_job_event)
             # SSE consumer disconnects mid-stream cancel the generator
             # from a different async context; CURRENT_SESSION_ID then
             # refuses the reset with a ValueError that aborts the rest

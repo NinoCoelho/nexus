@@ -26,6 +26,15 @@ function isAudioAttachment(path: string): boolean {
   return path.startsWith("uploads/voice/") && path.toLowerCase().endsWith(".webm");
 }
 
+export interface SubTaskState {
+  name: string;
+  child_session_id: string;
+  status: "pending" | "done" | "error";
+  text?: string;
+  error?: string;
+  tools?: { name: string; status: string; args_preview?: string; result_preview?: string }[];
+}
+
 export interface TimelineStep {
   id: string;
   type: "tool" | "text";
@@ -37,6 +46,7 @@ export interface TimelineStep {
   text?: string;
   live_output?: string;
   call_id?: string;
+  subtasks?: SubTaskState[];
 }
 
 export interface Message {

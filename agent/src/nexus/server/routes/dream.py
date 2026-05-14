@@ -103,11 +103,24 @@ async def dream_trigger(request: Request, depth: str = "light") -> dict[str, Any
 
     from ...dream.engine import run_dream
 
+    tracker = request.app.state.job_tracker
+    sessions = request.app.state.sessions
+    from ...server.events import SessionEvent
+    def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
+        sessions.publish("__jobs__", SessionEvent(kind=kind, data=data))
+
+    dream_job_id = tracker.start(
+        type="dream",
+        label=f"Dream ({depth})",
+        publish_fn=_publish_job_event,
+    )
     try:
         result = await run_dream(provider=provider, model_id=upstream_model, cfg=cfg, depth=depth)
     except Exception as exc:
         log.exception("dream trigger failed")
         raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        tracker.done(dream_job_id, publish_fn=_publish_job_event)
 
     return {
         "run_id": result.run_id,

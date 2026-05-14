@@ -7,9 +7,10 @@
  * Clicking a step opens StepDetailModal for the full args/result view.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { TraceEvent } from "../api";
-import type { TimelineStep } from "./ChatView";
+import { subscribeSessionEvents } from "../api/chat";
+import type { TimelineStep, SubTaskState } from "./ChatView";
 import StepDetailModal from "./StepDetailModal";
 import TerminalLiveModal from "./TerminalLiveModal";
 import "./ActivityTimeline.css";
@@ -42,6 +43,8 @@ function metaFor(tool: string): { label: string; icon: React.ReactElement } {
       return { label: "Reading skill", icon: <IconBook /> };
     case "skills_list":
       return { label: "Listing skills", icon: <IconList /> };
+    case "spawn_subagents":
+      return { label: "Subagents", icon: <IconSubagents /> };
     default:
       return { label: tool.replace(/_/g, " "), icon: <IconDot /> };
   }
@@ -144,6 +147,16 @@ const IconDot = () => (
   </svg>
 );
 
+const IconSubagents = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="5" cy="4" r="2" />
+    <circle cx="11" cy="4" r="2" />
+    <circle cx="8" cy="10" r="2" />
+    <line x1="6.5" y1="5.5" x2="7.5" y2="8.5" />
+    <line x1="9.5" y1="5.5" x2="8.5" y2="8.5" />
+  </svg>
+);
+
 const IconTextBubble = () => (
   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H5l-3 3V3.5z" />
@@ -198,6 +211,73 @@ interface Props {
 export default function ActivityTimeline({ steps, trace, streaming, sessionId }: Props) {
   const [activeGroup, setActiveGroup] = useState<CoalescedStep | null>(null);
   const [liveTerminal, setLiveTerminal] = useState<TimelineStep | null>(null);
+  const [subtasks, setSubtasks] = useState<Map<string, SubTaskState>>(new Map());
+
+  const hasSubagents = streaming && steps?.some(
+    (s) => s.type === "tool" && s.tool === "spawn_subagents" && s.status === "pending",
+  );
+
+  useEffect(() => {
+    if (!hasSubagents || !sessionId) return;
+    const sub = subscribeSessionEvents(sessionId, (event) => {
+      if (event.kind === "subagent_start") {
+        setSubtasks((prev) => {
+          const next = new Map(prev);
+          next.set(event.data.child_session_id, {
+            name: event.data.name,
+            child_session_id: event.data.child_session_id,
+            status: "pending",
+          });
+          return next;
+        });
+      } else if (event.kind === "subagent_delta") {
+        setSubtasks((prev) => {
+          const existing = prev.get(event.data.child_session_id);
+          if (!existing) return prev;
+          const next = new Map(prev);
+          next.set(event.data.child_session_id, {
+            ...existing,
+            text: (existing.text ?? "") + event.data.text,
+          });
+          return next;
+        });
+      } else if (event.kind === "subagent_tool") {
+        setSubtasks((prev) => {
+          const existing = prev.get(event.data.child_session_id);
+          if (!existing) return prev;
+          const next = new Map(prev);
+          const tools = [...(existing.tools ?? [])];
+          if (event.data.status === "pending") {
+            tools.push({ name: event.data.name, status: "pending", args_preview: event.data.args_preview });
+          } else {
+            const idx = [...tools].reverse().findIndex((t) => t.name === event.data.name && t.status === "pending");
+            if (idx !== -1) {
+              const realIdx = tools.length - 1 - idx;
+              tools[realIdx] = { ...tools[realIdx], status: "done", result_preview: event.data.result_preview };
+            }
+          }
+          next.set(event.data.child_session_id, { ...existing, tools });
+          return next;
+        });
+      } else if (event.kind === "subagent_done") {
+        setSubtasks((prev) => {
+          const existing = prev.get(event.data.child_session_id);
+          if (!existing) return prev;
+          const next = new Map(prev);
+          next.set(event.data.child_session_id, {
+            ...existing,
+            status: event.data.error ? "error" : "done",
+            error: event.data.error,
+          });
+          return next;
+        });
+      }
+    });
+    return () => {
+      sub.close();
+      setSubtasks(new Map());
+    };
+  }, [hasSubagents, sessionId]);
 
   if (!steps || steps.length === 0) return null;
 
@@ -259,9 +339,13 @@ export default function ActivityTimeline({ steps, trace, streaming, sessionId }:
             : `${label}${group.sub ? ` · ${group.sub}` : ""}`;
 
           const isLiveTerminal = group.tool === "terminal" && group.status === "pending" && !!streaming;
+          const isSubagentGroup = group.tool === "spawn_subagents" && group.status === "pending" && !!streaming;
           const handleClick = isLiveTerminal && group.steps[0]
             ? () => setLiveTerminal(group.steps[0])
             : () => setActiveGroup(group);
+
+          const subtaskList = isSubagentGroup ? Array.from(subtasks.values()) : [];
+          const subtaskDone = subtaskList.filter((s) => s.status === "done" || s.status === "error").length;
 
           return (
             <React.Fragment key={`g-${idx}`}>
@@ -273,8 +357,27 @@ export default function ActivityTimeline({ steps, trace, streaming, sessionId }:
                 type="button"
               >
                 <span className="at-badge-icon">{icon}</span>
-                {count > 1 && <span className="at-badge-count">×{count}</span>}
+                {count > 1 && <span className="at-badge-count">&times;{count}</span>}
+                {isSubagentGroup && subtaskList.length > 0 && (
+                  <span className="at-badge-subtasks">
+                    {subtaskDone}/{subtaskList.length}
+                  </span>
+                )}
               </button>
+              {isSubagentGroup && subtaskList.length > 0 && (
+                <div className="at-subtask-list">
+                  {subtaskList.map((st) => (
+                    <div
+                      key={st.child_session_id}
+                      className={`at-subtask-item at-subtask-item--${st.status}`}
+                      title={st.error ?? st.text?.slice(0, 100)}
+                    >
+                      <span className={`at-subtask-dot at-subtask-dot--${st.status}`} />
+                      <span className="at-subtask-name">{st.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </React.Fragment>
           );
         })}

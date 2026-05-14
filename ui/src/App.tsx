@@ -47,7 +47,9 @@ import { usePushSubscription } from "./hooks/usePushSubscription";
 import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
 import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
+import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
@@ -310,6 +312,17 @@ export default function App() {
   }, []);
 
   useCalendarAlerts({ onOpenCalendar: handleOpenCalendar });
+
+  const { jobs: runningJobs, killJob } = useRunningJobs();
+
+  const handleGoToJob = useCallback((sessionId: string | null, type: string) => {
+    if (type === "dream") { setView("dream"); return; }
+    if (type === "heartbeat") { setView("heartbeat"); return; }
+    if (sessionId) {
+      _handleSessionSelect(sessionId);
+      setView("chat");
+    }
+  }, [_handleSessionSelect]);
 
   const { alarms, dismiss: dismissAlarm, snooze: snoozeAlarm } = useCalendarAlarms({
     onOpenCalendar: handleOpenCalendar,
@@ -595,7 +608,9 @@ export default function App() {
               : null
           }
           notificationSlot={
-            <NotificationBell
+            <>
+              <GlobalSpinner jobs={runningJobs} onKill={killJob} onGoTo={handleGoToJob} />
+              <NotificationBell
               history={notificationCenter.history}
               pendingCount={notificationCenter.pendingCount}
               pushPermission={push.permission}
@@ -613,6 +628,7 @@ export default function App() {
                 dropRequest(rid);
               }}
             />
+            </>
           }
         />
         {backendUp === false && (
