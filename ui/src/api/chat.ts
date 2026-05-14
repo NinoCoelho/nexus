@@ -305,7 +305,7 @@ export type SessionEvent =
   | { kind: "subagent_delta"; data: { child_session_id: string; text: string } }
   | { kind: "subagent_tool"; data: { child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string } }
   | { kind: "subagent_done"; data: { child_session_id: string; result_preview?: string; error?: string } }
-  | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; extra?: Record<string, unknown> } }
+  | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; started_at?: number; extra?: Record<string, unknown> } }
   | { kind: "job_done"; data: { job_id: string; type: string } }
   | {
       kind: "nexus_tier_changed";

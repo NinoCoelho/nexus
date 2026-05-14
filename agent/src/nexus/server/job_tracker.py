@@ -99,4 +99,5 @@ class JobTracker:
             "label": job.label,
             "session_id": job.session_id,
             "extra": job.extra,
+            "started_at": job.started_at,
         }

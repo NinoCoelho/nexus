@@ -9,14 +9,16 @@ interface Props {
 }
 
 const TYPE_META: Record<string, { icon: string; view: string }> = {
-  chat_turn: { icon: "💬", view: "chat" },
-  terminal: { icon: "⌨️", view: "chat" },
-  subagent: { icon: "🤖", view: "chat" },
-  dream: { icon: "💤", view: "dream" },
-  heartbeat: { icon: "💓", view: "heartbeat" },
+  chat_turn: { icon: "\u{1F4AC}", view: "chat" },
+  terminal: { icon: "\u2328\uFE0F", view: "chat" },
+  subagent: { icon: "\u{1F916}", view: "chat" },
+  dream: { icon: "\u{1F4A4}", view: "dream" },
+  heartbeat: { icon: "\u{1F493}", view: "heartbeat" },
+  calendar: { icon: "\u{1F4C5}", view: "calendar" },
 };
 
 function formatElapsed(seconds: number): string {
+  if (seconds < 1) return "";
   if (seconds < 60) return `${Math.floor(seconds)}s`;
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -26,6 +28,13 @@ function formatElapsed(seconds: number): string {
 export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (jobs.length === 0) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [jobs.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -37,6 +46,8 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
   }, [open]);
 
   if (jobs.length === 0) return null;
+
+  const now = Date.now() / 1000;
 
   return (
     <div className="gs-container" ref={ref}>
@@ -53,8 +64,9 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
         <div className="gs-dropdown">
           <div className="gs-dropdown-header">Running tasks</div>
           {jobs.map((job) => {
-            const meta = TYPE_META[job.type] ?? { icon: "⚙️", view: "" };
-            const elapsed = job.elapsed_seconds ?? 0;
+            const meta = TYPE_META[job.type] ?? { icon: "\u2699\uFE0F", view: "" };
+            const elapsed = Math.max(0, now - job.started_at + tick * 0);
+            const elapsedStr = formatElapsed(elapsed);
             return (
               <div key={job.id} className="gs-job-row">
                 <button
@@ -68,7 +80,7 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
                 >
                   <span className="gs-job-icon">{meta.icon}</span>
                   <span className="gs-job-text">{job.label}</span>
-                  <span className="gs-job-elapsed">{formatElapsed(elapsed)}</span>
+                  {elapsedStr && <span className="gs-job-elapsed">{elapsedStr}</span>}
                 </button>
                 <button
                   className="gs-job-kill"

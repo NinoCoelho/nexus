@@ -7,7 +7,7 @@ export interface RunningJob {
   type: string;
   label: string;
   session_id: string | null;
-  elapsed_seconds?: number;
+  started_at: number;
   extra?: Record<string, unknown>;
 }
 
@@ -29,6 +29,7 @@ export function useRunningJobs() {
   useEffect(() => {
     const sub = subscribeGlobalNotifications((_sid, event) => {
       if (event.kind === "job_started") {
+        const startedAt = event.data.started_at ?? Date.now() / 1000;
         setJobs((prev) => {
           const existing = prev.find((j) => j.id === event.data.id);
           if (existing) return prev;
@@ -37,6 +38,7 @@ export function useRunningJobs() {
             type: event.data.type,
             label: event.data.label,
             session_id: event.data.session_id ?? null,
+            started_at: startedAt,
             extra: event.data.extra,
           }];
         });
