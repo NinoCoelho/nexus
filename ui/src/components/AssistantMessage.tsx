@@ -1,10 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
 import { setMessageFeedback, setMessagePin } from "../api";
 import type { TimelineStep } from "./ChatView";
+import MarkdownView from "./MarkdownView";
 
 /**
  * AssistantMessage — renders a single assistant response in the chat.
@@ -21,91 +20,10 @@ import type { TimelineStep } from "./ChatView";
  */
 import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
-import { VaultLink, asVaultPath, linkifyVaultPaths, vaultUrlTransform } from "./vaultLink";
 import { useTTS } from "../hooks/useTTS";
 import { InternalResourceRenderer } from "./StepDetailModal/ResultRenderers";
 import { tryParseJson } from "./StepDetailModal/types";
-const LazyChartBlock = lazy(() => import("./ChartBlock"));
 import "./AssistantMessage.css";
-
-let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
-function loadMermaid() {
-  if (!_mermaidPromise) {
-    _mermaidPromise = import("mermaid").then((m) => {
-      const mermaid = m.default;
-      const bg = getComputedStyle(document.documentElement)
-        .getPropertyValue("--bg").trim().toLowerCase();
-      const isDark = /^#[01][0-9a-f]/i.test(bg)
-        || bg.startsWith("#0") || bg.startsWith("#1") || bg.startsWith("#2");
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: isDark ? "dark" : "default",
-        securityLevel: "strict",
-        fontFamily: "inherit",
-      });
-      return mermaid;
-    });
-  }
-  return _mermaidPromise;
-}
-
-// Mermaid v11 appends a temporary <div id="d{id}"> to document.body during
-// render. On parse failure (common with streamed/partial fences) it can leak
-// the bomb-icon "Syntax error in text" SVG into that orphan div. Sweep any
-// element whose id starts with our render id, including the `d`-prefixed twin.
-function purgeMermaidOrphans(id: string) {
-  if (!id) return;
-  const sel = `[id^="${CSS.escape(id)}"], [id^="${CSS.escape("d" + id)}"]`;
-  document.querySelectorAll(sel).forEach((el) => {
-    if (!el.closest(".mermaid-block")) el.remove();
-  });
-}
-
-function MermaidBlock({ code }: { code: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const idRef = useRef(`m${Math.random().toString(36).slice(2, 10)}`);
-
-  useEffect(() => {
-    const trimmed = code.trim();
-    if (!trimmed) return;
-    let cancelled = false;
-    loadMermaid()
-      .then(async (mermaid) => {
-        // Validate first — render() leaks an error SVG into <body> on parse
-        // failure, which is what the user sees as a stray bomb icon.
-        const ok = await mermaid.parse(trimmed, { suppressErrors: true });
-        if (!ok) throw new Error("invalid mermaid syntax");
-        return mermaid.render(idRef.current, trimmed);
-      })
-      .then((res) => {
-        if (cancelled || !ref.current || !res) return;
-        ref.current.innerHTML = res.svg;
-        setErr(null);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setErr(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        purgeMermaidOrphans(idRef.current);
-      });
-    return () => { cancelled = true; purgeMermaidOrphans(idRef.current); };
-  }, [code]);
-
-  useEffect(() => {
-    return () => { purgeMermaidOrphans(idRef.current); };
-  }, []);
-
-  if (err) {
-    return (
-      <pre className="mermaid-error">
-        <code>{`mermaid error: ${err}\n\n${code}`}</code>
-      </pre>
-    );
-  }
-  return <div ref={ref} className="mermaid-block" />;
-}
 
 interface Props {
   content: string;
@@ -165,7 +83,7 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
   useEffect(() => { setLocalFeedback(feedback ?? null); }, [feedback]);
   useEffect(() => { setLocalPinned(!!pinned); }, [pinned]);
 
-  const processed = useMemo(() => linkifyVaultPaths(content), [content]);
+  const processed = useMemo(() => content, [content]);
 
   async function handleCopy() {
     try {
@@ -249,48 +167,12 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
           </div>
         ))}
         <div className="asst-body">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            urlTransform={vaultUrlTransform}
-            components={{
-              code: ({ className, children, ...rest }) => {
-                const match = /language-([\w-]+)/.exec(className || "");
-                const lang = match?.[1];
-                const raw = String(children ?? "");
-                if (lang === "mermaid" && raw.includes("\n")) {
-                  return <MermaidBlock code={raw.replace(/\n$/, "")} />;
-                }
-                if (lang === "nexus-chart") {
-                  return (
-                    <Suspense fallback={<span className="mermaid-block" />}>
-                      <LazyChartBlock code={raw.replace(/\n$/, "")} />
-                    </Suspense>
-                  );
-                }
-                return <code className={className} {...rest}>{children}</code>;
-              },
-              a: ({ href, children, ...rest }) => {
-                const vaultPath = asVaultPath(href ?? "");
-                if (vaultPath) {
-                  return (
-                    <VaultLink path={vaultPath} onPreview={setPreviewPath}>
-                      {children}
-                    </VaultLink>
-                  );
-                }
-                if (!href) {
-                  return <span {...rest}>{children}</span>;
-                }
-                return (
-                  <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
-                    {children}
-                  </a>
-                );
-              },
-            }}
+          <MarkdownView
+            linkifyVaultPaths
+            onVaultLinkPreview={setPreviewPath}
           >
             {processed}
-          </ReactMarkdown>
+          </MarkdownView>
         </div>
         <div className="asst-footer">
           {canFeedback && (

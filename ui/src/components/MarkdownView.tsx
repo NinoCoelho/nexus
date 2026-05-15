@@ -15,6 +15,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { vaultRawUrl } from "../api";
 import {
   VaultLink,
@@ -30,6 +33,10 @@ import {
  * passed through unchanged. Returns `undefined` for missing input so it can
  * be spread into JSX `src`/`href` props safely.
  */
+function normalizeMathDelimiters(text: string): string {
+  return text.replace(/\$\$\s*\$\$/g, "$$");
+}
+
 function rewriteVaultMediaUrl(src: string | undefined | null): string | undefined {
   if (!src) return undefined;
   const m = src.match(/^vault:\/\/(.+)$/i) ?? src.match(/^vault:(.+)$/i);
@@ -142,13 +149,16 @@ export default function MarkdownView({
 }: Props) {
   const ctxPreview = useVaultLinkPreviewFromContext();
   const previewHandler = onVaultLinkPreview ?? ctxPreview ?? undefined;
-  const processed = useMemo(
-    () => (linkifyVaultPaths ? linkifyVaultPathsFn(children) : children),
-    [children, linkifyVaultPaths],
-  );
+  const processed = useMemo(() => {
+    let t = children;
+    t = normalizeMathDelimiters(t);
+    if (linkifyVaultPaths) t = linkifyVaultPathsFn(t);
+    return t;
+  }, [children, linkifyVaultPaths]);
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
       urlTransform={urlTransform ?? vaultUrlTransform}
       components={{
         img: ({ src, alt, ...rest }) => {
