@@ -76,6 +76,59 @@ async def vault_read_raw(path: str):
     )
 
 
+# Per-(path, mtime) memo for /vault/transcribe so the bubble's "show
+# transcript" badge doesn't re-run whisper on every click. Bounded to a
+# few hundred entries — voice memos are short-lived in practice.
+_transcript_cache: dict[tuple[str, int], str] = {}
+_TRANSCRIPT_CACHE_MAX = 256
+
+
+@router.get("/vault/transcribe")
+async def vault_transcribe(path: str) -> dict:
+    """Transcribe a vault audio file lazily and cache by (path, mtime).
+
+    Used by the chat UI to reveal the text behind a voice-memo attachment
+    without persisting the transcript on the message itself. Returns
+    ``{"text": str}``; an empty string means transcription was attempted
+    but produced no output.
+    """
+    from ...multimodal import transcribe_bytes
+    from ...vault import resolve_path
+
+    try:
+        full = resolve_path(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not full.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no such file: {path!r}")
+
+    mtime_ns = full.stat().st_mtime_ns
+    cache_key = (path, mtime_ns)
+    cached = _transcript_cache.get(cache_key)
+    if cached is not None:
+        return {"text": cached}
+
+    import mimetypes
+    mime, _ = mimetypes.guess_type(full.name)
+    if not (mime and mime.startswith("audio/")) and not full.name.lower().endswith(".webm"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"not an audio file: {path!r}",
+        )
+    # The file may be a webm voice memo whose extension sniffs to video/webm;
+    # transcribe_bytes only cares about giving whisper a sensible suffix.
+    effective_mime = mime if (mime and mime.startswith("audio/")) else "audio/webm"
+
+    data = full.read_bytes()
+    text = await transcribe_bytes(data, effective_mime)
+
+    if len(_transcript_cache) >= _TRANSCRIPT_CACHE_MAX:
+        # Drop the oldest entry — Python 3.7+ dicts preserve insertion order.
+        _transcript_cache.pop(next(iter(_transcript_cache)))
+    _transcript_cache[cache_key] = text
+    return {"text": text}
+
+
 @router.get("/vault/file")
 async def vault_read_file(path: str) -> dict:
     from ...vault import read_file
@@ -419,6 +472,34 @@ async def vault_csv_schema_endpoint(body: dict) -> dict:
         msg = str(exc)
         code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE if "too large" in msg else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=code, detail=msg)
+
+
+@router.get("/vault/export/pdf")
+async def vault_export_pdf(path: str):
+    """Export a vault markdown file as a styled PDF document.
+
+    Strips frontmatter, converts markdown to HTML (with tables, fenced code,
+    etc.), renders to PDF and streams it back for download.
+    """
+    from fastapi.responses import Response
+    from ...vault_pdf import vault_file_to_pdf
+
+    if not path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="`path` required")
+    try:
+        data = vault_file_to_pdf(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    import os
+    filename = os.path.splitext(os.path.basename(path))[0] + ".pdf"
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)

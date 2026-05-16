@@ -26,6 +26,13 @@ _CREDENTIAL_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # can show a clear "not yet supported" message.
 _SUPPORTED_AUTH_METHODS_PR2 = {"api", "anonymous"}
 
+# Nexus subscription sign-in: the wizard runs the popup + idToken flow
+# out-of-band via ``/auth/nexus/verify`` (which writes the apiKey into
+# ``secrets.toml`` under ``nexus_api_key``). The wizard apply just binds
+# a provider entry with ``runtime_kind="nexus"`` to that already-stored
+# credential — no credentials field on the request body.
+_NEXUS_AUTH_METHODS = {"nexus_signin"}
+
 # OAuth-bundle methods: the upstream produces a refresh+access pair we
 # store via ``secrets.set_oauth`` and reference through ``oauth_token_ref``.
 # Includes Claude Code's local bundle since that file already carries
@@ -405,7 +412,9 @@ def _wizard_apply_models(cfg: Any, provider_name: str, models: list[str]) -> Non
     # If the agent has no default yet and we just added a model, adopt it
     # so the chat view becomes immediately usable. Mirrors POST /models.
     if not cfg.agent.default_model and cfg.models:
-        cfg.agent.default_model = cfg.models[0].id
+        vision = getattr(getattr(cfg, "agent", None), "vision_model", "") or ""
+        non_vision = [m for m in cfg.models if m.id != vision]
+        cfg.agent.default_model = (non_vision or cfg.models)[0].id
 
 
 @router.post("/providers/wizard")
@@ -451,6 +460,7 @@ async def wizard_apply(
         and auth_method_id not in _OAUTH_AUTH_METHODS
         and auth_method_id not in _LOCAL_API_AUTH_METHODS
         and auth_method_id not in _IAM_AUTH_METHODS
+        and auth_method_id not in _NEXUS_AUTH_METHODS
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -466,7 +476,7 @@ async def wizard_apply(
         )
 
     runtime_kind = (body.get("runtime_kind") or "openai_compat").strip()
-    if runtime_kind not in {"openai_compat", "anthropic", "ollama"}:
+    if runtime_kind not in {"openai_compat", "anthropic", "ollama", "nexus"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"unsupported runtime_kind {runtime_kind!r}",
@@ -548,6 +558,35 @@ async def wizard_apply(
                 detail=f"OAuth bundle {credential_ref_in!r} not found in secrets store",
             )
 
+    if auth_method_id in _NEXUS_AUTH_METHODS:
+        # Nexus subscription: the apiKey was already written by
+        # /auth/nexus/verify (it ran when the popup posted the idToken).
+        # The wizard MUST NOT pass any credential values here — and the
+        # runtime must be the dedicated ``nexus`` kind.
+        if credentials_in:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="nexus_signin must not include a credentials body — "
+                "the apiKey is provisioned by /auth/nexus/verify",
+            )
+        if runtime_kind != "nexus":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="nexus_signin requires runtime_kind=nexus",
+            )
+        cred_ref_resolved = credential_ref_in or "nexus_api_key"
+        if not _secrets.get(cred_ref_resolved):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"nexus credential {cred_ref_resolved!r} not in store — "
+                "complete the popup sign-in before applying the wizard",
+            )
+        # Carry the resolved name forward so the provider config binds
+        # against it explicitly.
+        credential_ref_in = cred_ref_resolved
+        if not base_url:
+            base_url = "https://llm.nexus-model.us/v1"
+
     if auth_method_id == "anonymous":
         auth_kind = "anonymous"
     elif auth_method_id in _OAUTH_AUTH_METHODS:
@@ -555,8 +594,9 @@ async def wizard_apply(
     elif auth_method_id in _IAM_AUTH_METHODS:
         auth_kind = "iam"
     else:
-        # ``api`` and ``_LOCAL_API_AUTH_METHODS`` (e.g. local_codex)
-        # both end with a plain API key bound via credential_ref.
+        # ``api`` / ``_LOCAL_API_AUTH_METHODS`` (e.g. local_codex) /
+        # ``nexus_signin`` all end with a plain API key bound via
+        # credential_ref.
         auth_kind = "api"
     iam_profile = (body.get("iam_profile") or "").strip()
     iam_region = (body.get("iam_region") or "").strip()

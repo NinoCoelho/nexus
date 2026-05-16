@@ -14,6 +14,60 @@ export interface DashboardOperation {
   prefill?: Record<string, unknown>;
   icon?: string;
   order?: number;
+  /** Opt-in: when true, chat-kind operations show a plan-review step before
+   *  executing. The agent first produces a JSON plan of what it would do;
+   *  the user approves, refines, or cancels; only then does the real run
+   *  start. Off by default — most ops are routine and a mandatory approval
+   *  trains users to rubber-stamp. Reserve for ops with risky writes. */
+  preview?: boolean;
+}
+
+export type VizType = "bar" | "line" | "area" | "pie" | "donut" | "table" | "kpi";
+export type WidgetRefresh = "manual" | "daily";
+export type WidgetSize = "sm" | "md" | "lg";
+
+export interface VizConfig {
+  x_field?: string;
+  y_field?: string;
+  y_fields?: string[];
+  y_label?: string;
+  x_label?: string;
+  title?: string;
+  stacked?: boolean;
+  horizontal?: boolean;
+  show_dots?: boolean;
+  show_grid?: boolean;
+  donut?: boolean;
+  number_format?: string;
+  trend_field?: string;
+  label_field?: string;
+  [key: string]: unknown;
+}
+
+export interface DashboardWidget {
+  id: string;
+  title: string;
+  viz_type: VizType;
+  query: string;
+  query_tables?: string[];
+  viz_config?: VizConfig;
+  /** Optional prompt — kept for redesign reference, not used for refresh. */
+  prompt?: string;
+  refresh: WidgetRefresh;
+  /** ISO 8601 UTC timestamp of the most recent successful execute, or null. */
+  last_refreshed_at: string | null;
+  size?: WidgetSize;
+  order?: number;
+  /** When true, the widget was manually edited and AI auto-fix is skipped. */
+  user_defined?: boolean;
+}
+
+export interface WidgetQueryResult {
+  columns: { name: string; type: string }[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  truncated?: boolean;
+  error?: string;
 }
 
 export interface Dashboard {
@@ -21,6 +75,7 @@ export interface Dashboard {
   title: string;
   chat_session_id: string | null;
   operations: DashboardOperation[];
+  widgets: DashboardWidget[];
   /** True iff `_data.md` exists on disk; false means caller is seeing defaults. */
   exists: boolean;
   schema_version?: number;
@@ -125,6 +180,48 @@ export async function runOperation(
   return res.json();
 }
 
+/**
+ * Plan-only run for an operation marked ``preview: true``. The agent reads
+ * the data it needs but doesn't write — instead it emits a JSON ``nexus-plan``
+ * fence the UI parses for user approval.
+ */
+export async function planOperation(
+  folder: string,
+  opId: string,
+): Promise<RunOperationResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/run-operation/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, op_id: opId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Plan operation error: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Execute an operation against an approved (and possibly edited) plan. The
+ * agent receives the plan in its seed and is instructed to execute it.
+ */
+export async function executeOperation(
+  folder: string,
+  opId: string,
+  approvedPlan: string,
+): Promise<RunOperationResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/run-operation/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, op_id: opId, approved_plan: approvedPlan }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Execute operation error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteOperation(folder: string, opId: string): Promise<Dashboard> {
   const res = await fetch(
     `${BASE}/vault/dashboard/operations/${encodeURIComponent(opId)}?folder=${encodeURIComponent(folder)}`,
@@ -146,6 +243,164 @@ export interface DeleteDatabaseResult {
  * Server requires ``confirm`` to equal the folder's basename — pass it
  * explicitly so callers can't trigger a wipe by mistake.
  */
+// ── Widgets ───────────────────────────────────────────────────────────────
+
+export interface ExecuteWidgetResult {
+  folder: string;
+  widget_id: string;
+  result: WidgetQueryResult;
+  executed_at: string;
+}
+
+export async function addWidget(
+  folder: string,
+  widget: DashboardWidget,
+): Promise<Dashboard> {
+  const res = await fetch(`${BASE}/vault/dashboard/widgets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, widget }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Add widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteWidget(folder: string, widgetId: string): Promise<Dashboard> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}?folder=${encodeURIComponent(folder)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(`Delete widget error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchWidgetContent(
+  folder: string,
+  widgetId: string,
+): Promise<{ content: string }> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/content?folder=${encodeURIComponent(folder)}`,
+  );
+  if (!res.ok) throw new Error(`Widget content error: ${res.status}`);
+  return res.json();
+}
+
+export async function executeWidget(
+  folder: string,
+  widgetId: string,
+): Promise<ExecuteWidgetResult> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/execute`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Execute widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function refreshWidget(
+  folder: string,
+  widgetId: string,
+): Promise<ExecuteWidgetResult> {
+  return executeWidget(folder, widgetId);
+}
+
+export interface DesignWidgetResult {
+  session_id: string;
+  folder: string;
+  widget_id: string;
+  status: "running";
+}
+
+export async function previewWidget(
+  folder: string,
+  widget: {
+    query: string;
+    viz_type: VizType;
+    viz_config?: VizConfig;
+    query_tables?: string[];
+  },
+): Promise<WidgetQueryResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/widgets/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, ...widget }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Preview widget error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.result as WidgetQueryResult;
+}
+
+export async function designWidget(
+  folder: string,
+  widgetId: string,
+  goal: string,
+): Promise<DesignWidgetResult> {
+  const res = await fetch(
+    `${BASE}/vault/dashboard/widgets/${encodeURIComponent(widgetId)}/design`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder, goal }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Design widget error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Wizard ────────────────────────────────────────────────────────────────
+
+export type WizardKind = "widget" | "operation";
+
+export interface WizardStartResult {
+  session_id: string;
+  folder: string;
+  kind: WizardKind;
+  status: "running";
+}
+
+/**
+ * Start a back-and-forth design wizard for a widget or operation.
+ *
+ * Creates a hidden chat session pre-seeded with the wizard's role + the
+ * user's initial goal, and kicks the first turn. The UI then drives the
+ * conversation via the regular `/chat/stream` endpoint with the returned
+ * `session_id`. The wizard is instructed to ask at most one clarifying
+ * question per turn (max 2 total) and emit a fenced JSON proposal that
+ * the UI parses and commits via addWidget / addOperation.
+ */
+export async function startWizard(
+  folder: string,
+  kind: WizardKind,
+  goal: string,
+): Promise<WizardStartResult> {
+  const res = await fetch(`${BASE}/vault/dashboard/wizard/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, kind, goal }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Wizard start error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteDatabase(
   folder: string,
   confirm: string,

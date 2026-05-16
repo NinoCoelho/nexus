@@ -29,12 +29,44 @@ from typing import Any, Iterable
 
 # Per-message overhead (role markers, separators, etc).
 _PER_MESSAGE_TOKENS = 4
-# Headroom kept for the model's own output and the system prompt the agent
-# loop injects (skills index, vault context, USER.md). Was 2048; bumped to
-# 4096 because Nexus's system prompt with a populated skills index easily
-# exceeds 2K tokens on its own, and z.ai gives no error when the combined
-# request overflows — it just returns empty content.
 _OUTPUT_HEADROOM_TOKENS = 4096
+_DEFAULT_FALLBACK_WINDOW = 32_000
+_DEFAULT_MAX_MESSAGES = 80
+
+KNOWN_WINDOWS: dict[str, int] = {
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-2.0-flash": 1_048_576,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4.1-mini": 1_047_576,
+    "gpt-4.1-nano": 1_047_576,
+    "o3": 200_000,
+    "o4-mini": 200_000,
+    "claude-sonnet-4-20250514": 200_000,
+    "claude-3.5-sonnet": 200_000,
+    "claude-3.7-sonnet": 200_000,
+    "glm-4.7": 128_000,
+    "glm-5": 200_000,
+    "glm-5.1": 200_000,
+    "deepseek-r1": 128_000,
+    "deepseek-chat": 128_000,
+    "nexus": 200_000,
+}
+
+
+def known_context_window(model: str) -> int:
+    if not model:
+        return 0
+    name = model.split("/")[-1]
+    exact = KNOWN_WINDOWS.get(name, 0)
+    if exact:
+        return exact
+    for key, window in KNOWN_WINDOWS.items():
+        if key in name:
+            return window
+    return 0
 
 # Tunable chars/token ratios.
 _CHARS_PER_TOKEN_ASCII = 4
@@ -124,21 +156,28 @@ def check_overflow(
     context_window: int,
     output_headroom: int = _OUTPUT_HEADROOM_TOKENS,
 ) -> OverflowCheck:
-    """Return an OverflowCheck describing whether this turn likely fits.
-
-    `context_window=0` disables the check (caller hasn't configured a limit
-    for the model).
-    """
     est = estimate_tokens(messages)
-    if context_window <= 0:
-        return OverflowCheck(False, est, 0, 0)
-    budget = context_window - output_headroom
+    effective_window = context_window if context_window > 0 else _DEFAULT_FALLBACK_WINDOW
+    budget = effective_window - output_headroom
     if est <= budget:
         return OverflowCheck(False, est, context_window, output_headroom)
-    pct = est * 100 // max(1, context_window)
+    pct = est * 100 // max(1, effective_window)
+    window_label = f"{context_window:,}" if context_window > 0 else f"{_DEFAULT_FALLBACK_WINDOW:,} (fallback)"
     detail = (
         f"Conversation is too large for this model: ~{est:,} input tokens "
-        f"vs. {context_window:,} window ({pct}% of capacity, no room for a "
+        f"vs. {window_label} window ({pct}% of capacity, no room for a "
         f"reply). Compact the history or start a new session."
     )
     return OverflowCheck(True, est, context_window, output_headroom, detail)
+
+
+def check_message_count(
+    messages: Iterable[Any],
+    limit: int = _DEFAULT_MAX_MESSAGES,
+) -> bool:
+    n = 0
+    for _ in messages:
+        n += 1
+        if n > limit:
+            return True
+    return False

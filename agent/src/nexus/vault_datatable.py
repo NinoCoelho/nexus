@@ -631,19 +631,124 @@ def add_row(path: str, row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def add_rows(path: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Append multiple rows in one write (CSV import). Returns new rows."""
+def add_rows_with_report(
+    path: str,
+    rows: list[Any],
+    *,
+    required_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """Append rows; return ``{added, skipped}`` with per-row diagnostics.
+
+    Skipped entries are ``{"index": int, "reason": str}``. Reasons cover:
+      - non-dict input (the silent-drop bug from the John Doe session)
+      - missing values for any field listed in ``required_fields``
+    """
     fm, tbl = _load_state(path)
     added: list[dict[str, Any]] = []
-    for r in rows:
+    skipped: list[dict[str, Any]] = []
+    required = list(required_fields or [])
+    for i, r in enumerate(rows):
         if not isinstance(r, dict):
+            skipped.append({
+                "index": i,
+                "reason": f"not an object: {type(r).__name__}",
+            })
+            continue
+        missing = [f for f in required if r.get(f) in (None, "")]
+        if missing:
+            skipped.append({
+                "index": i,
+                "reason": f"missing required field(s): {', '.join(missing)}",
+            })
             continue
         if "_id" not in r:
             r = {"_id": uuid.uuid4().hex[:8], **r}
         tbl["rows"].append(r)
         added.append(r)
     vault.write_file(path, _serialize(fm, tbl["schema"], tbl["rows"], tbl.get("views", [])))
-    return added
+    return {"added": added, "skipped": skipped}
+
+
+def add_rows(path: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Append multiple rows in one write (CSV import). Returns new rows.
+
+    Thin wrapper over :func:`add_rows_with_report` that drops the diagnostic
+    payload — kept for backward compatibility.
+    """
+    return add_rows_with_report(path, rows)["added"]
+
+
+def find_rows(
+    path: str,
+    *,
+    where: dict[str, Any] | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Search rows by exact-match ``where`` and/or substring ``q``.
+
+    ``where`` is a dict of ``{field: value}`` requiring exact equality on each
+    listed field. For cardinality-many fields (lists), membership is used.
+
+    ``q`` is a case-insensitive substring matched against every text/textarea
+    field on the schema (fields without an explicit ``kind`` default to text)
+    and against ``_id``. A row passes when *any* such field contains the
+    needle.
+
+    Both filters may be combined; a row must satisfy both. At least one of
+    ``where`` or ``q`` must be provided.
+
+    Returns ``{rows, count, total, offset, limit, truncated}`` where ``total``
+    is the count of all matches in the table (not just this page).
+    """
+    if not where and not (q and q.strip()):
+        raise ValueError("find_rows requires `where` and/or `q`")
+    tbl = read_table(path)
+    rows = tbl["rows"]
+    schema = tbl["schema"] or {}
+    fields = schema.get("fields") or []
+    text_fields = [
+        f.get("name") for f in fields
+        if isinstance(f, dict)
+        and f.get("name")
+        and f.get("kind", "text") in ("text", "textarea")
+    ]
+    needle = q.strip().lower() if isinstance(q, str) and q.strip() else None
+    where = where or {}
+
+    def _matches(row: dict[str, Any]) -> bool:
+        for k, v in where.items():
+            cell = row.get(k)
+            if isinstance(cell, list):
+                if v not in cell:
+                    return False
+            elif cell != v:
+                return False
+        if needle is not None:
+            scan = list(text_fields)
+            if "_id" not in scan:
+                scan.append("_id")
+            for fname in scan:
+                cell = row.get(fname)
+                if cell is None:
+                    continue
+                if needle in str(cell).lower():
+                    return True
+            return False
+        return True
+
+    matched = [r for r in rows if _matches(r)]
+    total = len(matched)
+    page = matched[offset : offset + limit]
+    return {
+        "rows": page,
+        "count": len(page),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "truncated": (offset + len(page)) < total,
+    }
 
 
 def update_row(path: str, row_id: str, updates: dict[str, Any]) -> dict[str, Any]:

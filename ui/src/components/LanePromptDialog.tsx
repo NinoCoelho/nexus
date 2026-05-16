@@ -1,27 +1,28 @@
 /**
- * LanePromptDialog — set the auto-dispatch prompt + model for a lane.
- *
- * When a card is dropped into a lane that has a prompt set, the server
- * background-dispatches the agent with that prompt as context. If a model
- * is also set, that model is used; otherwise the agent's default model
- * applies.
+ * LanePromptDialog — set the auto-dispatch prompt + model + webhook for a lane.
  */
 
 import { useEffect, useState } from "react";
-import { getRouting, type KanbanLane } from "../api";
+import { getRouting, getLaneWebhook, setLaneWebhook, type KanbanLane } from "../api";
 import "./Modal.css";
 
 interface Props {
   lane: KanbanLane;
+  boardPath: string;
   onCancel: () => void;
   onSubmit: (patch: { prompt: string | null; model: string | null }) => void | Promise<void>;
 }
 
-export default function LanePromptDialog({ lane, onCancel, onSubmit }: Props) {
+export default function LanePromptDialog({ lane, boardPath, onCancel, onSubmit }: Props) {
   const [prompt, setPrompt] = useState(lane.prompt ?? "");
   const [model, setModel] = useState(lane.model ?? "");
   const [available, setAvailable] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const [webhookOpen, setWebhookOpen] = useState(false);
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const [webhookCopied, setWebhookCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,9 +30,23 @@ export default function LanePromptDialog({ lane, onCancel, onSubmit }: Props) {
       .then((r) => {
         if (!cancelled) setAvailable(r.available_models ?? []);
       })
-      .catch(() => { /* offline: leave list empty, falls back to free-text input */ });
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!webhookOpen) return;
+    let cancelled = false;
+    getLaneWebhook(boardPath, lane.id)
+      .then((info) => {
+        if (!cancelled) {
+          setWebhookEnabled(info.enabled);
+          setWebhookUrl(info.url);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [webhookOpen, boardPath, lane.id]);
 
   async function handleSave() {
     setSaving(true);
@@ -45,6 +60,28 @@ export default function LanePromptDialog({ lane, onCancel, onSubmit }: Props) {
     }
   }
 
+  async function handleToggleWebhook(enabled: boolean) {
+    setSaving(true);
+    try {
+      const info = await setLaneWebhook(boardPath, lane.id, { enabled });
+      setWebhookEnabled(info.enabled);
+      setWebhookUrl(info.url);
+    } catch {
+      setWebhookEnabled(false);
+      setWebhookUrl(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCopyUrl() {
+    if (!webhookUrl) return;
+    navigator.clipboard.writeText(webhookUrl).then(() => {
+      setWebhookCopied(true);
+      setTimeout(() => setWebhookCopied(false), 2000);
+    }).catch(() => {});
+  }
+
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: 480 }}>
@@ -54,7 +91,28 @@ export default function LanePromptDialog({ lane, onCancel, onSubmit }: Props) {
           as context to the agent. If a model is set, the agent uses it for the run.
         </p>
 
-        <label className="modal-field-label">Auto-dispatch prompt</label>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <label className="modal-field-label" style={{ marginBottom: 0 }}>Auto-dispatch prompt</label>
+          <button
+            type="button"
+            className={`kanban-icon-btn${webhookOpen ? " kanban-icon-btn--active" : ""}`}
+            title="Webhook settings"
+            onClick={() => setWebhookOpen((v) => !v)}
+            style={{
+              background: "none",
+              border: "none",
+              color: webhookOpen ? "var(--accent)" : "var(--fg-dim)",
+              cursor: "pointer",
+              fontSize: 14,
+              padding: "2px 4px",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 3H3a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h1l2 3V3z" />
+              <path d="M10 13h3a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-1l-2-3v9z" />
+            </svg>
+          </button>
+        </div>
         <textarea
           className="modal-input"
           value={prompt}
@@ -86,6 +144,81 @@ export default function LanePromptDialog({ lane, onCancel, onSubmit }: Props) {
           />
         )}
 
+        {webhookOpen && (
+          <div style={{ marginTop: 12, padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-inset)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <label style={{ fontSize: 12, fontWeight: 600 }}>Webhook</label>
+              <button
+                type="button"
+                onClick={() => void handleToggleWebhook(!webhookEnabled)}
+                disabled={saving}
+                style={{
+                  background: webhookEnabled ? "var(--accent)" : "var(--border)",
+                  border: "none",
+                  borderRadius: 10,
+                  width: 36,
+                  height: 20,
+                  cursor: "pointer",
+                  position: "relative",
+                  transition: "background 0.15s",
+                  padding: 0,
+                }}
+              >
+                <span style={{
+                  position: "absolute",
+                  top: 2,
+                  left: webhookEnabled ? 18 : 2,
+                  width: 16,
+                  height: 16,
+                  borderRadius: "50%",
+                  background: "white",
+                  transition: "left 0.15s",
+                  display: "block",
+                }} />
+              </button>
+              <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+                {webhookEnabled ? "Enabled" : "Disabled"}
+              </span>
+            </div>
+            <p style={{ fontSize: 11, color: "var(--fg-dim)", margin: "0 0 8px" }}>
+              External services can POST payloads to create cards in this lane.
+              The payload is sanitised before processing to prevent prompt injection.
+            </p>
+            {webhookEnabled && webhookUrl && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <code style={{
+                  flex: 1,
+                  fontSize: 11,
+                  padding: "4px 8px",
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
+                  {webhookUrl}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleCopyUrl}
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "4px 8px",
+                    fontSize: 11,
+                    cursor: "pointer",
+                    color: webhookCopied ? "var(--ok, #4caf80)" : "var(--fg-dim)",
+                  }}
+                >
+                  {webhookCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="modal-actions">
           <button className="modal-btn" onClick={onCancel} disabled={saving}>
             Cancel
@@ -95,7 +228,7 @@ export default function LanePromptDialog({ lane, onCancel, onSubmit }: Props) {
             onClick={() => void handleSave()}
             disabled={saving}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? "Saving..." : "Save"}
           </button>
         </div>
       </div>

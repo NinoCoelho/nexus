@@ -13,17 +13,17 @@ import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
 import DatabaseListPanel from "../DatabaseListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconGear, IconCollapse } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
-import BrightnessKnob from "../BrightnessKnob";
+import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream";
 
 interface Props {
   view: View;
@@ -50,6 +50,7 @@ interface Props {
   onKanbanOpen: (path: string) => void;
   databaseSelectedPath: string | null;
   databaseSelectedFolder: string | null;
+  databaseListRevision?: number;
   onDatabaseOpen: (path: string) => void;
   onDatabaseSelectFolder: (folder: string) => void;
   onDatabaseOpenDiagram?: (folder: string) => void;
@@ -64,20 +65,28 @@ export default function Sidebar({
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
   onVisualizeFolderGraph,
   kanbanSelectedPath, onKanbanOpen,
-  databaseSelectedPath, databaseSelectedFolder,
+  databaseSelectedPath, databaseSelectedFolder, databaseListRevision,
   onDatabaseOpen, onDatabaseSelectFolder, onDatabaseOpenDiagram,
   mobileOpen = false, onMobileClose,
 }: Props) {
   const { t } = useTranslation("sidebar");
-  const VIEWS: { id: View; label: string; Icon: () => React.ReactElement }[] = [
-    { id: "chat",     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
-    { id: "calendar", label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
-    { id: "vault",    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
-    { id: "kanban",   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
-    { id: "data",     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
-    { id: "graph",    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
-    { id: "insights", label: t("sidebar:viewNames.insights"), Icon: IconInsights },
-  ];
+  const VIEWS = {
+    primary: [
+      { id: "chat" as View,     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
+    ],
+    content: [
+      { id: "vault" as View,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
+      { id: "kanban" as View,   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
+      { id: "calendar" as View, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+    ],
+    analytics: [
+      { id: "data" as View,     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
+      { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
+      { id: "heartbeat" as View, label: "Heartbeat", Icon: IconHeartbeat },
+      { id: "dream" as View, label: "Dream", Icon: IconDream },
+      { id: "insights" as View, label: t("sidebar:viewNames.insights"), Icon: IconInsights },
+    ],
+  };
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; }
@@ -238,7 +247,34 @@ export default function Sidebar({
       <div className="sidebar-section">
         {!collapsed && <div className="sidebar-section-label">{t("sidebar:views")}</div>}
         <nav className="sidebar-nav">
-          {VIEWS.map(({ id, label, Icon }) => (
+          {/* Primary */}
+          {VIEWS.primary.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
+              onClick={() => onViewChange(id)}
+              title={collapsed ? label : undefined}
+            >
+              <span className="sidebar-nav-icon"><Icon /></span>
+              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+            </button>
+          ))}
+          {!collapsed && <div className="sidebar-nav-divider" />}
+          {/* Content */}
+          {VIEWS.content.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
+              onClick={() => onViewChange(id)}
+              title={collapsed ? label : undefined}
+            >
+              <span className="sidebar-nav-icon"><Icon /></span>
+              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+            </button>
+          ))}
+          {!collapsed && <div className="sidebar-nav-divider" />}
+          {/* Analytics */}
+          {VIEWS.analytics.map(({ id, label, Icon }) => (
             <button
               key={id}
               className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
@@ -313,6 +349,7 @@ export default function Sidebar({
           <DatabaseListPanel
             selectedPath={databaseSelectedPath}
             selectedDatabase={databaseSelectedFolder}
+            revision={databaseListRevision}
             onOpen={onDatabaseOpen}
             onSelectDatabase={onDatabaseSelectFolder}
             onOpenDiagram={onDatabaseOpenDiagram}
@@ -325,13 +362,13 @@ export default function Sidebar({
         <div className="sidebar-spacer" />
       )}
 
-      {/* Settings + always-accessible brightness knob */}
+      {/* Settings */}
       <div className="sidebar-bottom">
+        <NexusUsageGauges collapsed={collapsed} onOpenSettings={onOpenSettings} />
         <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? t("sidebar:settings") : undefined}>
           <span className="sidebar-nav-icon"><IconGear /></span>
           {!collapsed && <span className="sidebar-nav-label">{t("sidebar:settings")}</span>}
         </button>
-        <BrightnessKnob collapsed={collapsed} />
       </div>
 
       {/* Floating context menu — position:fixed so it escapes the row's

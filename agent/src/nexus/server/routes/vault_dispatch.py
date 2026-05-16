@@ -8,7 +8,6 @@ re-exported for the agent's dispatch_card tool (via app.state._agent_dispatcher)
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -28,24 +27,47 @@ def _resolve_dispatch_model(requested: str | None, agent_: "Agent") -> str | Non
     falling back to the agent's configured default when the request is
     missing or unavailable.
 
+    Handles ``provider/model`` format by also checking the model part
+    alone when the full string isn't in the registry.
+
+    The vision-role model (``cfg.agent.vision_model``) is always excluded
+    from the available list so it is never picked as a chat dispatch
+    target — it should only be called by the OCR tool.
+
     Returns ``None`` when no usable model is known (caller lets the agent
     loop pick whatever default it has wired up).
     """
     if requested:
         requested = requested.strip() or None
     pr = getattr(agent_, "_provider_registry", None)
-    available = pr.available_model_ids() if pr is not None else []
-    if requested and (not available or requested in available):
-        return requested
     cfg = getattr(agent_, "_nexus_cfg", None)
+    vision_id = (getattr(cfg, "agent", None) and cfg.agent.vision_model) or ""
+    exclude = {vision_id} if vision_id else None
+    available = pr.available_model_ids(exclude=exclude) if pr is not None else []
+
+    def _match(req: str | None) -> str | None:
+        if not req:
+            return None
+        if not available or req in available:
+            return req
+        if "/" in req:
+            short = req.rsplit("/", 1)[-1]
+            if short in available:
+                return short
+        return None
+
+    hit = _match(requested)
+    if hit:
+        return hit
     default = (cfg.agent.default_model if cfg and getattr(cfg, "agent", None) else None) or None
     if requested:
         log.warning(
             "dispatch: requested model %r not in available %s; falling back",
             requested, available,
         )
-    if default and (not available or default in available):
-        return default
+    hit = _match(default)
+    if hit:
+        return hit
     if available:
         return available[0]
     return None
@@ -58,7 +80,8 @@ HIDDEN_SEED_MARKER = "<!-- nx:hidden-seed -->\n"
 
 def _compose_card_context_seed(
     *,
-    lane_prompt: str | None,
+    board_prompt: str | None = None,
+    lane_prompt: str | None = None,
     path: str,
     card_title: str,
     card_id: str,
@@ -76,6 +99,9 @@ def _compose_card_context_seed(
     """
     folder = path.rsplit("/", 1)[0] if "/" in path else ""
     parts = []
+    if board_prompt:
+        parts.append(board_prompt.strip())
+        parts.append("")
     if lane_prompt:
         parts.append(lane_prompt.strip())
         parts.append("")
@@ -108,16 +134,28 @@ def _compose_card_context_seed(
     return "\n".join(parts)
 
 
-def _compose_hidden_chat_seed(*, path: str, card_title: str, card_id: str, card_body: str) -> str:
+def _compose_hidden_chat_seed(
+    *,
+    board_prompt: str | None = None,
+    path: str,
+    card_title: str,
+    card_id: str,
+    card_body: str,
+) -> str:
     folder = path.rsplit("/", 1)[0] if "/" in path else ""
     body = [
         HIDDEN_SEED_MARKER.rstrip(),
+    ]
+    if board_prompt:
+        body.append(board_prompt.strip())
+        body.append("")
+    body.append(
         f"The user just opened this kanban card. Check the board file at `{path}`, "
         f"read the card, suggest 2-3 concrete next steps to the user, and then wait for instructions. "
-        f"Don't make changes yet.",
-        "",
-        f"**Board:** `{path}`",
-    ]
+        f"Don't make changes yet."
+    )
+    body.append("")
+    body.append(f"**Board:** `{path}`")
     if folder:
         body.append(f"**Folder:** `{folder}/`")
     body.append(f"**Card:** {card_title}")
@@ -262,6 +300,7 @@ async def _dispatch_impl(
     current_lane_id: str | None = None
     current_lane_title: str | None = None
     all_lanes: list[tuple[str, str]] = []
+    board_prompt: str | None = None
     # calendar branch state
     calendar_prompt: str | None = None
     event_start: str = ""
@@ -286,6 +325,7 @@ async def _dispatch_impl(
         current_lane_id = lane.id
         current_lane_title = lane.title
         all_lanes = [(ln.id, ln.title) for ln in board.lanes]
+        board_prompt = board.board_prompt
 
     is_fire_window_event = False
     if event_id:
@@ -347,6 +387,7 @@ async def _dispatch_impl(
             )
         else:
             seed_message = _compose_hidden_chat_seed(
+                board_prompt=board_prompt,
                 path=path, card_title=seed_title, card_id=card_id or "",
                 card_body=seed_body or "",
             )
@@ -360,6 +401,7 @@ async def _dispatch_impl(
             )
         else:
             seed_message = _compose_card_context_seed(
+                board_prompt=board_prompt,
                 lane_prompt=lane_prompt, path=path, card_title=seed_title,
                 card_id=card_id or "", card_body=seed_body or "",
                 current_lane_id=current_lane_id,
@@ -402,10 +444,11 @@ async def _dispatch_impl(
                 "dispatch: could not link session to event", exc_info=True,
             )
 
+    resolved_model = _resolve_dispatch_model(lane_model, a)
+
     if mode == "background":
-        resolved_model = _resolve_dispatch_model(lane_model, a)
-        asyncio.create_task(
-            _run_background_agent_turn(
+        async def _bg_turn() -> None:
+            await _run_background_agent_turn(
                 session_id=session.id,
                 seed_message=seed_message,
                 card_path=path,
@@ -416,11 +459,9 @@ async def _dispatch_impl(
                 entity_kind=entity_kind,
                 occurrence_start=occurrence_start if entity_kind == "event" else None,
             )
-        )
-        return {
-            "session_id": session.id, "path": path, "card_id": card_id,
-            "event_id": event_id, "mode": mode, "model": resolved_model,
-        }
+
+        from ..kanban_queue import get_queue
+        get_queue().submit(path, event_id or card_id, _bg_turn)
 
     return {
         "session_id": session.id,
@@ -429,6 +470,7 @@ async def _dispatch_impl(
         "card_id": card_id,
         "event_id": event_id,
         "mode": mode,
+        "model": resolved_model,
     }
 
 
@@ -483,6 +525,41 @@ def _compose_database_context_seed(folder: str) -> str:
         "via `dashboard_manage.add_operation`."
     )
     return "\n".join(parts)
+
+
+@router.get("/vault/dispatch/sessions")
+async def vault_dispatch_sessions(
+    path: str = "",
+    card_id: str = "",
+    store: SessionStore = Depends(get_sessions),
+) -> list[dict[str, Any]]:
+    """Return all sessions ever dispatched for a specific kanban card.
+
+    Queries the ``sessions.context`` column for the standard dispatch pattern
+    ``"Dispatched from vault file: <path> (card <card_id>)"`` and returns
+    ``[{id, title, model, updated_at}]`` ordered newest-first.
+    """
+    if not path or not card_id:
+        return []
+    prefix = f"Dispatched from vault file: {path} (card {card_id})"
+    conn = store._connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, COALESCE(s.title, 'New session'), s.model, s.updated_at
+            FROM sessions s
+            WHERE s.context = ?
+            ORDER BY s.updated_at DESC
+            LIMIT 50
+            """,
+            (prefix,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r[0], "title": r[1], "model": r[2], "updated_at": r[3]}
+        for r in rows
+    ]
 
 
 @router.post("/vault/dispatch", status_code=status.HTTP_201_CREATED)

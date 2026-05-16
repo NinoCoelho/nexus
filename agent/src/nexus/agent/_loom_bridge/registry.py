@@ -53,17 +53,15 @@ class AgentHandlers:
         terminal: Any | None = None,
         dispatcher: Any | None = None,
         subagent_runner: Any | None = None,
+        notify_user: Any | None = None,
+        hb_manager_getter: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
-        # Async callable: dispatcher(path, card_id?, mode) -> dict
-        # with keys {session_id, seed_message?, path, card_id?, mode}.
-        # Late-bound by app.py so tools can spawn sub-sessions.
+        self.notify_user = notify_user
         self.dispatcher = dispatcher
-        # Async callable: subagent_runner(tasks, parent_session_id, depth) ->
-        # list[{session_id, result, error}]. Late-bound by app.py; left None
-        # for sub-agent registries to disable recursive spawn_subagents.
         self.subagent_runner = subagent_runner
+        self.hb_manager_getter = hb_manager_getter
 
 
 def build_tool_registry(
@@ -92,8 +90,12 @@ def build_tool_registry(
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
     from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
+    from nexus.tools.show_kanban_tool import SHOW_KANBAN_TOOL, handle_show_kanban
+    from nexus.tools.show_dashboard_widget_tool import SHOW_DASHBOARD_WIDGET_TOOL, handle_show_dashboard_widget
+    from nexus.tools.show_data_table_tool import SHOW_DATA_TABLE_TOOL, handle_show_data_table
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
+    from nexus.tools.ocr_tool import OCR_IMAGE_TOOL, handle_ocr_image_tool
     from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
     from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
     from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
@@ -217,6 +219,18 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
 
+    # manage_heartbeat — CRUD for heartbeat drivers. The manager getter is
+    # resolved lazily via handlers.hb_manager_getter because the
+    # HeartbeatRegistry / Store are created inside the lifespan.
+    from nexus.tools.heartbeat_tool import (
+        HEARTBEAT_MANAGE_TOOL, handle_heartbeat_manage_tool,
+    )
+
+    async def _manage_heartbeat(args: dict) -> str:
+        return await handle_heartbeat_manage_tool(args, handlers.hb_manager_getter)
+
+    registry.register(_SimpleToolHandler(HEARTBEAT_MANAGE_TOOL, _manage_heartbeat))
+
     # spawn_subagents — run N agent loops in parallel with fresh contexts.
     # Loom's SpawnSubagentsTool reads CURRENT_SESSION_ID and SUBAGENT_DEPTH
     # from loom.context contextvars (which nexus.agent.context re-exports)
@@ -239,6 +253,24 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
 
+    # show_kanban — render kanban board as inline MCP App
+    async def _show_kanban(args: dict) -> str:
+        return await handle_show_kanban(args)
+
+    registry.register(_SimpleToolHandler(SHOW_KANBAN_TOOL, _show_kanban))
+
+    # show_dashboard_widget — render chart widget as inline MCP App
+    async def _show_dashboard_widget(args: dict) -> str:
+        return await handle_show_dashboard_widget(args)
+
+    registry.register(_SimpleToolHandler(SHOW_DASHBOARD_WIDGET_TOOL, _show_dashboard_widget))
+
+    # show_data_table — render data table as inline MCP App
+    async def _show_data_table(args: dict) -> str:
+        return await handle_show_data_table(args)
+
+    registry.register(_SimpleToolHandler(SHOW_DATA_TABLE_TOOL, _show_data_table))
+
     # vault_csv — DuckDB analytics over CSV/TSV files
     async def _csv(args: dict) -> str:
         return handle_csv_tool(args)
@@ -250,6 +282,16 @@ def build_tool_registry(
         return handle_visualize_tool(args)
 
     registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
+
+    # ocr_image — extract text from a vault image / scanned PDF using the
+    # engine declared under [ocr] in config.toml. Always advertised so
+    # the agent can surface a useful "configure OCR first" error when
+    # the user hasn't set [ocr] yet, rather than pretending the
+    # capability doesn't exist.
+    async def _ocr_image(args: dict) -> str:
+        return await handle_ocr_image_tool(args)
+
+    registry.register(_SimpleToolHandler(OCR_IMAGE_TOOL, _ocr_image))
 
     _mem_handler = MemoryHandler()
 
@@ -274,6 +316,21 @@ def build_tool_registry(
         return json.dumps(handle_nexus_kb_search(args))
 
     registry.register(_SimpleToolHandler(NEXUS_KB_TOOL, _nexus_kb_search))
+
+    from nexus.tools.context_tool import (
+        CONTEXT_STATUS_TOOL, handle_context_status,
+        FORK_SESSION_TOOL, handle_fork_session,
+    )
+
+    async def _context_status(args: dict) -> str:
+        return handle_context_status(args)
+
+    registry.register(_SimpleToolHandler(CONTEXT_STATUS_TOOL, _context_status))
+
+    async def _fork_session(args: dict) -> str:
+        return handle_fork_session(args)
+
+    registry.register(_SimpleToolHandler(FORK_SESSION_TOOL, _fork_session))
 
     # HITL tools — always registered; handlers resolved at dispatch time.
     # This lets app.py late-bind handlers without rebuilding the registry.
@@ -303,6 +360,18 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
     registry.register(_SimpleToolHandler(TERMINAL_TOOL_SPEC, _terminal))
+
+    # notify_user — fire-and-forget status pings (TTS when input was
+    # voice, toast always). Read at dispatch time via ``handlers``.
+    from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
+
+    async def _notify_user(args: dict) -> str:
+        h = handlers.notify_user
+        if h is None:
+            return '{"ok": false, "error": "notify_user unavailable: handler not wired"}'
+        return await h.invoke(args)
+
+    registry.register(_SimpleToolHandler(NOTIFY_USER_TOOL, _notify_user))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.
@@ -367,6 +436,7 @@ def build_tool_registry(
         )
 
     _install_skill_redirect(registry, skill_registry)
+    _install_unknown_tool_helper(registry)
 
     return registry
 
@@ -394,5 +464,49 @@ def _install_skill_redirect(registry: ToolRegistry, skill_registry: Any) -> None
                     )
                     return await original_dispatch("skill_view", {"name": candidate})
         return await original_dispatch(name, args)
+
+    registry.dispatch = dispatch  # type: ignore[method-assign]
+
+
+# Names that smaller / OpenAI-compat models routinely hallucinate when they
+# want to run code — copied from other agent frameworks (Anthropic API tool_use
+# blocks, OpenAI code-interpreter, generic shell wrappers). When the agent
+# emits one of these, the bare ``Unknown tool: …`` response gives no recovery
+# signal: the model retries with another invented name and gives up. Replacing
+# it with a structured hint converts the wasted turn into a useful retry.
+_EXEC_ALIASES = frozenset({
+    "tool_use", "tool_create_file", "create_file", "write_file",
+    "run_python", "python", "python3", "code_interpreter", "execute_code",
+    "exec", "execute", "shell", "bash", "run_shell", "run_command",
+})
+
+
+_EXEC_ALIAS_HINT = (
+    "Tool {name!r} doesn't exist in Nexus. To run code, call `terminal` "
+    "with command=\"python3 -c '...'\" (or write the script to a temp file "
+    "first via `vault_write` and run it with `terminal` "
+    "command=\"python3 ~/.nexus/vault/<path>\"). To create a file, use "
+    "`vault_write` for vault paths, or `terminal` with `cat > /path << EOF` "
+    "for arbitrary paths. Retry the original intent using one of these tools."
+)
+
+
+def _install_unknown_tool_helper(registry: ToolRegistry) -> None:
+    """Convert hallucinated exec-tool names into a recovery hint.
+
+    Wraps ``registry.dispatch`` (after the skill-redirect wrapper) so that an
+    unknown name in :data:`_EXEC_ALIASES` returns a non-error :class:`ToolResult`
+    that explicitly names ``terminal`` and ``vault_write``. Without this, the
+    bare ``Unknown tool: …`` envelope gave the model no signal and it'd retry
+    with another invented name (observed: ``tool_use`` → ``tool_create_file``
+    → giving up and asking the user to run the script themselves).
+    """
+    wrapped_dispatch = registry.dispatch
+
+    async def dispatch(name: str, args: dict) -> ToolResult:
+        if name not in registry._handlers and name in _EXEC_ALIASES:
+            log.info("exec-alias tool call %r redirected to terminal hint", name)
+            return ToolResult(text=_EXEC_ALIAS_HINT.format(name=name), is_error=True)
+        return await wrapped_dispatch(name, args)
 
     registry.dispatch = dispatch  # type: ignore[method-assign]

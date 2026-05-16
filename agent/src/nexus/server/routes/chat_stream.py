@@ -17,13 +17,21 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from ..deps import get_agent, get_sessions
+from ..deps import get_agent, get_sessions, get_job_tracker
 from ..schemas import ChatRequest
+from ._sse import keepalive
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
+from ...config_file import load as load_config
 from ...redact import redact_sensitive_text
+from ...voice_ack import (
+    _AckTrigger,
+    emit_completion_ack,
+    emit_start_ack,
+)
 from ..session_store import SessionStore
+from ..job_tracker import JobTracker
 
 # Shared with chat.py — the cancel endpoint in chat.py mutates these same dicts
 # at runtime (imported once at module load; Python module objects are singletons).
@@ -40,8 +48,13 @@ async def chat_stream_route(
     request: Request,
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
+    tracker: JobTracker = Depends(get_job_tracker),
 ) -> StreamingResponse:
     from fastapi import HTTPException, status as _status
+
+    def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
+        from ..events import SessionEvent
+        store.publish("__jobs__", SessionEvent(kind=kind, data=data))
 
     # Server-side secret backstop. The UI's pre-send modal is the primary
     # control; this catches messages that bypass the UI (curl, scripts) or
@@ -105,6 +118,13 @@ async def chat_stream_route(
         if current is not None:
             _inflight_turns[session.id] = current
 
+        turn_job_id = tracker.start(
+            type="chat_turn",
+            label=req.message[:80] if req.message else "Turn",
+            session_id=session.id,
+            publish_fn=_publish_job_event,
+        )
+
         # Slash-command fast path: handle /compact, /clear, /title, /usage,
         # /help (and any future commands in the SLASH_COMMANDS registry)
         # without spinning up the agent loop. The handler streams its own
@@ -127,14 +147,121 @@ async def chat_stream_route(
                     _inflight_turns.pop(session.id, None)
             return
 
+        # Pre-send size guard: reject oversized messages BEFORE persisting
+        # them. Without this, a huge paste gets saved, and every subsequent
+        # turn immediately fails the pre-flight overflow check — the session
+        # becomes permanently stuck with no UI recovery path.
+        _MAX_MESSAGE_CHARS = 50_000
+        msg_len = len(req.message or "")
+        if msg_len > _MAX_MESSAGE_CHARS:
+            yield json.dumps({
+                "type": "error",
+                "detail": (
+                    f"Message too long ({msg_len:,} characters). "
+                    f"Maximum is {_MAX_MESSAGE_CHARS:,} characters."
+                ),
+                "reason": "message_too_large",
+                "retryable": False,
+                "status_code": None,
+                "actions": ["compact_history", "new_session"],
+            }) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "session_id": session.id,
+                "reply": "",
+                "trace": [],
+                "skills_touched": [],
+                "iterations": 0,
+                "messages": list(pre_turn_history),
+                "usage": {"input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "model": resolved_model_id},
+            }) + "\n"
+            return
+
+        # Context-window pre-check: estimate history + incoming message
+        # tokens and refuse early if they won't fit. The agent loop's own
+        # pre-flight check (overflow.py) runs after this, but this gate
+        # prevents the oversized message from being persisted.
+        _OUTPUT_HEADROOM = 4096
+        try:
+            from ...agent.loop.overflow import estimate_tokens as _est_tok
+            cfg = load_config()
+            ctx_window = 0
+            effective_model = resolved_model_id or getattr(cfg.agent, "default_model", "")
+            for entry in cfg.models:
+                if entry.id == effective_model or entry.model_name == effective_model:
+                    ctx_window = int(entry.context_window or 0)
+                    break
+            if ctx_window == 0:
+                from ...agent.loop.overflow import known_context_window as _kcw
+                ctx_window = _kcw(effective_model)
+            if ctx_window > 0 and pre_turn_history:
+                history_tokens = _est_tok(pre_turn_history)
+                incoming_tokens = _est_tok([
+                    type("M", (), {"content": req.message, "tool_calls": []})()
+                ])
+                if history_tokens + incoming_tokens > ctx_window - _OUTPUT_HEADROOM:
+                    yield json.dumps({
+                        "type": "error",
+                        "detail": (
+                            f"Sending this message would exceed the model's context window "
+                            f"(~{history_tokens + incoming_tokens:,} tokens needed vs "
+                            f"{ctx_window:,} available). Compact the conversation or start a new session."
+                        ),
+                        "reason": "message_too_large",
+                        "retryable": False,
+                        "status_code": None,
+                        "actions": ["compact_history", "new_session"],
+                        "estimated_input_tokens": history_tokens + incoming_tokens,
+                        "context_window": ctx_window,
+                    }) + "\n"
+                    yield json.dumps({
+                        "type": "done",
+                        "session_id": session.id,
+                        "reply": "",
+                        "trace": [],
+                        "skills_touched": [],
+                        "iterations": 0,
+                        "messages": list(pre_turn_history),
+                        "usage": {"input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "model": resolved_model_id},
+                    }) + "\n"
+                    return
+        except Exception:
+            log.debug("pre-send context-window check failed", exc_info=True)
+
         # Eagerly persist the user message so a crash between POST
         # and the first delta doesn't lose the prompt the user typed.
+        # When the request carries attachments, persist a multipart
+        # ``content`` list so reload-from-DB still shows the image/audio/
+        # document refs alongside the text.
+        attachment_parts: list[Any] = []
         try:
-            from ...agent.llm import ChatMessage as _CM, Role as _R
-            store.replace_history(
-                session.id,
-                pre_turn_history + [_CM(role=_R.USER, content=req.message)],
-            )
+            from ...agent.llm import ChatMessage as _CM, ContentPart as _CP, Role as _R
+            from ...multimodal import sniff_mime as _sniff_mime
+
+            def _classify_kind(mime: str) -> str:
+                if mime.startswith("image/"):
+                    return "image"
+                if mime.startswith("audio/"):
+                    return "audio"
+                return "document"
+
+            for att in (req.attachments or []):
+                mime = att.mime_type or _sniff_mime(att.vault_path)
+                attachment_parts.append(
+                    _CP(
+                        kind=_classify_kind(mime),
+                        vault_path=att.vault_path,
+                        mime_type=mime,
+                    )
+                )
+            if attachment_parts:
+                user_content: Any = (
+                    [_CP(kind="text", text=req.message)] if req.message else []
+                ) + attachment_parts
+                user_msg = _CM(role=_R.USER, content=user_content)
+            else:
+                user_msg = _CM(role=_R.USER, content=req.message)
+            store.replace_history(session.id, pre_turn_history + [user_msg])
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("pre-turn user message persist failed")
 
@@ -156,18 +283,112 @@ async def chat_stream_route(
                     user_message=req.message,
                 )
             )
+
+        # ── Voice acknowledgment plumbing ────────────────────────────────────
+        # Only kicks in for voice-input turns. There's NO programmatic
+        # start ack anymore — the agent itself uses the `notify_user`
+        # tool when it wants to give the user a status update mid-turn
+        # (the tool routes to TTS when input_mode is voice). The
+        # completion ack still fires on `done` to summarize the reply.
+        is_voice = req.input_mode == "voice"
+        # Stash on session.context so the notify_user tool handler knows
+        # whether to TTS the message or just surface it as a toast.
         try:
-            async for event in a.run_turn_stream(
-                req.message,
-                history=session.history,
-                context=session.context,
-                session_id=session.id,
-                model_id=resolved_model_id,
+            session.context = (session.context or "") + ""  # no-op touch
+        except Exception:  # noqa: BLE001
+            pass
+        store._latest_input_mode = getattr(store, "_latest_input_mode", {})  # type: ignore[attr-defined]
+        store._latest_input_mode[session.id] = req.input_mode  # type: ignore[attr-defined]
+        # Also track the last *global* input_mode so notify_user fired
+        # from sessions we didn't see (vault dispatch, kanban-card spawn,
+        # etc.) can fall back to "what the user has been doing recently"
+        # instead of always defaulting to text.
+        store._last_global_input_mode = req.input_mode  # type: ignore[attr-defined]
+        log.warning(
+            "[chat_stream] sess=%s input_mode=%r (is_voice=%s)",
+            session.id, req.input_mode, is_voice,
+        )
+
+        tts_cfg = load_config().tts
+        # ack_mode="always" → fire on every turn; "voice" → voice-input only.
+        ack_wanted = is_voice or tts_cfg.ack_mode == "always"
+        ack_active = (
+            ack_wanted
+            and tts_cfg.enabled
+            and tts_cfg.ack_enabled
+            and getattr(a, "_provider_registry", None) is not None
+        )
+        log.warning(
+            "[chat_stream] voice_ack ack_active=%s (is_voice=%s ack_wanted=%s ack_mode=%s tts.enabled=%s ack_enabled=%s registry=%s)",
+            ack_active, is_voice, ack_wanted, tts_cfg.ack_mode,
+            tts_cfg.enabled, tts_cfg.ack_enabled,
+            getattr(a, "_provider_registry", None) is not None,
+        )
+
+        # Fire a spoken start-ack for voice-input turns so the user
+        # hears an immediate contextual acknowledgment while the agent
+        # loop processes. Runs as a fire-and-forget task concurrent
+        # with the main agent loop.
+        if is_voice and ack_active:
+            asyncio.create_task(emit_start_ack(
+                agent=a, store=store,
+                trigger=_AckTrigger(
+                    user_text=req.message,
+                    session_id=session.id,
+                ),
+                cfg=load_config(),
+            ))
+
+        # Speculative completion-ack kickoff: when the agent has streamed
+        # ~80+ words of content and is in the middle of writing its final
+        # reply, fire the summary call NOW so the audio is ready (or
+        # nearly ready) by the time `done` arrives. Without this, audio
+        # plays 5-15s AFTER the visible text is fully written — the user
+        # has been complaining about exactly that lag.
+        SPECULATIVE_WORD_THRESHOLD = 80
+        completion_task: asyncio.Task | None = None
+
+        try:
+            async for event in keepalive(
+                a.run_turn_stream(
+                    req.message,
+                    history=session.history,
+                    context=session.context,
+                    session_id=session.id,
+                    model_id=resolved_model_id,
+                    attachments=attachment_parts or None,
+                ),
+                interval=15.0,
             ):
+                if event is None:
+                    yield ": ping\n\n"
+                    continue
                 etype = event.get("type")
 
                 if etype == "delta":
                     accumulated_text += event.get("text", "")
+                    # Speculative summary kickoff (see comment above).
+                    if (
+                        ack_active
+                        and completion_task is None
+                        and len(accumulated_text.split()) >= SPECULATIVE_WORD_THRESHOLD
+                    ):
+                        # Snapshot accumulated_text now (str is immutable;
+                        # later appends won't mutate the captured value).
+                        snapshot = accumulated_text
+                        log.warning(
+                            "[chat_stream] kicking off speculative completion ack at %d words",
+                            len(snapshot.split()),
+                        )
+                        completion_task = asyncio.create_task(emit_completion_ack(
+                            agent=a, store=store,
+                            trigger=_AckTrigger(
+                                user_text=req.message,
+                                session_id=session.id,
+                                full_reply=snapshot,
+                            ),
+                            cfg=load_config(),
+                        ))
                     yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
 
                 elif etype == "thinking":
@@ -181,12 +402,28 @@ async def chat_stream_route(
                     partial_status = "iteration_limit"
                     yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
 
+                elif etype == "reconnecting":
+                    yield (
+                        f"event: reconnecting\ndata: "
+                        f"{json.dumps({'attempt': event.get('attempt', 1), 'max_attempts': event.get('max_attempts', 1), 'delay_seconds': event.get('delay_seconds', 0), 'reason': event.get('reason', '')})}"
+                        f"\n\n"
+                    )
+
+                elif etype == "paused_for_cooldown":
+                    yield (
+                        f"event: paused_for_cooldown\ndata: "
+                        f"{json.dumps({'retry_after': event.get('retry_after', ''), 'estimated_seconds': event.get('estimated_seconds', 60), 'reason': event.get('reason', '')})}"
+                        f"\n\n"
+                    )
+
                 elif etype in ("tool_exec_start", "tool_exec_result"):
                     payload: dict[str, Any] = {"name": event.get("name", "")}
                     if "args" in event:
                         payload["args"] = event["args"]
                     if "result_preview" in event:
                         payload["result_preview"] = event["result_preview"]
+                    if "call_id" in event:
+                        payload["call_id"] = event["call_id"]
                     # Keep a running tool trace so a mid-turn abort still
                     # leaves badges in persisted history.
                     if etype == "tool_exec_start":
@@ -247,6 +484,30 @@ async def chat_stream_route(
                     }
                     yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
+                    # Voice ack: fire completion ack as a fire-and-forget
+                    # task — but ONLY if the speculative kickoff above
+                    # didn't already fire. When it did, we'd be
+                    # double-publishing two completion summaries that
+                    # the UI player would race against each other.
+                    if ack_active and completion_task is None:
+                        asyncio.create_task(emit_completion_ack(
+                            agent=a, store=store,
+                            trigger=_AckTrigger(
+                                user_text=req.message,
+                                session_id=session.id,
+                                full_reply=event.get("reply", ""),
+                            ),
+                            cfg=load_config(),
+                        ))
+                    elif completion_task is not None:
+                        log.warning(
+                            "[chat_stream] speculative ack already running — "
+                            "skipping post-done emit (snapshot may be ~%d words "
+                            "vs final %d words)",
+                            SPECULATIVE_WORD_THRESHOLD,
+                            len(event.get("reply", "").split()),
+                        )
+
                 elif etype == "error":
                     # Mid-stream structured error from the agent loop
                     # (e.g. an upstream failure after content was already
@@ -287,42 +548,52 @@ async def chat_stream_route(
                             err_payload[k] = event[k]
                     yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
         except (LLMTransportError, MalformedOutputError) as exc:
-            # Map loom's classified reason (timeout / rate_limit / 5xx /
-            # auth / ...) onto our partial_status so the persisted prefix
-            # + UI banner line up. Fall back to llm_error for anything
-            # the classifier doesn't recognise.
             partial_status = "llm_error"
-            try:
-                from ...error_classifier import classify_api_error as _c
-                _reason = _c(exc).reason.value
-                if _reason == "timeout":
-                    partial_status = "upstream_timeout"
-            except Exception:  # noqa: BLE001
-                pass
-            # Surface the upstream failure in the daemon log so the user
-            # can see WHICH provider call failed. Without this, a 401/404
-            # from OpenAI just disappears — the SSE error event reaches
-            # the UI but the daemon log is silent, making remote debug
-            # extremely painful.
-            log.warning(
-                "chat_stream LLM call failed: %s (status=%s)",
-                exc, getattr(exc, "status_code", None),
-            )
-            # Classify so the client gets a readable summary on top of
-            # the raw detail (e.g. "Provider rate limit — retrying with
-            # backoff." vs. the raw "HTTP 429: ..." body).
             detail = str(exc)
             reason = None
             retryable = None
             status_code = getattr(exc, "status_code", None)
             try:
-                from ...error_classifier import classify_api_error
-                classified = classify_api_error(exc)
-                reason = classified.reason.value
-                retryable = classified.retryable
-                if classified.user_facing_summary:
-                    detail = f"{classified.user_facing_summary} ({detail})"
-            except Exception:
+                from ...error_classifier import classify_api_error, is_budget_exceeded, budget_exceeded_detail
+                if is_budget_exceeded(exc):
+                    partial_status = "budget_exceeded"
+                    reason = "budget_exceeded"
+                    retryable = False
+                    bd = budget_exceeded_detail(exc)
+                    if bd:
+                        detail = bd
+                else:
+                    _reason = classify_api_error(exc).reason.value
+                    if _reason == "timeout":
+                        partial_status = "upstream_timeout"
+            except Exception:  # noqa: BLE001
+                pass
+            log.warning(
+                "chat_stream LLM call failed: %s (status=%s)",
+                exc, getattr(exc, "status_code", None),
+            )
+            if not detail or detail == str(exc):
+                detail = str(exc)
+            if reason is None:
+                try:
+                    from ...error_classifier import classify_api_error
+                    classified = classify_api_error(exc)
+                    reason = classified.reason.value
+                    retryable = classified.retryable
+                    if classified.user_facing_summary:
+                        detail = f"{classified.user_facing_summary} ({detail})"
+                except Exception:
+                    pass
+            try:
+                store.log_error(
+                    session.id,
+                    reason or "llm_error",
+                    message=detail[:2000],
+                    status_code=status_code,
+                    model=session.model_id if hasattr(session, 'model_id') else None,
+                    retryable=retryable or False,
+                )
+            except Exception:  # noqa: BLE001
                 pass
             err_payload = {
                 "detail": detail,
@@ -368,6 +639,7 @@ async def chat_stream_route(
                 accumulated_tools=accumulated_tools,
                 partial_status=partial_status,
             )
+            tracker.done(turn_job_id, publish_fn=_publish_job_event)
             # SSE consumer disconnects mid-stream cancel the generator
             # from a different async context; CURRENT_SESSION_ID then
             # refuses the reset with a ValueError that aborts the rest

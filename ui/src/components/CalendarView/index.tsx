@@ -25,6 +25,7 @@ import {
 import { dispatchFromVault, HIDDEN_SEED_MARKER } from "../../api/dispatch";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
 import CalendarSettingsModal from "./CalendarSettingsModal";
+import EventDetailModal from "./EventDetailModal";
 import EventModal, { type EventDraft } from "./EventModal";
 import Modal, { type ModalProps } from "../Modal";
 import MonthGrid from "./MonthGrid";
@@ -46,7 +47,7 @@ type ViewMode = "month" | "week" | "day";
 interface Props {
   selectedPath: string | null;
   onSelectPath: (path: string | null) => void;
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
 }
 
 export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat }: Props) {
@@ -56,7 +57,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [visible, setVisible] = useState(() => new Date());
-  const [modal, setModal] = useState<{ kind: "create" | "edit"; event?: CalendarEvent; defaultStart: Date } | null>(null);
+  const [modal, setModal] = useState<{ kind: "create" | "edit" | "view"; event?: CalendarEvent; defaultStart: Date } | null>(null);
   const [promptModal, setPromptModal] = useState<ModalProps | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,9 +133,15 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
     setModal({ kind: "create", defaultStart });
   }, []);
 
-  const openEdit = useCallback((ev: CalendarEvent) => {
-    setModal({ kind: "edit", event: ev, defaultStart: new Date(ev.start) });
+  const openView = useCallback((ev: CalendarEvent) => {
+    setModal({ kind: "view", event: ev, defaultStart: new Date(ev.start) });
   }, []);
+
+  const openEditFromView = useCallback((updatedEvent?: CalendarEvent) => {
+    if (!modal?.event) return;
+    const ev = updatedEvent ?? modal.event;
+    setModal({ kind: "edit", event: ev, defaultStart: new Date(ev.start) });
+  }, [modal]);
 
   const handleSave = useCallback(async (draft: EventDraft) => {
     if (!selectedPath) return;
@@ -154,6 +161,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_every_min: draft.fire_every_min ?? undefined,
           model: draft.model ?? undefined,
           assignee: draft.assignee ?? undefined,
+          remind_before_min: draft.remind_before_min ?? undefined,
         });
       } else {
         const ev = modal.event;
@@ -177,6 +185,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           fire_every_min: draft.fire_every_min,
           model: draft.model,
           assignee: draft.assignee,
+          remind_before_min: draft.remind_before_min,
         };
 
         // For a single occurrence of a recurring event, route "done" through
@@ -230,6 +239,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
         res.session_id,
         res.seed_message ?? `${HIDDEN_SEED_MARKER}${ev.title}`,
         ev.title,
+        res.model ?? undefined,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : t("calendar:error.chatFailed"));
@@ -357,7 +367,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
               visible={visible}
               events={events}
               onCellClick={openCreate}
-              onEventClick={openEdit}
+              onEventClick={openView}
               onEventOpenChat={(ev) => void handleEventOpenChat(ev)}
               onEventFire={(ev) => void handleEventFire(ev)}
             />
@@ -367,7 +377,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
               days={viewMode === "week" ? 7 : 1}
               events={events}
               onSlotClick={openCreate}
-              onEventClick={openEdit}
+              onEventClick={openView}
               onEventOpenChat={(ev) => void handleEventOpenChat(ev)}
               onEventFire={(ev) => void handleEventFire(ev)}
             />
@@ -379,7 +389,19 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
         )}
       </div>
 
-      {modal && selectedPath && (
+      {modal && selectedPath && modal.kind === "view" && modal.event && (
+        <EventDetailModal
+          event={modal.event}
+          calendarPath={selectedPath}
+          onEdit={(updatedEvent) => openEditFromView(updatedEvent)}
+          onDelete={() => void handleDelete()}
+          onClose={() => setModal(null)}
+          onReload={() => void reload()}
+          onOpenInChat={onOpenInChat ? (ev) => void handleEventOpenChat(ev) : undefined}
+        />
+      )}
+
+      {modal && selectedPath && (modal.kind === "create" || modal.kind === "edit") && (
         <EventModal
           initial={{
             event: modal.event,

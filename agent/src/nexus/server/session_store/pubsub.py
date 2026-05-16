@@ -36,6 +36,11 @@ _GLOBAL_HITL_KINDS = frozenset({
     "user_request_auto",
     "user_request_cancelled",
     "calendar_alert",
+    "calendar_alarm",
+    "voice_ack",
+    "nexus_tier_changed",
+    "job_started",
+    "job_done",
 })
 
 

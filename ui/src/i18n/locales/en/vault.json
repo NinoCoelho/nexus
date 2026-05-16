@@ -15,6 +15,8 @@
     "graphTitle": "View entity graph for this file",
     "history": "History",
     "historyTitle": "View history and undo",
+    "exportPdf": "PDF",
+    "exportPdfTitle": "Export as PDF",
     "split": "Split",
     "splitTitle": "Toggle live preview pane",
     "save": "Save",

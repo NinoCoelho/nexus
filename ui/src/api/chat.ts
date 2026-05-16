@@ -26,10 +26,28 @@ export interface ChatResponse {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; args?: unknown; result_preview?: string }
+  | { type: "tool"; name: string; args?: unknown; result_preview?: string; call_id?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
-  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null };
+  | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
+  | { type: "paused_for_cooldown"; retry_after: string; estimated_seconds: number; reason: string }
+  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[] }
+  | { type: "subagent_start"; name: string; index: number; total: number; child_session_id: string }
+  | { type: "subagent_delta"; child_session_id: string; text: string }
+  | { type: "subagent_tool"; child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string }
+  | { type: "subagent_done"; child_session_id: string; result_preview?: string; error?: string };
+
+/**
+ * One file attached to a chat message. The UI uploads the file to the vault
+ * first (via `POST /vault/upload`) and then references it here by path.
+ * The backend resolves each attachment into a multipart `ContentPart` so
+ * vision-capable models receive the bytes natively.
+ */
+export interface ChatAttachment {
+  vault_path: string;
+  /** Optional explicit mime type. The backend sniffs from the path when absent. */
+  mime_type?: string;
+}
 
 /**
  * Send a message to the agent via `POST /chat/stream` and process the SSE response.
@@ -43,6 +61,8 @@ export type StreamEvent =
  * @param onEvent - Callback invoked for each received SSE event.
  * @param signal - `AbortSignal` to cancel the request (e.g. the Stop button).
  * @param model - Model identifier to use; omitting uses the server default.
+ * @param options - Extra knobs: `attachments` for multimodal input (image,
+ *   audio, document); `bypassSecretGuard` for the secret-guard escape hatch.
  * @throws {Error} If the server returns a non-2xx status.
  */
 export async function chatStream(
@@ -51,16 +71,29 @@ export async function chatStream(
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
   model?: string,
-  options?: { bypassSecretGuard?: boolean },
+  options?: {
+    bypassSecretGuard?: boolean;
+    attachments?: ChatAttachment[];
+    /** "voice" when the user dictated; the backend uses this to decide
+     * whether to fire spoken acknowledgments. Defaults to "text". */
+    inputMode?: "voice" | "text";
+  },
 ): Promise<void> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (options?.bypassSecretGuard) {
     headers["X-Bypass-Secret-Guard"] = "1";
   }
+  const body: Record<string, unknown> = { message, session_id, model };
+  if (options?.attachments && options.attachments.length > 0) {
+    body.attachments = options.attachments;
+  }
+  if (options?.inputMode) {
+    body.input_mode = options.inputMode;
+  }
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, session_id, model }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -112,6 +145,7 @@ export async function chatStream(
             name: parsed.name as string,
             args: parsed.args,
             result_preview: parsed.result_preview as string | undefined,
+            call_id: parsed.call_id as string | undefined,
           });
         } else if (eventName === "done") {
           const usage = parsed.usage as Record<string, unknown> | undefined;
@@ -125,6 +159,21 @@ export async function chatStream(
           });
         } else if (eventName === "limit_reached") {
           onEvent({ type: "limit_reached", iterations: (parsed.iterations as number) ?? 0 });
+        } else if (eventName === "reconnecting") {
+          onEvent({
+            type: "reconnecting",
+            attempt: (parsed.attempt as number) ?? 1,
+            maxAttempts: (parsed.max_attempts as number) ?? 1,
+            delaySeconds: (parsed.delay_seconds as number) ?? 0,
+            reason: (parsed.reason as string) ?? "",
+          });
+        } else if (eventName === "paused_for_cooldown") {
+          onEvent({
+            type: "paused_for_cooldown",
+            retry_after: (parsed.retry_after as string) ?? "",
+            estimated_seconds: (parsed.estimated_seconds as number) ?? 60,
+            reason: (parsed.reason as string) ?? "",
+          });
         } else if (eventName === "error") {
           onEvent({
             type: "error",
@@ -132,6 +181,7 @@ export async function chatStream(
             reason: parsed.reason as string | undefined,
             retryable: parsed.retryable as boolean | undefined,
             status_code: parsed.status_code as number | null | undefined,
+            actions: parsed.actions as string[] | undefined,
           });
         }
       } catch { /* malformed frame — skip */ }
@@ -207,18 +257,66 @@ export type CalendarAlertPayload = {
   all_day?: boolean;
 };
 
+export interface VoiceAckPayload {
+  /** Which moment in the turn this announcement covers.
+   * - "start" / "progress" — programmatic acks (legacy; not currently emitted)
+   * - "complete" — completion summary spoken at end of turn
+   * - "notify" — agent-initiated status update via the `notify_user` tool */
+  kind: "start" | "progress" | "complete" | "notify";
+  /** What the agent decided to say, plain text (no markdown). */
+  transcript: string;
+  /** Backend-rendered audio bytes, base64-encoded. Null when engine=webspeech. */
+  audio_b64: string | null;
+  /** MIME of the bytes when audio_b64 is present. */
+  audio_mime: string;
+  engine: string;
+  voice: string;
+  language: string;
+  speed: number;
+}
+
+export type CalendarAlarmPayload = {
+  type: "calendar_alarm";
+  event_id: string;
+  title: string;
+  body?: string | null;
+  start: string;
+  calendar_title?: string;
+  path: string;
+  countdown_seconds: number;
+  is_overdue: boolean;
+  occurrence_start: string;
+};
+
 export type SessionEvent =
   | { kind: "iter"; data: { n: number } }
   | { kind: "delta"; data: { text: string } }
   | { kind: "tool_call"; data: { name: string; args: unknown } }
   | { kind: "tool_result"; data: { name: string; preview: string } }
   | { kind: "reply"; data: { text: string } }
+  | { kind: "terminal_output"; data: { stdout: string; stderr: string; call_id: string } }
   | { kind: "user_request"; data: UserRequestPayload }
   | { kind: "user_request_auto"; data: { prompt: string; answer: string; reason: string } }
   | { kind: "user_request_cancelled"; data: { request_id: string; reason: string } }
   | { kind: "calendar_alert"; data: CalendarAlertPayload }
-  // Terminal signal for ephemeral runs (e.g. dashboard operations) so the
-  // caller can flip its UI state without inspecting persisted history.
+  | { kind: "calendar_alarm"; data: CalendarAlarmPayload }
+  | { kind: "voice_ack"; data: VoiceAckPayload }
+  | { kind: "subagent_start"; data: { name: string; index: number; total: number; child_session_id: string } }
+  | { kind: "subagent_delta"; data: { child_session_id: string; text: string } }
+  | { kind: "subagent_tool"; data: { child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string } }
+  | { kind: "subagent_done"; data: { child_session_id: string; result_preview?: string; error?: string } }
+  | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; started_at?: number; extra?: Record<string, unknown> } }
+  | { kind: "job_done"; data: { job_id: string; type: string } }
+  | {
+      kind: "nexus_tier_changed";
+      data: {
+        from_models: string[];
+        to_models: string[];
+        default_model_from: string;
+        default_model_to: string;
+        tier?: string;
+      };
+    }
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */
@@ -251,10 +349,16 @@ export function subscribeSessionEvents(
     "tool_call",
     "tool_result",
     "reply",
+    "terminal_output",
     "user_request",
     "user_request_auto",
     "user_request_cancelled",
+    "voice_ack",
     "op_done",
+    "subagent_start",
+    "subagent_delta",
+    "subagent_tool",
+    "subagent_done",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {
@@ -371,6 +475,10 @@ function openGlobalNotifSource(): void {
     "user_request_auto",
     "user_request_cancelled",
     "calendar_alert",
+    "voice_ack",
+    "nexus_tier_changed",
+    "job_started",
+    "job_done",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {
@@ -519,4 +627,15 @@ export async function respondToUserRequest(
     return;
   }
   throw new Error(`Respond error: ${res.status}`);
+}
+
+export async function killTerminalProc(
+  session_id: string,
+  call_id: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/terminal/${encodeURIComponent(call_id)}/kill`,
+    { method: "POST" },
+  );
+  return res.json();
 }

@@ -183,4 +183,5 @@ def test_modelentry_persists_max_output_tokens(tmp_path, monkeypatch: pytest.Mon
 
     reloaded = config_file.load()
     assert reloaded.agent.default_max_output_tokens == 8000
-    assert reloaded.models[0].max_output_tokens == 12000
+    by_id = {m.id: m for m in reloaded.models}
+    assert by_id["x"].max_output_tokens == 12000

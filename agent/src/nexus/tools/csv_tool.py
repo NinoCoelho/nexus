@@ -17,6 +17,11 @@ CSV_TOOL = ToolSpec(
         "Analyze CSV/TSV files in the vault using DuckDB **without loading the "
         "data into the conversation context**. Prefer this over `vault_read` for "
         "any `.csv` / `.tsv` file.\n\n"
+        "Analysis workflow — always follow this order:\n"
+        "1. `schema` → columns, types, row_count, file_size (metadata only).\n"
+        "2. `describe` → per-column stats (count, nulls, distinct, min/max/mean, top values).\n"
+        "3. `query` or `analyze` → run SQL or Python to extract, aggregate, transform.\n"
+        "   Raw query results are auto-summarized when >30 rows.\n\n"
         "Actions:\n"
         "- `schema`: list columns, types, row_count and file_size.\n"
         "- `sample`: return N rows (`mode`: head/tail/random, default head, n=20).\n"
@@ -24,8 +29,18 @@ CSV_TOOL = ToolSpec(
         "min/max/mean/stddev for numeric columns, top_values for categorical. "
         "Pass `columns` to limit; omit for all.\n"
         "- `query`: run a SQL SELECT against the CSV (the file is exposed as the "
-        "view `t`). Only SELECT/WITH allowed. Result truncated to `limit` rows "
-        "(default 200). Use this for groupby/aggregate/filter.\n"
+        "view `t`). Only SELECT/WITH allowed. Result capped at `limit` rows "
+        "(default 50, max 200). Results >30 rows are auto-summarized "
+        "(column stats + head/tail sample). Pass `summarize: false` to force "
+        "raw output. Response shape is columnar by default "
+        "(`{columns: [...], data: [[...], ...]}`) — ~40% fewer tokens than the "
+        "row-of-objects shape. Pass `format: \"rows\"` for the legacy shape "
+        "(`{rows: [{col: val, ...}, ...]}`).\n"
+        "- `analyze`: run a Python script with `t` as a pandas DataFrame. "
+        "Pre-loaded: duckdb, pandas (as pd), numpy (as np). "
+        "Validation helpers: assert_row_count(min, max), assert_no_nulls(columns), "
+        "assert_unique(column), assert_range(column, min, max). "
+        "Use print() to output your report. Output capped at ~4000 chars. 30s timeout.\n"
         "- `relationships`: discover likely joins/FKs against other CSVs in the "
         "vault. Returns column pairs scored by name similarity + value overlap. "
         "Pass `candidates` to restrict to specific paths."
@@ -35,7 +50,7 @@ CSV_TOOL = ToolSpec(
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["schema", "sample", "describe", "query", "relationships"],
+                "enum": ["schema", "sample", "describe", "query", "analyze", "relationships"],
             },
             "path": {
                 "type": "string",
@@ -61,7 +76,30 @@ CSV_TOOL = ToolSpec(
             },
             "limit": {
                 "type": "integer",
-                "description": "Row cap for query results (default 200, max 5000).",
+                "description": "Row cap for query results (default 50, max 200).",
+            },
+            "summarize": {
+                "type": "boolean",
+                "description": (
+                    "For action=query: force summarization on (true) or off (false). "
+                    "When omitted, results >30 rows are auto-summarized."
+                ),
+            },
+            "script": {
+                "type": "string",
+                "description": (
+                    "Python script for action=analyze. The variable `t` is a pandas "
+                    "DataFrame with the CSV rows. Pre-loaded: duckdb, pandas (as pd), "
+                    "numpy (as np). Validation helpers: assert_row_count(min, max), "
+                    "assert_no_nulls(columns), assert_unique(column), "
+                    "assert_range(column, min, max). Use print() to output your report. "
+                    "Output capped at ~4000 chars. 30-second timeout."
+                ),
+            },
+            "format": {
+                "type": "string",
+                "enum": ["columns", "rows"],
+                "description": "Response shape for action=query. 'columns' (default) returns {columns, data: [[...]]} — ~40% fewer tokens. 'rows' returns the legacy {rows: [{col: val}, ...]}.",
             },
             "candidates": {
                 "type": "array",
@@ -75,7 +113,7 @@ CSV_TOOL = ToolSpec(
 
 
 def handle_csv_tool(args: dict[str, Any]) -> str:
-    from .. import vault_csv
+    from .. import vault, vault_csv, vault_datatable
 
     def _dumps(obj: dict) -> str:
         return json.dumps(obj, default=str)
@@ -87,6 +125,26 @@ def handle_csv_tool(args: dict[str, Any]) -> str:
             return _dumps({"ok": False, "error": "`action` is required"})
         if not path:
             return _dumps({"ok": False, "error": "`path` is required"})
+
+        # Redirect datatable .md files to datatable_manage. The agent has been
+        # observed calling vault_csv on `data-table-plugin: basic` files and
+        # giving up on the resulting "not a CSV/TSV file" error — give it a
+        # structured next step instead of a flat failure.
+        if path.lower().endswith(".md"):
+            try:
+                file = vault.read_file(path)
+            except (FileNotFoundError, OSError):
+                file = None
+            if file is not None and vault_datatable.is_datatable_file(file["content"]):
+                return _dumps({
+                    "ok": False,
+                    "error": f"`{path}` is a datatable, not a CSV — use `datatable_manage` instead",
+                    "hint": {
+                        "tool": "datatable_manage",
+                        "suggested_actions": ["view", "list_rows", "add_row"],
+                        "path": path,
+                    },
+                })
 
         if action == "schema":
             return _dumps({"ok": True, **vault_csv.csv_schema(path)})
@@ -101,8 +159,16 @@ def handle_csv_tool(args: dict[str, Any]) -> str:
             sql = args.get("sql", "")
             if not sql:
                 return _dumps({"ok": False, "error": "`sql` is required for action=query"})
-            limit = int(args.get("limit", 200))
-            return _dumps({"ok": True, **vault_csv.csv_query(path, sql, limit=limit)})
+            limit = int(args.get("limit", 50))
+            fmt = args.get("format", "columns")
+            summarize_raw = args.get("summarize")
+            summarize = None if summarize_raw is None else bool(summarize_raw)
+            return _dumps({"ok": True, **vault_csv.csv_query(path, sql, limit=limit, fmt=fmt, summarize=summarize)})
+        if action == "analyze":
+            script = args.get("script", "")
+            if not script:
+                return _dumps({"ok": False, "error": "`script` is required for action=analyze"})
+            return _dumps({"ok": True, **vault_csv.csv_analyze(path, script)})
         if action == "relationships":
             cands = args.get("candidates")
             return _dumps({"ok": True, **vault_csv.csv_relationships(path, candidates=cands)})

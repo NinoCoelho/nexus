@@ -82,6 +82,12 @@ AuthMethodId = Literal[
     # instead of running a fresh OAuth round-trip.
     "local_claude_code",
     "local_codex",
+    # Nexus subscription sign-in. The wizard handles this specially:
+    # opens a popup to the Nexus website's Firebase auth, receives the
+    # idToken via postMessage, exchanges it through /auth/nexus/verify,
+    # then writes a provider entry with runtime_kind="nexus" pointing at
+    # the LiteLLM gateway. No credential prompts shown to the user.
+    "nexus_signin",
 ]
 
 
@@ -106,6 +112,12 @@ RuntimeKind = Literal[
     "bedrock",
     "vertex",
     "azure_openai",
+    # OpenAI-compatible under the hood (same wire shape as openai_compat)
+    # but kept as its own kind so config files visually distinguish the
+    # paid Nexus subscription from any BYO openai_compat provider the
+    # user may have configured separately. The status watcher and the
+    # /auth/nexus/* routes only act on providers with this runtime_kind.
+    "nexus",
 ]
 
 Category = Literal["frontier", "open", "cloud", "local", "aggregator", "other"]
@@ -120,6 +132,8 @@ Capability = Literal[
     "vision",     # accepts image inputs
     "audio",      # speech in or out (whisper, tts) — usually NOT a chat model
     "embedding",  # embeddings only — never a chat model
+    "image",      # generates image OUTPUT (gpt-image-1, gemini-2.5-flash-image)
+    "document",   # accepts native document (PDF) input blocks
 ]
 
 
@@ -162,6 +176,12 @@ class ProviderCatalogEntry(BaseModel):
     default_models: list[ModelInfo] = Field(default_factory=list)
     docs_url: str = ""
     icon: str = ""
+    # Featured providers float to the top of the wizard's "Select
+    # provider" step in their own visually-distinct section. Used to
+    # surface the Nexus subscription before any BYO option.
+    featured: bool = False
+    # Optional one-line tagline shown beside featured tiles.
+    tagline: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -196,3 +216,106 @@ def find(provider_id: str) -> ProviderCatalogEntry | None:
         if e.id == provider_id:
             return e
     return None
+
+
+@lru_cache(maxsize=1)
+def _model_name_to_capabilities() -> dict[str, set[str]]:
+    """Walk the catalog and build a flat ``{model_name: {capabilities}}`` map.
+
+    Cached for the process lifetime; invalidated only by
+    ``load_catalog.cache_clear()`` in tests. The same model id can appear
+    under multiple providers (e.g. ``gemini-2.5-flash`` is also exposed by
+    OpenRouter); we union their capabilities so the lookup is conservative
+    — if any provider tags it ``"vision"``, the encoder treats it as
+    vision-capable.
+    """
+    out: dict[str, set[str]] = {}
+    for entry in load_catalog():
+        for model in entry.default_models:
+            out.setdefault(model.id, set()).update(model.capabilities)
+    return out
+
+
+_KNOWN_CAPABILITY_TAGS: frozenset[str] = frozenset(
+    [
+        "chat",
+        "tools",
+        "reasoning",
+        "vision",
+        "audio",
+        "embedding",
+        "image",
+        "document",
+    ]
+)
+
+
+def _user_config_capabilities(model_name: str) -> set[str]:
+    """Pull capability-like tags from the user's ``~/.nexus/config.toml``
+    ``[[models]]`` entries whose ``model_name`` (or trailing-path id)
+    matches.
+
+    This is the escape hatch for local GGUFs and any model the bundled
+    catalog doesn't know about: add ``tags = ["vision"]`` to a model
+    entry and the encoder will start sending image parts through it.
+    The user owns the assertion — if their llama-server isn't actually
+    set up with ``--mmproj``, the upstream call will fail loudly,
+    which is better than us silently dropping the bytes.
+    """
+    try:
+        from ..config_file import load as load_config
+
+        cfg = load_config()
+    except Exception:  # noqa: BLE001 — startup races / missing file
+        return set()
+    out: set[str] = set()
+    for m in cfg.models:
+        candidates = {m.model_name, m.id}
+        if "/" in m.id:
+            candidates.add(m.id.rsplit("/", 1)[-1])
+        if model_name in candidates:
+            for tag in m.tags:
+                if tag in _KNOWN_CAPABILITY_TAGS:
+                    out.add(tag)
+            break
+    return out
+
+
+def capabilities_for_model_name(model_name: str) -> set[str]:
+    """Return the capability tags for a resolved upstream model name.
+
+    Used by the LLM provider encoders to decide whether to pass image /
+    audio / document parts through natively or fall back to text. Sources
+    (unioned, in order):
+
+    1. The bundled provider catalog (``catalog.json``) — covers the
+       cloud providers we ship metadata for.
+    2. The user's ``~/.nexus/config.toml`` ``[[models]]`` ``tags`` —
+       overrides for local GGUFs and unknown models.
+
+    Returns an empty set for fully-unknown models — the encoder then
+    conservatively drops non-text parts with a breadcrumb so we never
+    send shapes the upstream rejects with HTTP 400.
+
+    Strips a few known prefixes (``openrouter/``, ``models/``) so e.g.
+    ``models/gemini-2.5-flash`` and ``gemini-2.5-flash`` resolve the same.
+    """
+    if not model_name:
+        return set()
+    table = _model_name_to_capabilities()
+    caps: set[str] = set()
+    if model_name in table:
+        caps = set(table[model_name])
+    else:
+        for prefix in ("models/", "openrouter/"):
+            if model_name.startswith(prefix):
+                stripped = model_name[len(prefix):]
+                if stripped in table:
+                    caps = set(table[stripped])
+                    break
+        if not caps and "/" in model_name:
+            tail = model_name.rsplit("/", 1)[-1]
+            if tail in table:
+                caps = set(table[tail])
+    caps |= _user_config_capabilities(model_name)
+    return caps

@@ -1,10 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { TraceEvent } from "../api";
 import { setMessageFeedback, setMessagePin } from "../api";
 import type { TimelineStep } from "./ChatView";
+import MarkdownView from "./MarkdownView";
 
 /**
  * AssistantMessage — renders a single assistant response in the chat.
@@ -21,63 +20,10 @@ import type { TimelineStep } from "./ChatView";
  */
 import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
-import { VaultLink, asVaultPath, linkifyVaultPaths, vaultUrlTransform } from "./vaultLink";
-const LazyChartBlock = lazy(() => import("./ChartBlock"));
+import { useTTS } from "../hooks/useTTS";
+import { InternalResourceRenderer } from "./StepDetailModal/ResultRenderers";
+import { tryParseJson } from "./StepDetailModal/types";
 import "./AssistantMessage.css";
-
-let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
-function loadMermaid() {
-  if (!_mermaidPromise) {
-    _mermaidPromise = import("mermaid").then((m) => {
-      const mermaid = m.default;
-      const bg = getComputedStyle(document.documentElement)
-        .getPropertyValue("--bg").trim().toLowerCase();
-      const isDark = /^#[01][0-9a-f]/i.test(bg)
-        || bg.startsWith("#0") || bg.startsWith("#1") || bg.startsWith("#2");
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: isDark ? "dark" : "default",
-        securityLevel: "strict",
-        fontFamily: "inherit",
-      });
-      return mermaid;
-    });
-  }
-  return _mermaidPromise;
-}
-
-function MermaidBlock({ code }: { code: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const idRef = useRef(`m${Math.random().toString(36).slice(2, 10)}`);
-
-  useEffect(() => {
-    const trimmed = code.trim();
-    if (!trimmed) return;
-    let cancelled = false;
-    loadMermaid()
-      .then((mermaid) => mermaid.render(idRef.current, trimmed))
-      .then(({ svg }) => {
-        if (cancelled || !ref.current) return;
-        ref.current.innerHTML = svg;
-        setErr(null);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setErr(e instanceof Error ? e.message : String(e));
-      });
-    return () => { cancelled = true; };
-  }, [code]);
-
-  if (err) {
-    return (
-      <pre className="mermaid-error">
-        <code>{`mermaid error: ${err}\n\n${code}`}</code>
-      </pre>
-    );
-  }
-  return <div ref={ref} className="mermaid-block" />;
-}
 
 interface Props {
   content: string;
@@ -94,15 +40,42 @@ interface Props {
   pinned?: boolean;
   onPinChange?: (pinned: boolean) => void;
   thinking?: string;
+  reconnecting?: {
+    attempt: number;
+    maxAttempts: number;
+    delaySeconds: number;
+    reason: string;
+  };
 }
 
 function fmt(d: Date) {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking }: Props) {
+const INLINE_TOOLS = new Set(["show_kanban", "show_dashboard_widget", "show_data_table"]);
+
+function inlineResourcesFromTrace(trace?: TraceEvent[]): { uri: string; toolResult: unknown }[] {
+  if (!trace) return [];
+  const out: { uri: string; toolResult: unknown }[] = [];
+  for (const ev of trace) {
+    const tool = ev.tool ?? ((ev as unknown as Record<string, unknown>).name as string | undefined);
+    const result = ev.result ?? (ev as unknown as Record<string, unknown>).preview;
+    if (!tool || !INLINE_TOOLS.has(tool) || result == null) continue;
+    const parsed = tryParseJson(result);
+    if (parsed && typeof parsed === "object") {
+      const uri = (parsed as Record<string, unknown>).resourceUri as string | undefined;
+      if (uri && uri.startsWith("ui://nexus/")) {
+        out.push({ uri, toolResult: parsed });
+      }
+    }
+  }
+  return out;
+}
+
+export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking, reconnecting }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
+  const tts = useTTS();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
   const [localPinned, setLocalPinned] = useState<boolean>(!!pinned);
@@ -110,7 +83,7 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
   useEffect(() => { setLocalFeedback(feedback ?? null); }, [feedback]);
   useEffect(() => { setLocalPinned(!!pinned); }, [pinned]);
 
-  const processed = useMemo(() => linkifyVaultPaths(content), [content]);
+  const processed = useMemo(() => content, [content]);
 
   async function handleCopy() {
     try {
@@ -173,50 +146,33 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
             <pre className="asst-thinking-body">{thinking}</pre>
           </details>
         )}
-        <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} />
+        {reconnecting && (
+          <div className="asst-reconnecting" role="status" aria-live="polite">
+            <span className="asst-reconnecting-spinner" aria-hidden="true" />
+            <span className="asst-reconnecting-text">
+              {t("chat:assistant.reconnecting", {
+                attempt: reconnecting.attempt,
+                max: reconnecting.maxAttempts,
+                reason: reconnecting.reason || "transient error",
+                delay: Math.round(reconnecting.delaySeconds),
+                defaultValue: "Reconnecting after {{reason}}… (attempt {{attempt}}/{{max}}, retrying in {{delay}}s)",
+              })}
+            </span>
+          </div>
+        )}
+        <ActivityTimeline steps={timeline} trace={trace} streaming={!!streaming} sessionId={sessionId} />
+        {inlineResourcesFromTrace(trace).map((r, i) => (
+          <div key={`inline-res-${i}`} className="asst-inline-resource">
+            <InternalResourceRenderer resourceUri={r.uri} toolResult={r.toolResult} />
+          </div>
+        ))}
         <div className="asst-body">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            urlTransform={vaultUrlTransform}
-            components={{
-              code: ({ className, children, ...rest }) => {
-                const match = /language-([\w-]+)/.exec(className || "");
-                const lang = match?.[1];
-                const raw = String(children ?? "");
-                if (lang === "mermaid" && raw.includes("\n")) {
-                  return <MermaidBlock code={raw.replace(/\n$/, "")} />;
-                }
-                if (lang === "nexus-chart") {
-                  return (
-                    <Suspense fallback={<span className="mermaid-block" />}>
-                      <LazyChartBlock code={raw.replace(/\n$/, "")} />
-                    </Suspense>
-                  );
-                }
-                return <code className={className} {...rest}>{children}</code>;
-              },
-              a: ({ href, children, ...rest }) => {
-                const vaultPath = asVaultPath(href ?? "");
-                if (vaultPath) {
-                  return (
-                    <VaultLink path={vaultPath} onPreview={setPreviewPath}>
-                      {children}
-                    </VaultLink>
-                  );
-                }
-                if (!href) {
-                  return <span {...rest}>{children}</span>;
-                }
-                return (
-                  <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
-                    {children}
-                  </a>
-                );
-              },
-            }}
+          <MarkdownView
+            linkifyVaultPaths
+            onVaultLinkPreview={setPreviewPath}
           >
             {processed}
-          </ReactMarkdown>
+          </MarkdownView>
         </div>
         <div className="asst-footer">
           {canFeedback && (
@@ -258,6 +214,38 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
                 </svg>
               </button>
             </>
+          )}
+          {tts.available && content && !streaming && (
+            <button
+              className={`bubble-action-btn${tts.state === "playing" ? " is-active" : ""}`}
+              onClick={() => {
+                if (tts.state === "idle") void tts.speak(content);
+                else tts.stop();
+              }}
+              title={
+                tts.state === "playing"
+                  ? "Stop reading"
+                  : tts.state === "loading"
+                  ? "Loading…"
+                  : "Read aloud"
+              }
+              aria-label="Read message aloud"
+              aria-pressed={tts.state === "playing"}
+              disabled={tts.state === "loading"}
+            >
+              {tts.state === "playing" ? (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <rect x="3" y="3" width="4" height="10" rx="0.5" />
+                  <rect x="9" y="3" width="4" height="10" rx="0.5" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 6h2l3-3v10l-3-3H3z" fill="currentColor" />
+                  <path d="M11 5.5a3.5 3.5 0 0 1 0 5" />
+                  <path d="M13 3.5a6 6 0 0 1 0 9" />
+                </svg>
+              )}
+            </button>
           )}
           <button
             className="bubble-action-btn"

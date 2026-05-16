@@ -98,6 +98,7 @@ export default function DataTableGrid({
         <table className="dt-table">
           <thead>
             <tr>
+              <th className="dt-actions-col dt-actions-col--icons"></th>
               {visibleFields.map((f) => (
                 <th
                   key={f.name}
@@ -111,7 +112,6 @@ export default function DataTableGrid({
                   )}
                 </th>
               ))}
-              <th className="dt-actions-col">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -119,6 +119,22 @@ export default function DataTableGrid({
               const rowId = String(row._id ?? i);
               return (
                 <tr key={rowId}>
+                  <td className="dt-actions-col dt-actions-col--icons">
+                    <button
+                      className="dt-icon-btn"
+                      onClick={() => onEditRow(row)}
+                      title="Edit"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2z" /></svg>
+                    </button>
+                    <button
+                      className="dt-icon-btn dt-icon-btn--delete"
+                      onClick={() => onDeleteRow(rowId)}
+                      title="Delete"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4m2 0v9.33a1.33 1.33 0 0 1-1.34 1.34H4.67a1.33 1.33 0 0 1-1.34-1.34V4h9.34z" /></svg>
+                    </button>
+                  </td>
                   {visibleFields.map((f) => {
                     const isEditing = editingCell?.rowId === rowId && editingCell.field === f.name;
                     const inlineable = INLINE_EDITABLE.has(f.kind ?? "text") && f.kind !== "formula";
@@ -146,22 +162,6 @@ export default function DataTableGrid({
                       </td>
                     );
                   })}
-                  <td className="dt-actions-col">
-                    <button
-                      className="dt-action-btn"
-                      onClick={() => onEditRow(row)}
-                      title="Edit"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="dt-action-btn dt-action-btn--delete"
-                      onClick={() => onDeleteRow(rowId)}
-                      title="Delete"
-                    >
-                      Del
-                    </button>
-                  </td>
                 </tr>
               );
             })}

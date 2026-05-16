@@ -12,7 +12,13 @@ from ..agent.llm import ToolSpec
 
 HTTP_CALL_TOOL = ToolSpec(
     name="http_call",
-    description="Make an HTTP GET or POST request to an external URL.",
+    description=(
+        "Make an HTTP GET or POST request to an external URL.\n\n"
+        "Use ONLY for external APIs or web services. Do NOT use `http_call` to "
+        "read local files or vault content — always use `vault_read`/`vault_list`/`vault_csv` "
+        "for that. Do NOT use `http_call` to reach localhost services; the agent runs "
+        "alongside the Nexus server and should use internal tools instead."
+    ),
     parameters={
         "type": "object",
         "properties": {

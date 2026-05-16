@@ -7,13 +7,23 @@
     "filters": "Filters",
     "activeFilterIndicator": " •",
     "addLane": "+ Lane",
-    "boardDeleted": "Board file was deleted"
+    "boardDeleted": "Board file was deleted",
+    "boardSettingsTitle": "Board settings — {{title}}",
+    "boardPromptDescription": "The board prompt is prepended before any lane prompt on every dispatch. Use it to set personality, behaviour, and general instructions for all cards on this board.",
+    "boardPromptLabel": "Board prompt",
+    "boardPromptPlaceholder": "e.g. You are a creative writing assistant. Be imaginative, use vivid language, and suggest bold ideas.",
+    "boardPromptIndicator": "Board prompt set",
+    "boardSettings": "Settings",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving..."
   },
   "lane": {
     "promptIndicator": "Auto-dispatch prompt set",
     "editPrompt": "Edit lane prompt",
     "setPrompt": "Set lane prompt",
     "deleteLane": "Delete lane",
+    "dragHandle": "Drag to reorder lane",
     "addCard": "+ Card",
     "addCardAria": "Add card to this lane",
     "newLaneTitle": "New lane",
@@ -28,7 +38,14 @@
   "card": {
     "deleteTitle": "Delete card",
     "deleteMessage": "This card will be removed from the board.",
-    "deleteConfirm": "Delete"
+    "deleteConfirm": "Delete",
+    "ctxOpenChat": "Open in chat",
+    "ctxViewActivity": "View activity",
+    "ctxCancel": "Cancel agent",
+    "ctxRetry": "Retry",
+    "ctxReRun": "Re-run",
+    "ctxMoveTo": "Move to…",
+    "ctxDelete": "Delete card"
   },
   "filter": {
     "textPlaceholder": "Search cards…",

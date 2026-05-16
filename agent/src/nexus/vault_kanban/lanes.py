@@ -51,5 +51,29 @@ def update_lane(path: str, lane_id: str, updates: dict[str, Any]) -> Lane:
     if "model" in updates:
         raw = updates["model"]
         lane.model = str(raw).strip() if raw else None
+    if "webhook_token" in updates:
+        raw = updates["webhook_token"]
+        lane.webhook_token = str(raw).strip() if raw else None
+    if "webhook_enabled" in updates:
+        lane.webhook_enabled = bool(updates["webhook_enabled"])
+    write_board(path, board)
+    return lane
+
+
+def move_lane(path: str, lane_id: str, position: int | None = None) -> Lane:
+    board = read_board(path)
+    src_idx = next(
+        (i for i, ln in enumerate(board.lanes) if ln.id == lane_id),
+        None,
+    )
+    if src_idx is None:
+        raise KeyError(f"lane {lane_id!r} not found")
+    lane = board.lanes.pop(src_idx)
+    # Position is interpreted against the post-removal list, matching how
+    # move_card treats card positions: clamp to [0, len].
+    if position is None or position >= len(board.lanes):
+        board.lanes.append(lane)
+    else:
+        board.lanes.insert(max(0, position), lane)
     write_board(path, board)
     return lane

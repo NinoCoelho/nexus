@@ -12,10 +12,13 @@ import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
+import "./components/onboarding/NexusLoginScreen.css";
 import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import DatabaseSchemaView from "./components/DatabaseSchemaView";
 import DataDashboardView from "./components/DataDashboardView";
+import HeartbeatView from "./components/HeartbeatView";
+import DreamView from "./components/DreamView";
 import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
@@ -31,12 +34,22 @@ import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
 import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
+import { useNexusAccount } from "./hooks/useNexusAccount";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
+import { useCalendarAlarms } from "./hooks/useCalendarAlarms";
+import AlarmNotification from "./components/AlarmNotification";
+import "./components/AlarmNotification.css";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
+import { useVoiceAckPlayer } from "./hooks/useVoiceAckPlayer";
+import { subscribeGlobalNotifications } from "./api/chat";
 import { usePushSubscription } from "./hooks/usePushSubscription";
+import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
+import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
+import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
@@ -44,6 +57,7 @@ import SharedSessionView from "./components/SharedSessionView";
 
 export default function App() {
   const toast = useToast();
+  const { t: tBg } = useTranslation("skillWizard");
   // Detect a read-only share-link route before any state setup. Hash routes
   // look like ``#/share/<token>``; that page bypasses the rest of the app
   // entirely, so unauthenticated viewers don't load the chat surface.
@@ -77,6 +91,8 @@ export default function App() {
   const [dataDiagramFolder, setDataDiagramFolder] = useState<string | null>(null);
   /** Currently selected database (folder) — drives the dashboard view. */
   const [dataSelectedDatabase, setDataSelectedDatabase] = useState<string | null>(null);
+  /** Bumped to force DatabaseListPanel to reload (e.g. after delete). */
+  const [databaseListRevision, setDatabaseListRevision] = useState(0);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -88,6 +104,19 @@ export default function App() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+
+  // Wizard background-build tracker — owns SSE subscriptions for any skill
+  // builds the user dismissed mid-flight, so they keep running on the
+  // server and surface a toast when the agent finishes.
+  useBackgroundSkillBuilds({
+    toast,
+    t: tBg,
+    onTryItNow: (skillName) => {
+      // Pop the new skill's drawer so the user sees what was built; from
+      // there they're one click away from a chat session that uses it.
+      setOpenSkill(skillName);
+    },
+  });
 
   // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
   // the right tab. Hash is preferred over query string because it's
@@ -105,7 +134,7 @@ export default function App() {
       if (window.location.hash === "#/database") {
         window.history.replaceState(null, "", "#/data");
       }
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights)$/);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat|dream)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();
@@ -154,6 +183,12 @@ export default function App() {
   const settings = useSettings();
   const { hasModel, availableModels, lastUsedModel, defaultModel, yoloMode, bumpSettingsRevision, persistUsedModel } = settings;
 
+  // Nexus account — drives the mandatory first-run sign-in gate and the
+  // Settings → Nexus tab. ``nexusAccount.status === null`` while the
+  // initial /auth/nexus/status fetch is in flight so we don't flash the
+  // login screen for already-signed-in users on every page load.
+  const nexusAccount = useNexusAccount();
+
   const chatSession = useChatSession(
     { availableModels, lastUsedModel, defaultModel, persistUsedModel },
     freshSessionId,
@@ -163,12 +198,26 @@ export default function App() {
     activeState, activeSession, setActiveSession, setChatStates,
     sessionsRevision, setSessionsRevision,
     pendingAutoSend, pendingNewSession,
-    send, handleStop, handleRollback, handleContinue,
-    handleContinuePartial, handleRetryPartial, dismissLimitBanner,
+    send, handleStop, handleRollback,
+    handleContinuePartial, handleRetryPartial,
     handleInputChange, handleAttachmentsChange, handleModelChange,
     handleSessionSelect: _handleSessionSelect,
     handleNewChat: _handleNewChat,
+    handleCompact: _handleCompact, handleRemoveLast,
   } = chatSession;
+
+  const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
+    try {
+      const result = await _handleCompact(options);
+      if (!result) return;
+      if (result.budget_exceeded) {
+        toast.error("Your API budget has been exceeded. Top up your credits or switch providers to continue.");
+      }
+      return result;
+    } catch {
+      toast.error("Compact failed. Try removing the last message or starting a new session.");
+    }
+  }, [_handleCompact, toast]);
 
   // Seed the __new__ slot's selectedModel whenever routing info loads so
   // the model picker is pre-filled on first render.
@@ -179,10 +228,34 @@ export default function App() {
     setChatStates((prev) => {
       const next = new Map(prev);
       const cur = next.get(NEW_KEY);
-      if (cur && !cur.selectedModel) next.set(NEW_KEY, { ...cur, selectedModel: seed });
+      if (cur && (!cur.selectedModel || !isReal(cur.selectedModel))) next.set(NEW_KEY, { ...cur, selectedModel: seed });
       return next;
     });
   }, [availableModels, lastUsedModel, defaultModel, setChatStates]);
+
+  // When availableModels changes (e.g. tier upgrade demo→nexus), sweep all
+  // sessions whose selectedModel is no longer available and switch them to
+  // the best valid model.
+  useEffect(() => {
+    if (availableModels.length === 0) return;
+    const pick = (s: string | undefined) => {
+      if (s && availableModels.includes(s)) return s;
+      if (availableModels.includes(defaultModel)) return defaultModel;
+      if (availableModels.includes(lastUsedModel)) return lastUsedModel;
+      return availableModels[0] ?? "";
+    };
+    setChatStates((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [key, state] of next) {
+        if (state.selectedModel && !availableModels.includes(state.selectedModel)) {
+          next.set(key, { ...state, selectedModel: pick(state.selectedModel) });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [availableModels, defaultModel, lastUsedModel, setChatStates]);
 
   // Cross-session HITL subscription. ``useApprovalQueue`` listens on
   // /notifications/events so any agent's question (active chat,
@@ -240,6 +313,21 @@ export default function App() {
 
   useCalendarAlerts({ onOpenCalendar: handleOpenCalendar });
 
+  const { jobs: runningJobs, killJob } = useRunningJobs();
+
+  const handleGoToJob = useCallback((sessionId: string | null, type: string) => {
+    if (type === "dream") { setView("dream"); return; }
+    if (type === "heartbeat") { setView("heartbeat"); return; }
+    if (sessionId) {
+      _handleSessionSelect(sessionId);
+      setView("chat");
+    }
+  }, [_handleSessionSelect]);
+
+  const { alarms, dismiss: dismissAlarm, snooze: snoozeAlarm } = useCalendarAlarms({
+    onOpenCalendar: handleOpenCalendar,
+  });
+
   const handleViewEntityGraph = useCallback((mode: "file" | "folder", path: string) => {
     setGraphSourceFilter({ mode, path });
     setView("graph");
@@ -269,13 +357,51 @@ export default function App() {
     setSessionsRevision((r) => r + 1);
   }, [setChatStates, setActiveSession, setSessionsRevision]);
 
-  const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string) => {
+  // Voice acknowledgment playback. The hook handles ack-kind routing
+  // (suppress start/progress for background sessions, surface a clickable
+  // toast for cross-session completions). The subscription is global —
+  // /notifications/events fans `voice_ack` out for every session, so
+  // background turns are heard even when the user has navigated away.
+  const ackPlayer = useVoiceAckPlayer({
+    activeSessionId: activeSession ?? null,
+    view,
+    onJumpToSession: (sid) => {
+      setActiveSession(sid);
+      setView("chat");
+    },
+  });
+  const { t: tSettings } = useTranslation("settings");
+  useEffect(() => {
+    const sub = subscribeGlobalNotifications((sessionId, event) => {
+      if (event.kind === "voice_ack") {
+        ackPlayer.handle(sessionId, event.data);
+      } else if (event.kind === "nexus_tier_changed") {
+        const upgraded =
+          !event.data.from_models.includes("nexus")
+          && event.data.to_models.includes("nexus");
+        const downgraded =
+          event.data.from_models.includes("nexus")
+          && !event.data.to_models.includes("nexus");
+        if (upgraded) {
+          toast.success(tSettings("settings:nexus.tierChanged.upgraded"));
+        } else if (downgraded) {
+          toast.info(tSettings("settings:nexus.tierChanged.downgraded"));
+        }
+        // Refresh settings so the Default model strip + ModelsTab pick
+        // up the new registry contents.
+        bumpSettingsRevision();
+      }
+    });
+    return () => sub.close();
+  }, [ackPlayer, toast, tSettings, bumpSettingsRevision]);
+
+  const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string, model?: string) => {
     setChatStates((prev) => {
       const next = new Map(prev);
       next.set(sessionId, {
         ...emptyState(),
-        historyLoaded: true, // skip GET /sessions — the only "message" is the hidden seed
-        selectedModel: chatSession.computeSeedModel(),
+        historyLoaded: true,
+        selectedModel: chatSession.computeSeedModel(model),
       });
       return next;
     });
@@ -285,6 +411,11 @@ export default function App() {
     setSessionsRevision((r) => r + 1);
     void title; // title was set server-side on dispatch
   }, [setChatStates, setActiveSession, setSessionsRevision, pendingAutoSend, chatSession]);
+
+  const handleNavigateToSession = useCallback((sessionId: string) => {
+    _handleSessionSelect(sessionId);
+    setView("chat");
+  }, [_handleSessionSelect]);
 
   // Poll for GraphRAG single-file indexing status. Fires when a file is
   // submitted for indexing via KnowledgeView; survives navigation because
@@ -435,6 +566,7 @@ export default function App() {
         onKanbanOpen={(path) => { setKanbanSelectedPath(path); setView("kanban"); }}
         databaseSelectedPath={dataSelectedPath}
         databaseSelectedFolder={dataSelectedDatabase}
+        databaseListRevision={databaseListRevision}
         onDatabaseOpen={(path) => {
           setDataSelectedPath(path);
           setDataDiagramFolder(null);
@@ -469,11 +601,16 @@ export default function App() {
                   usage={sessionUsage}
                   thinking={activeState.thinking}
                   selectedModel={activeState.selectedModel}
+                  sessionId={activeSession}
+                  onCompact={handleCompact}
+                  compacting={activeState.thinking}
                 />
               : null
           }
           notificationSlot={
-            <NotificationBell
+            <>
+              <GlobalSpinner jobs={runningJobs} onKill={killJob} onGoTo={handleGoToJob} />
+              <NotificationBell
               history={notificationCenter.history}
               pendingCount={notificationCenter.pendingCount}
               pushPermission={push.permission}
@@ -491,10 +628,11 @@ export default function App() {
                 dropRequest(rid);
               }}
             />
+            </>
           }
         />
         {backendUp === false && (
-          <div style={{ padding: "6px 12px", background: "#b91c1c", color: "white", fontSize: 13, textAlign: "center" }}>
+          <div style={{ padding: "6px 12px", background: "var(--bad)", color: "var(--fg-on-status)", fontSize: 13, textAlign: "center" }}>
             Backend unreachable — check that <code>nexus serve</code> is running on{" "}
             {import.meta.env.VITE_NEXUS_API ?? "http://localhost:18989"}.
           </div>
@@ -515,7 +653,6 @@ export default function App() {
                   const visible = cur.messages.filter(
                     (m) =>
                       (m.content ?? "").trim().length > 0 ||
-                      m.kind === "limit" ||
                       (m.timeline ?? []).length > 0 ||
                       m.partial != null,
                   );
@@ -538,7 +675,6 @@ export default function App() {
                   const visible = cur.messages.filter(
                     (m) =>
                       (m.content ?? "").trim().length > 0 ||
-                      m.kind === "limit" ||
                       (m.timeline ?? []).length > 0 ||
                       m.partial != null,
                   );
@@ -558,16 +694,17 @@ export default function App() {
               onInputChange={handleInputChange}
               onSend={send}
               onStop={handleStop}
-              onContinue={handleContinue}
               onRetryPartial={handleRetryPartial}
               onContinuePartial={handleContinuePartial}
-              onDismissLimit={dismissLimitBanner}
               hasModel={hasModel}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenInVault={handleOpenInVault}
               attachments={activeState.attachments}
               onAttachmentsChange={handleAttachmentsChange}
               onRollback={handleRollback}
+              onCompact={handleCompact}
+              onNewSession={_handleNewChat}
+              onRemoveLast={handleRemoveLast}
               models={availableModels}
               selectedModel={activeState.selectedModel}
               onModelChange={handleModelChange}
@@ -585,8 +722,10 @@ export default function App() {
               selectedPath={vaultSelectedPath}
               onDispatchToChat={handleDispatchToChat}
               onOpenInChat={handleOpenInChat}
+              onNavigateToSession={handleNavigateToSession}
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
+              onOpenInVault={handleOpenInVault}
             />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
@@ -595,8 +734,10 @@ export default function App() {
                 selectedPath={kanbanSelectedPath}
                 onDispatchToChat={handleDispatchToChat}
                 onOpenInChat={handleOpenInChat}
+                onNavigateToSession={handleNavigateToSession}
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
+                onOpenInVault={handleOpenInVault}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
@@ -627,6 +768,7 @@ export default function App() {
                   selectedPath={dataSelectedPath}
                   onDispatchToChat={handleDispatchToChat}
                   onOpenInChat={handleOpenInChat}
+                  onNavigateToSession={handleNavigateToSession}
                   onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                   onOpenCalendar={handleOpenCalendar}
                   onOpenTable={(p) => {
@@ -647,7 +789,9 @@ export default function App() {
                   setDataSelectedDatabase(null);
                   setDataSelectedPath(null);
                   setDataDiagramFolder(null);
+                  setDatabaseListRevision((n) => n + 1);
                 }}
+                onOpenInVault={handleOpenInVault}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
@@ -675,6 +819,17 @@ export default function App() {
               />
             )}
           </div>
+          <div className="view-pane" style={{ display: view === "heartbeat" ? "flex" : "none" }}>
+            {view === "heartbeat" && (
+              <HeartbeatView
+                onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
+                onOpenInVault={handleOpenInVault}
+              />
+            )}
+          </div>
+          <div className="view-pane" style={{ display: view === "dream" ? "flex" : "none" }}>
+            {view === "dream" && <DreamView />}
+          </div>
         </main>
       </div>
 
@@ -691,7 +846,10 @@ export default function App() {
           mode="first-run"
           configuredNames={[]}
           onClose={(result) => {
-            if (result.saved) bumpSettingsRevision();
+            if (result.saved) {
+              bumpSettingsRevision();
+              void nexusAccount.reload();
+            }
           }}
         />
       )}
@@ -711,6 +869,13 @@ export default function App() {
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+
+      <AlarmNotification
+        alarms={alarms}
+        onDismiss={dismissAlarm}
+        onSnooze={snoozeAlarm}
+        onOpen={handleOpenCalendar}
+      />
     </div>
   );
 }

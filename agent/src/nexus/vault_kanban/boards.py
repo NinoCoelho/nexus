@@ -30,6 +30,17 @@ def create_empty(path: str, title: str | None = None, columns: list[str] | None 
     return board
 
 
+def update_board(path: str, updates: dict[str, Any]) -> Board:
+    """Apply partial updates to a board's top-level fields and persist."""
+    board = read_board(path)
+    if "title" in updates and updates["title"]:
+        board.title = updates["title"]
+    if "board_prompt" in updates:
+        board.board_prompt = updates["board_prompt"]
+    write_board(path, board)
+    return board
+
+
 def list_boards() -> list[dict[str, Any]]:
     """Return ``[{path, title}]`` for every kanban board in the vault.
 

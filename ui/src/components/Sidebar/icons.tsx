@@ -97,3 +97,22 @@ export function IconCollapse({ collapsed }: { collapsed: boolean }) {
     </svg>
   );
 }
+
+export function IconHeartbeat() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 17s-7-4.35-7-8.5C3 5.36 5.5 3 8 3c1.5 0 2 .75 2 .75S10.5 3 12 3c2.5 0 5 2.36 5 5.5C17 12.65 10 17 10 17z" />
+      <line x1="10" y1="7" x2="10" y2="11" />
+      <line x1="8" y1="9" x2="12" y2="9" />
+    </svg>
+  );
+}
+
+export function IconDream() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 14 C2 14, 6 2, 10 10 C14 18, 18 6, 18 6" />
+      <circle cx="17" cy="4" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

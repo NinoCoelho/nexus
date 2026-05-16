@@ -10,16 +10,17 @@ from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
 from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
-from ..llm import ChatMessage, LLMProvider, Role, StreamEvent
+from ..llm import ChatMessage, ContentPart, LLMProvider, Role, StreamEvent
 from ...skills.registry import SkillRegistry
 from ._builder import build_loom_agent
 from .helpers import (
     AgentTurn,
     _annotate_short_reply,
+    _build_user_message,
     _from_loom_message,
     _to_loom_message,
 )
-from .overflow import check_overflow
+from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -49,6 +50,8 @@ _DROP_ASSISTANT_PLACEHOLDERS = (
     "[crashed]",
     "[interrupted]",
     "[cancelled]",
+    "[rate_limited]",
+    "[budget_exceeded]",
 )
 
 
@@ -193,19 +196,55 @@ class Agent:
     def _dispatcher(self, value: Any) -> None:
         self._handlers.dispatcher = value
 
-    def _context_window_for(self, model_id: str | None) -> int:
-        """Lookup the configured context window for a model id.
+    @property
+    def _notify_user_handler(self) -> Any:
+        return self._handlers.notify_user
 
-        Returns 0 when unknown — the overflow checker treats that as
-        "skip the check" so this stays a strictly opt-in safety net.
-        """
+    @_notify_user_handler.setter
+    def _notify_user_handler(self, value: Any) -> None:
+        self._handlers.notify_user = value
+
+    def _context_window_for(self, model_id: str | None) -> int:
         cfg = self._nexus_cfg
-        if not (cfg and model_id):
-            return 0
-        for m in getattr(cfg, "models", []) or []:
-            if getattr(m, "id", None) == model_id:
-                return int(getattr(m, "context_window", 0) or 0)
+        resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)
+        if cfg and resolved:
+            for m in getattr(cfg, "models", []) or []:
+                if getattr(m, "id", None) == resolved:
+                    cw = int(getattr(m, "context_window", 0) or 0)
+                    if cw > 0:
+                        return cw
+            fallback = known_context_window(resolved)
+            if fallback > 0:
+                return fallback
         return 0
+
+    def _log_llm_error(
+        self,
+        *,
+        session_id: str | None,
+        error_type: str,
+        message: str | None = None,
+        retryable: bool = False,
+        retry_attempt: int | None = None,
+        model_id: str | None = None,
+        tokens_est: int | None = None,
+        ctx_window: int | None = None,
+    ) -> None:
+        if self._sessions is None or not session_id:
+            return
+        try:
+            self._sessions.log_error(
+                session_id,
+                error_type,
+                message=message,
+                model=model_id,
+                retryable=retryable,
+                retry_attempt=retry_attempt,
+                tokens_in=tokens_est,
+                context_window=ctx_window,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
         """Return (nexus_provider, upstream_model_name). Kept for app.py compat."""
@@ -224,6 +263,7 @@ class Agent:
         history: list[ChatMessage] | None = None,
         context: str | None = None,
         model_id: str | None = None,
+        attachments: list[ContentPart] | None = None,
     ) -> AgentTurn:
         """Execute a complete turn in blocking mode and return the result.
 
@@ -232,6 +272,12 @@ class Agent:
             history: Prior message history for the session.
             context: Optional additional context injected into the turn.
             model_id: Force a specific model; None uses the configured default.
+            attachments: Optional non-text parts (image/audio/document) to send
+                alongside ``user_message``. When present, the user message is
+                built as a multipart ``content`` list rather than a plain
+                string. Multimodal-capable models receive them natively;
+                others get a transcribed/extracted text breadcrumb at encode
+                time (see ``materialize_messages`` in ``multimodal.py``).
 
         Returns:
             AgentTurn containing the reply, token usage, event trace, and the
@@ -251,9 +297,8 @@ class Agent:
         # Annotate terse yes/no using loom agent's pending question
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
-        loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=annotated or user_message)
-        )
+        user_msg = _build_user_message(annotated or user_message, attachments)
+        loom_messages.append(_to_loom_message(user_msg))
 
         loom_turn = await self._loom.run_turn(loom_messages, model_id=model_id)
 
@@ -280,6 +325,7 @@ class Agent:
         context: str | None = None,
         session_id: str | None = None,
         model_id: str | None = None,
+        attachments: list[ContentPart] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Execute a turn in streaming mode, yielding typed SSE events.
 
@@ -304,17 +350,25 @@ class Agent:
         self._chosen_model = model_id
 
         loom_messages: list[lt.ChatMessage] = []
+        stripped_history: list[ChatMessage] = []
         if history:
-            loom_messages = [
-                _to_loom_message(m) for m in _strip_dead_placeholders(history)
-            ]
+            stripped_history = _strip_dead_placeholders(history)
+
+        ctx_window = self._context_window_for(model_id or self._chosen_model)
+        effective_window = ctx_window if ctx_window > 0 else _DEFAULT_FALLBACK_WINDOW
+
+        loom_messages = [_to_loom_message(m) for m in stripped_history]
+
+        from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW
+        CURRENT_HISTORY.set(stripped_history)
+        CURRENT_CONTEXT_WINDOW.set(effective_window)
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
-        user_msg_content = annotated or user_message
-        loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=user_msg_content)
-        )
+        user_msg_text = annotated or user_message
+        user_msg = _build_user_message(user_msg_text, attachments)
+        user_msg_content = user_msg.content
+        loom_messages.append(_to_loom_message(user_msg))
 
         # Pre-flight overflow check — refuse the turn now if the request can't
         # fit in the chosen model's context window. Without this, providers
@@ -322,39 +376,46 @@ class Agent:
         # which surfaces as the generic "empty_response" error and triggers an
         # endless retry loop.
         ctx_window = self._context_window_for(model_id or self._chosen_model)
-        if ctx_window > 0:
-            check = check_overflow(loom_messages, context_window=ctx_window)
-            if check.overflowed:
-                yield {
-                    "type": "error",
-                    "detail": check.detail,
-                    "reason": "context_overflow",
-                    "retryable": False,
-                    "status_code": None,
-                    "estimated_input_tokens": check.estimated_input_tokens,
-                    "context_window": check.context_window,
-                    "actions": ["compact_history", "new_session"],
-                }
-                yield {
-                    "type": "done",
-                    "session_id": session_id,
-                    "reply": "",
-                    "trace": [{"event": "context_overflow",
-                               "estimated_input_tokens": check.estimated_input_tokens,
-                               "context_window": check.context_window}],
-                    "skills_touched": [],
-                    "iterations": 0,
-                    "messages": list(history or []) + [
-                        ChatMessage(role=Role.USER, content=user_msg_content),
-                    ],
-                    "usage": {
-                        "input_tokens": check.estimated_input_tokens,
-                        "output_tokens": 0,
-                        "tool_calls": 0,
-                        "model": model_id or self._chosen_model,
-                    },
-                }
-                return
+        check = check_overflow(loom_messages, context_window=ctx_window)
+        if check.overflowed:
+            self._log_llm_error(
+                session_id=session_id,
+                error_type="context_overflow",
+                message=check.detail,
+                model_id=model_id,
+                tokens_est=check.estimated_input_tokens,
+                ctx_window=check.context_window,
+            )
+            yield {
+                "type": "error",
+                "detail": check.detail,
+                "reason": "context_overflow",
+                "retryable": False,
+                "status_code": None,
+                "estimated_input_tokens": check.estimated_input_tokens,
+                "context_window": check.context_window,
+                "actions": ["compact_history", "new_session"],
+            }
+            yield {
+                "type": "done",
+                "session_id": session_id,
+                "reply": "",
+                "trace": [{"event": "context_overflow",
+                           "estimated_input_tokens": check.estimated_input_tokens,
+                           "context_window": check.context_window}],
+                "skills_touched": [],
+                "iterations": 0,
+                "messages": list(history or []) + [
+                    ChatMessage(role=Role.USER, content=user_msg_content),
+                ],
+                "usage": {
+                    "input_tokens": check.estimated_input_tokens,
+                    "output_tokens": 0,
+                    "tool_calls": 0,
+                    "model": model_id or self._chosen_model,
+                },
+            }
+            return
 
         # loom yields serialized dicts (via serialize_event=model_dump) but the
         # event structure differs from what app.py expects.  We translate here.
@@ -393,6 +454,21 @@ class Agent:
         # somehow drops it (older serialisers). Updated per dispatch.
         last_tool_exec_id: str | None = None
         last_tool_exec_name: str | None = None
+
+        # Auto-retry on retryable mid-stream errors (peer-closed connections,
+        # 429 rate limits, transient 5xx, "empty response" from a flaky
+        # provider). Loom emits ErrorEvent + DoneEvent and ends the iterator;
+        # without this layer the UI would surface a "Retry" banner that the
+        # user has to click. Instead we silently restart the loom run from
+        # ``working_messages`` (which already mirrors loom's all_messages),
+        # so every completed tool call in this turn is preserved and not
+        # replayed. We only auto-retry when no visible content has been
+        # streamed for the current LLM iteration — restarting after partial
+        # text would duplicate tokens in the UI.
+        _MAX_LOOM_RETRIES = 3
+        _LOOM_RETRY_BACKOFFS = (2.0, 5.0, 12.0)
+        _loom_retry_attempts = 0
+        _delta_emitted_this_iter = False
 
         def _materialise_assistant_if_needed() -> None:
             nonlocal materialised_for_iter
@@ -507,6 +583,7 @@ class Agent:
                 full_text += delta
                 pending_content_chunks.append(delta)
                 materialised_for_iter = False
+                _delta_emitted_this_iter = True
                 # Mirror to the trace bus so /chat/{sid}/events subscribers
                 # (e.g. CardActivityModal) can render typing live, not only
                 # after the post-turn `reply` event.
@@ -560,6 +637,12 @@ class Agent:
                         )
                     except Exception:  # noqa: BLE001
                         log.exception("set_pending_tool_call failed")
+                # Stash the call_id on the terminal output callback so the
+                # process registry can key by it and the SSE event carries it.
+                if tool_name == "terminal" and self._handlers is not None:
+                    th = self._handlers.terminal
+                    if th is not None and hasattr(th, "_on_output") and th._on_output is not None:
+                        th._on_output._call_id = tool_call_id
                 # Mirror to the trace bus so off-stream subscribers see
                 # tool steps live, not only on turn completion.
                 self._on_event("tool_call", {"name": tool_name, "args": tool_args})
@@ -567,6 +650,7 @@ class Agent:
                     "type": "tool_exec_start",
                     "name": tool_name,
                     "args": tool_args,
+                    "call_id": tool_call_id,
                 }
 
             elif etype == "tool_exec_result":
@@ -662,6 +746,11 @@ class Agent:
                 pending_content_chunks.clear()
                 pending_tcs.clear()
                 materialised_for_iter = False
+                # A tool result completed an LLM iteration successfully;
+                # the next iteration starts fresh, so visible-content
+                # tracking and the retry budget both reset.
+                _delta_emitted_this_iter = False
+                _loom_retry_attempts = 0
                 self._on_event("tool_result", {"name": tool_name, "preview": preview})
                 yield {
                     "type": "tool_exec_result",
@@ -678,10 +767,14 @@ class Agent:
                 yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
 
             elif etype == "context_overflow":
-                # Loom refused the next LLM call because the prompt would
-                # overflow the model's context window. Forward as a
-                # structured error so the UI renders the existing
-                # "Compact history / New session" affordance.
+                self._log_llm_error(
+                    session_id=session_id,
+                    error_type="context_overflow",
+                    message=ev.get("message", "context overflow"),
+                    model_id=model_id,
+                    tokens_est=ev.get("estimated_input_tokens", 0),
+                    ctx_window=ev.get("context_window", 0),
+                )
                 yield {
                     "type": "error",
                     "detail": ev.get("message", "context overflow"),
@@ -694,16 +787,121 @@ class Agent:
                 }
 
             elif etype == "error":
-                # loom already classified this. Forward verbatim AND mark
-                # the turn as having seen an error so the done branch's
-                # empty-reply synthesis doesn't run and overwrite it in
-                # the UI's applyErrorEvent (last error wins there).
+                # Auto-recover from transient mid-stream failures (peer-closed
+                # connections, 429 rate limits, transient 5xx, "empty
+                # response" from a flaky provider). When loom flags the
+                # error retryable AND nothing visible has been streamed for
+                # this LLM iteration AND we still have retry budget, swallow
+                # the error+done frames, sleep, and restart loom from
+                # ``working_messages`` (which already has every successful
+                # tool result this turn — no replay). The user sees a brief
+                # pause instead of a "Retry" banner.
+                retryable = bool(ev.get("retryable", False))
+                if (
+                    retryable
+                    and not _delta_emitted_this_iter
+                    and _loom_retry_attempts < _MAX_LOOM_RETRIES
+                ):
+                    # Drain the loom DoneEvent that follows every ErrorEvent
+                    # before we swap iterators. ``loom_task`` is already
+                    # awaiting the next __anext__ result (line above), which
+                    # is the done frame. We discard it; the new loom run
+                    # will emit its own done when it finishes.
+                    try:
+                        await loom_task  # consume the trailing done event
+                    except StopAsyncIteration:
+                        pass
+                    except Exception:  # noqa: BLE001 — best-effort drain
+                        pass
+                    delay = _LOOM_RETRY_BACKOFFS[
+                        min(_loom_retry_attempts, len(_LOOM_RETRY_BACKOFFS) - 1)
+                    ]
+                    log.warning(
+                        "loom auto-retry: attempt=%d/%d delay=%.1fs reason=%r "
+                        "(message=%r)",
+                        _loom_retry_attempts + 1, _MAX_LOOM_RETRIES,
+                        delay, ev.get("reason"),
+                        (ev.get("message") or "")[:200],
+                    )
+                    # Surface the backoff so the UI can render a small
+                    # "Reconnecting…" hint instead of leaving the user
+                    # staring at a frozen bubble.
+                    yield {
+                        "type": "reconnecting",
+                        "attempt": _loom_retry_attempts + 1,
+                        "max_attempts": _MAX_LOOM_RETRIES,
+                        "delay_seconds": delay,
+                        "reason": ev.get("reason") or "",
+                    }
+                    await asyncio.sleep(delay)
+                    _loom_retry_attempts += 1
+                    # Reset per-iteration state from the failed attempt so
+                    # the new loom run doesn't see stale tool_call_delta or
+                    # content_delta fragments.
+                    pending_content_chunks.clear()
+                    pending_tcs.clear()
+                    _tc_id_by_index.clear()
+                    materialised_for_iter = False
+                    _delta_emitted_this_iter = False
+                    # Restart loom from the working_messages we've already
+                    # accumulated — every successful tool call/result is
+                    # there, so no work is replayed.
+                    loom_iter = self._loom.run_turn_stream(
+                        working_messages, model_id=model_id
+                    ).__aiter__()
+                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                    continue
+                # Either non-retryable, content already streamed, or budget
+                # exhausted — surface the error as before. _saw_loom_error
+                # suppresses the done branch's empty-reply synthesis so the
+                # UI's applyErrorEvent (last error wins) keeps loom's
+                # classified message instead of a generic banner.
                 _saw_loom_error = True
+                self._log_llm_error(
+                    session_id=session_id,
+                    error_type=ev.get("reason") or "llm_error",
+                    message=(ev.get("message") or "")[:2000],
+                    retryable=retryable,
+                    retry_attempt=_loom_retry_attempts if _loom_retry_attempts > 0 else None,
+                    model_id=model_id,
+                    tokens_est=check_overflow(loom_messages, context_window=ctx_window or 0).estimated_input_tokens if ctx_window > 0 else None,
+                    ctx_window=ctx_window,
+                )
+                error_reason = ev.get("reason") or ""
+                if error_reason == "rate_limit" and session_id and self._sessions is not None:
+                    try:
+                        from datetime import datetime, timezone, timedelta
+                        cooldown = 60
+                        retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+                        wm_json = json.dumps(
+                            [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
+                              "content": m.content if isinstance(m.content, str) else json.dumps(m.content, default=str),
+                              "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in (m.tool_calls or [])] if m.tool_calls else None,
+                              "tool_call_id": m.tool_call_id, "name": m.name}
+                             for m in working_messages],
+                            default=str,
+                        )
+                        self._sessions.pause_turn(
+                            session_id,
+                            user_message=user_msg_content,
+                            working_messages_json=wm_json,
+                            retry_after_iso=retry_after.isoformat(),
+                            model_id=model_id,
+                            error_detail=(ev.get("message") or "")[:500],
+                        )
+                        yield {
+                            "type": "paused_for_cooldown",
+                            "retry_after": retry_after.isoformat(),
+                            "estimated_seconds": cooldown,
+                            "reason": error_reason,
+                        }
+                    except Exception:
+                        log.debug("failed to persist paused turn", exc_info=True)
                 yield {
                     "type": "error",
                     "detail": ev.get("message", ""),
                     "reason": ev.get("reason"),
-                    "retryable": ev.get("retryable", False),
+                    "retryable": retryable,
                     "status_code": ev.get("status_code"),
                 }
 
@@ -750,6 +948,14 @@ class Agent:
                         "(model=%s, stop_reason=%s, iters=%s, in_tokens=%s, out_tokens=%s)",
                         model_used, stop_reason, ev.get("iterations"),
                         usage_in, usage_out,
+                    )
+                    self._log_llm_error(
+                        session_id=session_id,
+                        error_type="empty_response",
+                        message=f"stop_reason={stop_reason} iters={ev.get('iterations')} in={usage_in} out={usage_out}",
+                        model_id=model_id,
+                        tokens_est=usage_in,
+                        ctx_window=ctx_window,
                     )
                     # Heuristic: if the request was already large, the most
                     # likely cause of a 200-with-empty-content is upstream

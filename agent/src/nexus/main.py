@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from .agent.registry import build_registry
 from .redact import install_redaction
 from .server.app import create_app
 from .skills.registry import SkillRegistry
+
+_PORT_FILE = Path.home() / ".nexus" / "port"
 
 
 _NEXUS_USER_DEFAULT = """\
@@ -65,17 +68,18 @@ def build_app():
     try:
         default_provider, _ = provider_registry.get_for_model(cfg.agent.default_model)
     except KeyError:
-        available = provider_registry.available_model_ids()
+        vision_id = (getattr(cfg, "agent", None) and cfg.agent.vision_model) or ""
+        exclude = {vision_id} if vision_id else None
+        available = provider_registry.available_model_ids(exclude=exclude)
         if available:
-            # Find a fallback whose provider is actually functional
-            # (has valid auth / is reachable).  Prefer the first available
-            # that is not a broken key-based provider.
-            fallback_id = available[0]
-            for candidate in available:
-                # The registry only registers providers that passed validation,
-                # so any model in available_model_ids() should be functional.
-                fallback_id = candidate
-                break
+            # Prefer Nexus-tier models when present (nexus > demo), since
+            # signed-in users always have one of those registered. Falls
+            # through to the first BYO-model otherwise.
+            preference = ("nexus", "demo")
+            fallback_id = next(
+                (mid for mid in preference if mid in available),
+                available[0],
+            )
             log.warning(
                 "Default model %r not registered — using %r as the Agent's fallback provider. "
                 "Fix by updating agent.default_model in ~/.nexus/config.toml or picking one in Settings.",
@@ -120,8 +124,63 @@ def build_app():
 app = build_app()
 
 
+def _write_port_file() -> None:
+    _PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PORT_FILE.write_text(str(PORT))
+    atexit.register(lambda: _PORT_FILE.unlink(missing_ok=True))
+
+
 def main() -> None:
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "dream":
+        _run_dream()
+        return
+    _write_port_file()
     uvicorn.run("nexus.main:app", host="127.0.0.1", port=PORT, reload=False)
+
+
+def _run_dream() -> None:
+    import asyncio
+    from .dream.engine import run_dream, close_store
+
+    cfg = apply_env_overlay(load_config())
+    dream_cfg = getattr(cfg, "dream", None)
+    if dream_cfg is None or not dream_cfg.enabled:
+        print("Dreaming is disabled. Enable it in ~/.nexus/config.toml with [dream] enabled = true")
+        return
+
+    provider, upstream_model = _resolve_dream_provider(cfg)
+
+    result = asyncio.run(run_dream(provider=provider, model_id=upstream_model, cfg=cfg))
+    if result.error:
+        print(f"Dream run #{result.run_id} failed: {result.error}")
+    else:
+        c = result.consolidation
+        print(f"Dream run #{result.run_id} completed (depth={result.depth}, duration={result.duration_ms / 1000:.1f}s)")
+        if c:
+            print(f"  Consolidation: {c.merges} merges, {c.updates} updates, {c.deletes} deletes")
+    close_store()
+
+
+def _resolve_dream_provider(cfg):
+    from .agent.registry import build_registry
+    from .agent.llm import OpenAIProvider, StaticBearerAuth
+    from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+
+    registry = build_registry(cfg)
+    try:
+        provider, upstream = registry.get_for_model(cfg.agent.default_model)
+        return provider, upstream
+    except KeyError:
+        available = registry.available_model_ids()
+        if available:
+            provider, upstream = registry.get_for_model(available[0])
+            return provider, upstream
+    return OpenAIProvider(
+        base_url=LLM_BASE_URL,
+        auth=StaticBearerAuth(LLM_API_KEY),
+        model=LLM_MODEL,
+    ), None
 
 
 if __name__ == "__main__":

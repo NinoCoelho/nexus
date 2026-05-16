@@ -14,12 +14,52 @@ log = logging.getLogger(__name__)
 from .types import (
     ChatMessage,
     ChatResponse,
+    ContentPart,
     LLMError,
     LLMProvider,
     StopReason,
     StreamEvent,
     ToolCall,
 )
+
+
+def _encode_part_anthropic(part: ContentPart) -> dict[str, Any]:
+    """Translate one ``ContentPart`` into Anthropic native block shape.
+
+    Image parts read bytes from the vault and emit a ``base64`` source
+    block. Document (PDF) parts ride Anthropic's native ``document``
+    block. The encoder assumes ``materialize_message`` has already
+    lowered any parts the model can't handle natively to text.
+    """
+    import base64
+
+    if part.kind == "text":
+        return {"type": "text", "text": part.text or ""}
+    if part.kind in ("image", "document"):
+        from ...multimodal import read_vault_bytes, sniff_mime
+
+        path = part.vault_path or ""
+        mime = part.mime_type or sniff_mime(path)
+        try:
+            data = read_vault_bytes(path)
+        except FileNotFoundError:
+            return {"type": "text", "text": f"[{part.kind} missing: {path}]"}
+        b64 = base64.b64encode(data).decode("ascii")
+        return {
+            "type": part.kind,
+            "source": {"type": "base64", "media_type": mime, "data": b64},
+        }
+    # Audio is not natively supported by Anthropic; materialize_message
+    # transcribes audio away before we get here. Safe breadcrumb fallback.
+    return {"type": "text", "text": f"[unsupported part kind: {part.kind}]"}
+
+
+def _encode_message_content_anthropic(content: Any) -> Any:
+    """Encode :class:`ChatMessage.content` for Anthropic — string, list of
+    :class:`ContentPart`, or ``None``."""
+    if isinstance(content, list):
+        return [_encode_part_anthropic(p) for p in content]
+    return content or ""
 
 
 def _encode_msg_anthropic(m: ChatMessage) -> dict[str, Any]:
@@ -30,19 +70,23 @@ def _encode_msg_anthropic(m: ChatMessage) -> dict[str, Any]:
                 {
                     "type": "tool_result",
                     "tool_use_id": m.tool_call_id,
-                    "content": m.content or "",
+                    "content": _encode_message_content_anthropic(m.content),
                 }
             ],
         }
     if m.tool_calls:
         content: list[dict[str, Any]] = []
-        if m.content:
+        if isinstance(m.content, list):
+            content.extend(_encode_part_anthropic(p) for p in m.content)
+        elif m.content:
             content.append({"type": "text", "text": m.content})
         for tc in m.tool_calls:
             content.append(
                 {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments}
             )
         return {"role": "assistant", "content": content}
+    if isinstance(m.content, list):
+        return {"role": m.role.value, "content": [_encode_part_anthropic(p) for p in m.content]}
     return {"role": m.role.value, "content": m.content or ""}
 
 
@@ -160,15 +204,21 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
             raise LLMError("No model specified: pass model= or set a default at construction")
-        system = ""
+        from ...multimodal import materialize_messages
+        from ...providers.catalog import capabilities_for_model_name
+
+        caps = capabilities_for_model_name(resolved_model)
+        prepared = await materialize_messages(messages, caps)
+        system: Any = ""
         filtered: list[dict[str, Any]] = []
-        for m in messages:
+        for m in prepared:
             if m.role == Role.SYSTEM:
-                system = m.content or ""
+                system = m.content if isinstance(m.content, str) else (m.content or "")
             else:
                 filtered.append(_encode_msg_anthropic(m))
 
@@ -178,6 +228,14 @@ class AnthropicProvider(LLMProvider):
             "messages": filtered,
             "temperature": self._temperature,
         }
+        # Caller-supplied extras (e.g. voice_ack disables extended thinking
+        # via {"thinking": {"type": "disabled"}}). Anthropic accepts a
+        # `thinking` field natively. Other extras are passed through; the
+        # SDK will reject anything it doesn't recognize.
+        if extra_payload:
+            for k, v in extra_payload.items():
+                if k not in kwargs:
+                    kwargs[k] = v
         if system:
             kwargs["system"] = system
         if tools:
@@ -197,11 +255,16 @@ class AnthropicProvider(LLMProvider):
         resolved_model = model or self._model
         if not resolved_model:
             raise LLMError("No model specified: pass model= or set a default at construction")
-        system = ""
+        from ...multimodal import materialize_messages
+        from ...providers.catalog import capabilities_for_model_name
+
+        caps = capabilities_for_model_name(resolved_model)
+        prepared = await materialize_messages(messages, caps)
+        system: Any = ""
         filtered: list[dict[str, Any]] = []
-        for m in messages:
+        for m in prepared:
             if m.role == Role.SYSTEM:
-                system = m.content or ""
+                system = m.content if isinstance(m.content, str) else (m.content or "")
             else:
                 filtered.append(_encode_msg_anthropic(m))
 

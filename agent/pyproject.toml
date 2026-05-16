@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nexus"
-version = "0.2.0"
+version = "0.3.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "uvicorn[standard]>=0.29",
@@ -22,9 +22,13 @@ dependencies = [
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "pt-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_sm-3.8.0/pt_core_news_sm-3.8.0-py3-none-any.whl",
     "faster-whisper>=1.0",
-    "loom-framework[anthropic,acp,tui,graphrag,search,scrape]",
+    "loom-framework[anthropic,acp,mcp,tui,graphrag,search,scrape]",
     "huggingface_hub>=0.24",
     "duckdb>=1.0",
+    # DuckDB needs pytz at runtime to materialize TIMESTAMP WITH TIME ZONE
+    # columns into Python datetimes via fetchall(). Without it, vault_csv
+    # blows up on any CSV with TZ-aware timestamps.
+    "pytz>=2024.1",
     "python-dateutil>=2.9",
     "pywebpush>=2.0",
     "cryptography>=42.0",
@@ -36,6 +40,24 @@ dependencies = [
     # (`nexus_kb_search` tool) to retrieve sections from the in-app knowledge
     # base without inflating the system prompt.
     "rank_bm25>=0.2.2",
+    # PDF text extraction for multimodal document attachments when the
+    # active model can't accept a native PDF block (i.e. anything except
+    # Anthropic Claude). Pure Python; small.
+    "pypdf>=4.0",
+    # Local TTS engine — Piper synthesizes high-quality speech on CPU
+    # using small ONNX models. Default voices (en_US-amy-medium,
+    # pt_BR-faber-medium) auto-download on first daemon start to
+    # ~/.nexus/tts/piper, ~63 MB each. Always available — no extras
+    # dance, no third-party API keys.
+    "piper-tts>=1.2",
+    # Number-to-words conversion for the TTS pre-formatting normalizer
+    # (1250 → "one thousand two hundred fifty" / "mil duzentos e cinquenta").
+    # Pure Python, ~few hundred KB, supports en + pt + es first-class.
+    "num2words>=0.5",
+    # Markdown → HTML conversion for vault PDF export. Pure Python, lightweight.
+    "markdown>=3.5",
+    # PDF generation for vault export (write_html renders styled HTML to PDF).
+    "fpdf2>=2.7",
 ]
 
 [tool.uv.sources]
@@ -72,6 +94,18 @@ bedrock = [
 # Install with: `uv sync --extra markitdown`
 markitdown = [
     "markitdown[all]>=0.0.1",
+]
+# Local OCR engines for the multimodal image fallback + the ocr_image tool.
+# The ``llm`` engine (talking to a vision-capable endpoint like vLLM serving
+# datalab-to/chandra-ocr-2) needs no extra deps and rides the existing
+# provider layer. Pull this extra only if you want the pure-Python rapidocr
+# fallback or scanned-PDF rasterization. Install with:
+# `uv sync --extra ocr` (and `brew install poppler` for PDF support).
+ocr = [
+    "rapidocr-onnxruntime>=1.4",
+    "Pillow>=10.0",
+    "numpy>=1.26",
+    "pdf2image>=1.17",
 ]
 
 [project.scripts]

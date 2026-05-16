@@ -30,9 +30,15 @@ from .config_schema import (  # noqa: F401
     ScrapeConfig,
     RemoteTranscriptionConfig,
     TranscriptionConfig,
+    TTSConfig,
     VaultHistoryConfig,
     VaultConfig,
     UIConfig,
+    LocationConfig,
+    DreamConfig,
+    NexusAccountConfig,
+    McpServerEntry,
+    McpConfig,
     NexusConfig,
     default_config,
 )
@@ -141,6 +147,12 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "model": cfg.transcription.remote.model,
             },
         },
+        "tts": {
+            "enabled": cfg.tts.enabled,
+            "ack_enabled": cfg.tts.ack_enabled,
+            "ack_mode": cfg.tts.ack_mode,
+            "voices_dir": cfg.tts.voices_dir,
+        },
         "vault": {
             "history": {
                 "enabled": cfg.vault.history.enabled,
@@ -148,6 +160,39 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         },
         "ui": {
             "language": cfg.ui.language,
+        },
+        "nexus_account": {
+            "base_url": cfg.nexus_account.base_url,
+            "gateway_url": cfg.nexus_account.gateway_url,
+            "poll_seconds": cfg.nexus_account.poll_seconds,
+            "auto_upgrade_default": cfg.nexus_account.auto_upgrade_default,
+        },
+        "location": {
+            "city": cfg.location.city,
+            "region": cfg.location.region,
+            "country": cfg.location.country,
+            "timezone": cfg.location.timezone,
+            "lat": cfg.location.lat,
+            "lon": cfg.location.lon,
+            "disabled": cfg.location.disabled,
+        },
+        "dream": cfg.dream.model_dump(),
+        "mcp": {
+            "servers": {
+                name: {
+                    "transport": entry.transport,
+                    "command": entry.command,
+                    "env": entry.env,
+                    "url": entry.url,
+                    "headers": entry.headers,
+                    "enabled": entry.enabled,
+                }
+                for name, entry in cfg.mcp.servers.items()
+            },
+            "server_enabled": cfg.mcp.server_enabled,
+            "server_port": cfg.mcp.server_port,
+            "server_expose": cfg.mcp.server_expose,
+            "server_auth_token": cfg.mcp.server_auth_token,
         },
     }
     for m in cfg.models:
@@ -283,6 +328,26 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     if isinstance(t_raw.get("language"), str) and not t_raw["language"].strip():
         t_raw["language"] = None
     transcription = TranscriptionConfig(**t_raw)
+    tts_raw = dict(raw.get("tts", {}))
+    # Older configs had per-engine sub-blocks, an `engine` field, per-kind
+    # ack toggles, threshold ints, voice/speed/language overrides and an
+    # `ack_model` field. Drop them silently — TTSConfig is now intentionally
+    # minimal (enabled + ack_enabled + voices_dir).
+    legacy_piper = tts_raw.pop("piper", None)
+    if isinstance(legacy_piper, dict) and "voices_dir" not in tts_raw:
+        vd = legacy_piper.get("voices_dir")
+        if isinstance(vd, str):
+            tts_raw["voices_dir"] = vd
+    for legacy_key in (
+        "openai", "elevenlabs", "engine",
+        "voice", "speed", "language", "auto_detect_language",
+        "ack_start_enabled", "ack_progress_enabled", "ack_complete_enabled",
+        "completion_ack_cross_session", "ack_model",
+        "long_process_threshold_s", "long_process_repeat_s",
+        "completion_ack_threshold_s",
+    ):
+        tts_raw.pop(legacy_key, None)
+    tts = TTSConfig(**tts_raw)
     vault_raw = dict(raw.get("vault", {}))
     history_raw = dict(vault_raw.get("history", {}))
     vault = VaultConfig(history=VaultHistoryConfig(**history_raw))
@@ -292,10 +357,22 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     if ui_raw.get("language") not in ("en", "pt-BR"):
         ui_raw.pop("language", None)
     ui = UIConfig(**ui_raw)
+    nexus_account = NexusAccountConfig(**dict(raw.get("nexus_account", {})))
+    location = LocationConfig(**dict(raw.get("location", {})))
+    dream = DreamConfig(**dict(raw.get("dream", {})))
+    mcp_raw = dict(raw.get("mcp", {}))
+    mcp_servers: dict[str, McpServerEntry] = {}
+    for sname, sdata in mcp_raw.get("servers", {}).items():
+        sdata = dict(sdata)
+        sdata.setdefault("enabled", True)
+        mcp_servers[sname] = McpServerEntry(**sdata)
+    mcp = McpConfig(servers=mcp_servers)
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
-        transcription=transcription, vault=vault, ui=ui,
+        transcription=transcription, tts=tts, vault=vault, ui=ui,
+        nexus_account=nexus_account, location=location, dream=dream,
+        mcp=mcp,
     )
 
 

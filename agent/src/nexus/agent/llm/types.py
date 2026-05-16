@@ -13,7 +13,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,10 +47,30 @@ class ToolCall(BaseModel):
         return json.dumps(self.arguments)
 
 
+class ContentPart(BaseModel):
+    """One typed slice of a multipart message body.
+
+    Used when a user uploads an image, audio clip, or document alongside
+    text and the resolved model is multimodal-capable. Non-text parts
+    reference a vault file by path; the provider encoder reads bytes and
+    base64-encodes only at request time so session history stays small
+    and image bytes never live in SQLite.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["text", "image", "audio", "document"]
+    text: str | None = None         # kind == "text"
+    vault_path: str | None = None   # kind in {image, audio, document}
+    mime_type: str | None = None    # for non-text; sniffed at upload time
+
+
 class ChatMessage(BaseModel):
     model_config = ConfigDict(frozen=True)
     role: Role
-    content: str | None = None
+    # ``str`` for the legacy single-text path (every existing call site)
+    # or ``list[ContentPart]`` when the user attached image/audio/document
+    # files alongside their message.
+    content: str | list[ContentPart] | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
@@ -126,6 +146,7 @@ class LLMProvider(ABC):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse: ...
 
     async def chat_stream(

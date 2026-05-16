@@ -19,11 +19,19 @@ Goals:
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
-from typing import Any
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, TYPE_CHECKING
 
 from ..llm.types import ChatMessage, Role
+
+if TYPE_CHECKING:
+    from ..llm import LLMProvider
+
+log = logging.getLogger(__name__)
 
 
 # Default threshold: anything bigger than this in a single tool message is a
@@ -188,3 +196,201 @@ def compact_history(
         bytes_after=bytes_after,
         skipped_already_compacted=skipped,
     )
+
+
+_AUTO_COMPACT_THRESHOLD_BYTES = 8 * 1024
+_AUTO_COMPACT_HEAD_KEEP = 1024
+_AUTO_COMPACT_SAMPLE_ROWS = 3
+
+_VAULT_TOOL_CACHE_DIR = Path("~/.nexus/vault/.tool-cache").expanduser()
+
+
+def _persist_to_vault(content: str, tool_call_id: str | None) -> str | None:
+    try:
+        _VAULT_TOOL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        h = hashlib.sha256(content.encode()).hexdigest()[:16]
+        suffix = f"{h}.json"
+        if tool_call_id:
+            suffix = f"{tool_call_id}_{suffix}"
+        path = _VAULT_TOOL_CACHE_DIR / suffix
+        path.write_text(content, encoding="utf-8")
+        return f"vault://.tool-cache/{suffix}"
+    except Exception:
+        log.debug("failed to persist tool result to vault cache", exc_info=True)
+        return None
+
+
+def auto_compact(
+    history: list[ChatMessage],
+    *,
+    threshold_bytes: int = _AUTO_COMPACT_THRESHOLD_BYTES,
+    head_keep: int = _AUTO_COMPACT_HEAD_KEEP,
+    sample_rows: int = _AUTO_COMPACT_SAMPLE_ROWS,
+) -> tuple[list[ChatMessage], CompactionReport]:
+    out: list[ChatMessage] = []
+    inspected = 0
+    compacted = 0
+    bytes_before = 0
+    bytes_after = 0
+    skipped = 0
+
+    for msg in history:
+        if msg.role != Role.TOOL or not msg.content:
+            out.append(msg)
+            continue
+        inspected += 1
+        size = len(msg.content)
+        bytes_before += size
+        if size <= threshold_bytes:
+            bytes_after += size
+            out.append(msg)
+            continue
+        if _is_compacted(msg.content):
+            skipped += 1
+            bytes_after += size
+            out.append(msg)
+            continue
+        vault_ref = _persist_to_vault(msg.content, msg.tool_call_id)
+        new_content = _compact_one(msg.content, head_keep=head_keep, sample_rows=sample_rows)
+        if vault_ref:
+            new_content += f"\n\n[Full result saved to {vault_ref}]"
+        bytes_after += len(new_content)
+        compacted += 1
+        out.append(
+            ChatMessage(
+                role=msg.role,
+                content=new_content,
+                tool_call_id=msg.tool_call_id,
+                name=msg.name,
+            )
+        )
+    return out, CompactionReport(
+        inspected=inspected,
+        compacted=compacted,
+        bytes_before=bytes_before,
+        bytes_after=bytes_after,
+        skipped_already_compacted=skipped,
+    )
+
+
+@dataclass
+class CompactAndSummarizeReport:
+    compact_report: CompactionReport = field(default_factory=lambda: CompactionReport(0, 0, 0, 0, 0))
+    summarized: bool = False
+    summarized_messages: int = 0
+    messages_before: int = 0
+    messages_after: int = 0
+    tokens_before: int = 0
+    tokens_after: int = 0
+    zone_after: str = "green"
+    still_overflowed: bool = False
+    budget_exceeded: bool = False
+
+
+async def compact_and_summarize(
+    history: list[ChatMessage],
+    *,
+    context_window: int,
+    session_id: str | None = None,
+    model_id: str | None = None,
+    provider: LLMProvider | None = None,
+    strategy: str = "auto",
+    force_summarize: bool = False,
+) -> tuple[list[ChatMessage], CompactAndSummarizeReport]:
+    from .zones import classify_zone
+    from .summarize import summarize_older_turns
+
+    report = CompactAndSummarizeReport(
+        messages_before=len(history),
+    )
+
+    est_tokens = _estimate_for(history)
+    report.tokens_before = est_tokens
+
+    effective_window = context_window if context_window > 0 else 32_000
+
+    result = list(history)
+
+    run_tools = strategy in ("auto", "tools_only", "aggressive")
+    run_summarize = strategy in ("auto", "summarize_only", "aggressive") or force_summarize
+
+    aggressive = strategy == "aggressive"
+
+    if run_tools:
+        tool_threshold = 4 * 1024 if aggressive else _AUTO_COMPACT_THRESHOLD_BYTES
+        tool_head = 512 if aggressive else _AUTO_COMPACT_HEAD_KEEP
+        tool_rows = 2 if aggressive else _AUTO_COMPACT_SAMPLE_ROWS
+
+        compacted_result, compact_report = auto_compact(
+            result,
+            threshold_bytes=tool_threshold,
+            head_keep=tool_head,
+            sample_rows=tool_rows,
+        )
+        report.compact_report = compact_report
+        if compact_report.compacted > 0:
+            log.info(
+                "compact_and_summarize: auto_compact compacted=%d saved=%d bytes",
+                compact_report.compacted, compact_report.saved_bytes,
+            )
+            result = compacted_result
+
+    re_tokens = _estimate_for(result)
+    zone = classify_zone(re_tokens, effective_window)
+
+    should_summarize = run_summarize and (zone in ("yellow", "orange", "red") or force_summarize)
+    if should_summarize and provider is not None:
+        try:
+            summary, recent = await summarize_older_turns(
+                result, provider,
+                model_id=model_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            from ...error_classifier import is_budget_exceeded
+            if is_budget_exceeded(exc):
+                report.budget_exceeded = True
+                log.warning("compact_and_summarize: budget exceeded during summarization")
+            else:
+                log.warning("compact_and_summarize: summarization failed", exc_info=True)
+        else:
+            if summary:
+                from .summarize import _SUMMARY_PREFIX
+                summary_msg = ChatMessage(
+                    role=Role.SYSTEM,
+                    content=f"{_SUMMARY_PREFIX} — auto-generated summary]\n{summary}",
+                )
+                report.summarized = True
+                report.summarized_messages = len(result) - len(recent)
+                result = [summary_msg] + recent
+                log.info(
+                    "compact_and_summarize: summarized %d old messages into %d chars",
+                    report.summarized_messages, len(summary),
+                )
+
+    final_tokens = _estimate_for(result)
+    final_zone = classify_zone(final_tokens, effective_window)
+
+    report.messages_after = len(result)
+    report.tokens_after = final_tokens
+    report.zone_after = final_zone
+    from .overflow import _OUTPUT_HEADROOM_TOKENS
+    report.still_overflowed = final_tokens > effective_window - _OUTPUT_HEADROOM_TOKENS
+
+    return result, report
+
+
+def _estimate_for(messages: list[ChatMessage]) -> int:
+    from .overflow import estimate_tokens
+
+    class _Msg:
+        pass
+
+    compat = []
+    for m in messages:
+        o = _Msg()
+        o.content = m.content
+        o.role = m.role
+        o.tool_calls = getattr(m, "tool_calls", None)
+        compat.append(o)
+    return estimate_tokens(compat) if compat else 0

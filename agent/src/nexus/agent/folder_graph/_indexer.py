@@ -16,8 +16,10 @@ from typing import Any, AsyncIterator
 from ._scanner import iter_indexable_files
 from ._storage import (
     content_hash,
+    get_meta_kv,
     is_file_current,
     normalize_folder,
+    ontology_hash,
     remove_file,
     upsert_file,
 )
@@ -59,11 +61,27 @@ async def index_folder_streaming(folder, *, cfg, ontology, full: bool = False
     engine = entry["engine"]
     manifest = entry["manifest"]
 
+    # Detect ontology drift: compare the ontology being indexed against the
+    # hash recorded after the last *successful* build (``build_ontology_hash``).
+    # ``ontology_hash`` in meta is updated immediately when the user saves the
+    # ontology via PUT, so comparing against it would always match — we need
+    # the build-time snapshot to detect real drift.
+    build_hash = get_meta_kv(manifest, "build_ontology_hash") or ""
+    new_hash = ontology_hash(ontology)
+    if not full:
+        if build_hash:
+            if new_hash != build_hash:
+                log.info("[folder_graph] ontology drift on %s — forcing full reindex", folder_p)
+                full = True
+        else:
+            from ._storage import all_indexed_files
+            if all_indexed_files(manifest):
+                log.info("[folder_graph] no build_ontology_hash on %s — forcing full reindex", folder_p)
+                full = True
+
     if full:
         yield _sse("status", {"message": "Dropping existing per-folder data…"})
         try:
-            # Remove every previously-indexed source from the loom DB and reset
-            # the manifest's files table — keep meta (ontology snapshot) intact.
             from ._storage import all_indexed_files
             for rel_path in all_indexed_files(manifest):
                 try:
@@ -145,6 +163,10 @@ async def index_folder_streaming(folder, *, cfg, ontology, full: bool = False
 
     elapsed = round(time.monotonic() - t0, 1)
     yield _sse("phase", {"phase": "writing"})
+
+    from ._storage import set_meta_kv
+    set_meta_kv(manifest, "build_ontology_hash", new_hash)
+
     yield _sse("stats", {
         "files_done": files_done,
         "files_total": total,

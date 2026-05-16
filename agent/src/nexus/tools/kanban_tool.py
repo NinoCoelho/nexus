@@ -18,8 +18,20 @@ KANBAN_MANAGE_TOOL = ToolSpec(
     description=(
         "Manage kanban boards stored as markdown in the vault. "
         "Each board is a single .md file with `kanban-plugin: basic` frontmatter. "
-        "Actions: create_board, view, add_card, move_card, update_card, delete_card, "
-        "add_lane, delete_lane."
+        "Actions: create_board, view, update_board, "
+        "add_card, move_card, update_card, delete_card, "
+        "add_lane, update_lane, move_lane, delete_lane.\n\n"
+        "Safe usage pattern:\n"
+        "- Before `update_card`/`delete_card`/`update_lane`/`delete_lane`, call `view` "
+        "to inspect the current board state and confirm the target exists.\n"
+        "- `delete_card` and `delete_lane` are irreversible.\n\n"
+        "Automated workflow pattern:\n"
+        "1. `create_board` for a project.\n"
+        "2. `add_lane` for each stage; use `update_lane` with `prompt` to bind an "
+        "agent behavior that auto-dispatches when cards enter the lane.\n"
+        "3. `add_card` with a problem description in the body.\n"
+        "4. `move_card` into a lane to auto-dispatch the agent with that lane's "
+        "prompt + card body as context."
     ),
     parameters={
         "type": "object",
@@ -27,9 +39,9 @@ KANBAN_MANAGE_TOOL = ToolSpec(
             "action": {
                 "type": "string",
                 "enum": [
-                    "create_board", "view",
+                    "create_board", "view", "update_board",
                     "add_card", "move_card", "update_card", "delete_card",
-                    "add_lane", "update_lane", "delete_lane",
+                    "add_lane", "update_lane", "move_lane", "delete_lane",
                 ],
                 "description": "Action to perform.",
             },
@@ -47,6 +59,14 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                     "Auto-dispatch prompt for update_lane. When a card is added/moved into "
                     "the lane, the agent is auto-dispatched with this prompt as context. "
                     "Empty string clears."
+                ),
+            },
+            "board_prompt": {
+                "type": "string",
+                "description": (
+                    "Board-level system prompt for update_board. Prepended before any "
+                    "lane prompt on every dispatch — use it to set personality, behaviour, "
+                    "and general instructions for all cards on this board. Empty string clears."
                 ),
             },
             "model": {
@@ -68,7 +88,13 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                     "rich markdown freely without escaping."
                 ),
             },
-            "position": {"type": "integer", "description": "Insert position within the lane (move_card)."},
+            "position": {
+                "type": "integer",
+                "description": (
+                    "Insert position within the destination lane (move_card), "
+                    "or the lane's new column index within the board (move_lane)."
+                ),
+            },
             "due": {"type": "string", "description": "ISO date 'YYYY-MM-DD' for update_card. Empty string clears."},
             "priority": {
                 "type": "string",
@@ -127,6 +153,18 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
             board = vault_kanban.read_board(path)
             return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
 
+        if action == "update_board":
+            updates: dict[str, Any] = {}
+            if "title" in args:
+                updates["title"] = args["title"]
+            if "board_prompt" in args:
+                bp = args["board_prompt"]
+                updates["board_prompt"] = bp if bp else None
+            if not updates:
+                return json.dumps({"ok": False, "error": "no fields to update (title/board_prompt)"})
+            board = vault_kanban.update_board(path, updates)
+            return json.dumps({"ok": True, "board": board.to_dict()})
+
         if action == "add_card":
             lane = args.get("lane", "")
             title = args.get("title", "")
@@ -179,6 +217,13 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
             if not updates:
                 return json.dumps({"ok": False, "error": "no fields to update (title/prompt/model)"})
             lane = vault_kanban.update_lane(path, lane_id, updates)
+            return json.dumps({"ok": True, "lane": lane.to_dict()})
+
+        if action == "move_lane":
+            lane_id = args.get("lane", "")
+            if not lane_id:
+                return json.dumps({"ok": False, "error": "`lane` (id) is required"})
+            lane = vault_kanban.move_lane(path, lane_id, args.get("position"))
             return json.dumps({"ok": True, "lane": lane.to_dict()})
 
         if action == "delete_lane":

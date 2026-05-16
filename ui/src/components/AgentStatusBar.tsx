@@ -1,12 +1,15 @@
 import type { SessionUsage } from "../api";
+import type { CompactResult } from "../api/sessions";
+import ContextDropdown from "./ContextDropdown";
 import "./AgentStatusBar.css";
 
 interface Props {
   usage: SessionUsage | null;
   thinking?: boolean;
-  /** Live UI selection — preferred over usage.model, which records only the
-   *  first model ever used in the session and goes stale on model switch. */
   selectedModel?: string;
+  sessionId?: string | null;
+  onCompact?: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<CompactResult | undefined>;
+  compacting?: boolean;
 }
 
 function fmtTokens(n: number): string {
@@ -21,20 +24,46 @@ function fmtCost(c: number | null, status: SessionUsage["cost_status"]): string 
   return `$${c.toFixed(2)}`;
 }
 
-export default function AgentStatusBar({ usage, thinking, selectedModel }: Props) {
+const ZONE_COLORS: Record<string, string> = {
+  green: "#22c55e",
+  yellow: "#eab308",
+  orange: "#f97316",
+  red: "#ef4444",
+};
+
+export default function AgentStatusBar({ usage, thinking, selectedModel, sessionId, onCompact, compacting }: Props) {
   if (!usage) return null;
   const { input_tokens, output_tokens, tool_call_count } = usage;
   const total = input_tokens + output_tokens;
-  // Prefer the live UI selection; fall back to the persisted (first-turn) value.
   const liveModel = selectedModel && selectedModel !== "auto" ? selectedModel : usage.model;
   if (!liveModel && total === 0 && tool_call_count === 0) return null;
   const shortModel = liveModel ? liveModel.split("/").pop() : null;
+  const ctxZone = usage.context_zone ?? "unknown";
+  const ctxPct = usage.context_pct ?? 0;
+  const showCtx = (usage.context_window_tokens > 0 || usage.estimated_context_tokens > 0) && ctxZone !== "unknown";
 
   return (
     <div className={`agent-status-bar${thinking ? " is-thinking" : ""}`}>
       {shortModel && (
         <span className="agent-status-pill" title={`Model: ${liveModel}`}>
           {shortModel}
+        </span>
+      )}
+      {showCtx && (
+        <span
+          className="agent-status-pill agent-status-ctx"
+          style={{ borderColor: ZONE_COLORS[ctxZone] || undefined, color: ZONE_COLORS[ctxZone] || undefined }}
+          title={`Context: ~${usage.estimated_context_tokens?.toLocaleString()} / ${usage.context_window_tokens?.toLocaleString()} tokens (${ctxZone})`}
+        >
+          <span
+            className="agent-status-ctx-dot"
+            style={{ background: ZONE_COLORS[ctxZone] }}
+          />
+          {sessionId && onCompact ? (
+            <ContextDropdown sessionId={sessionId} onCompact={onCompact} compacting={compacting} polledPct={Math.round(ctxPct * 100)} />
+          ) : (
+            <span>{Math.round(ctxPct * 100)}%</span>
+          )}
         </span>
       )}
       {total > 0 && (

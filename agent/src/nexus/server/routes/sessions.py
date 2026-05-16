@@ -10,17 +10,63 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from ...agent.loop.overflow import known_context_window as _known_context_window, KNOWN_WINDOWS as _KNOWN_WINDOWS
 from ...i18n import t
-from ..deps import get_locale, get_sessions
+from ..deps import get_agent, get_locale, get_sessions
 from ..schemas import CompactRequest, TruncateRequest
 from ..session_store import SessionStore
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_PARTIAL_PREFIXES = (
+    "[context_overflow]",
+    "[message_too_large]",
+    "[empty_response]",
+    "[llm_error]",
+    "[crashed]",
+    "[upstream_timeout]",
+    "[interrupted]",
+    "[cancelled]",
+    "[rate_limited]",
+    "[iteration_limit]",
+    "[budget_exceeded]",
+)
+
+
+def _clear_partial_prefixes(history: list[Any]) -> list[Any]:
+    from ...agent.llm import ChatMessage, Role
+
+    out: list[Any] = []
+    for msg in history:
+        if (
+            isinstance(msg, ChatMessage)
+            and msg.role == Role.ASSISTANT
+            and msg.content
+        ):
+            stripped = msg.content.strip()
+            for prefix in _PARTIAL_PREFIXES:
+                if stripped == prefix or stripped.startswith(prefix + " "):
+                    new_content = stripped[len(prefix):].strip()
+                    out.append(
+                        ChatMessage(
+                            role=msg.role,
+                            content=new_content,
+                            tool_calls=msg.tool_calls,
+                            tool_call_id=msg.tool_call_id,
+                            name=msg.name,
+                        )
+                    )
+                    break
+            else:
+                out.append(msg)
+        else:
+            out.append(msg)
+    return out
 
 
 def _session_markdown(session: Any, sessions: SessionStore, include_frontmatter: bool = True) -> str:
@@ -67,7 +113,9 @@ async def list_sessions(
     limit: int = 50,
     include_hidden: bool = False,
     store: SessionStore = Depends(get_sessions),
+    response: Response = None,
 ) -> list[dict]:
+    response.headers["Cache-Control"] = "no-cache"
     summaries = store.list(limit=limit, include_hidden=include_hidden)
     return [
         {
@@ -205,6 +253,7 @@ async def get_session_trajectories(
     return {"enabled": True, "records": records}
 
 
+
 @router.get("/sessions/{session_id}/usage")
 async def get_session_usage(
     session_id: str,
@@ -234,6 +283,40 @@ async def get_session_usage(
     cost, cost_status = (None, "unknown")
     if model:
         cost, cost_status = estimate_cost(model, input_tokens=in_tok, output_tokens=out_tok)
+
+    context_window_tokens = 0
+    estimated_context_tokens = 0
+    context_pct = 0.0
+    context_zone = "unknown"
+    try:
+        from ...config_file import load as load_config
+        from ...agent.loop.overflow import estimate_tokens
+        from ...agent.loop.zones import classify_zone
+
+        _FALLBACK_WINDOW = 128_000
+        cfg = load_config()
+        for entry in cfg.models:
+            if entry.id == model or entry.model_name == model:
+                context_window_tokens = int(entry.context_window or 0)
+                break
+        if context_window_tokens == 0:
+            context_window_tokens = _known_context_window(model)
+        session_obj = store.get(session_id)
+        if session_obj and session_obj.history:
+            estimated_context_tokens = estimate_tokens(session_obj.history)
+            effective_window = context_window_tokens if context_window_tokens > 0 else _FALLBACK_WINDOW
+            context_pct = round(
+                min(estimated_context_tokens / effective_window, 1.0), 4
+            )
+            if context_window_tokens > 0:
+                context_zone = classify_zone(estimated_context_tokens, context_window_tokens)
+            elif context_pct > 0.8:
+                context_zone = "red"
+            elif context_pct > 0.6:
+                context_zone = "orange"
+    except Exception:
+        log.debug("context-zone enrichment failed", exc_info=True)
+
     return {
         "model": model or None,
         "input_tokens": in_tok,
@@ -241,6 +324,113 @@ async def get_session_usage(
         "tool_call_count": tool_calls,
         "estimated_cost_usd": cost,
         "cost_status": cost_status,
+        "context_window_tokens": context_window_tokens,
+        "estimated_context_tokens": estimated_context_tokens,
+        "context_pct": context_pct,
+        "context_zone": context_zone,
+    }
+
+
+@router.get("/sessions/{session_id}/context-stats")
+async def get_context_stats(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
+) -> dict:
+    """Return detailed context usage breakdown for the context dropdown.
+
+    Includes per-role token estimates, per-tool stats, and a hint about
+    which compaction strategy would help most.
+    """
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
+
+    history = session.history or []
+
+    from ...agent.loop.overflow import _chars_per_token
+    from ...agent.loop.zones import classify_zone
+    from ...config_file import load as load_config
+
+    model = ""
+    row = store._loom._db.execute(
+        "SELECT model FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if row:
+        model = row[0] or ""
+
+    context_window_tokens = 0
+    cfg = load_config()
+    for entry in cfg.models:
+        if entry.id == model or entry.model_name == model:
+            context_window_tokens = int(entry.context_window or 0)
+            break
+    if context_window_tokens == 0:
+        context_window_tokens = _known_context_window(model)
+    effective_window = context_window_tokens if context_window_tokens > 0 else 128_000
+
+    role_tokens: dict[str, int] = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
+    role_counts: dict[str, int] = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
+    tool_stats: dict[str, dict] = {}
+
+    import json as _json
+
+    for msg in history:
+        role_val = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
+        role_key = role_val.lower()
+        if role_key not in role_tokens:
+            role_key = "system"
+
+        content = msg.content or ""
+        if not isinstance(content, str):
+            try:
+                content = _json.dumps(content, ensure_ascii=False)
+            except (TypeError, ValueError):
+                content = str(content)
+
+        chars_per = _chars_per_token(content) if content else 4
+        msg_tokens = (len(content) // chars_per + 4) if content else 4
+
+        tcs = getattr(msg, "tool_calls", None)
+        if tcs:
+            try:
+                tc_text = _json.dumps(tcs, default=str, ensure_ascii=False)
+            except (TypeError, ValueError):
+                tc_text = ""
+            msg_tokens += len(tc_text) // 3 if tc_text else 0
+
+        role_tokens[role_key] += msg_tokens
+        role_counts[role_key] += 1
+
+        if role_key == "tool" and getattr(msg, "name", None):
+            tool_name = msg.name
+            if tool_name not in tool_stats:
+                tool_stats[tool_name] = {"name": tool_name, "call_count": 0, "estimated_tokens": 0}
+            tool_stats[tool_name]["call_count"] += 1
+            tool_stats[tool_name]["estimated_tokens"] += msg_tokens
+
+    total_tokens = sum(role_tokens.values())
+    zone = classify_zone(total_tokens, effective_window)
+
+    tool_token_total = role_tokens.get("tool", 0)
+    if total_tokens > 0 and tool_token_total / total_tokens > 0.4:
+        compaction_hint = "tools_only"
+    elif total_tokens > 0 and (role_tokens.get("user", 0) + role_tokens.get("assistant", 0)) / total_tokens > 0.5:
+        compaction_hint = "summarize"
+    elif zone != "green":
+        compaction_hint = "full"
+    else:
+        compaction_hint = "none_needed"
+
+    return {
+        "context_window_tokens": context_window_tokens,
+        "estimated_context_tokens": total_tokens,
+        "context_pct": round(min(total_tokens / effective_window, 1.0), 4) if effective_window else 0,
+        "context_zone": zone,
+        "token_breakdown": role_tokens,
+        "message_counts": role_counts,
+        "tool_stats": sorted(tool_stats.values(), key=lambda x: x["estimated_tokens"], reverse=True),
+        "compaction_hint": compaction_hint,
     }
 
 
@@ -281,40 +471,119 @@ async def truncate_session(
     store.replace_history(session_id, truncated)
 
 
+@router.delete("/sessions/{session_id}/messages/last")
+async def rollback_last_message(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+    locale: str = Depends(get_locale),
+) -> dict:
+    """Remove the last user message (and any trailing assistant) from history.
+
+    Recovery path for sessions stuck due to oversized messages that triggered
+    ``context_overflow`` or ``message_too_large`` — without this, the session
+    is permanently broken because every turn immediately fails the pre-flight
+    overflow check.
+    """
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
+    history = list(session.history)
+    if not history:
+        raise HTTPException(status_code=422, detail="Session history is empty")
+    removed = 0
+    while history and history[-1].role.value != "user":
+        history.pop()
+        removed += 1
+    user_content: str | None = None
+    if history:
+        last_user = history.pop()
+        removed += 1
+        if isinstance(last_user.content, str):
+            user_content = last_user.content
+        elif isinstance(last_user.content, list):
+            parts = [p.text for p in last_user.content if getattr(p, "kind", None) == "text" and p.text]
+            user_content = " ".join(parts) if parts else None
+    store.replace_history(session_id, history)
+    return {"removed_count": removed, "remaining_messages": len(history), "removed_user_content": user_content}
+
+
 @router.post("/sessions/{session_id}/compact")
 async def compact_session(
     session_id: str,
+    request: Request,
     body: CompactRequest | None = None,
     store: SessionStore = Depends(get_sessions),
     locale: str = Depends(get_locale),
 ) -> dict:
-    """Compact oversized tool results in a session's history.
+    """Compact oversized tool results and/or summarize older turns.
 
-    Triggered by the UI's "Compact history" button when a turn fails with
-    ``context_overflow`` (or proactively from the chat menu). Returns a
-    report so the UI can show "saved 1.2 MB across 3 messages".
+    Strategy controlled by ``body.strategy``:
+      - ``auto`` (default): tools + summarize when zone >= yellow.
+      - ``tools_only``: only compress oversized tool results.
+      - ``summarize_only``: only LLM summarization of older turns.
+      - ``aggressive``: lower thresholds + summarization.
+
+    Also clears partial-turn banners (``[context_overflow]`` etc.) so the
+    UI doesn't re-show them after reload.
     """
-    from ...agent.loop.compact import compact_history
+    from ...agent.loop.compact import compact_and_summarize
+    from ...agent.loop import Agent
 
+    agent: Agent = get_agent(request)
     session = store.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
-    body = body or CompactRequest()
-    new_history, report = compact_history(
+
+    strategy = body.strategy if body else "auto"
+    force_summarize = body.force_summarize if body else False
+    model_id = body.model if body and body.model else None
+    if not model_id:
+        cfg = getattr(request.app.state, "mutable_state", {}).get("cfg")
+        model_id = getattr(getattr(cfg, "agent", None), "default_model", None) or None
+    provider, upstream_model = agent._resolve_provider(model_id)
+    context_window = agent._context_window_for(upstream_model or model_id)
+    if context_window == 0 and (upstream_model or model_id) in _KNOWN_WINDOWS:
+        context_window = _KNOWN_WINDOWS[upstream_model or model_id]
+
+    new_history, report = await compact_and_summarize(
         session.history,
-        threshold_bytes=body.threshold_bytes,
-        head_keep=body.head_keep_bytes,
-        sample_rows=body.csv_sample_rows,
+        context_window=context_window,
+        session_id=session_id,
+        model_id=upstream_model or model_id,
+        provider=provider,
+        strategy=strategy,
+        force_summarize=force_summarize,
     )
-    if report.compacted > 0:
+
+    log.info(
+        "compact session=%s: model=%s ctx_window=%d "
+        "compacted=%d summarized=%s tokens=%d->%d zone=%s still_overflowed=%s",
+        session_id, upstream_model or model_id, context_window,
+        report.compact_report.compacted, report.summarized,
+        report.tokens_before, report.tokens_after,
+        report.zone_after, report.still_overflowed,
+    )
+
+    if report.compact_report.compacted > 0 or report.summarized:
+        new_history = _clear_partial_prefixes(new_history)
         store.replace_history(session_id, new_history)
+
     return {
-        "inspected_tool_messages": report.inspected,
-        "compacted": report.compacted,
-        "skipped_already_compacted": report.skipped_already_compacted,
-        "bytes_before": report.bytes_before,
-        "bytes_after": report.bytes_after,
-        "saved_bytes": report.saved_bytes,
+        "inspected_tool_messages": report.compact_report.inspected,
+        "compacted": report.compact_report.compacted,
+        "skipped_already_compacted": report.compact_report.skipped_already_compacted,
+        "bytes_before": report.compact_report.bytes_before,
+        "bytes_after": report.compact_report.bytes_after,
+        "saved_bytes": report.compact_report.saved_bytes,
+        "summarized": report.summarized,
+        "summarized_messages": report.summarized_messages,
+        "messages_before": report.messages_before,
+        "messages_after": report.messages_after,
+        "tokens_before": report.tokens_before,
+        "tokens_after": report.tokens_after,
+        "zone_after": report.zone_after,
+        "still_overflowed": report.still_overflowed,
+        "budget_exceeded": report.budget_exceeded,
     }
 
 
@@ -388,3 +657,58 @@ async def export_session(
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/sessions/{session_id}/paused")
+async def get_paused_turn(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    paused = store.load_paused(session_id)
+    if not paused:
+        return {"ok": True, "paused": False}
+    from datetime import datetime, timezone
+    try:
+        retry_after = datetime.fromisoformat(paused["retry_after"])
+        now = datetime.now(timezone.utc)
+        remaining = max(0, int((retry_after - now).total_seconds()))
+    except (ValueError, TypeError):
+        remaining = 0
+    return {
+        "ok": True,
+        "paused": True,
+        "retry_after": paused["retry_after"],
+        "remaining_seconds": remaining,
+        "error_detail": paused.get("error_detail"),
+        "model_id": paused.get("model_id"),
+        "resume_count": paused.get("resume_count", 0),
+    }
+
+
+@router.post("/sessions/{session_id}/resume-paused")
+async def resume_paused_turn(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    paused = store.resume_paused(session_id)
+    if not paused:
+        raise HTTPException(status_code=404, detail="No paused turn for this session")
+    from datetime import datetime, timezone
+    try:
+        retry_after = datetime.fromisoformat(paused["retry_after"])
+        now = datetime.now(timezone.utc)
+        remaining = (retry_after - now).total_seconds()
+    except (ValueError, TypeError):
+        remaining = 0
+    if remaining > 0:
+        raise HTTPException(
+            status_code=425,
+            detail=f"Cooldown not elapsed. Wait {int(remaining)} more seconds.",
+            headers={"Retry-After": str(int(remaining))},
+        )
+    return {
+        "ok": True,
+        "working_messages_json": paused["working_messages_json"],
+        "user_message": paused["user_message"],
+        "model_id": paused.get("model_id"),
+    }

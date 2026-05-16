@@ -14,6 +14,10 @@ export interface SessionSummary {
 export interface SessionMessage {
   seq?: number;
   role: "user" | "assistant" | "tool";
+  /** Plain text in the common case. The server may also serialize a list of
+   * ContentPart-shaped dicts for user turns that carried image/audio/
+   * document attachments — consumers that need attachments should read the
+   * raw value (``content as unknown``) and detect ``Array.isArray``. */
   content: string;
   tool_calls?: unknown;
   tool_call_id?: string;
@@ -132,7 +136,7 @@ export async function getHealth(): Promise<{ ok: boolean }> {
 }
 
 export async function getSessions(limit = 50): Promise<SessionSummary[]> {
-  const res = await fetch(`${BASE}/sessions?limit=${limit}`);
+  const res = await fetch(`${BASE}/sessions?limit=${limit}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Sessions error: ${res.status}`);
   return res.json();
 }
@@ -172,14 +176,13 @@ export async function sessionToVault(
   return res.json();
 }
 
-export async function patchSession(id: string, patch: { title?: string }): Promise<SessionDetail> {
+export async function patchSession(id: string, patch: { title?: string }): Promise<void> {
   const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Session patch error: ${res.status}`);
-  return res.json();
 }
 
 export interface SessionUsage {
@@ -189,6 +192,10 @@ export interface SessionUsage {
   tool_call_count: number;
   estimated_cost_usd: number | null;
   cost_status: "ok" | "unknown" | "zero";
+  context_window_tokens: number;
+  estimated_context_tokens: number;
+  context_pct: number;
+  context_zone: "green" | "yellow" | "orange" | "red" | "unknown";
 }
 
 export async function getSessionUsage(sessionId: string): Promise<SessionUsage> {
@@ -222,10 +229,63 @@ export async function truncateSession(sessionId: string, beforeSeq: number): Pro
   if (!res.ok) throw new Error(`Truncate error: ${res.status}`);
 }
 
-export async function deleteSession(id: string): Promise<void> {
-  await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
+export interface CompactResult {
+  compacted: number;
+  saved_bytes: number;
+  summarized: boolean;
+  summarized_messages: number;
+  messages_before: number;
+  messages_after: number;
+  tokens_before: number;
+  tokens_after: number;
+  zone_after: string;
+  still_overflowed: boolean;
+  budget_exceeded: boolean;
+}
+
+export async function compactSession(
+  sessionId: string,
+  options?: { model?: string; strategy?: string; force_summarize?: boolean },
+): Promise<CompactResult> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/compact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options ?? {}),
+  });
+  if (!res.ok) throw new Error(`Compact error: ${res.status}`);
+  return res.json();
+}
+
+export interface ContextStats {
+  context_window_tokens: number;
+  estimated_context_tokens: number;
+  context_pct: number;
+  context_zone: "green" | "yellow" | "orange" | "red" | "unknown";
+  token_breakdown: { user: number; assistant: number; tool: number; system: number };
+  message_counts: { user: number; assistant: number; tool: number; system: number };
+  tool_stats: { name: string; call_count: number; estimated_tokens: number }[];
+  compaction_hint: "none_needed" | "tools_only" | "summarize" | "full";
+}
+
+export async function getContextStats(sessionId: string): Promise<ContextStats> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/context-stats`);
+  if (!res.ok) throw new Error(`Context stats error: ${res.status}`);
+  return res.json();
+}
+
+export async function rollbackLastMessage(sessionId: string): Promise<{ removed_count: number; remaining_messages: number; removed_user_content: string | null }> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/messages/last`, {
     method: "DELETE",
   });
+  if (!res.ok) throw new Error(`Rollback error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Delete error: ${res.status}`);
 }
 
 export async function exportSession(id: string): Promise<{ markdown: string; filename: string }> {

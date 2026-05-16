@@ -54,13 +54,25 @@ Nexus is a self-evolving single-agent platform with a Python FastAPI backend and
 
 ### Agent loop
 
-`agent/src/nexus/agent/loop.py` drives a tool-calling loop over a pluggable LLM provider (`llm.py`: OpenAI-compat + native Anthropic). The system prompt is built by `prompt_builder.py` using **progressive disclosure**: only skill *names + descriptions* go in; the agent fetches full skill bodies via the `skill_manage` / `skill_view` tools when it decides to use them.
+`agent/src/nexus/agent/loop/` (package) drives a tool-calling loop over a pluggable LLM provider (`llm.py`: OpenAI-compat + native Anthropic). The system prompt is built by `prompt_builder.py` using **progressive disclosure**: only skill *names + descriptions* go in; the agent fetches full skill bodies via the `skill_manage` / `skill_view` tools when it decides to use them. Context compaction strategies (auto / summarize / aggressive) live in `loop/compact.py` and `loop/summarize.py`.
 
 Tools wired into the loop live in `agent/src/nexus/tools/` and `agent/src/nexus/agent/*_tool.py`:
 - `skill_manage` (self-authoring — create/edit/patch/delete/view skills at runtime)
 - `vault_tool` (read/list/write markdown under `~/.nexus/vault/`)
 - `kanban_tool` (operates on vault .md files with `kanban-plugin: basic` frontmatter — boards are just markdown, not a separate store)
 - `memory_tool`, `state_tool`, `http_call`, `acp_call` (stub), `ask_user` (HITL), `terminal` (HITL)
+
+### Dreaming
+
+`agent/src/nexus/dream/` is a scheduled background agent that runs during idle periods. Four-phase cycle: consolidation → insight extraction → skill refinement → scenario rehearsal. State tracked in `dream_state.sqlite`. The engine is triggered by the `dream_trigger` heartbeat driver; the UI exposes a Dream view (`ui/src/components/DreamView/`). Skill suggestions are staged for user review, not auto-created.
+
+### Voice acknowledgments
+
+`agent/src/nexus/voice_ack.py` generates spoken confirmations for voice-input turns (start ack + completion ack), synthesized via Piper TTS. Gated by `[tts].ack_enabled`; uses `[tts].ack_model` for low-latency LLM calls. Language auto-detected via `langdetect`.
+
+### Calendar alarms
+
+`agent/src/nexus/alarm_store.py` (SQLite) persists per-occurrence alarm state (ringing / acknowledged / snoozed). The UI renders a stack of alarm cards (`AlarmNotification.tsx`) with countdown timers, snooze/dismiss actions. Alarm SSE events flow through the global notification channel.
 
 ### Self-evolution + safety
 
@@ -78,11 +90,11 @@ Two channels on each session:
 
 ### Server layout
 
-`agent/src/nexus/server/app.py` registers all FastAPI routes. Sessions are persisted via `session_store.py` (SQLite under `~/.nexus/`). Routing logic (`agent/router.py`) picks a model — `fixed` (default) uses `agent.default_model`, `auto` scores models by per-model `strengths` against a simple keyword classifier.
+`agent/src/nexus/server/app.py` registers all FastAPI routes. Sessions are persisted via `session_store.py` (SQLite under `~/.nexus/`). Routing logic (`agent/router.py`) picks a model — `fixed` (default) uses `agent.default_model`, `auto` scores models by per-model `tier` against a simple keyword classifier.
 
 ### Frontend
 
-`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
+`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`, `heartbeat`, `dream`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
 
 ### Config precedence
 

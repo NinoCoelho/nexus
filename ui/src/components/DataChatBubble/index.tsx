@@ -50,13 +50,18 @@ export interface DataChatBubbleHandle {
 interface Props {
   folder: string;
   databaseTitle?: string;
+  /** Fires after every assistant turn finishes — the dashboard view uses
+   *  this to reload `_data.md` so agent-driven changes (e.g. new operations
+   *  or widgets created via `dashboard_manage`) appear without a manual
+   *  refresh. */
+  onTurnComplete?: () => void;
 }
 
 const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChatBubble(
-  { folder, databaseTitle },
+  { folder, databaseTitle, onTurnComplete },
   ref,
 ) {
-  const session = useDatabaseChatSession(folder);
+  const session = useDatabaseChatSession(folder, { onTurnComplete });
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);

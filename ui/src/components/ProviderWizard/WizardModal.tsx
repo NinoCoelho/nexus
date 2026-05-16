@@ -12,11 +12,13 @@
  * use Modal + useToast.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyProviderWizard,
   fetchProviderCatalog,
   fetchProviderModels,
+  getConfig,
+  getNexusAccountStatus,
   testProviderConnection,
   type AuthMethod,
   type ProviderCatalogEntry,
@@ -25,6 +27,7 @@ import {
 import { useToast } from "../../toast/ToastProvider";
 import "./WizardModal.css";
 import ClaimLocalCreds from "./steps/ClaimLocalCreds";
+import NexusSignin from "./steps/NexusSignin";
 import OAuthInProgress from "./steps/OAuthInProgress";
 import SelectAuthMethod from "./steps/SelectAuthMethod";
 import SelectModels from "./steps/SelectModels";
@@ -41,6 +44,7 @@ import {
   IAM_AUTH_METHODS,
   LOCAL_CREDS_AUTH_METHODS,
   LOCAL_OAUTH_BUNDLE_METHODS,
+  NEXUS_AUTH_METHODS,
   OAUTH_AUTH_METHODS,
   SUPPORTED_AUTH_METHODS,
 } from "./types";
@@ -68,6 +72,7 @@ function emptyState(): WizardState {
     models: [],
     testResult: null,
     oauthCredentialRef: null,
+    selectedCredentialRef: null,
   };
 }
 
@@ -96,6 +101,21 @@ export default function WizardModal({
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+  const [nexusWebsiteUrl, setNexusWebsiteUrl] = useState<string>(
+    "https://www.nexus-model.us",
+  );
+
+  // Pull the configured Nexus website URL once so the nexus_signin step
+  // can target the right host (defaulting to production).
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        if (cfg.nexus_account?.base_url) setNexusWebsiteUrl(cfg.nexus_account.base_url);
+      })
+      .catch(() => {
+        // Non-fatal — the default URL still works in production.
+      });
+  }, []);
 
   // Seed catalog + edit-mode prefill on first render.
   useEffect(() => {
@@ -121,6 +141,7 @@ export default function WizardModal({
             models: editPrefill.models,
             testResult: null,
             oauthCredentialRef: editPrefill.credentialRef,
+            selectedCredentialRef: null,
           });
         }
       })
@@ -144,11 +165,13 @@ export default function WizardModal({
 
   const advanceToMethod = useCallback(
     (entry: ProviderCatalogEntry, m: AuthMethod) => {
-      const nextStep: WizardStep = OAUTH_AUTH_METHODS.includes(m.id)
-        ? "oauth-in-progress"
-        : LOCAL_CREDS_AUTH_METHODS.includes(m.id)
-          ? "claim-local-creds"
-          : "enter-credentials";
+      const nextStep: WizardStep = NEXUS_AUTH_METHODS.includes(m.id)
+        ? "nexus-signin"
+        : OAUTH_AUTH_METHODS.includes(m.id)
+          ? "oauth-in-progress"
+          : LOCAL_CREDS_AUTH_METHODS.includes(m.id)
+            ? "claim-local-creds"
+            : "enter-credentials";
       setState((prev) => ({
         ...prev,
         step: nextStep,
@@ -160,6 +183,7 @@ export default function WizardModal({
         models: [],
         testResult: null,
         oauthCredentialRef: null,
+        selectedCredentialRef: null,
       }));
     },
     [],
@@ -190,11 +214,13 @@ export default function WizardModal({
     (m: AuthMethod) => {
       setState((prev) => {
         if (!prev.catalog) return prev;
-        const nextStep: WizardStep = OAUTH_AUTH_METHODS.includes(m.id)
-          ? "oauth-in-progress"
-          : LOCAL_CREDS_AUTH_METHODS.includes(m.id)
-            ? "claim-local-creds"
-            : "enter-credentials";
+        const nextStep: WizardStep = NEXUS_AUTH_METHODS.includes(m.id)
+          ? "nexus-signin"
+          : OAUTH_AUTH_METHODS.includes(m.id)
+            ? "oauth-in-progress"
+            : LOCAL_CREDS_AUTH_METHODS.includes(m.id)
+              ? "claim-local-creds"
+              : "enter-credentials";
         return {
           ...prev,
           step: nextStep,
@@ -203,6 +229,7 @@ export default function WizardModal({
           models: [],
           testResult: null,
           oauthCredentialRef: null,
+          selectedCredentialRef: null,
         };
       });
     },
@@ -217,6 +244,69 @@ export default function WizardModal({
     }));
   }, []);
 
+  // ── Nexus subscription auto-apply ──────────────────────────────────
+  // The popup just stored the apiKey via /auth/nexus/verify. We skip
+  // the model-picker step (the catalog already declares demo + nexus)
+  // and apply the wizard payload immediately so the user lands back
+  // in chat.
+  //
+  // ``buildPayloadRef`` breaks the forward-reference: handleNexusSignedIn
+  // is built *before* buildPayload (because state setters are declared
+  // top-down), so we read the latest function from a ref that gets
+  // populated below in an effect.
+  const buildPayloadRef = useRef<((s: WizardState) => WizardPayload | null) | null>(null);
+  const handleNexusSignedIn = useCallback(async (payload?: { tier: string; apiKey: string }) => {
+    // Resolve the canonical model for the tier. Pro users get nexus model,
+    // free users get demo model.
+    setSubmitting(true);
+    let canonical = "demo";
+
+    // Use tier from callback if available (pro = nexus, free = demo)
+    if (payload?.tier === "pro") {
+      canonical = "nexus";
+    } else if (payload?.tier === "free") {
+      canonical = "demo";
+    } else {
+      // Fallback: fetch live status for models list
+      try {
+        const live = await getNexusAccountStatus();
+        const models = live.status?.models ?? live.models ?? [];
+        if (models.includes("nexus")) canonical = "nexus";
+        else if (models.includes("demo")) canonical = "demo";
+      } catch {
+        // Fall through to demo — the watcher will reconcile to the right
+        // model on its next tick anyway.
+      }
+    }
+    setState((prev) => {
+      if (!prev.catalog || !prev.authMethod) {
+        setSubmitting(false);
+        return prev;
+      }
+      const next = { ...prev, models: [canonical] };
+      void (async () => {
+        try {
+          const build = buildPayloadRef.current;
+          const payload = build ? build(next) : null;
+          if (!payload) {
+            toast.error("Could not build wizard payload after sign-in.");
+            return;
+          }
+          await applyProviderWizard(payload);
+          toast.success(`Connected ${payload.name}.`);
+          onClose({ saved: true });
+        } catch (e) {
+          toast.error("Save failed after sign-in.", {
+            detail: e instanceof Error ? e.message : undefined,
+          });
+        } finally {
+          setSubmitting(false);
+        }
+      })();
+      return next;
+    });
+  }, [onClose, toast]);
+
   const handleUnsupportedAuthMethod = useCallback(
     (_m: AuthMethod) => {
       toast.info("IAM sign-in ships in a later release.", {
@@ -227,8 +317,14 @@ export default function WizardModal({
   );
 
   const handleCredentialsChange = useCallback(
-    (values: Record<string, string>, baseUrl: string) => {
-      setState((prev) => ({ ...prev, values, baseUrl, testResult: null }));
+    (values: Record<string, string>, baseUrl: string, selectedCredentialRef: string | null) => {
+      setState((prev) => ({
+        ...prev,
+        values,
+        baseUrl,
+        testResult: null,
+        selectedCredentialRef,
+      }));
     },
     [],
   );
@@ -248,7 +344,12 @@ export default function WizardModal({
     let iamRegion = "";
     const iamExtra: Record<string, string> = {};
 
-    if (authMethod.id === "anonymous") {
+    if (NEXUS_AUTH_METHODS.includes(authMethod.id)) {
+      // Nexus subscription: backend stored the apiKey under
+      // "nexus_api_key" via /auth/nexus/verify. Just bind the provider
+      // entry to that name; never pass credential values from the UI.
+      credentialRef = "nexus_api_key";
+    } else if (authMethod.id === "anonymous") {
       // base_url may be carried in s.values["base_url"] OR s.baseUrl.
       baseUrl = s.values.base_url || baseUrl;
     } else if (
@@ -275,14 +376,12 @@ export default function WizardModal({
         }
       }
     } else if (authMethod.id === "api") {
-      // Generic openai-compat splits the credential into name + value
-      // prompts; everyone else uses the prompt name AS the credential
-      // store name.
-      if (s.values.credential_name && s.values.credential_value) {
+      if (s.selectedCredentialRef) {
+        credentialRef = s.selectedCredentialRef;
+      } else if (s.values.credential_name && s.values.credential_value) {
         credentialRef = s.values.credential_name;
         credentials[s.values.credential_name] = s.values.credential_value;
       } else {
-        // Find the (single) secret prompt in the auth method and bind it.
         const secretPrompt = authMethod.prompts.find((p) => p.secret);
         if (secretPrompt) {
           credentialRef = secretPrompt.name;
@@ -290,7 +389,6 @@ export default function WizardModal({
           if (v) credentials[secretPrompt.name] = v;
         }
       }
-      // base_url override carried in prompts (rare for api flow).
       if (s.values.base_url) baseUrl = s.values.base_url;
     }
 
@@ -308,6 +406,13 @@ export default function WizardModal({
       iam_extra: iamExtra,
     };
   }, []);
+
+  // Bind the latest buildPayload into the ref so handleNexusSignedIn
+  // (declared above for ordering) can call it without a circular
+  // dependency.
+  useEffect(() => {
+    buildPayloadRef.current = buildPayload;
+  }, [buildPayload]);
 
   const handleTest = useCallback(async () => {
     if (!state.catalog || !state.authMethod) return;
@@ -377,6 +482,7 @@ export default function WizardModal({
         prev.step === "enter-credentials"
         || prev.step === "oauth-in-progress"
         || prev.step === "claim-local-creds"
+        || prev.step === "nexus-signin"
       ) {
         // In edit mode, back from credentials closes the wizard — there's
         // no step 1/2 to return to.
@@ -430,6 +536,7 @@ export default function WizardModal({
       "enter-credentials": 3,
       "oauth-in-progress": 3,
       "claim-local-creds": 3,
+      "nexus-signin": 3,
       "select-models": 4,
     };
     return map[state.step];
@@ -523,6 +630,7 @@ export default function WizardModal({
               initialValues={state.values}
               initialBaseUrl={state.baseUrl}
               editing={mode === "edit"}
+              selectedCredentialRef={state.selectedCredentialRef}
               onChange={handleCredentialsChange}
               onTest={handleTest}
               testResult={state.testResult}
@@ -545,6 +653,14 @@ export default function WizardModal({
               onCancel={handleBack}
             />
           )}
+          {state.step === "nexus-signin" && (
+            <NexusSignin
+              websiteUrl={nexusWebsiteUrl}
+              onSignedIn={(payload) => void handleNexusSignedIn(payload)}
+              onCancel={handleBack}
+              busy={submitting}
+            />
+          )}
           {state.step === "select-models" && state.catalog && (
             <SelectModels
               catalog={state.catalog}
@@ -559,7 +675,8 @@ export default function WizardModal({
         <div className="provider-wizard-footer">
           {state.step !== "select-provider"
             && state.step !== "oauth-in-progress"
-            && state.step !== "claim-local-creds" && (
+            && state.step !== "claim-local-creds"
+            && state.step !== "nexus-signin" && (
               <button
                 type="button"
                 className="provider-wizard-secondary-btn"

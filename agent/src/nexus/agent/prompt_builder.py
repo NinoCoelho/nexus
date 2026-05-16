@@ -60,6 +60,28 @@ def _migrate_legacy_memory() -> None:
 
 _DATE_DIR_RE = re.compile(r"/\d{4}/\d{2}/\d{2}/")
 
+_DREAM_INSIGHTS_DIR = _MEMORY_DIR / "dream-insights"
+_DREAM_INSIGHTS_MAX = 3
+
+
+def _dream_insights_block() -> str:
+    if not _DREAM_INSIGHTS_DIR.exists():
+        return ""
+    files = sorted(_DREAM_INSIGHTS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = files[:_DREAM_INSIGHTS_MAX]
+    if not files:
+        return ""
+    lines = ["### Recent Dream Insights", ""]
+    for f in files:
+        content = f.read_text(encoding="utf-8")
+        body = content
+        if "---" in content:
+            parts = content.split("---", 2)
+            body = parts[2].strip() if len(parts) >= 3 else content
+        preview = body[:150].strip()
+        lines.append(f"- {preview}")
+    return "\n".join(lines)
+
 
 def _memory_summary() -> str:
     """Return a ## Memory block with previews of the most recently modified notes."""
@@ -81,6 +103,12 @@ def _memory_summary() -> str:
         lines.append(block)
         lines.append("")
         total += len(block)
+
+    dream_insights = _dream_insights_block()
+    if dream_insights and total + len(dream_insights) <= _MEMORY_MAX_TOTAL:
+        lines.append(dream_insights)
+        lines.append("")
+
     if len(lines) <= 2:
         return ""
     return "\n".join(lines)
@@ -104,6 +132,26 @@ you can't derive).
 say so briefly and proceed. You're not a search engine.
 - **Actions over words.** Prefer doing the thing over describing how to do it. \
 A working result beats a perfect explanation.
+- **Always use LaTeX for math.** Wrap inline math in `$…$` and display math in `$$…$$`. Never use plain-text approximations like `x^2` or Unicode symbols when a LaTeX equivalent exists.
+
+- **No code theater.** A code block in chat is inert text — it does **not** \
+execute. If you mean to run something, run it: `terminal` shells out on the \
+user's machine (HITL-gated; YOLO auto-approves) so `python3 -c …`, \
+`uv run …`, `jq`, `git`, `psql`, etc. are all real. There is no `tool_use`, \
+`code_interpreter`, `python`, `run_python`, `tool_create_file`, \
+`create_file`, `bash`, or `shell` tool — those are names from other \
+frameworks. **The only way to execute code is `terminal`.** To create a \
+file, use `vault_write` for vault paths or `terminal` with `cat > /path` \
+for arbitrary paths. For `.csv` / `.tsv` analytics prefer the purpose-built \
+`vault_csv` (DuckDB-backed: `schema`, `sample`, `describe`, `query`, \
+`analyze`, `relationships`) — it streams results without pulling the file into \
+context. For imported data tables (markdown with `data-table-plugin: basic` \
+frontmatter), `datatable_manage` actions `query` and `analyze` run SQL or \
+Python directly against the table. **For analysis tasks, always prefer \
+`analyze`** — you write Python code, it executes server-side, only the \
+printed report comes back. Never pull raw rows into context. Only paste a \
+code block when the user asked to *see* code, or when you're handing them \
+something to run themselves; never as a substitute for executing it.
 
 ## Try first, skill later
 
@@ -211,6 +259,34 @@ plain markdown files in the vault with `kanban-plugin: basic` frontmatter — \
 pick or create one at a sensible path like `boards/work.md`. Create cards \
 when the user mentions work to do, move them between lanes as status \
 changes, and keep them current.
+
+## Context Management
+
+Your conversation context is finite. Long sessions with many tool calls will \
+eventually exhaust the context window, causing empty responses or errors. \
+Manage your context proactively:
+
+- **`context_status`** — check how full your context window is and get \
+recommendations. Call this before starting complex multi-step operations.
+- **`fork_session`** — start a new session with a summary of the current \
+conversation. Use at natural boundaries: new feature, new debugging target, \
+new phase of work.
+- **`spawn_subagents`** — run independent subtasks in isolated sessions. Use \
+for parallel work (research, analysis, file operations).
+- **`vault_write`** — persist intermediate results to the vault instead of \
+keeping them in context.
+
+### Planning rules
+
+When planning a task with 3+ steps:
+1. Consider whether independent steps can run as sub-agents.
+2. At phase boundaries, fork to a fresh session with a summary.
+3. Use `vault_write` for large outputs — don't keep them in chat.
+4. Check `context_status` if you've been running many tool calls.
+
+If context is high, inform the user. They can compact via the context
+indicator in the status bar. Never refuse to work due to context —
+keep executing and let the user decide when to compact.
 """
 
 
@@ -262,6 +338,39 @@ def _language_directive(language: str | None) -> str:
     )
 
 
+def _time_location_block() -> str:
+    from datetime import datetime, timezone
+
+    from ..location import get_location
+
+    loc = get_location()
+    now_utc = datetime.now(timezone.utc)
+    lines = ["## Current time & location", ""]
+    lines.append(f"- **UTC:** {now_utc.strftime('%Y-%m-%d %H:%M UTC')}")
+
+    tz_name = loc.timezone
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            tz = ZoneInfo(tz_name)
+            now_local = datetime.now(tz)
+            offset = now_local.strftime("%z")
+            offset_fmt = f"UTC{offset[:3]}:{offset[3:]}" if offset else ""
+            lines.append(
+                f"- **Local:** {now_local.strftime('%Y-%m-%d %H:%M')} {offset_fmt} ({tz_name})"
+            )
+        except Exception:
+            pass
+
+    if loc.city or loc.region or loc.country:
+        parts = [p for p in (loc.city, loc.region, loc.country) if p]
+        lines.append(f"- **Location:** {', '.join(parts)}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     registry: SkillRegistry,
     *,
@@ -271,6 +380,10 @@ def build_system_prompt(
 ) -> str:
     _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
+
+    tl_block = _time_location_block()
+    parts.append(tl_block)
+    parts.append("")
 
     lang_block = _language_directive(language)
     if lang_block:
@@ -291,6 +404,24 @@ def build_system_prompt(
         parts.append(creds_block)
         parts.append("")
 
+    parts.append(
+        "## Status updates\n\n"
+        "When a step in your plan will take more than a few seconds — web "
+        "research, multi-source aggregation, large data ops, anything that "
+        "would leave the user staring at a blank screen — call the "
+        "`notify_user` tool with a short, casual message before starting. "
+        "If the run keeps going, call it again mid-flight to reassure the "
+        "user something is still happening. Examples:\n\n"
+        "- `notify_user(message=\"Looking that up — about a minute, hold on.\")`\n"
+        "- `notify_user(message=\"Already got the headlines, drafting the summary now.\")`\n"
+        "- `notify_user(message=\"Tô buscando, vai demorar uns instantes.\")`\n\n"
+        "Match the user's language. Keep messages under 20 words. Don't use "
+        "this tool to ask questions (that's `ask_user`) or to deliver final "
+        "results (those go in your reply). The user sees a toast in every "
+        "case; if they dictated by voice, the message is also spoken aloud."
+    )
+    parts.append("")
+
     descs = registry.descriptions()
     if descs:
         parts.append("## Available skills")
@@ -301,9 +432,15 @@ def build_system_prompt(
             "its steps. Skill names use hyphens (e.g. `deep-research`); never "
             "call a skill name as a tool."
         )
+        parts.append(
+            "Skills marked with [venv] have isolated Python environments — "
+            "always use the python path shown by `skill_view` for their scripts."
+        )
         parts.append("")
         for name, desc in descs:
-            parts.append(f"- **{name}** — {desc}")
+            skill = registry.get(name)
+            tag = " [venv]" if skill.has_requirements else ""
+            parts.append(f"- **{name}**{tag} — {desc}")
     else:
         parts.append("## Available skills")
         parts.append("")

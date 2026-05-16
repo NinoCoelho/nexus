@@ -51,13 +51,56 @@ export interface UIConfig {
   language: "en" | "pt-BR";
 }
 
+export interface TTSConfig {
+  /** Master switch — show speaker buttons + run synth at all. */
+  enabled: boolean;
+  /** Speak start + completion acks on voice-input turns. */
+  ack_enabled: boolean;
+  /** When "voice", acks only fire on voice turns. When "always", the agent
+   * speaks its completion summary on every turn (hands-free / accessibility). */
+  ack_mode: "voice" | "always";
+  /** Fast/cheap model for voice ack LLM calls. Empty = agent default model. */
+  ack_model: string;
+  /** Override language for spoken acks. Empty = auto-detect. */
+  voice_language: string;
+  /** Where the bundled Piper voices live on disk. Empty = ~/.nexus/tts/piper. */
+  voices_dir: string;
+}
+
+export interface NexusAccountConfig {
+  base_url: string;
+  gateway_url: string;
+  poll_seconds: number;
+  auto_upgrade_default: boolean;
+}
+
+export interface McpServerConfig {
+  transport: "stdio" | "sse" | "streamable-http";
+  command: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  enabled: boolean;
+}
+
+export interface McpConfig {
+  servers: Record<string, McpServerConfig>;
+  server_enabled: boolean;
+  server_port: number;
+  server_expose: string[];
+  server_auth_token: string;
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
   models: Model[];
   transcription?: TranscriptionConfig;
+  tts?: TTSConfig;
   search?: SearchConfig;
   ui?: UIConfig;
+  nexus_account?: NexusAccountConfig;
+  mcp?: McpConfig;
 }
 
 // Patch payload — every nested object is independently partial because the
@@ -67,8 +110,16 @@ export interface ConfigPatch {
   providers?: Partial<Config["providers"]>;
   models?: Model[];
   transcription?: Partial<TranscriptionConfig>;
+  tts?: Partial<TTSConfig>;
   search?: Partial<SearchConfig>;
   ui?: Partial<UIConfig>;
+  mcp?: {
+    servers?: Record<string, Partial<McpServerConfig> | null>;
+    server_enabled?: boolean;
+    server_port?: number;
+    server_expose?: string[];
+    server_auth_token?: string;
+  };
 }
 
 export async function getConfig(): Promise<Config> {

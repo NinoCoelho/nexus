@@ -1,0 +1,15 @@
+{
+  "$schema_version": 1,
+  "sources": [
+    {
+      "slug": "anthropics-skills",
+      "kind": "github",
+      "owner": "anthropics",
+      "repo": "skills",
+      "branch": "main",
+      "skill_path_glob": "**/SKILL.md",
+      "description": "Official skill collection from Anthropic.",
+      "verified": true
+    }
+  ]
+}

@@ -32,12 +32,17 @@ class ProviderRegistry:
             raise KeyError(f"Provider {provider_name!r} not available")
         return self._providers[provider_name], model_name
 
-    def available_model_ids(self, exclude_nonfunctional: bool = False) -> list[str]:
-        """Return registered model IDs, optionally filtered to those whose
-        providers passed the key check at registration time."""
+    def available_model_ids(
+        self,
+        exclude_nonfunctional: bool = False,
+        exclude: set[str] | None = None,
+    ) -> list[str]:
+        """Return registered model IDs, optionally filtering out specific
+        model IDs (e.g. the vision-role model that should never appear in
+        chat model pickers or dispatch fallbacks)."""
         return [
             mid for mid, (pname, _) in self._model_map.items()
-            if pname in self._providers
+            if pname in self._providers and (not exclude or mid not in exclude)
         ]
 
     async def aclose(self) -> None:
@@ -55,11 +60,20 @@ def _is_provider_functional(pcfg: Any, name: str) -> bool:
     import os as _os
     from .. import secrets as _secrets
 
-    provider_type = getattr(pcfg, "type", None) or ("anthropic" if name == "anthropic" else "openai_compat")
+    provider_type = (
+        getattr(pcfg, "runtime_kind", None)
+        or getattr(pcfg, "type", None)
+        or ("anthropic" if name == "anthropic" else "openai_compat")
+    )
 
     # Anonymous providers — always functional
     if provider_type == "ollama":
         return True
+
+    # Nexus subscription needs the apiKey resolved from secrets.toml.
+    if provider_type == "nexus":
+        cred = getattr(pcfg, "credential_ref", None) or "nexus_api_key"
+        return bool(_secrets.resolve(cred))
 
     # credential_ref takes priority and disqualifies anonymous fallback —
     # the user explicitly chose a credential; if it doesn't resolve we
@@ -113,6 +127,38 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             )
             reg.register_provider(name, provider)
             log.info("[provider] %s initialized (anonymous)", name)
+            continue
+
+        # Nexus subscription — OpenAI-compatible LiteLLM gateway, but kept
+        # as its own ``runtime_kind`` so the config visually distinguishes
+        # the hosted subscription from any BYO ``openai_compat`` provider
+        # the user may also have configured (often pointing at the same
+        # gateway but with their own credential). The status watcher keys
+        # off ``runtime_kind == "nexus"`` to decide which providers to
+        # reconcile against /api/status.
+        if provider_type == "nexus":
+            api_key = ""
+            cred_ref = getattr(pcfg, "credential_ref", None) or "nexus_api_key"
+            api_key = _secrets.resolve(cred_ref) or ""
+            if not api_key:
+                log.warning(
+                    "[provider] %s: nexus runtime requires a stored "
+                    "credential at %s — skipping until sign-in completes",
+                    name, cred_ref,
+                )
+                continue
+            base_url = pcfg.base_url or "https://llm.nexus-model.us/v1"
+            provider = OpenAIProvider(
+                base_url=base_url,
+                auth=StaticBearerAuth(api_key),
+                model="",
+                **sampling_kwargs,
+            )
+            reg.register_provider(name, provider)
+            log.info(
+                "[provider] %s initialized (nexus subscription, base=%s)",
+                name, base_url,
+            )
             continue
 
         # Anthropic with auth_kind="oauth" — load the bundle from the

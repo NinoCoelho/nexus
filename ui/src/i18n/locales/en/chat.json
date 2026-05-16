@@ -12,6 +12,18 @@
     "editTitle": "Edit & resend (truncates everything after this turn)",
     "editAria": "Edit message"
   },
+  "rollback": {
+    "undoTitle": "Undo last turn",
+    "undoAria": "Undo last turn",
+    "editTitle": "Rollback edit",
+    "editAria": "Rollback edit",
+    "confirmTitle": "Rollback this turn?",
+    "confirmMessage": "The response and your message will be removed. Your text will be restored to the input so you can edit and resend.",
+    "confirmLabel": "Rollback",
+    "undoConfirmTitle": "Undo last turn?",
+    "undoConfirmMessage": "The last response and your message will be removed. Your text will be restored to the input so you can edit and resend.",
+    "undoConfirmLabel": "Undo"
+  },
   "assistant": {
     "name": "Nexus",
     "via": "via {{model}}",
@@ -46,9 +58,16 @@
     "crashed": "The turn crashed unexpectedly.",
     "length": "Response was truncated — the model hit its output limit.",
     "upstreamTimeout": "The model didn't respond in time.",
+    "rateLimited": "Rate limit hit — the turn has been paused. Resume after the cooldown.",
+    "contextOverflow": "This conversation is getting too long for the model to keep track of everything.",
+    "messageTooLarge": "This message is too large to send.",
+    "budgetExceeded": "Your API budget has been exceeded. Top up your credits or switch providers to continue.",
     "proceed": "How do you want to proceed?",
     "continue": "Continue",
-    "retry": "Retry"
+    "retry": "Retry",
+    "compact": "Compact",
+    "newSession": "New session",
+    "removeLast": "Remove last message"
   },
   "input": {
     "placeholder": "Message Nexus…",

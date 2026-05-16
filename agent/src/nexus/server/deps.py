@@ -43,6 +43,10 @@ def get_graphrag_cfg(request: Request) -> Any:
     return request.app.state.graphrag_cfg
 
 
+def get_job_tracker(request: Request) -> Any:
+    return request.app.state.job_tracker
+
+
 def get_locale(request: Request) -> str:
     """Resolve the request's preferred language.
 

@@ -1,5 +1,27 @@
 [
   {
+    "id": "nexus",
+    "display_name": "Nexus",
+    "category": "frontier",
+    "runtime_kind": "nexus",
+    "base_url": "https://llm.nexus-model.us/v1",
+    "featured": true,
+    "tagline": "Sign in once — demo free, Pro unlocks the larger Nexus model.",
+    "docs_url": "https://www.nexus-model.us",
+    "auth_methods": [
+      {
+        "id": "nexus_signin",
+        "label": "Sign in with Nexus",
+        "priority": 10,
+        "prompts": []
+      }
+    ],
+    "default_models": [
+      { "id": "demo", "capabilities": ["chat", "tools"] },
+      { "id": "nexus", "capabilities": ["chat", "tools", "reasoning"] }
+    ]
+  },
+  {
     "id": "openai",
     "display_name": "OpenAI",
     "category": "frontier",
@@ -36,7 +58,8 @@
       {"id": "gpt-4o-mini", "capabilities": ["chat", "tools", "vision"]},
       {"id": "o1-mini", "capabilities": ["chat", "reasoning"]},
       {"id": "o3-mini", "capabilities": ["chat", "tools", "reasoning"]},
-      {"id": "gpt-4-turbo", "capabilities": ["chat", "tools", "vision"]}
+      {"id": "gpt-4-turbo", "capabilities": ["chat", "tools", "vision"]},
+      {"id": "gpt-image-1", "capabilities": ["image"]}
     ],
     "docs_url": "https://platform.openai.com/docs"
   },
@@ -87,9 +110,9 @@
       }
     ],
     "default_models": [
-      {"id": "claude-opus-4-7", "capabilities": ["chat", "tools", "vision", "reasoning"]},
-      {"id": "claude-sonnet-4-6", "capabilities": ["chat", "tools", "vision"]},
-      {"id": "claude-haiku-4-5-20251001", "capabilities": ["chat", "tools", "vision"]}
+      {"id": "claude-opus-4-7", "capabilities": ["chat", "tools", "vision", "reasoning", "document"]},
+      {"id": "claude-sonnet-4-6", "capabilities": ["chat", "tools", "vision", "document"]},
+      {"id": "claude-haiku-4-5-20251001", "capabilities": ["chat", "tools", "vision", "document"]}
     ],
     "docs_url": "https://docs.anthropic.com"
   },
@@ -122,7 +145,8 @@
     "default_models": [
       {"id": "gemini-2.5-pro", "capabilities": ["chat", "tools", "vision", "reasoning"]},
       {"id": "gemini-2.5-flash", "capabilities": ["chat", "tools", "vision"]},
-      {"id": "gemini-2.5-flash-lite", "capabilities": ["chat", "tools"]}
+      {"id": "gemini-2.5-flash-lite", "capabilities": ["chat", "tools"]},
+      {"id": "gemini-2.5-flash-image", "capabilities": ["image"]}
     ],
     "docs_url": "https://ai.google.dev/gemini-api/docs"
   },

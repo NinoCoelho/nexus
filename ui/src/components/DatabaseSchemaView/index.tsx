@@ -31,14 +31,21 @@ function loadMermaid(): Promise<MermaidApi> {
 
 let _renderId = 0;
 
+function isStaleChunkError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(msg);
+}
+
 export default function DatabaseSchemaView({ folder, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   const [empty, setEmpty] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
+    setStale(false);
     setEmpty(false);
     if (ref.current) ref.current.innerHTML = "";
 
@@ -61,7 +68,13 @@ export default function DatabaseSchemaView({ folder, onClose }: Props) {
         if (cancelled) return;
         if (ref.current) ref.current.innerHTML = svg;
       } catch (e) {
-        if (!cancelled) setError((e as Error).message ?? "render failed");
+        if (cancelled) return;
+        if (isStaleChunkError(e)) {
+          _mermaidPromise = null;
+          setStale(true);
+        } else {
+          setError((e as Error).message ?? "render failed");
+        }
       }
     })();
 
@@ -80,7 +93,15 @@ export default function DatabaseSchemaView({ folder, onClose }: Props) {
           </button>
         )}
       </div>
-      {error && <div className="dt-error">{error}</div>}
+      {stale && (
+        <div className="dt-error">
+          A newer build is available — the diagram renderer chunk no longer matches what this tab loaded.{" "}
+          <button className="dt-action-btn" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+        </div>
+      )}
+      {error && !stale && <div className="dt-error">{error}</div>}
       {empty && !error && (
         <div className="dt-empty">
           No relations to diagram in this database yet — add a column with{" "}

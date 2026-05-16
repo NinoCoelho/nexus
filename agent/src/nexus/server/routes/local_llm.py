@@ -126,11 +126,16 @@ async def list_installed() -> list[dict[str, Any]]:
     results = []
     for p in sorted(_MODELS_DIR.glob("*.gguf")):
         info = running.get(p.name)
+        is_mmproj = manager.is_mmproj_file(p)
         results.append({
             "filename": p.name,
             "size_bytes": p.stat().st_size,
-            "is_running": info is not None,
-            "is_active": info is not None,  # legacy alias
+            # Vision-language projector sidecars are listed so the UI's
+            # auto-start gate can wait for the matching language GGUF —
+            # but the UI hides them from the user-facing tile list.
+            "is_mmproj": is_mmproj,
+            "is_running": info is not None and not is_mmproj,
+            "is_active": info is not None and not is_mmproj,  # legacy alias
             "port": info["port"] if info else None,
             "slug": info["slug"] if info else manager.slugify(p.stem),
         })
@@ -176,9 +181,16 @@ async def start_model(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
+    try:
+        from ...ocr_server import pause as _ocr_pause
+        _ocr_pause()
+    except Exception:
+        pass
+
     model_id = manager.add_to_config(
         handle.slug, handle.port,
         is_embedding=handle.is_embedding,
+        is_vision=handle.is_vision,
         context_window=ctx_size,
     )
 
@@ -209,6 +221,12 @@ async def stop_model(
     slug = manager.slugify(Path(body.filename).stem)
     manager.stop(body.filename)
     manager.remove_from_config(slug)
+
+    try:
+        from ...ocr_server import resume as _ocr_resume
+        _ocr_resume()
+    except Exception:
+        pass
 
     try:
         from ...config_file import load as load_cfg

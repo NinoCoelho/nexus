@@ -17,6 +17,8 @@ import "./DatabaseListPanel.css";
 interface Props {
   selectedPath: string | null;
   selectedDatabase?: string | null;
+  /** Bumped by the host to force a reload (e.g. after a database is deleted). */
+  revision?: number;
   onOpen: (path: string) => void;
   /** Click on a database header → open its dashboard. Primary action. */
   onSelectDatabase?: (folder: string) => void;
@@ -26,6 +28,7 @@ interface Props {
 export default function DatabaseListPanel({
   selectedPath,
   selectedDatabase,
+  revision,
   onOpen,
   onSelectDatabase,
   onOpenDiagram,
@@ -42,10 +45,6 @@ export default function DatabaseListPanel({
     try {
       const res = await listDatabases();
       setDatabases(res.databases);
-      // Auto-expand the first database for one-click visibility.
-      if (res.databases.length > 0) {
-        setExpanded((prev) => prev.size === 0 ? new Set([res.databases[0].folder]) : prev);
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load databases");
     } finally {
@@ -54,6 +53,15 @@ export default function DatabaseListPanel({
   }, []);
 
   useEffect(() => { void refreshDatabases(); }, [refreshDatabases]);
+
+  // Host-driven reloads (e.g. after a database is deleted from the dashboard).
+  // Also clear the cached table lists so an expanded folder doesn't keep
+  // stale rows after the underlying files are gone.
+  useEffect(() => {
+    if (revision === undefined) return;
+    setTablesByFolder({});
+    void refreshDatabases();
+  }, [revision, refreshDatabases]);
 
   // Fetch tables for any expanded folder we don't yet have.
   useEffect(() => {
@@ -78,14 +86,17 @@ export default function DatabaseListPanel({
   }, [expanded, tablesByFolder]);
 
   const handleHeaderClick = (folder: string) => {
-    // Primary action: open the dashboard.
-    onSelectDatabase?.(folder);
-    // Secondary: ensure the inline table list is visible. Toggle only when the
-    // user clicks the header of the *already-active* database (lets them
-    // collapse).
+    // First click on a different database: just open its dashboard, leave the
+    // tree collapsed (loading the table list is slow because of row counts).
+    if (selectedDatabase !== folder) {
+      onSelectDatabase?.(folder);
+      return;
+    }
+    // Second click on the already-active database: toggle the inline table
+    // list. The dashboard stays open in the main pane.
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (selectedDatabase === folder && next.has(folder)) next.delete(folder);
+      if (next.has(folder)) next.delete(folder);
       else next.add(folder);
       return next;
     });

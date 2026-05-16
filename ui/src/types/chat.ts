@@ -2,7 +2,7 @@ import type React from "react";
 import type { Message } from "../components/ChatView";
 import type { SessionSummary } from "../api";
 
-export type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights";
+export type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream";
 
 /**
  * One entry per session the user has interacted with this tab. Keyed by
@@ -110,11 +110,13 @@ const REASON_TO_BANNER: Record<string, string> = {
   transport: "Couldn't reach the provider — check your network or the base URL.",
   upstream_timeout: "Provider took too long to respond. Try again, or reduce context size.",
   context_overflow: "Conversation is too long for the model's context window. Compact history or start a new session.",
+  message_too_large: "This message is too large to send. Try shortening it or compacting the conversation first.",
   empty_response: "The model returned an empty response. Sometimes a retry helps.",
   length: "The response was cut off because it hit the model's output limit.",
   iteration_limit: "Agent stopped after hitting the per-turn iteration limit.",
   llm_error: "Provider error.",
   hook_error: "Pre-call hook failed before the model was invoked.",
+  budget_exceeded: "Your API budget has been exceeded. Top up your credits or switch providers to continue.",
 };
 
 /** Decide whether an upstream-extracted message is meaty enough to show
@@ -217,7 +219,7 @@ export function readInitialView(): { view: View; vaultPath: string | null } {
   const qs = new URLSearchParams(window.location.search);
   const v = qs.get("view");
   const path = qs.get("path");
-  const allowed: View[] = ["chat", "calendar", "vault", "kanban", "data", "graph", "insights"];
+  const allowed: View[] = ["chat", "calendar", "vault", "kanban", "data", "graph", "insights", "heartbeat", "dream"];
   const view = (allowed as string[]).includes(v ?? "") ? (v as View) : "chat";
   return { view, vaultPath: path };
 }
@@ -234,15 +236,11 @@ export interface UseChatSessionResult {
   setPendingSessionId: (id: string) => void;
   sessionsRevision: number;
   setSessionsRevision: React.Dispatch<React.SetStateAction<number>>;
-  /** Placeholder session shown in the sidebar list while the first turn of a
-   * brand-new chat is in flight (before the backend confirms creation). */
   pendingNewSession: SessionSummary | null;
-  /** Ref for pending auto-send: { sid, seed } to fire after activeSession propagates. */
   pendingAutoSend: React.MutableRefObject<{ sid: string; seed: string } | null>;
   send: (override?: unknown) => Promise<void>;
   handleStop: () => void;
   handleRollback: (visibleIdx: number) => Promise<void>;
-  handleContinue: () => void;
   handleContinuePartial: (visibleIdx: number) => void;
   handleRetryPartial: (visibleIdx: number) => Promise<void>;
   handleInputChange: (v: string) => void;
@@ -252,6 +250,7 @@ export interface UseChatSessionResult {
   handleNewChat: () => void;
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
-  computeSeedModel: () => string;
-  dismissLimitBanner: () => void;
+  computeSeedModel: (preferred?: string) => string;
+  handleCompact: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<import("../api/sessions").CompactResult | undefined>;
+  handleRemoveLast: () => Promise<void>;
 }

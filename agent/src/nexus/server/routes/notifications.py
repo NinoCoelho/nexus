@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 
 from ..deps import get_sessions
 from ..session_store import SessionStore
+from ._sse import keepalive
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,11 @@ async def notifications_events(
 
     async def stream() -> AsyncIterator[bytes]:
         yield b": subscribed\n\n"
-        async for session_id, event in store.subscribe_global():
+        async for item in keepalive(store.subscribe_global(), interval=20.0):
+            if item is None:
+                yield b": ping\n\n"
+                continue
+            session_id, event = item
             payload = {"session_id": session_id, **event.data}
             yield f"event: {event.kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 

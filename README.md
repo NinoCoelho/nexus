@@ -16,7 +16,9 @@
 - **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
-- **Packaged Mac app** — ships as `Nexus.app` with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh Mac. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
+- **MCP integration** — connect to external MCP servers (stdio, HTTP, SSE) and use their tools natively, or expose Nexus tools to external hosts via server mode. One-box paste wizard in the Integrations tab makes setup trivial.
+- **Dreaming** — scheduled background agent that consolidates memories, extracts cross-session insights, refines skills, and rehearses scenarios during idle time. Dream journal, manual triggers, and staged skill-suggestion review in the UI.
+- **Packaged desktop apps** — ships as `Nexus.app` (macOS) and `Nexus.exe` (Windows) with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh machine. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
 
 ---
 
@@ -45,9 +47,26 @@ cd ~/nexus/ui && npm run dev   # http://localhost:1890
 
 ---
 
-## Mac App
+## Desktop Apps
 
-Download `Nexus.app` from the [Releases page](https://github.com/NinoCoelho/nexus/releases). The app bundles the backend, web UI, and menu bar controls — no terminal required. You'll still need to set an API key (or rebuild from source with `--bundle-llm qwen-3b` to include a local model).
+Download the prebuilt bundle for your OS from the [Releases page](https://github.com/NinoCoelho/nexus/releases):
+
+- **macOS** (Apple Silicon) — `Nexus-macos-arm64.zip` → extract → drag `Nexus.app` to `/Applications`. Menu bar app with autostart and prefs.
+- **Windows** (x64) — `Nexus-windows-x64.zip` → extract anywhere → double-click `Nexus.exe`. System-tray app with the same controls (Open / Restart / Show Access Token / Logs / Quit).
+
+Both bundles ship a private CPython, all Python deps, the web UI, the bundled skills, and pre-downloaded embedding/spaCy models so the first launch works offline. You'll still need to set an API key (or rebuild from source with `--bundle-llm qwen-3b` to include a local model).
+
+### Building from source
+
+```bash
+# macOS (run on macOS arm64)
+bash packaging/build.sh                 # → dist/Nexus.app
+
+# Windows (run on Windows in PowerShell 7+)
+.\packaging\build.ps1                   # → dist\Nexus\ + dist\Nexus.zip
+```
+
+Tagged GitHub Releases are built automatically by `.github/workflows/release.yml`: publishing a release triggers parallel macOS and Windows runners that build their bundle and attach the zip as a release asset.
 
 ---
 
@@ -110,7 +129,7 @@ The named volume holds `~/.nexus/` — sessions, vault, skills, secrets, and the
 
 ## Overview
 
-Nexus is a self-evolving agentic platform with a Python FastAPI backend and a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime; manage a markdown knowledge vault with FTS + GraphRAG; operate Obsidian-compatible kanban boards, an iCal-style calendar, and DuckDB-backed datatables; trigger turns from calendar events; and interact with users through a human-in-the-loop approval system that streams via SSE and Web Push.
+Nexus is a self-evolving agentic platform with a Python FastAPI backend and a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime; manage a markdown knowledge vault with FTS + GraphRAG; operate Obsidian-compatible kanban boards, an iCal-style calendar, and DuckDB-backed datatables; trigger turns from calendar events; interact with users through a human-in-the-loop approval system that streams via SSE and Web Push; and integrate with external tools via the Model Context Protocol (MCP) — both as a client (connecting to MCP servers) and a server (exposing Nexus tools to external hosts).
 
 The agentic loop is powered by **Loom** — a reusable framework that provides the tool-calling iteration engine, LLM provider abstractions, session persistence, HITL broker, heartbeat drivers, GraphRAG memory, and error classification. Nexus layers on domain tools (vault, kanban, calendar, datatables, skill management, ontology), a rich web UI, TOML-based config, optional local LLMs (llama.cpp), public tunneling (Cloudflare Quick Tunnel, no account needed), and self-evolution.
 
@@ -146,12 +165,13 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Sub-Agent Fan-Out** | `spawn_subagents` runs N agent loops in parallel with fresh contexts; recursion is bounded |
 | **Persistent User Identity** | Loom `USER.md` is injected into the system prompt every turn; agent-edited via the `edit_profile` tool (permission-gated) |
 | **Chat Slash Commands** | `/compact`, `/clear`, `/title`, `/usage`, `/help` — local-only fast paths handled before the LLM call |
+| **Context Management** | Header dropdown showing live context usage (color-coded zone), token breakdown by role, per-tool stats, and three compaction strategies (auto / summarize / aggressive) |
 | **Output Token Caps** | Per-model `max_output_tokens` with `[agent].default_max_output_tokens` fallback |
 | **Multi-Provider LLMs** | Any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, Groq, vLLM) plus native Anthropic and local Ollama / llama.cpp |
 | **Bundled Local LLM** | Ship-and-run Qwen2.5-3B-Instruct via llama.cpp; UI for searching / downloading / activating Hugging Face GGUFs. Fresh installs (and the macOS `.app`) auto-seed a default demo model so the agent works out of the box |
 | **Reasoning Stream** | Streams `thinking` events from reasoning-capable models into a collapsible block above each assistant turn |
 | **Vault Knowledge Base** | Markdown files + FTS5 search + tag index + backlinks graph + GraphRAG semantic recall |
-| **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions) |
+| **3D Knowledge Graph** | Force-directed 3D / 2D vault graph with scoped views (file / folder / agent / sessions). Configurable display settings (node size, link distance, particle speed, etc.) persisted in localStorage |
 | **Kanban Boards** | Vault-native (`kanban-plugin: basic`) — boards are markdown files; cards can dispatch chat sessions. Top-level **Kanban** view in the sidebar lists every board across the vault for fast switching |
 | **Calendar** | Vault-native iCal-style events with RRULE recurrence, MonthGrid + WeekGrid views, RepeatPicker |
 | **Calendar Triggers** | Heartbeat driver fires events on schedule into agent turns; supports single-shot and intra-day fire windows |
@@ -168,12 +188,21 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **In-Chat Search + Pins** | Cmd+Shift+F across the active session; pin assistant turns to a sidebar bookmarks list |
 | **Edit User Messages** | Pencil-affordance on user turns rewinds + re-runs the conversation from that point |
 | **Daemon Mode** | Background process with PID/log management and systemd / launchd / NSSM service installers |
-| **Desktop App** | Packaged `Nexus.app` macOS bundle with menu bar autostart and prefs (loopback-only bind; remote access via `nexus tunnel`) |
+| **Desktop Apps** | Packaged `Nexus.app` (macOS, menu bar) + `Nexus.exe` (Windows, system tray) — same bundled CPython + UI + models, autostart prefs, loopback-only bind; remote access via `nexus tunnel`. Tagged releases are built and attached automatically by `.github/workflows/release.yml`. |
 | **Mobile-Friendly** | Capacitor-friendly responsive layout; iOS Xcode project scaffolding included |
 | **One-Line Install** | `curl … | bash` clones, installs uv + deps, and writes a default config |
 | **Docker Image** | Single multi-stage `Dockerfile` + `docker-compose.yml` — backend + bundled UI on one port, persistent state on a named volume, loopback auth model preserved via an internal `socat` proxy |
 | **Skills From Git** | `nexus skills install <git-url-or-path>` |
 | **ACP Bridge** | Optional Agent Communication Protocol over WebSocket with Ed25519 device auth |
+| **Cookie Export Extension** | Chrome extension exports browser cookies to Nexus for authenticated web scraping; `nexus cookies setup-chrome` installs the native messaging host |
+| **MCP Integration** | Client mode connects to external MCP servers (stdio / HTTP / SSE), discovers tools, and registers them in the live ToolRegistry. Server mode exposes Nexus tools to external hosts via Streamable HTTP bridge. Sampling and elicitation bridges let MCP servers request LLM completions and user input. Integrations Tab with one-box paste wizard for easy setup |
+| **MCP Apps** | Sandboxed iframes render interactive HTML from MCP servers inline in chat. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML pages inside `McpAppSandbox` |
+| **Inline Visual Tools** | `show_kanban`, `show_dashboard_widget`, and `show_data_table` tools return `ui://nexus/*` resource URIs that the UI intercepts and renders as MCP App iframes — rich visuals without bloating the text response |
+| **Skill Wizard** | Multi-step guided wizard for non-technical users: describe a capability → LLM discovers matching skills → configure API keys → plan and refine → agentic synthesis builds the skill. Background tracker shows toast on completion |
+| **Running Tasks** | In-memory job tracker for subagents, background jobs, and dreams with `job_started` / `job_done` SSE events. Global UI indicator with kill support (`GET /jobs`, `POST /jobs/{id}/kill`) |
+| **LaTeX / KaTeX** | Inline (`$...$`) and display (`$$...$$`) math rendering in MarkdownView via `remark-math` + `rehype-katex` |
+| **Per-Skill Venvs** | Skills can declare Python dependencies in `SKILL.toml`; Nexus creates isolated venvs per skill with managed dependencies, so skill installs never pollute the global environment |
+| **Dreaming** | Scheduled background agent consolidates memories, extracts insights, refines skills, rehearses scenarios. Four-phase cycle (consolidation → insight → skill refinement → rehearsal) with progressive depth, token budget, and a Dream Journal UI |
 
 ---
 
@@ -390,6 +419,12 @@ graph TB
         SUB["spawn_subagents (parallel fan-out)"]
     end
 
+    subgraph "Visual (MCP Apps)"
+        SK["show_kanban"]
+        SDW["show_dashboard_widget"]
+        SDT["show_data_table"]
+    end
+
     subgraph "External"
         HTTP["http_call"]
         WEB["web_search (DDGS / Brave / Tavily)"]
@@ -409,6 +444,7 @@ graph TB
     REG --> MR & MW
     REG --> SUB
     REG --> HTTP & WEB & SCR & ACP
+    REG --> SK & SDW & SDT
     REG --> ASK & TERM
 
     style REG fill:#1a1a2e,color:#fff
@@ -456,7 +492,7 @@ The vault is more than markdown — Nexus parses several frontmatter shapes to p
 
 | View | Frontmatter trigger | Notes |
 |---|---|---|
-| **Kanban** | `kanban-plugin: basic` | Obsidian-compatible. Lanes = `## H2`, cards = `### H3` with `<!-- nx:id=<uuid> -->`. Cards can dispatch chat sessions and link the session id back. |
+| **Kanban** | `kanban-plugin: basic` | Obsidian-compatible. Lanes = `## H2`, cards = `### H3` with `<!-- nx:id=<uuid> -->`. Cards can dispatch chat sessions and link the session id back. Right-click context menu: Open in chat, View Activity, Cancel/Retry, Move to lane submenu, Delete. |
 | **Calendar** | `nx-calendar: true` events under a calendar root | iCal RRULE recurrence; MonthGrid + WeekGrid; EventModal + RepeatPicker UI. |
 | **DataTable** | `nx-datatable: true` | DuckDB-backed CRUD with column types, filters, and inline cell editing. |
 | **CSV** | file extension `.csv` | First-class editor inside `VaultEditorPanel`. |
@@ -470,6 +506,74 @@ The `dispatch_card` and `kanban_query` tools let the agent operate on boards dir
 - **Single-shot**: `scheduled → triggered → done`. RRULE recurrences re-fire on each occurrence; only `cancelled` opts out. Per-occurrence dedup via a `fired_events` state map.
 - **Intra-day fire window**: `all_day=true` + `fire_from` + `fire_to` + `fire_every_min` repeats inside a local time window without flipping status.
 - Fired events flow through the same vault-dispatch pipeline as kanban cards, so the spawned session id is stamped back into the markdown atomically.
+
+#### Calendar Alarms
+
+When a calendar event's start time approaches, the system creates a ringing alarm persisted in `alarm_store.py` (SQLite-backed, per-occurrence). The UI receives `calendar_alarm` SSE events and renders a stack of alarm cards (`AlarmNotification.tsx`) with:
+
+- Event title, countdown timer (ticking live), start time, calendar name.
+- Overdue styling when countdown hits zero.
+- Actions: Snooze 5m / 15m, Open (navigate to calendar file), Dismiss.
+
+API endpoints for alarm management: `GET /vault/calendar/alarms`, `POST …/alarm/ack`, `POST …/alarm/snooze`.
+
+### Dreaming (Background Agent)
+
+A scheduled background agent — the agent's "subconscious" — runs during idle periods to consolidate memories, surface cross-session insights, refine skills, and rehearse scenarios.
+
+```mermaid
+graph TB
+    subgraph "Dream Cycle"
+        SCHED["HeartbeatScheduler (60s tick)"]
+        ENGINE["Dream Engine"]
+        P1["Phase 1: Consolidation"]
+        P2["Phase 2: Insight Extraction"]
+        P3["Phase 3: Skill Refinement"]
+        P4["Phase 4: Scenario Rehearsal"]
+        JOURNAL["Dream Journal (vault/dreams/)"]
+    end
+
+    subgraph "Shared State"
+        VAULT["Vault + Memory"]
+        SKILLS["Skills"]
+        SESSIONS["Sessions DB"]
+    end
+
+    subgraph "UI"
+        DVIEW["Dream View (Status / Journal / Suggestions / History)"]
+    end
+
+    SCHED --> ENGINE
+    ENGINE --> P1 --> P2 --> P3 --> P4
+    P1 & P2 & P3 & P4 --> JOURNAL
+    P1 --> VAULT
+    P2 --> VAULT
+    P3 --> SKILLS
+    P4 --> VAULT
+    ENGINE --> SESSIONS
+    ENGINE --> DVIEW
+```
+
+**Four-phase cycle** (progressive depth):
+
+| Phase | Depth | What it does |
+|---|---|---|
+| **Consolidation** | light (always) | Reads memory notes + recent vault files, deduplicates, resolves contradictions, converts relative dates |
+| **Insight Extraction** | medium+ | Analyzes cross-session patterns, recurring themes, user preferences → writes insight notes |
+| **Skill Refinement** | deep | Identifies repeated multi-step workflows not covered by existing skills → drafts skill suggestions |
+| **Scenario Rehearsal** | deep | Pre-computes context for likely future tasks → caches speculative notes (24h expiry) |
+
+**Key safety mechanisms:**
+
+- **Concurrency lock** — only one dream runs at a time.
+- **Token budget** — daily spend limit with graceful degradation (phases skip as budget depletes).
+- **Guard rails** — all writes go through existing vault + skill guard infrastructure.
+- **Skill suggestions** — staged for user review, not auto-created.
+- **Kill switch** — hard timeout via `max_duration_seconds`.
+
+**Dream Journal:** every run writes a structured entry to `vault/dreams/YYYY-MM-DD.md` with phases run, token spend, duration, and results.
+
+**Prompt builder integration:** `_memory_summary()` includes "Recent Dream Insights" so the waking agent naturally references dream output.
 
 ### Human-in-the-Loop (HITL)
 
@@ -621,9 +725,71 @@ FastAPI's auto-generated `/docs`, `/redoc`, `/openapi.json` are disabled — the
 
 State is **in-memory only**; restarting the daemon resets the tunnel to off, which is intentional — activation is always explicit.
 
+### MCP Integration
+
+Nexus supports both sides of the Model Context Protocol:
+
+**Client mode** — connects to external MCP servers at startup, discovers their tools, and registers them in the live `ToolRegistry`. Servers can be stdio (local commands like `npx`/`uvx`/`docker`) or remote (HTTP / SSE). Sampling and elicitation bridges let MCP servers request LLM completions from the agent and prompt the user for input via the existing HITL `ask_user` handler.
+
+```mermaid
+graph LR
+    subgraph "Nexus"
+        REG["ToolRegistry"]
+        MGR["McpManager (Loom)"]
+        BRIDGE["Sampling / Elicitation Bridge"]
+    end
+
+    subgraph "MCP Servers"
+        S1["stdio server (npx/uvx)"]
+        S2["HTTP / SSE server"]
+    end
+
+    MGR --> S1 & S2
+    S1 & S2 -->|"discover tools"| REG
+    S1 & S2 -->|"sampling request"| BRIDGE
+    S1 & S2 -->|"elicitation request"| BRIDGE
+```
+
+**Server mode** (`[mcp].server_enabled = true`) exposes Nexus's own agent tools to external hosts via a Streamable HTTP MCP bridge on a background thread (`127.0.0.1:<port>`, default 18990). Tool exposure can be filtered via `server_expose`.
+
+**MCP Apps** — sandboxed `<iframe sandbox="allow-scripts">` renders interactive HTML from MCP servers inline in chat. Communication is via `postMessage` using the MCP Apps JSON-RPC protocol. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML:
+
+| Resource URI | Tool | Renders |
+|---|---|---|
+| `ui://nexus/kanban?path=...` | `show_kanban` | Styled kanban board with lanes, cards, badges |
+| `ui://nexus/dashboard-widget?folder=...&widget_id=...` | `show_dashboard_widget` | Chart.js bar/line/area/pie/donut/KPI |
+| `ui://nexus/data-table?path=...` | `show_data_table` | Structured table with headers and rows |
+
+**Integrations Tab** — settings panel with a one-box paste wizard. Paste any MCP server config (JSON block, bare URL, `npx`/`uvx`/`docker` command), and a smart parser extracts name, transport, command, URL, env vars, and headers. Detects placeholder credentials, prompts the user to fill them, tests the connection via `POST /mcp/test`, saves to config, and triggers a hot-reload. Existing servers show connection status, tool count, and enable/disable/reconnect/remove controls.
+
 ### Audio Transcription
 
 `POST /transcribe` accepts audio and returns text. The UI provides a live waveform + timer + cancel during recording. Backed by either a local model or a remote provider, configurable in Settings.
+
+### Voice Acknowledgments (Spoken Acks)
+
+When a voice message arrives, the server generates a short spoken acknowledgment (max 7 words) so the user gets instant audio feedback before the agent loop runs. When the agent finishes, a concise spoken summary (max 15 words) of the result is synthesized. Both are gated by `[tts].ack_enabled`.
+
+Audio is synthesized server-side through the bundled Piper engine; the event carries base64 WAV bytes that the UI decodes and plays. The ack uses a dedicated fast model (`[tts].ack_model`, falls back to the default model) to keep latency low. Language is auto-detected per utterance via `langdetect`, or overridden by `[tts].voice_language`.
+
+Two ack modes via `[tts].ack_mode`:
+- `"voice"` (default) — acks only fire on voice-input turns.
+- `"always"` — the agent speaks its completion summary on every turn, even keyboard input. Useful for hands-free / accessibility use.
+
+### Cookie Export Extension
+
+A Manifest V3 Chrome extension (`extension/`) exports browser cookies to the Nexus server for authenticated web scraping. The extension popup lists cookie domains with counts; the user selects domains and clicks "Export selected," which POSTs to `/cookies/import`. Cookies are stored in Netscape format at `~/.nexus/cookies/<domain>.cookies.txt` — the same format read by the Playwright-based web scraper.
+
+Port discovery is automatic: the extension tries native messaging first (`com.nexus.cookies`), then probes ports 18989–18999 for a `/health` response.
+
+Setup:
+
+```bash
+nexus cookies setup-chrome              # install native messaging host
+# Then: Chrome → chrome://extensions → Developer mode → Load unpacked → extension/
+```
+
+The Settings drawer also shows a Cookies section with domain summary, per-domain remove buttons, and setup instructions.
 
 ### Session Persistence & Sharing
 
@@ -705,12 +871,20 @@ graph TB
 
     CONTENT --> CHAT & VAULT & KANBAN & GRAPH & INSIGHTS & AGENTG
 
+    DREAM["DreamView (status / journal / suggestions / history)"]
+    ALARM["AlarmNotification (calendar alarm stack)"]
+    CTXDRP["ContextDropdown (zone gauge + strategies)"]
+    MCPAPP["McpAppSandbox (sandboxed iframe for MCP Apps)"]
+
+    CONTENT --> DREAM & ALARM & CTXDRP & MCPAPP
+
     SKILLD["SkillDrawer"]
-    SETTD["SettingsDrawer (providers / models / advanced)"]
+    SETTD["SettingsDrawer (providers / models / advanced / integrations)"]
     APPROVE["ApprovalDialog (HITL)"]
     SHORT["Shortcuts cheat sheet"]
+    JOBS["RunningTasksIndicator (job tracker)"]
 
-    APP --> SKILLD & SETTD & APPROVE & SHORT
+    APP --> SKILLD & SETTD & APPROVE & SHORT & JOBS
 ```
 
 Frontend design decisions:
@@ -722,10 +896,12 @@ Frontend design decisions:
 | **View switching** | `display: none/flex` (not conditional rendering) — preserves in-flight streaming |
 | **SSE** | Manual `ReadableStream` parsing for POST SSE; native `EventSource` for session events |
 | **Mermaid** | Lazy-loaded on first `language-mermaid` block |
+| **Math** | `remark-math` + `rehype-katex` for inline/display LaTeX rendering |
+| **MCP Apps** | Sandboxed `<iframe sandbox="allow-scripts">` with `postMessage` JSON-RPC; `ui://nexus/*` resources rendered inline |
 | **3D graph** | force-graph + custom physics; 2D fallback |
 | **Mobile** | Capacitor-friendly responsive layout; iOS Xcode project under `ui/ios/` |
 | **Splash** | `SplashScreen` + `BrandMark` shown on first load (one chime, sessionStorage-gated) |
-| **Theming** | Adaptive theme system with continuous brightness knob; tokens in `ui/src/tokens.css` |
+| **Theming** | Dark/light mode toggle + named themes (mermaidcore, neutrals, neon, biophilic); tokens in `ui/src/tokens.css` |
 
 ---
 
@@ -750,6 +926,7 @@ nexus/
 │       ├── local_llm/                  # llama.cpp lifecycle, HF search, downloads
 │       ├── heartbeat_drivers/
 │       │   └── calendar_trigger/       # Vault calendar event firing
+│       ├── dream/                      # Dream system (engine, consolidation, insight, skill_refine, rehearse, journal, state)
 │       ├── calendar_runtime.py
 │       ├── agent/
 │       │   ├── loop/                   # Façade over loom.loop.Agent
@@ -766,16 +943,21 @@ nexus/
 │       │   └── terminal_tool.py        # HITL terminal
 │       ├── server/
 │       │   ├── app.py                  # Route registration
+│       │   ├── job_tracker.py          # In-memory running-jobs registry (SSE events)
 │       │   └── routes/
 │       │       ├── chat.py / chat_stream.py
 │       │       ├── sessions.py / sessions_vault.py
 │       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py
 │       │       ├── providers.py / models.py / config.py / settings.py
 │       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
-│       │       ├── insights.py / graph.py
+│       │       ├── insights.py / graph.py / mcp.py / skill_wizard.py
+│       │       ├── dream.py                 # Dream status, trigger, journal, suggestions
+│       ├── mcp_lifecycle.py            # MCP client + server startup, tool discovery
+│       ├── mcp_resources/              # Internal ui://nexus/* HTML generators (kanban, dashboard, data_table)
 │       ├── skills/                     # SkillRegistry + SkillManager + guard
 │       ├── tools/                      # vault, kanban, kanban_query, calendar, datatable, csv,
-│       │                               # visualize, dispatch_card, ontology, memory, http, acp
+│       │                               # visualize, dispatch_card, ontology, memory, http, acp,
+│       │                               # show_kanban, show_dashboard_widget, show_data_table
 │       ├── vault.py + vault_*.py       # vault search / index / graph / kanban / calendar / csv / datatable
 │       └── tests/
 ├── ui/                                 # React frontend
@@ -798,20 +980,33 @@ nexus/
 │           ├── CalendarView/                # MonthGrid + WeekGrid + RepeatPicker + EventModal
 │           ├── GraphView.tsx + AgentGraphView.tsx + SubgraphCanvas3D.tsx
 │           ├── InsightsView.tsx
-│           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid
+│           ├── DreamView/                     # Dream status, journal, suggestions, run history
+│           ├── McpAppSandbox/                  # Sandboxed iframe for MCP App rendering
+│           ├── SkillWizard/                    # Multi-step guided skill discovery + build
+│           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid + KaTeX
 │           ├── BrandMark.tsx + SplashScreen.tsx
 │           ├── SettingsDrawer.tsx
 │           ├── ApprovalDialog.tsx
 │           └── …
 ├── skills/                             # Bundled skills (seeded on first run)
-├── packaging/macos/                    # Nexus.app scaffolding
+├── packaging/
+│   ├── bootstrap.py                    # Shared launcher used by both bundles
+│   ├── build.sh                        # macOS .app build script
+│   ├── build.ps1                       # Windows .exe build script (PowerShell 7+)
+│   ├── macos/                          # Swift menu-bar host (NexusApp.swift, ServerController, …)
+│   └── windows/                        # Tray launcher (tray.pyw + Nexus.cmd) frozen into Nexus.exe
+├── .github/workflows/release.yml       # GitHub Release → builds macOS + Windows zips in parallel
 ├── install.sh                          # One-line installer
 ├── Dockerfile                          # Multi-stage container image (UI + backend)
 ├── docker-compose.yml                  # Single-service compose recipe
 ├── docker/entrypoint.sh                # socat → loopback uvicorn launcher
 ├── .dockerignore
+├── extension/                        # Chrome cookie export extension (Manifest V3)
+│   ├── manifest.json
+│   ├── popup.html / popup.js / popup.css
+│   └── native-host/                 # Native messaging host + manifest template
 ├── CLAUDE.md
-└── LICENSE                             # Apache 2.0
+└── LICENSE                             # BSL 1.1 (→ Apache 2.0 on 2030-05-04)
 ```
 
 ---
@@ -984,9 +1179,9 @@ uv run nexus daemon install --user    # systemd / launchd auto-start
 uv run nexus daemon uninstall --user
 ```
 
-#### macOS App
+#### Desktop Apps (macOS / Windows)
 
-A packaged `Nexus.app` bundle lives in `packaging/macos/`. Menu bar options cover autostart and port preferences. The app always binds to `127.0.0.1`; remote access goes through `nexus tunnel`.
+Prebuilt bundles for **macOS** (`Nexus.app`, menu bar) and **Windows** (`Nexus.exe`, system tray) are produced by `packaging/build.sh` and `packaging/build.ps1` respectively. Both bundle a private CPython + the UI + pre-downloaded models, always bind to `127.0.0.1`, and expose the same menu actions (Open / Restart / Show Access Token / Logs / Quit). Remote access goes through `nexus tunnel`. See `packaging/windows/README.md` for Windows-specific build notes; releases are produced automatically by `.github/workflows/release.yml`.
 
 #### Manual Server + UI
 
@@ -1006,7 +1201,7 @@ The UI reads its API base from `VITE_NEXUS_API` (default `http://localhost:18989
 uv run nexus chat
 ```
 
-Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`. The bundled set includes `nexus` (self-docs, queried via `nexus_kb_search`), `markitdown` (doc → markdown ingestion), `pdf-maker`, `web-scrape`, `deep-research`, `parallel-research`, `summarize-file`, `vault-curator`, `ontology-curator`, `code-review-local`, `daily-standup`, and `brainstorm`.
+Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`. The bundled set includes `nexus` (self-docs, queried via `nexus_kb_search`), `markitdown` (doc → markdown ingestion), `pdf-maker`, `web-scrape`, `deep-research`, `parallel-research`, `summarize-file`, `vault-curator`, `ontology-curator`, `code-review-local`, `daily-standup`, `brainstorm`, and more. Skills can declare Python dependencies for isolated venv management.
 
 If no model is configured (fresh install or the macOS `.app`), the local-LLM manager auto-seeds a small bundled demo model and points `[agent].default_model` at it, so the agent answers immediately without requiring an API key.
 
@@ -1053,6 +1248,7 @@ nexus config init | show | path
 nexus providers list | add <name> --base-url <url> [--key-env <VAR>] | remove <name>
 nexus models    list | add <id> --provider <p> --model <name> [--tags ...] | remove <id> | set-default <id>
 nexus skills    list | view <name> | install <git-url-or-path> | remove <name>
+nexus cookies   setup-chrome [--extension-id <id>]
 nexus version
 nexus doctor
 ```
@@ -1129,6 +1325,9 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/vault/backlinks` | GET | Backlinks |
 | `/vault/dispatch` | POST | Spawn session from file/card |
 | `/vault/calendar*` | GET / POST / PATCH / DELETE | Calendar events + RRULE + manual fire |
+| `/vault/calendar/alarms` | GET | List ringing alarms |
+| `/vault/calendar/events/{id}/alarm/ack` | POST | Acknowledge alarm |
+| `/vault/calendar/events/{id}/alarm/snooze` | POST | Snooze alarm (body: `{minutes: N}`) |
 | `/vault/csv*` | GET / POST / PATCH / DELETE | CSV editor |
 | `/vault/history/status` | GET | Git-backed history enabled? |
 | `/vault/history/enable` / `/disable` | POST | Toggle history layer (initializes `~/.nexus/.vault-history`) |
@@ -1167,6 +1366,14 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/local/activate` | POST | Set active model |
 | `/local/start` / `/local/stop` | POST | llama.cpp lifecycle |
 
+### Cookies
+
+| Route | Method | Description |
+|---|---|---|
+| `/cookies/import` | POST | Import cookies from browser extension |
+| `/cookies` | GET | List stored cookie domains |
+| `/cookies/{domain}` | DELETE | Remove cookies for a domain |
+
 ### Tunnel & Notifications
 
 | Route | Method | Description |
@@ -1191,6 +1398,19 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/routing` | GET / PUT | Routing config |
 | `/settings` | GET / POST | YOLO mode + preferences |
 
+### Dream
+
+| Route | Method | Description |
+|---|---|---|
+| `/dream/status` | GET | Enabled state, running flag, last run, budget |
+| `/dream/trigger` | POST | Manual dream trigger (`?depth=light\|medium\|deep`) |
+| `/dream/journal` | GET | List journal entries |
+| `/dream/journal/{date}` | GET | Read journal entry |
+| `/dream/suggestions` | GET | List staged skill suggestions |
+| `/dream/suggestions/{filename}/accept` | POST | Accept suggestion (creates skill) |
+| `/dream/suggestions/{filename}` | DELETE | Dismiss suggestion |
+| `/dream/runs` | GET | Run history |
+
 ### Misc
 
 | Route | Method | Description |
@@ -1199,6 +1419,38 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/skills` / `/skills/{name}` | GET | Skill list / body |
 | `/graph` | GET | Agent / skill / session graph |
 | `/insights` | GET | Token / cost / model / tool analytics |
+
+### MCP
+
+| Route | Method | Description |
+|---|---|---|
+| `/mcp/servers` | GET | List connected MCP servers and their tools |
+| `/mcp/servers/{name}/reconnect` | POST | Reconnect a single server |
+| `/mcp/refresh` | POST | Re-discover tools from all servers |
+| `/mcp/reload` | POST | Hot-reload from config (stop old, start new) |
+| `/mcp/resources` | GET | List MCP resources from connected servers |
+| `/mcp/resources/{server}?uri=...` | GET | Read an MCP resource |
+| `/mcp/prompts` | GET | List MCP prompt templates |
+| `/mcp/prompts/{server}/{name}` | POST | Render a prompt template |
+| `/mcp/app/{server}?uri=...` | GET | Fetch MCP App HTML |
+| `/mcp/tools` | GET | List all MCP + internal tools |
+| `/mcp/call-tool` | POST | Call a tool on a server or internal tool |
+| `/mcp/internal-resource?uri=...` | GET | Resolve `ui://nexus/*` resource URIs |
+| `/mcp/test` | POST | Test a server config without persisting |
+
+### Jobs
+
+| Route | Method | Description |
+|---|---|---|
+| `/jobs` | GET | List running background jobs |
+| `/jobs/{id}/kill` | POST | Kill a running job |
+
+### Skill Wizard
+
+| Route | Method | Description |
+|---|---|---|
+| `/skills/wizard/discover` | POST | LLM-ranked skill discovery from natural language |
+| `/skills/wizard/build` | POST | Agentic skill synthesis (creates hidden session) |
 
 ---
 
@@ -1273,6 +1525,42 @@ max_content_bytes = 102400
 # into a private git work-tree at ~/.nexus/.vault-history.
 [vault.history]
 enabled = false
+
+# Dream system — scheduled background agent for memory consolidation,
+# insight extraction, skill refinement, and scenario rehearsal.
+# Disabled by default; flip to true to enable.
+[dream]
+enabled = true
+schedule_cron = "0 3 * * *"          # 3 AM daily
+model_id = ""                         # blank = use default model
+context_budget_tokens = 8000          # max input context per phase
+max_output_tokens = 4000              # max dream output per phase
+max_duration_seconds = 300            # hard timeout per run
+daily_token_budget = 500000           # cumulative token spend limit
+
+# MCP (Model Context Protocol) — connect to external MCP servers and/or
+# expose Nexus tools as an MCP server.
+[mcp]
+server_enabled = false                 # expose Nexus tools to external hosts
+server_port = 18990                    # MCP server bind port (loopback only)
+
+[[mcp.servers]]
+name = "my-server"                     # friendly name
+transport = "stdio"                    # "stdio" | "http" | "sse"
+command = "npx"                        # for stdio
+args = ["-y", "@example/mcp-server"]   # for stdio
+# url = "http://localhost:3000/mcp"    # for http/sse
+# env = { API_KEY = "$MY_SERVER_KEY" } # environment variables ($VAR resolved from shell)
+# headers = { Authorization = "Bearer ..." } # for http/sse
+
+# Voice output (TTS via bundled Piper). Acks are spoken confirmations
+# for voice-input turns (start + completion).
+[tts]
+enabled = true                         # master switch; hides TTS buttons when false
+ack_enabled = true                     # spoken acks for voice turns
+ack_mode = "voice"                     # "voice" = only voice turns | "always" = every turn
+ack_model = ""                         # fast model for ack LLM calls (blank = default)
+voice_language = ""                    # override auto-detection (e.g. "pt", "en")
 ```
 
 ### Environment Variable Override
@@ -1300,8 +1588,12 @@ export NEXUS_LLM_MODEL="gpt-4o"
 ├── .vault-history/      # Git work-tree of vault mutations (only if [vault.history] enabled)
 ├── graphrag/            # Vault-wide GraphRAG store (entities + relations + embeddings)
 ├── skills/              # Agent skills
+├── dream_state.sqlite   # Dream run history, budget tracking, explored territory
 ├── local_llm/           # Downloaded GGUFs
 ├── push/                # VAPID keys + subscriptions
+├── cookies/              # Exported browser cookies (Netscape format, per domain)
+├── native-host/          # Chrome native messaging host for cookie extension
+├── tts/                  # Downloaded Piper ONNX voice files
 ├── nexus-daemon.pid
 └── nexus-daemon.log
 ```
@@ -1312,20 +1604,11 @@ API keys are referenced by environment variable name (`api_key_env`), never stor
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+Licensed under the [Business Source License 1.1](LICENSE). The BSL permits non-production use, evaluation, and development. Production use that competes with the Licensor's own managed offering requires a commercial license. On the change date (2030-05-04) the license converts to Apache 2.0.
 
 ```
 Copyright 2024 Nino Coelho
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Business Source License 1.1
+See LICENSE for full terms.
 ```

@@ -16,22 +16,29 @@ import Modal, { type ModalProps } from "../Modal";
 import CardDetailModal from "../CardDetailModal";
 import CardActivityModal from "../CardActivityModal";
 import LanePromptDialog from "../LanePromptDialog";
+import BoardPromptDialog from "../BoardPromptDialog";
 import {
   addVaultKanbanLane,
+  cancelVaultKanbanCard,
   deleteVaultKanbanCard,
   deleteVaultKanbanLane,
   dispatchFromVault,
+  fetchCardSessions,
   getVaultKanban,
+  patchVaultKanbanBoard,
   patchVaultKanbanCard,
   patchVaultKanbanLane,
+  retryVaultKanbanCard,
   type KanbanBoard as BoardT,
   type KanbanCard,
   type KanbanLane,
 } from "../../api";
+import type { CardSession } from "../../api/dispatch";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
 import "../KanbanBoard.css";
 import KanbanLaneColumn from "./KanbanLaneColumn";
 import KanbanFilterBar from "./KanbanFilterBar";
+import SessionPickerModal from "./SessionPickerModal";
 import { type BoardFilters } from "./utils";
 
 interface Props {
@@ -41,22 +48,32 @@ interface Props {
    * The chat view should POST the seed_message to /chat/stream — it
    * contains a hidden-seed marker the chat bubble renderer filters out.
    */
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
+  /** Navigate to an existing chat session (no new seed/auto-send). */
+  onNavigateToSession?: (sessionId: string) => void;
+  /** Navigate the host app to open `path` in the Vault view — forwarded to
+   *  card detail/activity modals so vault links opened from there keep
+   *  the "Open in Vault" affordance in their preview header. */
+  onOpenInVault?: (path: string) => void;
 }
 
-export default function KanbanBoard({ path, onOpenInChat }: Props) {
+export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, onOpenInVault }: Props) {
   const { t } = useTranslation("kanban");
   const [board, setBoard] = useState<BoardT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragCard, setDragCard] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<{ lane: string; index: number } | null>(null);
+  const [dragLane, setDragLane] = useState<string | null>(null);
+  const [laneDragOver, setLaneDragOver] = useState<number | null>(null);
   const [modal, setModal] = useState<ModalProps | null>(null);
   const [detailCard, setDetailCard] = useState<KanbanCard | null>(null);
   const [newCardLane, setNewCardLane] = useState<string | null>(null);
   const [activityCard, setActivityCard] = useState<KanbanCard | null>(null);
   const [editLane, setEditLane] = useState<KanbanLane | null>(null);
+  const [sessionPicker, setSessionPicker] = useState<{ card: KanbanCard; sessions: CardSession[] } | null>(null);
   const [filters, setFilters] = useState<BoardFilters>({ text: "", label: "", priority: "", assignee: "" });
   const [showFilters, setShowFilters] = useState(false);
+  const [editBoard, setEditBoard] = useState(false);
 
   const matchesFilters = (card: KanbanCard): boolean => {
     if (filters.text) {
@@ -158,12 +175,50 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
     } catch { /* ignore move errors */ }
   };
 
+  const handleLaneDrop = async (insertIndex: number) => {
+    if (!dragLane || !board) return;
+    const laneId = dragLane;
+    const srcIndex = board.lanes.findIndex((l) => l.id === laneId);
+    setDragLane(null);
+    setLaneDragOver(null);
+    if (srcIndex < 0) return;
+    // The backend treats `position` as the index into the post-removal list,
+    // so an insertIndex past the source needs to shift down by one to land
+    // visually where the user dropped.
+    const target = insertIndex > srcIndex ? insertIndex - 1 : insertIndex;
+    if (target === srcIndex) return;
+    try {
+      await patchVaultKanbanLane(path, laneId, { position: target });
+      reload();
+    } catch { /* ignore reorder errors */ }
+  };
+
   const handleOpenInChat = async (card: KanbanCard) => {
+    if (!card.session_id) {
+      handleNewDispatch(card);
+      return;
+    }
+    try {
+      const sessions = await fetchCardSessions(path, card.id);
+      if (sessions.length === 0) {
+        handleNewDispatch(card);
+        return;
+      }
+      if (sessions.length === 1) {
+        onNavigateToSession?.(sessions[0].id);
+        return;
+      }
+      setSessionPicker({ card, sessions });
+    } catch {
+      handleNewDispatch(card);
+    }
+  };
+
+  const handleNewDispatch = async (card: KanbanCard) => {
     try {
       const res = await dispatchFromVault({ path, card_id: card.id, mode: "chat-hidden" });
       if (res.seed_message) {
-        onOpenInChat?.(res.session_id, res.seed_message, card.title);
-        // Pick up the linked session_id the backend stamped on the card.
+        onOpenInChat?.(res.session_id, res.seed_message, card.title, res.model ?? undefined);
         reload();
       }
     } catch { /* ignore */ }
@@ -227,13 +282,60 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
     });
   };
 
+  const handleCancelCard = async (cardId: string) => {
+    try {
+      await cancelVaultKanbanCard(path, cardId);
+      reload();
+    } catch { /* ignore */ }
+  };
+
+  const handleRetryCard = async (cardId: string) => {
+    try {
+      await retryVaultKanbanCard(path, cardId);
+      reload();
+    } catch { /* ignore */ }
+  };
+
+  const handleMoveCard = async (cardId: string, targetLaneId: string) => {
+    try {
+      const targetLane = board?.lanes.find((l) => l.id === targetLaneId);
+      const position = targetLane?.cards.length ?? 0;
+      await patchVaultKanbanCard(path, cardId, { lane: targetLaneId, position });
+      reload();
+    } catch { /* ignore */ }
+  };
+
   const hasActiveFilters = !!(filters.text || filters.label || filters.priority || filters.assignee);
 
   return (
     <div className="kanban-board">
       <div className="kanban-board-header">
-        <div className="kanban-board-title">{board.title}</div>
+        <div className="kanban-board-title">
+          {board.title}
+          {board.board_prompt && (
+            <span
+              title={t("kanban:board.boardPromptIndicator")}
+              style={{
+                color: "var(--accent)",
+                fontSize: 13,
+                marginLeft: 4,
+                opacity: 0.7,
+                verticalAlign: "middle",
+              }}
+            >
+              &#9888;
+            </span>
+          )}
+        </div>
         <div className="kanban-board-header-actions">
+          <button
+            className="kanban-pill"
+            onClick={() => setEditBoard(true)}
+            title={t("kanban:board.boardSettings")}
+            style={board.board_prompt ? { color: "var(--accent)" } : undefined}
+          >
+            {t("kanban:board.boardSettings")}
+          </button>
           <button
             className="kanban-pill"
             onClick={() => setShowFilters((v) => !v)}
@@ -247,17 +349,26 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
       </div>
       {showFilters && <KanbanFilterBar filters={filters} onFiltersChange={setFilters} />}
       <div className="kanban-lanes">
-        {board.lanes.map((lane) => (
+        {board.lanes.map((lane, idx) => (
           <KanbanLaneColumn
             key={lane.id}
             lane={lane}
+            laneIndex={idx}
+            isLastLane={idx === board.lanes.length - 1}
+            allLanes={board.lanes.map((l) => ({ id: l.id, title: l.title }))}
             dragCard={dragCard}
+            dragLane={dragLane}
             dragOver={dragOver}
+            laneDragOver={laneDragOver}
             filters={filters}
             matchesFilters={matchesFilters}
             onSetDragCard={setDragCard}
             onSetDragOver={setDragOver}
             onDrop={handleDrop}
+            onLaneDragStart={(id) => setDragLane(id)}
+            onLaneDragEnd={() => { setDragLane(null); setLaneDragOver(null); }}
+            onLaneDragOver={(insertIdx) => setLaneDragOver(insertIdx)}
+            onLaneDrop={(insertIdx) => void handleLaneDrop(insertIdx)}
             onEditLane={(l) => setEditLane(l)}
             onDeleteLane={handleDeleteLane}
             onAddCard={handleAddCard}
@@ -265,6 +376,9 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
             onOpenCardActivity={(card) => setActivityCard(card)}
             onOpenCardInChat={(card) => void handleOpenInChat(card)}
             onDeleteCard={handleDeleteCard}
+            onCancelCard={handleCancelCard}
+            onRetryCard={handleRetryCard}
+            onMoveCard={(cardId, targetLaneId) => void handleMoveCard(cardId, targetLaneId)}
           />
         ))}
       </div>
@@ -272,6 +386,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
       {editLane && (
         <LanePromptDialog
           lane={editLane}
+          boardPath={path}
           onCancel={() => setEditLane(null)}
           onSubmit={async (patch) => {
             try {
@@ -290,6 +405,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           cardTitle={activityCard.title}
           status={activityCard.status}
           onClose={() => { setActivityCard(null); reload(); }}
+          onOpenInVault={onOpenInVault}
         />
       )}
       {detailCard && (
@@ -298,6 +414,7 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           boardPath={path}
           onClose={() => setDetailCard(null)}
           onSaved={() => { setDetailCard(null); reload(); }}
+          onOpenInVault={onOpenInVault}
         />
       )}
       {newCardLane && (
@@ -306,6 +423,30 @@ export default function KanbanBoard({ path, onOpenInChat }: Props) {
           boardPath={path}
           onClose={() => setNewCardLane(null)}
           onSaved={() => { setNewCardLane(null); reload(); }}
+          onOpenInVault={onOpenInVault}
+        />
+      )}
+      {sessionPicker && (
+        <SessionPickerModal
+          sessions={sessionPicker.sessions}
+          onSelect={(sid) => { setSessionPicker(null); onNavigateToSession?.(sid); }}
+          onNewSession={() => { const card = sessionPicker.card; setSessionPicker(null); void handleNewDispatch(card); }}
+          onCancel={() => setSessionPicker(null)}
+        />
+      )}
+      {editBoard && board && (
+        <BoardPromptDialog
+          board={board}
+          onCancel={() => setEditBoard(false)}
+          onSubmit={async (patch) => {
+            try {
+              await patchVaultKanbanBoard(path, patch);
+              setEditBoard(false);
+              reload();
+            } catch {
+              setEditBoard(false);
+            }
+          }}
         />
       )}
     </div>

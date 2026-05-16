@@ -1,18 +1,21 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { type KnowledgeStats } from "../../api";
+import { type KnowledgeStats, type Model } from "../../api";
+import CookiesSection from "./CookiesSection";
 import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
 import VaultHistorySection from "../VaultHistorySection";
 import SettingsSection from "./SettingsSection";
 import SharingSection from "./SharingSection";
+import VoiceSection from "./VoiceSection";
 
 interface Props {
   graphStats: KnowledgeStats | null;
+  models: Model[];
 }
 
-export default function FeaturesTab({ graphStats }: Props) {
+export default function FeaturesTab({ graphStats, models }: Props) {
   const { t } = useTranslation("settings");
   const [reindexOpen, setReindexOpen] = useState(false);
 
@@ -35,6 +38,29 @@ export default function FeaturesTab({ graphStats }: Props) {
         }}
       >
         <TranscriptionSection />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Voice & speech"
+        icon="🔊"
+        collapsible
+        defaultOpen={false}
+        help={{
+          title: "Voice output",
+          body: (
+            <>
+              Read assistant messages and vault notes aloud, and (for voice
+              messages) get a brief spoken acknowledgment when the agent
+              starts working, while it's running, and when it finishes.
+              Engines: <b>Web Speech</b> uses your browser's built-in
+              voices (zero install). <b>Piper</b> runs a small ONNX model
+              locally for higher quality (downloads on first use). Remote
+              options (OpenAI, ElevenLabs) require an API key.
+            </>
+          ),
+        }}
+      >
+        <VoiceSection models={models} />
       </SettingsSection>
 
       <SettingsSection
@@ -120,6 +146,8 @@ export default function FeaturesTab({ graphStats }: Props) {
       </SettingsSection>
 
       <SharingSection />
+
+      <CookiesSection />
 
       <ReindexModal open={reindexOpen} onClose={() => setReindexOpen(false)} />
     </>

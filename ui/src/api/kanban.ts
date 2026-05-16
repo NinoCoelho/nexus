@@ -34,6 +34,7 @@ export interface KanbanBoard {
   path: string;
   title: string;
   lanes: KanbanLane[];
+  board_prompt?: string;
 }
 
 export interface KanbanBoardSummary {
@@ -230,11 +231,13 @@ export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQu
 }
 
 /**
- * Update a lane's metadata (title, automation prompt, or default model).
+ * Update a lane's metadata (title, automation prompt, or default model)
+ * and/or move it to a different column index within the board.
  *
  * `prompt` and `model` control the lane's auto-dispatch behaviour: when a card
  * is moved into the lane, the agent can be triggered automatically with that
- * prompt and model. Sending `null` clears the field.
+ * prompt and model. Sending `null` clears the field. To reorder columns,
+ * include `position` (zero-based index against the post-removal list).
  *
  * @param path - Path to the board's `.md` file.
  * @param laneId - Unique ID of the lane to update.
@@ -243,7 +246,7 @@ export async function queryVaultKanban(q: KanbanQuery): Promise<{ hits: KanbanQu
 export async function patchVaultKanbanLane(
   path: string,
   laneId: string,
-  patch: { title?: string; prompt?: string | null; model?: string | null },
+  patch: { title?: string; prompt?: string | null; model?: string | null; position?: number },
 ): Promise<KanbanLane> {
   const res = await fetch(
     `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}?path=${encodeURIComponent(path)}`,
@@ -254,5 +257,67 @@ export async function patchVaultKanbanLane(
     },
   );
   if (!res.ok) throw new Error(`Kanban lane patch error: ${res.status}`);
+  return res.json();
+}
+
+export async function cancelVaultKanbanCard(path: string, cardId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}/cancel?path=${encodeURIComponent(path)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`Kanban card cancel error: ${res.status}`);
+  return res.json();
+}
+
+export async function retryVaultKanbanCard(path: string, cardId: string): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/cards/${encodeURIComponent(cardId)}/retry?path=${encodeURIComponent(path)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`Kanban card retry error: ${res.status}`);
+  return res.json();
+}
+
+export interface LaneWebhookInfo {
+  enabled: boolean;
+  url: string | null;
+  token: string | null;
+}
+
+export async function getLaneWebhook(path: string, laneId: string): Promise<LaneWebhookInfo> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}/webhook?path=${encodeURIComponent(path)}`,
+  );
+  if (!res.ok) throw new Error(`Lane webhook get error: ${res.status}`);
+  return res.json();
+}
+
+export async function setLaneWebhook(
+  path: string,
+  laneId: string,
+  patch: { enabled: boolean },
+): Promise<LaneWebhookInfo> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}/webhook?path=${encodeURIComponent(path)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!res.ok) throw new Error(`Lane webhook set error: ${res.status}`);
+  return res.json();
+}
+
+export async function patchVaultKanbanBoard(
+  path: string,
+  patch: { title?: string; board_prompt?: string | null },
+): Promise<KanbanBoard> {
+  const res = await fetch(`${BASE}/vault/kanban?path=${encodeURIComponent(path)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Kanban board patch error: ${res.status}`);
   return res.json();
 }

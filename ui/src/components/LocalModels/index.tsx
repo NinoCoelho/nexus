@@ -71,9 +71,21 @@ export default function LocalModels({ onRefresh }: Props) {
   const autoStartedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (installed.length === 0) return;
-    if (installed.some((m) => m.is_running)) return;
-    const candidate = installed.find((m) => !autoStartedRef.current.has(m.filename));
+    const visible = installed.filter((m) => !m.is_mmproj);
+    if (visible.some((m) => m.is_running)) return;
+    const candidate = visible.find((m) => !autoStartedRef.current.has(m.filename));
     if (!candidate) return;
+    // Hold off auto-start while the matching mmproj sidecar from the
+    // catalog is still pending — starting llama-server before the
+    // projector is on disk would launch it text-only and image inputs
+    // would error out.
+    const catalogEntry = CATALOG.find((e) => e.filename === candidate.filename);
+    if (catalogEntry?.mmproj_filename) {
+      const sidecarPresent = installed.some(
+        (m) => m.filename === catalogEntry.mmproj_filename,
+      );
+      if (!sidecarPresent) return;
+    }
     autoStartedRef.current.add(candidate.filename);
     onStart(candidate.filename);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -83,6 +95,9 @@ export default function LocalModels({ onRefresh }: Props) {
     setBusy(entry.id);
     try {
       await startDownload(entry.repo_id, entry.filename);
+      if (entry.mmproj_filename) {
+        await startDownload(entry.repo_id, entry.mmproj_filename);
+      }
       toast.info(`Downloading ${entry.title}…`);
       refreshLocal();
     } catch (e) {
@@ -254,9 +269,18 @@ export default function LocalModels({ onRefresh }: Props) {
         <div className="local-catalog-grid">
           {CATALOG.map((entry) => {
             const ramOK = !hw || hw.ram_gb >= entry.min_ram_gb;
-            const installedHere = installedByFilename.has(entry.filename);
-            const dl = downloadByKey.get(`${entry.repo_id}/${entry.filename}`);
-            const inProgress = dl && (dl.status === "downloading" || dl.status === "pending");
+            const langHere = installedByFilename.has(entry.filename);
+            const mmprojHere = entry.mmproj_filename
+              ? installedByFilename.has(entry.mmproj_filename)
+              : true;
+            const installedHere = langHere && mmprojHere;
+            const dlLang = downloadByKey.get(`${entry.repo_id}/${entry.filename}`);
+            const dlMmproj = entry.mmproj_filename
+              ? downloadByKey.get(`${entry.repo_id}/${entry.mmproj_filename}`)
+              : undefined;
+            const isPending = (t: typeof dlLang) =>
+              t && (t.status === "downloading" || t.status === "pending");
+            const inProgress = isPending(dlLang) || isPending(dlMmproj);
             const isBusy = busy === entry.id;
 
             let label: string;

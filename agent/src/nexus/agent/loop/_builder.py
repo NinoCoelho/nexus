@@ -117,12 +117,15 @@ def build_loom_agent(
     # the rest of Nexus uses. Returning 0 disables the check for unknown
     # models — preserves backwards compat for ad-hoc model ids.
     def _model_context_window(model_id: str) -> int:
-        if not nexus_cfg or not getattr(nexus_cfg, "models", None):
-            return 0
-        for entry in nexus_cfg.models:
-            if entry.id == model_id or entry.model_name == model_id:
-                return int(getattr(entry, "context_window", 0) or 0)
-        return 0
+        if nexus_cfg and getattr(nexus_cfg, "models", None):
+            for entry in nexus_cfg.models:
+                if entry.id == model_id or entry.model_name == model_id:
+                    cw = int(getattr(entry, "context_window", 0) or 0)
+                    if cw > 0:
+                        return cw
+        from .overflow import known_context_window
+        fallback = known_context_window(model_id)
+        return fallback if fallback > 0 else 0
 
     loom_cfg = AgentConfig(
         max_iterations=max_iter,

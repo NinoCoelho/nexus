@@ -162,9 +162,11 @@ class BedrockProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,  # accepted for interface parity; unused
     ) -> ChatResponse:
         import asyncio
         import botocore.exceptions  # type: ignore[import-not-found]
+        _ = extra_payload  # intentionally ignored (Bedrock has no thinking-toggle field)
 
         resolved_model = model or self._model
         if not resolved_model:

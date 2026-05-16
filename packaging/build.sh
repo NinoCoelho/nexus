@@ -8,12 +8,24 @@
 #   packaging/build.sh                          # full build (signs ad-hoc)
 #   packaging/build.sh --skip-models            # don't pre-download embedding models
 #   packaging/build.sh --skip-sign              # skip codesign step
+#   packaging/build.sh --identity "Developer ID Application: Name (TEAMID)"
+#                                               # sign with a Developer ID certificate
+#   packaging/build.sh --identity "Developer ID Application: Name (TEAMID)" \
+#                       --notarize \
+#                       --notary-apple-id you@email.com \
+#                       --notary-team-id TEAMID \
+#                       --notary-password app-specific-password
+#                                               # sign + notarize + staple
 #   packaging/build.sh --bundle-llm none        # no local LLM (default)
 #   packaging/build.sh --bundle-llm qwen-3b     # opt-in: Qwen2.5-3B-Instruct (~1.9 GB)
 #   packaging/build.sh --bundle-llm gemma-e4b   # opt-in: Gemma 3n E4B (~2.5 GB,
 #                                                 emits Gemma's tool_code blocks
 #                                                 instead of OpenAI tool_calls
 #                                                 — Nexus's loop won't see them)
+#
+# Signing / notarization can also be set in packaging/build.conf (see
+# build.conf.example) or via env vars. Precedence: CLI flags > env vars >
+# build.conf.
 #
 # Optional: ship a pre-configured remote model so a fresh install starts
 # with chat working out of the box. All three values are required together;
@@ -47,10 +59,24 @@ PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$
 SKIP_MODELS=0
 SKIP_SIGN=0
 BUNDLE_LLM="none"
+SIGN_IDENTITY="${NEXUS_SIGN_IDENTITY:-}"
+NOTARIZE=0
+NOTARY_APPLE_ID="${NOTARY_APPLE_ID:-}"
+NOTARY_TEAM_ID="${NOTARY_TEAM_ID:-}"
+NOTARY_PASSWORD="${NOTARY_PASSWORD:-}"
 # Demo-model flags fall back to env vars so the key can stay out of shell history.
 DEMO_URL="${DEMO_LLM_BASE_URL:-}"
 DEMO_KEY="${DEMO_LLM_API_KEY:-}"
 DEMO_MODEL="${DEMO_LLM_MODEL:-}"
+
+# Load optional config file (git-ignored, secrets live here).
+# CLI flags and env vars override anything in the file.
+BUILD_CONF="$PACKAGING/build.conf"
+if [[ -f "$BUILD_CONF" ]]; then
+  # shellcheck source=packaging/build.conf
+  source "$BUILD_CONF"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-models) SKIP_MODELS=1; shift ;;
@@ -59,6 +85,11 @@ while [[ $# -gt 0 ]]; do
     --demo-url)    DEMO_URL="${2:-}"; shift 2 ;;
     --demo-key)    DEMO_KEY="${2:-}"; shift 2 ;;
     --demo-model)  DEMO_MODEL="${2:-}"; shift 2 ;;
+    --identity)    SIGN_IDENTITY="${2:-}"; shift 2 ;;
+    --notarize)    NOTARIZE=1; shift ;;
+    --notary-apple-id)  NOTARY_APPLE_ID="${2:-}"; shift 2 ;;
+    --notary-team-id)   NOTARY_TEAM_ID="${2:-}"; shift 2 ;;
+    --notary-password)  NOTARY_PASSWORD="${2:-}"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -160,7 +191,7 @@ from pathlib import Path
 models = Path(os.environ["NEXUS_MODELS_DIR"])
 (models / "fastembed").mkdir(parents=True, exist_ok=True)
 from fastembed import TextEmbedding
-TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=str(models / "fastembed"))
+TextEmbedding(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", cache_dir=str(models / "fastembed"))
 print("fastembed cached at", models / "fastembed")
 PYEOF
 
@@ -170,7 +201,17 @@ PYEOF
   mkdir -p "$STAGE/models/spacy"
   cp -R "$SPACY_PKG" "$STAGE/models/spacy/en_core_web_sm_pkg"
   echo "spaCy cached at $STAGE/models/spacy/en_core_web_sm_pkg"
-  # faster-whisper warmup is optional; skip unless explicitly requested.
+
+  echo "==> Pre-downloading faster-whisper model into bundle"
+  HF_HOME="$STAGE/models/huggingface" "$PY" - <<'PYEOF'
+import os
+from pathlib import Path
+hf = Path(os.environ["HF_HOME"])
+hf.mkdir(parents=True, exist_ok=True)
+from faster_whisper import download_model
+path = download_model("base", cache_dir=str(hf))
+print("faster-whisper cached at", path)
+PYEOF
 fi
 
 if [[ -n "$LLM_REPO" ]]; then
@@ -209,6 +250,9 @@ if [[ -n "$LLM_REPO" ]]; then
 EOF
 fi
 
+echo "==> Removing duplicated site-packages from Python runtime"
+rm -rf "${SITE_SRC:?}"/*
+
 # Stage bundled skills so they ship with the .app and get seeded into
 # ~/.nexus/skills/ on first run (see SkillRegistry._seed_new_builtins).
 # Without this, the install on a fresh machine starts with zero skills.
@@ -219,6 +263,7 @@ if [[ -d "$REPO_ROOT/skills" ]]; then
   /usr/bin/rsync -a \
     --exclude='.DS_Store' --exclude='SKILL_FORMAT.md' \
     "$REPO_ROOT/skills/" "$STAGE/skills/"
+  chmod -R a+rX "$STAGE/skills"
 fi
 
 # Stage demo_llm.json when --demo-* / DEMO_LLM_* are set. bootstrap.py reads
@@ -273,16 +318,88 @@ cp -R "$STAGE/ui"              "$RES/ui"
 cp "$STAGE/bootstrap.py"       "$RES/bootstrap.py"
 [[ -f "$STAGE/loom_version.txt" ]] && cp "$STAGE/loom_version.txt" "$RES/loom_version.txt"
 
+if [[ -d "$REPO_ROOT/extension" ]]; then
+  echo "==> Staging Chrome extension"
+  mkdir -p "$RES/extension"
+  /usr/bin/rsync -a \
+    --exclude='.DS_Store' \
+    "$REPO_ROOT/extension/" "$RES/extension/"
+fi
+
 if [[ "$SKIP_SIGN" -eq 0 ]]; then
-  echo "==> Ad-hoc codesigning bundle"
-  # python-build-standalone's interpreter and dylibs already ship with
-  # consistent ad-hoc signatures. Re-signing them with --options runtime
-  # (hardened runtime) caused Team-ID mismatches between python3 and
-  # libpython3.12.dylib. Sign only the outer .app with --deep, which
-  # re-signs the Nexus host binary and leaves the bundled Python tree's
-  # existing self-consistent signatures intact for files we don't touch.
-  codesign --force --deep --sign - --timestamp=none "$APP"
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "==> Codesigning nested binaries with Developer ID: $SIGN_IDENTITY"
+    NESTED=0
+    while IFS= read -r -d '' bin; do
+      codesign --force --sign "$SIGN_IDENTITY" --timestamp "$bin" 2>/dev/null && NESTED=$((NESTED + 1))
+    done < <(/usr/bin/find "$APP" \( -name '*.so' -o -name '*.dylib' -o -name '*.abi3.so' \) -type f -print0 | sort -z -u)
+    while IFS= read -r -d '' bin; do
+      codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$bin" 2>/dev/null && NESTED=$((NESTED + 1))
+    done < <(/usr/bin/find "$APP/Contents/MacOS" "$APP/Contents/Resources/python/bin" -type f -perm -u+x -print0 2>/dev/null | sort -z -u)
+    echo "    signed $NESTED nested binaries"
+
+    echo "==> Codesigning bundle with Developer ID: $SIGN_IDENTITY"
+    codesign --force --sign "$SIGN_IDENTITY" \
+      --options runtime --timestamp "$APP"
+  else
+    echo "==> Ad-hoc codesigning bundle"
+    codesign --force --deep --sign - --timestamp=none "$APP"
+  fi
+fi
+
+if [[ "$NOTARIZE" -eq 1 ]]; then
+  if [[ -z "$SIGN_IDENTITY" ]]; then
+    echo "error: --notarize requires --identity (or NEXUS_SIGN_IDENTITY)" >&2
+    exit 1
+  fi
+  if [[ -z "$NOTARY_APPLE_ID" || -z "$NOTARY_TEAM_ID" || -z "$NOTARY_PASSWORD" ]]; then
+    echo "error: --notarize requires --notary-apple-id, --notary-team-id, and --notary-password" >&2
+    echo "       (or set NOTARY_APPLE_ID, NOTARY_TEAM_ID, NOTARY_PASSWORD env vars)" >&2
+    exit 1
+  fi
+
+  echo "==> Creating zip for notarization submission"
+  NOTARIZE_ZIP="$DIST/Nexus-notarize.zip"
+  ditto -c -k --keepParent "$APP" "$NOTARIZE_ZIP"
+
+  echo "==> Submitting for notarization (this may take several minutes)"
+  xcrun notarytool submit "$NOTARIZE_ZIP" \
+    --apple-id "$NOTARY_APPLE_ID" \
+    --team-id "$NOTARY_TEAM_ID" \
+    --password "$NOTARY_PASSWORD" \
+    --wait
+
+  echo "==> Stapling notarization ticket"
+  xcrun stapler staple "$APP"
+
+  rm -f "$NOTARIZE_ZIP"
+fi
+
+echo "==> Creating installer package"
+PKG="$DIST/Nexus.pkg"
+pkgbuild --install-location /Applications --component "$APP" "$PKG"
+
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  INSTALLER_IDENTITY="${NEXUS_INSTALLER_IDENTITY:-}"
+  if [[ -n "$INSTALLER_IDENTITY" ]]; then
+    echo "==> Signing package with Developer ID Installer: $INSTALLER_IDENTITY"
+    productsign --sign "$INSTALLER_IDENTITY" "$PKG" "$PKG.signed"
+    mv "$PKG.signed" "$PKG"
+  fi
+fi
+
+if [[ "$NOTARIZE" -eq 1 && -n "$INSTALLER_IDENTITY" ]]; then
+  echo "==> Submitting .pkg for notarization (this may take several minutes)"
+  xcrun notarytool submit "$PKG" \
+    --apple-id "$NOTARY_APPLE_ID" \
+    --team-id "$NOTARY_TEAM_ID" \
+    --password "$NOTARY_PASSWORD" \
+    --wait
+
+  echo "==> Stapling notarization ticket to .pkg"
+  xcrun stapler staple "$PKG"
 fi
 
 echo "==> Done: $APP"
 du -sh "$APP"
+du -sh "$PKG"

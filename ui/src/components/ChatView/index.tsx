@@ -9,11 +9,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../../api";
+import { classify } from "../../fileTypes";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
+import Modal, { type ModalProps } from "../Modal";
 import { PartialTurnActions } from "./partialTurn";
 import ChatSearchBar from "./ChatSearchBar";
+import VoiceAttachment from "./VoiceAttachment";
 import "../ChatView.css";
+
+// Voice memos are recorded as audio/webm and stored under ``uploads/voice/``.
+// ``classify`` keys off the extension and treats ``.webm`` as video, so we
+// special-case the voice path to render an <audio> player instead.
+function isAudioAttachment(path: string): boolean {
+  if (classify(path).kind === "audio") return true;
+  return path.startsWith("uploads/voice/") && path.toLowerCase().endsWith(".webm");
+}
+
+export interface SubTaskState {
+  name: string;
+  child_session_id: string;
+  status: "pending" | "done" | "error";
+  text?: string;
+  error?: string;
+  tools?: { name: string; status: string; args_preview?: string; result_preview?: string }[];
+}
 
 export interface TimelineStep {
   id: string;
@@ -24,6 +44,9 @@ export interface TimelineStep {
   result_preview?: string;
   status?: "pending" | "done" | "error";
   text?: string;
+  live_output?: string;
+  call_id?: string;
+  subtasks?: SubTaskState[];
 }
 
 export interface Message {
@@ -33,8 +56,6 @@ export interface Message {
   timeline?: TimelineStep[];
   timestamp: Date;
   streaming?: boolean;
-  kind?: "limit";
-  limitIterations?: number;
   attachments?: { name: string; vaultPath: string }[];
   model?: string;
   /** Backend-assigned position in session.history; only set for messages
@@ -58,8 +79,22 @@ export interface Message {
       | "llm_error"
       | "crashed"
       | "length"
-      | "upstream_timeout";
+      | "upstream_timeout"
+      | "rate_limited"
+      | "context_overflow"
+      | "message_too_large"
+      | "budget_exceeded";
     detail?: string;
+    actions?: string[];
+  };
+  /** Transient hint while the agent backs off after a retryable mid-stream
+   * error. Cleared on the next delta/tool event (recovery succeeded) or
+   * when the error finally surfaces (recovery exhausted). */
+  reconnecting?: {
+    attempt: number;
+    maxAttempts: number;
+    delaySeconds: number;
+    reason: string;
   };
 }
 
@@ -97,8 +132,6 @@ interface Props {
   onInputChange: (v: string) => void;
   onSend: (override?: string | { text?: string; inPlace?: boolean; bypassSecretGuard?: boolean }) => void;
   onStop?: () => void;
-  onContinue?: () => void;
-  onDismissLimit?: () => void;
   onRetryPartial?: (msgIndex: number) => void;
   onContinuePartial?: (msgIndex: number) => void;
   hasModel: boolean | null;
@@ -107,6 +140,9 @@ interface Props {
   attachments?: { name: string; vaultPath: string }[];
   onAttachmentsChange?: (files: { name: string; vaultPath: string }[]) => void;
   onRollback?: (msgIndex: number) => void;
+  onCompact?: () => void;
+  onNewSession?: () => void;
+  onRemoveLast?: () => void;
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
@@ -128,8 +164,6 @@ export default function ChatView({
   onInputChange,
   onSend,
   onStop,
-  onContinue,
-  onDismissLimit,
   onRetryPartial,
   onContinuePartial,
   hasModel,
@@ -138,6 +172,9 @@ export default function ChatView({
   attachments,
   onAttachmentsChange,
   onRollback,
+  onCompact,
+  onNewSession,
+  onRemoveLast,
   models,
   selectedModel,
   onModelChange,
@@ -149,6 +186,7 @@ export default function ChatView({
   const bottomRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [rollbackModal, setRollbackModal] = useState<ModalProps | null>(null);
 
   useEffect(() => {
     if (autoScrollEnabled) {
@@ -180,9 +218,9 @@ export default function ChatView({
   const visible = messages.filter(
     (m) =>
       (m.content ?? "").trim().length > 0 ||
-      m.kind === "limit" ||
       (m.timeline ?? []).length > 0 ||
-      m.partial != null,
+      m.partial != null ||
+      (m.attachments ?? []).length > 0,
   );
 
   const setMsgRef = (idx: number) => (el: HTMLDivElement | null) => {
@@ -217,61 +255,57 @@ export default function ChatView({
         )}
         {visible.map((msg, idx) =>
           msg.role === "assistant" ? (
-            msg.kind === "limit" ? (
-              <div key={idx} ref={setMsgRef(idx)} className="limit-banner">
-                <div className="limit-banner-text">
-                  {t("chat:limit.banner", { limit: msg.limitIterations ?? 16 })}
-                </div>
-                <div className="limit-banner-actions">
-                  <button
-                    className="limit-banner-btn limit-banner-btn-primary"
-                    onClick={onContinue}
-                    type="button"
-                  >
-                    {t("chat:limit.continue")}
-                  </button>
-                  <button
-                    className="limit-banner-btn"
-                    onClick={onDismissLimit}
-                    type="button"
-                  >
-                    {t("chat:limit.stop")}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div key={idx} ref={setMsgRef(idx)}>
-                {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0) && (
-                  <AssistantMessage
-                    content={msg.content}
-                    trace={msg.trace}
-                    timeline={msg.timeline}
-                    thinking={msg.thinking}
-                    timestamp={msg.timestamp}
-                    streaming={msg.streaming}
-                    onOpenInVault={onOpenInVault}
-                    model={msg.model}
-                    sessionId={activeSessionId ?? null}
-                    seq={msg.seq}
-                    feedback={msg.feedback ?? null}
-                    pinned={msg.pinned ?? false}
-                    onFeedbackChange={
-                      onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
-                    }
-                    onPinChange={
-                      onPinChange ? (p) => onPinChange(idx, p) : undefined
-                    }
-                  />
-                )}
-                {msg.partial && !thinking && (
-                  <PartialTurnActions
-                    status={msg.partial.status}
-                    onRetry={onRetryPartial ? () => onRetryPartial(idx) : undefined}
-                    onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
-                  />
-                )}
-              </div>
-            )
+            <div key={idx} ref={setMsgRef(idx)}>
+              {((msg.content ?? "").length > 0 || (msg.timeline ?? []).length > 0 || (msg.thinking ?? "").length > 0 || msg.reconnecting != null) && (
+                <AssistantMessage
+                  content={msg.content}
+                  trace={msg.trace}
+                  timeline={msg.timeline}
+                  thinking={msg.thinking}
+                  timestamp={msg.timestamp}
+                  streaming={msg.streaming}
+                  onOpenInVault={onOpenInVault}
+                  model={msg.model}
+                  sessionId={activeSessionId ?? null}
+                  seq={msg.seq}
+                  feedback={msg.feedback ?? null}
+                  pinned={msg.pinned ?? false}
+                  reconnecting={msg.reconnecting}
+                  onFeedbackChange={
+                    onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
+                  }
+                  onPinChange={
+                    onPinChange ? (p) => onPinChange(idx, p) : undefined
+                  }
+                />
+              )}
+              {msg.partial && !thinking && (
+                <PartialTurnActions
+                  status={msg.partial.status}
+                  onRetry={onRetryPartial ? () => onRetryPartial(idx) : undefined}
+                  onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
+                  onCompact={onCompact}
+                  onNewSession={onNewSession}
+                  onRemoveLast={
+                    onRemoveLast
+                      ? () =>
+                          setRollbackModal({
+                            kind: "confirm",
+                            title: t("chat:rollback.undoConfirmTitle"),
+                            message: t("chat:rollback.undoConfirmMessage"),
+                            confirmLabel: t("chat:rollback.undoConfirmLabel"),
+                            danger: true,
+                            onCancel: () => setRollbackModal(null),
+                            onSubmit: () => {
+                              setRollbackModal(null);
+                              onRemoveLast();
+                            },
+                          })
+                      : undefined
+                  }
+                />
+              )}
+            </div>
           ) : (
             <div key={idx} ref={setMsgRef(idx)} className="user-msg">
               <div className="user-msg-meta">
@@ -280,7 +314,20 @@ export default function ChatView({
                 {!thinking && onRollback && (
                   <button
                     className="user-msg-edit"
-                    onClick={() => onRollback(idx)}
+                    onClick={() =>
+                      setRollbackModal({
+                        kind: "confirm",
+                        title: t("chat:rollback.confirmTitle"),
+                        message: t("chat:rollback.confirmMessage"),
+                        confirmLabel: t("chat:rollback.confirmLabel"),
+                        danger: true,
+                        onCancel: () => setRollbackModal(null),
+                        onSubmit: () => {
+                          setRollbackModal(null);
+                          onRollback(idx);
+                        },
+                      })
+                    }
                     type="button"
                     title={t("chat:user.editTitle")}
                     aria-label={t("chat:user.editAria")}
@@ -292,7 +339,22 @@ export default function ChatView({
                   </button>
                 )}
               </div>
-              <div className="user-msg-bubble">{msg.content}</div>
+              <div className="user-msg-bubble">
+                {msg.attachments && msg.attachments.length > 0 && (
+                  <div className="user-msg-attachments">
+                    {msg.attachments.map((a, i) => (
+                      isAudioAttachment(a.vaultPath) ? (
+                        <VoiceAttachment key={i} path={a.vaultPath} />
+                      ) : (
+                        <span key={i} className="user-msg-attachment-chip">
+                          {a.name}
+                        </span>
+                      )
+                    ))}
+                  </div>
+                )}
+                {!msg.attachments?.some((a) => isAudioAttachment(a.vaultPath)) && msg.content}
+              </div>
             </div>
           )
         )}
@@ -307,6 +369,36 @@ export default function ChatView({
               <span className="dot" />
               <span className="dot" />
             </div>
+          </div>
+        )}
+        {!thinking && visible.length > 0 && onRemoveLast && (
+          <div className="rollback-undo-row">
+            <button
+              className="rollback-undo-btn"
+              onClick={() =>
+                setRollbackModal({
+                  kind: "confirm",
+                  title: t("chat:rollback.undoConfirmTitle"),
+                  message: t("chat:rollback.undoConfirmMessage"),
+                  confirmLabel: t("chat:rollback.undoConfirmLabel"),
+                  danger: true,
+                  onCancel: () => setRollbackModal(null),
+                  onSubmit: () => {
+                    setRollbackModal(null);
+                    onRemoveLast();
+                  },
+                })
+              }
+              type="button"
+              title={t("chat:rollback.undoTitle")}
+              aria-label={t("chat:rollback.undoAria")}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 2v5h5" />
+                <path d="M2.5 7C3.5 4 6.5 2 9.5 2.5c4 .7 6 5 4.5 8.5s-6 4.5-9 2.5" />
+              </svg>
+              {t("chat:rollback.undoTitle")}
+            </button>
           </div>
         )}
         <div ref={bottomRef} />
@@ -331,6 +423,8 @@ export default function ChatView({
           </div>
         </div>
       </div>
+
+      {rollbackModal && <Modal {...rollbackModal} />}
     </div>
   );
 }

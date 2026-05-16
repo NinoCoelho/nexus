@@ -15,6 +15,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
+import { vaultRawUrl } from "../api";
 import {
   VaultLink,
   asVaultPath,
@@ -22,6 +26,23 @@ import {
   useVaultLinkPreviewFromContext,
   vaultUrlTransform,
 } from "./vaultLink";
+
+/**
+ * Resolve a `vault://path` (or bare `vault:path`) URL to a streaming `/vault/raw`
+ * URL the browser can actually load. Plain http(s) URLs and other schemes are
+ * passed through unchanged. Returns `undefined` for missing input so it can
+ * be spread into JSX `src`/`href` props safely.
+ */
+function normalizeMathDelimiters(text: string): string {
+  return text.replace(/\$\$\s*\$\$/g, "$$");
+}
+
+function rewriteVaultMediaUrl(src: string | undefined | null): string | undefined {
+  if (!src) return undefined;
+  const m = src.match(/^vault:\/\/(.+)$/i) ?? src.match(/^vault:(.+)$/i);
+  if (!m) return src;
+  return vaultRawUrl(m[1].replace(/^\/+/, ""));
+}
 
 // ChartBlock lazy-loaded on first nexus-chart fence.
 const LazyChartBlock = lazy(() => import("./ChartBlock"));
@@ -44,6 +65,18 @@ function loadMermaid() {
   return _mermaidPromise;
 }
 
+// Mermaid v11 appends a temporary <div id="d{id}"> to document.body during
+// render. On parse failure (common with streamed/partial fences) it can leak
+// the bomb-icon "Syntax error in text" SVG into that orphan div. Sweep any
+// element whose id starts with our render id, including the `d`-prefixed twin.
+function purgeMermaidOrphans(id: string) {
+  if (!id) return;
+  const sel = `[id^="${CSS.escape(id)}"], [id^="${CSS.escape("d" + id)}"]`;
+  document.querySelectorAll(sel).forEach((el) => {
+    if (!el.closest(".mermaid-block")) el.remove();
+  });
+}
+
 export function MermaidBlock({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -54,18 +87,29 @@ export function MermaidBlock({ code }: { code: string }) {
     if (!trimmed) return;
     let cancelled = false;
     loadMermaid()
-      .then((mermaid) => mermaid.render(idRef.current, trimmed))
-      .then(({ svg }) => {
-        if (cancelled || !ref.current) return;
-        ref.current.innerHTML = svg;
+      .then(async (mermaid) => {
+        const ok = await mermaid.parse(trimmed, { suppressErrors: true });
+        if (!ok) throw new Error("invalid mermaid syntax");
+        return mermaid.render(idRef.current, trimmed);
+      })
+      .then((res) => {
+        if (cancelled || !ref.current || !res) return;
+        ref.current.innerHTML = res.svg;
         setErr(null);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        purgeMermaidOrphans(idRef.current);
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; purgeMermaidOrphans(idRef.current); };
   }, [code]);
+
+  useEffect(() => {
+    return () => { purgeMermaidOrphans(idRef.current); };
+  }, []);
 
   if (err) {
     return (
@@ -89,6 +133,10 @@ type Props = {
    *  before rendering. Off by default — useful for chat/agent output where
    *  unwrapped paths are common, off for generic markdown bodies. */
   linkifyVaultPaths?: boolean;
+  /** Notified when an embedded ```nexus-chart``` fence fails to render — the
+   *  callsite can swap in a friendlier "couldn't render that, want to refine
+   *  the prompt?" UI instead of showing raw error text. */
+  onChartError?: (message: string) => void;
 };
 
 export default function MarkdownView({
@@ -97,18 +145,26 @@ export default function MarkdownView({
   urlTransform,
   onVaultLinkPreview,
   linkifyVaultPaths,
+  onChartError,
 }: Props) {
   const ctxPreview = useVaultLinkPreviewFromContext();
   const previewHandler = onVaultLinkPreview ?? ctxPreview ?? undefined;
-  const processed = useMemo(
-    () => (linkifyVaultPaths ? linkifyVaultPathsFn(children) : children),
-    [children, linkifyVaultPaths],
-  );
+  const processed = useMemo(() => {
+    let t = children;
+    t = normalizeMathDelimiters(t);
+    if (linkifyVaultPaths) t = linkifyVaultPathsFn(t);
+    return t;
+  }, [children, linkifyVaultPaths]);
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
       urlTransform={urlTransform ?? vaultUrlTransform}
       components={{
+        img: ({ src, alt, ...rest }) => {
+          const url = rewriteVaultMediaUrl(typeof src === "string" ? src : undefined);
+          return <img src={url} alt={alt ?? ""} {...rest} />;
+        },
         code: ({ className, children: codeChildren, ...rest }) => {
           const match = /language-([\w-]+)/.exec(className || "");
           const lang = match?.[1];
@@ -119,7 +175,7 @@ export default function MarkdownView({
           if (lang === "nexus-chart") {
             return (
               <Suspense fallback={<span className="mermaid-block" />}>
-                <LazyChartBlock code={raw.replace(/\n$/, "")} />
+                <LazyChartBlock code={raw.replace(/\n$/, "")} onError={onChartError} />
               </Suspense>
             );
           }

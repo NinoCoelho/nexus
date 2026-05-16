@@ -66,7 +66,7 @@ async def test_compact_endpoint_shrinks_session(client) -> None:
     assert sess2.history[1].role == Role.ASSISTANT
     assert sess2.history[2].role == Role.TOOL
     assert sess2.history[2].tool_call_id == "t1"
-    summary = json.loads(sess2.history[2].content or "")
+    summary = json.loads((sess2.history[2].content or "").split("\n\n[Full result saved to")[0])
     assert summary["nx:compacted"] is True
     assert summary["format"] == "csv"
 

@@ -11,9 +11,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyReconnectingEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -70,7 +70,8 @@ export function useChatSession(
     [availableModels],
   );
 
-  const computeSeedModel = useCallback((): string => {
+  const computeSeedModel = useCallback((preferred?: string): string => {
+    if (preferred && isRealModel(preferred)) return preferred;
     if (isRealModel(lastUsedModel)) return lastUsedModel;
     if (isRealModel(defaultModel)) return defaultModel;
     return availableModels[0] ?? "";
@@ -118,7 +119,7 @@ export function useChatSession(
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
     if (state.thinking) return;
-    const visible = state.messages.filter((m) => (m.content ?? "").trim().length > 0 || m.kind === "limit");
+    const visible = state.messages.filter((m) => (m.content ?? "").trim().length > 0 || m.partial != null || (m.timeline ?? []).length > 0);
     const targetMsg = visible[visibleIdx];
     if (!targetMsg || targetMsg.role !== "user") return;
     const fullIdx = state.messages.indexOf(targetMsg);
@@ -138,24 +139,64 @@ export function useChatSession(
     let overrideText: string | undefined;
     let inPlace = false;
     let bypassSecretGuard = false;
+    let inputMode: "voice" | "text" | undefined;
+    // ``extraAttachments`` rides through ``onSend`` from the input bar's voice
+    // flow: the recording is uploaded to the vault and we want it to land on
+    // the same turn as the (possibly empty) typed text without a state-update
+    // round-trip through ``state.attachments``. The optional ``mimeType``
+    // forces the backend to treat the file as audio — webm sniffs to
+    // ``video/webm`` by default, which would otherwise route through the
+    // document branch and skip transcription.
+    type ExtraAtt = { name: string; vaultPath: string; mimeType?: string };
+    let extraAttachments: ExtraAtt[] = [];
     if (typeof override === "string") { overrideText = override; }
     else if (override && typeof override === "object") {
-      const o = override as { text?: unknown; inPlace?: unknown; bypassSecretGuard?: unknown };
+      const o = override as {
+        text?: unknown;
+        inPlace?: unknown;
+        bypassSecretGuard?: unknown;
+        extraAttachments?: unknown;
+        inputMode?: unknown;
+      };
       if (typeof o.text === "string") overrideText = o.text;
       if (typeof o.inPlace === "boolean") inPlace = o.inPlace;
       if (typeof o.bypassSecretGuard === "boolean") bypassSecretGuard = o.bypassSecretGuard;
+      if (o.inputMode === "voice" || o.inputMode === "text") inputMode = o.inputMode;
+      if (Array.isArray(o.extraAttachments)) {
+        extraAttachments = o.extraAttachments.flatMap((a): ExtraAtt[] => {
+          if (!a || typeof a !== "object") return [];
+          const r = a as { name?: unknown; vaultPath?: unknown; mimeType?: unknown };
+          if (typeof r.vaultPath !== "string" || typeof r.name !== "string") return [];
+          return [{
+            name: r.name,
+            vaultPath: r.vaultPath,
+            ...(typeof r.mimeType === "string" ? { mimeType: r.mimeType } : {}),
+          }];
+        });
+      }
     }
     const rawText = (overrideText ?? state.input).trim();
-    const hasAttachments = state.attachments.length > 0;
+    const allAttachments: ExtraAtt[] = extraAttachments.length > 0
+      ? [...state.attachments, ...extraAttachments]
+      : state.attachments;
+    const hasAttachments = allAttachments.length > 0;
     if ((!rawText && !hasAttachments) || state.thinking) return;
 
-    let text = rawText;
-    if (hasAttachments) {
-      const refs = state.attachments.map((a) => `[${a.name}](vault://${a.vaultPath})`).join("\n");
-      text = text ? `${text}\n\n${refs}` : refs;
-    }
+    // Attachments now ride a structured `attachments` field on the request
+    // body; the backend translates each entry into a multipart `ContentPart`
+    // so vision-capable models receive the image/audio/document bytes
+    // natively. We no longer splice `[name](vault://path)` markdown links
+    // into the user message text — the chat bubble renders the attachment
+    // chips from `userMsg.attachments` directly.
+    const text = rawText;
+    const attachmentsForRequest = hasAttachments
+      ? allAttachments.map((a) => ({
+          vault_path: a.vaultPath,
+          ...(a.mimeType ? { mime_type: a.mimeType } : {}),
+        }))
+      : undefined;
     const isHidden = text.startsWith(HIDDEN_SEED_MARKER);
-    const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...state.attachments] : undefined };
+    const userMsg: Message = { role: "user", content: text, timestamp: new Date(), attachments: hasAttachments ? [...allAttachments] : undefined };
     const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true };
     // In-place resume: keep the trailing assistant, clear its partial flag,
     // mark it streaming, let delta/tool events append to it. No user bubble.
@@ -212,10 +253,20 @@ export function useChatSession(
           applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, key, activeSession, state.selectedModel, event);
         } else if (event.type === "limit_reached") {
           applyLimitReachedEvent(setChatStates, key, event.iterations);
+        } else if (event.type === "reconnecting") {
+          applyReconnectingEvent(setChatStates, key, {
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            delaySeconds: event.delaySeconds,
+            reason: event.reason,
+          });
+        } else if (event.type === "paused_for_cooldown") {
+          applyErrorEvent(setChatStates, key, "rate_limited",
+            `Rate limit hit. You can continue this task after the cooldown. Estimated wait: ${event.estimated_seconds}s.`);
         } else if (event.type === "error") {
-          applyErrorEvent(setChatStates, key, event.reason, event.detail);
+          applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
         }
-      }, abortController.signal, sendModel, { bypassSecretGuard });
+      }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode });
 
       if (!sawDone && !abortController.signal.aborted) {
         // Server closed the stream without a terminal `done`. Pull persisted
@@ -290,23 +341,6 @@ export function useChatSession(
     });
   }, [activeKey, activeSession, pendingSessionId]);
 
-  const dismissLimitBanner = useCallback(() => {
-    setChatStates((prev) => {
-      const next = new Map(prev);
-      const cur = next.get(activeKey);
-      if (!cur) return prev;
-      next.set(activeKey, { ...cur, messages: cur.messages.filter((m) => m.kind !== "limit") });
-      return next;
-    });
-  }, [activeKey]);
-
-  const handleContinue = useCallback(() => {
-    dismissLimitBanner();
-    // Same hidden-seed / in-place trick the partial-turn Continue uses:
-    // the user clicked a button, don't add a "continue" user bubble.
-    void send({ text: `${HIDDEN_SEED_MARKER}continue`, inPlace: true });
-  }, [dismissLimitBanner, send]);
-
   const handleContinuePartial = useCallback((_visibleIdx: number) => {
     // Continue **in place** — no "continue" user bubble. The existing
     // partial assistant keeps its content and timeline; its ``partial``
@@ -319,7 +353,7 @@ export function useChatSession(
     const state = chatStates.get(activeKey) ?? emptyState();
     if (state.thinking) return;
     const visible = state.messages.filter(
-      (m) => (m.content ?? "").trim().length > 0 || m.kind === "limit" || (m.timeline ?? []).length > 0 || m.partial != null,
+      (m) => (m.content ?? "").trim().length > 0 || (m.timeline ?? []).length > 0 || m.partial != null,
     );
     // Walk back from the clicked assistant to find its preceding user message.
     let userVisibleIdx = -1;
@@ -342,13 +376,45 @@ export function useChatSession(
     void send(`${HIDDEN_SEED_MARKER}retry: ${targetUser.content}`);
   }, [activeKey, chatStates, send]);
 
+  const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
+    const sid = activeSession;
+    if (!sid) return;
+    try {
+      const state = chatStates.get(activeKey) ?? emptyState();
+      const model = state.selectedModel || undefined;
+      const result = await compactSession(sid, { model, ...options });
+      if (state.thinking) return;
+      await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
+      return result;
+    } catch {
+      /* best-effort */
+    }
+  }, [activeSession, activeKey, chatStates, setChatStates, computeSeedModel, patchState]);
+
+  const handleRemoveLast = useCallback(async () => {
+    const sid = activeSession;
+    if (!sid) return;
+    const state = chatStates.get(activeKey) ?? emptyState();
+    if (state.thinking) return;
+    try {
+      const result = await rollbackLastMessage(sid);
+      await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
+      if (result.removed_user_content) {
+        patchState(activeKey, { input: result.removed_user_content });
+      }
+    } catch {
+      /* best-effort */
+    }
+  }, [activeSession, activeKey, chatStates, setChatStates, computeSeedModel, patchState]);
+
   return {
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,
     pendingSessionId, setPendingSessionId, sessionsRevision, setSessionsRevision,
     pendingNewSession,
-    pendingAutoSend, send, handleStop, handleRollback, handleContinue,
+    pendingAutoSend, send, handleStop, handleRollback,
     handleContinuePartial, handleRetryPartial, handleInputChange,
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
-    handleNewChat, loadSessionHistory, patchState, computeSeedModel, dismissLimitBanner,
+    handleNewChat, loadSessionHistory, patchState, computeSeedModel,
+    handleCompact, handleRemoveLast,
   };
 }

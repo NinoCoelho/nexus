@@ -176,6 +176,10 @@ async def test_gpt4_turbo_with_many_tools_streams(provider: OpenAIProvider) -> N
     assert finish_event is not None
 
 
+@pytest.mark.skip(
+    reason="o1-mini retired from public OpenAI API — re-enable with a "
+    "currently-available reasoning model when one is selected.",
+)
 async def test_reasoning_model_returns_content(provider: OpenAIProvider) -> None:
     """o1-mini uses a different path internally — assert it still gets
     content through our adapter."""

@@ -13,7 +13,7 @@ from typing import Any
 
 import loom.types as lt
 
-from ..llm import ChatMessage, Role, ToolCall, ToolSpec
+from ..llm import ChatMessage, ContentPart, Role, ToolCall, ToolSpec
 
 DEFAULT_MAX_TOOL_ITERATIONS = 32
 
@@ -36,7 +36,16 @@ SKILL_MANAGE_TOOL = ToolSpec(
         "  ## Gotchas\n"
         "  - Known failure modes and how to recover (auth walls, rate limits, missing deps).\n\n"
         "Write in the imperative voice of a teammate handing off a recipe. Skip background theory and "
-        "library-feature tours — those belong in upstream docs. If the skill won't save a future-you turn, don't create it."
+        "library-feature tours — those belong in upstream docs. If the skill won't save a future-you turn, don't create it.\n\n"
+        "Safe usage pattern:\n"
+        "- Before `edit`, `patch`, or `delete`, always call `skill_view` to inspect the current SKILL.md.\n"
+        "- Preserve existing 'Gotchas' sections unless they are obsolete — those capture hard-won lessons.\n"
+        "- After `create`, call `skill_view` to verify the skill was saved correctly before relying on it.\n\n"
+        "Micro-recipe for creating a new skill:\n"
+        "1. Draft content in your reasoning (do NOT output inert code blocks to the user).\n"
+        "2. Call `skill_manage` with `action: 'create'` and fully-formed SKILL.md content.\n"
+        "3. Verify with `skill_view` that the skill saved correctly.\n"
+        "4. Only then start using the skill in your own future plans."
     ),
     parameters={
         "type": "object",
@@ -113,6 +122,75 @@ def _annotate_short_reply(user_text: str, pending_question: str | None) -> str |
     return None
 
 
+def _content_to_loom(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+    out: list[Any] = []
+    for p in content:
+        if not isinstance(p, ContentPart):
+            out.append(p)
+            continue
+        if p.kind == "text":
+            out.append(lt.TextPart(text=p.text or ""))
+        elif p.kind == "image":
+            out.append(
+                lt.ImagePart(
+                    source=p.vault_path or "", media_type=p.mime_type or ""
+                )
+            )
+        else:
+            out.append(
+                lt.FilePart(
+                    source=p.vault_path or "", media_type=p.mime_type or ""
+                )
+            )
+    return out
+
+
+def _content_from_loom(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+    out: list[Any] = []
+    for p in content:
+        ptype = getattr(p, "type", None)
+        media = getattr(p, "media_type", "") or ""
+        source = getattr(p, "source", "") or ""
+        if ptype == "text":
+            out.append(ContentPart(kind="text", text=getattr(p, "text", "") or ""))
+        elif ptype == "image":
+            out.append(
+                ContentPart(kind="image", vault_path=source, mime_type=media or None)
+            )
+        elif media.startswith("audio/"):
+            out.append(
+                ContentPart(kind="audio", vault_path=source, mime_type=media)
+            )
+        else:
+            out.append(
+                ContentPart(kind="document", vault_path=source, mime_type=media or None)
+            )
+    return out
+
+
+def _build_user_message(
+    text: str, attachments: list[ContentPart] | None = None
+) -> ChatMessage:
+    """Assemble a user :class:`ChatMessage` with optional attachments.
+
+    When ``attachments`` is empty, returns a plain text message (the legacy
+    shape — keeps every existing call site that expects ``content: str``
+    working). With attachments, the text becomes a leading text part and
+    each attachment slots in after.
+    """
+    if not attachments:
+        return ChatMessage(role=Role.USER, content=text)
+    parts: list[ContentPart] = []
+    if text:
+        parts.append(ContentPart(kind="text", text=text))
+    parts.extend(attachments)
+    return ChatMessage(role=Role.USER, content=parts)
+
+
 def _to_loom_message(msg: ChatMessage) -> lt.ChatMessage:
     loom_tcs: list[lt.ToolCall] | None = None
     if msg.tool_calls:
@@ -122,7 +200,7 @@ def _to_loom_message(msg: ChatMessage) -> lt.ChatMessage:
         ]
     return lt.ChatMessage(
         role=lt.Role(msg.role.value),
-        content=msg.content,
+        content=_content_to_loom(msg.content),
         tool_calls=loom_tcs,
         tool_call_id=msg.tool_call_id,
         name=msg.name,
@@ -140,7 +218,7 @@ def _from_loom_message(msg: lt.ChatMessage) -> ChatMessage:
             nexus_tcs.append(ToolCall(id=tc.id, name=tc.name, arguments=args))
     return ChatMessage(
         role=Role(msg.role.value),
-        content=msg.content,
+        content=_content_from_loom(msg.content),
         tool_calls=nexus_tcs,
         tool_call_id=msg.tool_call_id,
         name=msg.name,

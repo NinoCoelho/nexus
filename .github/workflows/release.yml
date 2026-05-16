@@ -1,0 +1,101 @@
+name: Release bundles
+
+# Fires when you publish a Release in the GitHub UI (or via `gh release create`).
+# Both jobs run in parallel and attach their zip to that same release as
+# downloadable assets. Total wall time ≈ time of the slower job (Windows,
+# typically ~12-18 min with models bundled).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # required by softprops/action-gh-release to upload assets
+
+jobs:
+  macos:
+    name: macOS · Nexus.app
+    runs-on: macos-14   # M1 runner — matches packaging/build.sh's aarch64-apple-darwin target
+    steps:
+      - name: Check out nexus
+        uses: actions/checkout@v4
+        with:
+          path: nexus
+
+      - name: Check out loom (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: NinoCoelho/loom
+          ref: main
+          path: loom
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: nexus/ui/package-lock.json
+
+      - name: Build .app bundle
+        working-directory: nexus
+        env:
+          # build.sh defaults to ../loom relative to the repo, which would be
+          # one level above the workspace. Pin it to the sibling checkout.
+          LOOM_DIR: ${{ github.workspace }}/loom
+        # Pass --skip-models to drop the ~150 MB embedder/spaCy prefetch if you
+        # want a leaner zip; the app will download them on first launch.
+        run: bash packaging/build.sh
+
+      - name: Zip Nexus.app
+        working-directory: nexus/dist
+        # ditto preserves macOS metadata (resource forks, signatures) where
+        # `zip -r` would mangle them — required for the .app to launch after
+        # extraction without "is damaged" errors.
+        run: ditto -c -k --keepParent Nexus.app Nexus-macos-arm64.zip
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nexus/dist/Nexus-macos-arm64.zip
+          fail_on_unmatched_files: true
+
+  windows:
+    name: Windows · Nexus.exe
+    runs-on: windows-latest
+    steps:
+      - name: Check out nexus
+        uses: actions/checkout@v4
+        with:
+          path: nexus
+
+      - name: Check out loom (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: NinoCoelho/loom
+          ref: main
+          path: loom
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: nexus/ui/package-lock.json
+
+      - name: Build Nexus.exe bundle
+        working-directory: nexus
+        shell: pwsh
+        # build.ps1 already produces dist\Nexus.zip with the canonical layout.
+        # Pass -SkipModels to drop the embedder/spaCy prefetch (see macOS note).
+        run: .\packaging\build.ps1 -LoomDir "$env:GITHUB_WORKSPACE\loom"
+
+      - name: Rename for clarity
+        working-directory: nexus
+        shell: pwsh
+        run: Move-Item dist\Nexus.zip dist\Nexus-windows-x64.zip
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nexus/dist/Nexus-windows-x64.zip
+          fail_on_unmatched_files: true

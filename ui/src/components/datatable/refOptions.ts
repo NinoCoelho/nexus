@@ -42,10 +42,7 @@ export function deriveLabelInfo(
 ): { pkName: string; labelField: FieldSchema | null } {
   let pk = tableMeta?.primary_key;
   if (!pk) {
-    const naturalPk = fields.find(
-      (f) => f.required === true && (f.kind === "text" || f.kind === "number"),
-    );
-    pk = naturalPk?.name ?? "_id";
+    pk = "_id";
   }
   const NAME_HINTS = new Set(["name", "title", "label", "full_name"]);
   let labelField = fields.find(

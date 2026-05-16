@@ -28,6 +28,9 @@ interface Props {
   /** Click handler for the inline status icon — opens the run preview. */
   onOpenRun?: (op: DashboardOperation) => void;
   onAddOperation: () => void;
+  /** Click handler for the wizard entry point. When omitted, the wizard
+   *  chip is hidden. */
+  onAddOperationWizard?: () => void;
   onRemoveOperation?: (opId: string) => void;
 }
 
@@ -37,6 +40,7 @@ export default function OperationChips({
   onRunOperation,
   onOpenRun,
   onAddOperation,
+  onAddOperationWizard,
   onRemoveOperation,
 }: Props) {
   return (
@@ -101,10 +105,20 @@ export default function OperationChips({
         type="button"
         className="data-dash-chip data-dash-chip--add"
         onClick={onAddOperation}
-        title="Add a new operation"
+        title="Add a new operation (simple form)"
       >
         + Operation
       </button>
+      {onAddOperationWizard && (
+        <button
+          type="button"
+          className="data-dash-chip data-dash-chip--add data-dash-chip--wizard"
+          onClick={onAddOperationWizard}
+          title="Design an operation with a wizard — describe what you want and the agent helps shape it."
+        >
+          ✨ Wizard
+        </button>
+      )}
     </div>
   );
 }

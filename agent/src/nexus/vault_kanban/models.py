@@ -53,7 +53,9 @@ class Lane:
     title: str
     cards: list[Card] = field(default_factory=list)
     prompt: str | None = None
-    model: str | None = None  # model id used when auto-dispatching this lane's prompt
+    model: str | None = None
+    webhook_token: str | None = None
+    webhook_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "title": self.title, "cards": [c.to_dict() for c in self.cards]}
@@ -69,12 +71,16 @@ class Board:
     title: str
     lanes: list[Lane] = field(default_factory=list)
     frontmatter: dict[str, Any] = field(default_factory=dict)
+    board_prompt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "title": self.title,
             "lanes": [ln.to_dict() for ln in self.lanes],
         }
+        if self.board_prompt is not None:
+            out["board_prompt"] = self.board_prompt
+        return out
 
 
 def is_kanban_file(content: str) -> bool:

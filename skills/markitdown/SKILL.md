@@ -13,8 +13,7 @@ nexus_authored_by: builtin
 
 Convert almost any document to Markdown so the agent (and the vault FTS index)
 can read it. Wraps Microsoft's `markitdown` library with a Nexus-native CLI
-that auto-installs the dependency on first use and can write the result
-straight into the vault.
+that writes the result straight into the vault.
 
 ## When to use
 
@@ -35,8 +34,10 @@ straight into the vault.
 
 ### 1. Convert and dump to stdout
 
+This skill has an isolated Python environment. After calling `skill_view(name="markitdown")`, use the `python.path` from the response (referred to as `$SKILL_PYTHON` below).
+
 ```bash
-python3 ~/.nexus/skills/markitdown/scripts/markitdown.py convert <path-or-url>
+"$SKILL_PYTHON" ~/.nexus/skills/markitdown/scripts/markitdown.py convert <path-or-url>
 ```
 
 Output is Markdown on stdout. Pipe to `wc -l` first if the file is huge — the
@@ -45,13 +46,13 @@ agent loop has limited context.
 ### 2. Convert and save to a file
 
 ```bash
-python3 ~/.nexus/skills/markitdown/scripts/markitdown.py convert <input> -o <output.md>
+"$SKILL_PYTHON" ~/.nexus/skills/markitdown/scripts/markitdown.py convert <input> -o <output.md>
 ```
 
 ### 3. Convert and write straight into the vault
 
 ```bash
-python3 ~/.nexus/skills/markitdown/scripts/markitdown.py convert <input> --vault inbox/<name>.md
+"$SKILL_PYTHON" ~/.nexus/skills/markitdown/scripts/markitdown.py convert <input> --vault inbox/<name>.md
 ```
 
 This writes to `~/.nexus/vault/<rel-path>` and emits frontmatter with `source:`
@@ -62,7 +63,7 @@ that already exists in the user's vault layout when possible.
 ### 4. Batch a directory
 
 ```bash
-python3 ~/.nexus/skills/markitdown/scripts/markitdown.py batch <dir> --out-dir <dest>
+"$SKILL_PYTHON" ~/.nexus/skills/markitdown/scripts/markitdown.py batch <dir> --out-dir <dest>
 ```
 
 Walks `<dir>` recursively, converts every supported file, mirrors the tree
@@ -71,7 +72,7 @@ under `<dest>`. Add `--vault inbox/` to mirror into the vault instead.
 ### 5. List supported formats
 
 ```bash
-python3 ~/.nexus/skills/markitdown/scripts/markitdown.py formats
+"$SKILL_PYTHON" ~/.nexus/skills/markitdown/scripts/markitdown.py formats
 ```
 
 ## Flags
@@ -81,19 +82,13 @@ python3 ~/.nexus/skills/markitdown/scripts/markitdown.py formats
 - `--stdout` — force stdout even when `--vault`/`-o` is set (also writes the file).
 - `--max-bytes N` — refuse files larger than N (default 50 MiB) to protect the loop.
 - `--quiet` — suppress progress notes on stderr.
-- `--no-install` — fail instead of pip-installing `markitdown` on first run.
 
-## First-run install
+## Troubleshooting
 
-The wrapper auto-installs `markitdown[all]` into the **current Python env**
-(via `pip install --quiet`) the first time it runs and the import fails.
-On the packaged `.app` build this targets the bundled Python; in dev it lands
-in the active `uv` venv. Pass `--no-install` to opt out and surface the
-ImportError to the caller. For a one-shot manual install:
+If imports fail, the skill's managed venv may be stale. Re-sync with:
 
-```bash
-uv pip install 'markitdown[all]'   # dev checkout
-pip install 'markitdown[all]'      # packaged .app
+```
+skill_manage(action="ensure_venv", name="markitdown")
 ```
 
 ## Supported formats
