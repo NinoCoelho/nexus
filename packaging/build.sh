@@ -250,6 +250,9 @@ if [[ -n "$LLM_REPO" ]]; then
 EOF
 fi
 
+echo "==> Removing duplicated site-packages from Python runtime"
+rm -rf "${SITE_SRC:?}"/*
+
 # Stage bundled skills so they ship with the .app and get seeded into
 # ~/.nexus/skills/ on first run (see SkillRegistry._seed_new_builtins).
 # Without this, the install on a fresh machine starts with zero skills.
@@ -260,6 +263,7 @@ if [[ -d "$REPO_ROOT/skills" ]]; then
   /usr/bin/rsync -a \
     --exclude='.DS_Store' --exclude='SKILL_FORMAT.md' \
     "$REPO_ROOT/skills/" "$STAGE/skills/"
+  chmod -R a+rX "$STAGE/skills"
 fi
 
 # Stage demo_llm.json when --demo-* / DEMO_LLM_* are set. bootstrap.py reads

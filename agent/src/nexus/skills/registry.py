@@ -78,7 +78,11 @@ class SkillRegistry:
                 continue
             dest = self._dir / name
             if not dest.exists():
-                shutil.copytree(child, dest, dirs_exist_ok=True)
+                try:
+                    shutil.copytree(child, dest, dirs_exist_ok=True)
+                except OSError as exc:
+                    log.warning("skipping unreadable builtin skill %s: %s", name, exc)
+                    continue
                 _write_meta(dest, trust="builtin")
                 log.info("seeded builtin skill: %s", name)
                 _seed_venv(dest, name)
