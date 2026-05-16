@@ -16,6 +16,7 @@
 - **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
+- **MCP integration** — connect to external MCP servers (stdio, HTTP, SSE) and use their tools natively, or expose Nexus tools to external hosts via server mode. One-box paste wizard in the Integrations tab makes setup trivial.
 - **Dreaming** — scheduled background agent that consolidates memories, extracts cross-session insights, refines skills, and rehearses scenarios during idle time. Dream journal, manual triggers, and staged skill-suggestion review in the UI.
 - **Packaged desktop apps** — ships as `Nexus.app` (macOS) and `Nexus.exe` (Windows) with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh machine. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
 
@@ -128,7 +129,7 @@ The named volume holds `~/.nexus/` — sessions, vault, skills, secrets, and the
 
 ## Overview
 
-Nexus is a self-evolving agentic platform with a Python FastAPI backend and a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime; manage a markdown knowledge vault with FTS + GraphRAG; operate Obsidian-compatible kanban boards, an iCal-style calendar, and DuckDB-backed datatables; trigger turns from calendar events; and interact with users through a human-in-the-loop approval system that streams via SSE and Web Push.
+Nexus is a self-evolving agentic platform with a Python FastAPI backend and a React 19 + Vite frontend. The agent can create, edit, and delete its own skills at runtime; manage a markdown knowledge vault with FTS + GraphRAG; operate Obsidian-compatible kanban boards, an iCal-style calendar, and DuckDB-backed datatables; trigger turns from calendar events; interact with users through a human-in-the-loop approval system that streams via SSE and Web Push; and integrate with external tools via the Model Context Protocol (MCP) — both as a client (connecting to MCP servers) and a server (exposing Nexus tools to external hosts).
 
 The agentic loop is powered by **Loom** — a reusable framework that provides the tool-calling iteration engine, LLM provider abstractions, session persistence, HITL broker, heartbeat drivers, GraphRAG memory, and error classification. Nexus layers on domain tools (vault, kanban, calendar, datatables, skill management, ontology), a rich web UI, TOML-based config, optional local LLMs (llama.cpp), public tunneling (Cloudflare Quick Tunnel, no account needed), and self-evolution.
 
@@ -194,6 +195,13 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Skills From Git** | `nexus skills install <git-url-or-path>` |
 | **ACP Bridge** | Optional Agent Communication Protocol over WebSocket with Ed25519 device auth |
 | **Cookie Export Extension** | Chrome extension exports browser cookies to Nexus for authenticated web scraping; `nexus cookies setup-chrome` installs the native messaging host |
+| **MCP Integration** | Client mode connects to external MCP servers (stdio / HTTP / SSE), discovers tools, and registers them in the live ToolRegistry. Server mode exposes Nexus tools to external hosts via Streamable HTTP bridge. Sampling and elicitation bridges let MCP servers request LLM completions and user input. Integrations Tab with one-box paste wizard for easy setup |
+| **MCP Apps** | Sandboxed iframes render interactive HTML from MCP servers inline in chat. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML pages inside `McpAppSandbox` |
+| **Inline Visual Tools** | `show_kanban`, `show_dashboard_widget`, and `show_data_table` tools return `ui://nexus/*` resource URIs that the UI intercepts and renders as MCP App iframes — rich visuals without bloating the text response |
+| **Skill Wizard** | Multi-step guided wizard for non-technical users: describe a capability → LLM discovers matching skills → configure API keys → plan and refine → agentic synthesis builds the skill. Background tracker shows toast on completion |
+| **Running Tasks** | In-memory job tracker for subagents, background jobs, and dreams with `job_started` / `job_done` SSE events. Global UI indicator with kill support (`GET /jobs`, `POST /jobs/{id}/kill`) |
+| **LaTeX / KaTeX** | Inline (`$...$`) and display (`$$...$$`) math rendering in MarkdownView via `remark-math` + `rehype-katex` |
+| **Per-Skill Venvs** | Skills can declare Python dependencies in `SKILL.toml`; Nexus creates isolated venvs per skill with managed dependencies, so skill installs never pollute the global environment |
 | **Dreaming** | Scheduled background agent consolidates memories, extracts insights, refines skills, rehearses scenarios. Four-phase cycle (consolidation → insight → skill refinement → rehearsal) with progressive depth, token budget, and a Dream Journal UI |
 
 ---
@@ -411,6 +419,12 @@ graph TB
         SUB["spawn_subagents (parallel fan-out)"]
     end
 
+    subgraph "Visual (MCP Apps)"
+        SK["show_kanban"]
+        SDW["show_dashboard_widget"]
+        SDT["show_data_table"]
+    end
+
     subgraph "External"
         HTTP["http_call"]
         WEB["web_search (DDGS / Brave / Tavily)"]
@@ -430,6 +444,7 @@ graph TB
     REG --> MR & MW
     REG --> SUB
     REG --> HTTP & WEB & SCR & ACP
+    REG --> SK & SDW & SDT
     REG --> ASK & TERM
 
     style REG fill:#1a1a2e,color:#fff
@@ -710,6 +725,43 @@ FastAPI's auto-generated `/docs`, `/redoc`, `/openapi.json` are disabled — the
 
 State is **in-memory only**; restarting the daemon resets the tunnel to off, which is intentional — activation is always explicit.
 
+### MCP Integration
+
+Nexus supports both sides of the Model Context Protocol:
+
+**Client mode** — connects to external MCP servers at startup, discovers their tools, and registers them in the live `ToolRegistry`. Servers can be stdio (local commands like `npx`/`uvx`/`docker`) or remote (HTTP / SSE). Sampling and elicitation bridges let MCP servers request LLM completions from the agent and prompt the user for input via the existing HITL `ask_user` handler.
+
+```mermaid
+graph LR
+    subgraph "Nexus"
+        REG["ToolRegistry"]
+        MGR["McpManager (Loom)"]
+        BRIDGE["Sampling / Elicitation Bridge"]
+    end
+
+    subgraph "MCP Servers"
+        S1["stdio server (npx/uvx)"]
+        S2["HTTP / SSE server"]
+    end
+
+    MGR --> S1 & S2
+    S1 & S2 -->|"discover tools"| REG
+    S1 & S2 -->|"sampling request"| BRIDGE
+    S1 & S2 -->|"elicitation request"| BRIDGE
+```
+
+**Server mode** (`[mcp].server_enabled = true`) exposes Nexus's own agent tools to external hosts via a Streamable HTTP MCP bridge on a background thread (`127.0.0.1:<port>`, default 18990). Tool exposure can be filtered via `server_expose`.
+
+**MCP Apps** — sandboxed `<iframe sandbox="allow-scripts">` renders interactive HTML from MCP servers inline in chat. Communication is via `postMessage` using the MCP Apps JSON-RPC protocol. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML:
+
+| Resource URI | Tool | Renders |
+|---|---|---|
+| `ui://nexus/kanban?path=...` | `show_kanban` | Styled kanban board with lanes, cards, badges |
+| `ui://nexus/dashboard-widget?folder=...&widget_id=...` | `show_dashboard_widget` | Chart.js bar/line/area/pie/donut/KPI |
+| `ui://nexus/data-table?path=...` | `show_data_table` | Structured table with headers and rows |
+
+**Integrations Tab** — settings panel with a one-box paste wizard. Paste any MCP server config (JSON block, bare URL, `npx`/`uvx`/`docker` command), and a smart parser extracts name, transport, command, URL, env vars, and headers. Detects placeholder credentials, prompts the user to fill them, tests the connection via `POST /mcp/test`, saves to config, and triggers a hot-reload. Existing servers show connection status, tool count, and enable/disable/reconnect/remove controls.
+
 ### Audio Transcription
 
 `POST /transcribe` accepts audio and returns text. The UI provides a live waveform + timer + cancel during recording. Backed by either a local model or a remote provider, configurable in Settings.
@@ -822,15 +874,17 @@ graph TB
     DREAM["DreamView (status / journal / suggestions / history)"]
     ALARM["AlarmNotification (calendar alarm stack)"]
     CTXDRP["ContextDropdown (zone gauge + strategies)"]
+    MCPAPP["McpAppSandbox (sandboxed iframe for MCP Apps)"]
 
-    CONTENT --> DREAM & ALARM & CTXDRP
+    CONTENT --> DREAM & ALARM & CTXDRP & MCPAPP
 
     SKILLD["SkillDrawer"]
-    SETTD["SettingsDrawer (providers / models / advanced)"]
+    SETTD["SettingsDrawer (providers / models / advanced / integrations)"]
     APPROVE["ApprovalDialog (HITL)"]
     SHORT["Shortcuts cheat sheet"]
+    JOBS["RunningTasksIndicator (job tracker)"]
 
-    APP --> SKILLD & SETTD & APPROVE & SHORT
+    APP --> SKILLD & SETTD & APPROVE & SHORT & JOBS
 ```
 
 Frontend design decisions:
@@ -842,6 +896,8 @@ Frontend design decisions:
 | **View switching** | `display: none/flex` (not conditional rendering) — preserves in-flight streaming |
 | **SSE** | Manual `ReadableStream` parsing for POST SSE; native `EventSource` for session events |
 | **Mermaid** | Lazy-loaded on first `language-mermaid` block |
+| **Math** | `remark-math` + `rehype-katex` for inline/display LaTeX rendering |
+| **MCP Apps** | Sandboxed `<iframe sandbox="allow-scripts">` with `postMessage` JSON-RPC; `ui://nexus/*` resources rendered inline |
 | **3D graph** | force-graph + custom physics; 2D fallback |
 | **Mobile** | Capacitor-friendly responsive layout; iOS Xcode project under `ui/ios/` |
 | **Splash** | `SplashScreen` + `BrandMark` shown on first load (one chime, sessionStorage-gated) |
@@ -887,17 +943,21 @@ nexus/
 │       │   └── terminal_tool.py        # HITL terminal
 │       ├── server/
 │       │   ├── app.py                  # Route registration
+│       │   ├── job_tracker.py          # In-memory running-jobs registry (SSE events)
 │       │   └── routes/
 │       │       ├── chat.py / chat_stream.py
 │       │       ├── sessions.py / sessions_vault.py
 │       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py
 │       │       ├── providers.py / models.py / config.py / settings.py
 │       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
-│       │       ├── insights.py / graph.py
+│       │       ├── insights.py / graph.py / mcp.py / skill_wizard.py
 │       │       ├── dream.py                 # Dream status, trigger, journal, suggestions
+│       ├── mcp_lifecycle.py            # MCP client + server startup, tool discovery
+│       ├── mcp_resources/              # Internal ui://nexus/* HTML generators (kanban, dashboard, data_table)
 │       ├── skills/                     # SkillRegistry + SkillManager + guard
 │       ├── tools/                      # vault, kanban, kanban_query, calendar, datatable, csv,
-│       │                               # visualize, dispatch_card, ontology, memory, http, acp
+│       │                               # visualize, dispatch_card, ontology, memory, http, acp,
+│       │                               # show_kanban, show_dashboard_widget, show_data_table
 │       ├── vault.py + vault_*.py       # vault search / index / graph / kanban / calendar / csv / datatable
 │       └── tests/
 ├── ui/                                 # React frontend
@@ -921,7 +981,9 @@ nexus/
 │           ├── GraphView.tsx + AgentGraphView.tsx + SubgraphCanvas3D.tsx
 │           ├── InsightsView.tsx
 │           ├── DreamView/                     # Dream status, journal, suggestions, run history
-│           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid
+│           ├── McpAppSandbox/                  # Sandboxed iframe for MCP App rendering
+│           ├── SkillWizard/                    # Multi-step guided skill discovery + build
+│           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid + KaTeX
 │           ├── BrandMark.tsx + SplashScreen.tsx
 │           ├── SettingsDrawer.tsx
 │           ├── ApprovalDialog.tsx
@@ -1139,7 +1201,7 @@ The UI reads its API base from `VITE_NEXUS_API` (default `http://localhost:18989
 uv run nexus chat
 ```
 
-Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`. The bundled set includes `nexus` (self-docs, queried via `nexus_kb_search`), `markitdown` (doc → markdown ingestion), `pdf-maker`, `web-scrape`, `deep-research`, `parallel-research`, `summarize-file`, `vault-curator`, `ontology-curator`, `code-review-local`, `daily-standup`, and `brainstorm`.
+Bundled skills from `skills/` are copied into `~/.nexus/skills/` on first run (and on subsequent restarts when new bundled skills appear) and marked `trust="builtin"`. Skills you delete locally stay deleted — the seeder tracks what it has installed in `~/.nexus/skills/.seeded-builtins.json`. The bundled set includes `nexus` (self-docs, queried via `nexus_kb_search`), `markitdown` (doc → markdown ingestion), `pdf-maker`, `web-scrape`, `deep-research`, `parallel-research`, `summarize-file`, `vault-curator`, `ontology-curator`, `code-review-local`, `daily-standup`, `brainstorm`, and more. Skills can declare Python dependencies for isolated venv management.
 
 If no model is configured (fresh install or the macOS `.app`), the local-LLM manager auto-seeds a small bundled demo model and points `[agent].default_model` at it, so the agent answers immediately without requiring an API key.
 
@@ -1358,6 +1420,38 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/graph` | GET | Agent / skill / session graph |
 | `/insights` | GET | Token / cost / model / tool analytics |
 
+### MCP
+
+| Route | Method | Description |
+|---|---|---|
+| `/mcp/servers` | GET | List connected MCP servers and their tools |
+| `/mcp/servers/{name}/reconnect` | POST | Reconnect a single server |
+| `/mcp/refresh` | POST | Re-discover tools from all servers |
+| `/mcp/reload` | POST | Hot-reload from config (stop old, start new) |
+| `/mcp/resources` | GET | List MCP resources from connected servers |
+| `/mcp/resources/{server}?uri=...` | GET | Read an MCP resource |
+| `/mcp/prompts` | GET | List MCP prompt templates |
+| `/mcp/prompts/{server}/{name}` | POST | Render a prompt template |
+| `/mcp/app/{server}?uri=...` | GET | Fetch MCP App HTML |
+| `/mcp/tools` | GET | List all MCP + internal tools |
+| `/mcp/call-tool` | POST | Call a tool on a server or internal tool |
+| `/mcp/internal-resource?uri=...` | GET | Resolve `ui://nexus/*` resource URIs |
+| `/mcp/test` | POST | Test a server config without persisting |
+
+### Jobs
+
+| Route | Method | Description |
+|---|---|---|
+| `/jobs` | GET | List running background jobs |
+| `/jobs/{id}/kill` | POST | Kill a running job |
+
+### Skill Wizard
+
+| Route | Method | Description |
+|---|---|---|
+| `/skills/wizard/discover` | POST | LLM-ranked skill discovery from natural language |
+| `/skills/wizard/build` | POST | Agentic skill synthesis (creates hidden session) |
+
 ---
 
 ## Configuration Guide
@@ -1443,6 +1537,21 @@ context_budget_tokens = 8000          # max input context per phase
 max_output_tokens = 4000              # max dream output per phase
 max_duration_seconds = 300            # hard timeout per run
 daily_token_budget = 500000           # cumulative token spend limit
+
+# MCP (Model Context Protocol) — connect to external MCP servers and/or
+# expose Nexus tools as an MCP server.
+[mcp]
+server_enabled = false                 # expose Nexus tools to external hosts
+server_port = 18990                    # MCP server bind port (loopback only)
+
+[[mcp.servers]]
+name = "my-server"                     # friendly name
+transport = "stdio"                    # "stdio" | "http" | "sse"
+command = "npx"                        # for stdio
+args = ["-y", "@example/mcp-server"]   # for stdio
+# url = "http://localhost:3000/mcp"    # for http/sse
+# env = { API_KEY = "$MY_SERVER_KEY" } # environment variables ($VAR resolved from shell)
+# headers = { Authorization = "Bearer ..." } # for http/sse
 
 # Voice output (TTS via bundled Piper). Acks are spoken confirmations
 # for voice-input turns (start + completion).
