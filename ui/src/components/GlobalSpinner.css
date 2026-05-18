@@ -41,17 +41,18 @@
 }
 
 .gs-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
   min-width: 220px;
   max-width: 320px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-  z-index: 100;
   overflow: hidden;
+}
+
+.gs-dropdown--portal {
+  position: fixed;
+  z-index: 9999;
 }
 
 .gs-dropdown-header {

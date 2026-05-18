@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { RunningJob } from "../hooks/useRunningJobs";
 import "./GlobalSpinner.css";
 
@@ -27,8 +28,10 @@ function formatElapsed(seconds: number): string {
 
 export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const [tick, setTick] = useState(0);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 
   useEffect(() => {
     if (jobs.length === 0) return;
@@ -36,10 +39,20 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
     return () => clearInterval(id);
   }, [jobs.length]);
 
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setPos({ top: rect.bottom + 6, right: window.innerWidth - rect.right });
+    return () => setPos(null);
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -50,7 +63,7 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
   const now = Date.now() / 1000;
 
   return (
-    <div className="gs-container" ref={ref}>
+    <div className="gs-container" ref={triggerRef}>
       <button
         className="gs-trigger"
         onClick={() => setOpen((v) => !v)}
@@ -60,8 +73,12 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
         <span className="gs-spinner" />
         <span className="gs-count">{jobs.length}</span>
       </button>
-      {open && (
-        <div className="gs-dropdown">
+      {open && pos && createPortal(
+        <div
+          className="gs-dropdown gs-dropdown--portal"
+          ref={dropdownRef}
+          style={{ top: pos.top, right: pos.right }}
+        >
           <div className="gs-dropdown-header">Running tasks</div>
           {jobs.map((job) => {
             const meta = TYPE_META[job.type] ?? { icon: "\u2699\uFE0F", view: "" };
@@ -93,7 +110,8 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
               </div>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
