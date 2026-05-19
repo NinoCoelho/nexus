@@ -8,8 +8,9 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ...agent.loop import Agent
-from ..deps import get_agent, get_sessions
+from ..deps import get_agent, get_registry, get_sessions
 from ..session_store import SessionStore
+from ...skills.registry import SkillRegistry
 
 log = logging.getLogger(__name__)
 
@@ -974,7 +975,11 @@ async def vault_dashboard_wizard_start(
 
 
 @router.delete("/vault/dashboard")
-async def vault_dashboard_delete_database(folder: str, confirm: str) -> dict:
+async def vault_dashboard_delete_database(
+    folder: str,
+    confirm: str,
+    registry: SkillRegistry = Depends(get_registry),
+) -> dict:
     """Delete an entire database (folder of data-tables + `_data.md`).
 
     ``confirm`` must equal the folder's basename — server-side guard against
@@ -982,8 +987,10 @@ async def vault_dashboard_delete_database(folder: str, confirm: str) -> dict:
     """
     from ... import vault_dashboard
     try:
-        return vault_dashboard.delete_database(folder, confirm=confirm)
+        result = vault_dashboard.delete_database(folder, confirm=confirm)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    registry.reload()
+    return result

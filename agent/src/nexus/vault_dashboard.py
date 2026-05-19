@@ -39,6 +39,7 @@ Format (mirrors ``data-table-plugin`` and ``kanban-plugin`` conventions)::
 
 from __future__ import annotations
 
+import logging
 import posixpath
 import re
 from pathlib import PurePosixPath
@@ -47,6 +48,9 @@ from typing import Any
 import yaml
 
 from . import vault
+from . import vault_dashboard_skill
+
+log = logging.getLogger(__name__)
 
 DASHBOARD_PLUGIN_KEY = "data-dashboard"
 DASHBOARD_FILENAME = "_data.md"
@@ -567,8 +571,7 @@ def delete_database(folder: str, *, confirm: str) -> dict[str, Any]:
     except (FileNotFoundError, OSError):
         pass
     try:
-        from . import vault_dashboard_skill
         vault_dashboard_skill.delete_skill(folder)
     except Exception:
-        pass
+        log.warning("failed to delete companion skill for %r", folder, exc_info=True)
     return {"deleted": len(deleted), "paths": deleted, "folder": folder}

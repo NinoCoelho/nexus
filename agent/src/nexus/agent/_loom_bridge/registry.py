@@ -249,7 +249,10 @@ def build_tool_registry(
 
     # dashboard_manage — per-database `_data.md` operations + chat session id.
     async def _dashboard(args: dict) -> str:
-        return handle_dashboard_tool(args)
+        result = handle_dashboard_tool(args)
+        if args.get("action") == "delete_database" and '"ok": true' in result:
+            skill_registry.reload()
+        return result
 
     registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
 

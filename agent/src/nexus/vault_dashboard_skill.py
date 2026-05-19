@@ -240,10 +240,19 @@ def sync_skill(folder: str, dashboard: dict[str, Any]) -> None:
 
 
 def delete_skill(folder: str) -> None:
+    import logging
     import shutil
 
+    log = logging.getLogger(__name__)
     name = _skill_name(folder)
     skill_dir = _SKILLS_DIR / name
     if not skill_dir.is_dir():
+        log.debug("delete_skill: no companion skill dir for %r (expected %s)", folder, skill_dir)
         return
+    try:
+        from .skills.venv_manager import remove_venv
+        remove_venv(name)
+    except Exception:
+        pass
     shutil.rmtree(skill_dir)
+    log.info("deleted companion skill %r for database %r", name, folder)
