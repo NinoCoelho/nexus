@@ -233,6 +233,9 @@ def default_dashboard(folder: str) -> dict[str, Any]:
         "chat_session_id": None,
         "operations": [],
         "widgets": [],
+        "screens": [],
+        "flows": [],
+        "links": {"boards": [], "calendars": []},
         "exists": False,
         "schema_version": SCHEMA_VERSION,
     }
@@ -271,12 +274,34 @@ def read_dashboard(folder: str) -> dict[str, Any]:
             if norm_w is not None:
                 widgets.append(norm_w)
     widgets.sort(key=lambda w: w.get("order", 0))
+    raw_screens = data.get("screens")
+    screens: list[dict[str, Any]] = []
+    if isinstance(raw_screens, list):
+        for s in raw_screens:
+            if isinstance(s, dict) and s.get("id"):
+                screens.append(s)
+    raw_flows = data.get("flows")
+    flows: list[dict[str, Any]] = []
+    if isinstance(raw_flows, list):
+        for f in raw_flows:
+            if isinstance(f, dict) and f.get("id"):
+                flows.append(f)
+    raw_links = data.get("links")
+    links: dict[str, Any] = {"boards": [], "calendars": []}
+    if isinstance(raw_links, dict):
+        if isinstance(raw_links.get("boards"), list):
+            links["boards"] = raw_links["boards"]
+        if isinstance(raw_links.get("calendars"), list):
+            links["calendars"] = raw_links["calendars"]
     return {
         "folder": folder,
         "title": str(data.get("title") or _folder_basename(folder)),
         "chat_session_id": data.get("chat_session_id") or None,
         "operations": operations,
         "widgets": widgets,
+        "screens": screens,
+        "flows": flows,
+        "links": links,
         "exists": True,
         "schema_version": int(data.get("schema_version") or SCHEMA_VERSION),
     }
@@ -289,6 +314,9 @@ def _serialize(dashboard: dict[str, Any]) -> str:
         "chat_session_id": dashboard.get("chat_session_id"),
         "operations": dashboard.get("operations", []),
         "widgets": dashboard.get("widgets", []),
+        "screens": dashboard.get("screens", []),
+        "flows": dashboard.get("flows", []),
+        "links": dashboard.get("links", {"boards": [], "calendars": []}),
         "schema_version": SCHEMA_VERSION,
     }
     fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False).rstrip()
@@ -320,9 +348,18 @@ def write_dashboard(folder: str, dashboard: dict[str, Any]) -> dict[str, Any]:
             )
             if w is not None
         ],
+        "screens": [s for s in (dashboard.get("screens") or []) if isinstance(s, dict) and s.get("id")],
+        "flows": [f for f in (dashboard.get("flows") or []) if isinstance(f, dict) and f.get("id")],
+        "links": dashboard.get("links", {"boards": [], "calendars": []}),
     }
     vault.write_file(path, _serialize(payload))
-    return read_dashboard(folder)
+    result = read_dashboard(folder)
+    try:
+        from . import vault_dashboard_skill
+        vault_dashboard_skill.sync_skill(folder, result)
+    except Exception:
+        pass
+    return result
 
 
 def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
@@ -337,6 +374,9 @@ def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
         "chat_session_id": current.get("chat_session_id"),
         "operations": current.get("operations", []),
         "widgets": current.get("widgets", []),
+        "screens": current.get("screens", []),
+        "flows": current.get("flows", []),
+        "links": current.get("links", {"boards": [], "calendars": []}),
     }
     if "title" in patch and patch["title"] is not None:
         merged["title"] = str(patch["title"])
@@ -346,6 +386,12 @@ def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
         merged["operations"] = patch["operations"]
     if "widgets" in patch and isinstance(patch["widgets"], list):
         merged["widgets"] = patch["widgets"]
+    if "screens" in patch and isinstance(patch["screens"], list):
+        merged["screens"] = patch["screens"]
+    if "flows" in patch and isinstance(patch["flows"], list):
+        merged["flows"] = patch["flows"]
+    if "links" in patch and isinstance(patch["links"], dict):
+        merged["links"] = patch["links"]
     return write_dashboard(folder, merged)
 
 
@@ -426,6 +472,64 @@ def set_widget_refreshed(
     return patch_dashboard(folder, {"widgets": widgets})
 
 
+def upsert_screen(folder: str, screen: dict[str, Any]) -> dict[str, Any]:
+    """Append or replace a screen definition by id."""
+    if not isinstance(screen, dict) or not screen.get("id"):
+        raise ValueError("screen must have an 'id' field")
+    current = read_dashboard(folder)
+    screens = [s for s in current.get("screens", []) if s.get("id") != screen["id"]]
+    screens.append(screen)
+    return patch_dashboard(folder, {"screens": screens})
+
+
+def remove_screen(folder: str, screen_id: str) -> dict[str, Any]:
+    """Remove a screen by id."""
+    current = read_dashboard(folder)
+    screens = [s for s in current.get("screens", []) if s.get("id") != screen_id]
+    return patch_dashboard(folder, {"screens": screens})
+
+
+def upsert_flow(folder: str, flow: dict[str, Any]) -> dict[str, Any]:
+    """Append or replace a flow definition by id."""
+    if not isinstance(flow, dict) or not flow.get("id"):
+        raise ValueError("flow must have an 'id' field")
+    current = read_dashboard(folder)
+    flows = [f for f in current.get("flows", []) if f.get("id") != flow["id"]]
+    flows.append(flow)
+    return patch_dashboard(folder, {"flows": flows})
+
+
+def remove_flow(folder: str, flow_id: str) -> dict[str, Any]:
+    """Remove a flow by id."""
+    current = read_dashboard(folder)
+    flows = [f for f in current.get("flows", []) if f.get("id") != flow_id]
+    return patch_dashboard(folder, {"flows": flows})
+
+
+def add_link(folder: str, kind: str, path: str) -> dict[str, Any]:
+    """Add a linked board or calendar path."""
+    if kind not in ("boards", "calendars"):
+        raise ValueError(f"link kind must be 'boards' or 'calendars', got {kind!r}")
+    current = read_dashboard(folder)
+    links = dict(current.get("links", {"boards": [], "calendars": []}))
+    items = list(links.get(kind, []))
+    if path not in items:
+        items.append(path)
+    links[kind] = items
+    return patch_dashboard(folder, {"links": links})
+
+
+def remove_link(folder: str, kind: str, path: str) -> dict[str, Any]:
+    """Remove a linked board or calendar path."""
+    if kind not in ("boards", "calendars"):
+        raise ValueError(f"link kind must be 'boards' or 'calendars', got {kind!r}")
+    current = read_dashboard(folder)
+    links = dict(current.get("links", {"boards": [], "calendars": []}))
+    items = [p for p in links.get(kind, []) if p != path]
+    links[kind] = items
+    return patch_dashboard(folder, {"links": links})
+
+
 def delete_database(folder: str, *, confirm: str) -> dict[str, Any]:
     """Permanently remove every file in ``folder`` (data-tables + `_data.md`).
 
@@ -461,5 +565,10 @@ def delete_database(folder: str, *, confirm: str) -> dict[str, Any]:
     try:
         vault.delete(folder, recursive=True)
     except (FileNotFoundError, OSError):
+        pass
+    try:
+        from . import vault_dashboard_skill
+        vault_dashboard_skill.delete_skill(folder)
+    except Exception:
         pass
     return {"deleted": len(deleted), "paths": deleted, "folder": folder}

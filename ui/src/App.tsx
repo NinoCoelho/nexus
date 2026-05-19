@@ -32,6 +32,7 @@ import {
 import i18n, { normalizeLanguage } from "./i18n";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
+import { listDatabases, type DatabaseSummary } from "./api/datatable";
 import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
 import { useNexusAccount } from "./hooks/useNexusAccount";
@@ -93,6 +94,10 @@ export default function App() {
   const [dataSelectedDatabase, setDataSelectedDatabase] = useState<string | null>(null);
   /** Bumped to force DatabaseListPanel to reload (e.g. after delete). */
   const [databaseListRevision, setDatabaseListRevision] = useState(0);
+  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>([]);
+  useEffect(() => {
+    listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
+  }, [databaseListRevision]);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -564,28 +569,12 @@ export default function App() {
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
         kanbanSelectedPath={kanbanSelectedPath}
         onKanbanOpen={(path) => { setKanbanSelectedPath(path); setView("kanban"); }}
-        databaseSelectedPath={dataSelectedPath}
         databaseSelectedFolder={dataSelectedDatabase}
         databaseListRevision={databaseListRevision}
-        onDatabaseOpen={(path) => {
-          setDataSelectedPath(path);
-          setDataDiagramFolder(null);
-          // Pin the parent folder as the active database so navigating back
-          // (clearing the path) lands on the correct dashboard.
-          const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-          setDataSelectedDatabase(parent);
-          setView("data");
-        }}
         onDatabaseSelectFolder={(folder) => {
           setDataSelectedDatabase(folder);
           setDataSelectedPath(null);
           setDataDiagramFolder(null);
-          setView("data");
-        }}
-        onDatabaseOpenDiagram={(folder) => {
-          setDataDiagramFolder(folder);
-          setDataSelectedPath(null);
-          setDataSelectedDatabase(folder);
           setView("data");
         }}
       />
@@ -866,6 +855,14 @@ export default function App() {
         view={view}
         onViewChange={setView}
         onOpenDrawer={() => setMobileDrawerOpen(true)}
+        databases={appDatabases}
+        selectedApp={dataSelectedDatabase}
+        onAppSelect={(folder) => {
+          setDataSelectedDatabase(folder);
+          setDataSelectedPath(null);
+          setDataDiagramFolder(null);
+          setView("data");
+        }}
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />

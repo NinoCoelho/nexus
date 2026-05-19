@@ -45,7 +45,8 @@ import { subscribeSessionEvents } from "../../api/chat";
 import { useToast } from "../../toast/ToastProvider";
 import Modal from "../Modal";
 import FormRenderer from "../FormRenderer";
-import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
+import { deriveLabelInfo, suggestNextPk, resolveRefPath, fetchTableCached, summarizeRow } from "../datatable/refOptions";
+import RefCombobox from "../Combobox";
 import OperationChips, { type OpRunState } from "./OperationChips";
 import AddOperationModal from "./AddOperationModal";
 import WidgetGrid from "./WidgetGrid";
@@ -56,6 +57,161 @@ import CardActivityModal from "../CardActivityModal";
 import WidgetSQLEditor from "./WidgetSQLEditor";
 import "./DataDashboardView.css";
 
+function useResolvedLabels(fields: import("../../types/form").FieldSchema[], hostPath: string) {
+  const [lookup, setLookup] = useState<Map<string, string>>(new Map());
+  const refFields = fields.filter((f) => f.kind === "ref" && f.target_table);
+  useEffect(() => {
+    if (refFields.length === 0) return;
+    let cancelled = false;
+    const next = new Map<string, string>();
+    void (async () => {
+      const targets = new Map<string, { pkName: string; labelField: import("../../types/form").FieldSchema | null; rows: Record<string, unknown>[] }>();
+      for (const f of refFields) {
+        const absPath = resolveRefPath(hostPath, f.target_table!);
+        if (targets.has(absPath)) continue;
+        try {
+          const tbl = await fetchTableCached(absPath);
+          const info = deriveLabelInfo(tbl.schema.fields, tbl.schema.table);
+          targets.set(absPath, { pkName: info.pkName, labelField: info.labelField, rows: tbl.rows });
+        } catch { /* skip */ }
+      }
+      if (cancelled) return;
+      for (const f of refFields) {
+        const absPath = resolveRefPath(hostPath, f.target_table!);
+        const t = targets.get(absPath);
+        if (!t) continue;
+        for (const r of t.rows) {
+          const id = String(r[t.pkName] ?? r._id ?? "");
+          if (id) next.set(`${f.name}::${id}`, summarizeRow(r, t.pkName, t.labelField));
+        }
+      }
+      if (!cancelled) setLookup(next);
+    })();
+    return () => { cancelled = true; };
+  }, [hostPath, refFields.length]);
+  return lookup;
+}
+
+function QuickAddChildForm({
+  childPath,
+  fields,
+  fkField,
+  parentPk,
+  disabled,
+  existingRows,
+  onAdded,
+}: {
+  childPath: string;
+  fields: import("../../types/form").FieldSchema[];
+  fkField: string;
+  parentPk: string;
+  disabled: boolean;
+  existingRows: Record<string, unknown>[];
+  onAdded: () => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [addedRows, setAddedRows] = useState<Record<string, unknown>[]>([]);
+  const visibleFields = fields.filter((f) => f.name !== fkField);
+  const displayFields = visibleFields.filter((f) => f.kind !== "formula").slice(0, 5);
+  const { pkName } = deriveLabelInfo(fields, null);
+  const refLookup = useResolvedLabels(fields, childPath);
+
+  const resetForm = useCallback(() => {
+    const allRows = [...existingRows, ...addedRows];
+    const suggested = suggestNextPk(allRows, pkName);
+    setValues(suggested ? { [pkName]: suggested } : {});
+  }, [existingRows, addedRows, pkName]);
+
+  useEffect(() => { resetForm(); }, [addedRows]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSubmit = useCallback(async () => {
+    setBusy(true);
+    try {
+      const row = { ...values, [fkField]: parentPk };
+      await addVaultDataTableRow(childPath, row);
+      toast.success("Detail row added");
+      setAddedRows((prev) => [...prev, row]);
+      onAdded();
+    } catch (e) {
+      toast.error("Add failed", { detail: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }, [childPath, fkField, parentPk, values, onAdded, toast]);
+
+  if (disabled) return <div className="qa-detail-hint">Save the parent row first to add details.</div>;
+
+  const renderCell = (val: unknown, f: import("../../types/form").FieldSchema) => {
+    if (val == null || val === "") return "—";
+    if (f.kind === "ref") return refLookup.get(`${f.name}::${val}`) ?? String(val);
+    return String(val);
+  };
+
+  return (
+    <div className="qa-child-section">
+      {addedRows.length > 0 && (
+        <div className="qa-mini-table-wrap">
+          <table className="qa-mini-table">
+            <thead>
+              <tr>
+                {displayFields.map((f) => (
+                  <th key={f.name}>{f.label ?? f.name}</th>
+                ))}
+                <th className="qa-mini-th-act"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {addedRows.map((r, i) => (
+                <tr key={i}>
+                  {displayFields.map((f) => (
+                    <td key={f.name}>{renderCell(r[f.name], f)}</td>
+                  ))}
+                  <td className="qa-mini-td-act">
+                    <button className="qa-added-remove" onClick={() => setAddedRows((prev) => prev.filter((_, j) => j !== i))} title="Remove">×</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="qa-inline-form">
+        {visibleFields.map((f) => (
+          <div key={f.name} className="qa-inline-field">
+            <label className="qa-inline-label">{f.label ?? f.name}{f.required && " *"}</label>
+            {f.kind === "ref" ? (
+              <RefCombobox
+                field={f}
+                hostPath={childPath}
+                value={values[f.name] ?? ""}
+                onChange={(v) => setValues((prev) => ({ ...prev, [f.name]: v }))}
+                className="qa-inline-input"
+              />
+            ) : (
+              <input
+                className="qa-inline-input"
+                type={f.kind === "number" ? "number" : f.kind === "date" ? "date" : "text"}
+                placeholder={f.placeholder ?? ""}
+                value={String(values[f.name] ?? "")}
+                onChange={(e) => {
+                  const v = f.kind === "number" && e.target.value !== "" ? parseFloat(e.target.value) : e.target.value;
+                  setValues((prev) => ({ ...prev, [f.name]: v }));
+                }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleSubmit(); } }}
+              />
+            )}
+          </div>
+        ))}
+        <button className="qa-inline-add" onClick={() => void handleSubmit()} disabled={busy}>
+          {busy ? "Adding..." : "+ Add line"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   folder: string;
   onOpenTable: (path: string) => void;
@@ -64,7 +220,7 @@ interface Props {
   onOpenInVault?: (path: string) => void;
 }
 
-export default function DataDashboardView({
+export default function AppDashboardView({
   folder,
   onOpenTable,
   onOpenDiagram,
@@ -89,6 +245,8 @@ export default function DataDashboardView({
   >(null);
   const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<DashboardWidget | null>(null);
   const [formOp, setFormOp] = useState<{ op: DashboardOperation; table: DataTable } | null>(null);
+  const [formCreatedRow, setFormCreatedRow] = useState<Record<string, unknown> | null>(null);
+  const [formChildTables, setFormChildTables] = useState<{ path: string; table: DataTable; fkField: string }[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [typeToConfirm, setTypeToConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -380,22 +538,54 @@ export default function DataDashboardView({
         },
         table: tbl,
       });
+      setFormCreatedRow(null);
+      setFormChildTables([]);
+      if (!tables) return;
+      const children: { path: string; table: DataTable; fkField: string }[] = [];
+      for (const sibling of tables) {
+        if (sibling.path === tablePath) continue;
+        try {
+          const sibTbl = await getVaultDataTable(sibling.path);
+          const tableFileName = tablePath.includes("/") ? tablePath.split("/").pop()! : tablePath;
+          for (const f of sibTbl.schema.fields) {
+            if (f.kind === "ref" && f.cardinality !== "many") {
+              const target = f.target_table ?? "";
+              const resolved = target.startsWith("./") ? `${folder}/${target.slice(2)}` : target.includes("/") ? target : `${folder}/${target}`;
+              if (resolved === tablePath || target === tableFileName || target === `./${tableFileName}`) {
+                children.push({ path: sibling.path, table: sibTbl, fkField: f.name });
+                break;
+              }
+            }
+          }
+        } catch { /* skip unreadable tables */ }
+      }
+      setFormChildTables(children);
     } catch (e) {
       toast.error("Couldn't load the table.", { detail: (e as Error).message });
     }
-  }, [toast]);
+  }, [tables, folder, toast]);
 
   const handleFormSubmit = useCallback(async (values: Record<string, unknown>) => {
     if (!formOp) return;
     try {
-      await addVaultDataTableRow(formOp.op.table!, values);
+      const created = await addVaultDataTableRow(formOp.op.table!, values);
       toast.success(`Added row to ${formOp.op.table}`);
-      setFormOp(null);
-      void reload();
+      if (formChildTables.length > 0) {
+        setFormCreatedRow(created);
+      } else {
+        setFormOp(null);
+        void reload();
+      }
     } catch (e) {
       toast.error("Couldn't add row", { detail: (e as Error).message });
     }
-  }, [formOp, reload, toast]);
+  }, [formOp, formChildTables.length, reload, toast]);
+
+  const handleCloseForm = useCallback(() => {
+    setFormOp(null);
+    setFormCreatedRow(null);
+    void reload();
+  }, [reload]);
 
   const folderBasename = folder.split("/").pop() || folder || "(root)";
 
@@ -448,27 +638,6 @@ export default function DataDashboardView({
       </header>
 
       <section className="data-dash-section">
-        <h2 className="data-dash-section-title">Quick actions</h2>
-        <OperationChips
-          operations={dashboard.operations}
-          runState={runState}
-          onRunOperation={(op) => void handleRunOperation(op)}
-          onOpenRun={handleOpenRun}
-          onAddOperation={() => setShowAddOp(true)}
-          onAddOperationWizard={() => setShowOpWizard(true)}
-          onRemoveOperation={(id) => {
-            const op = dashboard.operations.find((o) => o.id === id);
-            if (op) setPendingRemoval(op);
-          }}
-        />
-        {dashboard.operations.length === 0 && (
-          <div className="data-dash-hint">
-            No quick actions yet — chat with the <code>database-design</code> skill to suggest some, or click <strong>+ Operation</strong>.
-          </div>
-        )}
-      </section>
-
-      <section className="data-dash-section">
         <h2 className="data-dash-section-title">Tables</h2>
         {tables.length === 0 ? (
           <div className="data-dash-hint">
@@ -505,6 +674,27 @@ export default function DataDashboardView({
       </section>
 
       <section className="data-dash-section">
+        <h2 className="data-dash-section-title">Quick actions</h2>
+        <OperationChips
+          operations={dashboard.operations}
+          runState={runState}
+          onRunOperation={(op) => void handleRunOperation(op)}
+          onOpenRun={handleOpenRun}
+          onAddOperation={() => setShowAddOp(true)}
+          onAddOperationWizard={() => setShowOpWizard(true)}
+          onRemoveOperation={(id) => {
+            const op = dashboard.operations.find((o) => o.id === id);
+            if (op) setPendingRemoval(op);
+          }}
+        />
+        {dashboard.operations.length === 0 && (
+          <div className="data-dash-hint">
+            No quick actions yet — chat with the <code>database-design</code> skill to suggest some, or click <strong>+ Operation</strong>.
+          </div>
+        )}
+      </section>
+
+      <section className="data-dash-section">
         <h2 className="data-dash-section-title">Widgets</h2>
         <WidgetGrid
           folder={folder}
@@ -521,6 +711,38 @@ export default function DataDashboardView({
           onAIFix={(w, error) => setAiFixContext({ widget: w, error })}
         />
       </section>
+
+      {dashboard.links && (dashboard.links.boards.length > 0 || dashboard.links.calendars.length > 0) && (
+        <section className="data-dash-section">
+          <h2 className="data-dash-section-title">Processes</h2>
+          <div className="data-dash-links">
+            {dashboard.links.boards.map((path) => (
+              <button
+                key={path}
+                className="data-dash-link-card"
+                onClick={() => _onOpenInVault?.(path.replace(/^\.\//, `${folder}/`))}
+              >
+                <span className="data-dash-link-icon">📋</span>
+                <span className="data-dash-link-name">
+                  {path.replace(/^\.\//, "").replace(".md", "").replace(/[-_]/g, " ")}
+                </span>
+              </button>
+            ))}
+            {dashboard.links.calendars.map((path) => (
+              <button
+                key={path}
+                className="data-dash-link-card"
+                onClick={() => _onOpenInVault?.(path.replace(/^\.\//, `${folder}/`))}
+              >
+                <span className="data-dash-link-icon">📅</span>
+                <span className="data-dash-link-name">
+                  {path.replace(/^\.\//, "").replace(".md", "").replace(/[-_]/g, " ")}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {pendingWidgetRemoval && (
         <Modal
@@ -612,10 +834,6 @@ export default function DataDashboardView({
       )}
 
       {formOp && (() => {
-        // Auto-suggest the next primary-key value for the target table, so
-        // Quick-add and form-kind operations don't make the user type C005,
-        // P009, etc. by hand. Op-defined `prefill` values still win — the
-        // op author may have intentionally set a specific id.
         const meta = formOp.table.schema.table ?? null;
         const { pkName } = deriveLabelInfo(formOp.table.schema.fields, meta);
         const suggested = suggestNextPk(formOp.table.rows, pkName);
@@ -623,18 +841,65 @@ export default function DataDashboardView({
           ...(suggested ? { [pkName]: suggested } : {}),
           ...(formOp.op.prefill ?? {}),
         };
+        const parentPk = formCreatedRow ? String(formCreatedRow[pkName] ?? "") : "";
         return (
-          <div className="dt-modal-overlay" onClick={() => setFormOp(null)}>
-            <div className="dt-modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: 420 }}>
+          <div className="dt-modal-overlay" onClick={() => handleCloseForm()}>
+            <div className="dt-modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: 480, maxWidth: 600 }}>
               <div className="dt-modal-title">{formOp.op.label}</div>
-              <FormRenderer
-                hostPath={formOp.op.table!}
-                fields={formOp.table.schema.fields.filter((f) => f.kind !== "formula")}
-                initialValues={initialValues}
-                onSubmit={(v) => void handleFormSubmit(v)}
-                onCancel={() => setFormOp(null)}
-                submitLabel="Add"
-              />
+              {!formCreatedRow ? (
+                <FormRenderer
+                  hostPath={formOp.op.table!}
+                  fields={formOp.table.schema.fields.filter((f) => f.kind !== "formula")}
+                  initialValues={initialValues}
+                  onSubmit={(v) => void handleFormSubmit(v)}
+                  onCancel={() => handleCloseForm()}
+                  submitLabel="Save & continue"
+                />
+              ) : (
+                <div className="qa-master-readonly">
+                  <div className="qa-master-header">
+                    <span className="qa-master-check">✓</span>
+                    <span className="qa-master-pk">{formOp.table.schema?.title ?? "Row"} <strong>{parentPk}</strong></span>
+                  </div>
+                  <div className="qa-master-fields">
+                    {formOp.table.schema.fields.filter((f) => f.kind !== "formula" && f.name !== "_id").map((f) => (
+                      <div key={f.name} className="qa-master-field">
+                        <span className="qa-master-field-label">{f.label ?? f.name}</span>
+                        <span className="qa-master-field-value">{String(formCreatedRow[f.name] ?? "—")}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {formChildTables.length > 0 && (
+                <div className="qa-detail-section">
+                  <div className="qa-detail-title">Details</div>
+                  {formChildTables.map((child) => {
+                    const childFields = child.table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula");
+                    return (
+                      <div key={child.path} className="qa-child-group">
+                        <div className="qa-child-group-title">{child.table.schema?.title ?? child.path}</div>
+                        <QuickAddChildForm
+                          childPath={child.path}
+                          fields={childFields}
+                          fkField={child.fkField}
+                          parentPk={parentPk}
+                          disabled={!formCreatedRow}
+                          existingRows={child.table.rows}
+                          onAdded={() => void reload()}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {formCreatedRow && (
+                <div className="qa-done-row">
+                  <button className="dt-action-btn dt-action-btn--primary" onClick={() => handleCloseForm()}>
+                    Done
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         );

@@ -1,9 +1,6 @@
-/**
- * MobileTabBar — bottom tab bar shown on viewports <=768px.
- * Mirrors the Sidebar's view buttons in a touch-first layout.
- */
 import type { ComponentType } from "react";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconHeartbeat, IconDream } from "./Sidebar/icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights } from "./Sidebar/icons";
+import type { DatabaseSummary } from "../api/datatable";
 
 type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream";
 
@@ -11,21 +8,22 @@ interface Props {
   view: View;
   onViewChange: (v: View) => void;
   onOpenDrawer: () => void;
+  databases?: DatabaseSummary[];
+  selectedApp?: string | null;
+  onAppSelect?: (folder: string) => void;
 }
 
-const TABS: ReadonlyArray<{ id: View; label: string; Icon: ComponentType }> = [
+const STATIC_TABS: ReadonlyArray<{ id: View; label: string; Icon: ComponentType }> = [
   { id: "chat", label: "Chat", Icon: IconChat },
   { id: "calendar", label: "Calendar", Icon: IconCalendar },
   { id: "vault", label: "Vault", Icon: IconVault },
   { id: "kanban", label: "Kanban", Icon: IconKanban },
-  { id: "data", label: "Data", Icon: IconDatabase },
   { id: "graph", label: "Graph", Icon: IconGraph },
-  { id: "heartbeat", label: "Heartbeat", Icon: IconHeartbeat },
-  { id: "dream", label: "Dream", Icon: IconDream },
   { id: "insights", label: "Insights", Icon: IconInsights },
 ];
 
-export default function MobileTabBar({ view, onViewChange, onOpenDrawer }: Props) {
+export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databases, selectedApp, onAppSelect }: Props) {
+  const appTabs = (databases ?? []).slice(0, 3);
   return (
     <nav className="mobile-tab-bar" aria-label="Primary">
       <button
@@ -40,7 +38,7 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer }: Props
         </svg>
         <span>Menu</span>
       </button>
-      {TABS.map(({ id, label, Icon }) => (
+      {STATIC_TABS.map(({ id, label, Icon }) => (
         <button
           key={id}
           type="button"
@@ -53,6 +51,22 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer }: Props
           <span>{label}</span>
         </button>
       ))}
+      {appTabs.map((db) => {
+        const active = view === "data" && selectedApp === db.folder;
+        return (
+          <button
+            key={db.folder}
+            type="button"
+            aria-label={db.title}
+            aria-current={active ? "page" : undefined}
+            className={active ? "is-active" : undefined}
+            onClick={() => onAppSelect?.(db.folder)}
+          >
+            <span className="mobile-tab-letter">{db.title.charAt(0).toUpperCase()}</span>
+            <span>{db.title.length > 8 ? db.title.slice(0, 7) + "…" : db.title}</span>
+          </button>
+        );
+      })}
     </nav>
   );
 }

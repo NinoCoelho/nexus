@@ -31,6 +31,7 @@ interface Props {
   safePage: number;
   pageCount: number;
   hostPath?: string;
+  selectedRowId?: string | null;
   onToggleSort: (name: string) => void;
   onStartEdit: (rowId: string, field: FieldSchema, value: unknown) => void;
   onCellDraftChange: (v: unknown) => void;
@@ -38,6 +39,7 @@ interface Props {
   onCancelEdit: () => void;
   onEditRow: (row: RowRecord) => void;
   onDeleteRow: (rowId: string) => void;
+  onRowClick: (row: RowRecord) => void;
   onPageChange: (next: number) => void;
 }
 
@@ -69,9 +71,9 @@ interface Props {
  */
 export default function DataTableGrid({
   visibleFields, pageRows, sorted, rows, fields, sort,
-  editingCell, cellDraft, safePage, pageCount, hostPath,
+  editingCell, cellDraft, safePage, pageCount, hostPath, selectedRowId,
   onToggleSort, onStartEdit, onCellDraftChange, onCommitEdit, onCancelEdit,
-  onEditRow, onDeleteRow, onPageChange,
+  onEditRow, onDeleteRow, onRowClick, onPageChange,
 }: Props) {
   const [refPreview, setRefPreview] = useState<{ target: string; id: string } | null>(null);
   const handleRefClick = (target: string, id: string) => setRefPreview({ target, id });
@@ -117,8 +119,18 @@ export default function DataTableGrid({
           <tbody>
             {pageRows.map((row, i) => {
               const rowId = String(row._id ?? i);
+              const isSelected = selectedRowId === rowId;
               return (
-                <tr key={rowId}>
+                <tr
+                  key={rowId}
+                  className={isSelected ? "dt-row--selected" : undefined}
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest("button") || target.closest("a") || target.closest("input") || target.closest("select") || target.closest("textarea")) return;
+                    onRowClick(row);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
                   <td className="dt-actions-col dt-actions-col--icons">
                     <button
                       className="dt-icon-btn"

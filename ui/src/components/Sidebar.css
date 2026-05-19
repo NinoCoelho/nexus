@@ -188,6 +188,15 @@
   flex-shrink: 0;
   width: 16px;
 }
+.sidebar-nav-icon--letter {
+  font-size: 11px;
+  font-weight: 600;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+}
 .sidebar-nav-label {
   white-space: nowrap;
   overflow: hidden;

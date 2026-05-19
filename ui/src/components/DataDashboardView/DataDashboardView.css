@@ -745,3 +745,337 @@
   background: var(--bg-soft);
   border-bottom: 1px solid var(--border, color-mix(in srgb, var(--fg) 8%, transparent));
 }
+
+.data-dash-screens {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.data-dash-screen-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: center;
+  transition: all 150ms ease;
+  font-family: inherit;
+  color: var(--fg);
+}
+
+.data-dash-screen-card:hover {
+  border-color: var(--accent);
+}
+
+.data-dash-screen-icon {
+  font-size: 24px;
+}
+
+.data-dash-screen-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.data-dash-screen-desc {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.data-dash-links {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.data-dash-link-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-family: inherit;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.data-dash-link-card:hover {
+  border-color: var(--accent);
+}
+
+.data-dash-link-icon {
+  font-size: 16px;
+}
+
+.data-dash-link-name {
+  text-transform: capitalize;
+}
+
+/* ── Collapsible Tables section ──────────────────────────────────── */
+
+.data-dash-tables-collapse {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+
+.data-dash-tables-toggle {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-dash-tables-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.data-dash-tables-toggle::before {
+  content: "▸";
+  font-size: 10px;
+  transition: transform 120ms ease;
+  display: inline-block;
+}
+
+.data-dash-tables-collapse[open] > .data-dash-tables-toggle::before {
+  transform: rotate(90deg);
+}
+
+.data-dash-tables-collapse[open] {
+  padding-top: 12px;
+}
+
+.data-dash-tables-collapse > :not(.data-dash-tables-toggle) {
+  margin-top: 10px;
+}
+
+.qa-master-readonly {
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.qa-master-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.qa-master-check {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.qa-master-pk strong {
+  color: var(--accent);
+}
+
+.qa-master-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 4px 16px;
+}
+
+.qa-master-field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.qa-master-field-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.qa-master-field-value {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.qa-detail-section {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 12px;
+  padding-top: 8px;
+}
+
+.qa-detail-title {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-faint);
+  margin-bottom: 8px;
+}
+
+.qa-child-group {
+  margin-bottom: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.qa-child-group-title {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+}
+
+.qa-detail-hint {
+  padding: 8px 12px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.qa-child-section {
+  padding: 0;
+}
+
+.qa-mini-table-wrap {
+  margin: 0 0 4px;
+  overflow-x: auto;
+}
+
+.qa-mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.qa-mini-table th {
+  text-align: left;
+  padding: 4px 8px;
+  font-weight: 500;
+  color: var(--fg-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+
+.qa-mini-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qa-mini-th-act,
+.qa-mini-td-act {
+  width: 24px;
+  text-align: center;
+}
+
+.qa-added-remove {
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+}
+
+.qa-added-remove:hover {
+  color: var(--bad);
+}
+
+.qa-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px 8px;
+  align-items: flex-end;
+}
+
+.qa-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 100px;
+  flex: 1;
+}
+
+.qa-inline-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-faint);
+}
+
+.qa-inline-input {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.qa-inline-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.qa-inline-add {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: flex-end;
+}
+
+.qa-inline-add:hover { opacity: 0.9; }
+.qa-inline-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.qa-done-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.dt-action-btn--primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dt-action-btn--primary:hover {
+  opacity: 0.9;
+}

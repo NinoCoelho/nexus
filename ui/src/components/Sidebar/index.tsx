@@ -9,11 +9,11 @@ import {
   getSessions, searchSessions,
   type SessionSearchResult, type SessionSummary,
 } from "../../api";
+import { listDatabases, type DatabaseSummary } from "../../api/datatable";
 import { useToast } from "../../toast/ToastProvider";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
-import DatabaseListPanel from "../DatabaseListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconDatabase, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -48,12 +48,9 @@ interface Props {
   onVisualizeFolderGraph?: (path: string) => void;
   kanbanSelectedPath: string | null;
   onKanbanOpen: (path: string) => void;
-  databaseSelectedPath: string | null;
   databaseSelectedFolder: string | null;
   databaseListRevision?: number;
-  onDatabaseOpen: (path: string) => void;
   onDatabaseSelectFolder: (folder: string) => void;
-  onDatabaseOpenDiagram?: (folder: string) => void;
   /** Mobile drawer open state. When true, sidebar slides in from the left. */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -65,8 +62,8 @@ export default function Sidebar({
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
   onVisualizeFolderGraph,
   kanbanSelectedPath, onKanbanOpen,
-  databaseSelectedPath, databaseSelectedFolder, databaseListRevision,
-  onDatabaseOpen, onDatabaseSelectFolder, onDatabaseOpenDiagram,
+  databaseSelectedFolder, databaseListRevision,
+  onDatabaseSelectFolder,
   mobileOpen = false, onMobileClose,
 }: Props) {
   const { t } = useTranslation("sidebar");
@@ -80,7 +77,6 @@ export default function Sidebar({
       { id: "calendar" as View, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
     ],
     analytics: [
-      { id: "data" as View,     label: t("sidebar:viewNames.data"),     Icon: IconDatabase },
       { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
       { id: "heartbeat" as View, label: "Heartbeat", Icon: IconHeartbeat },
       { id: "dream" as View, label: "Dream", Icon: IconDream },
@@ -94,6 +90,11 @@ export default function Sidebar({
   });
   const [width, setWidth] = useState<number>(() => loadStoredWidth());
   const [resizing, setResizing] = useState(false);
+
+  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>([]);
+  useEffect(() => {
+    listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
+  }, [databaseListRevision]);
 
   useEffect(() => {
     try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* ignore */ }
@@ -272,6 +273,31 @@ export default function Sidebar({
               {!collapsed && <span className="sidebar-nav-label">{label}</span>}
             </button>
           ))}
+          {/* Databases (dynamic) */}
+          {appDatabases.length > 0 && (
+            <>
+              {!collapsed && <div className="sidebar-nav-divider" />}
+              {appDatabases.map((db) => {
+                const active = view === "data" && databaseSelectedFolder === db.folder;
+                return (
+                  <button
+                    key={db.folder}
+                    className={`sidebar-nav-item sidebar-nav-item--app${active ? " sidebar-nav-item--active" : ""}`}
+                    onClick={() => {
+                      onDatabaseSelectFolder(db.folder);
+                      onViewChange("data");
+                    }}
+                    title={collapsed ? db.title : undefined}
+                  >
+                    <span className="sidebar-nav-icon sidebar-nav-icon--letter">
+                      {db.title.charAt(0).toUpperCase()}
+                    </span>
+                    {!collapsed && <span className="sidebar-nav-label">{db.title}</span>}
+                  </button>
+                );
+              })}
+            </>
+          )}
           {!collapsed && <div className="sidebar-nav-divider" />}
           {/* Analytics */}
           {VIEWS.analytics.map(({ id, label, Icon }) => (
@@ -343,22 +369,8 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Data list — only in Data view */}
-      {view === "data" && !collapsed && (
-        <div className="sidebar-section sidebar-vault-section">
-          <DatabaseListPanel
-            selectedPath={databaseSelectedPath}
-            selectedDatabase={databaseSelectedFolder}
-            revision={databaseListRevision}
-            onOpen={onDatabaseOpen}
-            onSelectDatabase={onDatabaseSelectFolder}
-            onOpenDiagram={onDatabaseOpenDiagram}
-          />
-        </div>
-      )}
-
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && !(view === "data" && !collapsed) && (
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}
 

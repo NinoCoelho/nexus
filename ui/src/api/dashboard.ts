@@ -70,13 +70,36 @@ export interface WidgetQueryResult {
   error?: string;
 }
 
+export interface DashboardScreen {
+  id: string;
+  name: string;
+  description?: string;
+  layout: string;
+  sections?: Record<string, unknown>[];
+  actions?: Record<string, unknown>[];
+  flows?: Record<string, unknown>[];
+}
+
+export interface DashboardFlow {
+  id: string;
+  name: string;
+  steps?: Record<string, unknown>[];
+}
+
+export interface DashboardLinks {
+  boards: string[];
+  calendars: string[];
+}
+
 export interface Dashboard {
   folder: string;
   title: string;
   chat_session_id: string | null;
   operations: DashboardOperation[];
   widgets: DashboardWidget[];
-  /** True iff `_data.md` exists on disk; false means caller is seeing defaults. */
+  screens: DashboardScreen[];
+  flows: DashboardFlow[];
+  links: DashboardLinks;
   exists: boolean;
   schema_version?: number;
 }

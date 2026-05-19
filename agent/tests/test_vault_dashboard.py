@@ -339,3 +339,170 @@ def test_delete_database_cleans_up_widget_files(_vault_tmp):
     res = vault_dashboard.delete_database("shop", confirm="shop")
     assert res["deleted"] >= 3
     assert not (_vault_tmp / "shop").exists()
+
+
+# ── Screens CRUD ──────────────────────────────────────────────────────────────
+
+
+def test_upsert_screen_appends():
+    d = vault_dashboard.upsert_screen("shop", {
+        "id": "item-catalog", "name": "Item Catalog", "layout": "search-and-edit",
+        "sections": [{"id": "main", "source": {"table": "items.md"}, "display_fields": ["name", "price"]}],
+    })
+    assert len(d["screens"]) == 1
+    assert d["screens"][0]["id"] == "item-catalog"
+    assert d["screens"][0]["layout"] == "search-and-edit"
+
+
+def test_upsert_screen_replaces_by_id():
+    vault_dashboard.upsert_screen("shop", {
+        "id": "catalog", "name": "v1", "layout": "single-form",
+    })
+    vault_dashboard.upsert_screen("shop", {
+        "id": "catalog", "name": "v2", "layout": "master-detail",
+    })
+    d = vault_dashboard.read_dashboard("shop")
+    assert len(d["screens"]) == 1
+    assert d["screens"][0]["name"] == "v2"
+
+
+def test_upsert_screen_rejects_no_id():
+    with pytest.raises(ValueError, match="id"):
+        vault_dashboard.upsert_screen("shop", {"name": "no-id", "layout": "single-form"})
+
+
+def test_remove_screen():
+    vault_dashboard.upsert_screen("shop", {"id": "a", "name": "A", "layout": "dashboard"})
+    vault_dashboard.upsert_screen("shop", {"id": "b", "name": "B", "layout": "dashboard"})
+    d = vault_dashboard.remove_screen("shop", "a")
+    assert len(d["screens"]) == 1
+    assert d["screens"][0]["id"] == "b"
+
+
+def test_remove_screen_idempotent():
+    d = vault_dashboard.remove_screen("shop", "nonexistent")
+    assert d["screens"] == []
+
+
+# ── Flows CRUD ────────────────────────────────────────────────────────────────
+
+
+def test_upsert_flow_appends():
+    d = vault_dashboard.upsert_flow("shop", {
+        "id": "onboard", "name": "Customer Onboarding",
+        "steps": [
+            {"type": "form", "table": "customers.md", "fields": ["name", "email"]},
+            {"type": "confirm", "message": "Create this customer?"},
+        ],
+    })
+    assert len(d["flows"]) == 1
+    assert d["flows"][0]["id"] == "onboard"
+    assert len(d["flows"][0]["steps"]) == 2
+
+
+def test_upsert_flow_replaces_by_id():
+    vault_dashboard.upsert_flow("shop", {"id": "flow1", "name": "v1", "steps": []})
+    vault_dashboard.upsert_flow("shop", {"id": "flow1", "name": "v2", "steps": [{"type": "confirm"}]})
+    d = vault_dashboard.read_dashboard("shop")
+    assert len(d["flows"]) == 1
+    assert d["flows"][0]["name"] == "v2"
+
+
+def test_upsert_flow_rejects_no_id():
+    with pytest.raises(ValueError, match="id"):
+        vault_dashboard.upsert_flow("shop", {"name": "no-id"})
+
+
+def test_remove_flow():
+    vault_dashboard.upsert_flow("shop", {"id": "f1", "name": "F1"})
+    vault_dashboard.upsert_flow("shop", {"id": "f2", "name": "F2"})
+    d = vault_dashboard.remove_flow("shop", "f1")
+    assert len(d["flows"]) == 1
+    assert d["flows"][0]["id"] == "f2"
+
+
+def test_remove_flow_idempotent():
+    d = vault_dashboard.remove_flow("shop", "nonexistent")
+    assert d["flows"] == []
+
+
+# ── Links CRUD ────────────────────────────────────────────────────────────────
+
+
+def test_add_link_board():
+    d = vault_dashboard.add_link("shop", "boards", "./workflow.md")
+    assert "./workflow.md" in d["links"]["boards"]
+
+
+def test_add_link_calendar():
+    d = vault_dashboard.add_link("shop", "calendars", "./schedule.md")
+    assert "./schedule.md" in d["links"]["calendars"]
+
+
+def test_add_link_dedup():
+    vault_dashboard.add_link("shop", "boards", "./board.md")
+    d = vault_dashboard.add_link("shop", "boards", "./board.md")
+    assert d["links"]["boards"].count("./board.md") == 1
+
+
+def test_add_link_rejects_bad_kind():
+    with pytest.raises(ValueError, match="kind"):
+        vault_dashboard.add_link("shop", "invalid", "./x.md")
+
+
+def test_remove_link():
+    vault_dashboard.add_link("shop", "boards", "./board1.md")
+    vault_dashboard.add_link("shop", "boards", "./board2.md")
+    d = vault_dashboard.remove_link("shop", "boards", "./board1.md")
+    assert d["links"]["boards"] == ["./board2.md"]
+
+
+def test_remove_link_idempotent():
+    d = vault_dashboard.remove_link("shop", "boards", "nonexistent.md")
+    assert d["links"]["boards"] == []
+
+
+# ── Dashboard tool integration ────────────────────────────────────────────────
+
+
+def test_dashboard_tool_add_screen():
+    from nexus.tools.dashboard_tool import handle_dashboard_tool
+    import json
+
+    result = handle_dashboard_tool({
+        "action": "add_screen",
+        "folder": "shop",
+        "screen": {"id": "catalog", "name": "Catalog", "layout": "dashboard"},
+    })
+    parsed = json.loads(result)
+    assert parsed["ok"] is True
+    assert any(s["id"] == "catalog" for s in parsed["dashboard"]["screens"])
+
+
+def test_dashboard_tool_add_flow():
+    from nexus.tools.dashboard_tool import handle_dashboard_tool
+    import json
+
+    result = handle_dashboard_tool({
+        "action": "add_flow",
+        "folder": "shop",
+        "flow": {"id": "onboard", "name": "Onboarding", "steps": []},
+    })
+    parsed = json.loads(result)
+    assert parsed["ok"] is True
+    assert any(f["id"] == "onboard" for f in parsed["dashboard"]["flows"])
+
+
+def test_dashboard_tool_add_link():
+    from nexus.tools.dashboard_tool import handle_dashboard_tool
+    import json
+
+    result = handle_dashboard_tool({
+        "action": "add_link",
+        "folder": "shop",
+        "link_kind": "boards",
+        "link_path": "./board.md",
+    })
+    parsed = json.loads(result)
+    assert parsed["ok"] is True
+    assert "./board.md" in parsed["dashboard"]["links"]["boards"]

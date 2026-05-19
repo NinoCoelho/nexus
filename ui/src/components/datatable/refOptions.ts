@@ -147,14 +147,35 @@ export function fetchTableCached(absPath: string): Promise<DataTable> {
   let p = _tableCache.get(absPath);
   if (!p) {
     p = getVaultDataTable(absPath).catch((err) => {
-      // Drop failed entries so the next call retries instead of returning
-      // the stale rejection forever.
       _tableCache.delete(absPath);
       throw err;
     });
     _tableCache.set(absPath, p);
   }
   return p;
+}
+
+let _cacheRevision = 0;
+const _revListeners = new Set<() => void>();
+
+export function invalidateTableCache(absPath?: string) {
+  if (absPath) {
+    _tableCache.delete(absPath);
+  } else {
+    _tableCache.clear();
+  }
+  _cacheRevision++;
+  for (const fn of _revListeners) fn();
+}
+
+function useCacheRevision() {
+  const [rev, setRev] = useState(_cacheRevision);
+  useEffect(() => {
+    const fn = () => setRev(_cacheRevision);
+    _revListeners.add(fn);
+    return () => { _revListeners.delete(fn); };
+  }, []);
+  return rev;
 }
 
 /**
@@ -166,6 +187,7 @@ export function useRefOptions(field: FieldSchema, hostPath: string): {
   error: string | null;
 } {
   const target = resolveRefPath(hostPath, field.target_table ?? "");
+  const rev = useCacheRevision();
   const [state, setState] = useState<{ options: RefOption[] | null; error: string | null }>({
     options: null,
     error: null,
@@ -196,7 +218,7 @@ export function useRefOptions(field: FieldSchema, hostPath: string): {
     return () => {
       cancelled = true;
     };
-  }, [target]);
+  }, [target, rev]);
 
   return state;
 }

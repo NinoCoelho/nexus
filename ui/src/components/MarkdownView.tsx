@@ -81,10 +81,12 @@ export function MermaidBlock({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [err, setErr] = useState<string | null>(null);
   const idRef = useRef(`m${Math.random().toString(36).slice(2, 10)}`);
+  const lastRenderedRef = useRef<string | null>(null);
 
   useEffect(() => {
     const trimmed = code.trim();
     if (!trimmed) return;
+    if (lastRenderedRef.current === trimmed) return;
     let cancelled = false;
     loadMermaid()
       .then(async (mermaid) => {
@@ -95,6 +97,7 @@ export function MermaidBlock({ code }: { code: string }) {
       .then((res) => {
         if (cancelled || !ref.current || !res) return;
         ref.current.innerHTML = res.svg;
+        lastRenderedRef.current = trimmed;
         setErr(null);
       })
       .catch((e: unknown) => {
@@ -155,17 +158,19 @@ export default function MarkdownView({
     if (linkifyVaultPaths) t = linkifyVaultPathsFn(t);
     return t;
   }, [children, linkifyVaultPaths]);
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-      urlTransform={urlTransform ?? vaultUrlTransform}
-      components={{
-        img: ({ src, alt, ...rest }) => {
+
+  const mdComponents = useMemo(
+    () =>
+      ({
+        img: ({ src, alt, ...rest }: React.ImgHTMLAttributes<HTMLImageElement> & { src?: string }) => {
           const url = rewriteVaultMediaUrl(typeof src === "string" ? src : undefined);
           return <img src={url} alt={alt ?? ""} {...rest} />;
         },
-        code: ({ className, children: codeChildren, ...rest }) => {
+        code: ({
+          className,
+          children: codeChildren,
+          ...rest
+        }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
           const match = /language-([\w-]+)/.exec(className || "");
           const lang = match?.[1];
           const raw = String(codeChildren ?? "");
@@ -179,9 +184,17 @@ export default function MarkdownView({
               </Suspense>
             );
           }
-          return <code className={className} {...rest}>{codeChildren}</code>;
+          return (
+            <code className={className} {...rest}>
+              {codeChildren}
+            </code>
+          );
         },
-        a: ({ href, children: linkChildren, ...rest }) => {
+        a: ({
+          href,
+          children: linkChildren,
+          ...rest
+        }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
           const vaultPath = asVaultPath(href ?? "");
           if (vaultPath) {
             return (
@@ -200,7 +213,16 @@ export default function MarkdownView({
           );
         },
         ...components,
-      }}
+      }) as ComponentProps<typeof ReactMarkdown>["components"],
+    [onChartError, previewHandler, components],
+  );
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      urlTransform={urlTransform ?? vaultUrlTransform}
+      components={mdComponents}
     >
       {processed}
     </ReactMarkdown>

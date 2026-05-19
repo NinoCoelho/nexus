@@ -19,6 +19,7 @@ import { getVaultDataTable } from "../../api";
 import DataTableToolbar from "./DataTableToolbar";
 import DataTableGrid from "./DataTableGrid";
 import RelatedRowsPanel from "./RelatedRowsPanel";
+import RowDetailDrawer from "./RowDetailDrawer";
 import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
 import { useDataTableActions } from "./useDataTableActions";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
@@ -41,6 +42,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showSchemaEditor, setShowSchemaEditor] = useState(false);
   const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
+  const [detailRow, setDetailRow] = useState<RowRecord | null>(null);
   const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
 
   // toolbar state
@@ -98,6 +100,12 @@ export default function DataTableView({ path, onOpenTable }: Props) {
 
   const { fields, views, visibleFields, sorted, pageCount } = actions;
 
+  const handleRowClick = useCallback((row: RowRecord) => {
+    setDetailRow(row);
+    setEditingRow(null);
+    setShowAddForm(false);
+  }, []);
+
   if (error) return <div className="dt-error">{error}</div>;
   if (!table) return <div className="dt-loading">Loading…</div>;
 
@@ -107,6 +115,8 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   const editingValues = editingRow
     ? Object.fromEntries(fields.map((f) => [f.name, editingRow[f.name]]))
     : undefined;
+
+  const detailRowId = detailRow ? String(detailRow._id ?? "") : null;
 
   return (
     <VaultLinkPreviewProvider onPreview={onVaultPreview}>
@@ -142,13 +152,10 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         onExportCSV={actions.exportCSV}
         onImportCSV={actions.importCSV}
         onOpenSchema={() => setShowSchemaEditor(true)}
-        onAddRow={() => { setShowAddForm(true); setEditingRow(null); }}
+        onAddRow={() => { setShowAddForm(true); setEditingRow(null); setDetailRow(null); }}
       />
 
       {showAddForm && (() => {
-        // Pre-fill the primary-key column with a suggested next id (e.g.
-        // following C001 C002 C003 with C004) so the user doesn't have to
-        // type it. Only applied on Add — Edit never overwrites existing PKs.
         const { pkName } = deriveLabelInfo(fields, table.schema.table);
         const next = suggestNextPk(actions.rows, pkName);
         const initialValues = next ? { [pkName]: next } : undefined;
@@ -168,11 +175,6 @@ export default function DataTableView({ path, onOpenTable }: Props) {
       })()}
 
       {editingRow && (() => {
-        // Resolve the row's "natural" id the same way the picker + popup do —
-        // explicit primary_key wins, otherwise infer from the first
-        // required text/number field. Falling back to `_id` (the auto-hash)
-        // would mean inbound refs never match because they store the
-        // user-facing key (e.g. "C002"), not the hash.
         const { pkName } = deriveLabelInfo(fields, table.schema.table);
         const editingRowId = editingRow[pkName] ?? editingRow._id;
         return (
@@ -197,31 +199,46 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         );
       })()}
 
-      <DataTableGrid
-        visibleFields={visibleFields}
-        pageRows={pageRows}
-        sorted={sorted}
-        rows={actions.rows}
-        fields={fields}
-        sort={sort}
-        editingCell={editingCell}
-        cellDraft={cellDraft}
-        safePage={safePage}
-        pageCount={pageCount}
-        hostPath={path}
-        onToggleSort={(name) => setSort((s) => {
-          if (!s || s.field !== name) return { field: name, dir: "asc" };
-          if (s.dir === "asc") return { field: name, dir: "desc" };
-          return null;
-        })}
-        onStartEdit={(rowId, f, value) => { setEditingCell({ rowId, field: f.name }); setCellDraft(value); }}
-        onCellDraftChange={setCellDraft}
-        onCommitEdit={() => void actions.commitInlineEdit(editingCell, cellDraft, () => setEditingCell(null))}
-        onCancelEdit={() => setEditingCell(null)}
-        onEditRow={(row) => { setEditingRow(row); setShowAddForm(false); }}
-        onDeleteRow={actions.handleDelete}
-        onPageChange={setPage}
-      />
+      <div className={detailRow ? "dt-with-drawer" : undefined}>
+        <DataTableGrid
+          visibleFields={visibleFields}
+          pageRows={pageRows}
+          sorted={sorted}
+          rows={actions.rows}
+          fields={fields}
+          sort={sort}
+          editingCell={editingCell}
+          cellDraft={cellDraft}
+          safePage={safePage}
+          pageCount={pageCount}
+          hostPath={path}
+          selectedRowId={detailRowId}
+          onToggleSort={(name) => setSort((s) => {
+            if (!s || s.field !== name) return { field: name, dir: "asc" };
+            if (s.dir === "asc") return { field: name, dir: "desc" };
+            return null;
+          })}
+          onStartEdit={(rowId, f, value) => { setEditingCell({ rowId, field: f.name }); setCellDraft(value); }}
+          onCellDraftChange={setCellDraft}
+          onCommitEdit={() => void actions.commitInlineEdit(editingCell, cellDraft, () => setEditingCell(null))}
+          onCancelEdit={() => setEditingCell(null)}
+          onEditRow={(row) => { setEditingRow(row); setShowAddForm(false); setDetailRow(null); }}
+          onDeleteRow={actions.handleDelete}
+          onRowClick={handleRowClick}
+          onPageChange={setPage}
+        />
+        {detailRow && table && (
+          <RowDetailDrawer
+            path={path}
+            rowId={detailRowId ?? ""}
+            row={detailRow}
+            table={table}
+            onClose={() => setDetailRow(null)}
+            onOpenTable={onOpenTable}
+            onRefresh={() => { void reload(); setDetailRow(null); }}
+          />
+        )}
+      </div>
       {vaultPreviewModal}
     </div>
     </VaultLinkPreviewProvider>
