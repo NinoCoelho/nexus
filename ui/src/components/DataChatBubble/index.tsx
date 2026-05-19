@@ -13,6 +13,7 @@
  */
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { MessageSquare, Send, X } from "lucide-react";
 import {
   useDatabaseChatSession,
   type BubbleMessage,
@@ -144,7 +145,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
         title="Chat about this database"
         aria-label="Open data chat"
       >
-        <span className="data-bubble-fab-icon">💬</span>
+        <span className="data-bubble-fab-icon"><MessageSquare size={16} /></span>
         <span className="data-bubble-fab-label">Chat</span>
       </button>
     );
@@ -165,7 +166,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
       />
       <header className="data-bubble-header">
         <div className="data-bubble-title">
-          <span className="data-bubble-title-icon">💬</span>
+          <span className="data-bubble-title-icon"><MessageSquare size={16} /></span>
           <span className="data-bubble-title-text">{databaseTitle || folder.split("/").pop() || "Data"}</span>
         </div>
         <div className="data-bubble-header-actions">
@@ -185,7 +186,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
             title="Collapse"
             aria-label="Collapse chat"
           >
-            ×
+            <X size={14} />
           </button>
         </div>
       </header>
@@ -236,7 +237,7 @@ const DataChatBubble = forwardRef<DataChatBubbleHandle, Props>(function DataChat
           disabled={!draft.trim() || session.thinking}
           aria-label="Send"
         >
-          ↑
+          <Send size={16} />
         </button>
       </form>
       {vaultPreviewModal}

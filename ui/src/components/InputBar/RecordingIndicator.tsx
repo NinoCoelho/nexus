@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import "./RecordingIndicator.css";
 
 interface Props {
@@ -22,7 +23,7 @@ export default function RecordingIndicator({ levels, seconds, onCancel }: Props)
         title="Cancel recording"
         aria-label="Cancel recording"
       >
-        ×
+        <X size={14} />
       </button>
       <span className="recording-dot" aria-hidden="true" />
       <span className="recording-time">{fmt(seconds)}</span>

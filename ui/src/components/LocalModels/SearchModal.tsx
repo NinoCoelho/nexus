@@ -6,6 +6,7 @@
  * GGUF file list inline with quant + size + Download button.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ChevronDown, ChevronRight, Heart, X } from "lucide-react";
 import {
   fmtBytes,
   listDownloads,
@@ -157,7 +158,7 @@ export default function SearchModal({
       >
         <div className="search-modal-head">
           <h3 className="search-modal-title">Browse Hugging Face</h3>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">✕</button>
+          <button className="drawer-close" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
 
         <input
@@ -205,9 +206,9 @@ export default function SearchModal({
                     </div>
                   </div>
                   <div className="search-repo-stats">
-                    <span title="downloads">↓ {r.downloads.toLocaleString()}</span>
-                    <span title="likes">♥ {r.likes}</span>
-                    <span className="search-repo-chev">{isOpen ? "▾" : "▸"}</span>
+                    <span title="downloads"><ArrowDown size={12} /> {r.downloads.toLocaleString()}</span>
+                    <span title="likes"><Heart size={12} /> {r.likes}</span>
+                    <span className="search-repo-chev">{isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                   </div>
                 </button>
 

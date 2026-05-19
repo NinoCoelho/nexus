@@ -7,6 +7,7 @@
  * same guard scan as the agent's skill_manage tool.
  */
 
+import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import CodeMirror from "@uiw/react-codemirror";
@@ -137,7 +138,7 @@ export default function SkillDrawer({ skillName, onClose, onDeleted }: Props) {
               </>
             )}
             <button className="drawer-close" onClick={onClose} aria-label="Close">
-              ✕
+              <X size={16} />
             </button>
           </div>
         </div>

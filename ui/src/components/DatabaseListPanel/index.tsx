@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import {
   listDatabases,
   listDatabaseTables,
@@ -153,7 +154,7 @@ export default function DatabaseListPanel({
                     aria-expanded={isOpen}
                   >
                     <span className={`db-list-caret${isOpen ? " db-list-caret--open" : ""}`}>
-                      ▸
+                      <ChevronRight size={12} />
                     </span>
                     <span className="db-list-group-title">{db.title}</span>
                     <span className="db-list-group-count">{db.table_count}</span>

@@ -19,6 +19,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import type { FieldSchema } from "../../types/form";
 import {
   deriveLabelInfo,
@@ -166,7 +167,7 @@ export function RefPreviewPopup({
             onClick={onClose}
             aria-label="Close preview"
           >
-            ×
+            <X size={14} />
           </button>
         </div>
 

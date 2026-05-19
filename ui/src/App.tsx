@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -751,7 +752,7 @@ export default function App() {
                       onClick={() => setDataSelectedPath(null)}
                       title="Back to dashboard"
                     >
-                      ← Back to dashboard
+                      <ArrowLeft size={14} /> Back to dashboard
                     </button>
                   </div>
                 )}

@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { X } from "lucide-react";
 import { sounds } from "../hooks/useSounds";
 import "./ToastProvider.css";
 
@@ -176,7 +177,7 @@ function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardPr
         aria-label="Dismiss"
         onClick={() => onDismiss(toast.id)}
       >
-        ×
+        <X size={14} />
       </button>
     </div>
   );

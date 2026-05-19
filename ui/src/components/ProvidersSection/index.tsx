@@ -11,6 +11,7 @@
  * so they're never written to the config file.
  */
 
+import { X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -255,7 +256,7 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
                   </>
                 ) : (
                   <button className="settings-icon-btn settings-icon-btn--bad" title={t("providers:remove.removeTitle")} onClick={() => setConfirmRemove(p.name)}>
-                    ✕
+                    <X size={14} />
                   </button>
                 )}
               </div>

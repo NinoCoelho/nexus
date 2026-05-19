@@ -7,6 +7,7 @@
  * and full (drop + rebuild) modes.
  */
 
+import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   graphragReindex,
@@ -132,7 +133,7 @@ export default function ReindexModal({ open, onClose }: Props) {
           <span className="reindex-title">GraphRAG Index</span>
           {!running && (
             <button className="reindex-close" onClick={onClose} aria-label="Close">
-              ✕
+              <X size={16} />
             </button>
           )}
         </div>

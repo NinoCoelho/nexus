@@ -1,3 +1,5 @@
+import { X } from "lucide-react";
+
 // Shared widget components for InsightsView.
 
 export type Window = 7 | 30 | 90 | 365;
@@ -57,7 +59,7 @@ export function FilterPill({ label, onClear }: { label: string; onClear: () => v
       <span>Filtered by model:</span>
       <strong>{label}</strong>
       <button type="button" className="insights-filter-clear" onClick={onClear} aria-label="Clear filter">
-        ✕
+        <X size={12} />
       </button>
     </div>
   );

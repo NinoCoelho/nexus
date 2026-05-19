@@ -19,6 +19,7 @@
  * centered panel with header / body / footer rows.
  */
 
+import { Check, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -213,7 +214,7 @@ export default function SkillWizard({ onClose, onSkillBuilt }: Props) {
             onClick={handleCloseWithBackgroundHandoff}
             aria-label={t("close")}
           >
-            ✕
+            <X size={16} />
           </button>
         </div>
 
@@ -430,7 +431,7 @@ function CandidateCard({
             {candidate.requires_keys.map((k) => (
               <span key={k.name} className="skill-wizard-key-chip">
                 {k.vendor || k.name}
-                {k.free_tier_available ? " ✓" : ""}
+                {k.free_tier_available ? <> <Check size={14} /></> : ""}
               </span>
             ))}
           </span>
@@ -549,7 +550,7 @@ function KeysStep({
                   <span className="skill-wizard-key-vendor">{k.vendor}</span>
                 )}
                 <span className="skill-wizard-key-status">
-                  {present ? "✓ " + t("keys.ready") : t("keys.missing")}
+                  {present ? <><Check size={14} /> {t("keys.ready")}</> : t("keys.missing")}
                 </span>
               </div>
               <div className="skill-wizard-key-row-actions">
@@ -699,7 +700,7 @@ function PlanStep({
                     title={c.summary}
                   >
                     <span className="skill-wizard-bundle-chip-mark" aria-hidden="true">
-                      {checked ? "✓" : "+"}
+                      {checked ? <Check size={14} /> : "+"}
                     </span>
                     <span className="skill-wizard-bundle-chip-title">{c.title}</span>
                   </button>
@@ -837,7 +838,7 @@ function BuildStep({
   if (terminal?.kind === "success") {
     return (
       <div className="skill-wizard-step skill-wizard-build-success">
-        <div className="skill-wizard-build-icon" aria-hidden="true">✓</div>
+        <div className="skill-wizard-build-icon" aria-hidden="true"><Check size={14} /></div>
         <h2 className="skill-wizard-step-heading">{t("build.success")}</h2>
         <p className="skill-wizard-helper">
           {t("build.successDetail")}
@@ -860,7 +861,7 @@ function BuildStep({
   if (terminal?.kind === "failure") {
     return (
       <div className="skill-wizard-step skill-wizard-build-failure">
-        <div className="skill-wizard-build-icon" aria-hidden="true">✕</div>
+        <div className="skill-wizard-build-icon" aria-hidden="true"><X size={14} /></div>
         <h2 className="skill-wizard-step-heading">{t("build.failed")}</h2>
         <p className="skill-wizard-helper">
           {t("build.failedDetail")}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { KanbanCard } from "../../api";
 import MarkdownView from "../MarkdownView";
@@ -313,7 +314,7 @@ export default function KanbanCardItem({
           className="kanban-card-btn kanban-card-btn--danger"
           onClick={(e) => { e.stopPropagation(); onDelete(); }}
           title="Delete card"
-        >×</button>
+        ><X size={14} /></button>
       </div>
       {ctxMenu && (
         <div className="kanban-card-ctx" style={{ top: ctxTop, left: ctxLeft, width: menuWidth }}>

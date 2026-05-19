@@ -10,6 +10,7 @@
  * wizard in add mode.
  */
 
+import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteModel,
@@ -299,7 +300,7 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
                 onClick={() => setConfirmRemoveProvider(p.name)}
                 aria-label={`Remove ${p.name}`}
               >
-                ✕
+                <X size={14} />
               </button>
             </div>
             <div className="providers-list-card__body">
@@ -314,7 +315,7 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
                     }
                     aria-label={`Remove ${m.model_name}`}
                   >
-                    ✕
+                    <X size={12} />
                   </button>
                 </span>
               ))}

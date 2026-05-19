@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
 import Modal, { type ModalProps } from "../Modal";
 import "../VaultView.css";
 import {
@@ -254,7 +255,7 @@ export default function VaultTreePanel({
           spellCheck={false}
         />
         {searchQuery && (
-          <button className="vault-search-clear" onClick={() => { setSearchQuery(""); setSearchResults([]); }} title="Clear">×</button>
+          <button className="vault-search-clear" onClick={() => { setSearchQuery(""); setSearchResults([]); }} title="Clear"><X size={14} /></button>
         )}
         <button className="vault-search-reindex" onClick={() => void handleReindex()} title="Reindex vault">
           <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

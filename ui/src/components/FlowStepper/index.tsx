@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import type { DashboardFlow } from "../../api/dashboard";
 import {
   getVaultDataTable,
@@ -151,7 +152,7 @@ export default function FlowStepper({ flow, folder, onClose, onComplete }: Props
           <div className="flow-stepper-steps">
             Step {currentStep + 1} of {steps.length}
           </div>
-          <button className="flow-stepper-close" onClick={onClose}>×</button>
+          <button className="flow-stepper-close" onClick={onClose}><X size={14} /></button>
         </div>
 
         <div className="flow-stepper-progress">

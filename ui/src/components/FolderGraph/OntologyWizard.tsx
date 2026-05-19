@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Sparkles, X } from "lucide-react";
 import {
   answerOntologyWizard,
   startOntologyWizard,
@@ -100,9 +101,9 @@ export function OntologyWizard({ folderPath, onAccept, onCancel, onActiveChange 
   return (
     <div className="fg-wizard">
       <div className="fg-wizard-header">
-        <span className="fg-wizard-title">✨ Ontology wizard</span>
+        <span className="fg-wizard-title"><Sparkles size={14} /> Ontology wizard</span>
         <button type="button" className="fg-icon-btn" onClick={onCancel} title="Cancel wizard">
-          ×
+          <X size={14} />
         </button>
       </div>
 

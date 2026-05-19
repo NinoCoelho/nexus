@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import type { FieldSchema } from "../../types/form";
 import { useRefOptions, type RefOption } from "../datatable/refOptions";
 import RefSearchPopup from "./RefSearchPopup";
@@ -255,7 +256,7 @@ function SingleRefCombobox({
               onClick={clearValue}
               title="Clear"
             >
-              ×
+              <X size={14} />
             </button>
           )}
           <button
@@ -454,7 +455,7 @@ function MultiRefCombobox({
                 removeRef(id);
               }}
             >
-              ×
+              <X size={14} />
             </button>
           </span>
         ))}

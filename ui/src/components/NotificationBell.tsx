@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { HitlEventRow, HitlEventStatus } from "../api";
 import type { PushPermission } from "../hooks/usePushSubscription";
@@ -205,7 +206,7 @@ export default function NotificationBell({
                           title={t("chat:notifications.cancelRequestTitle")}
                           aria-label={t("chat:notifications.cancelRequestAria")}
                         >
-                          ×
+                          <X size={14} />
                         </button>
                       )}
                     </div>

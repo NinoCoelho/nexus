@@ -1,3 +1,4 @@
+import { Settings as SettingsIcon, X, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { KanbanCard, KanbanLane } from "../../api";
 import KanbanCardItem from "./KanbanCardItem";
@@ -101,7 +102,7 @@ export default function KanbanLaneColumn({
         <span className="kanban-lane-title">
           {lane.title}
           {lane.prompt && (
-            <span className="kanban-lane-prompt-indicator" title={t("kanban:lane.promptIndicator")}>⚡</span>
+            <span className="kanban-lane-prompt-indicator" title={t("kanban:lane.promptIndicator")}><Zap size={12} /></span>
           )}
         </span>
         <span className="kanban-lane-count">{lane.cards.length}</span>
@@ -109,12 +110,12 @@ export default function KanbanLaneColumn({
           className="kanban-icon-btn"
           title={lane.prompt ? t("kanban:lane.editPrompt") : t("kanban:lane.setPrompt")}
           onClick={() => onEditLane(lane)}
-        >⚙</button>
+        ><SettingsIcon size={12} /></button>
         <button
           className="kanban-icon-btn"
           title={t("kanban:lane.deleteLane")}
           onClick={() => onDeleteLane(lane.id)}
-        >×</button>
+        ><X size={14} /></button>
       </div>
       <div
         className="kanban-lane-cards"

@@ -10,6 +10,7 @@
  */
 
 import type { ReactNode } from "react";
+import { AlertTriangle, Check, FileText, MessageSquare, Sparkles, X } from "lucide-react";
 import type { DashboardOperation } from "../../api/dashboard";
 
 export type OpRunStatus = "running" | "done" | "failed";
@@ -67,7 +68,7 @@ export default function OperationChips({
               title={op.prompt || op.label}
               disabled={state?.status === "running"}
             >
-              <span className="data-dash-chip-kind">{op.kind === "form" ? "📝" : "💬"}</span>
+              <span className="data-dash-chip-kind">{op.kind === "form" ? <FileText size={14} /> : <MessageSquare size={14} />}</span>
               <span className="data-dash-chip-label">{op.label}</span>
             </button>
             {indicator && onOpenRun && (
@@ -95,7 +96,7 @@ export default function OperationChips({
                 title="Remove operation"
                 aria-label="Remove operation"
               >
-                ×
+                <X size={14} />
               </button>
             )}
           </div>
@@ -116,7 +117,7 @@ export default function OperationChips({
           onClick={onAddOperationWizard}
           title="Design an operation with a wizard — describe what you want and the agent helps shape it."
         >
-          ✨ Wizard
+          <Sparkles size={14} /> Wizard
         </button>
       )}
     </div>
@@ -128,7 +129,7 @@ function renderIndicator(status: OpRunStatus): ReactNode {
     return <span className="kanban-card-spin" aria-hidden />;
   }
   if (status === "failed") {
-    return <span className="data-dash-chip-status-icon" aria-hidden>⚠</span>;
+    return <span className="data-dash-chip-status-icon" aria-hidden><AlertTriangle size={14} /></span>;
   }
-  return <span className="data-dash-chip-status-icon" aria-hidden>✓</span>;
+  return <span className="data-dash-chip-status-icon" aria-hidden><Check size={14} /></span>;
 }

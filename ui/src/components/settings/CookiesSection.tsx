@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Cookie } from "lucide-react";
 import { type CookieDomain, listCookies, deleteCookies } from "../../api/cookies";
 import { useToast } from "../../toast/ToastProvider";
 import Modal from "../Modal";
@@ -44,7 +45,7 @@ export default function CookiesSection() {
   return (
     <SettingsSection
       title={t("settings:features.cookiesTitle", "Web Scraping Cookies")}
-      icon="🍪"
+      icon={<Cookie size={16} />}
       collapsible
       defaultOpen={false}
       help={{

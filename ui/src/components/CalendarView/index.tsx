@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Settings as SettingsIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   type Calendar as CalendarFile,
@@ -346,7 +347,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
           </label>
         )}
         {calendar && (
-          <button title={t("calendar:header.settingsTitle")} onClick={() => setSettingsOpen(true)}>⚙</button>
+          <button title={t("calendar:header.settingsTitle")} onClick={() => setSettingsOpen(true)}><SettingsIcon size={14} /></button>
         )}
       </div>
 

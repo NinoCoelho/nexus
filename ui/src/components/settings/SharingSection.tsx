@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link, AlertTriangle, Check } from "lucide-react";
 import {
   getTunnelStatus,
   startTunnel,
@@ -134,7 +135,7 @@ export default function SharingSection() {
     <>
       <SettingsSection
         title={t("tunnel:sharing.sectionTitle")}
-        icon="🔗"
+        icon={<Link size={16} />}
         collapsible
         defaultOpen={false}
         help={{
@@ -201,7 +202,7 @@ export default function SharingSection() {
                   lineHeight: 1.5,
                 }}
               >
-                <strong style={{ color: "var(--warn)" }}>⚠ {t("tunnel:sharing.active.warning")}</strong>{" "}
+                <strong style={{ color: "var(--warn)" }}><AlertTriangle size={14} style={{ verticalAlign: "middle" }} /> {t("tunnel:sharing.active.warning")}</strong>{" "}
                 {t("tunnel:sharing.active.warningBody")}
               </div>
               <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
@@ -272,7 +273,7 @@ export default function SharingSection() {
                         border: "1px solid rgba(80, 200, 120, 0.35)",
                       }}
                     >
-                      <strong style={{ color: "var(--ok)" }}>✓ {t("tunnel:sharing.active.paired")}</strong>{" "}
+                      <strong style={{ color: "var(--ok)" }}><Check size={14} style={{ verticalAlign: "middle" }} /> {t("tunnel:sharing.active.paired")}</strong>{" "}
                       {t("tunnel:sharing.active.pairedBody")}
                     </div>
                   ) : null}

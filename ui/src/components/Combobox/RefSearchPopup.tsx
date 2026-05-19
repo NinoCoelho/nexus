@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import type { FieldSchema } from "../../types/form";
 import { resolveRefPath, fetchTableCached, deriveLabelInfo, suggestNextPk, invalidateTableCache } from "../datatable/refOptions";
 import type { DataTable } from "../../api/datatable";
@@ -156,7 +157,7 @@ export default function RefSearchPopup({ field, hostPath, onSelect, onClose }: P
             {!showAddForm && table && (
               <button className="cbx-add-btn" onClick={handleOpenAdd} title="Add new row">+ New</button>
             )}
-            <button className="cbx-search-close" onClick={onClose}>×</button>
+            <button className="cbx-search-close" onClick={onClose}><X size={14} /></button>
           </div>
           <div className="cbx-search-body">
             {error && <div className="cbx-search-empty">{error}</div>}

@@ -12,6 +12,7 @@
  * use Modal + useToast.
  */
 
+import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyProviderWizard,
@@ -603,7 +604,7 @@ export default function WizardModal({
               onClick={() => onClose({ saved: false })}
               aria-label="Close wizard"
             >
-              ✕
+              <X size={16} />
             </button>
           )}
         </div>

@@ -13,6 +13,7 @@
  * keep their internal form state where it matters (ModelsSection's editingId).
  */
 
+import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -113,7 +114,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
         <div className="drawer-header">
           <span className="drawer-title">{t("settings:drawer.title")}</span>
           <button className="drawer-close" onClick={onClose} aria-label={t("settings:drawer.closeAria")}>
-            ✕
+            <X size={16} />
           </button>
         </div>
 

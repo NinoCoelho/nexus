@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Calendar, Check, ClipboardList } from "lucide-react";
 import {
   fetchDashboard,
   addOperation,
@@ -720,7 +721,7 @@ export default function AppDashboardView({
                 className="data-dash-link-card"
                 onClick={() => _onOpenInVault?.(path.replace(/^\.\//, `${folder}/`))}
               >
-                <span className="data-dash-link-icon">📋</span>
+                <span className="data-dash-link-icon"><ClipboardList size={16} /></span>
                 <span className="data-dash-link-name">
                   {path.replace(/^\.\//, "").replace(".md", "").replace(/[-_]/g, " ")}
                 </span>
@@ -732,7 +733,7 @@ export default function AppDashboardView({
                 className="data-dash-link-card"
                 onClick={() => _onOpenInVault?.(path.replace(/^\.\//, `${folder}/`))}
               >
-                <span className="data-dash-link-icon">📅</span>
+                <span className="data-dash-link-icon"><Calendar size={16} /></span>
                 <span className="data-dash-link-name">
                   {path.replace(/^\.\//, "").replace(".md", "").replace(/[-_]/g, " ")}
                 </span>
@@ -856,7 +857,7 @@ export default function AppDashboardView({
               ) : (
                 <div className="qa-master-readonly">
                   <div className="qa-master-header">
-                    <span className="qa-master-check">✓</span>
+                    <span className="qa-master-check"><Check size={14} /></span>
                     <span className="qa-master-pk">{formOp.table.schema?.title ?? "Row"} <strong>{parentPk}</strong></span>
                   </div>
                   <div className="qa-master-fields">

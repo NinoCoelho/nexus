@@ -8,6 +8,7 @@
  */
 
 import { useState } from "react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import type { FieldKind, FieldSchema, RollupAggregate } from "../../types/form";
 
 interface Props {
@@ -190,14 +191,14 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
                 onChange={(e) => update(i, { required: e.target.checked })}
               />
               <div className="dt-schema-field-actions">
-                <button className="dt-action-btn" type="button" onClick={() => move(i, -1)}>↑</button>
-                <button className="dt-action-btn" type="button" onClick={() => move(i, 1)}>↓</button>
+                <button className="dt-action-btn" type="button" onClick={() => move(i, -1)}><ChevronUp size={14} /></button>
+                <button className="dt-action-btn" type="button" onClick={() => move(i, 1)}><ChevronDown size={14} /></button>
                 <button
                   className="dt-action-btn dt-action-btn--delete"
                   type="button"
                   onClick={() => remove(i)}
                 >
-                  ×
+                  <X size={14} />
                 </button>
               </div>
             </div>

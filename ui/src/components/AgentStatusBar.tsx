@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { SessionUsage } from "../api";
 import type { CompactResult } from "../api/sessions";
 import ContextDropdown from "./ContextDropdown";
@@ -68,7 +69,7 @@ export default function AgentStatusBar({ usage, thinking, selectedModel, session
       )}
       {total > 0 && (
         <span className="agent-status-pill" title={`In: ${input_tokens.toLocaleString()} · Out: ${output_tokens.toLocaleString()}`}>
-          {fmtTokens(input_tokens)}↑ {fmtTokens(output_tokens)}↓
+          {fmtTokens(input_tokens)}<ChevronUp size={10} /> {fmtTokens(output_tokens)}<ChevronDown size={10} />
         </span>
       )}
       {tool_call_count > 0 && (

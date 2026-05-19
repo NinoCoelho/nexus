@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Volume2 } from "lucide-react";
 import { type KnowledgeStats, type Model } from "../../api";
 import CookiesSection from "./CookiesSection";
 import ReindexModal from "../ReindexModal";
@@ -42,7 +43,7 @@ export default function FeaturesTab({ graphStats, models }: Props) {
 
       <SettingsSection
         title="Voice & speech"
-        icon="🔊"
+        icon={<Volume2 size={16} />}
         collapsible
         defaultOpen={false}
         help={{

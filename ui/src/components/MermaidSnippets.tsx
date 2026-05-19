@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 
 const SNIPPETS: { label: string; body: string }[] = [
   {
@@ -54,7 +55,7 @@ export default function MermaidSnippets({ onInsert }: Props) {
         aria-expanded={open}
         title="Insert a mermaid diagram template"
       >
-        Mermaid ▾
+        Mermaid <ChevronDown size={12} />
       </button>
       {open && (
         <div className="vault-mermaid-menu" role="menu">

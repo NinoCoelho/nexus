@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { X } from "lucide-react";
 import {
   type GraphSettings,
   DEFAULT_GRAPH_SETTINGS,
@@ -37,7 +38,7 @@ export function GraphSettingsPanel({ settings, onChange, onClose }: Props) {
             Reset
           </button>
           <button className="ug-settings-close" onClick={onClose} aria-label="Close settings">
-            ×
+            <X size={14} />
           </button>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Star } from "lucide-react";
 import { putRouting, type Model, type RoutingConfig } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 
@@ -40,7 +41,7 @@ export default function DefaultModelStrip({ routing, models, onChanged }: Props)
 
   return (
     <div className="s-default-strip">
-      <span className="s-default-strip__icon" aria-hidden>★</span>
+      <span className="s-default-strip__icon" aria-hidden><Star size={14} /></span>
       <div className="s-default-strip__text">
         <span className="s-default-strip__label">{t("settings:defaultModel.label")}</span>
         {picking ? (

@@ -7,6 +7,7 @@
  * listed for transparency but are skipped by the undo walk.
  */
 
+import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -101,7 +102,7 @@ export default function VaultHistoryPanel({ path, onClose, onUndone }: Props) {
         <div className="drawer-header">
           <span className="drawer-title">{t("vault:history.drawerTitle", { path })}</span>
           <button className="drawer-close" onClick={onClose} aria-label={t("vault:history.closeAria")}>
-            ✕
+            <X size={16} />
           </button>
         </div>
         <div className="vault-history-toolbar">

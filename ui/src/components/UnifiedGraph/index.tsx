@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Settings as SettingsIcon, RefreshCw, X, Search, Maximize, Maximize2 } from "lucide-react";
 import "../KnowledgeView.css";
 import "../GraphView.css";
 import "../AgentGraphView.css";
@@ -272,21 +273,21 @@ export default function UnifiedGraph({
             onClick={() => setFolderEditTrigger((v) => v + 1)}
             title="Edit ontology"
           >
-            ⚙
+            <SettingsIcon size={14} />
           </button>
           <button
             className="ug-tool-btn"
             onClick={() => setFolderReindexTrigger((v) => v + 1)}
             title="Rebuild graph from scratch"
           >
-            ⟳
+            <RefreshCw size={14} />
           </button>
           <button
             className="ug-tool-btn"
             onClick={() => setFolderResetTrigger((v) => v + 1)}
             title="Delete graph and start over"
           >
-            ✕
+            <X size={14} />
           </button>
         </>
       )}
@@ -296,7 +297,7 @@ export default function UnifiedGraph({
         onClick={() => setSettingsOpen((v) => !v)}
         title="Display settings"
       >
-        ⚙
+        <SettingsIcon size={14} />
       </button>
 
       <button
@@ -307,22 +308,22 @@ export default function UnifiedGraph({
         }}
         title="Find in graph (/)"
       >
-        🔍
+        <Search size={14} />
       </button>
       <button className="ug-tool-btn ug-tool-btn--hint" title="Drag = rotate · Right-drag = pan · Scroll = zoom · / = find in graph · Esc = close find / exit full view">?</button>
-      <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)">↻</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)"><RefreshCw size={14} /></button>
       <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomIn()} title="Zoom in">+</button>
       <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomOut()} title="Zoom out">−</button>
-      <button className="ug-tool-btn" onClick={() => canvasRef.current?.fit()} title="Fit to view (f)">⛶</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.fit()} title="Fit to view (f)"><Maximize size={14} /></button>
       {showRefresh && refresh && (
-        <button className="ug-tool-btn" onClick={refresh} title="Refresh data">⟳</button>
+        <button className="ug-tool-btn" onClick={refresh} title="Refresh data"><RefreshCw size={14} /></button>
       )}
       <button
         className={`ug-tool-btn${fullscreen ? " ug-tool-btn--active" : ""}`}
         onClick={() => setFullscreen((v) => !v)}
         title={fullscreen ? "Exit full view (Esc)" : "Full view"}
       >
-        {fullscreen ? "✕" : "▢"}
+        {fullscreen ? <X size={14} /> : <Maximize2 size={14} />}
       </button>
     </div>
   );
@@ -366,7 +367,7 @@ export default function UnifiedGraph({
                 title="Close tab (keeps the .nexus-graph index on disk)"
                 aria-label={`Close ${t.label}`}
               >
-                ×
+                <X size={14} />
               </button>
             </span>
           ))}
@@ -409,7 +410,7 @@ export default function UnifiedGraph({
             title="Close (Esc)"
             aria-label="Close find widget"
           >
-            ×
+            <X size={14} />
           </button>
         </div>
       )}

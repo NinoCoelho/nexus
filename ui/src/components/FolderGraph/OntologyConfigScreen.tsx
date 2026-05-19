@@ -7,6 +7,7 @@
  */
 
 import { useState } from "react";
+import { Sparkles, X } from "lucide-react";
 import type { FolderOntology } from "../../api/folderGraph";
 import { OntologyWizard } from "./OntologyWizard";
 import "./FolderGraph.css";
@@ -96,7 +97,7 @@ export function OntologyConfigScreen({
             onClick={() => setWizardOpen(true)}
             disabled={wizardActive}
           >
-            ✨ Auto-propose with LLM
+            <Sparkles size={14} /> Auto-propose with LLM
           </button>
         </div>
 
@@ -206,7 +207,7 @@ function ListEditor({
             title="Remove"
             aria-label={`Remove ${v}`}
           >
-            ×
+            <X size={14} />
           </button>
         </div>
       ))}

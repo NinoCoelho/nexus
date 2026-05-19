@@ -4,6 +4,7 @@
  * edit.
  */
 
+import { MessageSquare, Play, Zap } from "lucide-react";
 import type { CalendarEvent } from "../../api/calendar";
 import {
   DOW_LABELS,
@@ -74,7 +75,7 @@ export default function MonthGrid({ visible, events, onCellClick, onEventClick, 
                   title={`${ev.title} — ${ev.status}${isAgentAssigned(ev) ? " (auto-runs agent)" : ""}`}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {isAgentAssigned(ev) && <span style={{ marginRight: 3 }}>⚡</span>}
+                    {isAgentAssigned(ev) && <span style={{ marginRight: 3 }}><Zap size={12} /></span>}
                     {!ev.all_day && parseEventStart(ev.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}{" "}
                     {ev.title}
                   </span>
@@ -83,13 +84,13 @@ export default function MonthGrid({ visible, events, onCellClick, onEventClick, 
                       className="cal-event-fire-btn"
                       title="Fire now"
                       onClick={(e) => { e.stopPropagation(); onEventFire(ev); }}
-                    >▶</button>
+                    ><Play size={12} /></button>
                   )}
                   <button
                     className="cal-event-chat-btn"
                     title="Open in chat"
                     onClick={(e) => { e.stopPropagation(); onEventOpenChat(ev); }}
-                  >💬</button>
+                  ><MessageSquare size={12} /></button>
                 </div>
               ))}
               {dayEvents.length > 3 && (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ChevronDown, ChevronUp, X } from "lucide-react";
 import {
   addVaultCsvRow,
   deleteVaultCsvRow,
@@ -185,7 +186,7 @@ export default function CsvEditorView({ path }: CsvEditorViewProps) {
                     disabled={busy}
                     onClick={() => void onDeleteRow(i)}
                   >
-                    ×
+                    <X size={14} />
                   </button>
                 </td>
               </tr>
@@ -269,16 +270,16 @@ function SchemaPanel({ path, columns, onClose, onSaved }: SchemaPanelProps) {
               }
             />
             <span className="csv-schema-from">
-              {c.rename_from ? `← ${c.rename_from}` : "(new)"}
+              {c.rename_from ? <><ArrowLeft size={12} /> {c.rename_from}</> : "(new)"}
             </span>
-            <button className="csv-row-del" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
-            <button className="csv-row-del" onClick={() => move(i, 1)} disabled={i === draft.length - 1}>↓</button>
+            <button className="csv-row-del" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp size={14} /></button>
+            <button className="csv-row-del" onClick={() => move(i, 1)} disabled={i === draft.length - 1}><ChevronDown size={14} /></button>
             <button
               className="csv-row-del"
               onClick={() => setDraft((d) => d.filter((_, k) => k !== i))}
               title="Drop column"
             >
-              ×
+              <X size={14} />
             </button>
           </li>
         ))}

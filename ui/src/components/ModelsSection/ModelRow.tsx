@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Pencil, Lock, X } from "lucide-react";
 import type { Model } from "../../api";
 
 interface Props {
@@ -126,14 +127,14 @@ export default function ModelRow({
         </div>
         <div className="settings-card-actions">
           <button className="settings-icon-btn" title={t("models:row.editTitle")} onClick={onEdit}>
-            ✎
+            <Pencil size={14} />
           </button>
           {locked ? (
             <span
               className="settings-icon-btn settings-icon-btn--locked"
               title={t("models:row.lockedTitle")}
             >
-              🔒
+              <Lock size={14} />
             </span>
           ) : confirmRemove === m.id ? (
             <>
@@ -150,7 +151,7 @@ export default function ModelRow({
               title={t("models:row.removeTitle")}
               onClick={onConfirmRemove}
             >
-              ✕
+              <X size={14} />
             </button>
           )}
         </div>

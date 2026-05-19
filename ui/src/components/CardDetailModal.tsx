@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Link } from "lucide-react";
 import MarkdownView from "./MarkdownView";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import { useVaultLinkPreview } from "./vaultLink";
@@ -233,7 +234,7 @@ export default function CardDetailModal({ card, lane, boardPath, onClose, onSave
                       handleToolbar(btn.action, btn.args);
                     }}
                   >
-                    {btn.label}
+                    {btn.action === "link" ? <Link size={14} /> : btn.label}
                   </button>
                 )
               )}

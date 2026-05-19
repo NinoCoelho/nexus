@@ -1,6 +1,6 @@
 {
   "name": "nexus-ui",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,6 +14,7 @@
     "cytoscape": "^3.33.2",
     "i18next": "^23.16.8",
     "i18next-browser-languagedetector": "^8.2.1",
+    "lucide-react": "^1.16.0",
     "mermaid": "^11.14.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
