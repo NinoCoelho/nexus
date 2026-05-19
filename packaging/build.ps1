@@ -53,7 +53,7 @@ $PyTriple  = 'x86_64-pc-windows-msvc'
 $PyDist    = "cpython-$PyVersion+$PyBuild-$PyTriple-install_only.tar.gz"
 $PyUrl     = "https://github.com/astral-sh/python-build-standalone/releases/download/$PyBuild/$PyDist"
 
-$LlamaTag  = 'b8929'
+$LlamaTag  = 'b9222'
 # Win64 CPU-only build is the safest default — works on every machine. Users
 # with a real GPU can swap in the cuda/vulkan archive by hand and rerun.
 $LlamaDist = "llama-$LlamaTag-bin-win-cpu-x64.zip"

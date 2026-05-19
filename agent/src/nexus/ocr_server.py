@@ -21,8 +21,6 @@ stops.
 from __future__ import annotations
 
 import logging
-import os
-import shutil
 import socket
 import subprocess
 import time
@@ -106,26 +104,8 @@ def _pick_free_port(host: str = "127.0.0.1") -> int:
 
 
 def _discover_binary() -> Path | None:
-    env_bin = os.environ.get("NEXUS_LLAMA_BIN", "")
-    if env_bin:
-        p = Path(env_bin)
-        if p.is_file():
-            return p
-
-    bundle_dir = os.environ.get("NEXUS_BUNDLE_DIR", "")
-    if bundle_dir:
-        for candidate in Path(bundle_dir).glob("llama/**/llama-server"):
-            if candidate.is_file():
-                return candidate
-
-    user_llama = Path.home() / ".nexus" / "llama"
-    if user_llama.is_dir():
-        for candidate in user_llama.glob("**/llama-server"):
-            if candidate.is_file():
-                return candidate
-
-    which = shutil.which("llama-server")
-    return Path(which) if which else None
+    from .local_llm.manager import discover_binary
+    return discover_binary()
 
 
 def _wait_health(port: int, proc: subprocess.Popen) -> bool:

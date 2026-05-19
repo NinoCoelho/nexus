@@ -105,7 +105,7 @@ if [[ "$DEMO_SET_COUNT" -ne 0 && "$DEMO_SET_COUNT" -ne 3 ]]; then
   exit 2
 fi
 
-LLAMA_TAG="b8929"
+LLAMA_TAG="b9222"
 LLAMA_DIST="llama-${LLAMA_TAG}-bin-macos-arm64.tar.gz"
 LLAMA_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LLAMA_TAG}/${LLAMA_DIST}"
 

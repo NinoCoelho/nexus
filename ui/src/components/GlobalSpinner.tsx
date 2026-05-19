@@ -1,12 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { RunningJob } from "../hooks/useRunningJobs";
+import type { DownloadTask } from "../api/localLlm";
+import { fmtBytes } from "../api/localLlm";
 import "./GlobalSpinner.css";
 
 interface Props {
   jobs: RunningJob[];
+  downloads?: DownloadTask[];
   onKill: (jobId: string) => void;
   onGoTo: (sessionId: string | null, type: string) => void;
+  onCancelDownload?: (taskId: string) => void;
 }
 
 const TYPE_META: Record<string, { icon: string; view: string }> = {
@@ -26,18 +30,26 @@ function formatElapsed(seconds: number): string {
   return `${m}m${s > 0 ? ` ${s}s` : ""}`;
 }
 
-export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
+export default function GlobalSpinner({
+  jobs,
+  downloads = [],
+  onKill,
+  onGoTo,
+  onCancelDownload,
+}: Props) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [tick, setTick] = useState(0);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 
+  const totalCount = jobs.length + downloads.length;
+
   useEffect(() => {
-    if (jobs.length === 0) return;
+    if (totalCount === 0) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [jobs.length]);
+  }, [totalCount]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -58,7 +70,7 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  if (jobs.length === 0) return null;
+  if (totalCount === 0) return null;
 
   const now = Date.now() / 1000;
 
@@ -67,11 +79,11 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
       <button
         className="gs-trigger"
         onClick={() => setOpen((v) => !v)}
-        title={`${jobs.length} running task${jobs.length > 1 ? "s" : ""}`}
+        title={`${totalCount} background task${totalCount > 1 ? "s" : ""}`}
         type="button"
       >
         <span className="gs-spinner" />
-        <span className="gs-count">{jobs.length}</span>
+        <span className="gs-count">{totalCount}</span>
       </button>
       {open && pos && createPortal(
         <div
@@ -79,37 +91,75 @@ export default function GlobalSpinner({ jobs, onKill, onGoTo }: Props) {
           ref={dropdownRef}
           style={{ top: pos.top, right: pos.right }}
         >
-          <div className="gs-dropdown-header">Running tasks</div>
-          {jobs.map((job) => {
-            const meta = TYPE_META[job.type] ?? { icon: "\u2699\uFE0F", view: "" };
-            const elapsed = Math.max(0, now - job.started_at + tick * 0);
-            const elapsedStr = formatElapsed(elapsed);
-            return (
-              <div key={job.id} className="gs-job-row">
-                <button
-                  className="gs-job-label"
-                  type="button"
-                  onClick={() => {
-                    onGoTo(job.session_id, job.type);
-                    setOpen(false);
-                  }}
-                  title="Go to"
-                >
-                  <span className="gs-job-icon">{meta.icon}</span>
-                  <span className="gs-job-text">{job.label}</span>
-                  {elapsedStr && <span className="gs-job-elapsed">{elapsedStr}</span>}
-                </button>
-                <button
-                  className="gs-job-kill"
-                  type="button"
-                  onClick={() => onKill(job.id)}
-                  title="Kill"
-                >
-                  &times;
-                </button>
-              </div>
-            );
-          })}
+          {jobs.length > 0 && (
+            <>
+              <div className="gs-dropdown-header">Running tasks</div>
+              {jobs.map((job) => {
+                const meta = TYPE_META[job.type] ?? { icon: "\u2699\uFE0F", view: "" };
+                const elapsed = Math.max(0, now - job.started_at + tick * 0);
+                const elapsedStr = formatElapsed(elapsed);
+                return (
+                  <div key={job.id} className="gs-job-row">
+                    <button
+                      className="gs-job-label"
+                      type="button"
+                      onClick={() => {
+                        onGoTo(job.session_id, job.type);
+                        setOpen(false);
+                      }}
+                      title="Go to"
+                    >
+                      <span className="gs-job-icon">{meta.icon}</span>
+                      <span className="gs-job-text">{job.label}</span>
+                      {elapsedStr && <span className="gs-job-elapsed">{elapsedStr}</span>}
+                    </button>
+                    <button
+                      className="gs-job-kill"
+                      type="button"
+                      onClick={() => onKill(job.id)}
+                      title="Kill"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
+          {downloads.length > 0 && (
+            <>
+              <div className="gs-dropdown-header">Downloads</div>
+              {downloads.map((dl) => {
+                const pct = dl.total_bytes > 0
+                  ? Math.min(100, (dl.downloaded_bytes / dl.total_bytes) * 100)
+                  : 0;
+                return (
+                  <div key={dl.task_id} className="gs-dl-row">
+                    <div className="gs-dl-info">
+                      <span className="gs-job-icon">{"\u2B07"}</span>
+                      <div className="gs-dl-detail">
+                        <span className="gs-job-text">{dl.filename}</span>
+                        <div className="gs-dl-bar">
+                          <div className="gs-dl-fill" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="gs-dl-meta">
+                          {fmtBytes(dl.downloaded_bytes)} / {fmtBytes(dl.total_bytes)} ({pct.toFixed(0)}%)
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      className="gs-job-kill"
+                      type="button"
+                      onClick={() => onCancelDownload?.(dl.task_id)}
+                      title="Cancel download"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>,
         document.body,
       )}
