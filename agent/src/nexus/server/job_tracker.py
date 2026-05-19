@@ -24,7 +24,7 @@ class Job:
     type: str
     label: str
     session_id: str | None
-    started_at: float = field(default_factory=time.monotonic)
+    started_at: float = field(default_factory=time.time)
     kill_fn: Callable[[], Awaitable[None]] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -70,7 +70,7 @@ class JobTracker:
             publish_fn("job_done", {"job_id": job_id, "type": job.type})
 
     def list_jobs(self) -> list[dict[str, Any]]:
-        now = time.monotonic()
+        now = time.time()
         return [
             {**self._job_to_dict(j), "elapsed_seconds": round(now - j.started_at, 1)}
             for j in self._jobs.values()

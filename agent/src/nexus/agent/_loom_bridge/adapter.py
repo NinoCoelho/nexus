@@ -182,29 +182,22 @@ class LoomProviderAdapter(LoomLLMProvider):
                 args_delta = ev.get("args_delta", "")
                 if tc_id in tool_parts:
                     tool_parts[tc_id]["args"] += args_delta
-                    # Find index by insertion order
-                    idx = list(tool_parts.keys()).index(tc_id)
-                    yield lt.ToolCallDeltaEvent(
-                        index=idx, id=tc_id, name=None, arguments_delta=args_delta
-                    )
+                    # Buffer raw deltas; validated complete args emitted at finish
 
             elif etype == "tool_call_end":
                 pass  # loom assembles from deltas; no explicit end event in loom
 
             elif etype == "finish":
                 finish_reason = ev.get("finish_reason", "stop")
-                # Emit any tool calls from the finish event as delta events so
-                # loom.Agent can assemble them (some providers only emit tool
-                # calls in the finish frame, not as deltas).
-                # Only synthesize tool-call deltas for providers that DIDN'T
-                # already stream them. If we've seen any `tool_call_delta`
-                # event for a tc_id, its args are already assembled in loom's
-                # buffer — re-emitting the full payload here would duplicate.
+                # Emit validated tool call arguments from the finish event.
+                # By NOT forwarding raw streaming deltas above, loom's
+                # accumulation buffer is empty — so we safely emit the
+                # complete validated args here without duplication.
                 finish_tool_calls = ev.get("tool_calls") or []
-                for idx, tc_dict in enumerate(finish_tool_calls):
-                    tc_id = tc_dict.get("id", f"tc_{idx}")
-                    if tc_id in tool_parts and tool_parts[tc_id]["args"]:
-                        continue  # already streamed — skip
+                finish_tc_ids: set[str] = set()
+                for tc_dict in finish_tool_calls:
+                    tc_id = tc_dict.get("id", f"tc_{len(tool_parts)}")
+                    finish_tc_ids.add(tc_id)
                     tc_name = tc_dict.get("name", "")
                     tc_args = tc_dict.get("arguments", {})
                     if isinstance(tc_args, dict):
@@ -212,13 +205,30 @@ class LoomProviderAdapter(LoomLLMProvider):
                     else:
                         tc_args_str = str(tc_args)
                     if tc_id not in tool_parts:
+                        idx = len(tool_parts)
                         yield lt.ToolCallDeltaEvent(
                             index=idx, id=tc_id, name=tc_name, arguments_delta=None
                         )
                         tool_parts[tc_id] = {"name": tc_name, "args": tc_args_str}
+                    else:
+                        idx = list(tool_parts.keys()).index(tc_id)
                     yield lt.ToolCallDeltaEvent(
                         index=idx, id=tc_id, name=None, arguments_delta=tc_args_str
                     )
+                # Handle tool calls that were streamed as deltas but absent
+                # from the finish event — validate raw accumulated args.
+                for tc_id, parts in tool_parts.items():
+                    if tc_id not in finish_tc_ids:
+                        idx = list(tool_parts.keys()).index(tc_id)
+                        raw = parts["args"]
+                        try:
+                            json.loads(raw)
+                            validated = raw
+                        except json.JSONDecodeError:
+                            validated = "{}"
+                        yield lt.ToolCallDeltaEvent(
+                            index=idx, id=tc_id, name=None, arguments_delta=validated
+                        )
 
                 usage_dict = ev.get("usage") or {}
                 usage = lt.Usage(
