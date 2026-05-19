@@ -51,6 +51,7 @@ import NotificationBell from "./components/NotificationBell";
 import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useRunningJobs } from "./hooks/useRunningJobs";
+import { useActiveDownloads } from "./hooks/useActiveDownloads";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
@@ -268,7 +269,7 @@ export default function App() {
   // view. Recovers pending requests on mount via
   // /notifications/pending so a hard reload mid-question still
   // surfaces the dialog.
-  const { pendingRequest, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest, dropRequest } = useApprovalQueue();
+  const { pendingRequest, headItem, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest, dropRequest } = useApprovalQueue();
 
   // Bell + Web Push: durable HITL history visible from any view, plus
   // OS-level notifications when no Nexus tab is open. The push hook
@@ -319,6 +320,7 @@ export default function App() {
   useCalendarAlerts({ onOpenCalendar: handleOpenCalendar });
 
   const { jobs: runningJobs, killJob } = useRunningJobs();
+  const { downloads: activeDownloads, cancel: cancelDownload } = useActiveDownloads();
 
   const handleGoToJob = useCallback((sessionId: string | null, type: string) => {
     if (type === "dream") { setView("dream"); return; }
@@ -598,7 +600,7 @@ export default function App() {
           }
           notificationSlot={
             <>
-              <GlobalSpinner jobs={runningJobs} onKill={killJob} onGoTo={handleGoToJob} />
+              <GlobalSpinner jobs={runningJobs} downloads={activeDownloads} onKill={killJob} onGoTo={handleGoToJob} onCancelDownload={cancelDownload} />
               <NotificationBell
               history={notificationCenter.history}
               pendingCount={notificationCenter.pendingCount}
@@ -847,6 +849,10 @@ export default function App() {
           request={pendingRequest}
           onSubmit={handleApprovalSubmit}
           onTimeout={handleApprovalTimeout}
+          onCancel={headItem ? async () => {
+            await cancelHitlRequest(headItem.session_id, headItem.request.request_id);
+            dropRequest(headItem.request.request_id);
+          } : undefined}
           queueLength={queueLength}
         />
       )}

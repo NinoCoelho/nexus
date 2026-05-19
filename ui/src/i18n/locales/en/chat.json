@@ -100,7 +100,11 @@
     "deny": "Deny",
     "allow": "Allow",
     "send": "Send",
-    "answerPlaceholder": "Type your answer…"
+    "answerPlaceholder": "Type your answer…",
+    "cancel": "Cancel",
+    "customResponse": "Type your own response",
+    "customPlaceholder": "Type your response…",
+    "customSend": "Send"
   },
   "notifications": {
     "title": "Notifications",

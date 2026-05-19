@@ -1,11 +1,3 @@
-// Generic dialog for every ask_user HITL prompt — confirm / choice /
-// text. Closes when the user picks an answer (POST /respond) or when
-// the timeout elapses (server is the source of truth on timeout, but
-// the UI shows a live countdown so the pause doesn't feel frozen).
-//
-// Rule from project: never use native alert/prompt/confirm. This IS
-// the replacement.
-
 import { FormEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { UserRequestPayload } from "../api";
@@ -17,18 +9,26 @@ interface Props {
   request: UserRequestPayload;
   onSubmit: (answer: string | Record<string, unknown>) => void;
   onTimeout: () => void;
-  /** Total pending including this one — when > 1 a "1 of N" hint shows. */
+  onCancel?: () => void;
   queueLength?: number;
 }
 
-export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLength = 1 }: Props) {
+export default function ApprovalDialog({
+  request,
+  onSubmit,
+  onTimeout,
+  onCancel,
+  queueLength = 1,
+}: Props) {
   const { t } = useTranslation("chat");
   const [remaining, setRemaining] = useState(request.timeout_seconds);
   const [textValue, setTextValue] = useState(request.default ?? "");
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customValue, setCustomValue] = useState("");
+
+  const showCustom = request.kind !== "text";
 
   useEffect(() => {
-    // Simple 1s countdown. Server holds the authoritative timeout; the
-    // UI's job is just to convey urgency.
     const id = setInterval(() => {
       setRemaining((r) => {
         if (r <= 1) {
@@ -37,9 +37,7 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
           return 0;
         }
         const next = r - 1;
-        // Per-second tick during the final 10s ramp-down.
         if (next > 0 && next <= 10) sounds.countdownTick();
-        // Every minute of waiting, nudge the user with an attention chime.
         else if (next > 0 && next % 60 === 0) sounds.attention();
         return next;
       });
@@ -51,6 +49,12 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
     e.preventDefault();
     if (!textValue.trim()) return;
     onSubmit(textValue);
+  }
+
+  function submitCustom(e: FormEvent) {
+    e.preventDefault();
+    if (!customValue.trim()) return;
+    onSubmit(customValue);
   }
 
   return (
@@ -141,6 +145,48 @@ export default function ApprovalDialog({ request, onSubmit, onTimeout, queueLeng
               disabled={!textValue.trim()}
             >
               {t("chat:approval.send")}
+            </button>
+          </form>
+        )}
+
+        <div className="approval-footer">
+          <div className="approval-footer-left">
+            {onCancel && (
+              <button
+                type="button"
+                className="approval-btn approval-btn-cancel"
+                onClick={onCancel}
+              >
+                {t("chat:approval.cancel")}
+              </button>
+            )}
+          </div>
+          {showCustom && (
+            <button
+              type="button"
+              className="approval-custom-toggle"
+              onClick={() => setCustomOpen((v) => !v)}
+            >
+              {t("chat:approval.customResponse")}
+            </button>
+          )}
+        </div>
+
+        {showCustom && customOpen && (
+          <form onSubmit={submitCustom} className="approval-text-row approval-custom-row">
+            <input
+              className="approval-text-input"
+              value={customValue}
+              onChange={(e) => setCustomValue(e.target.value)}
+              placeholder={t("chat:approval.customPlaceholder")}
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="approval-btn approval-btn-allow"
+              disabled={!customValue.trim()}
+            >
+              {t("chat:approval.customSend")}
             </button>
           </form>
         )}

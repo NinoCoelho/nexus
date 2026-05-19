@@ -94,7 +94,11 @@
     "deny": "Negar",
     "allow": "Permitir",
     "send": "Enviar",
-    "answerPlaceholder": "Digite sua resposta…"
+    "answerPlaceholder": "Digite sua resposta…",
+    "cancel": "Cancelar",
+    "customResponse": "Digitar sua própria resposta",
+    "customPlaceholder": "Digite sua resposta…",
+    "customSend": "Enviar"
   },
   "notifications": {
     "title": "Notificações",
