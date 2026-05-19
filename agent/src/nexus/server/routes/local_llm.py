@@ -104,6 +104,57 @@ async def list_downloads() -> list[dict[str, Any]]:
     ]
 
 
+@router.post("/local/download/{task_id}/cancel")
+async def cancel_download(task_id: str) -> dict[str, Any]:
+    from ...local_llm.downloader import cancel_download as _cancel
+    ok = _cancel(task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Download not found or already finished")
+    return {"cancelled": task_id}
+
+
+# ---------------------------------------------------------------------------
+# Binary updates
+# ---------------------------------------------------------------------------
+
+@router.get("/local/binary/status")
+async def binary_status() -> dict[str, Any]:
+    from ...local_llm.binary_update import current_version, check_latest, is_downloading
+    cur = current_version()
+    latest_info = check_latest()
+    latest = latest_info["version"] if latest_info else cur
+    return {
+        "current_version": cur,
+        "latest_version": latest,
+        "update_available": latest > cur,
+        "downloading": is_downloading(),
+    }
+
+
+@router.post("/local/binary/update")
+async def binary_update() -> dict[str, Any]:
+    import asyncio
+    import logging
+    from ...local_llm.binary_update import needs_update, download_and_install, is_downloading
+
+    if is_downloading():
+        raise HTTPException(status_code=409, detail="Update already in progress")
+
+    info = needs_update()
+    if info is None:
+        return {"status": "up_to_date"}
+
+    async def _do_update() -> None:
+        try:
+            download_and_install(info["url"], info["tag"], info["dist"])
+            logging.getLogger(__name__).info("[binary_update] updated to %s", info["tag"])
+        except Exception as exc:
+            logging.getLogger(__name__).error("[binary_update] failed: %s", exc)
+
+    asyncio.get_running_loop().run_in_executor(None, _do_update)
+    return {"status": "updating", "tag": info["tag"], "version": info["latest"]}
+
+
 # ---------------------------------------------------------------------------
 # Installed models
 # ---------------------------------------------------------------------------
@@ -127,17 +178,21 @@ async def list_installed() -> list[dict[str, Any]]:
     for p in sorted(_MODELS_DIR.glob("*.gguf")):
         info = running.get(p.name)
         is_mmproj = manager.is_mmproj_file(p)
+        has_mamba = False
+        if not is_mmproj:
+            try:
+                has_mamba = manager._gguf_has_mamba_layers(p)
+            except Exception:
+                pass
         results.append({
             "filename": p.name,
             "size_bytes": p.stat().st_size,
-            # Vision-language projector sidecars are listed so the UI's
-            # auto-start gate can wait for the matching language GGUF —
-            # but the UI hides them from the user-facing tile list.
             "is_mmproj": is_mmproj,
             "is_running": info is not None and not is_mmproj,
-            "is_active": info is not None and not is_mmproj,  # legacy alias
+            "is_active": info is not None and not is_mmproj,
             "port": info["port"] if info else None,
             "slug": info["slug"] if info else manager.slugify(p.stem),
+            "has_mamba_layers": has_mamba,
         })
     return results
 
@@ -191,7 +246,7 @@ async def start_model(
         handle.slug, handle.port,
         is_embedding=handle.is_embedding,
         is_vision=handle.is_vision,
-        context_window=ctx_size,
+        context_window=handle.context_window or ctx_size,
     )
 
     try:
@@ -239,6 +294,45 @@ async def stop_model(
     return {"stopped": body.filename}
 
 
+@router.post("/local/stop-all")
+async def stop_all_models(
+    app_state: dict[str, Any] = Depends(get_app_state),
+    agent: Any = Depends(get_agent),
+) -> dict[str, Any]:
+    """Stop every running local llama-server and unregister all."""
+    from ...local_llm import manager
+    from .config import _rebuild_registry
+
+    running = manager.list_running()
+    if not running:
+        return {"stopped": []}
+
+    slugs = []
+    for info in running:
+        slug = manager.slugify(Path(info["filename"]).stem)
+        slugs.append(slug)
+        manager.stop(info["filename"])
+
+    for slug in slugs:
+        manager.remove_from_config(slug)
+
+    try:
+        from ...ocr_server import resume as _ocr_resume
+        _ocr_resume()
+    except Exception:
+        pass
+
+    try:
+        from ...config_file import load as load_cfg
+        new_cfg = load_cfg()
+        _rebuild_registry(new_cfg, app_state, agent)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("registry rebuild after stop-all failed: %s", exc)
+
+    return {"stopped": [info["filename"] for info in running]}
+
+
 # Legacy alias kept so older UI builds keep working.
 @router.post("/local/activate")
 async def activate_model_legacy(
@@ -250,16 +344,37 @@ async def activate_model_legacy(
 
 
 @router.delete("/local/installed/{filename}")
-async def delete_installed(filename: str) -> dict[str, str]:
-    """Delete an installed GGUF file. Returns 409 if it's currently running."""
+async def delete_installed(
+    filename: str,
+    app_state: dict[str, Any] = Depends(get_app_state),
+    agent: Any = Depends(get_agent),
+) -> dict[str, str]:
+    """Delete an installed GGUF file. Stops the server first if running."""
     from ...local_llm import manager
-
-    if manager.is_running(filename):
-        raise HTTPException(status_code=409, detail="Stop the model before deleting it.")
+    from .config import _rebuild_registry
 
     model_path = _MODELS_DIR / filename
     if not model_path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+
+    if manager.is_running(filename):
+        slug = manager.slugify(Path(filename).stem)
+        manager.stop(filename)
+        manager.remove_from_config(slug)
+
+        try:
+            from ...ocr_server import resume as _ocr_resume
+            _ocr_resume()
+        except Exception:
+            pass
+
+        try:
+            from ...config_file import load as load_cfg
+            new_cfg = load_cfg()
+            _rebuild_registry(new_cfg, app_state, agent)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("registry rebuild after stop-for-delete failed: %s", exc)
 
     try:
         model_path.unlink()

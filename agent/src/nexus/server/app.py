@@ -424,6 +424,15 @@ def create_app(
             except Exception:
                 log.exception("local_llm orphan reap failed")
 
+        # Non-blocking: pre-warm the latest llama.cpp release check so
+        # /local/binary/status responds instantly on first UI load.
+        if not skip_local_llm:
+            try:
+                from ..local_llm.binary_update import check_latest
+                await asyncio.to_thread(check_latest)
+            except Exception:
+                pass
+
         # Restart any local-* models the user had enabled in a prior run.
         # Each gets a fresh port; we refresh config and rebuild the registry
         # so the agent sees the live URLs without the user opening Settings.

@@ -32,6 +32,10 @@ _PER_MESSAGE_TOKENS = 4
 _OUTPUT_HEADROOM_TOKENS = 4096
 _DEFAULT_FALLBACK_WINDOW = 32_000
 _DEFAULT_MAX_MESSAGES = 80
+# Approximate token cost of system prompt + all tool JSON Schema definitions
+# sent with every request. With ~46 tools, the tool payloads alone consume
+# ~10-12K tokens; the system prompt adds another ~2-3K.
+_TOOLS_AND_SYSTEM_OVERHEAD = 12_000
 
 KNOWN_WINDOWS: dict[str, int] = {
     "gemini-2.5-flash": 1_048_576,
@@ -155,10 +159,13 @@ def check_overflow(
     *,
     context_window: int,
     output_headroom: int = _OUTPUT_HEADROOM_TOKENS,
+    tools_overhead: int = _TOOLS_AND_SYSTEM_OVERHEAD,
 ) -> OverflowCheck:
     est = estimate_tokens(messages)
     effective_window = context_window if context_window > 0 else _DEFAULT_FALLBACK_WINDOW
-    budget = effective_window - output_headroom
+    budget = effective_window - output_headroom - tools_overhead
+    if budget < 0:
+        budget = 0
     if est <= budget:
         return OverflowCheck(False, est, context_window, output_headroom)
     pct = est * 100 // max(1, effective_window)

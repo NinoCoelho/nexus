@@ -148,7 +148,7 @@ class Agent:
             registry=self._registry,
             handlers=self._handlers,
             provider_registry=self._provider_registry,
-            nexus_cfg=self._nexus_cfg,
+            get_nexus_cfg=lambda: self._nexus_cfg,
             get_chosen_model=lambda: self._chosen_model,
             get_turn_trace=lambda: self._turn_trace,
             on_trace_event=self._on_event,

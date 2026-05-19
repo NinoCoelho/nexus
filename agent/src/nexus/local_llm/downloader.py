@@ -1,7 +1,8 @@
 """Background GGUF file downloader using huggingface_hub.
 
-Downloads run in daemon threads. Progress is polled by watching the
-partial file size and published to ``nexus.server.event_bus``.
+Downloads run in daemon threads. Progress is reported via a custom tqdm
+class passed to ``hf_hub_download`` so the UI gets accurate byte-level
+updates in real time. Downloads can be cancelled through :func:`cancel_download`.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from tqdm import tqdm as _base_tqdm
 
 
 @dataclass
@@ -22,33 +25,74 @@ class DownloadTask:
     filename: str
     total_bytes: int = 0
     downloaded_bytes: int = 0
-    status: str = "pending"  # "pending"|"downloading"|"done"|"error"
+    status: str = "pending"  # "pending"|"downloading"|"done"|"error"|"cancelled"
     error: str | None = None
 
 
 _TASKS: dict[str, DownloadTask] = {}
 _TASKS_LOCK = threading.Lock()
+_CANCEL_FLAGS: dict[str, threading.Event] = {}
+
+
+class _DownloadCancelled(Exception):
+    pass
+
+
+class _DownloadTqdm(_base_tqdm):
+    """Custom tqdm that pushes progress into a DownloadTask.
+
+    Output is suppressed (file=/dev/null) but internal counters are kept
+    alive so ``self.n`` accurately reflects bytes downloaded.  Raises
+    :class:`_DownloadCancelled` when the task's cancel flag is set.
+    """
+
+    _task: DownloadTask | None = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        import os
+        kwargs["file"] = open(os.devnull, "w")  # noqa: SIM115
+        kwargs["disable"] = False
+        super().__init__(*args, **kwargs)
+        if self._task and self.total and self.total > self._task.total_bytes:
+            self._task.total_bytes = int(self.total)
+
+    def update(self, n: int = 1, **kwargs: Any) -> bool:
+        task = self._task
+        if task is not None:
+            flag = _CANCEL_FLAGS.get(task.task_id)
+            if flag and flag.is_set():
+                raise _DownloadCancelled(task.task_id)
+        result = super().update(n, **kwargs)
+        if task is not None:
+            task.downloaded_bytes = int(self.n)
+            if self.total and self.total > task.total_bytes:
+                task.total_bytes = int(self.total)
+            _publish({
+                "kind": "local_llm.download.progress",
+                "task_id": task.task_id,
+                "downloaded_bytes": task.downloaded_bytes,
+                "total_bytes": task.total_bytes,
+            })
+        return result
+
+    def close(self) -> None:
+        try:
+            if self.fp:  # type: ignore[attr-defined]
+                self.fp.close()
+        except Exception:
+            pass
+        super().close()
 
 
 def start_download(repo_id: str, filename: str, dest_dir: Path) -> DownloadTask:
-    """Start a background download of a GGUF file from HuggingFace Hub.
-
-    Args:
-        repo_id: HuggingFace repository ID (e.g. ``"owner/model"``).
-        filename: Filename within the repository.
-        dest_dir: Local directory where the file will be saved.
-
-    Returns:
-        A ``DownloadTask`` instance tracking the download.
-    """
+    """Start a background download of a GGUF file from HuggingFace Hub."""
     task_id = str(uuid.uuid4())
     task = DownloadTask(task_id=task_id, repo_id=repo_id, filename=filename)
 
     with _TASKS_LOCK:
         _TASKS[task_id] = task
+    _CANCEL_FLAGS[task_id] = threading.Event()
 
-    # Pre-populate total_bytes via HfApi before spawning to give the UI
-    # an immediate size estimate (best-effort; 0 if it fails).
     try:
         from huggingface_hub import HfApi
         api = HfApi()
@@ -68,6 +112,23 @@ def start_download(repo_id: str, filename: str, dest_dir: Path) -> DownloadTask:
     )
     t.start()
     return task
+
+
+def cancel_download(task_id: str) -> bool:
+    """Request cancellation of an in-flight download.
+
+    Returns ``True`` if the task was found and signalled for cancellation,
+    ``False`` otherwise.  The download thread will abort on its next chunk
+    and the task status will transition to ``"cancelled"``.
+    """
+    with _TASKS_LOCK:
+        task = _TASKS.get(task_id)
+    if task is None or task.status not in ("pending", "downloading"):
+        return False
+    flag = _CANCEL_FLAGS.get(task_id)
+    if flag is not None:
+        flag.set()
+    return True
 
 
 def get_task(task_id: str) -> DownloadTask | None:
@@ -104,16 +165,8 @@ def _download_worker(task: DownloadTask, dest_dir: Path) -> None:
         "filename": task.filename,
     })
 
-    # Spin up a separate thread to poll the partial file size and emit
-    # progress events while the download thread blocks on hf_hub_download.
-    stop_poll = threading.Event()
-    poll_thread = threading.Thread(
-        target=_progress_poller,
-        args=(task, dest_dir, stop_poll),
-        daemon=True,
-        name=f"nexus-dl-poll-{task.task_id[:8]}",
-    )
-    poll_thread.start()
+    class _BoundTqdm(_DownloadTqdm):
+        _task = task  # type: ignore[assignment]
 
     try:
         from huggingface_hub import hf_hub_download
@@ -123,6 +176,7 @@ def _download_worker(task: DownloadTask, dest_dir: Path) -> None:
             local_dir=str(dest_dir),
             resume_download=True,
             local_dir_use_symlinks=False,
+            tqdm_class=_BoundTqdm,
         )
         task.downloaded_bytes = task.total_bytes
         task.status = "done"
@@ -131,6 +185,13 @@ def _download_worker(task: DownloadTask, dest_dir: Path) -> None:
             "task_id": task.task_id,
             "downloaded_bytes": task.downloaded_bytes,
             "total_bytes": task.total_bytes,
+        })
+    except _DownloadCancelled:
+        task.status = "cancelled"
+        task.error = "Cancelled"
+        _publish({
+            "kind": "local_llm.download.cancelled",
+            "task_id": task.task_id,
         })
     except Exception as exc:
         task.status = "error"
@@ -141,41 +202,4 @@ def _download_worker(task: DownloadTask, dest_dir: Path) -> None:
             "error": task.error,
         })
     finally:
-        stop_poll.set()
-        poll_thread.join(timeout=2.0)
-
-
-def _progress_poller(task: DownloadTask, dest_dir: Path, stop: threading.Event) -> None:
-    """Poll the partial or final file size every 500 ms and emit progress events."""
-    filename = task.filename
-    # hf_hub_download may place the file in a subdirectory matching the repo structure
-    # or directly in dest_dir. Check both locations.
-    while not stop.is_set():
-        size = _read_partial_size(dest_dir, filename)
-        if size is not None and size != task.downloaded_bytes:
-            task.downloaded_bytes = size
-            _publish({
-                "kind": "local_llm.download.progress",
-                "task_id": task.task_id,
-                "downloaded_bytes": task.downloaded_bytes,
-                "total_bytes": task.total_bytes,
-            })
-        stop.wait(0.5)
-
-
-def _read_partial_size(dest_dir: Path, filename: str) -> int | None:
-    """Return the size of the partial or complete downloaded file, if it exists."""
-    # huggingface_hub uses .incomplete suffix during download
-    for candidate in [
-        dest_dir / (filename + ".incomplete"),
-        dest_dir / filename,
-        # Some hf_hub_download versions place files inside blobs/ subdir
-        *(list(dest_dir.rglob(filename + ".incomplete"))[:1]),
-        *(list(dest_dir.rglob(filename))[:1]),
-    ]:
-        try:
-            if candidate.exists():
-                return candidate.stat().st_size
-        except OSError:
-            pass
-    return None
+        _CANCEL_FLAGS.pop(task.task_id, None)

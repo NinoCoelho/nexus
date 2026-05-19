@@ -34,6 +34,7 @@ class ServerHandle:
     # entry so chat-side capability detection treats the model as
     # vision-capable.
     is_vision: bool = False
+    context_window: int = 0
 
 
 # Architectures (from GGUF metadata `general.architecture`) that produce
@@ -63,6 +64,47 @@ _EMBEDDING_NAME_HINTS = (
     "minilm", "bge-", "bge_", "nomic-embed", "e5-", "e5_",
     "gte-", "mxbai-embed", "embed",
 )
+
+
+def _gguf_has_mamba_layers(model_path: Path) -> bool:
+    """Check whether a GGUF contains Mamba/SSM layers.
+
+    Hybrid Mamba-Transformer models (e.g. Qwen3-UD, Zamba) include
+    ``<arch>.ssm_d_conv`` or similar SSM hyper-parameter keys in their
+    metadata. Standard transformer models do not.
+
+    Returns True if SSM/Mamba metadata is found, False otherwise.
+    """
+    import struct
+
+    arch = _read_gguf_architecture(model_path)
+    if not arch:
+        return False
+
+    ssm_prefix = f"{arch}.ssm_"
+    try:
+        with open(model_path, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return False
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return False
+            f.read(8)
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return False
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                if key.startswith(ssm_prefix):
+                    return True
+                _read_gguf_value(f, val_type)
+        return False
+    except Exception:
+        return False
 
 
 def is_mmproj_file(path: Path) -> bool:
@@ -170,6 +212,51 @@ def _read_gguf_value(f, val_type: int):
     raise ValueError(f"unknown gguf value type {val_type}")
 
 
+def _read_gguf_context_length(model_path: Path) -> int:
+    """Read the context length from GGUF metadata.
+
+    Looks for ``<arch>.context_length`` (e.g. ``qwen2.context_length``,
+    ``llama.context_length``), then ``<arch>.max_position_embeddings``,
+    then ``general.context_length``.  Returns 0 when none are found.
+    """
+    import struct
+
+    arch = _read_gguf_architecture(model_path)
+    target_keys_ordered: list[str] = []
+    if arch:
+        target_keys_ordered.append(f"{arch}.context_length")
+        target_keys_ordered.append(f"{arch}.max_position_embeddings")
+    target_keys_ordered.append("general.context_length")
+    target_keys = set(target_keys_ordered)
+
+    try:
+        with open(model_path, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return 0
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return 0
+            f.read(8)
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return 0
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                if key in target_keys:
+                    value = _read_gguf_value(f, val_type)
+                    if isinstance(value, (int, float)):
+                        return int(value)
+                    return 0
+                _read_gguf_value(f, val_type)
+        return 0
+    except Exception:
+        return 0
+
+
 def is_embedding_model(model_path: Path) -> bool:
     """Detect whether a GGUF file is an embedding model.
 
@@ -191,6 +278,7 @@ def is_embedding_model(model_path: Path) -> bool:
 
 # Keyed by GGUF filename (the basename, e.g. "Qwen2.5-7B-Instruct-Q4_K_M.gguf").
 _servers: dict[str, ServerHandle] = {}
+_VERSION_CACHE: dict[str, int] = {}
 
 
 def slugify(name: str) -> str:
@@ -234,8 +322,7 @@ def discover_binary() -> Path | None:
     Search order:
     1. ``NEXUS_LLAMA_BIN`` environment variable.
     2. Bundled binary relative to ``NEXUS_BUNDLE_DIR`` (macOS .app).
-    3. ``~/.nexus/llama/**/llama-server`` (user-installed binary).
-    4. ``llama-server`` on ``PATH`` via ``shutil.which``.
+    3. Newest ``llama-server`` found across ``~/.nexus/llama/`` and ``PATH``.
 
     Returns:
         Path to the binary, or None if not found.
@@ -253,17 +340,46 @@ def discover_binary() -> Path | None:
             if candidate.is_file():
                 return candidate
 
+    candidates: list[tuple[int, Path]] = []
+
     user_llama = Path.home() / ".nexus" / "llama"
     if user_llama.is_dir():
         for candidate in user_llama.glob("**/llama-server"):
             if candidate.is_file():
-                return candidate
+                ver = _parse_build_version(candidate)
+                candidates.append((ver, candidate))
 
     which = shutil.which("llama-server")
     if which:
-        return Path(which)
+        p = Path(which)
+        ver = _parse_build_version(p)
+        candidates.append((ver, p))
 
-    return None
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates[0][1]
+
+
+def _parse_build_version(binary: Path) -> int:
+    """Extract the numeric build version from a llama-server path.
+
+    Looks for a ``b<digits>`` pattern in the parent directory name first
+    (e.g. ``llama-b8929``), then in the binary name itself.  Returns 0 if
+    no version can be determined.  Results are cached per resolved path.
+    """
+    key = str(binary.resolve())
+    if key in _VERSION_CACHE:
+        return _VERSION_CACHE[key]
+    ver = 0
+    for text in [binary.parent.name, binary.name]:
+        m = re.search(r"b(\d+)", text)
+        if m:
+            ver = int(m.group(1))
+            break
+    _VERSION_CACHE[key] = ver
+    return ver
 
 
 def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
@@ -290,6 +406,35 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
     port = _pick_free_port()
     slug = slugify(model_path.stem)
     is_emb = is_embedding_model(model_path)
+
+    if not is_emb and _gguf_has_mamba_layers(model_path):
+        raise RuntimeError(
+            "This model uses a hybrid Mamba/Transformer architecture that is not "
+            "yet supported by llama.cpp. Look for a standard (non-hybrid) GGUF — "
+            "avoid filenames with \"UD\", \"MTP\", or \"Mamba\" in the name. "
+            "For Qwen models, choose repos labeled just \"Qwen3-27B-GGUF\" or "
+            "\"Qwen3.6-27B-GGUF\" without UD/MTP variants."
+        )
+
+    detected_ctx = _read_gguf_context_length(model_path)
+    if detected_ctx > 0 and (ctx_size <= 0 or detected_ctx > ctx_size):
+        if ctx_size > 0:
+            log.info(
+                "[local_llm] GGUF context_length=%d overrides stale config value %d for %s",
+                detected_ctx, ctx_size, model_path.name,
+            )
+        else:
+            log.info(
+                "[local_llm] auto-detected context_length=%d from GGUF metadata for %s",
+                detected_ctx, model_path.name,
+            )
+        ctx_size = detected_ctx
+    elif ctx_size <= 0:
+        ctx_size = 32768
+        log.info(
+            "[local_llm] GGUF context_length not found; using fallback %d for %s",
+            ctx_size, model_path.name,
+        )
 
     log_path = Path.home() / "Library" / "Logs" / "Nexus" / "llama-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,18 +486,33 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
     while time.time() < deadline:
         if proc.poll() is not None:
             log.warning("[local_llm] llama-server exited early; see %s", log_path)
-            raise RuntimeError(f"llama-server exited before becoming ready (see {log_path})")
+            raise RuntimeError(_diagnose_start_failure(log_path, model_path))
         try:
             with urllib.request.urlopen(health_url, timeout=1.5) as r:
                 if r.status == 200:
                     handle = ServerHandle(
                         proc=proc, port=port, slug=slug, model_path=model_path,
                         is_embedding=is_emb, is_vision=is_vision,
+                        context_window=ctx_size,
                     )
                     _servers[filename] = handle
+
+                    actual_ctx = _query_server_n_ctx(port)
+                    if actual_ctx > 0:
+                        handle.context_window = actual_ctx
+
+                    _MIN_CTX_WARNING = 24_576
+                    if not is_emb and handle.context_window > 0 and handle.context_window < _MIN_CTX_WARNING:
+                        log.warning(
+                            "[local_llm] context window (%d) may be too small for the "
+                            "agent's system prompt + tool definitions (~22K tokens). "
+                            "Consider using a model with at least 32K context.",
+                            handle.context_window,
+                        )
+
                     log.info(
-                        "[local_llm] llama-server ready: %s on :%d (slug=%s)",
-                        filename, port, slug,
+                        "[local_llm] llama-server ready: %s on :%d (slug=%s, ctx=%d)",
+                        filename, port, slug, handle.context_window,
                     )
                     return handle
         except (urllib.error.URLError, OSError):
@@ -360,7 +520,74 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         time.sleep(0.5)
 
     proc.terminate()
-    raise RuntimeError(f"llama-server did not become ready in 90s (see {log_path})")
+    raise RuntimeError(_diagnose_start_failure(log_path, model_path))
+
+
+def _query_server_n_ctx(port: int) -> int:
+    """Query llama-server ``/props`` for the actual ``n_ctx`` in use.
+
+    Returns 0 if the endpoint is unavailable or the value cannot be parsed.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        url = f"http://127.0.0.1:{port}/props"
+        with urllib.request.urlopen(url, timeout=2) as r:
+            if r.status == 200:
+                data = json.loads(r.read())
+                return int(
+                    data.get("default_generation_settings", {}).get("n_ctx", 0)
+                )
+    except Exception:
+        pass
+    return 0
+
+
+def _diagnose_start_failure(log_path: Path, model_path: Path) -> str:
+    """Read the tail of the llama-server log and produce a user-facing message.
+
+    Returns a string like ``"llama-server failed: <reason>. <hint>"``.
+    """
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return f"llama-server failed to start. Log: {log_path}"
+
+    missing_match = re.search(r"missing tensor '([^']+)'", text)
+    if missing_match:
+        tensor = missing_match.group(1)
+        arch = _read_gguf_architecture(model_path)
+        arch_label = f" (architecture: {arch})" if arch else ""
+        return (
+            f"This model{arch_label} is not compatible with the installed version of "
+            f"llama.cpp. It requires layers (e.g. {tensor}) that your build does not "
+            f"support. Try updating llama.cpp first (Settings → Local Models). If the "
+            f"update doesn't help, this architecture may not be supported yet — use a "
+            f"standard (non-hybrid) GGUF without \"UD\" or \"Mamba\" in the filename."
+        )
+
+    if "exceeds the available context size" in text:
+        return (
+            "Model context window is too small for the agent's system prompt + tools. "
+            "Try a model with at least 32K context, or update llama.cpp to a newer build."
+        )
+
+    if "CUDA out of memory" in text or "MPS out of memory" in text:
+        return (
+            "Not enough GPU/memory to load this model. Try a smaller quantization "
+            "(e.g. Q4_K_M instead of Q8_0) or a smaller model."
+        )
+
+    if "failed to load model" in text:
+        return (
+            "llama-server could not load this GGUF file. It may be corrupted or use "
+            "an unsupported format. Try re-downloading the model or choosing a "
+            "different quantization."
+        )
+
+    return f"llama-server failed to start. Check the log for details: {log_path}"
 
 
 def stop(filename: str) -> bool:
@@ -661,7 +888,7 @@ def restart_local_models(models_dir: Path | None = None) -> int:
             handle.slug, handle.port,
             is_embedding=handle.is_embedding,
             is_vision=handle.is_vision,
-            context_window=ctx,
+            context_window=handle.context_window or ctx,
         )
         started += 1
         log.info("[local_llm] restarted %s on :%d", slug, handle.port)

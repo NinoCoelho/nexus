@@ -181,7 +181,13 @@ async def chat_stream_route(
         # tokens and refuse early if they won't fit. The agent loop's own
         # pre-flight check (overflow.py) runs after this, but this gate
         # prevents the oversized message from being persisted.
+        #
+        # The estimate covers messages only — tool schemas and system prompt
+        # are NOT included in estimate_tokens().  We add a flat overhead
+        # constant to approximate their cost (~12K for ~46 tool schemas +
+        # system prompt + protocol framing).
         _OUTPUT_HEADROOM = 4096
+        _TOOLS_AND_SYSTEM_OVERHEAD = 12_000
         try:
             from ...agent.loop.overflow import estimate_tokens as _est_tok
             cfg = load_config()
@@ -199,19 +205,20 @@ async def chat_stream_route(
                 incoming_tokens = _est_tok([
                     type("M", (), {"content": req.message, "tool_calls": []})()
                 ])
-                if history_tokens + incoming_tokens > ctx_window - _OUTPUT_HEADROOM:
+                total_est = history_tokens + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
+                if total_est > ctx_window - _OUTPUT_HEADROOM:
                     yield json.dumps({
                         "type": "error",
                         "detail": (
                             f"Sending this message would exceed the model's context window "
-                            f"(~{history_tokens + incoming_tokens:,} tokens needed vs "
+                            f"(~{total_est:,} tokens needed vs "
                             f"{ctx_window:,} available). Compact the conversation or start a new session."
                         ),
                         "reason": "message_too_large",
                         "retryable": False,
                         "status_code": None,
                         "actions": ["compact_history", "new_session"],
-                        "estimated_input_tokens": history_tokens + incoming_tokens,
+                        "estimated_input_tokens": total_est,
                         "context_window": ctx_window,
                     }) + "\n"
                     yield json.dumps({

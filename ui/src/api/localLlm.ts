@@ -37,7 +37,7 @@ export interface DownloadTask {
   filename: string;
   total_bytes: number;
   downloaded_bytes: number;
-  status: "pending" | "downloading" | "done" | "error";
+  status: "pending" | "downloading" | "done" | "error" | "cancelled";
   error: string | null;
 }
 
@@ -53,6 +53,7 @@ export interface InstalledModel {
    *  so the UI can wait for them before auto-starting the language model,
    *  but hidden from the user-facing tile list. */
   is_mmproj?: boolean;
+  has_mamba_layers?: boolean;
 }
 
 export async function getHardware(): Promise<HardwareProbe> {
@@ -93,6 +94,13 @@ export async function listDownloads(): Promise<DownloadTask[]> {
   return res.json();
 }
 
+export async function cancelDownload(taskId: string): Promise<void> {
+  const res = await fetch(`${BASE}/local/download/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Cancel download error: ${res.status}`);
+}
+
 export async function listInstalled(): Promise<InstalledModel[]> {
   const res = await fetch(`${BASE}/local/installed`);
   if (!res.ok) throw new Error(`Installed list error: ${res.status}`);
@@ -106,8 +114,14 @@ export async function startModel(filename: string): Promise<void> {
     body: JSON.stringify({ filename }),
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Start error: ${res.status} ${detail}`);
+    let msg = "";
+    try {
+      const body = await res.json();
+      msg = body.detail || body.error || JSON.stringify(body);
+    } catch {
+      msg = await res.text().catch(() => `${res.status}`);
+    }
+    throw new Error(msg);
   }
 }
 
@@ -123,6 +137,18 @@ export async function stopModel(filename: string): Promise<void> {
   }
 }
 
+export async function stopAllModels(): Promise<string[]> {
+  const res = await fetch(`${BASE}/local/stop-all`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Stop-all error: ${res.status} ${detail}`);
+  }
+  const data = await res.json();
+  return data.stopped ?? [];
+}
+
 /** @deprecated use startModel */
 export const activateModel = startModel;
 
@@ -134,6 +160,28 @@ export async function deleteInstalled(filename: string): Promise<void> {
     const detail = await res.text().catch(() => "");
     throw new Error(`Delete error: ${res.status} ${detail}`);
   }
+}
+
+export interface BinaryStatus {
+  current_version: number;
+  latest_version: number;
+  update_available: boolean;
+  downloading: boolean;
+}
+
+export async function getBinaryStatus(): Promise<BinaryStatus> {
+  const res = await fetch(`${BASE}/local/binary/status`);
+  if (!res.ok) throw new Error(`Binary status error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateBinary(): Promise<{ status: string; tag?: string }> {
+  const res = await fetch(`${BASE}/local/binary/update`, { method: "POST" });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Binary update error: ${res.status} ${detail}`);
+  }
+  return res.json();
 }
 
 export function fmtBytes(n: number): string {
