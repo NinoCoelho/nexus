@@ -114,7 +114,7 @@ function QuickAddChildForm({
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [addedRows, setAddedRows] = useState<Record<string, unknown>[]>([]);
   const visibleFields = fields.filter((f) => f.name !== fkField);
-  const displayFields = visibleFields.filter((f) => f.kind !== "formula").slice(0, 5);
+  const displayFields = visibleFields.filter((f) => f.kind !== "formula" && f.kind !== "rollup").slice(0, 5);
   const { pkName } = deriveLabelInfo(fields, null);
   const refLookup = useResolvedLabels(fields, childPath);
 
@@ -546,12 +546,10 @@ export default function AppDashboardView({
         if (sibling.path === tablePath) continue;
         try {
           const sibTbl = await getVaultDataTable(sibling.path);
-          const tableFileName = tablePath.includes("/") ? tablePath.split("/").pop()! : tablePath;
           for (const f of sibTbl.schema.fields) {
             if (f.kind === "ref" && f.cardinality !== "many") {
-              const target = f.target_table ?? "";
-              const resolved = target.startsWith("./") ? `${folder}/${target.slice(2)}` : target.includes("/") ? target : `${folder}/${target}`;
-              if (resolved === tablePath || target === tableFileName || target === `./${tableFileName}`) {
+              const resolved = resolveRefPath(sibling.path, f.target_table ?? "");
+              if (resolved === tablePath) {
                 children.push({ path: sibling.path, table: sibTbl, fkField: f.name });
                 break;
               }
@@ -849,7 +847,7 @@ export default function AppDashboardView({
               {!formCreatedRow ? (
                 <FormRenderer
                   hostPath={formOp.op.table!}
-                  fields={formOp.table.schema.fields.filter((f) => f.kind !== "formula")}
+                  fields={formOp.table.schema.fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup")}
                   initialValues={initialValues}
                   onSubmit={(v) => void handleFormSubmit(v)}
                   onCancel={() => handleCloseForm()}
@@ -862,7 +860,7 @@ export default function AppDashboardView({
                     <span className="qa-master-pk">{formOp.table.schema?.title ?? "Row"} <strong>{parentPk}</strong></span>
                   </div>
                   <div className="qa-master-fields">
-                    {formOp.table.schema.fields.filter((f) => f.kind !== "formula" && f.name !== "_id").map((f) => (
+                    {formOp.table.schema.fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup" && f.name !== "_id").map((f) => (
                       <div key={f.name} className="qa-master-field">
                         <span className="qa-master-field-label">{f.label ?? f.name}</span>
                         <span className="qa-master-field-value">{String(formCreatedRow[f.name] ?? "—")}</span>
@@ -875,7 +873,7 @@ export default function AppDashboardView({
                 <div className="qa-detail-section">
                   <div className="qa-detail-title">Details</div>
                   {formChildTables.map((child) => {
-                    const childFields = child.table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula");
+                    const childFields = child.table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula" && (f.kind ?? "text") !== "rollup");
                     return (
                       <div key={child.path} className="qa-child-group">
                         <div className="qa-child-group-title">{child.table.schema?.title ?? child.path}</div>

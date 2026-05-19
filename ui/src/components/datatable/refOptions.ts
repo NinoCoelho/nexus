@@ -222,3 +222,53 @@ export function useRefOptions(field: FieldSchema, hostPath: string): {
 
   return state;
 }
+
+export type RefLabelLookup = Map<string, string>;
+
+/**
+ * Resolve all `kind: "ref"` fields' stored values to human-friendly labels.
+ *
+ * Returns a `Map<"fieldName::refValue", label>` that can be passed to
+ * `renderCell` via `RenderCellOptions.refLabels`. Re-resolves when fields
+ * or the cache revision change.
+ */
+export function useRefLabels(fields: FieldSchema[], hostPath: string): RefLabelLookup {
+  const [lookup, setLookup] = useState<RefLabelLookup>(new Map());
+  const rev = useCacheRevision();
+
+  const refFields = fields.filter((f) => f.kind === "ref" && f.target_table);
+
+  useEffect(() => {
+    if (refFields.length === 0) return;
+    let cancelled = false;
+    const next = new Map<string, string>();
+
+    void (async () => {
+      const targets = new Map<string, { pkName: string; labelField: FieldSchema | null; rows: Record<string, unknown>[] }>();
+      for (const f of refFields) {
+        const absPath = resolveRefPath(hostPath, f.target_table!);
+        if (targets.has(absPath)) continue;
+        try {
+          const tbl = await fetchTableCached(absPath);
+          const info = deriveLabelInfo(tbl.schema.fields, tbl.schema.table);
+          targets.set(absPath, { pkName: info.pkName, labelField: info.labelField, rows: tbl.rows });
+        } catch { /* skip */ }
+      }
+      if (cancelled) return;
+      for (const f of refFields) {
+        const absPath = resolveRefPath(hostPath, f.target_table!);
+        const target = targets.get(absPath);
+        if (!target) continue;
+        for (const r of target.rows) {
+          const id = String(r[target.pkName] ?? r._id ?? "");
+          if (id) next.set(`${f.name}::${id}`, summarizeRow(r, target.pkName, target.labelField));
+        }
+      }
+      if (!cancelled) setLookup(next);
+    })();
+
+    return () => { cancelled = true; };
+  }, [refFields.map((f) => `${f.name}::${f.target_table}`).join(","), hostPath, rev]);
+
+  return lookup;
+}

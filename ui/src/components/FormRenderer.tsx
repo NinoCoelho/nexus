@@ -270,14 +270,18 @@ function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
     );
   }
 
-  if (kind === "formula") {
+  if (kind === "formula" || kind === "rollup") {
     return (
       <input
         type="text"
         className="form-input"
         value={String(value ?? "")}
         readOnly
-        placeholder={field.formula ? `= ${field.formula}` : t("forms:formulaComputed")}
+        placeholder={
+          field.formula ? `= ${field.formula}` :
+          field.rollup_aggregate ? `${field.rollup_aggregate}(${field.rollup_source_field ?? ""})` :
+          t("forms:formulaComputed")
+        }
         title={t("forms:formulaTitle")}
       />
     );

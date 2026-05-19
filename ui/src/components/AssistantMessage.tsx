@@ -170,6 +170,7 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
           <MarkdownView
             linkifyVaultPaths
             onVaultLinkPreview={setPreviewPath}
+            streaming={streaming}
           >
             {processed}
           </MarkdownView>

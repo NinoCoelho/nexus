@@ -20,7 +20,7 @@ import DataTableToolbar from "./DataTableToolbar";
 import DataTableGrid from "./DataTableGrid";
 import RelatedRowsPanel from "./RelatedRowsPanel";
 import RowDetailDrawer from "./RowDetailDrawer";
-import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
+import { deriveLabelInfo, suggestNextPk, useRefLabels } from "../datatable/refOptions";
 import { useDataTableActions } from "./useDataTableActions";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
 import { useVaultLinkPreview, VaultLinkPreviewProvider } from "../vaultLink";
@@ -43,6 +43,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   const [showSchemaEditor, setShowSchemaEditor] = useState(false);
   const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
   const [detailRow, setDetailRow] = useState<RowRecord | null>(null);
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
 
   // toolbar state
@@ -99,6 +100,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   });
 
   const { fields, views, visibleFields, sorted, pageCount } = actions;
+  const refLabels = useRefLabels(fields, path);
 
   const handleRowClick = useCallback((row: RowRecord) => {
     setDetailRow(row);
@@ -164,9 +166,12 @@ export default function DataTableView({ path, onOpenTable }: Props) {
             <div className="dt-form-heading">New Row</div>
             <FormRenderer
               hostPath={path}
-              fields={fields.filter((f) => f.kind !== "formula")}
+              fields={fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup")}
               initialValues={initialValues}
-              onSubmit={(v) => void actions.handleAdd(v)}
+              onSubmit={async (v) => {
+                const created = await actions.handleAdd(v);
+                if (created) setDetailRow(created);
+              }}
               onCancel={() => setShowAddForm(false)}
               submitLabel="Add"
             />
@@ -182,7 +187,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
             <div className="dt-form-heading">Edit Row</div>
             <FormRenderer
               hostPath={path}
-              fields={fields.filter((f) => f.kind !== "formula")}
+              fields={fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup")}
               initialValues={editingValues}
               onSubmit={(v) => void actions.handleUpdate(editingRow, v)}
               onCancel={() => setEditingRow(null)}
@@ -213,6 +218,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
           pageCount={pageCount}
           hostPath={path}
           selectedRowId={detailRowId}
+          refLabels={refLabels}
           onToggleSort={(name) => setSort((s) => {
             if (!s || s.field !== name) return { field: name, dir: "asc" };
             if (s.dir === "asc") return { field: name, dir: "desc" };
@@ -235,7 +241,18 @@ export default function DataTableView({ path, onOpenTable }: Props) {
             table={table}
             onClose={() => setDetailRow(null)}
             onOpenTable={onOpenTable}
-            onRefresh={() => { void reload(); setDetailRow(null); }}
+            onRefresh={() => {
+              getVaultDataTable(path).then((fresh) => {
+                setTable(fresh);
+                const id = detailRow?._id;
+                if (id) {
+                  const updated = fresh.rows.find((r: RowRecord) => r._id === id);
+                  if (updated) setDetailRow(updated);
+                }
+                setDetailRefreshKey((k) => k + 1);
+              }).catch(() => {});
+            }}
+            refreshKey={detailRefreshKey}
           />
         )}
       </div>

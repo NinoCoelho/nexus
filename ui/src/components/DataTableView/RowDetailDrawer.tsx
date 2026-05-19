@@ -74,6 +74,7 @@ interface Props {
   onClose: () => void;
   onOpenTable?: (path: string) => void;
   onRefresh: () => void;
+  refreshKey?: number;
 }
 
 export default function RowDetailDrawer({
@@ -84,6 +85,7 @@ export default function RowDetailDrawer({
   onClose,
   onOpenTable,
   onRefresh,
+  refreshKey,
 }: Props) {
   const toast = useToast();
   const fields: FieldSchema[] = table.schema?.fields ?? [];
@@ -130,7 +132,7 @@ export default function RowDetailDrawer({
       })();
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [path, rowId]);
+  }, [path, rowId, refreshKey]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -171,7 +173,7 @@ export default function RowDetailDrawer({
     return String(val);
   };
 
-  const visibleFields = fields.filter((f) => f.kind !== "formula");
+  const visibleFields = fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup");
 
   return (
     <div className="dt-drawer">
@@ -252,7 +254,7 @@ function pickDisplayCols(
   schemaFields: FieldSchema[],
   fkField: string,
 ): FieldSchema[] {
-  const skip = new Set(["formula", "textarea"]);
+  const skip = new Set(["formula", "rollup", "textarea"]);
   const eligible = schemaFields.filter(
     (f) => f.name !== fkField && f.name !== "_id" && !skip.has(f.kind ?? "text"),
   );
@@ -362,7 +364,7 @@ function OneToManyGroupSection({
   };
 
   const addFields = schema
-    ? schema.fields.filter((f) => f.name !== group.field_name && f.kind !== "formula")
+    ? schema.fields.filter((f) => f.name !== group.field_name && f.kind !== "formula" && f.kind !== "rollup")
     : [];
   const pkForAdd = schema ? suggestNextPk(schema.allRows, schema.pkName) : undefined;
   const addInitial = pkForAdd ? { [schema?.pkName ?? ""]: pkForAdd } : undefined;
@@ -437,7 +439,7 @@ function ManyToManyGroupSection({
   onOpenTable?: (path: string) => void;
 }) {
   const displayCols = useMemo(() => schema
-    ? schema.fields.filter((f) => f.kind !== "formula" && f.kind !== "textarea" && f.name !== "_id").slice(0, MAX_COLS)
+    ? schema.fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup" && f.kind !== "textarea" && f.name !== "_id").slice(0, MAX_COLS)
     : [], [schema]);
   const refLookup = useGroupRefLookup(group.junction_table, displayCols);
 

@@ -82,9 +82,13 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                     "Schema definition for create_table or set_schema. "
                     "Shape: { title?: str, table?: { primary_key?: str, is_junction?: bool }, "
                     "fields: [{name, label?, kind?, required?, choices?, target_table?, cardinality?, ...}] }. "
-                    "field.kind: 'text'|'textarea'|'number'|'boolean'|'select'|'multiselect'|'date'|'vault-link'|'formula'|'ref'. "
+                    "field.kind: 'text'|'textarea'|'number'|'boolean'|'select'|'multiselect'|'date'|'vault-link'|'formula'|'rollup'|'ref'. "
                     "For kind='ref', set target_table to the related table's vault path "
-                    "(./sibling.md or ../folder/file.md) and cardinality to 'one' or 'many'."
+                    "(./sibling.md or ../folder/file.md) and cardinality to 'one' or 'many'. "
+                    "For kind='rollup', set rollup_target_table (path to detail table), "
+                    "rollup_relation_field (FK field on detail table), "
+                    "rollup_aggregate ('sum'|'count'|'avg'|'min'|'max'), and "
+                    "rollup_source_field (field on detail table to aggregate; not needed for count)."
                 ),
             },
             "field": {

@@ -94,6 +94,14 @@ def _ref_fields(schema: dict[str, Any]) -> list[dict[str, Any]]:
     return [f for f in fields if isinstance(f, dict) and f.get("kind") == "ref"]
 
 
+def _rollup_fields(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return fields with kind == 'rollup'."""
+    fields = schema.get("fields") if isinstance(schema, dict) else None
+    if not isinstance(fields, list):
+        return []
+    return [f for f in fields if isinstance(f, dict) and f.get("kind") == "rollup"]
+
+
 def is_junction(schema: dict[str, Any]) -> bool:
     """Heuristic: is this schema a junction (N:N) table?
 
@@ -137,6 +145,23 @@ def validate_schema(schema: dict[str, Any], host_path: str = "") -> list[str]:
             warnings.append(
                 f"field {name!r}: cardinality={card!r} should be 'one' or 'many'"
             )
+    for f in _rollup_fields(schema):
+        name = f.get("name") or "(unnamed)"
+        target = f.get("rollup_target_table")
+        if not target or not isinstance(target, str) or not target.strip():
+            warnings.append(f"field {name!r}: kind=rollup needs a rollup_target_table")
+        rel_field = f.get("rollup_relation_field")
+        if not rel_field or not isinstance(rel_field, str) or not rel_field.strip():
+            warnings.append(f"field {name!r}: kind=rollup needs a rollup_relation_field")
+        agg = f.get("rollup_aggregate")
+        if agg not in ("sum", "count", "avg", "min", "max"):
+            warnings.append(
+                f"field {name!r}: rollup_aggregate={agg!r} must be one of sum/count/avg/min/max"
+            )
+        if agg != "count":
+            src = f.get("rollup_source_field")
+            if not src or not isinstance(src, str) or not src.strip():
+                warnings.append(f"field {name!r}: kind=rollup needs a rollup_source_field for aggregate={agg!r}")
     return warnings
 
 

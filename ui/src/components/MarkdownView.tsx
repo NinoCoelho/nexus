@@ -140,6 +140,9 @@ type Props = {
    *  callsite can swap in a friendlier "couldn't render that, want to refine
    *  the prompt?" UI instead of showing raw error text. */
   onChartError?: (message: string) => void;
+  /** When true, mermaid/nexus-chart blocks are shown as placeholders to avoid
+   *  rendering incomplete content during streaming. */
+  streaming?: boolean;
 };
 
 export default function MarkdownView({
@@ -149,6 +152,7 @@ export default function MarkdownView({
   onVaultLinkPreview,
   linkifyVaultPaths,
   onChartError,
+  streaming,
 }: Props) {
   const ctxPreview = useVaultLinkPreviewFromContext();
   const previewHandler = onVaultLinkPreview ?? ctxPreview ?? undefined;
@@ -174,10 +178,16 @@ export default function MarkdownView({
           const match = /language-([\w-]+)/.exec(className || "");
           const lang = match?.[1];
           const raw = String(codeChildren ?? "");
-          if (lang === "mermaid" && raw.includes("\n")) {
+          if (lang === "mermaid") {
+            if (streaming || !raw.trim()) {
+              return <div className="mermaid-block mermaid-block--loading" />;
+            }
             return <MermaidBlock code={raw.replace(/\n$/, "")} />;
           }
           if (lang === "nexus-chart") {
+            if (streaming) {
+              return <span className="mermaid-block" />;
+            }
             return (
               <Suspense fallback={<span className="mermaid-block" />}>
                 <LazyChartBlock code={raw.replace(/\n$/, "")} onError={onChartError} />

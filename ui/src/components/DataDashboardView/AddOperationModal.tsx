@@ -96,7 +96,7 @@ export default function AddOperationModal({ folder: _folder, tables, onSubmit, o
   const prefillFields: FieldSchema[] = useMemo(() => {
     if (!tableSchema) return [];
     return tableSchema.schema.fields
-      .filter((f) => f.kind !== "formula")
+      .filter((f) => f.kind !== "formula" && f.kind !== "rollup")
       .map((f) => ({ ...f, required: false }));
   }, [tableSchema]);
 

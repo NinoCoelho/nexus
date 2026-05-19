@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import type { FieldSchema } from "../../types/form";
+import type { RefLabelLookup } from "../datatable/refOptions";
 import InlineEditor from "./InlineEditor";
 import { renderCell } from "./utils";
 import { RefPreviewPopup } from "./RefPreviewPopup";
@@ -32,6 +33,7 @@ interface Props {
   pageCount: number;
   hostPath?: string;
   selectedRowId?: string | null;
+  refLabels?: RefLabelLookup;
   onToggleSort: (name: string) => void;
   onStartEdit: (rowId: string, field: FieldSchema, value: unknown) => void;
   onCellDraftChange: (v: unknown) => void;
@@ -72,6 +74,7 @@ interface Props {
 export default function DataTableGrid({
   visibleFields, pageRows, sorted, rows, fields, sort,
   editingCell, cellDraft, safePage, pageCount, hostPath, selectedRowId,
+  refLabels,
   onToggleSort, onStartEdit, onCellDraftChange, onCommitEdit, onCancelEdit,
   onEditRow, onDeleteRow, onRowClick, onPageChange,
 }: Props) {
@@ -149,7 +152,7 @@ export default function DataTableGrid({
                   </td>
                   {visibleFields.map((f) => {
                     const isEditing = editingCell?.rowId === rowId && editingCell.field === f.name;
-                    const inlineable = INLINE_EDITABLE.has(f.kind ?? "text") && f.kind !== "formula";
+                    const inlineable = INLINE_EDITABLE.has(f.kind ?? "text") && f.kind !== "formula" && f.kind !== "rollup";
                     return (
                       <td
                         key={f.name}
@@ -169,7 +172,7 @@ export default function DataTableGrid({
                             onCancel={onCancelEdit}
                           />
                         ) : (
-                          renderCell(row[f.name], f, { onRefClick: handleRefClick, hostPath })
+                          renderCell(row[f.name], f, { onRefClick: handleRefClick, hostPath, refLabels })
                         )}
                       </td>
                     );

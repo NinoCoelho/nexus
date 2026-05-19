@@ -11,6 +11,7 @@ import {
 } from "../../api";
 import { listDatabases, type DatabaseSummary } from "../../api/datatable";
 import { useToast } from "../../toast/ToastProvider";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
 import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream } from "./icons";
@@ -95,6 +96,12 @@ export default function Sidebar({
   useEffect(() => {
     listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
   }, [databaseListRevision]);
+
+  useVaultEvents((ev) => {
+    if (ev.type === "vault.indexed" || ev.type === "vault.removed") {
+      listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
+    }
+  });
 
   useEffect(() => {
     try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* ignore */ }

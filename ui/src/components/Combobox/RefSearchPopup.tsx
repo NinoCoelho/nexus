@@ -58,7 +58,7 @@ export default function RefSearchPopup({ field, hostPath, onSelect, onClose }: P
 
   const columns = useMemo(() => {
     if (!table) return [];
-    return table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula");
+    return table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula" && (f.kind ?? "text") !== "rollup");
   }, [table]);
 
   const { pkName } = useMemo(() => {
@@ -97,7 +97,7 @@ export default function RefSearchPopup({ field, hostPath, onSelect, onClose }: P
 
   const handleAddNew = useCallback(async () => {
     if (!targetPath || !table) return;
-    const fields = table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula");
+    const fields = table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula" && (f.kind ?? "text") !== "rollup");
     for (const f of fields) {
       if (f.required && !addValues[f.name]) {
         setAddError(`${f.label ?? f.name} is required`);
@@ -136,7 +136,7 @@ export default function RefSearchPopup({ field, hostPath, onSelect, onClose }: P
 
   const addFormFields = useMemo(() => {
     if (!table) return [];
-    return table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula");
+    return table.schema.fields.filter((f) => (f.kind ?? "text") !== "formula" && (f.kind ?? "text") !== "rollup");
   }, [table]);
 
   return (
