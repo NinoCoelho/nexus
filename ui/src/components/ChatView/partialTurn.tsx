@@ -1,5 +1,6 @@
 // Partial-turn action banner for ChatView.
 
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Message } from "./index";
 
@@ -46,13 +47,19 @@ export function PartialTurnActions({
   status: NonNullable<Message["partial"]>["status"];
   onRetry?: () => void;
   onContinue?: () => void;
-  onCompact?: () => void;
+  onCompact?: () => Promise<unknown>;
   onNewSession?: () => void;
   onRemoveLast?: () => void;
 }) {
   const { t } = useTranslation("chat");
+  const [compacting, setCompacting] = useState(false);
   const showContinue = PARTIAL_CAN_CONTINUE[status] && !!onContinue;
   const isContextIssue = status === "context_overflow" || status === "message_too_large";
+  const doCompact = useCallback(() => {
+    if (compacting || !onCompact) return;
+    setCompacting(true);
+    onCompact().finally(() => setCompacting(false));
+  }, [compacting, onCompact]);
   return (
     <div className="limit-banner" style={{ marginTop: 4 }}>
       <div className="limit-banner-text">{t(PARTIAL_KEY[status])} {t("chat:partial.proceed")}</div>
@@ -62,10 +69,11 @@ export function PartialTurnActions({
             {onCompact && (
               <button
                 className="limit-banner-btn limit-banner-btn-primary"
-                onClick={onCompact}
+                onClick={doCompact}
+                disabled={compacting}
                 type="button"
               >
-                {t("chat:partial.compact")}
+                {compacting ? "Compacting…" : t("chat:partial.compact")}
               </button>
             )}
             {onRemoveLast && (

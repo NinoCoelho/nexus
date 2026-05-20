@@ -140,7 +140,7 @@ interface Props {
   attachments?: { name: string; vaultPath: string }[];
   onAttachmentsChange?: (files: { name: string; vaultPath: string }[]) => void;
   onRollback?: (msgIndex: number) => void;
-  onCompact?: () => void;
+  onCompact?: () => Promise<unknown>;
   onNewSession?: () => void;
   onRemoveLast?: () => void;
   models?: string[];

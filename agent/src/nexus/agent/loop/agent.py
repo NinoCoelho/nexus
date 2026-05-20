@@ -21,6 +21,7 @@ from .helpers import (
     _to_loom_message,
 )
 from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
+from .budget import check_tool_budget, BUDGET_EXCEEDED_HINT, DEFAULT_TOOL_BUDGET_TOKENS
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -359,9 +360,15 @@ class Agent:
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
 
-        from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW
+        from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW, TOOL_BUDGET_EXCEEDED
         CURRENT_HISTORY.set(stripped_history)
         CURRENT_CONTEXT_WINDOW.set(effective_window)
+        TOOL_BUDGET_EXCEEDED.set(False)
+        _tool_budget = 0
+        if self._nexus_cfg:
+            agent_cfg = getattr(self._nexus_cfg, "agent", None)
+            if agent_cfg:
+                _tool_budget = int(getattr(agent_cfg, "tool_budget_tokens", 0) or 0)
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
@@ -377,6 +384,18 @@ class Agent:
         # endless retry loop.
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         check = check_overflow(loom_messages, context_window=ctx_window)
+        _auto_compacted_history: list[ChatMessage] | None = None
+        if check.overflowed:
+            from .compact import auto_compact
+
+            compacted_stripped, compact_report = auto_compact(stripped_history)
+            if compact_report.compacted > 0:
+                loom_messages = [_to_loom_message(m) for m in compacted_stripped]
+                loom_messages.append(_to_loom_message(user_msg))
+                check = check_overflow(loom_messages, context_window=ctx_window)
+                if not check.overflowed:
+                    _auto_compacted_history = compacted_stripped
+
         if check.overflowed:
             self._log_llm_error(
                 session_id=session_id,
@@ -428,10 +447,7 @@ class Agent:
         # Setting this flag on the error branch lets the done branch skip
         # the synthetic emission.
         _saw_loom_error = False
-        # Snapshot inbound history so we can rebuild the persisted message list
-        # for app.py's `store.replace_history`. loom's streaming DoneEvent does
-        # not carry the assembled message list.
-        _history_snapshot = list(history or [])
+        _history_snapshot = list(_auto_compacted_history if _auto_compacted_history is not None else (history or []))
 
         # Mirror of loom's all_messages for the parking flow. We only need this
         # when ask_user_tool parks: the snapshot up through the ASSISTANT
@@ -454,6 +470,8 @@ class Agent:
         # somehow drops it (older serialisers). Updated per dispatch.
         last_tool_exec_id: str | None = None
         last_tool_exec_name: str | None = None
+        _cumulative_tool_tokens: int = 0
+        _budget_hint_injected: bool = False
 
         # Auto-retry on retryable mid-stream errors (peer-closed connections,
         # 429 rate limits, transient 5xx, "empty response" from a flaky
@@ -741,6 +759,16 @@ class Agent:
                         name=tc_name,
                     )
                 )
+                bc = check_tool_budget(_cumulative_tool_tokens, result_text, budget=_tool_budget)
+                _cumulative_tool_tokens = bc.cumulative_tool_tokens
+                if _tool_budget > 0 and bc.exceeded and not _budget_hint_injected:
+                    _budget_hint_injected = True
+                    from ..context import TOOL_BUDGET_EXCEEDED
+                    TOOL_BUDGET_EXCEEDED.set(True)
+                    log.warning(
+                        "Tool budget exceeded: %d/%d tokens after %s",
+                        bc.cumulative_tool_tokens, bc.budget, tool_name,
+                    )
                 # Reset per-iteration accumulators so the NEXT LLM call
                 # starts with a fresh content/tcs buffer.
                 pending_content_chunks.clear()

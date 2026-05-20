@@ -239,6 +239,8 @@ export default function App() {
       if (!result) return;
       if (result.budget_exceeded) {
         toast.error("Your API budget has been exceeded. Top up your credits or switch providers to continue.");
+      } else if (result.still_overflowed) {
+        toast.info("Compacted, but the conversation is still too long. Try removing the last message or starting a new session.");
       }
       return result;
     } catch {

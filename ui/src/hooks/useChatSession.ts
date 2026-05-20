@@ -376,18 +376,21 @@ export function useChatSession(
     void send(`${HIDDEN_SEED_MARKER}retry: ${targetUser.content}`);
   }, [activeKey, chatStates, send]);
 
+  const compactingRef = useRef(false);
+
   const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
     const sid = activeSession;
-    if (!sid) return;
+    if (!sid || compactingRef.current) return;
+    compactingRef.current = true;
     try {
       const state = chatStates.get(activeKey) ?? emptyState();
       const model = state.selectedModel || undefined;
       const result = await compactSession(sid, { model, ...options });
-      if (state.thinking) return;
+      if (state.thinking) return result;
       await loadHistory(sid, setChatStates, computeSeedModel, patchState, true);
       return result;
-    } catch {
-      /* best-effort */
+    } finally {
+      compactingRef.current = false;
     }
   }, [activeSession, activeKey, chatStates, setChatStates, computeSeedModel, patchState]);
 

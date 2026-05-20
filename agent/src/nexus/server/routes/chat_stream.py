@@ -207,6 +207,14 @@ async def chat_stream_route(
                 ])
                 total_est = history_tokens + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
                 if total_est > ctx_window - _OUTPUT_HEADROOM:
+                    from ...agent.loop.compact import auto_compact
+                    compacted, report = auto_compact(pre_turn_history)
+                    if report.compacted > 0:
+                        new_tokens = _est_tok(compacted) + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
+                        if new_tokens <= ctx_window - _OUTPUT_HEADROOM:
+                            pre_turn_history = compacted
+                            total_est = new_tokens
+                if total_est > ctx_window - _OUTPUT_HEADROOM:
                     yield json.dumps({
                         "type": "error",
                         "detail": (
