@@ -154,3 +154,212 @@ export async function getVaultForwardLinks(path: string): Promise<{ path: string
 export function vaultExportPdfUrl(path: string): string {
   return `${BASE}/vault/export/pdf?path=${encodeURIComponent(path)}`;
 }
+
+// ── Import wizard types and API ──────────────────────────────────────────────
+
+export interface ImportTreeNode {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  size?: number;
+  children?: ImportTreeNode[];
+}
+
+export interface ImportCsvInfo {
+  path: string;
+  name: string;
+  headers: string[];
+  column_count: number;
+  estimated_rows: number;
+  size: number;
+  mode?: "as_is" | "app";
+}
+
+export interface ImportStats {
+  total_files: number;
+  total_size: number;
+  csvs: ImportCsvInfo[];
+}
+
+export interface ZipPreviewResult {
+  import_id: string;
+  tree: ImportTreeNode[];
+  stats: ImportStats;
+  export_format?: { format: string; conversation_count: number } | null;
+}
+
+export interface ImportOptions {
+  selected_paths: string[];
+  dest_dir: string;
+  csv_options: Record<string, "as_is" | "app">;
+  process_options?: { prompt: string; keep_originals: boolean };
+  export_options?: { format: string; import_as: "conversations" | "raw" };
+}
+
+export interface CsvProposal {
+  entities: Array<{
+    name: string;
+    fields: Array<{ name: string; kind: string; choices?: string[]; required?: boolean }>;
+    sample_values?: Record<string, unknown[]>;
+  }>;
+  relationships: Array<{
+    from: string;
+    to: string;
+    type: string;
+    via_field: string;
+    description?: string;
+  }>;
+}
+
+export type ImportSseEvent =
+  | { event: "file_start"; data: { path: string; action: string; entity?: string } }
+  | { event: "file_done"; data: { path: string; action: string; size?: number; entity?: string; added?: number; skipped?: number } }
+  | { event: "file_error"; data: { path: string; error: string; entity?: string } }
+  | { event: "done"; data: { stats: { imported: number; processed: number; errors: number }; csv_apps?: string[]; batch_id?: string } };
+
+export async function uploadZipPreview(file: File): Promise<ZipPreviewResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/vault/upload/zip-preview`, { method: "POST", body: form });
+  if (!res.ok) {
+    let detail = `Upload failed: ${res.status}`;
+    try { const j = await res.json(); if (j?.detail) detail = j.detail; } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function cancelZipImport(importId: string): Promise<void> {
+  await fetch(`${BASE}/vault/import/zip/${importId}`, { method: "DELETE" });
+}
+
+function parseSseLines(text: string): ImportSseEvent[] {
+  const events: ImportSseEvent[] = [];
+  let currentEvent = "";
+  let currentData = "";
+  for (const line of text.split("\n")) {
+    if (line.startsWith("event: ")) {
+      currentEvent = line.slice(7).trim();
+    } else if (line.startsWith("data: ")) {
+      currentData = line.slice(6);
+    } else if (line === "" && currentEvent && currentData) {
+      try {
+        const data = JSON.parse(currentData);
+        events.push({ event: currentEvent as ImportSseEvent["event"], data } as ImportSseEvent);
+      } catch { /* skip malformed */ }
+      currentEvent = "";
+      currentData = "";
+    }
+  }
+  return events;
+}
+
+export async function streamZipImport(
+  importId: string,
+  options: ImportOptions,
+  onEvent: (event: ImportSseEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/vault/import/zip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ import_id: importId, ...options }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`Import failed: ${res.status}`);
+  await _consumeSse(res, onEvent);
+}
+
+export async function streamBatchImport(
+  files: Map<string, File>,
+  options: ImportOptions,
+  onEvent: (event: ImportSseEvent) => void,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const form = new FormData();
+  form.append("options", JSON.stringify(options));
+  let batchId: string | undefined;
+  for (const [path, file] of files) {
+    form.append("files", file, path);
+  }
+  const res = await fetch(`${BASE}/vault/import/batch`, {
+    method: "POST",
+    body: form,
+    signal,
+  });
+  if (!res.ok) throw new Error(`Import failed: ${res.status}`);
+  await _consumeSse(res, (ev) => {
+    if (ev.event === "done" && "batch_id" in ev.data) {
+      batchId = ev.data.batch_id as string;
+    }
+    onEvent(ev);
+  });
+  return batchId;
+}
+
+export async function analyzeCsv(params: {
+  csv_path: string;
+  import_id?: string;
+  batch_id?: string;
+  source?: "temp" | "vault";
+}): Promise<{ proposal: CsvProposal; csv_stats: { rows: number; columns: number; headers: string[] } }> {
+  const res = await fetch(`${BASE}/vault/csv-analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...params, source: params.source ?? (params.import_id ? "temp" : "vault") }),
+  });
+  if (!res.ok) {
+    let detail = `CSV analysis failed: ${res.status}`;
+    try { const j = await res.json(); if (j?.detail) detail = j.detail; } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function streamCsvMigrate(
+  params: {
+    csv_path: string;
+    import_id?: string;
+    batch_id?: string;
+    source?: "temp" | "vault";
+    dest_dir: string;
+    approved_plan: CsvProposal;
+  },
+  onEvent: (event: ImportSseEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/vault/csv-migrate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...params, source: params.source ?? (params.import_id ? "temp" : "vault") }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`CSV migration failed: ${res.status}`);
+  await _consumeSse(res, onEvent);
+}
+
+async function _consumeSse(
+  res: Response,
+  onEvent: (event: ImportSseEvent) => void,
+): Promise<void> {
+  const reader = res.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      const events = parseSseLines(part + "\n\n");
+      for (const ev of events) onEvent(ev);
+    }
+  }
+  if (buffer.trim()) {
+    const events = parseSseLines(buffer + "\n\n");
+    for (const ev of events) onEvent(ev);
+  }
+}

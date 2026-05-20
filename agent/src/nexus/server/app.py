@@ -862,6 +862,7 @@ def create_app(
     from .routes.dream import router as dream_router
     from .routes.mcp import router as mcp_router
     from .routes.jobs import router as jobs_router
+    from .routes.vault_import import router as vault_import_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -878,6 +879,7 @@ def create_app(
     app.include_router(vault_dashboard_router)
     app.include_router(vault_dispatch_router)
     app.include_router(vault_history_router)
+    app.include_router(vault_import_router)
     app.include_router(config_router)
     app.include_router(catalog_router)
     app.include_router(oauth_router)

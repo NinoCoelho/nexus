@@ -570,4 +570,11 @@
 }
 .vault-ctx-item:hover { background: var(--bg-hover); }
 .vault-ctx-item--danger { color: var(--bad); }
+
+/* ── Drop zone ───────────────────────────────────────────────────────────── */
+
+.vault-tree--drop-over {
+  outline: 2px dashed var(--accent, #6c63ff);
+  outline-offset: -2px;
+}
 .vault-ctx-item--danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
