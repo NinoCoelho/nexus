@@ -27,6 +27,14 @@ from loom.context import (  # noqa: F401 — re-export
     SUBAGENT_DEPTH,
 )
 
+try:
+    from loom.context import CURRENT_USER_ID as CURRENT_USER_ID  # noqa: F401
+except ImportError:
+    from contextvars import ContextVar
+    CURRENT_USER_ID: ContextVar[str | None] = ContextVar(
+        "loom_current_user_id", default=None,
+    )
+
 # Tracks the chain of card_ids whose lane-prompts have been auto-dispatched
 # *into* the current execution context. Used by the lane-change hook to
 # detect cycles (A→B→A) and cap cascade depth so a misconfigured set of
@@ -49,4 +57,11 @@ CURRENT_HISTORY: ContextVar[list] = ContextVar(
 # The effective context window for the current turn. 0 = unknown.
 CURRENT_CONTEXT_WINDOW: ContextVar[int] = ContextVar(
     "CURRENT_CONTEXT_WINDOW", default=0
+)
+
+# Set to True when the cumulative tool-result token budget is exceeded
+# for the current turn. Read by the before_llm_call hook to inject a
+# "synthesize now" hint into the system prompt.
+TOOL_BUDGET_EXCEEDED: ContextVar[bool] = ContextVar(
+    "TOOL_BUDGET_EXCEEDED", default=False
 )

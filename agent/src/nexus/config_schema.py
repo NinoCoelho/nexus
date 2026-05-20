@@ -121,6 +121,11 @@ class AgentConfig(BaseModel):
     # else is in [ocr] or returns no-op. Set via the "Vision" toggle in the
     # models settings table.
     vision_model: str = ""
+    # Per-turn cumulative token budget for tool results. When the total
+    # tool-result text in a single turn exceeds this threshold (estimated
+    # tokens), the agent receives a system hint to synthesize with what it
+    # has instead of calling more tools. 0 = disabled (no budget).
+    tool_budget_tokens: int = 50_000
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
@@ -196,7 +201,7 @@ class ScrapeConfig(BaseModel):
     mode: str = "auto"
     headless: bool = True
     timeout: int = 30
-    max_content_bytes: int = 102400
+    max_content_bytes: int = 20480
 
 
 class RemoteTranscriptionConfig(BaseModel):
@@ -302,6 +307,10 @@ class McpConfig(BaseModel):
     server_auth_token: str = ""
 
 
+class ServerConfig(BaseModel):
+    multi_user: bool = False
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -317,6 +326,7 @@ class NexusConfig(BaseModel):
     location: LocationConfig = Field(default_factory=LocationConfig)
     dream: DreamConfig = Field(default_factory=DreamConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
 
 
 # Fresh install starts with providers configured but NO models.

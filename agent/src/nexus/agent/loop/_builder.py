@@ -101,6 +101,10 @@ def build_loom_agent(
         nexus_cfg = get_nexus_cfg()
         language = getattr(getattr(nexus_cfg, "ui", None), "language", None) if nexus_cfg else None
         sys_prompt = build_system_prompt(registry, home=home, language=language)
+        from ..context import TOOL_BUDGET_EXCEEDED
+        from .budget import BUDGET_EXCEEDED_HINT
+        if TOOL_BUDGET_EXCEEDED.get(False):
+            sys_prompt += BUDGET_EXCEEDED_HINT
         return [
             lt.ChatMessage(role=lt.Role.SYSTEM, content=sys_prompt),
             *[m for m in messages if m.role != lt.Role.SYSTEM],
