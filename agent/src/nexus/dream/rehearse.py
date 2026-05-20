@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -69,12 +70,12 @@ async def run_scenario_rehearsal(
     max_tokens: int = 3000,
     context_budget: int = 4000,
 ) -> RehearsalResult:
-    session_summaries = _load_recent_sessions(limit=10)
+    session_summaries = await asyncio.to_thread(_load_recent_sessions, limit=10)
     if not session_summaries:
         log.info("dream/rehearse: no sessions, skipping")
         return RehearsalResult()
 
-    insight_notes = _load_recent_insights(limit=3)
+    insight_notes = await asyncio.to_thread(_load_recent_insights, limit=3)
     context = _build_context(session_summaries, insight_notes)
     if len(context) > context_budget:
         context = context[:context_budget]
@@ -128,10 +129,10 @@ async def run_scenario_rehearsal(
             tags=tags + ["precomputed", "speculative"],
         )
 
-        _persist_precomputed(scenario)
+        await asyncio.to_thread(_persist_precomputed, scenario)
         result.scenarios.append(scenario)
 
-    _expire_old_precomputed()
+    await asyncio.to_thread(_expire_old_precomputed)
 
     return result
 

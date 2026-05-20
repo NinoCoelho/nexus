@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -68,7 +69,7 @@ async def run_consolidation(
     if vault_memory_dir is None:
         vault_memory_dir = Path.home() / ".nexus" / "vault" / "memory"
 
-    memory_files = _load_memory_files(vault_memory_dir)
+    memory_files = await asyncio.to_thread(_load_memory_files, vault_memory_dir)
     if not memory_files:
         log.info("dream/consolidate: no memory files found, skipping")
         return ConsolidationResult()
@@ -178,7 +179,7 @@ async def _consolidate_chunk(
     if not isinstance(actions, list):
         return ConsolidationResult(errors=["Merge plan 'actions' is not a list"], tokens_in=tokens_in, tokens_out=tokens_out)
 
-    result = _execute_actions(actions, files)
+    result = await asyncio.to_thread(_execute_actions, actions, files)
     result.tokens_in = tokens_in
     result.tokens_out = tokens_out
     return result

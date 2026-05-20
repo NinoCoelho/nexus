@@ -68,7 +68,7 @@ async def run_dream(
 ) -> DreamResult:
     store = get_store()
 
-    if store.is_running():
+    if await asyncio.to_thread(store.is_running):
         log.warning("dream/engine: a dream is already running, skipping")
         return DreamResult(
             run_id=0, depth=depth, phases_run=[], consolidation=None,
@@ -104,7 +104,7 @@ async def run_dream(
     max_duration = dream_cfg.max_duration_seconds
     daily_budget = dream_cfg.daily_token_budget
 
-    budget_used = store.budget_used_today()
+    budget_used = await asyncio.to_thread(store.budget_used_today)
     if budget_used >= daily_budget:
         log.info("dream/engine: daily budget exhausted (%d/%d)", budget_used, daily_budget)
         return DreamResult(
@@ -125,7 +125,7 @@ async def run_dream(
         phases.append("skill_refine")
         phases.append("rehearsal")
 
-    run_id = store.start_run(depth=depth, phases=",".join(phases))
+    run_id = await asyncio.to_thread(store.start_run, depth=depth, phases=",".join(phases))
     t0 = asyncio.get_event_loop().time()
 
     _publish_event("dream.started", {
@@ -163,7 +163,7 @@ async def run_dream(
             })
 
         if "insight" in phases and not error:
-            last_run = store.last_run()
+            last_run = await asyncio.to_thread(store.last_run)
             since = last_run.started_at if last_run else None
 
             insight_result = await run_insight_extraction(
@@ -232,7 +232,8 @@ async def run_dream(
     elapsed = asyncio.get_event_loop().time() - t0
     duration_ms = int(elapsed * 1000)
 
-    store.finish_run(
+    await asyncio.to_thread(
+        store.finish_run,
         run_id,
         status="failed" if error else "done",
         tokens_in=tokens_in,
@@ -245,10 +246,11 @@ async def run_dream(
     )
 
     if tokens_in + tokens_out > 0:
-        store.add_budget_spend(tokens_in + tokens_out)
+        await asyncio.to_thread(store.add_budget_spend, tokens_in + tokens_out)
 
     try:
-        journal_path = write_journal(
+        journal_path = await asyncio.to_thread(
+            write_journal,
             run_id=run_id,
             depth=depth,
             phases_run=phases,

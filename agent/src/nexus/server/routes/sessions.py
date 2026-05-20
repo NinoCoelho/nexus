@@ -6,6 +6,7 @@ under 300 lines.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -116,7 +117,7 @@ async def list_sessions(
     response: Response = None,
 ) -> list[dict]:
     response.headers["Cache-Control"] = "no-cache"
-    summaries = store.list(limit=limit, include_hidden=include_hidden)
+    summaries = await asyncio.to_thread(store.list, limit, include_hidden=include_hidden)
     return [
         {
             "id": s.id,
@@ -143,7 +144,7 @@ async def search_sessions(
     """
     if not q.strip():
         return []
-    return store.search(q.strip(), limit=max(1, min(limit, 100)))
+    return await asyncio.to_thread(store.search, q.strip(), limit=max(1, min(limit, 100)))
 
 
 @router.get("/sessions/{session_id}")
@@ -152,7 +153,7 @@ async def get_session(
     store: SessionStore = Depends(get_sessions),
     locale: str = Depends(get_locale),
 ) -> dict:
-    session = store.get(session_id)
+    session = await asyncio.to_thread(store.get, session_id)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -164,8 +165,8 @@ async def get_session(
         if ts is None:
             return None
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    feedback_map = store.get_feedback_map(session_id)
-    pinned_set = store.get_pinned_set(session_id)
+    feedback_map = await asyncio.to_thread(store.get_feedback_map, session_id)
+    pinned_set = await asyncio.to_thread(store.get_pinned_set, session_id)
     return {
         "id": session.id,
         "title": session.title,
@@ -194,7 +195,7 @@ async def rename_session(
 ) -> None:
     title = body.get("title")
     if title is not None:
-        store.rename(session_id, title)
+        await asyncio.to_thread(store.rename, session_id, title)
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -202,7 +203,7 @@ async def delete_session(
     session_id: str,
     store: SessionStore = Depends(get_sessions),
 ) -> None:
-    store.delete(session_id)
+    await asyncio.to_thread(store.delete, session_id)
 
 
 @router.patch("/sessions/{session_id}/messages/{seq}/pin", status_code=status.HTTP_204_NO_CONTENT)
@@ -214,10 +215,10 @@ async def set_message_pin(
     locale: str = Depends(get_locale),
 ) -> None:
     """Set or clear the pinned flag for a message. Body: ``{"pinned": bool}``."""
-    if store.get(session_id) is None:
+    if await asyncio.to_thread(store.get, session_id) is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     pinned = bool(body.get("pinned", False))
-    store.set_pinned(session_id, seq, pinned)
+    await asyncio.to_thread(store.set_pinned, session_id, seq, pinned)
 
 
 @router.get("/pins")
@@ -226,7 +227,7 @@ async def list_pins(
     store: SessionStore = Depends(get_sessions),
 ) -> list[dict]:
     """Return pinned messages across all sessions, newest first."""
-    return store.list_pinned_across_sessions(limit=limit)
+    return await asyncio.to_thread(store.list_pinned_across_sessions, limit=limit)
 
 
 @router.get("/sessions/{session_id}/trajectories")
@@ -245,7 +246,7 @@ async def get_session_trajectories(
     """
     from .chat import _trajectory_logger
 
-    if store.get(session_id) is None:
+    if await asyncio.to_thread(store.get, session_id) is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     if _trajectory_logger is None:
         return {"enabled": False, "records": []}
@@ -266,11 +267,13 @@ async def get_session_usage(
     ``estimated_cost_usd`` is ``null`` when the model has no entry in the
     pricing table.
     """
-    row = store._loom._db.execute(
+    row = await asyncio.to_thread(
+        store._loom._db.execute,
         "SELECT model, input_tokens, output_tokens, tool_call_count "
         "FROM sessions WHERE id = ?",
         (session_id,),
-    ).fetchone()
+    )
+    row = row.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
 
@@ -301,7 +304,7 @@ async def get_session_usage(
                 break
         if context_window_tokens == 0:
             context_window_tokens = _known_context_window(model)
-        session_obj = store.get(session_id)
+        session_obj = await asyncio.to_thread(store.get, session_id)
         if session_obj and session_obj.history:
             estimated_context_tokens = estimate_tokens(session_obj.history)
             effective_window = context_window_tokens if context_window_tokens > 0 else _FALLBACK_WINDOW
@@ -342,7 +345,7 @@ async def get_context_stats(
     Includes per-role token estimates, per-tool stats, and a hint about
     which compaction strategy would help most.
     """
-    session = store.get(session_id)
+    session = await asyncio.to_thread(store.get, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
 
@@ -353,9 +356,12 @@ async def get_context_stats(
     from ...config_file import load as load_config
 
     model = ""
-    row = store._loom._db.execute(
-        "SELECT model FROM sessions WHERE id = ?", (session_id,)
-    ).fetchone()
+    row = await asyncio.to_thread(
+        store._loom._db.execute,
+        "SELECT model FROM sessions WHERE id = ?",
+        (session_id,),
+    )
+    row = row.fetchone()
     if row:
         model = row[0] or ""
 
@@ -446,13 +452,13 @@ async def set_message_feedback(
 
     Body: ``{"value": "up" | "down" | null}``. ``null`` clears the entry.
     """
-    if store.get(session_id) is None:
+    if await asyncio.to_thread(store.get, session_id) is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     raw_value = body.get("value")
     if raw_value is not None and raw_value not in ("up", "down"):
         raise HTTPException(status_code=422, detail=t("errors.sessions.bad_feedback", locale))
     try:
-        store.set_feedback(session_id, seq, raw_value)
+        await asyncio.to_thread(store.set_feedback, session_id, seq, raw_value)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -464,11 +470,11 @@ async def truncate_session(
     store: SessionStore = Depends(get_sessions),
     locale: str = Depends(get_locale),
 ) -> None:
-    session = store.get(session_id)
+    session = await asyncio.to_thread(store.get, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     truncated = session.history[: body.before_seq]
-    store.replace_history(session_id, truncated)
+    await asyncio.to_thread(store.replace_history, session_id, truncated)
 
 
 @router.delete("/sessions/{session_id}/messages/last")
@@ -484,7 +490,7 @@ async def rollback_last_message(
     is permanently broken because every turn immediately fails the pre-flight
     overflow check.
     """
-    session = store.get(session_id)
+    session = await asyncio.to_thread(store.get, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
     history = list(session.history)
@@ -503,7 +509,7 @@ async def rollback_last_message(
         elif isinstance(last_user.content, list):
             parts = [p.text for p in last_user.content if getattr(p, "kind", None) == "text" and p.text]
             user_content = " ".join(parts) if parts else None
-    store.replace_history(session_id, history)
+    await asyncio.to_thread(store.replace_history, session_id, history)
     return {"removed_count": removed, "remaining_messages": len(history), "removed_user_content": user_content}
 
 
@@ -530,7 +536,7 @@ async def compact_session(
     from ...agent.loop import Agent
 
     agent: Agent = get_agent(request)
-    session = store.get(session_id)
+    session = await asyncio.to_thread(store.get, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
 
@@ -566,7 +572,7 @@ async def compact_session(
 
     if report.compact_report.compacted > 0 or report.summarized:
         new_history = _clear_partial_prefixes(new_history)
-        store.replace_history(session_id, new_history)
+        await asyncio.to_thread(store.replace_history, session_id, new_history)
 
     return {
         "inspected_tool_messages": report.compact_report.inspected,
@@ -596,7 +602,7 @@ async def export_session(
     from datetime import datetime, timezone
     import re
 
-    session = store.get(session_id)
+    session = await asyncio.to_thread(store.get, session_id)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -604,7 +610,7 @@ async def export_session(
         )
 
     # Gather session-level timestamps from the store.
-    created_at_ts, updated_at_ts = store.get_session_timestamps(session_id)
+    created_at_ts, updated_at_ts = await asyncio.to_thread(store.get_session_timestamps, session_id)
 
     def _iso(ts: int) -> str:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
@@ -664,7 +670,7 @@ async def get_paused_turn(
     session_id: str,
     store: SessionStore = Depends(get_sessions),
 ) -> dict:
-    paused = store.load_paused(session_id)
+    paused = await asyncio.to_thread(store.load_paused, session_id)
     if not paused:
         return {"ok": True, "paused": False}
     from datetime import datetime, timezone
@@ -690,7 +696,7 @@ async def resume_paused_turn(
     session_id: str,
     store: SessionStore = Depends(get_sessions),
 ) -> dict:
-    paused = store.resume_paused(session_id)
+    paused = await asyncio.to_thread(store.resume_paused, session_id)
     if not paused:
         raise HTTPException(status_code=404, detail="No paused turn for this session")
     from datetime import datetime, timezone

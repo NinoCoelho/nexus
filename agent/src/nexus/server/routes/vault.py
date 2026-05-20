@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -17,40 +18,57 @@ router = APIRouter()
 @router.get("/vault/tree")
 async def vault_tree() -> list[dict]:
     from ...vault import list_tree
-    entries = list_tree()
+
+    entries = await asyncio.to_thread(list_tree)
     return [{"path": e.path, "type": e.type, "size": e.size, "mtime": e.mtime} for e in entries]
 
 
 @router.get("/vault/tags")
 async def vault_list_tags() -> list[dict]:
     from ... import vault_index
-    if vault_index.is_empty():
-        vault_index.rebuild_from_disk()
-    return vault_index.list_tags()
+
+    def _work():
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return vault_index.list_tags()
+
+    return await asyncio.to_thread(_work)
 
 
 @router.get("/vault/tags/{tag}")
 async def vault_files_for_tag(tag: str) -> dict:
     from ... import vault_index
-    if vault_index.is_empty():
-        vault_index.rebuild_from_disk()
-    return {"tag": tag, "files": vault_index.files_with_tag(tag)}
+
+    def _work():
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return vault_index.files_with_tag(tag)
+
+    return {"tag": tag, "files": await asyncio.to_thread(_work)}
 
 
 @router.get("/vault/backlinks")
 async def vault_backlinks_endpoint(path: str) -> dict:
     from ... import vault_index
-    if vault_index.is_empty():
-        vault_index.rebuild_from_disk()
-    return {"path": path, "backlinks": vault_index.backlinks(path)}
+
+    def _work():
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return vault_index.backlinks(path)
+
+    return {"path": path, "backlinks": await asyncio.to_thread(_work)}
 
 
 @router.get("/vault/forward-links")
 async def vault_forward_links_endpoint(path: str) -> dict:
     from ... import vault_index
-    if vault_index.is_empty():
-        vault_index.rebuild_from_disk()
-    return {"path": path, "forward_links": vault_index.forward_links(path)}
+
+    def _work():
+        if vault_index.is_empty():
+            vault_index.rebuild_from_disk()
+        return vault_index.forward_links(path)
+
+    return {"path": path, "forward_links": await asyncio.to_thread(_work)}
 
 
 @router.get("/vault/raw")
@@ -62,8 +80,9 @@ async def vault_read_raw(path: str):
     """
     import mimetypes
     from ...vault import resolve_path
+
     try:
-        full = resolve_path(path)
+        full = await asyncio.to_thread(resolve_path, path)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if not full.is_file():
@@ -96,7 +115,7 @@ async def vault_transcribe(path: str) -> dict:
     from ...vault import resolve_path
 
     try:
-        full = resolve_path(path)
+        full = await asyncio.to_thread(resolve_path, path)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if not full.is_file():
@@ -119,7 +138,7 @@ async def vault_transcribe(path: str) -> dict:
     # transcribe_bytes only cares about giving whisper a sensible suffix.
     effective_mime = mime if (mime and mime.startswith("audio/")) else "audio/webm"
 
-    data = full.read_bytes()
+    data = await asyncio.to_thread(full.read_bytes)
     text = await transcribe_bytes(data, effective_mime)
 
     if len(_transcript_cache) >= _TRANSCRIPT_CACHE_MAX:
@@ -133,17 +152,23 @@ async def vault_transcribe(path: str) -> dict:
 async def vault_read_file(path: str) -> dict:
     from ...vault import read_file
     from ... import vault_index
+
     try:
-        result = read_file(path)
+        result = await asyncio.to_thread(read_file, path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     try:
-        if vault_index.is_empty():
-            vault_index.rebuild_from_disk()
-        result["tags"] = vault_index.tags_for_file(path)
-        result["backlinks"] = vault_index.backlinks(path)
+
+        def _attach_meta():
+            if vault_index.is_empty():
+                vault_index.rebuild_from_disk()
+            return vault_index.tags_for_file(path), vault_index.backlinks(path)
+
+        tags, backlinks = await asyncio.to_thread(_attach_meta)
+        result["tags"] = tags
+        result["backlinks"] = backlinks
     except Exception:
         log.warning("vault_index: failed to attach tags/backlinks", exc_info=True)
     return result
@@ -152,12 +177,13 @@ async def vault_read_file(path: str) -> dict:
 @router.put("/vault/file", status_code=status.HTTP_204_NO_CONTENT)
 async def vault_write_file(body: dict) -> None:
     from ...vault import write_file
+
     path = body.get("path", "")
     content = body.get("content", "")
     if not path:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
     try:
-        write_file(path, content)
+        await asyncio.to_thread(write_file, path, content)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -165,8 +191,9 @@ async def vault_write_file(body: dict) -> None:
 @router.delete("/vault/file", status_code=status.HTTP_204_NO_CONTENT)
 async def vault_delete_file(path: str, recursive: bool = False) -> None:
     from ...vault import delete
+
     try:
-        delete(path, recursive=recursive)
+        await asyncio.to_thread(delete, path, recursive)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except (ValueError, OSError) as exc:
@@ -176,11 +203,12 @@ async def vault_delete_file(path: str, recursive: bool = False) -> None:
 @router.post("/vault/folder", status_code=status.HTTP_201_CREATED)
 async def vault_create_folder(body: dict) -> dict:
     from ...vault import create_folder
+
     path = body.get("path", "")
     if not path:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
     try:
-        create_folder(path)
+        await asyncio.to_thread(create_folder, path)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return {"path": path}
@@ -224,9 +252,9 @@ async def vault_upload(request: Request) -> dict:
         _, ext = os.path.splitext(safe_name.lower())
         try:
             if ext in text_exts:
-                write_file(rel, raw.decode("utf-8", errors="replace"))
+                await asyncio.to_thread(write_file, rel, raw.decode("utf-8", errors="replace"))
             else:
-                write_file_bytes(rel, raw)
+                await asyncio.to_thread(write_file_bytes, rel, raw)
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
         uploaded.append({"path": rel, "size": len(raw)})
@@ -243,8 +271,9 @@ async def vault_mention_endpoint(q: str = "", limit: int = 8) -> dict:
     Returns at most `limit` entries with the same shape as `/vault/tree`.
     """
     from ...vault import list_tree
+
     query = q.strip().lower()
-    entries = list_tree()
+    entries = await asyncio.to_thread(list_tree)
     if not query:
         ranked = entries[:limit]
     else:
@@ -284,12 +313,17 @@ async def vault_mention_endpoint(q: str = "", limit: int = 8) -> dict:
 @router.get("/vault/search")
 async def vault_search_endpoint(q: str = "", limit: int = 50) -> dict:
     from ... import vault_search
+
     q = q.strip()
     if not q:
         return {"results": [], "q": q, "count": 0}
-    if vault_search.is_empty():
-        vault_search.rebuild_from_disk()
-    results = vault_search.search(q, limit=limit)
+
+    def _work():
+        if vault_search.is_empty():
+            vault_search.rebuild_from_disk()
+        return vault_search.search(q, limit=limit)
+
+    results = await asyncio.to_thread(_work)
     return {"results": results, "q": q, "count": len(results)}
 
 
@@ -301,7 +335,6 @@ async def vault_events() -> Any:
     ``graphrag.removed`` events as they occur. Best-effort: dropped frames
     on slow consumers, no replay on reconnect.
     """
-    import asyncio
     import json
     from fastapi.responses import StreamingResponse
     from ..event_bus import subscribe, unsubscribe
@@ -338,11 +371,16 @@ async def vault_reindex(full: bool = False) -> dict:
     for files that have disappeared on disk.
     """
     from ... import vault_search, vault_index
-    n = vault_search.rebuild_from_disk(full=full)
-    try:
-        vault_index.rebuild_from_disk(full=full)
-    except Exception:
-        log.warning("vault_index rebuild failed", exc_info=True)
+
+    def _work():
+        n = vault_search.rebuild_from_disk(full=full)
+        try:
+            vault_index.rebuild_from_disk(full=full)
+        except Exception:
+            log.warning("vault_index rebuild failed", exc_info=True)
+        return n
+
+    n = await asyncio.to_thread(_work)
     return {"indexed": n, "full": full}
 
 
@@ -354,15 +392,16 @@ async def vault_graph(
     edge_types: str = "link",
 ) -> dict:
     from ...vault_graph import build_graph, build_scoped_graph
+
     if scope == "all" and not seed:
-        data = build_graph()
+        data = await asyncio.to_thread(build_graph)
         return {
             "nodes": data["nodes"],
             "edges": [{"from": e["from_"], "to": e["to"]} for e in data["edges"]],
             "orphans": data["orphans"],
         }
     hops = max(1, min(int(hops), 3))
-    data = build_scoped_graph(scope=scope, seed=seed, hops=hops, edge_types=edge_types)
+    data = await asyncio.to_thread(build_scoped_graph, scope, seed, hops, edge_types)
     return {
         "nodes": data["nodes"],
         "edges": [{"from": e["from_"], "to": e["to_"], "type": e["type"]} for e in data["edges"]],
@@ -374,13 +413,15 @@ async def vault_graph(
 @router.get("/vault/graph/entity-sources")
 async def vault_graph_entity_sources(path: str) -> dict:
     from ...agent.graphrag_manager import entities_for_source
-    return {"path": path, "entities": entities_for_source(path)}
+
+    return {"path": path, "entities": await asyncio.to_thread(entities_for_source, path)}
 
 
 @router.get("/vault/graph/source-files")
 async def vault_graph_source_files(entity_id: int) -> dict:
     from ...agent.graphrag_manager import sources_for_entity
-    return {"entity_id": entity_id, "source_files": sources_for_entity(entity_id)}
+
+    return {"entity_id": entity_id, "source_files": await asyncio.to_thread(sources_for_entity, entity_id)}
 
 
 @router.get("/vault/csv")
@@ -392,10 +433,9 @@ async def vault_csv_read(
     sort_dir: str = "asc",
 ) -> dict:
     from ... import vault_csv
+
     try:
-        return vault_csv.csv_read_page(
-            path, offset=offset, limit=limit, sort=sort, sort_dir=sort_dir
-        )
+        return await asyncio.to_thread(vault_csv.csv_read_page, path, offset, limit, sort, sort_dir)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
@@ -405,12 +445,13 @@ async def vault_csv_read(
 @router.post("/vault/csv/row")
 async def vault_csv_add_row(body: dict) -> dict:
     from ... import vault_csv
+
     path = body.get("path", "")
     values = body.get("values") or {}
     if not path:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`path` required")
     try:
-        return vault_csv.csv_append_row(path, values)
+        return await asyncio.to_thread(vault_csv.csv_append_row, path, values)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
@@ -422,6 +463,7 @@ async def vault_csv_add_row(body: dict) -> dict:
 @router.patch("/vault/csv/cell")
 async def vault_csv_update_cell(body: dict) -> dict:
     from ... import vault_csv
+
     path = body.get("path", "")
     row_index = body.get("row_index")
     column = body.get("column", "")
@@ -432,7 +474,7 @@ async def vault_csv_update_cell(body: dict) -> dict:
             detail="`path`, `row_index`, `column` required",
         )
     try:
-        return vault_csv.csv_update_cell(path, int(row_index), column, value)
+        return await asyncio.to_thread(vault_csv.csv_update_cell, path, int(row_index), column, value)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
@@ -444,8 +486,9 @@ async def vault_csv_update_cell(body: dict) -> dict:
 @router.delete("/vault/csv/row")
 async def vault_csv_delete_row(path: str, row_index: int) -> dict:
     from ... import vault_csv
+
     try:
-        return vault_csv.csv_delete_row(path, row_index)
+        return await asyncio.to_thread(vault_csv.csv_delete_row, path, row_index)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
@@ -457,6 +500,7 @@ async def vault_csv_delete_row(path: str, row_index: int) -> dict:
 @router.post("/vault/csv/schema")
 async def vault_csv_schema_endpoint(body: dict) -> dict:
     from ... import vault_csv
+
     path = body.get("path", "")
     columns = body.get("columns") or []
     if not path or not columns:
@@ -465,7 +509,7 @@ async def vault_csv_schema_endpoint(body: dict) -> dict:
             detail="`path` and `columns` required",
         )
     try:
-        return vault_csv.csv_set_schema(path, columns)
+        return await asyncio.to_thread(vault_csv.csv_set_schema, path, columns)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
@@ -487,13 +531,12 @@ async def vault_export_pdf(path: str):
     if not path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="`path` required")
     try:
-        data = vault_file_to_pdf(path)
+        data = await asyncio.to_thread(vault_file_to_pdf, path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    import os
     filename = os.path.splitext(os.path.basename(path))[0] + ".pdf"
     return Response(
         content=data,
@@ -505,11 +548,12 @@ async def vault_export_pdf(path: str):
 @router.post("/vault/move", status_code=status.HTTP_204_NO_CONTENT)
 async def vault_move(body: dict) -> None:
     from ...vault import move
+
     from_path = body.get("from", "")
     to_path = body.get("to", "")
     if not from_path or not to_path:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`from` and `to` required")
     try:
-        move(from_path, to_path)
+        await asyncio.to_thread(move, from_path, to_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

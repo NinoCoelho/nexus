@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -78,8 +79,8 @@ async def run_skill_refinement(
     max_tokens: int = 4000,
     context_budget: int = 6000,
 ) -> SkillRefineResult:
-    existing_skills = _load_existing_skills()
-    session_summaries = _load_session_summaries(limit=30)
+    existing_skills = await asyncio.to_thread(_load_existing_skills)
+    session_summaries = await asyncio.to_thread(_load_session_summaries, limit=30)
 
     if len(session_summaries) < _MIN_SESSIONS:
         log.info("dream/skill_refine: fewer than %d sessions, skipping", _MIN_SESSIONS)
@@ -139,16 +140,16 @@ async def run_skill_refinement(
         )
 
         content_hash = _hash_suggestion(name, description)
-        if state_store.has_explored(content_hash):
+        if await asyncio.to_thread(state_store.has_explored, content_hash):
             log.debug("dream/skill_refine: skipping duplicate '%s'", name)
             continue
 
-        if _skill_exists(name):
+        if await asyncio.to_thread(_skill_exists, name):
             log.debug("dream/skill_refine: skill '%s' already exists", name)
             continue
 
-        _write_skill_suggestion(suggestion)
-        state_store.mark_explored(content_hash)
+        await asyncio.to_thread(_write_skill_suggestion, suggestion)
+        await asyncio.to_thread(state_store.mark_explored, content_hash)
         result.suggestions.append(suggestion)
 
     return result

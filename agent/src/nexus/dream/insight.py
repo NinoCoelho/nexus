@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -76,12 +77,12 @@ async def run_insight_extraction(
     context_budget: int = 6000,
     since: datetime | None = None,
 ) -> InsightResult:
-    session_summaries = _load_recent_sessions(since=since, limit=20)
+    session_summaries = await asyncio.to_thread(_load_recent_sessions, since=since, limit=20)
     if len(session_summaries) < 2:
         log.info("dream/insight: fewer than 2 sessions, skipping")
         return InsightResult()
 
-    memory_notes = _load_memory_summaries(limit=10)
+    memory_notes = await asyncio.to_thread(_load_memory_summaries, limit=10)
 
     combined_context = _build_context(session_summaries, memory_notes)
     if len(combined_context) > context_budget:
@@ -128,7 +129,7 @@ async def run_insight_extraction(
             continue
 
         content_hash = _hash_insight(title, body)
-        if _insight_exists(title):
+        if await asyncio.to_thread(_insight_exists, title):
             log.debug("dream/insight: skipping duplicate insight '%s'", title)
             continue
 
@@ -139,11 +140,11 @@ async def run_insight_extraction(
             tags=tags + ["dream-insight", "auto-generated"],
         )
 
-        _persist_insight(insight)
-        state_store.mark_explored(content_hash)
+        await asyncio.to_thread(_persist_insight, insight)
+        await asyncio.to_thread(state_store.mark_explored, content_hash)
         result.insights.append(insight)
 
-    _expire_old_insights()
+    await asyncio.to_thread(_expire_old_insights)
 
     return result
 

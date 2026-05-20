@@ -107,7 +107,12 @@ export default function App() {
   // server is unreachable so the user can tell "server is down" apart
   // from "model is still thinking". Starts as null (unknown) — never
   // shows the banner on first load before the first ping resolves.
+  // Requires BACKEND_DOWN_THRESHOLD consecutive failures before showing
+  // the red banner, so brief blocking spikes during indexing etc. don't
+  // flash a false alarm.
+  const BACKEND_DOWN_THRESHOLD = 3;
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  const consecutiveDownRef = useRef(0);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
@@ -160,10 +165,25 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const tick = () => void pingHealth().then((ok) => { if (!cancelled) setBackendUp(ok); });
+    const tick = () =>
+      void pingHealth().then((ok) => {
+        if (cancelled) return;
+        if (ok) {
+          consecutiveDownRef.current = 0;
+          setBackendUp(true);
+        } else {
+          consecutiveDownRef.current += 1;
+          if (consecutiveDownRef.current >= BACKEND_DOWN_THRESHOLD) {
+            setBackendUp(false);
+          }
+        }
+      });
     tick();
-    const id = setInterval(tick, 15000);
-    return () => { cancelled = true; clearInterval(id); };
+    const id = setInterval(tick, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   // Sync UI language from `~/.nexus/config.toml` once on mount. The fetch
