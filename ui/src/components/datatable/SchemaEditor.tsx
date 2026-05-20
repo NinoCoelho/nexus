@@ -116,40 +116,49 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
                   placeholder="e.g. price * qty"
                 />
               ) : f.kind === "rollup" ? (
-                <div style={{ display: "flex", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <input
+                      className="form-input"
+                      style={{ flex: 2 }}
+                      value={f.rollup_target_table ?? ""}
+                      onChange={(e) => update(i, { rollup_target_table: e.target.value })}
+                      placeholder="./items.md"
+                      title="Path to the detail table"
+                    />
+                    <input
+                      className="form-input"
+                      style={{ flex: 1 }}
+                      value={f.rollup_relation_field ?? ""}
+                      onChange={(e) => update(i, { rollup_relation_field: e.target.value })}
+                      placeholder="FK field"
+                      title="FK field on the detail table pointing back to this table"
+                    />
+                    <select
+                      className="form-input"
+                      style={{ flex: 1 }}
+                      value={f.rollup_aggregate ?? "sum"}
+                      onChange={(e) => update(i, { rollup_aggregate: e.target.value as RollupAggregate })}
+                      title="Aggregate function"
+                    >
+                      {ROLLUP_AGGREGATES.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                    <input
+                      className="form-input"
+                      style={{ flex: 1 }}
+                      value={f.rollup_source_field ?? ""}
+                      onChange={(e) => update(i, { rollup_source_field: e.target.value })}
+                      placeholder="field"
+                      title="Field on detail table to aggregate (not needed for count)"
+                      disabled={f.rollup_aggregate === "count"}
+                    />
+                  </div>
                   <input
                     className="form-input"
-                    style={{ flex: 2 }}
-                    value={f.rollup_target_table ?? ""}
-                    onChange={(e) => update(i, { rollup_target_table: e.target.value })}
-                    placeholder="./items.md"
-                    title="Path to the detail table"
-                  />
-                  <input
-                    className="form-input"
-                    style={{ flex: 1 }}
-                    value={f.rollup_relation_field ?? ""}
-                    onChange={(e) => update(i, { rollup_relation_field: e.target.value })}
-                    placeholder="FK field"
-                    title="FK field on the detail table pointing back to this table"
-                  />
-                  <select
-                    className="form-input"
-                    style={{ flex: 1 }}
-                    value={f.rollup_aggregate ?? "sum"}
-                    onChange={(e) => update(i, { rollup_aggregate: e.target.value as RollupAggregate })}
-                    title="Aggregate function"
-                  >
-                    {ROLLUP_AGGREGATES.map((a) => <option key={a} value={a}>{a}</option>)}
-                  </select>
-                  <input
-                    className="form-input"
-                    style={{ flex: 1 }}
-                    value={f.rollup_source_field ?? ""}
-                    onChange={(e) => update(i, { rollup_source_field: e.target.value })}
-                    placeholder="field"
-                    title="Field on detail table to aggregate (not needed for count)"
-                    disabled={f.rollup_aggregate === "count"}
+                    value={f.rollup_filter ?? ""}
+                    onChange={(e) => update(i, { rollup_filter: e.target.value || undefined })}
+                    placeholder='filter: e.g. status == "active"'
+                    title="Optional formula filter on detail rows (truthy = included)"
                   />
                 </div>
               ) : (f.kind === "select" || f.kind === "multiselect") ? (

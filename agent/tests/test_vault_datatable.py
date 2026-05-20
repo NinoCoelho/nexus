@@ -1529,3 +1529,246 @@ def test_tool_query_summarize_override():
     assert result["ok"] is True
     assert result.get("summarized") is not True
     assert "data" in result
+
+
+# ── update_field ──────────────────────────────────────────────────────────────
+
+
+def test_update_field_formula():
+    vault_datatable.create_table("uf.md", {
+        "fields": [
+            {"name": "price", "kind": "number"},
+            {"name": "qty", "kind": "number"},
+            {"name": "total", "kind": "formula", "formula": "price * qty"},
+        ],
+    })
+    result = vault_datatable.update_field("uf.md", "total", {"formula": "price * qty * 1.1"})
+    assert result["warnings"] == []
+    tbl = vault_datatable.read_table("uf.md")
+    fields = tbl["schema"]["fields"]
+    f = next(f for f in fields if f["name"] == "total")
+    assert f["formula"] == "price * qty * 1.1"
+
+
+def test_update_field_rollup():
+    vault_datatable.create_table("ufr_master.md", {
+        "table": {"primary_key": "id"},
+        "fields": [{"name": "id", "kind": "text"}],
+    })
+    vault_datatable.create_table("ufr_detail.md", {
+        "fields": [
+            {"name": "master_id", "kind": "ref", "target_table": "./ufr_master.md"},
+            {"name": "amount", "kind": "number"},
+        ],
+    })
+    vault_datatable.add_field("ufr_master.md", {
+        "name": "total",
+        "kind": "rollup",
+        "rollup_target_table": "./ufr_detail.md",
+        "rollup_relation_field": "master_id",
+        "rollup_aggregate": "sum",
+        "rollup_source_field": "amount",
+    })
+    result = vault_datatable.update_field("ufr_master.md", "total", {
+        "rollup_aggregate": "avg",
+    })
+    assert result["warnings"] == []
+    tbl = vault_datatable.read_table("ufr_master.md")
+    f = next(f for f in tbl["schema"]["fields"] if f["name"] == "total")
+    assert f["rollup_aggregate"] == "avg"
+
+
+def test_update_field_rename():
+    vault_datatable.create_table("ufrn.md", {
+        "fields": [{"name": "old_name", "kind": "text"}],
+    })
+    vault_datatable.add_row("ufrn.md", {"old_name": "value1"})
+    vault_datatable.update_field("ufrn.md", "old_name", {"name": "new_name"})
+    tbl = vault_datatable.read_table("ufrn.md")
+    names = [f["name"] for f in tbl["schema"]["fields"]]
+    assert "old_name" not in names
+    assert "new_name" in names
+    assert tbl["rows"][0].get("new_name") == "value1"
+
+
+def test_update_field_not_found():
+    vault_datatable.create_table("unf.md", {"fields": []})
+    with pytest.raises(KeyError):
+        vault_datatable.update_field("unf.md", "missing", {"kind": "text"})
+
+
+# ── materialize ──────────────────────────────────────────────────────────────
+
+
+def test_materialize_formulas():
+    vault_datatable.create_table("mat.md", {
+        "fields": [
+            {"name": "price", "kind": "number"},
+            {"name": "qty", "kind": "number"},
+            {"name": "total", "kind": "formula", "formula": "price * qty"},
+        ],
+    })
+    vault_datatable.add_row("mat.md", {"price": 10, "qty": 3})
+    vault_datatable.add_row("mat.md", {"price": 5, "qty": 7})
+    rows = vault_datatable.materialize("mat.md")
+    assert rows[0]["total"] == 30.0
+    assert rows[1]["total"] == 35.0
+
+
+def test_materialize_formulas_with_functions():
+    vault_datatable.create_table("matf.md", {
+        "fields": [
+            {"name": "score", "kind": "number"},
+            {"name": "grade", "kind": "formula", "formula": 'IF(score >= 60, "pass", "fail")'},
+        ],
+    })
+    vault_datatable.add_row("matf.md", {"score": 85})
+    vault_datatable.add_row("matf.md", {"score": 42})
+    rows = vault_datatable.materialize("matf.md")
+    assert rows[0]["grade"] == "pass"
+    assert rows[1]["grade"] == "fail"
+
+
+def test_materialize_rollups():
+    vault_datatable.create_table("mat_master.md", {
+        "table": {"primary_key": "id"},
+        "fields": [{"name": "id", "kind": "text"}],
+    })
+    vault_datatable.create_table("mat_detail.md", {
+        "fields": [
+            {"name": "master_id", "kind": "ref", "target_table": "./mat_master.md"},
+            {"name": "amount", "kind": "number"},
+        ],
+    })
+    vault_datatable.add_row("mat_master.md", {"id": "A"})
+    vault_datatable.add_row("mat_master.md", {"id": "B"})
+    vault_datatable.add_row("mat_detail.md", {"master_id": "A", "amount": 10})
+    vault_datatable.add_row("mat_detail.md", {"master_id": "A", "amount": 20})
+    vault_datatable.add_row("mat_detail.md", {"master_id": "B", "amount": 50})
+    vault_datatable.add_field("mat_master.md", {
+        "name": "total_amount",
+        "kind": "rollup",
+        "rollup_target_table": "./mat_detail.md",
+        "rollup_relation_field": "master_id",
+        "rollup_aggregate": "sum",
+        "rollup_source_field": "amount",
+    })
+    rows = vault_datatable.materialize("mat_master.md")
+    a_row = next(r for r in rows if r["id"] == "A")
+    b_row = next(r for r in rows if r["id"] == "B")
+    assert a_row["total_amount"] == 30.0
+    assert b_row["total_amount"] == 50.0
+
+
+def test_materialize_rollup_with_filter():
+    vault_datatable.create_table("mf_master.md", {
+        "table": {"primary_key": "id"},
+        "fields": [{"name": "id", "kind": "text"}],
+    })
+    vault_datatable.create_table("mf_detail.md", {
+        "fields": [
+            {"name": "master_id", "kind": "ref", "target_table": "./mf_master.md"},
+            {"name": "amount", "kind": "number"},
+            {"name": "status", "kind": "text"},
+        ],
+    })
+    vault_datatable.add_row("mf_master.md", {"id": "A"})
+    vault_datatable.add_row("mf_detail.md", {"master_id": "A", "amount": 10, "status": "active"})
+    vault_datatable.add_row("mf_detail.md", {"master_id": "A", "amount": 20, "status": "cancelled"})
+    vault_datatable.add_row("mf_detail.md", {"master_id": "A", "amount": 30, "status": "active"})
+    vault_datatable.add_field("mf_master.md", {
+        "name": "active_total",
+        "kind": "rollup",
+        "rollup_target_table": "./mf_detail.md",
+        "rollup_relation_field": "master_id",
+        "rollup_aggregate": "sum",
+        "rollup_source_field": "amount",
+        "rollup_filter": 'status == "active"',
+    })
+    rows = vault_datatable.materialize("mf_master.md")
+    a_row = next(r for r in rows if r["id"] == "A")
+    assert a_row["active_total"] == 40.0
+
+
+def test_materialize_formula_over_rollup():
+    vault_datatable.create_table("mfr_master.md", {
+        "table": {"primary_key": "id"},
+        "fields": [{"name": "id", "kind": "text"}],
+    })
+    vault_datatable.create_table("mfr_detail.md", {
+        "fields": [
+            {"name": "master_id", "kind": "ref", "target_table": "./mfr_master.md"},
+            {"name": "amount", "kind": "number"},
+        ],
+    })
+    vault_datatable.add_row("mfr_master.md", {"id": "A"})
+    vault_datatable.add_row("mfr_detail.md", {"master_id": "A", "amount": 100})
+    vault_datatable.add_field("mfr_master.md", {
+        "name": "subtotal",
+        "kind": "rollup",
+        "rollup_target_table": "./mfr_detail.md",
+        "rollup_relation_field": "master_id",
+        "rollup_aggregate": "sum",
+        "rollup_source_field": "amount",
+    })
+    vault_datatable.add_field("mfr_master.md", {
+        "name": "total_with_tax",
+        "kind": "formula",
+        "formula": "subtotal * 1.2",
+    })
+    rows = vault_datatable.materialize("mfr_master.md")
+    a_row = next(r for r in rows if r["id"] == "A")
+    assert a_row["subtotal"] == 100.0
+    assert a_row["total_with_tax"] == 120.0
+
+
+def test_materialize_query_duckdb():
+    vault_datatable.create_table("mq.md", {
+        "fields": [
+            {"name": "price", "kind": "number"},
+            {"name": "qty", "kind": "number"},
+            {"name": "total", "kind": "formula", "formula": "price * qty"},
+        ],
+    })
+    vault_datatable.add_row("mq.md", {"price": 10, "qty": 3})
+    vault_datatable.add_row("mq.md", {"price": 20, "qty": 2})
+    result = json.loads(handle_datatable_tool({
+        "action": "query",
+        "path": "mq.md",
+        "sql": "SELECT * FROM t WHERE total > 25",
+        "summarize": False,
+    }))
+    assert result["ok"] is True
+    assert len(result["data"]) == 2
+
+
+# ── update_field tool action ─────────────────────────────────────────────────
+
+
+def test_tool_update_field():
+    vault_datatable.create_table("tuf.md", {
+        "fields": [
+            {"name": "val", "kind": "number"},
+            {"name": "computed", "kind": "formula", "formula": "val * 2"},
+        ],
+    })
+    result = json.loads(handle_datatable_tool({
+        "action": "update_field",
+        "path": "tuf.md",
+        "field_name": "computed",
+        "field": {"formula": "val * 3"},
+    }))
+    assert result["ok"] is True
+    tbl = vault_datatable.read_table("tuf.md")
+    f = next(f for f in tbl["schema"]["fields"] if f["name"] == "computed")
+    assert f["formula"] == "val * 3"
+
+
+def test_tool_update_field_missing_path():
+    result = json.loads(handle_datatable_tool({
+        "action": "update_field",
+        "path": "",
+        "field_name": "x",
+        "field": {"kind": "text"},
+    }))
+    assert result["ok"] is False

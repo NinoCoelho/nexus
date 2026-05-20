@@ -44,11 +44,24 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
         "query (DuckDB SQL against `t`; default limit 50, max 200; auto-summarizes >30 rows), "
         "analyze (run a Python script with `t` as a DataFrame or list-of-dicts; "
         "use duckdb/pandas/numpy; print() your report; validation helpers available), "
-        "set_schema, set_views, add_field, remove_field, rename_field, "
+        "set_schema, set_views, add_field, update_field, remove_field, rename_field, "
         "create_relation, create_junction, suggest_schema, er_diagram, "
         "list_databases, related_rows, "
         "import_csv (one-shot bulk ingest with optional `mapping`; "
-        "set `dry_run: true` to preview first 5 mapped rows)."
+        "set `dry_run: true` to preview first 5 mapped rows).\n\n"
+        "**Formula & rollup columns.** `query`, `analyze`, and `list_rows` auto-materialize "
+        "formula and rollup columns so SQL and scripts can reference computed values.\n"
+        "Formula syntax: arithmetic (+ - * / %), comparisons (== != > < >= <= → 1/0), "
+        "logical (AND, OR, NOT), functions: IF(cond,a,b), ROUND(val,digits), ABS(val), "
+        "MIN(a,b,...), MAX(a,b,...), COALESCE(a,b,...), LEN(text), CONCAT(a,b,...). "
+        "Field names resolve to the current row's value.\n"
+        "Rollup fields: set rollup_target_table, rollup_relation_field, rollup_aggregate "
+        "(sum|count|avg|min|max), rollup_source_field (not needed for count). "
+        "Optional rollup_filter: a formula expression evaluated against each detail row; "
+        "only rows where the filter is truthy are included. "
+        "Example: {kind:'rollup', rollup_target_table:'./items.md', rollup_relation_field:'order_id', "
+        "rollup_aggregate:'sum', rollup_source_field:'total', "
+        "rollup_filter:'status == \"active\"'}"
     ),
     parameters={
         "type": "object",
@@ -60,7 +73,7 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
                     "add_row", "add_rows", "update_row", "delete_row",
                     "list_rows", "find_rows", "query", "analyze",
                     "set_schema", "set_views",
-                    "add_field", "remove_field", "rename_field",
+                    "add_field", "update_field", "remove_field", "rename_field",
                     "create_relation", "create_junction",
                     "suggest_schema", "er_diagram",
                     "list_databases", "related_rows",
@@ -97,7 +110,7 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
             },
             "field_name": {
                 "type": "string",
-                "description": "Field name for remove_field, rename_field, create_relation.",
+                "description": "Field name for update_field, remove_field, rename_field, create_relation.",
             },
             "new_name": {
                 "type": "string",
@@ -299,7 +312,9 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             summarize_raw = args.get("summarize")
             summarize = None if summarize_raw is None else bool(summarize_raw)
             tbl = vault_datatable.read_table(path)
-            payload = _run_datatable_query(tbl, sql, limit=limit, summarize=summarize)
+            materialized = vault_datatable.materialize(path, tbl["rows"], tbl["schema"])
+            tbl_mat = {**tbl, "rows": materialized}
+            payload = _run_datatable_query(tbl_mat, sql, limit=limit, summarize=summarize)
             return json.dumps({"ok": True, "path": path, **payload})
 
         if action == "analyze":
@@ -313,13 +328,13 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
                 for f in fields
                 if isinstance(f, dict) and f.get("name")
             ]
-            rows = tbl.get("rows") or []
+            rows = vault_datatable.materialize(path, tbl.get("rows") or [], tbl.get("schema"))
             result = _run_analyze(rows, field_specs, script)
             return json.dumps({"ok": True, "path": path, **result})
 
         if action == "list_rows":
             tbl = vault_datatable.read_table(path)
-            all_rows = tbl["rows"]
+            all_rows = vault_datatable.materialize(path, tbl["rows"], tbl["schema"])
             total = len(all_rows)
             offset = max(0, int(args.get("offset", 0)))
             limit_raw = args.get("limit")
@@ -429,6 +444,16 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             tbl = vault_datatable.add_field(path, field)
             return json.dumps({"ok": True, "table": tbl})
 
+        if action == "update_field":
+            field_name = args.get("field_name", "")
+            field = args.get("field")
+            if not field_name:
+                return json.dumps({"ok": False, "error": "`field_name` is required for update_field"})
+            if not isinstance(field, dict) or not field:
+                return json.dumps({"ok": False, "error": "`field` (non-empty object) is required for update_field"})
+            result = vault_datatable.update_field(path, field_name, field)
+            return json.dumps({"ok": True, **result})
+
         if action == "remove_field":
             field_name = args.get("field_name", "")
             if not field_name:
@@ -514,6 +539,8 @@ _KIND_TO_DUCKDB = {
     "number": "DOUBLE",
     "boolean": "BOOLEAN",
     "date": "DATE",
+    "formula": "DOUBLE",
+    "rollup": "DOUBLE",
 }
 
 

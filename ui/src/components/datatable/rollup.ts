@@ -60,9 +60,17 @@ export async function evalRollups(
     const relField = rf.rollup_relation_field!;
     const aggFn = rf.rollup_aggregate!;
     const srcField = rf.rollup_source_field;
+    const filterExpr = rf.rollup_filter;
+
+    const filtered = filterExpr
+      ? targetData.rows.filter((r) => {
+          const v = evalFormula(filterExpr, r);
+          return v != null && v !== "" && v !== 0 && v !== false;
+        })
+      : targetData.rows;
 
     const grouped = new Map<string, unknown[]>();
-    for (const detailRow of targetData.rows) {
+    for (const detailRow of filtered) {
       const fkVal = String(detailRow[relField] ?? "");
       if (!fkVal) continue;
       let group = grouped.get(fkVal);

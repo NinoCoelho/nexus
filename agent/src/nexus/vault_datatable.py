@@ -135,6 +135,27 @@ def validate_schema(schema: dict[str, Any], host_path: str = "") -> list[str]:
       * `cardinality` (when present) is one of "one"|"many".
     """
     warnings: list[str] = []
+    from . import vault_formula
+
+    all_fields = schema.get("fields") if isinstance(schema, dict) else None
+    if isinstance(all_fields, list):
+        for f in all_fields:
+            if not isinstance(f, dict):
+                continue
+            name = f.get("name") or "(unnamed)"
+            kind = f.get("kind")
+            if kind == "formula":
+                expr = f.get("formula")
+                if expr and isinstance(expr, str):
+                    errs = vault_formula.validate_formula(expr)
+                    for e in errs:
+                        warnings.append(f"field {name!r}: invalid formula: {e}")
+            elif kind == "rollup":
+                if f.get("rollup_filter"):
+                    errs = vault_formula.validate_formula(f["rollup_filter"])
+                    for e in errs:
+                        warnings.append(f"field {name!r}: invalid rollup_filter: {e}")
+
     for f in _ref_fields(schema):
         name = f.get("name") or "(unnamed)"
         target = f.get("target_table")
@@ -192,6 +213,191 @@ def remove_field(path: str, field_name: str) -> dict[str, Any]:
     schema["fields"] = fields
     vault.write_file(path, _serialize(fm, schema, tbl["rows"], tbl.get("views", [])))
     return {"schema": schema, "rows": tbl["rows"], "views": tbl.get("views", [])}
+
+
+def update_field(path: str, field_name: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Update properties of an existing field, preserving its position.
+
+    *updates* is merged into the field dict. If ``name`` is present in updates
+    and differs from *field_name*, row data keys are migrated as well.
+    Returns ``{schema, rows, views, warnings}``.
+    """
+    fm, tbl = _load_state(path)
+    schema = tbl["schema"] or {}
+    fields = schema.get("fields", [])
+    found = False
+    new_name = updates.get("name")
+    for f in fields:
+        if isinstance(f, dict) and f.get("name") == field_name:
+            f.update(updates)
+            if new_name and new_name != field_name:
+                for r in tbl["rows"]:
+                    if field_name in r:
+                        r[new_name] = r.pop(field_name)
+            found = True
+            break
+    if not found:
+        raise KeyError(f"field {field_name!r} not found")
+    warnings = validate_schema(schema, path)
+    vault.write_file(path, _serialize(fm, schema, tbl["rows"], tbl.get("views", [])))
+    return {
+        "schema": schema,
+        "rows": tbl["rows"],
+        "views": tbl.get("views", []),
+        "warnings": warnings,
+    }
+
+
+def _pk_name(schema: dict[str, Any]) -> str:
+    table_meta = schema.get("table") if isinstance(schema, dict) else None
+    if isinstance(table_meta, dict) and table_meta.get("primary_key"):
+        return table_meta["primary_key"]
+    return "_id"
+
+
+def _formula_fields(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = schema.get("fields") if isinstance(schema, dict) else None
+    if not isinstance(fields, list):
+        return []
+    return [
+        f for f in fields
+        if isinstance(f, dict) and f.get("kind") == "formula" and f.get("formula")
+    ]
+
+
+def materialize(
+    path: str,
+    rows: list[dict[str, Any]] | None = None,
+    schema: dict[str, Any] | None = None,
+    *,
+    _cache: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Enrich rows with computed formula and rollup values.
+
+    Does **not** write back to disk — pure computation.  Used by the agent
+    tool so that ``query`` / ``analyze`` / ``list_rows`` see materialized
+    values for formula and rollup columns.
+    """
+    from . import vault_formula
+
+    if rows is None or schema is None:
+        tbl = read_table(path)
+        if rows is None:
+            rows = tbl["rows"]
+        if schema is None:
+            schema = tbl["schema"]
+
+    enriched = [dict(r) for r in rows]
+
+    formula_flds = _formula_fields(schema)
+    rollup_flds = _rollup_fields(schema)
+
+    if not formula_flds and not rollup_flds:
+        return enriched
+
+    for f in formula_flds:
+        expr = f["formula"]
+        for row in enriched:
+            row[f["name"]] = vault_formula.eval_formula(expr, row)
+
+    if rollup_flds:
+        if _cache is None:
+            _cache = {}
+        pk = _pk_name(schema)
+        for rf in rollup_flds:
+            target_path = resolve_ref(path, rf.get("rollup_target_table", ""))
+            if not target_path:
+                continue
+            if target_path in _cache:
+                target_rows = _cache[target_path]
+            else:
+                try:
+                    target_tbl = read_table(target_path)
+                except (FileNotFoundError, OSError):
+                    continue
+                target_rows = materialize(
+                    target_path,
+                    target_tbl["rows"],
+                    target_tbl["schema"],
+                    _cache=_cache,
+                )
+                _cache[target_path] = target_rows
+
+            filter_expr = rf.get("rollup_filter")
+            if filter_expr:
+                filtered = [
+                    r for r in target_rows
+                    if _truthy_materialize(vault_formula.eval_formula(filter_expr, r))
+                ]
+            else:
+                filtered = target_rows
+
+            rel_field = rf.get("rollup_relation_field", "")
+            agg = rf.get("rollup_aggregate", "sum")
+            src_field = rf.get("rollup_source_field")
+
+            grouped: dict[str, list[Any]] = {}
+            for detail in filtered:
+                fk_val = str(detail.get(rel_field, "")).strip()
+                if not fk_val:
+                    continue
+                grouped.setdefault(fk_val, []).append(
+                    detail.get(src_field, 1) if src_field else 1
+                )
+
+            for row in enriched:
+                pk_val = str(row.get(pk, row.get("_id", ""))).strip()
+                group = grouped.get(pk_val)
+                if not group:
+                    row[rf["name"]] = 0 if agg == "count" else ""
+                    continue
+                nums = [_to_num_materialize(v) for v in group]
+                row[rf["name"]] = _aggregate(nums, agg)
+
+    for f in formula_flds:
+        expr = f["formula"]
+        for row in enriched:
+            row[f["name"]] = vault_formula.eval_formula(expr, row)
+
+    return enriched
+
+
+def _to_num_materialize(v: Any) -> float:
+    if isinstance(v, (int, float)):
+        return float(v)
+    if v is None or v == "":
+        return 0.0
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _truthy_materialize(v: Any) -> bool:
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v != ""
+    return bool(v)
+
+
+def _aggregate(values: list[float], fn: str) -> Any:
+    if fn == "count":
+        return len(values)
+    if not values:
+        return ""
+    s = sum(values)
+    if fn == "sum":
+        return round(s * 1_000_000) / 1_000_000
+    if fn == "avg":
+        return round((s / len(values)) * 1_000_000) / 1_000_000
+    if fn == "min":
+        return min(values)
+    if fn == "max":
+        return max(values)
+    return ""
 
 
 def rename_field(path: str, old_name: str, new_name: str) -> dict[str, Any]:
