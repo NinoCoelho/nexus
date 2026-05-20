@@ -198,6 +198,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **MCP Integration** | Client mode connects to external MCP servers (stdio / HTTP / SSE), discovers tools, and registers them in the live ToolRegistry. Server mode exposes Nexus tools to external hosts via Streamable HTTP bridge. Sampling and elicitation bridges let MCP servers request LLM completions and user input. Integrations Tab with one-box paste wizard for easy setup |
 | **MCP Apps** | Sandboxed iframes render interactive HTML from MCP servers inline in chat. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML pages inside `McpAppSandbox` |
 | **Inline Visual Tools** | `show_kanban`, `show_dashboard_widget`, and `show_data_table` tools return `ui://nexus/*` resource URIs that the UI intercepts and renders as MCP App iframes — rich visuals without bloating the text response |
+| **Vault Import Wizard** | Drag-and-drop zip, folder, or individual files onto the vault tree. Auto-detects ChatGPT / Claude / Gemini conversation exports (by JSON structure) and converts to per-conversation markdown. Optional LLM processing per file. CSV → DuckDB data-table app promotion. SSE-streamed progress. Large files (>1 MiB) use byte-safe writes |
 | **Skill Wizard** | Multi-step guided wizard for non-technical users: describe a capability → LLM discovers matching skills → configure API keys → plan and refine → agentic synthesis builds the skill. Background tracker shows toast on completion |
 | **Running Tasks** | In-memory job tracker for subagents, background jobs, and dreams with `job_started` / `job_done` SSE events. Global UI indicator with kill support (`GET /jobs`, `POST /jobs/{id}/kill`) |
 | **LaTeX / KaTeX** | Inline (`$...$`) and display (`$$...$$`) math rendering in MarkdownView via `remark-math` + `rehype-katex` |
@@ -947,7 +948,7 @@ nexus/
 │       │   └── routes/
 │       │       ├── chat.py / chat_stream.py
 │       │       ├── sessions.py / sessions_vault.py
-│       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py
+│       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py / vault_import.py
 │       │       ├── providers.py / models.py / config.py / settings.py
 │       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
 │       │       ├── insights.py / graph.py / mcp.py / skill_wizard.py
@@ -1334,6 +1335,12 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/vault/history` | GET | List commits touching a path |
 | `/vault/history/undo` | POST | Step a path back one real commit (per-path cursor) |
 | `/vault/history/purge` | POST | Drop the history work-tree |
+| `/vault/upload/zip-preview` | POST | Upload zip, extract to temp, return tree + stats |
+| `/vault/import/zip` | POST | Confirm zip import, SSE progress stream |
+| `/vault/import/batch` | POST | Import dropped files, SSE progress stream |
+| `/vault/import/zip/{id}` | DELETE | Cancel and clean up temp extraction |
+| `/vault/csv-analyze` | POST | Analyze CSV with LLM, return data model proposal |
+| `/vault/csv-migrate` | POST | Execute approved CSV migration, SSE progress |
 | `/graphrag/reindex` | POST | Rebuild GraphRAG store |
 | `/graph/knowledge*` | GET / POST | Vault-wide GraphRAG entities, subgraphs, queries, indexing status |
 | `/graph/folder/open` | POST | Open a folder as a knowledge sub-tab |

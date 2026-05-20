@@ -84,6 +84,10 @@ Two channels on each session:
 1. `POST /chat/stream` — per-turn SSE (deltas, tool calls, done, error).
 2. `GET /chat/{sid}/events` — session-scoped SSE for out-of-band events (`user_request`, `user_request_auto`, `user_request_cancelled`). The UI opens this *before* the first POST by using a client-generated `pendingSessionId`, so approval dialogs don't miss events during the first turn. YOLO mode (`/settings`) auto-answers requests.
 
+### Vault import wizard
+
+`agent/src/nexus/server/routes/vault_import.py` + `agent/src/nexus/vault_import_parsers.py` implement a universal import flow: drag-and-drop zip files, folders, or individual files onto the vault tree (or use the upload button). Multi-step modal (`ui/src/components/ImportModal/`) walks through file selection → export format detection → optional LLM processing → confirm → SSE-streamed progress. ChatGPT / Claude / Gemini conversation exports are auto-detected by JSON structure inspection (not filenames) and converted to per-conversation markdown files. CSV files can be promoted to DuckDB-backed data-table apps via an LLM analysis step. Large files (>1 MiB) use `write_file_bytes` (32 MiB limit) instead of `write_file` (1 MiB limit). Temp extraction lives in `~/.nexus/tmp/zip-import/` (1-hour TTL auto-cleanup).
+
 ### Vault
 
 `~/.nexus/vault/` is a folder of markdown files with FTS5 search (`vault_index.py`, `vault_search.py`), tag index, and a backlinks graph (`vault_graph.py`). Kanban boards are vault-native: any `.md` file whose frontmatter contains `kanban-plugin:` is interpreted as a board by both the `vault_kanban` module (Python) and `KanbanBoard.tsx` (UI). Do not add a separate kanban store — edit the vault markdown directly. `POST /vault/dispatch` creates a new chat session seeded from a vault file or kanban card and links the session id back into the card.
