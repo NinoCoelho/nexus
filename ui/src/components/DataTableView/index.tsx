@@ -204,7 +204,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         );
       })()}
 
-      <div className={detailRow ? "dt-with-drawer" : undefined}>
+      <div className={`dt-grid-area${detailRow ? " dt-with-drawer" : ""}`}>
         <DataTableGrid
           visibleFields={visibleFields}
           pageRows={pageRows}
