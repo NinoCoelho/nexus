@@ -44,7 +44,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
-    "/dream", "/mcp", "/jobs",
+    "/dream", "/mcp", "/jobs", "/update",
 )
 
 
@@ -218,6 +218,7 @@ from ..agent.context import CURRENT_SESSION_ID
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
 from .auth import AuthManager
+from .deps import SessionStoreProxy
 from .events import SessionEvent
 from .job_tracker import JobTracker
 from .middleware import MultiUserAuthMiddleware
@@ -269,6 +270,17 @@ def create_app(
         from .session_store.registry import UserSessionRegistry
         session_registry = UserSessionRegistry()
 
+    # Proxy that resolves the correct per-user SessionStore based on
+    # CURRENT_SESSION_ID.  In single-user mode this is a no-op wrapper
+    # that always returns the default store — identical to before.
+    # Used by agent._sessions, AskUserHandler, _trace, etc.
+    _app_state_ns = type("_AppState", (), {
+        "multi_user": multi_user,
+        "session_registry": session_registry,
+        "user_store": user_store,
+    })()
+    store_proxy = SessionStoreProxy(sessions, _app_state_ns)
+
     def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
         sessions.publish(
             "__jobs__",
@@ -285,7 +297,7 @@ def create_app(
     # restarting the server. Attached to the agent so its loop's
     # ``_tools()`` / ``_handle()`` branches pick it up.
     ask_user_handler = AskUserHandler(
-        session_store=sessions,
+        session_store=store_proxy,
         yolo_mode_getter=lambda: settings_store.get().yolo_mode,
     )
 
@@ -355,7 +367,7 @@ def create_app(
 
     agent._ask_user_handler = ask_user_handler
     agent._terminal_handler = TerminalTool(
-        broker=sessions.broker,
+        broker=store_proxy.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
     )
 
@@ -365,10 +377,8 @@ def create_app(
     # publishing on the per-session SSE channel and for reading the
     # original input_mode (stashed on the store by chat_stream).
     from ..agent.notify_user_tool import NotifyUserHandler
-    agent._notify_user_handler = NotifyUserHandler(session_store=sessions)
-    # Give the agent the SessionStore so the streaming loop can persist
-    # parked HITL snapshots and the resume entry-point can rehydrate them.
-    agent._sessions = sessions
+    agent._notify_user_handler = NotifyUserHandler(session_store=store_proxy)
+    agent._sessions = store_proxy
 
     # Trace callback routes every agent event (iter, tool_call,
     # tool_result, reply) into the SSE subscriber fanout for whichever
@@ -379,7 +389,7 @@ def create_app(
         session_id = CURRENT_SESSION_ID.get()
         if session_id is None:
             return
-        sessions.publish(session_id, SessionEvent(kind=kind, data=data))
+        store_proxy.publish(session_id, SessionEvent(kind=kind, data=data))
 
     # Install the trace hook without clobbering one the caller may
     # already have wired (main.py doesn't today, but a test might).
@@ -524,45 +534,54 @@ def create_app(
 
             now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             re_published = 0
-            for row in sessions.list_all_pending():
-                deadline = row.get("deadline_at")
-                if deadline and deadline < now_iso:
-                    sessions.cancel_hitl_pending(
-                        row["request_id"], reason="expired",
+
+            def _sweep_store(store: SessionStore) -> None:
+                nonlocal re_published
+                for row in store.list_all_pending():
+                    deadline = row.get("deadline_at")
+                    if deadline and deadline < now_iso:
+                        store.cancel_hitl_pending(
+                            row["request_id"], reason="expired",
+                        )
+                        store.publish(
+                            row["session_id"],
+                            _SE(
+                                kind="user_request_cancelled",
+                                data={
+                                    "request_id": row["request_id"],
+                                    "reason": "expired",
+                                },
+                            ),
+                        )
+                        continue
+                    ev_data: dict[str, Any] = {
+                        "request_id": row["request_id"],
+                        "prompt": row["prompt"],
+                        "kind": row["kind"],
+                        "choices": row.get("choices"),
+                        "default": row.get("default"),
+                        "timeout_seconds": row.get("timeout_seconds"),
+                    }
+                    if row.get("kind") == "form":
+                        ev_data["fields"] = row.get("fields")
+                        ev_data["form_title"] = row.get("form_title")
+                        ev_data["form_description"] = row.get("form_description")
+                    store.publish(
+                        row["session_id"], _SE(kind="user_request", data=ev_data),
                     )
-                    sessions.publish(
-                        row["session_id"],
-                        _SE(
-                            kind="user_request_cancelled",
-                            data={
-                                "request_id": row["request_id"],
-                                "reason": "expired",
-                            },
-                        ),
-                    )
-                    continue
-                ev_data: dict[str, Any] = {
-                    "request_id": row["request_id"],
-                    "prompt": row["prompt"],
-                    "kind": row["kind"],
-                    "choices": row.get("choices"),
-                    "default": row.get("default"),
-                    "timeout_seconds": row.get("timeout_seconds"),
-                }
-                if row.get("kind") == "form":
-                    ev_data["fields"] = row.get("fields")
-                    ev_data["form_title"] = row.get("form_title")
-                    ev_data["form_description"] = row.get("form_description")
-                sessions.publish(
-                    row["session_id"], _SE(kind="user_request", data=ev_data),
-                )
-                re_published += 1
+                    re_published += 1
+                store.trim_hitl_pending(keep_days=30)
+
+            if multi_user and session_registry is not None:
+                for _uid, user_store_inst in session_registry.all_stores().items():
+                    _sweep_store(user_store_inst)
+            else:
+                _sweep_store(sessions)
             if re_published:
                 log.info(
                     "[hitl] re-published %d parked request(s) at startup",
                     re_published,
                 )
-            sessions.trim_hitl_pending(keep_days=30)
         except Exception:
             log.exception("hitl parked sweep failed")
 
@@ -685,10 +704,17 @@ def create_app(
                 # Use a synthetic session id so the fanout works through the
                 # store's per-session router; the UI ignores session_id for
                 # calendar_alert events.
-                sessions.publish(
-                    "__calendar__",
-                    SessionEvent(kind="calendar_alert", data=payload),
-                )
+                if multi_user and session_registry is not None:
+                    for _uid, user_store_inst in session_registry.all_stores().items():
+                        user_store_inst.publish(
+                            "__calendar__",
+                            SessionEvent(kind="calendar_alert", data=payload),
+                        )
+                else:
+                    sessions.publish(
+                        "__calendar__",
+                        SessionEvent(kind="calendar_alert", data=payload),
+                    )
             _set_cal_notifier(_calendar_notifier)
 
             heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
@@ -801,7 +827,7 @@ def create_app(
     # enumerate the full API surface, which is unnecessary information leakage.
     app = FastAPI(
         title="nexus",
-        version="0.1.0",
+        version=__import__("nexus").__version__,
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -886,6 +912,7 @@ def create_app(
     from .routes.mcp import router as mcp_router
     from .routes.jobs import router as jobs_router
     from .routes.vault_import import router as vault_import_router
+    from .routes.update import router as update_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -936,6 +963,7 @@ def create_app(
     app.include_router(dream_router)
     app.include_router(mcp_router)
     app.include_router(jobs_router)
+    app.include_router(update_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent
@@ -943,7 +971,7 @@ def create_app(
     from .routes.vault_dispatch import _dispatch_impl
 
     async def _agent_dispatcher(*, path: str, card_id: str | None, mode: str) -> dict:
-        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=sessions)
+        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=store_proxy)
 
     agent._dispatcher = _agent_dispatcher
 
@@ -977,8 +1005,9 @@ def create_app(
             home=agent._home,
             permissions=agent._permissions,
         )
-        sub._sessions = sessions
-        child = sessions.create_child(parent_session_id=parent_session_id, hidden=True)
+        parent_store = store_proxy._resolve(parent_session_id)
+        sub._sessions = parent_store
+        child = parent_store.create_child(parent_session_id=parent_session_id, hidden=True)
         child_id = child.id
 
         job_id = job_tracker.start(
@@ -989,7 +1018,7 @@ def create_app(
             publish_fn=_publish_job_event,
         )
 
-        sessions.publish(
+        parent_store.publish(
             parent_session_id,
             SessionEvent(
                 kind="subagent_start",
@@ -1014,7 +1043,7 @@ def create_app(
                     if etype == "delta":
                         chunk = event.get("text", "") or ""
                         final_text += chunk
-                        sessions.publish(
+                        parent_store.publish(
                             parent_session_id,
                             SessionEvent(
                                 kind="subagent_delta",
@@ -1033,7 +1062,7 @@ def create_app(
                             tool_data["name"] = event.get("name", "")
                             tool_data["result_preview"] = _truncate_preview(event.get("result_preview"))
                             tool_data["status"] = "done"
-                        sessions.publish(
+                        parent_store.publish(
                             parent_session_id,
                             SessionEvent(kind="subagent_tool", data=tool_data),
                         )
@@ -1043,7 +1072,7 @@ def create_app(
                         final_messages = event.get("messages")
                     elif etype == "error":
                         error = str(event.get("message") or "subagent error")
-                        sessions.publish(
+                        parent_store.publish(
                             parent_session_id,
                             SessionEvent(
                                 kind="subagent_done",
@@ -1058,12 +1087,12 @@ def create_app(
             SUBAGENT_DEPTH.reset(depth_token)
             if final_messages is not None:
                 try:
-                    sessions.replace_history(child_id, final_messages)
+                    parent_store.replace_history(child_id, final_messages)
                 except Exception:
                     log.exception("subagent: persist final history failed (child=%s)", child_id)
             job_tracker.done(job_id, publish_fn=_publish_job_event)
             if error is None:
-                sessions.publish(
+                parent_store.publish(
                     parent_session_id,
                     SessionEvent(
                         kind="subagent_done",
@@ -1133,7 +1162,7 @@ def create_app(
         loop.create_task(
             _dispatch_impl(
                 path=path, card_id=card_id, mode="background",
-                a=agent, store=sessions,
+                a=agent, store=store_proxy,
             )
         )
 

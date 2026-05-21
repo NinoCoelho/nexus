@@ -358,6 +358,9 @@ async def _dispatch_impl(
         context_str += f" (event {event_id})"
     session = store.create(context=context_str)
 
+    if hasattr(store, "claim_for_parent"):
+        store.claim_for_parent(session.id)
+
     # ``chat-hidden`` sessions back the database chat bubble. The bubble owns
     # its own persistent session id (in _data.md), and the bubble UX is the
     # only intended way for the user to reach it — exposing it in the main

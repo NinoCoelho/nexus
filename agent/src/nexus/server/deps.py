@@ -30,6 +30,77 @@ def get_sessions(request: Request) -> "SessionStore":
     return request.app.state.sessions
 
 
+class SessionStoreProxy:
+    """Transparent proxy that delegates to the correct per-user SessionStore.
+
+    In single-user mode (``multi_user`` is False or no registry), every
+    attribute access resolves to the default store — identical to the
+    pre-proxy behaviour.
+
+    In multi-user mode, each attribute access reads ``CURRENT_SESSION_ID``
+    from the current asyncio context and resolves the session owner's store
+    via the ``UserSessionRegistry``.  This ensures that HITL publishes,
+    broker registrations, pending-future management, and snapshot
+    persistence all land in the per-user ``sessions.sqlite`` whose SSE
+    subscribers are the ones who should see the events.
+
+    The proxy is read-only: all attribute access delegates to the resolved
+    store.  Attributes that are set by callers (e.g.
+    ``store._latest_input_mode``) must be set on the actual per-user store,
+    not on the proxy.  Route handlers already receive the correct store via
+    ``get_sessions()``, so this is not a problem in practice.
+    """
+
+    __slots__ = ("_default", "_app_state")
+
+    def __init__(self, default: "SessionStore", app_state: Any) -> None:
+        object.__setattr__(self, "_default", default)
+        object.__setattr__(self, "_app_state", app_state)
+
+    def _resolve(self, session_id: str | None = None) -> "SessionStore":
+        state = object.__getattribute__(self, "_app_state")
+        if not getattr(state, "multi_user", False):
+            return object.__getattribute__(self, "_default")
+        sid = session_id
+        if sid is None:
+            from ..agent.context import CURRENT_SESSION_ID
+            sid = CURRENT_SESSION_ID.get()
+        if not sid:
+            return object.__getattribute__(self, "_default")
+        registry = getattr(state, "session_registry", None)
+        user_store = getattr(state, "user_store", None)
+        if registry is None or user_store is None:
+            return object.__getattribute__(self, "_default")
+        owner = registry.store_for_session(sid, user_store)
+        return owner or object.__getattribute__(self, "_default")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolve(), name)
+
+    def claim_for_parent(self, session_id: str) -> None:
+        """Claim *session_id* for the same user that owns the current session.
+
+        Used by vault dispatch / calendar triggers that create new sessions
+        inside a turn.  In single-user mode this is a silent no-op.
+        """
+        state = object.__getattribute__(self, "_app_state")
+        if not getattr(state, "multi_user", False):
+            return
+        from ..agent.context import CURRENT_SESSION_ID
+        parent_sid = CURRENT_SESSION_ID.get()
+        if not parent_sid:
+            return
+        user_store = getattr(state, "user_store", None)
+        if not user_store:
+            return
+        owner_id = user_store.session_owner(parent_sid)
+        if owner_id:
+            user_store.claim_session(session_id, owner_id)
+
+    def __repr__(self) -> str:
+        return f"SessionStoreProxy(default={object.__getattribute__(self, '_default')!r})"
+
+
 def get_sessions_for_session(request: Request, session_id: str) -> "SessionStore":
     if getattr(request.app.state, "multi_user", False):
         registry = request.app.state.session_registry
