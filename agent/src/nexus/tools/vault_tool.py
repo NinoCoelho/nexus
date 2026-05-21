@@ -15,9 +15,19 @@ def _current_session_id() -> str | None:
     return CURRENT_SESSION_ID.get(None)
 
 
+def _top_level_exists(path: str) -> bool:
+    top = path.split("/", 1)[0]
+    if top == path:
+        return False
+    from .. import vault
+    return (vault._vault_root() / top).is_dir()
+
+
 def _scope_write_path(path: str) -> str:
     sid = _current_session_id()
     if sid and not path.startswith(_SESSION_PREFIX):
+        if _top_level_exists(path):
+            return path
         return f"{_SESSION_PREFIX}{sid}/{path}"
     return path
 
@@ -25,6 +35,8 @@ def _scope_write_path(path: str) -> str:
 def _resolve_read_path(path: str) -> str:
     sid = _current_session_id()
     if sid and not path.startswith(_SESSION_PREFIX):
+        if _top_level_exists(path):
+            return path
         scoped = f"{_SESSION_PREFIX}{sid}/{path}"
         try:
             from .. import vault

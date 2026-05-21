@@ -35,6 +35,12 @@ class ServerHandle:
     # vision-capable.
     is_vision: bool = False
     context_window: int = 0
+    # True when the GGUF contains multi-token prediction heads
+    # (``<arch>.nextn_predict_layers > 0``) and llama-server was launched
+    # with ``--spec-type draft-mtp``. The ``spec_draft_n_max`` field holds
+    # the number of draft tokens.
+    is_mtp: bool = False
+    spec_draft_n_max: int = 0
 
 
 # Architectures (from GGUF metadata `general.architecture`) that produce
@@ -70,8 +76,8 @@ def _gguf_has_mamba_layers(model_path: Path) -> bool:
     """Check whether a GGUF contains Mamba/SSM layers.
 
     Hybrid Mamba-Transformer models (e.g. Qwen3-UD, Zamba) include
-    ``<arch>.ssm_d_conv`` or similar SSM hyper-parameter keys in their
-    metadata. Standard transformer models do not.
+    ``<arch>.ssm_*`` hyper-parameter keys in their metadata. Standard
+    transformer models do not.
 
     Returns True if SSM/Mamba metadata is found, False otherwise.
     """
@@ -105,6 +111,49 @@ def _gguf_has_mamba_layers(model_path: Path) -> bool:
         return False
     except Exception:
         return False
+
+
+def _gguf_mtp_draft_layers(model_path: Path) -> int:
+    """Return the number of MTP (multi-token prediction) draft layers.
+
+    GGUF models with built-in speculative decoding (e.g. Qwen3.6-27B-MTP)
+    expose ``<arch>.nextn_predict_layers`` in their metadata. When > 0 the
+    model can use ``--spec-type draft-mtp`` in llama-server for ~2x speedup.
+
+    Returns the integer value, or 0 when absent / unreadable.
+    """
+    arch = _read_gguf_architecture(model_path)
+    if not arch:
+        return 0
+
+    target_key = f"{arch}.nextn_predict_layers"
+    try:
+        with open(model_path, "rb") as f:
+            import struct
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return 0
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return 0
+            f.read(8)
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return 0
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                if key == target_key:
+                    value = _read_gguf_value(f, val_type)
+                    if isinstance(value, (int, float)):
+                        return int(value)
+                    return 0
+                _read_gguf_value(f, val_type)
+        return 0
+    except Exception:
+        return 0
 
 
 def is_mmproj_file(path: Path) -> bool:
@@ -312,6 +361,8 @@ def list_running() -> list[dict]:
             "port": h.port,
             "pid": h.proc.pid,
             "model_path": str(h.model_path),
+            "is_mtp": h.is_mtp,
+            "spec_draft_n_max": h.spec_draft_n_max,
         })
     return out
 
@@ -382,11 +433,26 @@ def _parse_build_version(binary: Path) -> int:
     return ver
 
 
-def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
+def start(
+    model_path: Path,
+    ctx_size: int = 16384,
+    spec_type: str | None = None,
+    spec_draft_n_max: int | None = None,
+) -> ServerHandle:
     """Start (or return existing) llama-server for the given model.
 
     If a server is already running for ``model_path.name``, returns its handle
     without spawning a duplicate.
+
+    Args:
+        model_path: Path to the GGUF file.
+        ctx_size: Context window size (0 = auto-detect from GGUF metadata).
+        spec_type: Override speculative decoding type (e.g. ``"draft-mtp"``).
+            When ``None`` and the model has MTP heads, ``"draft-mtp"`` is
+            used automatically.
+        spec_draft_n_max: Number of draft tokens for speculative decoding.
+            When ``None`` and MTP is active, the value is read from the
+            GGUF ``nextn_predict_layers`` metadata.
 
     Raises:
         RuntimeError: If the binary is missing or the server fails to become
@@ -407,14 +473,10 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
     slug = slugify(model_path.stem)
     is_emb = is_embedding_model(model_path)
 
-    if not is_emb and _gguf_has_mamba_layers(model_path):
-        raise RuntimeError(
-            "This model uses a hybrid Mamba/Transformer architecture that is not "
-            "yet supported by llama.cpp. Look for a standard (non-hybrid) GGUF — "
-            "avoid filenames with \"UD\", \"MTP\", or \"Mamba\" in the name. "
-            "For Qwen models, choose repos labeled just \"Qwen3-27B-GGUF\" or "
-            "\"Qwen3.6-27B-GGUF\" without UD/MTP variants."
-        )
+    mtp_layers = _gguf_mtp_draft_layers(model_path) if not is_emb else 0
+    is_mtp = mtp_layers > 0
+    effective_spec_type = spec_type or ("draft-mtp" if is_mtp else None)
+    effective_draft_n = spec_draft_n_max or (mtp_layers if is_mtp else 0)
 
     detected_ctx = _read_gguf_context_length(model_path)
     if detected_ctx > 0 and (ctx_size <= 0 or detected_ctx > ctx_size):
@@ -473,6 +535,14 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         # parser, which only scans the post-think tail. The Nexus UI renders
         # the separate `thinking` SSE channel as a collapsed section.
         cmd += ["--jinja"]
+        if effective_spec_type:
+            cmd += ["--spec-type", effective_spec_type]
+            if effective_draft_n > 0:
+                cmd += ["--spec-draft-n-max", str(effective_draft_n)]
+            log.info(
+                "[local_llm] MTP speculative decoding: type=%s, draft_n=%d",
+                effective_spec_type, effective_draft_n,
+            )
     is_vision = mmproj_path is not None
 
     log.info("[local_llm] starting llama-server: %s", " ".join(cmd))
@@ -494,6 +564,8 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
                         proc=proc, port=port, slug=slug, model_path=model_path,
                         is_embedding=is_emb, is_vision=is_vision,
                         context_window=ctx_size,
+                        is_mtp=effective_spec_type == "draft-mtp",
+                        spec_draft_n_max=effective_draft_n,
                     )
                     _servers[filename] = handle
 
@@ -657,6 +729,8 @@ def add_to_config(
     is_embedding: bool = False,
     context_window: int = 0,
     is_vision: bool = False,
+    is_mtp: bool = False,
+    spec_draft_n_max: int = 0,
 ) -> str:
     """Register a running local model in ``~/.nexus/config.toml``.
 
@@ -717,6 +791,8 @@ def add_to_config(
         tags = ["local", "offline"]
         if is_vision:
             tags.append("vision")
+        if is_mtp:
+            tags.append("mtp")
     entry: dict = {
         "id": model_id,
         "provider": pname,
@@ -733,6 +809,9 @@ def add_to_config(
         entry["is_embedding_capable"] = True
     if context_window > 0:
         entry["context_window"] = context_window
+    if is_mtp and spec_draft_n_max > 0:
+        entry["spec_type"] = "draft-mtp"
+        entry["spec_draft_n_max"] = spec_draft_n_max
     models.append(entry)
     raw["models"] = models
 
@@ -842,7 +921,7 @@ def restart_local_models(models_dir: Path | None = None) -> int:
     providers = raw.get("providers", {}) or {}
     models = raw.get("models", []) or []
 
-    targets: list[tuple[str, int]] = []  # (slug, configured_ctx)
+    targets: list[tuple[str, int, str | None, int]] = []  # (slug, ctx, spec_type, spec_n)
     for pname in list(providers.keys()):
         if not pname.startswith("local-") or pname == "local":
             continue
@@ -850,11 +929,18 @@ def restart_local_models(models_dir: Path | None = None) -> int:
         if not slug:
             continue
         ctx = 0
+        spec_type: str | None = None
+        spec_n = 0
         for m in models:
-            if m.get("provider") == pname and isinstance(m.get("context_window"), int):
-                ctx = m["context_window"]
+            if m.get("provider") == pname:
+                if isinstance(m.get("context_window"), int):
+                    ctx = m["context_window"]
+                if isinstance(m.get("spec_type"), str):
+                    spec_type = m["spec_type"]
+                if isinstance(m.get("spec_draft_n_max"), int):
+                    spec_n = m["spec_draft_n_max"]
                 break
-        targets.append((slug, ctx))
+        targets.append((slug, ctx, spec_type, spec_n))
 
     if not targets:
         return 0
@@ -869,14 +955,21 @@ def restart_local_models(models_dir: Path | None = None) -> int:
     by_slug = {slugify(p.stem): p for p in ggufs}
 
     started = 0
-    for slug, ctx in targets:
+    for slug, ctx, model_spec_type, model_spec_n in targets:
         gguf = by_slug.get(slug)
         if gguf is None:
             log.warning("[local_llm] no GGUF found for slug %r — removing from config", slug)
             remove_from_config(slug)
             continue
         try:
-            handle = start(gguf, ctx_size=ctx) if ctx > 0 else start(gguf)
+            kwargs: dict = {}
+            if ctx > 0:
+                kwargs["ctx_size"] = ctx
+            if model_spec_type:
+                kwargs["spec_type"] = model_spec_type
+            if model_spec_n > 0:
+                kwargs["spec_draft_n_max"] = model_spec_n
+            handle = start(gguf, **kwargs)
         except RuntimeError as exc:
             log.warning(
                 "[local_llm] failed to restart %s (%s) — removing from config: %s",
@@ -889,6 +982,8 @@ def restart_local_models(models_dir: Path | None = None) -> int:
             is_embedding=handle.is_embedding,
             is_vision=handle.is_vision,
             context_window=handle.context_window or ctx,
+            is_mtp=handle.is_mtp,
+            spec_draft_n_max=handle.spec_draft_n_max,
         )
         started += 1
         log.info("[local_llm] restarted %s on :%d", slug, handle.port)

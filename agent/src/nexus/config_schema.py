@@ -33,6 +33,14 @@ class ModelEntry(BaseModel):
     # Gates which models the UI offers for the embedding role; chat-only
     # models (gpt-4o, glm-4.7, etc.) should leave this false.
     is_embedding_capable: bool = False
+    # Speculative decoding type for local GGUF models. When set (e.g.
+    # ``"draft-mtp"``), passed to llama-server as ``--spec-type``.
+    # Auto-detected from GGUF metadata on first start; user can override.
+    spec_type: str = ""
+    # Number of draft tokens for speculative decoding. Passed to
+    # llama-server as ``--spec-draft-n-max``. Auto-detected from the
+    # GGUF ``nextn_predict_layers`` metadata.
+    spec_draft_n_max: int = 0
 
 
 AuthKind = Literal["api", "oauth", "iam", "anonymous"]

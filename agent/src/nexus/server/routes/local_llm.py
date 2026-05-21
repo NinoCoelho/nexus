@@ -179,9 +179,16 @@ async def list_installed() -> list[dict[str, Any]]:
         info = running.get(p.name)
         is_mmproj = manager.is_mmproj_file(p)
         has_mamba = False
+        has_mtp = False
+        mtp_draft_n = 0
         if not is_mmproj:
             try:
                 has_mamba = manager._gguf_has_mamba_layers(p)
+            except Exception:
+                pass
+            try:
+                mtp_draft_n = manager._gguf_mtp_draft_layers(p)
+                has_mtp = mtp_draft_n > 0
             except Exception:
                 pass
         results.append({
@@ -193,6 +200,8 @@ async def list_installed() -> list[dict[str, Any]]:
             "port": info["port"] if info else None,
             "slug": info["slug"] if info else manager.slugify(p.stem),
             "has_mamba_layers": has_mamba,
+            "has_mtp": has_mtp,
+            "mtp_draft_n": mtp_draft_n,
         })
     return results
 
@@ -222,17 +231,30 @@ async def start_model(
     expected_slug = manager.slugify(model_path.stem)
     expected_id = f"local-{expected_slug}/{expected_slug}"
     ctx_size = 0
+    spec_type: str | None = None
+    spec_draft_n_max: int | None = None
     if cfg is not None:
         for m in cfg.models:
-            if m.id == expected_id and getattr(m, "context_window", 0) > 0:
-                ctx_size = m.context_window
+            if m.id == expected_id:
+                if getattr(m, "context_window", 0) > 0:
+                    ctx_size = m.context_window
+                raw_spec_type = getattr(m, "spec_type", None)
+                if isinstance(raw_spec_type, str) and raw_spec_type:
+                    spec_type = raw_spec_type
+                raw_spec_n = getattr(m, "spec_draft_n_max", None)
+                if isinstance(raw_spec_n, int) and raw_spec_n > 0:
+                    spec_draft_n_max = raw_spec_n
                 break
 
     try:
+        start_kwargs: dict = {}
         if ctx_size > 0:
-            handle = manager.start(model_path, ctx_size=ctx_size)
-        else:
-            handle = manager.start(model_path)
+            start_kwargs["ctx_size"] = ctx_size
+        if spec_type:
+            start_kwargs["spec_type"] = spec_type
+        if spec_draft_n_max:
+            start_kwargs["spec_draft_n_max"] = spec_draft_n_max
+        handle = manager.start(model_path, **start_kwargs)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -247,6 +269,8 @@ async def start_model(
         is_embedding=handle.is_embedding,
         is_vision=handle.is_vision,
         context_window=handle.context_window or ctx_size,
+        is_mtp=handle.is_mtp,
+        spec_draft_n_max=handle.spec_draft_n_max,
     )
 
     try:
