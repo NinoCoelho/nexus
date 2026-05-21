@@ -37,6 +37,34 @@ function normalizeMathDelimiters(text: string): string {
   return text.replace(/\$\$\s*\$\$/g, "$$");
 }
 
+function escapeCurrencyDollars(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (
+      text[i] === "$" &&
+      i + 1 < text.length &&
+      /\d/.test(text[i + 1]) &&
+      (i === 0 || !/[a-zA-Z]$/.test(text[i - 1]))
+    ) {
+      let j = i + 1;
+      while (j < text.length && /[\d,.]/.test(text[j])) j++;
+      if (j < text.length && /[BMKTbmkt]/.test(text[j])) {
+        j++;
+      }
+      const candidate = text.slice(i + 1, j);
+      if (/\d/.test(candidate)) {
+        out += "\\$" + text.slice(i + 1, j);
+        i = j;
+        continue;
+      }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
 function rewriteVaultMediaUrl(src: string | undefined | null): string | undefined {
   if (!src) return undefined;
   const m = src.match(/^vault:\/\/(.+)$/i) ?? src.match(/^vault:(.+)$/i);
@@ -158,6 +186,7 @@ export default function MarkdownView({
   const previewHandler = onVaultLinkPreview ?? ctxPreview ?? undefined;
   const processed = useMemo(() => {
     let t = children;
+    t = escapeCurrencyDollars(t);
     t = normalizeMathDelimiters(t);
     if (linkifyVaultPaths) t = linkifyVaultPathsFn(t);
     return t;
