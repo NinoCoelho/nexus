@@ -799,6 +799,36 @@ class Agent:
                             "Tool budget exceeded: %d/%d tokens after %s",
                             bc.cumulative_tool_tokens, bc.budget, tool_name,
                         )
+                # Mid-turn compaction: if context is >= 80% of the window,
+                # compact oversized tool messages before the next LLM call.
+                if ctx_window > 0 and len(working_messages) > 6:
+                    from .compact import compact_failed_scrapes, auto_compact
+                    from .overflow import estimate_tokens
+                    from .zones import classify_zone
+                    class _WM:
+                        pass
+                    _wm_compat = []
+                    for _wm in working_messages:
+                        _o = _WM()
+                        _o.content = _wm.content
+                        _o.role = _wm.role
+                        _o.tool_calls = getattr(_wm, "tool_calls", None)
+                        _wm_compat.append(_o)
+                    _est_tok = estimate_tokens(_wm_compat) if _wm_compat else 0
+                    _zone = classify_zone(_est_tok, ctx_window)
+                    if _zone in ("orange", "red"):
+                        working_messages, _n_cleaned = compact_failed_scrapes(working_messages)
+                        if _n_cleaned > 0:
+                            log.info(
+                                "Mid-turn: cleaned %d failed scrape results (zone=%s, %dK tokens)",
+                                _n_cleaned, _zone, _est_tok // 1024,
+                            )
+                        working_messages, _mid_report = auto_compact(working_messages)
+                        if _mid_report.compacted > 0:
+                            log.info(
+                                "Mid-turn: auto_compact compacted=%d saved=%d bytes (zone=%s)",
+                                _mid_report.compacted, _mid_report.saved_bytes, _zone,
+                            )
                 # Reset per-iteration accumulators so the NEXT LLM call
                 # starts with a fresh content/tcs buffer.
                 pending_content_chunks.clear()

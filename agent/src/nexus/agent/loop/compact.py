@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
@@ -394,3 +395,73 @@ def _estimate_for(messages: list[ChatMessage]) -> int:
         o.tool_calls = getattr(m, "tool_calls", None)
         compat.append(o)
     return estimate_tokens(compat) if compat else 0
+
+
+_FAILED_SCRAPE_PATTERNS = (
+    "Scrape returned no usable content",
+    "page may require JavaScript rendering",
+    "cf-challenge",
+    "checking your browser",
+    "are you a robot",
+    "just a moment",
+    "enable javascript",
+    "attention required",
+)
+
+_CSS_JS_PATTERN = re.compile(
+    r"(?:function\s*\(|var\s+\w|const\s+\w|let\s+\w|"
+    r"document\.|window\.|addEventListener|"
+    r"color\s*:\s*#|background\s*:|margin\s*:|padding\s*:|"
+    r"font-family|font-size|display\s*:\s*(?:flex|grid|block))",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_scrape_garbage(content: str) -> bool:
+    """Detect tool results that are CSS/JS noise or known failure messages."""
+    if not content:
+        return False
+    for pattern in _FAILED_SCRAPE_PATTERNS:
+        if pattern in content:
+            return True
+    if len(content) < 500:
+        return False
+    css_js_matches = len(_CSS_JS_PATTERN.findall(content[:2048]))
+    return css_js_matches > 8
+
+
+def compact_failed_scrapes(
+    history: list[ChatMessage],
+) -> tuple[list[ChatMessage], int]:
+    """Replace tool messages containing scrape garbage with compact summaries.
+
+    Returns (new_history, count_of_compacted_messages).
+    """
+    out: list[ChatMessage] = []
+    compacted = 0
+    for msg in history:
+        if msg.role != Role.TOOL or not msg.content:
+            out.append(msg)
+            continue
+        if _is_compacted(msg.content):
+            out.append(msg)
+            continue
+        if _looks_like_scrape_garbage(msg.content):
+            vault_ref = _persist_to_vault(msg.content, msg.tool_call_id)
+            tool_label = msg.name or "tool"
+            summary = f"[{tool_label} result was CSS/JS noise or a blocked page"
+            if vault_ref:
+                summary += f"; full result saved to {vault_ref}"
+            summary += "]"
+            out.append(
+                ChatMessage(
+                    role=msg.role,
+                    content=summary,
+                    tool_call_id=msg.tool_call_id,
+                    name=msg.name,
+                )
+            )
+            compacted += 1
+        else:
+            out.append(msg)
+    return out, compacted
