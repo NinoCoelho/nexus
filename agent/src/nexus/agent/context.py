@@ -72,3 +72,7 @@ TOOL_BUDGET_EXCEEDED: ContextVar[bool] = ContextVar(
 ALLOWED_TOOLS: ContextVar[frozenset[str] | None] = ContextVar(
     "ALLOWED_TOOLS", default=None
 )
+
+GLOBAL_SCRAPE_COUNT: ContextVar[int] = ContextVar(
+    "GLOBAL_SCRAPE_COUNT", default=0
+)
