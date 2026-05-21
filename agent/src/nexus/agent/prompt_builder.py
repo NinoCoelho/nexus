@@ -13,16 +13,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..skills.registry import SkillRegistry
+from ..home import vault_root
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
 
-_MEMORY_DIR = Path("~/.nexus/vault/memory").expanduser()
 _MEMORY_MAX_TOTAL = 1500
 _MEMORY_PREVIEW_BYTES = 500
 _MEMORY_TOP_N = 5
 
 _migrated = False
+
+
+def _memory_dir() -> Path:
+    return vault_root() / "memory"
 
 
 def _migrate_legacy_memory() -> None:
@@ -33,7 +37,7 @@ def _migrate_legacy_memory() -> None:
     import shutil
 
     old_dir = Path("~/.nexus/memory").expanduser()
-    new_dir = Path("~/.nexus/vault/memory").expanduser()
+    new_dir = _memory_dir()
     if not old_dir.exists():
         return
     has_md_files = any(
@@ -60,14 +64,15 @@ def _migrate_legacy_memory() -> None:
 
 _DATE_DIR_RE = re.compile(r"/\d{4}/\d{2}/\d{2}/")
 
-_DREAM_INSIGHTS_DIR = _MEMORY_DIR / "dream-insights"
+_DREAM_INSIGHTS_DIR_REF = "dream-insights"
 _DREAM_INSIGHTS_MAX = 3
 
 
 def _dream_insights_block() -> str:
-    if not _DREAM_INSIGHTS_DIR.exists():
+    insights_dir = _memory_dir() / _DREAM_INSIGHTS_DIR_REF
+    if not insights_dir.exists():
         return ""
-    files = sorted(_DREAM_INSIGHTS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(insights_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
     files = files[:_DREAM_INSIGHTS_MAX]
     if not files:
         return ""
@@ -85,16 +90,17 @@ def _dream_insights_block() -> str:
 
 def _memory_summary() -> str:
     """Return a ## Memory block with previews of the most recently modified notes."""
-    if not _MEMORY_DIR.exists():
+    md = _memory_dir()
+    if not md.exists():
         return ""
-    files = sorted(_MEMORY_DIR.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(md.rglob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
     files = files[:_MEMORY_TOP_N]
     if not files:
         return ""
     lines = ["## Memory", ""]
     total = 0
     for f in files:
-        key = f.relative_to(_MEMORY_DIR).with_suffix("").as_posix()
+        key = f.relative_to(md).with_suffix("").as_posix()
         key = _DATE_DIR_RE.sub("/", key)
         preview = f.read_bytes()[:_MEMORY_PREVIEW_BYTES].decode("utf-8", errors="replace")
         block = f"### {key}\n{preview}"

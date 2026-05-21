@@ -8,12 +8,14 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ...home import dreams_dir, dream_suggestions_dir
+
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dream", tags=["dream"])
 
-_DREAMS_DIR = Path.home() / ".nexus" / "vault" / "dreams"
-_SUGGESTIONS_DIR = Path.home() / ".nexus" / "vault" / "dreams" / "suggestions"
+_DREAMS_DIR = dreams_dir()
+_SUGGESTIONS_DIR = dream_suggestions_dir()
 
 
 def _get_store(request: Request) -> Any:

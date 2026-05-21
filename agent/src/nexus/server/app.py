@@ -217,10 +217,13 @@ from ..agent.ask_user_tool import AskUserHandler
 from ..agent.context import CURRENT_SESSION_ID
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
+from .auth import AuthManager
 from .events import SessionEvent
 from .job_tracker import JobTracker
+from .middleware import MultiUserAuthMiddleware
 from .session_store import SessionStore
 from .settings import SettingsStore
+from .user_store import UserStore
 
 log = logging.getLogger(__name__)
 
@@ -256,6 +259,15 @@ def create_app(
     sessions = sessions or SessionStore()
     settings_store = settings_store or SettingsStore()
     job_tracker = JobTracker()
+
+    multi_user = bool(nexus_cfg and getattr(nexus_cfg, "server", None) and nexus_cfg.server.multi_user)
+    user_store = UserStore() if multi_user else None
+    auth_manager = AuthManager() if multi_user else None
+
+    session_registry = None
+    if multi_user:
+        from .session_store.registry import UserSessionRegistry
+        session_registry = UserSessionRegistry()
 
     def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
         sessions.publish(
@@ -800,7 +812,14 @@ def create_app(
     # auth path must remain reachable on every request so it can enforce the
     # token on traffic that traversed the public tunnel.
     _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
-    app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
+    if multi_user:
+        app.add_middleware(
+            MultiUserAuthMiddleware,
+            auth_manager=auth_manager,
+            user_store=user_store,
+        )
+    else:
+        app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -820,6 +839,10 @@ def create_app(
     app.state.ask_user_handler = ask_user_handler
     app.state.terminal_procs = _terminal_procs
     app.state.job_tracker = job_tracker
+    app.state.multi_user = multi_user
+    app.state.user_store = user_store
+    app.state.auth_manager = auth_manager
+    app.state.session_registry = session_registry
 
     from .kanban_queue import init_queue
     init_queue()
@@ -869,6 +892,18 @@ def create_app(
     app.include_router(chat_stream_router)
     app.include_router(settings_router)
     app.include_router(sessions_router)
+
+    if multi_user:
+        from .routes.auth import router as auth_router, generate_bootstrap_token
+        from .routes.admin import router as admin_router
+        from .routes.vault_share import router as vault_share_router
+        app.include_router(auth_router)
+        app.include_router(admin_router)
+        app.include_router(vault_share_router)
+        if user_store and not user_store.has_any_users():
+            setup_token = generate_bootstrap_token()
+            log.info("Multi-user mode: no users found. Setup URL: http://localhost:%d/auth/setup (token: %s)",
+                     int(os.environ.get("NEXUS_PORT", "18989")), setup_token)
     app.include_router(sessions_vault_router)
     app.include_router(graph_router)
     app.include_router(insights_router)

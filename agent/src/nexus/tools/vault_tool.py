@@ -7,6 +7,33 @@ from typing import Any
 
 from ..agent.llm import ToolSpec
 
+_SESSION_PREFIX = "sessions/"
+
+
+def _current_session_id() -> str | None:
+    from ..agent.context import CURRENT_SESSION_ID
+    return CURRENT_SESSION_ID.get(None)
+
+
+def _scope_write_path(path: str) -> str:
+    sid = _current_session_id()
+    if sid and not path.startswith(_SESSION_PREFIX):
+        return f"{_SESSION_PREFIX}{sid}/{path}"
+    return path
+
+
+def _resolve_read_path(path: str) -> str:
+    sid = _current_session_id()
+    if sid and not path.startswith(_SESSION_PREFIX):
+        scoped = f"{_SESSION_PREFIX}{sid}/{path}"
+        try:
+            from .. import vault
+            vault.resolve_path(scoped)
+            return scoped
+        except (FileNotFoundError, ValueError):
+            pass
+    return path
+
 VAULT_LIST_TOOL = ToolSpec(
     name="vault_list",
     description=(
@@ -183,6 +210,23 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
         if name == "vault_list":
             path = args.get("path", "")
             entries = vault.list_tree()
+            sid = _current_session_id()
+            if sid:
+                scoped_prefix = f"{_SESSION_PREFIX}{sid}/"
+                seen = set()
+                merged: list[dict] = []
+                for e in entries:
+                    p = e.path
+                    if p.startswith(scoped_prefix):
+                        stripped = p[len(scoped_prefix):]
+                        if not path or stripped.startswith(path.rstrip("/") + "/") or stripped == path:
+                            seen.add(stripped)
+                            merged.append({"path": stripped, "type": e.type, "size": e.size})
+                            continue
+                    if not path or p.startswith(path.rstrip("/") + "/") or p == path:
+                        if p not in seen:
+                            merged.append({"path": p, "type": e.type, "size": e.size})
+                return _dumps({"ok": True, "entries": merged})
             if path:
                 entries = [e for e in entries if e.path.startswith(path.rstrip("/") + "/") or e.path == path]
             return _dumps({"ok": True, "entries": [{"path": e.path, "type": e.type, "size": e.size} for e in entries]})
@@ -191,23 +235,22 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
             path = args.get("path", "")
             if not path:
                 return _dumps({"ok": False, "error": "`path` is required"})
+            resolved = _resolve_read_path(path)
             head = args.get("head")
             tail = args.get("tail")
             offset = int(args.get("offset", 0) or 0)
             limit = args.get("limit")
-            # Default cap: when the agent didn't request a specific slice we
-            # still avoid dumping multi-MB files into the conversation. 64KB
-            # ≈ ~16k tokens, which is a sane budget for a single tool result.
             DEFAULT_BYTE_CAP = 64 * 1024
             if head is None and tail is None and limit is None and offset == 0:
                 limit = DEFAULT_BYTE_CAP
             result = vault.read_file(
-                path,
+                resolved,
                 offset=offset,
                 limit=int(limit) if limit is not None else None,
                 head=int(head) if head is not None else None,
                 tail=int(tail) if tail is not None else None,
             )
+            result["path"] = path
             if result.get("truncated"):
                 result["hint"] = (
                     "Output truncated. Use `head=N`/`tail=N` for line slices, "
@@ -221,9 +264,10 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
             content = args.get("content", "")
             if not path:
                 return _dumps({"ok": False, "error": "`path` is required"})
-            vault.write_file(path, content)
-            _trigger_graphrag_index(path, content)
-            return _dumps({"ok": True})
+            scoped = _scope_write_path(path)
+            vault.write_file(scoped, content)
+            _trigger_graphrag_index(scoped, content)
+            return _dumps({"ok": True, "path": scoped})
 
         if name == "vault_search":
             from .. import vault_search

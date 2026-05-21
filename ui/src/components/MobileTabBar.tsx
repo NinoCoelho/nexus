@@ -62,7 +62,9 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databas
             className={active ? "is-active" : undefined}
             onClick={() => onAppSelect?.(db.folder)}
           >
-            <span className="mobile-tab-letter">{db.title.charAt(0).toUpperCase()}</span>
+            <span className={`mobile-tab-letter${db.icon ? " mobile-tab-letter--emoji" : ""}`}>
+              {db.icon || db.title.charAt(0).toUpperCase()}
+            </span>
             <span>{db.title.length > 8 ? db.title.slice(0, 7) + "…" : db.title}</span>
           </button>
         );

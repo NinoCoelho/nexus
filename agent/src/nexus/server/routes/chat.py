@@ -43,6 +43,20 @@ from ...skills.registry import SkillRegistry
 from ..session_store import SessionStore
 
 
+def _maybe_resolve_owner_store(
+    request: Request, session_id: str, fallback: SessionStore
+) -> SessionStore:
+    if not getattr(request.app.state, "multi_user", False):
+        return fallback
+    role = getattr(request.state, "user_role", None)
+    if role != "admin":
+        return fallback
+    registry = request.app.state.session_registry
+    user_store = request.app.state.user_store
+    owner_store = registry.store_for_session(session_id, user_store)
+    return owner_store if owner_store else fallback
+
+
 class SkillUpdate(BaseModel):
     body: str
 
@@ -598,8 +612,10 @@ async def chat_events(session_id: str, store: SessionStore = Depends(get_session
 async def chat_respond(
     session_id: str,
     body: RespondPayload,
+    request: Request,
     store: SessionStore = Depends(get_sessions),
 ) -> None:
+    store = _maybe_resolve_owner_store(request, session_id, store)
     """Resolve a pending ``ask_user`` request. 404 when the request
     is unknown — most commonly because it timed out or the session
     was reset before the user clicked through.
@@ -642,9 +658,11 @@ async def chat_hitl_answer(
     session_id: str,
     request_id: str,
     body: RespondPayload,
+    request: Request,
     a: Agent = Depends(get_agent),
     store: SessionStore = Depends(get_sessions),
 ) -> StreamingResponse:
+    store = _maybe_resolve_owner_store(request, session_id, store)
     """Resume a parked ``ask_user`` request and stream the agent's
     continuation as SSE.
 

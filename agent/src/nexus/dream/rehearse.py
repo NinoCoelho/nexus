@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..home import dream_insights_dir, precomputed_dir, sessions_db
+
 log = logging.getLogger(__name__)
 
 _REHEARSAL_SYSTEM_PROMPT = """\
@@ -41,7 +43,7 @@ Rules:
 - Today's date: {today}
 """
 
-_PRECOMPUTED_DIR = Path.home() / ".nexus" / "vault" / "memory" / "precomputed"
+_PRECOMPUTED_DIR = precomputed_dir()
 _PRECOMPUTED_EXPIRY_HOURS = 24
 
 
@@ -140,7 +142,7 @@ async def run_scenario_rehearsal(
 def _load_recent_sessions(*, limit: int = 10) -> list[dict[str, str]]:
     try:
         import sqlite3
-        db_path = Path.home() / ".nexus" / "sessions.sqlite"
+        db_path = sessions_db()
         if not db_path.exists():
             return []
         conn = sqlite3.connect(str(db_path))
@@ -174,7 +176,7 @@ def _load_recent_sessions(*, limit: int = 10) -> list[dict[str, str]]:
 
 def _load_recent_insights(*, limit: int = 3, insights_dir: Path | None = None) -> list[str]:
     if insights_dir is None:
-        insights_dir = Path.home() / ".nexus" / "vault" / "memory" / "dream-insights"
+        insights_dir = dream_insights_dir()
     if not insights_dir.exists():
         return []
     notes = []

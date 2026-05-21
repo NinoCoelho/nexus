@@ -51,6 +51,8 @@ import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
 import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useSession } from "./components/SessionProvider";
+import { adminAllPending, adminAnswerHitl, adminCancelHitl } from "./api/auth";
 import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useActiveDownloads } from "./hooks/useActiveDownloads";
 import { useSessionUsage } from "./hooks/useSessionUsage";
@@ -300,6 +302,28 @@ export default function App() {
   // subscription registered with the backend.
   const push = usePushSubscription();
   const notificationCenter = useNotificationCenter();
+  const { user: sessionUser } = useSession();
+  const isAdmin = sessionUser?.role === "admin";
+  const [teamPending, setTeamPending] = useState<import("./api/auth").AdminPendingItem[]>([]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const items = await adminAllPending();
+        if (!cancelled) {
+          const ownItems = items.filter(
+            (i) => i.user_id && i.user_id !== sessionUser?.user_id,
+          );
+          setTeamPending(ownItems);
+        }
+      } catch { /* ignore */ }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [isAdmin, sessionUser?.user_id]);
   // When the SW relays a click on an OS notification (or a deep link
   // ?respond=<rid>), hop the approval queue to that specific request.
   useEffect(() => {
@@ -641,6 +665,15 @@ export default function App() {
                 await respondToUserRequest(sid, rid, answer);
                 dropRequest(rid);
               }}
+              teamPending={isAdmin ? teamPending : undefined}
+              onAdminAnswer={isAdmin ? async (sid, rid, answer) => {
+                await adminAnswerHitl(sid, rid, answer);
+                setTeamPending((prev) => prev.filter((i) => i.request_id !== rid));
+              } : undefined}
+              onAdminCancel={isAdmin ? async (sid, rid) => {
+                await adminCancelHitl(sid, rid);
+                setTeamPending((prev) => prev.filter((i) => i.request_id !== rid));
+              } : undefined}
             />
             </>
           }

@@ -83,6 +83,11 @@ def _folder_basename(folder: str) -> str:
     return PurePosixPath(folder).name or folder
 
 
+def _display_title(folder: str) -> str:
+    raw = _folder_basename(folder)
+    return raw[0].upper() + raw[1:] if raw else raw
+
+
 def is_dashboard_file(content: str) -> bool:
     if not content.startswith("---"):
         return False
@@ -233,7 +238,8 @@ def default_dashboard(folder: str) -> dict[str, Any]:
     """Return the implicit dashboard for a folder (no disk write)."""
     return {
         "folder": folder,
-        "title": _folder_basename(folder),
+        "title": _display_title(folder),
+        "icon": None,
         "chat_session_id": None,
         "operations": [],
         "widgets": [],
@@ -299,7 +305,8 @@ def read_dashboard(folder: str) -> dict[str, Any]:
             links["calendars"] = raw_links["calendars"]
     return {
         "folder": folder,
-        "title": str(data.get("title") or _folder_basename(folder)),
+        "title": str(data.get("title") or _display_title(folder)),
+        "icon": str(data["icon"]) if data.get("icon") else None,
         "chat_session_id": data.get("chat_session_id") or None,
         "operations": operations,
         "widgets": widgets,
@@ -314,7 +321,8 @@ def read_dashboard(folder: str) -> dict[str, Any]:
 def _serialize(dashboard: dict[str, Any]) -> str:
     fm = {DASHBOARD_PLUGIN_KEY: "basic"}
     body_yaml: dict[str, Any] = {
-        "title": dashboard.get("title") or _folder_basename(dashboard.get("folder", "")),
+        "title": dashboard.get("title") or _display_title(dashboard.get("folder", "")),
+        "icon": dashboard.get("icon"),
         "chat_session_id": dashboard.get("chat_session_id"),
         "operations": dashboard.get("operations", []),
         "widgets": dashboard.get("widgets", []),
@@ -336,7 +344,8 @@ def write_dashboard(folder: str, dashboard: dict[str, Any]) -> dict[str, Any]:
     path = dashboard_path(folder)
     payload = {
         "folder": folder,
-        "title": dashboard.get("title") or _folder_basename(folder),
+        "title": dashboard.get("title") or _display_title(folder),
+        "icon": dashboard.get("icon") or None,
         "chat_session_id": dashboard.get("chat_session_id") or None,
         "operations": [
             op for op in (
@@ -375,6 +384,7 @@ def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = {
         "folder": folder,
         "title": current.get("title"),
+        "icon": current.get("icon"),
         "chat_session_id": current.get("chat_session_id"),
         "operations": current.get("operations", []),
         "widgets": current.get("widgets", []),
@@ -384,6 +394,8 @@ def patch_dashboard(folder: str, patch: dict[str, Any]) -> dict[str, Any]:
     }
     if "title" in patch and patch["title"] is not None:
         merged["title"] = str(patch["title"])
+    if "icon" in patch:
+        merged["icon"] = str(patch["icon"]) if patch["icon"] else None
     if "chat_session_id" in patch:
         merged["chat_session_id"] = patch["chat_session_id"] or None
     if "operations" in patch and isinstance(patch["operations"], list):

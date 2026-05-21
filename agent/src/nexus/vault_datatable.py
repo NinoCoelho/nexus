@@ -774,6 +774,98 @@ def _extract_section_yaml(body: str, section_re: re.Pattern) -> tuple[Any, int, 
     return parsed, fence_start, fence_end
 
 
+def validate_refs(
+    path: str, row: dict[str, Any],
+) -> list[str]:
+    """Validate ref field values against their target tables.
+
+    Returns a list of warning strings (empty if all refs are valid).
+    Non-existent target tables are skipped gracefully.
+    """
+    warnings: list[str] = []
+    fm, tbl = _load_state(path)
+    schema = tbl.get("schema", {})
+    for f in _ref_fields(schema):
+        fname = f.get("name", "")
+        raw_val = row.get(fname)
+        if raw_val is None or raw_val == "":
+            continue
+        target = f.get("target_table", "")
+        resolved = resolve_ref(path, target)
+        if not resolved:
+            continue
+        try:
+            tgt = read_table(resolved)
+        except (FileNotFoundError, OSError):
+            continue
+        tgt_schema = tgt.get("schema", {})
+        tgt_meta = tgt_schema.get("table") if isinstance(tgt_schema, dict) else None
+        pk_name = ""
+        if isinstance(tgt_meta, dict):
+            pk_name = tgt_meta.get("primary_key", "")
+        ids = raw_val if isinstance(raw_val, list) else [raw_val]
+        for ref_id in ids:
+            ref_str = str(ref_id).strip()
+            found = any(
+                str(r.get(pk_name, "")).strip() == ref_str
+                or str(r.get("_id", "")).strip() == ref_str
+                or any(str(v).strip() == ref_str for v in r.values() if isinstance(v, (str, int, float)))
+                for r in tgt.get("rows", [])
+                if isinstance(r, dict)
+            )
+            if not found:
+                warnings.append(
+                    f"ref '{fname}' value '{ref_str}' not found in {resolved} "
+                    f"(no row with pk/{pk_name or '_id'} matching '{ref_str}')"
+                )
+    return warnings
+
+
+def _validate_refs(
+    path: str, schema: dict[str, Any], row: dict[str, Any],
+) -> list[str]:
+    """Validate ref field values against their target tables.
+
+    Returns a list of warning strings (empty if all refs are valid).
+    Non-existent target tables are skipped gracefully.
+    """
+    warnings: list[str] = []
+    for f in _ref_fields(schema):
+        fname = f.get("name", "")
+        raw_val = row.get(fname)
+        if raw_val is None or raw_val == "":
+            continue
+        target = f.get("target_table", "")
+        resolved = resolve_ref(path, target)
+        if not resolved:
+            continue
+        try:
+            tbl = read_table(resolved)
+        except (FileNotFoundError, OSError):
+            continue
+        tbl_schema = tbl.get("schema", {})
+        tbl_meta = tbl_schema.get("table") if isinstance(tbl_schema, dict) else None
+        pk_name = ""
+        if isinstance(tbl_meta, dict):
+            pk_name = tbl_meta.get("primary_key", "")
+        ids = raw_val if isinstance(raw_val, list) else [raw_val]
+        for ref_id in ids:
+            ref_str = str(ref_id).strip()
+            found = any(
+                str(r.get(pk_name, "")).strip() == ref_str
+                or str(r.get("_id", "")).strip() == ref_str
+                or any(str(v).strip() == ref_str for v in r.values() if isinstance(v, (str, int, float)))
+                for r in tbl.get("rows", [])
+                if isinstance(r, dict)
+            )
+            if not found:
+                warnings.append(
+                    f"ref '{fname}' value '{ref_str}' not found in {resolved} "
+                    f"(no row with pk/{pk_name or '_id'} matching '{ref_str}')"
+                )
+    return warnings
+
+
 def read_table(path: str) -> dict[str, Any]:
     """Read a data-table file and return {'schema', 'rows', 'views'}."""
     file = vault.read_file(path)

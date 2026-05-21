@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
+from ..home import dream_db
 from .consolidate import ConsolidationResult, run_consolidation
 from .insight import InsightResult, run_insight_extraction
 from .journal import write_journal
@@ -17,23 +17,27 @@ from .state import DreamStateStore
 
 log = logging.getLogger(__name__)
 
-_DB_PATH = Path.home() / ".nexus" / "dream_state.sqlite"
-
-_store: DreamStateStore | None = None
+_stores: dict[str, DreamStateStore] = {}
 
 
 def get_store() -> DreamStateStore:
-    global _store
-    if _store is None:
-        _store = DreamStateStore(_DB_PATH)
-    return _store
+    from ..home import _base
+    key = str(_base())
+    s = _stores.get(key)
+    if s is not None:
+        return s
+    s = DreamStateStore(dream_db())
+    _stores[key] = s
+    return s
 
 
 def close_store() -> None:
-    global _store
-    if _store is not None:
-        _store.close()
-        _store = None
+    for s in _stores.values():
+        try:
+            s.close()
+        except Exception:
+            pass
+    _stores.clear()
 
 
 @dataclass

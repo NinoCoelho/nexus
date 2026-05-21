@@ -23,10 +23,10 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from ..llm.types import ChatMessage, Role
+from nexus.home import vault_tool_cache as _vault_tool_cache_fn
 
 if TYPE_CHECKING:
     from ..llm import LLMProvider
@@ -200,19 +200,19 @@ def compact_history(
 
 _AUTO_COMPACT_THRESHOLD_BYTES = 8 * 1024
 _AUTO_COMPACT_HEAD_KEEP = 1024
-_AUTO_COMPACT_SAMPLE_ROWS = 3
 
-_VAULT_TOOL_CACHE_DIR = Path("~/.nexus/vault/.tool-cache").expanduser()
+_AUTO_COMPACT_SAMPLE_ROWS = 3
 
 
 def _persist_to_vault(content: str, tool_call_id: str | None) -> str | None:
     try:
-        _VAULT_TOOL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_dir = _vault_tool_cache_fn()
+        cache_dir.mkdir(parents=True, exist_ok=True)
         h = hashlib.sha256(content.encode()).hexdigest()[:16]
         suffix = f"{h}.json"
         if tool_call_id:
             suffix = f"{tool_call_id}_{suffix}"
-        path = _VAULT_TOOL_CACHE_DIR / suffix
+        path = cache_dir / suffix
         path.write_text(content, encoding="utf-8")
         return f"vault://.tool-cache/{suffix}"
     except Exception:

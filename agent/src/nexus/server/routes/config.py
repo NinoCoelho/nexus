@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ..deps import get_agent, get_app_state
 
@@ -102,6 +102,9 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "server_expose": mcp.server_expose,
             "server_auth_token": "***" if mcp.server_auth_token else "",
         }
+    srv = getattr(cfg, "server", None)
+    if srv is not None:
+        out["server"] = {"multi_user": srv.multi_user}
     return out
 
 
@@ -133,9 +136,15 @@ async def get_config(app_state: dict[str, Any] = Depends(get_app_state)) -> dict
 @router.patch("/config")
 async def patch_config(
     body: dict[str, Any],
+    request: Request,
     app_state: dict[str, Any] = Depends(get_app_state),
     a=Depends(get_agent),
 ) -> dict[str, Any]:
+    from ..permissions import can_manage_server
+    role = getattr(request.state, "user_role", None)
+    if not can_manage_server(role):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin only")
     from ...config_file import load as load_cfg, save as save_cfg, NexusConfig
     cfg = app_state["cfg"] or load_cfg()
     raw = cfg.model_dump()
@@ -217,7 +226,36 @@ async def patch_config(
         if "server_expose" in patch:
             merged_mcp["server_expose"] = patch["server_expose"]
         raw["mcp"] = merged_mcp
+    if "server" in body:
+        existing = raw.get("server", {}) or {}
+        patch = body["server"] or {}
+        raw["server"] = {**existing, **patch}
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)
     return _redact_cfg(new_cfg)
+
+
+@router.post("/config/enable-multi-user")
+async def enable_multi_user(
+    request: Request,
+    app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
+) -> dict[str, Any]:
+    from ..permissions import can_manage_server
+    role = getattr(request.state, "user_role", None)
+    if not can_manage_server(role):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin only")
+    from ...config_file import load as load_cfg, save as save_cfg, NexusConfig
+    cfg = app_state["cfg"] or load_cfg()
+    if getattr(cfg, "server", None) and cfg.server.multi_user:
+        return {"enabled": True, "message": "Already enabled"}
+    raw = cfg.model_dump()
+    raw.setdefault("server", {})["multi_user"] = True
+    new_cfg = NexusConfig(**raw)
+    save_cfg(new_cfg)
+    return {
+        "enabled": True,
+        "message": "Multi-user mode enabled. Restart the server to activate.",
+    }

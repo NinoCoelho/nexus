@@ -76,6 +76,11 @@ async def chat_stream_route(
 
     session = store.get_or_create(req.session_id, context=req.context)
 
+    if getattr(request.app.state, "multi_user", False):
+        user_id = getattr(request.state, "user_id", None)
+        if user_id:
+            request.app.state.user_store.claim_session(session.id, user_id)
+
     # Block if a form is parked on this session — the agent's previous turn
     # is waiting for an async answer, and starting a new turn now would
     # orphan the parked tool_call. Confirm/text/choice timeouts don't
@@ -114,6 +119,10 @@ async def chat_stream_route(
         # (generators carry their own context) so concurrent
         # streams don't stomp on each other.
         token = CURRENT_SESSION_ID.set(session.id)
+        from ...agent.context import ALLOWED_TOOLS
+        from ..permissions import allowed_tools_for_role
+        user_role = getattr(request.state, "user_role", None)
+        _allowed_token = ALLOWED_TOOLS.set(allowed_tools_for_role(user_role))
         current = asyncio.current_task()
         if current is not None:
             _inflight_turns[session.id] = current
@@ -143,6 +152,7 @@ async def chat_stream_route(
                     yield chunk
             finally:
                 CURRENT_SESSION_ID.reset(token)
+                ALLOWED_TOOLS.reset(_allowed_token)
                 if _inflight_turns.get(session.id) is current:
                     _inflight_turns.pop(session.id, None)
             return
@@ -661,6 +671,7 @@ async def chat_stream_route(
             # of cleanup. Best-effort here.
             try:
                 CURRENT_SESSION_ID.reset(token)
+                ALLOWED_TOOLS.reset(_allowed_token)
             except ValueError:
                 log.debug("CURRENT_SESSION_ID reset across contexts")
             if _inflight_turns.get(session.id) is current:

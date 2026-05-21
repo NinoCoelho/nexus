@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from ..llm import ChatMessage, LLMProvider, Role
+from nexus.home import vault_session_memory as _session_memory_fn
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +53,6 @@ Rules:
 """
 
 _KEEP_RECENT_N = 20
-
-_SESSION_MEMORY_DIR = Path("~/.nexus/vault/.session-memory").expanduser()
 
 _SUMMARY_PREFIX = "[Session Memory"
 
@@ -177,8 +175,9 @@ async def _call_summarizer(
 
 def persist_session_summary(session_id: str, summary: str, *, model_id: str | None = None) -> None:
     try:
-        _SESSION_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-        path = _SESSION_MEMORY_DIR / f"{session_id}.md"
+        sm_dir = _session_memory_fn()
+        sm_dir.mkdir(parents=True, exist_ok=True)
+        path = sm_dir / f"{session_id}.md"
         now = datetime.now(timezone.utc).isoformat()
         frontmatter = (
             "---\n"

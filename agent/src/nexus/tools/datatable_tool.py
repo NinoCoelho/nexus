@@ -139,11 +139,23 @@ DATATABLE_MANAGE_TOOL = ToolSpec(
             },
             "row": {
                 "type": "object",
-                "description": "Row data for add_row or update_row. Key-value pairs matching field names.",
+                "description": (
+                    "Row data for add_row or update_row. Key-value pairs matching field names. "
+                    "For kind='ref' fields the value MUST be the primary key (or _id) of an "
+                    "existing row in the target table — first call list_rows on the target to "
+                    "find the correct row, then use its pk/_id value. Never guess or invent "
+                    "ref values — they must match a row that actually exists."
+                ),
             },
             "rows": {
                 "type": "array",
-                "description": "List of rows for add_rows (bulk import). Each item is a row dict.",
+                "description": (
+                    "List of rows for add_rows (bulk import). Each item is a row dict. "
+                    "For kind='ref' fields the value MUST be the primary key (or _id) of an "
+                    "existing row in the target table — first call list_rows on the target to "
+                    "find the correct row, then use its pk/_id value. Never guess or invent "
+                    "ref values — they must match a row that actually exists."
+                ),
                 "items": {"type": "object"},
             },
             "row_id": {
@@ -354,8 +366,12 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             row = args.get("row")
             if not row or not isinstance(row, dict):
                 return json.dumps({"ok": False, "error": "`row` is required for add_row"})
+            ref_warnings = vault_datatable.validate_refs(path, row)
             added = vault_datatable.add_row(path, row)
-            return json.dumps({"ok": True, "row": added})
+            result: dict[str, Any] = {"ok": True, "row": added}
+            if ref_warnings:
+                result["warnings"] = ref_warnings
+            return json.dumps(result)
 
         if action == "update_row":
             row_id = args.get("row_id", "")
@@ -364,8 +380,12 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
                 return json.dumps({"ok": False, "error": "`row_id` is required for update_row"})
             if not row or not isinstance(row, dict):
                 return json.dumps({"ok": False, "error": "`row` is required for update_row"})
+            ref_warnings = vault_datatable.validate_refs(path, row)
             updated = vault_datatable.update_row(path, row_id, row)
-            return json.dumps({"ok": True, "row": updated})
+            result = {"ok": True, "row": updated}
+            if ref_warnings:
+                result["warnings"] = ref_warnings
+            return json.dumps(result)
 
         if action == "delete_row":
             row_id = args.get("row_id", "")
@@ -386,6 +406,10 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             if not isinstance(rows, list):
                 return json.dumps({"ok": False, "error": "`rows` (list) is required for add_rows"})
             required = _required_fields(vault_datatable, path)
+            all_ref_warnings: list[str] = []
+            for r in rows:
+                if isinstance(r, dict):
+                    all_ref_warnings.extend(vault_datatable.validate_refs(path, r))
             report = vault_datatable.add_rows_with_report(
                 path, rows, required_fields=required,
             )
@@ -397,6 +421,8 @@ def handle_datatable_tool(args: dict[str, Any]) -> str:
             if report["skipped"]:
                 response["skipped"] = report["skipped"]
                 response["skipped_count"] = len(report["skipped"])
+            if all_ref_warnings:
+                response["warnings"] = all_ref_warnings
             return json.dumps(response)
 
         if action == "import_csv":

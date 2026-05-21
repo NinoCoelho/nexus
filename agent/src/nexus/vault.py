@@ -10,10 +10,13 @@ from typing import Any
 
 import yaml
 
-_VAULT_ROOT = Path("~/.nexus/vault").expanduser()
+from . import home as _home
+
 _MAX_SIZE = 1 * 1024 * 1024  # 1 MiB — text writes
 _MAX_BINARY_SIZE = 32 * 1024 * 1024  # 32 MiB — images/audio/pdf attachments
 _SKIP_DIRS = {"node_modules", "__pycache__"}
+
+_VAULT_ROOT: Path | None = None
 
 
 @dataclass
@@ -25,8 +28,9 @@ class Entry:
 
 
 def _vault_root() -> Path:
-    _VAULT_ROOT.mkdir(parents=True, exist_ok=True)
-    return _VAULT_ROOT
+    if _VAULT_ROOT is not None:
+        return _VAULT_ROOT
+    return _home.vault_root()
 
 
 def _safe_resolve(rel: str, root: Path) -> Path:

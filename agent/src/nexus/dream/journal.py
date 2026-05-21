@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 
 from .consolidate import ConsolidationResult
 from .insight import InsightResult
 from .skill_refine import SkillRefineResult
 from .rehearse import RehearsalResult
+from ..home import dreams_dir, vault_root
 
 log = logging.getLogger(__name__)
 
-_DREAMS_DIR = Path.home() / ".nexus" / "vault" / "dreams"
+_DREAMS_DIR = dreams_dir()
 
 
 def write_journal(
@@ -60,7 +60,7 @@ def write_journal(
 
     path.write_text(content, encoding="utf-8")
     try:
-        return str(path.relative_to(Path.home() / ".nexus" / "vault"))
+        return str(path.relative_to(vault_root()))
     except ValueError:
         return f"dreams/{today}.md"
 

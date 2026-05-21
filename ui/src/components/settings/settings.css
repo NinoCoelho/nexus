@@ -542,5 +542,116 @@
 .mcp-test-result--bad {
   background: color-mix(in srgb, var(--bad) 10%, transparent);
   color: var(--bad);
-  border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent);
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--fg-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.admin-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  vertical-align: middle;
+}
+
+.admin-table-sm td,
+.admin-table-sm th {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.admin-email {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.admin-mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.admin-select {
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.admin-status-badge {
+  border: none;
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.admin-status-badge.active {
+  background: color-mix(in srgb, var(--good) 15%, transparent);
+  color: var(--good);
+}
+
+.admin-status-badge.suspended {
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--warn);
+}
+
+.admin-btn-danger {
+  border: none;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--bad);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-btn-danger:hover {
+  background: color-mix(in srgb, var(--bad) 20%, transparent);
+}
+
+.admin-invite-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-invite-url {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.admin-invite-url-input {
+  flex: 1;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
 }

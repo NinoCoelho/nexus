@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..home import vault_root
+
 log = logging.getLogger(__name__)
 
 _CONSOLIDATION_SYSTEM_PROMPT = """\
@@ -67,7 +69,7 @@ async def run_consolidation(
     vault_memory_dir: Path | None = None,
 ) -> ConsolidationResult:
     if vault_memory_dir is None:
-        vault_memory_dir = Path.home() / ".nexus" / "vault" / "memory"
+        vault_memory_dir = vault_root() / "memory"
 
     memory_files = await asyncio.to_thread(_load_memory_files, vault_memory_dir)
     if not memory_files:

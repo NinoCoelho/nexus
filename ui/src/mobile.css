@@ -135,6 +135,8 @@
   .mobile-tab-bar button:active { background: var(--bg-hover); }
   .mobile-tab-bar button.is-active { color: var(--accent); }
   .mobile-tab-bar svg { width: 22px; height: 22px; }
+  .mobile-tab-letter { font-size: 13px; font-weight: 600; }
+  .mobile-tab-letter--emoji { font-size: 16px; filter: grayscale(1) brightness(0.6); font-weight: 400; }
 
   /* Modals respect safe area. */
   .modal-overlay,

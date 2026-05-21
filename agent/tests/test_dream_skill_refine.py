@@ -45,19 +45,13 @@ class TestBuildContext:
 class TestLoadExistingSkills:
     def test_no_skills_dir(self, tmp_path: Path):
         import nexus.dream.skill_refine as mod
-        original = mod.Path
-
-        class MockPath(type(original())):
-            @staticmethod
-            def home():
-                return tmp_path
-
-        mod.Path = MockPath
+        orig_fn = mod._home_skills_dir
+        mod._home_skills_dir = lambda: tmp_path / ".nexus" / "skills"
         try:
             skills = _load_existing_skills()
             assert skills == []
         finally:
-            mod.Path = original
+            mod._home_skills_dir = orig_fn
 
     def test_loads_skills(self, tmp_path: Path):
         skills_dir = tmp_path / ".nexus" / "skills"
@@ -68,21 +62,15 @@ class TestLoadExistingSkills:
         )
 
         import nexus.dream.skill_refine as mod
-        original = mod.Path
-
-        class MockPath(type(original())):
-            @staticmethod
-            def home():
-                return tmp_path
-
-        mod.Path = MockPath
+        orig_fn = mod._home_skills_dir
+        mod._home_skills_dir = lambda: skills_dir
         try:
             skills = _load_existing_skills()
             assert len(skills) == 1
             assert skills[0]["name"] == "my-skill"
             assert skills[0]["description"] == "Does things"
         finally:
-            mod.Path = original
+            mod._home_skills_dir = orig_fn
 
 
 class TestRunSkillRefinement:
@@ -126,14 +114,6 @@ class TestRunSkillRefinement:
             ]
             mod._skill_exists = lambda n: False
 
-            class MockPath2(type(mod.Path())):
-                @staticmethod
-                def home():
-                    return tmp_path
-
-            orig_path = mod.Path
-            mod.Path = MockPath2
-
             try:
                 result = await run_skill_refinement(
                     provider=provider,
@@ -145,7 +125,6 @@ class TestRunSkillRefinement:
                 mod._load_existing_skills = orig_load
                 mod._load_session_summaries = orig_sessions
                 mod._skill_exists = orig_exists
-                mod.Path = orig_path
         finally:
             store.close()
 
@@ -184,7 +163,6 @@ class TestRunSkillRefinement:
             orig_load = mod._load_existing_skills
             orig_sessions = mod._load_session_summaries
             orig_exists = mod._skill_exists
-            orig_path = mod.Path
 
             mod._load_existing_skills = lambda: []
             mod._load_session_summaries = lambda **kw: [
@@ -193,12 +171,6 @@ class TestRunSkillRefinement:
             ]
             mod._skill_exists = lambda n: False
 
-            class MockPath(type(orig_path())):
-                @staticmethod
-                def home():
-                    return tmp_path
-
-            mod.Path = MockPath
             try:
                 result = await run_skill_refinement(
                     provider=provider,
@@ -209,7 +181,6 @@ class TestRunSkillRefinement:
                 mod._load_existing_skills = orig_load
                 mod._load_session_summaries = orig_sessions
                 mod._skill_exists = orig_exists
-                mod.Path = orig_path
         finally:
             store.close()
 
@@ -245,7 +216,6 @@ class TestRunSkillRefinement:
             orig_load = mod._load_existing_skills
             orig_sessions = mod._load_session_summaries
             orig_exists = mod._skill_exists
-            orig_path = mod.Path
 
             mod._load_existing_skills = lambda: [{"name": "existing-skill", "description": "exists"}]
             mod._load_session_summaries = lambda **kw: [
@@ -254,12 +224,6 @@ class TestRunSkillRefinement:
             ]
             mod._skill_exists = lambda n: n == "existing-skill"
 
-            class MockPath(type(orig_path())):
-                @staticmethod
-                def home():
-                    return tmp_path
-
-            mod.Path = MockPath
             try:
                 result = await run_skill_refinement(
                     provider=provider,
@@ -270,6 +234,5 @@ class TestRunSkillRefinement:
                 mod._load_existing_skills = orig_load
                 mod._load_session_summaries = orig_sessions
                 mod._skill_exists = orig_exists
-                mod.Path = orig_path
         finally:
             store.close()

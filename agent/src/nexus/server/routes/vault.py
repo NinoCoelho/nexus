@@ -16,11 +16,36 @@ router = APIRouter()
 
 
 @router.get("/vault/tree")
-async def vault_tree() -> list[dict]:
+async def vault_tree(request: Request) -> list[dict]:
     from ...vault import list_tree
 
     entries = await asyncio.to_thread(list_tree)
-    return [{"path": e.path, "type": e.type, "size": e.size, "mtime": e.mtime} for e in entries]
+    result = [{"path": e.path, "type": e.type, "size": e.size, "mtime": e.mtime} for e in entries]
+
+    if getattr(request.app.state, "multi_user", False):
+        user_store = request.app.state.user_store
+        from ...home import shared_vault_root
+        user_id = getattr(request.state, "user_id", None)
+        role = getattr(request.state, "user_role", None)
+        if user_id and role:
+            shared = user_store.shared_resources_for_user(user_id, role)
+            shared_root = shared_vault_root()
+            existing_paths = {e["path"] for e in result}
+            for r in shared:
+                if r["path"] in existing_paths:
+                    continue
+                full = shared_root / r["path"]
+                prefix = r["path"].split("/")[0]
+                if prefix not in existing_paths and "/" in r["path"]:
+                    result.append({"path": prefix, "type": "dir", "size": None, "mtime": None, "shared": True})
+                if full.is_file():
+                    st = full.stat()
+                    result.append({"path": r["path"], "type": "file", "size": st.st_size, "mtime": st.st_mtime, "shared": True})
+                elif full.is_dir():
+                    result.append({"path": r["path"], "type": "dir", "size": None, "mtime": None, "shared": True})
+                existing_paths.add(r["path"])
+
+    return result
 
 
 @router.get("/vault/tags")
@@ -149,14 +174,24 @@ async def vault_transcribe(path: str) -> dict:
 
 
 @router.get("/vault/file")
-async def vault_read_file(path: str) -> dict:
+async def vault_read_file(path: str, request: Request) -> dict:
     from ...vault import read_file
     from ... import vault_index
 
     try:
         result = await asyncio.to_thread(read_file, path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except FileNotFoundError:
+        if getattr(request.app.state, "multi_user", False):
+            from ...home import shared_vault_root
+            shared = shared_vault_root() / path
+            if shared.is_file():
+                user_store = request.app.state.user_store
+                user_id = getattr(request.state, "user_id", None)
+                role = getattr(request.state, "user_role", None)
+                if user_id and role and user_store.check_access(path, user_id, role, "read"):
+                    text = await asyncio.to_thread(shared.read_text, "utf-8", "replace")
+                    return {"path": path, "content": text, "frontmatter": None, "shared": True}
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"not found: {path}")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     try:

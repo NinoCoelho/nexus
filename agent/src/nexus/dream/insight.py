@@ -9,8 +9,9 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
+
+from ..home import dream_insights_dir, sessions_db, vault_root
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ Rules:
 - Today's date: {today}
 """
 
-_DREAM_INSIGHTS_DIR = Path.home() / ".nexus" / "vault" / "memory" / "dream-insights"
+_DREAM_INSIGHTS_DIR = dream_insights_dir()
 _INSIGHT_EXPIRY_DAYS = 30
 
 
@@ -154,7 +155,7 @@ def _load_recent_sessions(
 ) -> list[dict[str, str]]:
     try:
         import sqlite3
-        db_path = Path.home() / ".nexus" / "sessions.sqlite"
+        db_path = sessions_db()
         if not db_path.exists():
             return []
         conn = sqlite3.connect(str(db_path))
@@ -199,7 +200,7 @@ def _load_recent_sessions(
 
 
 def _load_memory_summaries(*, limit: int = 10) -> list[dict[str, str]]:
-    memory_dir = Path.home() / ".nexus" / "vault" / "memory"
+    memory_dir = vault_root() / "memory"
     if not memory_dir.exists():
         return []
     notes = []

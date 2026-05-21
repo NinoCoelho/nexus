@@ -598,7 +598,7 @@ def test_list_databases_groups_by_folder():
     by_folder = {db["folder"]: db for db in dbs}
     assert "shop" in by_folder
     assert by_folder["shop"]["table_count"] == 2
-    assert by_folder["shop"]["title"] == "shop"
+    assert by_folder["shop"]["title"] == "Shop"
     assert "people" in by_folder
     assert by_folder["people"]["table_count"] == 1
 

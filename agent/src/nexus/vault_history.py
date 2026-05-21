@@ -22,14 +22,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import home as _home
+
 _log = logging.getLogger(__name__)
 
-_VAULT_ROOT = Path("~/.nexus/vault").expanduser()
-_HISTORY_DIR = Path("~/.nexus/.vault-history").expanduser()
-_CURSORS_PATH = Path("~/.nexus/.vault-history-cursors.json").expanduser()
+_VAULT_ROOT: Path | None = None
+_HISTORY_DIR: Path | None = None
+_CURSORS_PATH: Path | None = None
 
 _UNDO_PREFIX = "undo: "
 _BOOTSTRAP_MSG = "history: enable"
+
+
+def _vr() -> Path:
+    return _VAULT_ROOT if _VAULT_ROOT is not None else _home.vault_root()
+
+
+def _hd() -> Path:
+    return _HISTORY_DIR if _HISTORY_DIR is not None else _home.vault_history_dir()
+
+
+def _cp() -> Path:
+    return _CURSORS_PATH if _CURSORS_PATH is not None else _home.vault_history_cursors()
 
 
 class HistoryError(RuntimeError):
@@ -92,8 +106,8 @@ def _run_git(*args: str, check: bool = True, env: dict[str, str] | None = None) 
     full_env.setdefault("GIT_TERMINAL_PROMPT", "0")
     cmd = [
         "git",
-        f"--git-dir={_HISTORY_DIR}",
-        f"--work-tree={_VAULT_ROOT}",
+        f"--git-dir={_hd()}",
+        f"--work-tree={_vr()}",
         *args,
     ]
     return subprocess.run(
@@ -106,11 +120,11 @@ def _run_git(*args: str, check: bool = True, env: dict[str, str] | None = None) 
 
 
 def _repo_exists() -> bool:
-    return (_HISTORY_DIR / "HEAD").exists()
+    return (_hd() / "HEAD").exists()
 
 
 def _ensure_vault_root() -> None:
-    _VAULT_ROOT.mkdir(parents=True, exist_ok=True)
+    _vr().mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +137,7 @@ def enable() -> dict[str, Any]:
         raise HistoryError("git is not on PATH; install git to enable vault history")
     _ensure_vault_root()
     if not _repo_exists():
-        _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        _hd().mkdir(parents=True, exist_ok=True)
         # Initialize the repo with the vault as work-tree. Using `--git-dir` /
         # `--work-tree` *as command-level options* (before the subcommand) is
         # the supported way to set both at once for `git init`.
@@ -293,17 +307,19 @@ def _real_commits_for(path: str) -> list[str]:
 
 
 def _read_cursors() -> dict[str, str]:
-    if not _CURSORS_PATH.exists():
+    cursors = _cp()
+    if not cursors.exists():
         return {}
     try:
-        return json.loads(_CURSORS_PATH.read_text(encoding="utf-8"))
+        return json.loads(cursors.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def _write_cursors(d: dict[str, str]) -> None:
-    _CURSORS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CURSORS_PATH.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    cpath = _cp()
+    cpath.parent.mkdir(parents=True, exist_ok=True)
+    cpath.write_text(json.dumps(d, indent=2), encoding="utf-8")
 
 
 def _drop_cursors(paths: list[str]) -> None:
@@ -321,9 +337,10 @@ def _drop_cursors(paths: list[str]) -> None:
 
 
 def _clear_all_cursors() -> None:
-    if _CURSORS_PATH.exists():
+    cpath = _cp()
+    if cpath.exists():
         try:
-            _CURSORS_PATH.unlink()
+            cpath.unlink()
         except OSError:
             pass
 
@@ -413,7 +430,7 @@ def _reindex_after_undo(rel_paths: list[str]) -> None:
         return
     removed: list[str] = []
     for rel in rel_paths:
-        full = _VAULT_ROOT / rel
+        full = _vr() / rel
         if full.is_file():
             try:
                 content = full.read_text(encoding="utf-8")
@@ -436,14 +453,15 @@ def _reindex_after_undo(rel_paths: list[str]) -> None:
 
 def _list_tracked_under(rel: str) -> set[str]:
     """Files currently in the working tree under rel (file or folder)."""
-    full = _VAULT_ROOT / rel
+    vr = _vr()
+    full = vr / rel
     if full.is_file():
         return {rel}
     if full.is_dir():
         out: set[str] = set()
         for sub in full.rglob("*"):
             if sub.is_file():
-                out.add(str(sub.relative_to(_VAULT_ROOT)))
+                out.add(str(sub.relative_to(vr)))
         return out
     return set()
 

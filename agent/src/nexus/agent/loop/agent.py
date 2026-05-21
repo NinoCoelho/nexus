@@ -21,7 +21,7 @@ from .helpers import (
     _to_loom_message,
 )
 from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
-from .budget import check_tool_budget, BUDGET_EXCEEDED_HINT, DEFAULT_TOOL_BUDGET_TOKENS
+from .budget import check_tool_budget
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -156,6 +156,7 @@ class Agent:
             home=self._home,
             permissions=self._permissions,
         )
+        self._loom._build_tools = self._filtered_tools
         # SessionStore is wired in by app.py so the streaming loop can
         # update the parked-tool-call snapshot used by ask_user_tool when
         # it parks a request. None during tests that drive the agent
@@ -167,6 +168,14 @@ class Agent:
         self._turn_trace.append(entry)
         if self._trace:
             self._trace(kind, payload)
+
+    def _filtered_tools(self) -> list:
+        from ..context import ALLOWED_TOOLS
+        all_tools = self._loom._tools.specs()
+        allowed = ALLOWED_TOOLS.get(None)
+        if allowed is None:
+            return all_tools
+        return [t for t in all_tools if t.name in allowed]
 
     # app.py sets these attributes directly after construction; we intercept
     # via properties so the mutable handler container stays in sync.

@@ -23,6 +23,23 @@ def get_agent(request: Request) -> "Agent":
 
 
 def get_sessions(request: Request) -> "SessionStore":
+    if getattr(request.app.state, "multi_user", False):
+        user_id = getattr(request.state, "user_id", None)
+        if user_id:
+            return request.app.state.session_registry.get(user_id)
+    return request.app.state.sessions
+
+
+def get_sessions_for_session(request: Request, session_id: str) -> "SessionStore":
+    if getattr(request.app.state, "multi_user", False):
+        registry = request.app.state.session_registry
+        user_store = request.app.state.user_store
+        owner_store = registry.store_for_session(session_id, user_store)
+        if owner_store:
+            return owner_store
+        user_id = getattr(request.state, "user_id", None)
+        if user_id:
+            return registry.get(user_id)
     return request.app.state.sessions
 
 

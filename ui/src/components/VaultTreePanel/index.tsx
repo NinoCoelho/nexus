@@ -43,6 +43,7 @@ import { useVaultActions } from "./useVaultActions";
 import type { TreeNode } from "./types";
 import { readDropEntries } from "../../utils/readDropEntries";
 import ImportModal, { type ImportSource } from "../ImportModal";
+import { useSession } from "../SessionProvider";
 
 interface VaultTreePanelProps {
   selectedPath: string | null;
@@ -53,6 +54,7 @@ interface VaultTreePanelProps {
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
   onVisualizeFolderGraph?: (path: string) => void;
+  multiUser?: boolean;
 }
 
 export default function VaultTreePanel({
@@ -64,9 +66,12 @@ export default function VaultTreePanel({
   onDispatchToChat,
   onViewEntityGraph,
   onVisualizeFolderGraph,
+  multiUser: multiUserProp,
 }: VaultTreePanelProps) {
   const { t } = useTranslation("vault");
   const toast = useToast();
+  const { authStatus } = useSession();
+  const multiUser = multiUserProp ?? (authStatus?.multi_user ?? false);
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
   const [treeError, setTreeError] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -246,6 +251,24 @@ export default function VaultTreePanel({
     e.preventDefault(); e.stopPropagation();
     setCtxMenu({ x: e.clientX, y: e.clientY, node });
   };
+
+  const handleShare = useCallback(async (node: TreeNode) => {
+    setCtxMenu(null);
+    try {
+      const { shareVaultResource } = await import("../../api/auth");
+      await shareVaultResource({
+        path: node.path,
+        grantee_type: "role",
+        grantee_id: "member",
+        access_level: "read",
+      });
+      toast.success(`Shared: ${node.path}`);
+    } catch (err) {
+      toast.error("Failed to share", {
+        detail: err instanceof Error ? err.message : undefined,
+      });
+    }
+  }, [toast]);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
@@ -428,6 +451,7 @@ export default function VaultTreePanel({
           onUndo={historyEnabled ? actions.handleUndo : undefined}
           onViewEntityGraph={onViewEntityGraph}
           onVisualizeFolderGraph={onVisualizeFolderGraph}
+          onShare={multiUser ? handleShare : undefined}
           onClose={() => setCtxMenu(null)}
         />
       )}

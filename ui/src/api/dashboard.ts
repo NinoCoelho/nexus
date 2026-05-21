@@ -94,6 +94,7 @@ export interface DashboardLinks {
 export interface Dashboard {
   folder: string;
   title: string;
+  icon?: string | null;
   chat_session_id: string | null;
   operations: DashboardOperation[];
   widgets: DashboardWidget[];

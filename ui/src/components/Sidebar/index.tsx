@@ -296,8 +296,8 @@ export default function Sidebar({
                     }}
                     title={collapsed ? db.title : undefined}
                   >
-                    <span className="sidebar-nav-icon sidebar-nav-icon--letter">
-                      {db.title.charAt(0).toUpperCase()}
+                    <span className={`sidebar-nav-icon${db.icon ? " sidebar-nav-icon--emoji" : " sidebar-nav-icon--letter"}`}>
+                      {db.icon || db.title.charAt(0).toUpperCase()}
                     </span>
                     {!collapsed && <span className="sidebar-nav-label">{db.title}</span>}
                   </button>

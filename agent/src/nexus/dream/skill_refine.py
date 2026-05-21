@@ -7,8 +7,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path  # noqa: F401 — kept for test monkeypatching
 from typing import Any
+
+from ..home import skills_dir as _home_skills_dir, sessions_db, dream_suggestions_dir
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +158,7 @@ async def run_skill_refinement(
 
 
 def _load_existing_skills() -> list[dict[str, str]]:
-    skills_dir = Path.home() / ".nexus" / "skills"
+    skills_dir = _home_skills_dir()
     if not skills_dir.exists():
         return []
     skills = []
@@ -180,7 +182,7 @@ def _load_existing_skills() -> list[dict[str, str]]:
 def _load_session_summaries(*, limit: int = 30) -> list[dict[str, str]]:
     try:
         import sqlite3
-        db_path = Path.home() / ".nexus" / "sessions.sqlite"
+        db_path = sessions_db()
         if not db_path.exists():
             return []
         conn = sqlite3.connect(str(db_path))
@@ -233,11 +235,11 @@ def _build_context(
 
 
 def _skill_exists(name: str) -> bool:
-    return (Path.home() / ".nexus" / "skills" / name / "SKILL.md").exists()
+    return (_home_skills_dir() / name / "SKILL.md").exists()
 
 
 def _write_skill_suggestion(suggestion: SkillSuggestion) -> None:
-    suggestions_dir = Path.home() / ".nexus" / "vault" / "dreams" / "suggestions"
+    suggestions_dir = dream_suggestions_dir()
     suggestions_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     filename = f"{suggestion.name}-{ts}.md"

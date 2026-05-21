@@ -39,6 +39,7 @@ from .config_schema import (  # noqa: F401
     NexusAccountConfig,
     McpServerEntry,
     McpConfig,
+    ServerConfig,
     NexusConfig,
     default_config,
 )
@@ -193,6 +194,9 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "server_port": cfg.mcp.server_port,
             "server_expose": cfg.mcp.server_expose,
             "server_auth_token": cfg.mcp.server_auth_token,
+        },
+        "server": {
+            "multi_user": cfg.server.multi_user,
         },
     }
     for m in cfg.models:
@@ -367,12 +371,13 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         sdata.setdefault("enabled", True)
         mcp_servers[sname] = McpServerEntry(**sdata)
     mcp = McpConfig(servers=mcp_servers)
+    server = ServerConfig(**dict(raw.get("server", {})))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
         nexus_account=nexus_account, location=location, dream=dream,
-        mcp=mcp,
+        mcp=mcp, server=server,
     )
 
 

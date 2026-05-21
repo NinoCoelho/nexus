@@ -108,12 +108,6 @@ class TestRunScenarioRehearsal:
         ]
         mod._load_recent_insights = lambda **kw: []
 
-        class MockPath(type(orig_path())):
-            @staticmethod
-            def home():
-                return tmp_path
-
-        mod.Path = MockPath
         try:
             result = await run_scenario_rehearsal(
                 provider=provider,
@@ -125,7 +119,6 @@ class TestRunScenarioRehearsal:
         finally:
             mod._load_recent_sessions = orig_sessions
             mod._load_recent_insights = orig_insights
-            mod.Path = orig_path
 
     async def test_llm_failure(self):
         provider = MagicMock()

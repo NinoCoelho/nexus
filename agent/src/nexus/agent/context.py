@@ -65,3 +65,10 @@ CURRENT_CONTEXT_WINDOW: ContextVar[int] = ContextVar(
 TOOL_BUDGET_EXCEEDED: ContextVar[bool] = ContextVar(
     "TOOL_BUDGET_EXCEEDED", default=False
 )
+
+# Role-based tool allowlist for the current turn. None = all tools (admin /
+# single-user). A frozenset of tool names = only these tools. Set by the
+# chat_stream handler from the current user's role before each turn.
+ALLOWED_TOOLS: ContextVar[frozenset[str] | None] = ContextVar(
+    "ALLOWED_TOOLS", default=None
+)

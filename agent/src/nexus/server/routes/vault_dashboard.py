@@ -32,7 +32,7 @@ async def vault_dashboard_put(body: dict) -> dict:
     folder = body.get("folder", "")
     if not isinstance(folder, str):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="`folder` must be a string")
-    patch = {k: body[k] for k in ("title", "chat_session_id", "operations") if k in body}
+    patch = {k: body[k] for k in ("title", "icon", "chat_session_id", "operations") if k in body}
     try:
         return vault_dashboard.patch_dashboard(folder, patch)
     except (ValueError, OSError) as exc:

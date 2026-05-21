@@ -197,6 +197,12 @@
   background: var(--bg-inset);
   color: var(--fg-faint);
 }
+.sidebar-nav-icon--emoji {
+  font-size: 14px;
+  filter: grayscale(1) brightness(0.6);
+  width: 16px;
+  height: 16px;
+}
 .sidebar-nav-label {
   white-space: nowrap;
   overflow: hidden;

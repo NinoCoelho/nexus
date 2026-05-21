@@ -8,6 +8,8 @@ from typing import Any
 
 from loom.heartbeat import HeartbeatDriver, HeartbeatEvent
 
+from ....home import dream_db, sessions_db
+
 log = logging.getLogger(__name__)
 
 _MIN_SESSIONS = 5
@@ -31,8 +33,7 @@ class Driver(HeartbeatDriver):
 
         try:
             from nexus.dream.state import DreamStateStore
-            from pathlib import Path
-            store = DreamStateStore(Path.home() / ".nexus" / "dream_state.sqlite")
+            store = DreamStateStore(dream_db())
         except Exception:
             log.exception("dream_trigger: state store init failed")
             return [], state
@@ -109,9 +110,8 @@ class Driver(HeartbeatDriver):
 
 def _count_recent_sessions(since: datetime | None) -> int:
     try:
-        from pathlib import Path
         import sqlite3
-        db_path = Path.home() / ".nexus" / "sessions.sqlite"
+        db_path = sessions_db()
         if not db_path.exists():
             return 0
         conn = sqlite3.connect(str(db_path))

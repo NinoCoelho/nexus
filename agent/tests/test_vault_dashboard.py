@@ -25,7 +25,8 @@ def test_default_dashboard_for_missing_file():
     """GET on a folder without `_data.md` returns sensible defaults."""
     d = vault_dashboard.read_dashboard("shop")
     assert d["folder"] == "shop"
-    assert d["title"] == "shop"
+    assert d["title"] == "Shop"
+    assert d["icon"] is None
     assert d["chat_session_id"] is None
     assert d["operations"] == []
     assert d["exists"] is False
