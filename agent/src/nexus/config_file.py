@@ -135,6 +135,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "headless": cfg.scrape.headless,
             "timeout": cfg.scrape.timeout,
             "max_content_bytes": cfg.scrape.max_content_bytes,
+            "max_scrape_calls": cfg.scrape.max_scrape_calls,
         },
         "transcription": {
             "mode": cfg.transcription.mode,

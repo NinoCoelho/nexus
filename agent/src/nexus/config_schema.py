@@ -125,7 +125,7 @@ class AgentConfig(BaseModel):
     # tool-result text in a single turn exceeds this threshold (estimated
     # tokens), the agent receives a system hint to synthesize with what it
     # has instead of calling more tools. 0 = disabled (no budget).
-    tool_budget_tokens: int = 50_000
+    tool_budget_tokens: int = 15_000
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
@@ -202,6 +202,7 @@ class ScrapeConfig(BaseModel):
     headless: bool = True
     timeout: int = 30
     max_content_bytes: int = 20480
+    max_scrape_calls: int = 3
 
 
 class RemoteTranscriptionConfig(BaseModel):

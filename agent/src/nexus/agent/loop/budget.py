@@ -11,10 +11,11 @@ the context window between LLM iterations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
-DEFAULT_TOOL_BUDGET_TOKENS = 50_000
+DEFAULT_TOOL_BUDGET_TOKENS = 15_000
+DEFAULT_MAX_SCRAPE_CALLS = 3
 
 
 @dataclass
@@ -22,6 +23,8 @@ class BudgetCheck:
     exceeded: bool
     cumulative_tool_tokens: int
     budget: int
+    call_counts: dict[str, int] = field(default_factory=dict)
+    call_limit_exceeded: tuple[str, int] | None = None
 
 
 def estimate_tool_result_tokens(text: str) -> int:
@@ -42,6 +45,9 @@ def check_tool_budget(
     cumulative_tool_tokens: int,
     new_result_text: str,
     budget: int = DEFAULT_TOOL_BUDGET_TOKENS,
+    call_counts: dict[str, int] | None = None,
+    tool_name: str = "",
+    call_limits: dict[str, int] | None = None,
 ) -> BudgetCheck:
     """Check whether adding a new tool result exceeds the per-turn budget.
 
@@ -50,16 +56,39 @@ def check_tool_budget(
             in this turn.
         new_result_text: The tool result text about to be added.
         budget: Maximum cumulative tool-result tokens for a single turn.
+        call_counts: Cumulative per-tool call counts so far (modified in-place).
+        tool_name: Name of the tool that produced this result.
+        call_limits: Per-tool call limits, e.g. {"web_scrape": 3}.
 
     Returns:
-        BudgetCheck with exceeded flag and updated cumulative count.
+        BudgetCheck with exceeded flag, updated cumulative count, and
+        updated call_counts.
     """
+    if call_counts is None:
+        call_counts = {}
+    if call_limits is None:
+        call_limits = {}
+    if tool_name:
+        call_counts[tool_name] = call_counts.get(tool_name, 0) + 1
+
     new_tokens = estimate_tool_result_tokens(new_result_text)
     total = cumulative_tool_tokens + new_tokens
+    token_exceeded = total > budget if budget > 0 else False
+
+    call_limit_hit: tuple[str, int] | None = None
+    if tool_name and tool_name in call_limits:
+        limit = call_limits[tool_name]
+        count = call_counts[tool_name]
+        if count >= limit:
+            call_limit_hit = (tool_name, count)
+
+    exceeded = token_exceeded or call_limit_hit is not None
     return BudgetCheck(
-        exceeded=total > budget,
+        exceeded=exceeded,
         cumulative_tool_tokens=total,
         budget=budget,
+        call_counts=call_counts,
+        call_limit_exceeded=call_limit_hit,
     )
 
 
@@ -67,4 +96,10 @@ BUDGET_EXCEEDED_HINT = (
     "\n\n[Tool budget reached: cumulative tool results are approaching the "
     "context limit. Synthesize your answer with the information you already "
     "have. Do not call any more tools unless absolutely critical.]"
+)
+
+CALL_LIMIT_EXCEEDED_HINT = (
+    "\n\n[Tool call limit reached: {count} {tool} calls in this turn. "
+    "Synthesize your answer with the information you already have. "
+    "Do not call any more tools unless absolutely critical.]"
 )

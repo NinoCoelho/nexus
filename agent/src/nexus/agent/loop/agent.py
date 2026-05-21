@@ -374,10 +374,14 @@ class Agent:
         CURRENT_CONTEXT_WINDOW.set(effective_window)
         TOOL_BUDGET_EXCEEDED.set(False)
         _tool_budget = 0
+        _scrape_call_limit = 0
         if self._nexus_cfg:
             agent_cfg = getattr(self._nexus_cfg, "agent", None)
             if agent_cfg:
                 _tool_budget = int(getattr(agent_cfg, "tool_budget_tokens", 0) or 0)
+            scrape_cfg = getattr(self._nexus_cfg, "scrape", None)
+            if scrape_cfg:
+                _scrape_call_limit = int(getattr(scrape_cfg, "max_scrape_calls", 0) or 0)
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
@@ -481,6 +485,10 @@ class Agent:
         last_tool_exec_name: str | None = None
         _cumulative_tool_tokens: int = 0
         _budget_hint_injected: bool = False
+        _tool_call_counts: dict[str, int] = {}
+        _call_limits: dict[str, int] = {}
+        if _scrape_call_limit > 0:
+            _call_limits["web_scrape"] = _scrape_call_limit
 
         # Auto-retry on retryable mid-stream errors (peer-closed connections,
         # 429 rate limits, transient 5xx, "empty response" from a flaky
@@ -768,16 +776,29 @@ class Agent:
                         name=tc_name,
                     )
                 )
-                bc = check_tool_budget(_cumulative_tool_tokens, result_text, budget=_tool_budget)
+                bc = check_tool_budget(
+                    _cumulative_tool_tokens, result_text,
+                    budget=_tool_budget,
+                    call_counts=_tool_call_counts,
+                    tool_name=tool_name,
+                    call_limits=_call_limits,
+                )
                 _cumulative_tool_tokens = bc.cumulative_tool_tokens
-                if _tool_budget > 0 and bc.exceeded and not _budget_hint_injected:
+                if bc.exceeded and not _budget_hint_injected:
                     _budget_hint_injected = True
                     from ..context import TOOL_BUDGET_EXCEEDED
                     TOOL_BUDGET_EXCEEDED.set(True)
-                    log.warning(
-                        "Tool budget exceeded: %d/%d tokens after %s",
-                        bc.cumulative_tool_tokens, bc.budget, tool_name,
-                    )
+                    if bc.call_limit_exceeded:
+                        lim_tool, lim_count = bc.call_limit_exceeded
+                        log.warning(
+                            "Tool call limit exceeded: %d %s calls in turn",
+                            lim_count, lim_tool,
+                        )
+                    else:
+                        log.warning(
+                            "Tool budget exceeded: %d/%d tokens after %s",
+                            bc.cumulative_tool_tokens, bc.budget, tool_name,
+                        )
                 # Reset per-iteration accumulators so the NEXT LLM call
                 # starts with a fresh content/tcs buffer.
                 pending_content_chunks.clear()
