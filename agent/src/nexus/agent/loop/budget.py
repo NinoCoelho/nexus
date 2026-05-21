@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 DEFAULT_TOOL_BUDGET_TOKENS = 15_000
 DEFAULT_MAX_SCRAPE_CALLS = 3
+DEFAULT_SESSION_TOOL_BUDGET_TOKENS = 50_000
 
 
 @dataclass
@@ -93,13 +94,31 @@ def check_tool_budget(
 
 
 BUDGET_EXCEEDED_HINT = (
-    "\n\n[Tool budget reached: cumulative tool results are approaching the "
-    "context limit. Synthesize your answer with the information you already "
-    "have. Do not call any more tools unless absolutely critical.]"
+    "\n\n[CRITICAL: Tool budget reached — cumulative tool results have consumed "
+    "the per-turn token allocation. You MUST NOT call any more tools this turn. "
+    "Synthesize your answer immediately using only the information already "
+    "available in this conversation. Do not attempt additional searches, "
+    "scrapes, or API calls.]"
 )
 
 CALL_LIMIT_EXCEEDED_HINT = (
-    "\n\n[Tool call limit reached: {count} {tool} calls in this turn. "
-    "Synthesize your answer with the information you already have. "
-    "Do not call any more tools unless absolutely critical.]"
+    "\n\n[CRITICAL: Tool call limit reached — {count} {tool} calls in this turn. "
+    "You MUST NOT call any more tools this turn. Synthesize your answer "
+    "immediately using only the information already available. Do not attempt "
+    "additional searches, scrapes, or API calls.]"
 )
+
+
+def estimate_session_tool_tokens(history) -> int:
+    """Estimate total tool-result tokens across a session history.
+
+    Scans for TOOL-role messages and sums estimated tokens. Used by the
+    cross-turn budget check to decide whether to trigger compaction.
+    """
+    from ..llm.types import Role
+
+    total = 0
+    for msg in history:
+        if getattr(msg, "role", None) == Role.TOOL and msg.content:
+            total += estimate_tool_result_tokens(msg.content)
+    return total

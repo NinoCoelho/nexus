@@ -375,10 +375,12 @@ class Agent:
         TOOL_BUDGET_EXCEEDED.set(False)
         _tool_budget = 0
         _scrape_call_limit = 0
+        _session_tool_budget = 0
         if self._nexus_cfg:
             agent_cfg = getattr(self._nexus_cfg, "agent", None)
             if agent_cfg:
                 _tool_budget = int(getattr(agent_cfg, "tool_budget_tokens", 0) or 0)
+                _session_tool_budget = int(getattr(agent_cfg, "session_tool_budget_tokens", 0) or 0)
             scrape_cfg = getattr(self._nexus_cfg, "scrape", None)
             if scrape_cfg:
                 _scrape_call_limit = int(getattr(scrape_cfg, "max_scrape_calls", 0) or 0)
@@ -389,6 +391,42 @@ class Agent:
         user_msg = _build_user_message(user_msg_text, attachments)
         user_msg_content = user_msg.content
         loom_messages.append(_to_loom_message(user_msg))
+
+        # Cross-turn cumulative tool budget: if total tool-result tokens
+        # across the session exceed the threshold, trigger compaction
+        # BEFORE the pre-flight overflow check. This prevents the death
+        # spiral where scraped content accumulates across turns without
+        # cleanup until the context window overflows.
+        _auto_compacted_history: list[ChatMessage] | None = None
+        if _session_tool_budget > 0 and stripped_history:
+            from .budget import estimate_session_tool_tokens
+            _session_tool_tok = estimate_session_tool_tokens(stripped_history)
+            if _session_tool_tok > _session_tool_budget:
+                log.info(
+                    "Cross-turn tool budget exceeded: %dK > %dK tokens — triggering compact_and_summarize",
+                    _session_tool_tok // 1024, _session_tool_budget // 1024,
+                )
+                from .compact import compact_and_summarize
+                compacted, _cs_report = await compact_and_summarize(
+                    stripped_history,
+                    context_window=effective_window,
+                    session_id=session_id,
+                    model_id=model_id or self._chosen_model,
+                    provider=self._provider,
+                    strategy="auto",
+                )
+                if _cs_report.compact_report.compacted > 0 or _cs_report.summarized:
+                    log.info(
+                        "Cross-turn compaction: compacted=%d summarized=%s tokens %dK→%dK",
+                        _cs_report.compact_report.compacted,
+                        _cs_report.summarized,
+                        _cs_report.tokens_before // 1024,
+                        _cs_report.tokens_after // 1024,
+                    )
+                    stripped_history = compacted
+                    _auto_compacted_history = compacted
+                    loom_messages = [_to_loom_message(m) for m in compacted]
+                    loom_messages.append(_to_loom_message(user_msg))
 
         # Pre-flight overflow check — refuse the turn now if the request can't
         # fit in the chosen model's context window. Without this, providers
@@ -402,7 +440,6 @@ class Agent:
                 "High token usage: ~%dK estimated input tokens for session %s, model %s",
                 check.estimated_input_tokens // 1024, session_id, model_id,
             )
-        _auto_compacted_history: list[ChatMessage] | None = None
         if check.overflowed:
             from .compact import auto_compact
 

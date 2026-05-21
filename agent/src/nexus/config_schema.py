@@ -134,6 +134,12 @@ class AgentConfig(BaseModel):
     # tokens), the agent receives a system hint to synthesize with what it
     # has instead of calling more tools. 0 = disabled (no budget).
     tool_budget_tokens: int = 15_000
+    # Cross-turn cumulative token budget. When total tool-result tokens
+    # across the entire session history exceed this threshold, the agent
+    # triggers compact_and_summarize before starting the next turn.
+    # Prevents the death spiral where scraped content accumulates across
+    # turns without cleanup. 0 = disabled.
+    session_tool_budget_tokens: int = 50_000
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
