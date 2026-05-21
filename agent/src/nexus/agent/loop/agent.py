@@ -612,7 +612,7 @@ class Agent:
                     ev.get("stop_reason"),
                 )
             else:
-                log.warning(
+                log.debug(
                     "loom event: type=%s keys=%s",
                     etype,
                     sorted(ev.keys())[:8] if isinstance(ev, dict) else "?",
