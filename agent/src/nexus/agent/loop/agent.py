@@ -397,6 +397,11 @@ class Agent:
         # endless retry loop.
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         check = check_overflow(loom_messages, context_window=ctx_window)
+        if check.estimated_input_tokens > 100_000:
+            log.warning(
+                "High token usage: ~%dK estimated input tokens for session %s, model %s",
+                check.estimated_input_tokens // 1024, session_id, model_id,
+            )
         _auto_compacted_history: list[ChatMessage] | None = None
         if check.overflowed:
             from .compact import auto_compact
