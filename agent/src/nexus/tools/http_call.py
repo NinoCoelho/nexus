@@ -21,7 +21,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
 _HTML_HINT_RE = re.compile(
-    r"(?:<!DOCTYPE|<html|<head|<body)",
+    r"(?:<!DOCTYPE|<html|<head|<body|<div|<p\s|<span|</[a-z])",
     re.IGNORECASE,
 )
 
