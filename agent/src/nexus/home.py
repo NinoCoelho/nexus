@@ -111,6 +111,10 @@ def venvs_dir() -> Path:
     return _base() / "venvs"
 
 
+def workflow_runs_db() -> Path:
+    return _base() / "workflow_runs.sqlite"
+
+
 def shared_vault_root() -> Path:
     p = _ROOT / "shared" / "vault"
     p.mkdir(parents=True, exist_ok=True)

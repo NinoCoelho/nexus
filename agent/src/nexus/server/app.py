@@ -32,6 +32,7 @@ TUNNEL_PUBLIC_PATHS = frozenset({
     "/tunnel/redeem",
     "/tunnel/auth-status",
     "/webhook",
+    "/workflow/trigger",
 })
 
 # API surface that must require a cookie when reached through the tunnel. This
@@ -44,7 +45,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
-    "/dream", "/mcp", "/jobs", "/update",
+    "/dream", "/mcp", "/jobs", "/update", "/workflows",
 )
 
 
@@ -77,6 +78,8 @@ def _tunnel_path_requires_auth(path: str) -> bool:
     if path in TUNNEL_PUBLIC_PATHS:
         return False
     if path.startswith("/webhook/"):
+        return False
+    if path.startswith("/workflow/trigger/"):
         return False
     if path.startswith("/tunnel/"):
         # /tunnel/start, /stop, /status, /install — admin. Require a cookie
@@ -759,6 +762,25 @@ def create_app(
         except Exception:
             log.exception("heartbeat / calendar bootstrap failed")
 
+        # ── workflow engine ─────────────────────────────────────────────────
+        try:
+            from ..workflows.store import WorkflowStore
+            from ..workflows.engine import WorkflowEngine
+            from .. import home as _wf_home
+
+            wf_db = str(_wf_home.workflow_runs_db())
+            wf_store = WorkflowStore(wf_db)
+            wf_engine = WorkflowEngine(wf_store)
+            app.state.workflow_store = wf_store
+            app.state.workflow_engine = wf_engine
+
+            from .routes.workflows import init as _wf_init
+            _wf_init(wf_store, wf_engine)
+
+            log.info("workflow engine initialised")
+        except Exception:
+            log.exception("workflow engine bootstrap failed")
+
         # ── MCP server connections ────────────────────────────────────────
         mcp_manager = None
         mcp_server_bridge = None
@@ -814,6 +836,12 @@ def create_app(
                 _close_dream_store()
             except Exception:
                 log.exception("dream store close failed")
+            try:
+                wf_store = getattr(app.state, "workflow_store", None)
+                if wf_store is not None:
+                    wf_store.close()
+            except Exception:
+                log.exception("workflow store close failed")
             if mcp_manager is not None:
                 try:
                     from ..mcp_lifecycle import stop_mcp
@@ -913,6 +941,7 @@ def create_app(
     from .routes.jobs import router as jobs_router
     from .routes.vault_import import router as vault_import_router
     from .routes.update import router as update_router
+    from .routes.workflows import router as workflows_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -964,6 +993,7 @@ def create_app(
     app.include_router(mcp_router)
     app.include_router(jobs_router)
     app.include_router(update_router)
+    app.include_router(workflows_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent
