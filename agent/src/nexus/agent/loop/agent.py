@@ -493,11 +493,7 @@ class Agent:
         _tool_call_counts: dict[str, int] = {}
         _call_limits: dict[str, int] = {}
         if _scrape_call_limit > 0:
-            from ..context import GLOBAL_SCRAPE_COUNT
             _call_limits["web_scrape"] = _scrape_call_limit
-            _prior_scrapes = GLOBAL_SCRAPE_COUNT.get(0)
-            if _prior_scrapes > 0:
-                _tool_call_counts["web_scrape"] = _prior_scrapes
 
         # Auto-retry on retryable mid-stream errors (peer-closed connections,
         # 429 rate limits, transient 5xx, "empty response" from a flaky
@@ -793,9 +789,6 @@ class Agent:
                     call_limits=_call_limits,
                 )
                 _cumulative_tool_tokens = bc.cumulative_tool_tokens
-                if tool_name == "web_scrape" and _scrape_call_limit > 0:
-                    from ..context import GLOBAL_SCRAPE_COUNT
-                    GLOBAL_SCRAPE_COUNT.set(bc.call_counts.get("web_scrape", 0))
                 if bc.exceeded and not _budget_hint_injected:
                     _budget_hint_injected = True
                     from ..context import TOOL_BUDGET_EXCEEDED
