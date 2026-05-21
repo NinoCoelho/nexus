@@ -209,8 +209,8 @@ class ScrapeConfig(BaseModel):
     mode: str = "auto"
     headless: bool = True
     timeout: int = 30
-    max_content_bytes: int = 20480
-    max_scrape_calls: int = 6
+    max_content_bytes: int = 8192
+    max_scrape_calls: int = 3
 
 
 class RemoteTranscriptionConfig(BaseModel):
