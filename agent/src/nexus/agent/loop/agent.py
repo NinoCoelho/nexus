@@ -804,11 +804,15 @@ class Agent:
                             "Tool budget exceeded: %d/%d tokens after %s",
                             bc.cumulative_tool_tokens, bc.budget, tool_name,
                         )
-                # Mid-turn compaction: if context is >= 80% of the window,
-                # compact oversized tool messages before the next LLM call.
+                # Mid-turn compaction: clean failed scrapes at yellow zone
+                # (60%+) since they're pure waste; run heavier auto_compact
+                # only at orange/red (80%+). After compaction we must restart
+                # loom from the compacted working_messages because loom's
+                # internal all_messages is independent and still holds the
+                # originals.
                 if ctx_window > 0 and len(working_messages) > 6:
                     from .compact import compact_failed_scrapes, auto_compact
-                    from .overflow import estimate_tokens
+                    from .overflow import estimate_tokens, _TOOLS_AND_SYSTEM_OVERHEAD
                     from .zones import classify_zone
                     class _WM:
                         pass
@@ -820,20 +824,34 @@ class Agent:
                         _o.tool_calls = getattr(_wm, "tool_calls", None)
                         _wm_compat.append(_o)
                     _est_tok = estimate_tokens(_wm_compat) if _wm_compat else 0
-                    _zone = classify_zone(_est_tok, ctx_window)
-                    if _zone in ("orange", "red"):
+                    _zone = classify_zone(_est_tok, ctx_window, tools_overhead=_TOOLS_AND_SYSTEM_OVERHEAD)
+                    _need_loom_restart = False
+                    if _zone in ("yellow", "orange", "red"):
                         working_messages, _n_cleaned = compact_failed_scrapes(working_messages)
                         if _n_cleaned > 0:
                             log.info(
                                 "Mid-turn: cleaned %d failed scrape results (zone=%s, %dK tokens)",
                                 _n_cleaned, _zone, _est_tok // 1024,
                             )
+                            _need_loom_restart = True
+                    if _zone in ("orange", "red"):
                         working_messages, _mid_report = auto_compact(working_messages)
                         if _mid_report.compacted > 0:
                             log.info(
                                 "Mid-turn: auto_compact compacted=%d saved=%d bytes (zone=%s)",
                                 _mid_report.compacted, _mid_report.saved_bytes, _zone,
                             )
+                            _need_loom_restart = True
+                    if _need_loom_restart:
+                        pending_content_chunks.clear()
+                        pending_tcs.clear()
+                        _tc_id_by_index.clear()
+                        materialised_for_iter = False
+                        loom_iter = self._loom.run_turn_stream(
+                            working_messages, model_id=model_id
+                        ).__aiter__()
+                        loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                        continue
                 # Reset per-iteration accumulators so the NEXT LLM call
                 # starts with a fresh content/tcs buffer.
                 pending_content_chunks.clear()
