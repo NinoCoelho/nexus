@@ -14,6 +14,9 @@ from nexus.agent.llm.types import ChatMessage, Role
 from nexus.agent.loop.compact import (
     DEFAULT_COMPACT_THRESHOLD_BYTES,
     compact_history,
+    auto_compact,
+    _AUTO_COMPACT_THRESHOLD_BYTES,
+    _AUTO_COMPACT_HEAD_KEEP,
 )
 
 
@@ -124,3 +127,35 @@ def test_threshold_is_respected() -> None:
     out2, report2 = compact_history(history, threshold_bytes=2_000)
     assert report2.compacted == 1
     assert "compacted" in json.loads(out2[0].content)
+
+
+def test_auto_compact_threshold_is_4kb() -> None:
+    assert _AUTO_COMPACT_THRESHOLD_BYTES == 4 * 1024
+
+
+def test_auto_compact_head_keep_is_512() -> None:
+    assert _AUTO_COMPACT_HEAD_KEEP == 512
+
+
+def test_auto_compact_catches_5kb_result() -> None:
+    payload = "x" * 5_000
+    history = [_tool_msg(payload, tcid="t5k")]
+    out, report = auto_compact(history)
+    assert report.compacted == 1
+    assert len(out[0].content) < 2_000
+
+
+def test_auto_compact_leaves_3kb_result_alone() -> None:
+    payload = "x" * 3_000
+    history = [_tool_msg(payload, tcid="t3k")]
+    out, report = auto_compact(history)
+    assert report.compacted == 0
+    assert out[0].content == payload
+
+
+def test_auto_compact_persists_original_to_vault_ref() -> None:
+    payload = json.dumps({"ok": True, "data": "x" * 5_000})
+    history = [_tool_msg(payload, tcid="t_vault")]
+    out, report = auto_compact(history)
+    assert report.compacted == 1
+    assert "vault://" in out[0].content
