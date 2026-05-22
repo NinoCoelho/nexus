@@ -368,10 +368,17 @@ def create_app(
     # streaming callback can locate the running subprocess.
     _terminal_procs: dict[str, asyncio.subprocess.Process] = {}
 
+    _on_term_output = _make_terminal_output_callback(store_proxy, _terminal_procs)
+    _proc_reg = _make_proc_register(_terminal_procs)
+    _proc_unreg = _make_proc_unregister(_terminal_procs)
+
     agent._ask_user_handler = ask_user_handler
     agent._terminal_handler = TerminalTool(
         broker=store_proxy.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
+        on_output=_on_term_output,
+        proc_register=_proc_reg,
+        proc_unregister=_proc_unreg,
     )
 
     # notify_user — fire-and-forget status pings the agent emits during
