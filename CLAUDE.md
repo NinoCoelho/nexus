@@ -98,7 +98,32 @@ Two channels on each session:
 
 ### Frontend
 
-`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`, `heartbeat`, `dream`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
+`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`, `heartbeat`, `dream`, `workflows`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
+
+### Workflows
+
+`agent/src/nexus/workflows/` implements a visual flow-based automation engine. Workflow definitions are stored as vault markdown files with `workflow-plugin: basic` frontmatter (consistent with kanban/calendar pattern — no separate store). The visual editor (`ui/src/components/WorkflowFlow/`) uses `@xyflow/react` (v12) for the node graph canvas with controlled nodes (`applyNodeChanges` for drag).
+
+**Models** (`models.py`): `StepType` enum (`tool_call`, `agent_session`, `mcp_call`, `http_request`, `condition`, `transform`, `delay`), `TriggerType` enum (`webhook`, `fs_watch`, `schedule`, `manual`, `event`). Each step has a `slug` (auto-generated camelCase from name) used for template references like `{{steps.mySlug.result}}`.
+
+**Engine** (`engine.py`): Executes steps sequentially with template resolution, retry logic, and error handling. Step dispatch:
+- `tool_call` — calls a registered Loom tool by name
+- `agent_session` — creates a real chat session with an LLM
+- `mcp_call` — calls a tool on a connected MCP server via `McpManager`
+- `http_request` — HTTP call with auth support (API key bearer/header/query, basic auth, OAuth 2.0, custom headers). Credentials resolved at runtime via `secrets.resolve()`
+- `transform` — three modes: `template` (standard `{{...}}` substitution), `llm` (LLM transform without tools/reasoning), `script` (Python `exec()` with `data` variable)
+- `condition` — evaluates expression, branches to `then_step` or `else_step`
+- `delay` — async sleep
+
+**Parser** (`parser.py`): Reads/writes vault markdown with YAML frontmatter. The `StepConfig.to_dict()` method only serializes non-default fields to keep the markdown clean.
+
+**Triggers**: Five trigger types, each with its own driver. Webhook triggers generate tokens and receive at `POST /workflow/trigger/{token}`. Schedule triggers use a cron-based heartbeat driver. FS watch uses `watchdog>=4.0`. Event triggers subscribe to the internal event bus. Manual triggers are user-initiated.
+
+**API** (`server/routes/workflows.py`): CRUD endpoints for workflow definitions, webhook receiver, run history, and manual trigger endpoint.
+
+**UI**: React-flow canvas with custom node types (`TriggerNode`, `StepNode`, `ConditionNode` as diamond with true/false ports, `AddNode`). Left sidebar palette with draggable step/trigger icons. ConfigPanel slides in on node selection. `TemplateInput` component provides `{{steps.slug...` autocomplete with Tab to accept. Node positions are controlled state persisted via `applyNodeChanges`. Rearrange button (⇅) resets to auto-computed layout. Debounced saves (500ms) prevent "Saving…" from blocking typing.
+
+**Run history**: Separate SQLite `~/.nexus/workflow_runs.sqlite` tracks run state and per-step outputs. SSE events (`workflow.run_completed`) published via the global event bus.
 
 ### Config precedence
 

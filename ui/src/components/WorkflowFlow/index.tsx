@@ -5,6 +5,8 @@ import {
   Controls,
   MiniMap,
   ReactFlowProvider,
+  applyNodeChanges,
+  useReactFlow,
   type Node,
   type Edge,
   type Connection,
@@ -297,28 +299,36 @@ function Canvas({
 }: {
   wf: WorkflowDef;
   onSave: (updated: WorkflowDef) => void;
-  insertStep: (type: StepType, afterStepId: string | null) => void;
+  insertStep: (type: StepType, afterStepId: string | null, position?: { x: number; y: number }) => void;
 }) {
+  const rfInstance = useReactFlow();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deletedEdges, setDeletedEdges] = useState<Set<string>>(new Set());
-  const posRef = useRef<PosMap>({});
-  const [layoutVer, setLayoutVer] = useState(0);
-  const prevStepsLen = useRef(-1);
+  const [controlledNodes, setControlledNodes] = useState<Node[]>([]);
   const wfRef = useRef(wf);
   wfRef.current = wf;
 
-  // Initialize or grow layout when steps change
-  if (prevStepsLen.current !== wf.steps.length) {
-    const grew = wf.steps.length > prevStepsLen.current && prevStepsLen.current >= 0;
-    prevStepsLen.current = wf.steps.length;
-    if (grew || Object.keys(posRef.current).length === 0) {
-      const fresh = computeLayout(wf);
-      // Keep user-dragged positions, only add new positions
-      posRef.current = { ...fresh, ...posRef.current };
-      setLayoutVer((v) => v + 1);
+  // Sync nodes from wf data
+  const posRef = useRef<PosMap>({});
+  const [layoutVer, setLayoutVer] = useState(0);
+  const prevStepsLen = useRef(-1);
+
+  // When wf changes, rebuild nodes keeping dragged positions
+  useMemo(() => {
+    // Preserve dragged positions from current controlled nodes
+    const currentPos: PosMap = {};
+    for (const n of controlledNodes) {
+      currentPos[n.id] = n.position;
     }
-    setDeletedEdges(new Set());
-  }
+    // Merge with fresh layout for any new nodes
+    const fresh = computeLayout(wf);
+    const merged: PosMap = {};
+    for (const k of Object.keys(fresh)) {
+      merged[k] = currentPos[k] || fresh[k];
+    }
+    posRef.current = merged;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wf]);
 
   const addBranch = useCallback((conditionStepId: string, branch: "then" | "else") => {
     const cur = wfRef.current;
@@ -337,11 +347,31 @@ function Canvas({
     }
   }, [onSave]);
 
-  const nodes = useMemo(
+  if (prevStepsLen.current !== wf.steps.length) {
+    prevStepsLen.current = wf.steps.length;
+    setDeletedEdges(new Set());
+  }
+
+  const desiredNodes = useMemo(
     () => buildNodes(wf, selectedId, posRef.current, addBranch, (t) => insertStep(t, selectedId)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [wf, selectedId, addBranch, insertStep, layoutVer],
   );
+
+  // Rebuild controlled nodes from desired, but keep positions from state
+  useMemo(() => {
+    setControlledNodes((prev) => {
+      const posMap = new Map(prev.map((n) => [n.id, n.position]));
+      return desiredNodes.map((n) => {
+        const savedPos = posMap.get(n.id);
+        if (savedPos) {
+          return { ...n, position: savedPos };
+        }
+        return n;
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desiredNodes]);
 
   const edges = useMemo(
     () => buildEdges(wf, deletedEdges),
@@ -356,11 +386,7 @@ function Canvas({
   const onPaneClick = useCallback(() => setSelectedId(null), []);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    for (const c of changes) {
-      if (c.type === "position" && c.position && c.id) {
-        posRef.current[c.id] = c.position;
-      }
-    }
+    setControlledNodes((prev) => applyNodeChanges(changes, prev));
   }, []);
 
   const onConnect = useCallback(
@@ -418,7 +444,7 @@ function Canvas({
     [edges, wf, onSave],
   );
 
-  const selectedNode = selectedId ? nodes.find((n) => n.id === selectedId) : null;
+  const selectedNode = selectedId ? controlledNodes.find((n) => n.id === selectedId) : null;
 
   const handleDeleteStep = useCallback(() => {
     if (!selectedId?.startsWith("step-")) return;
@@ -466,9 +492,15 @@ function Canvas({
   );
 
   const handleRearrange = useCallback(() => {
-    posRef.current = computeLayout(wf);
+    const fresh = computeLayout(wf);
+    posRef.current = fresh;
     setDeletedEdges(new Set());
-    setLayoutVer((v) => v + 1);
+    setControlledNodes((prev) =>
+      prev.map((n) => {
+        const p = fresh[n.id];
+        return p ? { ...n, position: p } : n;
+      }),
+    );
   }, [wf]);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -480,9 +512,15 @@ function Canvas({
     (e: React.DragEvent) => {
       const raw = e.dataTransfer.getData("application/wf-step");
       if (!raw) return;
-      insertStep(raw as StepType, selectedId);
+
+      const position = rfInstance.screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY,
+      });
+
+      insertStep(raw as StepType, selectedId, position);
     },
-    [insertStep, selectedId],
+    [insertStep, selectedId, rfInstance],
   );
 
   return (
@@ -526,7 +564,7 @@ function Canvas({
 
       <div className="wf-flow-canvas">
         <ReactFlow
-          nodes={nodes}
+          nodes={controlledNodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
           onNodeClick={onNodeClick}
@@ -592,7 +630,7 @@ export default function WorkflowFlow({
   onSave: (updated: WorkflowDef) => void;
 }) {
   const insertStep = useCallback(
-    (type: StepType, afterStepId: string | null) => {
+    (type: StepType, afterStepId: string | null, _position?: { x: number; y: number }) => {
       const id = uid();
       const name = `${type.replace(/_/g, " ")} ${wf.steps.length + 1}`;
       const step: StepConfig = { id, name, slug: slugify(name), type };
