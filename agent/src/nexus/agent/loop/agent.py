@@ -546,6 +546,19 @@ class Agent:
         _LOOM_RETRY_BACKOFFS = (2.0, 5.0, 12.0)
         _loom_retry_attempts = 0
         _delta_emitted_this_iter = False
+        _post_retry_compaction_done = False
+        _MID_STREAM_DISCONNECT_SIGNALS = (
+            "peer closed connection",
+            "incomplete chunked read",
+            "server disconnected",
+            "connection reset by peer",
+            "connection was closed",
+            "unexpected eof",
+        )
+
+        def _is_mid_stream_disconnect(ev: dict) -> bool:
+            msg = (ev.get("message") or "").lower()
+            return any(s in msg for s in _MID_STREAM_DISCONNECT_SIGNALS)
 
         def _materialise_assistant_if_needed() -> None:
             nonlocal materialised_for_iter
@@ -999,6 +1012,112 @@ class Agent:
                     ).__aiter__()
                     loom_task = asyncio.ensure_future(loom_iter.__anext__())
                     continue
+
+                # Mid-stream disconnect: the upstream provider dropped the
+                # connection after we had already started streaming content
+                # deltas. Unlike the clean-retry path above, we cannot simply
+                # restart — the UI has already rendered partial text. Instead:
+                # materialise the partial assistant message, append a short
+                # continuation prompt, and restart loom. New deltas append to
+                # ``full_text`` so the final ``reply_text`` is the complete
+                # response.
+                if (
+                    retryable
+                    and _delta_emitted_this_iter
+                    and _is_mid_stream_disconnect(ev)
+                    and _loom_retry_attempts < _MAX_LOOM_RETRIES
+                ):
+                    try:
+                        await loom_task
+                    except StopAsyncIteration:
+                        pass
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _materialise_assistant_if_needed()
+                    working_messages.append(lt.ChatMessage(
+                        role=lt.Role.USER,
+                        content="[Connection was interrupted. Continue your response from where you left off.]",
+                    ))
+                    delay = _LOOM_RETRY_BACKOFFS[
+                        min(_loom_retry_attempts, len(_LOOM_RETRY_BACKOFFS) - 1)
+                    ]
+                    log.warning(
+                        "loom mid-stream retry: attempt=%d/%d delay=%.1fs reason=%r "
+                        "partial_len=%d",
+                        _loom_retry_attempts + 1, _MAX_LOOM_RETRIES,
+                        delay, ev.get("reason"),
+                        len(full_text),
+                    )
+                    yield {
+                        "type": "reconnecting",
+                        "attempt": _loom_retry_attempts + 1,
+                        "max_attempts": _MAX_LOOM_RETRIES,
+                        "delay_seconds": delay,
+                        "reason": "mid_stream_disconnect",
+                    }
+                    await asyncio.sleep(delay)
+                    _loom_retry_attempts += 1
+                    pending_content_chunks.clear()
+                    pending_tcs.clear()
+                    _tc_id_by_index.clear()
+                    materialised_for_iter = False
+                    _delta_emitted_this_iter = False
+                    loom_iter = self._loom.run_turn_stream(
+                        working_messages, model_id=model_id
+                    ).__aiter__()
+                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                    continue
+
+                # Post-retry-exhaustion compaction: all retries failed on a
+                # server error (e.g. 524 Cloudflare timeout). The context is
+                # likely too large for the provider to process within its
+                # connection timeout. Compact and retry once more with a
+                # smaller payload.
+                if (
+                    retryable
+                    and not _delta_emitted_this_iter
+                    and _loom_retry_attempts >= _MAX_LOOM_RETRIES
+                    and not _post_retry_compaction_done
+                    and ev.get("reason") in ("server_error", "timeout")
+                ):
+                    from .compact import auto_compact
+
+                    compacted_wm, compact_report = auto_compact(working_messages)
+                    if compact_report.compacted > 0:
+                        try:
+                            await loom_task
+                        except StopAsyncIteration:
+                            pass
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _post_retry_compaction_done = True
+                        log.warning(
+                            "Post-retry compaction: compacted=%d saved=%d bytes, "
+                            "retrying with %d→%d messages",
+                            compact_report.compacted, compact_report.saved_bytes,
+                            len(working_messages), len(compacted_wm),
+                        )
+                        yield {
+                            "type": "reconnecting",
+                            "attempt": _MAX_LOOM_RETRIES + 1,
+                            "max_attempts": _MAX_LOOM_RETRIES + 1,
+                            "delay_seconds": 2.0,
+                            "reason": "post_retry_compaction",
+                        }
+                        await asyncio.sleep(2.0)
+                        _loom_retry_attempts = 0
+                        working_messages = compacted_wm
+                        pending_content_chunks.clear()
+                        pending_tcs.clear()
+                        _tc_id_by_index.clear()
+                        materialised_for_iter = False
+                        _delta_emitted_this_iter = False
+                        loom_iter = self._loom.run_turn_stream(
+                            working_messages, model_id=model_id
+                        ).__aiter__()
+                        loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                        continue
+
                 # Either non-retryable, content already streamed, or budget
                 # exhausted — surface the error as before. _saw_loom_error
                 # suppresses the done branch's empty-reply synthesis so the

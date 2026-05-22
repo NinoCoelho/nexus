@@ -197,9 +197,11 @@ async def test_retryable_error_silently_restarts_loom(
 async def test_retryable_error_after_visible_content_is_not_silently_retried(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """If visible content has streamed for the current iteration, restart
-    would duplicate tokens in the UI — fall back to surfacing the error."""
-    monkeypatch.setattr(asyncio, "sleep", lambda *_a, **_k: asyncio.sleep(0))
+    """If visible content has streamed for the current iteration and the
+    error is NOT a disconnect (e.g. rate limit), restart would duplicate
+    tokens in the UI — fall back to surfacing the error."""
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda *_a, **_k: _real_sleep(0))
 
     agent = Agent(
         provider=_NoopProvider(),
@@ -211,16 +213,13 @@ async def test_retryable_error_after_visible_content_is_not_silently_retried(
     async def _fake_loom_stream(messages, *, model_id=None):  # type: ignore[no-untyped-def]
         nonlocal invocations
         invocations += 1
-        # Stream some visible content, then fail mid-response. This is
-        # NOT eligible for silent retry — the UI has already rendered
-        # "partial " and a fresh stream would render duplicate tokens.
         yield {"type": "content_delta", "delta": "partial "}
         yield {
             "type": "error",
-            "message": "peer closed connection",
-            "reason": "timeout",
+            "message": "rate limit exceeded",
+            "reason": "rate_limit",
             "retryable": True,
-            "status_code": None,
+            "status_code": 429,
         }
         yield {
             "type": "done",
@@ -245,14 +244,213 @@ async def test_retryable_error_after_visible_content_is_not_silently_retried(
     ):
         events.append(ev)
 
-    # Only one loom run — content already streamed, so we did NOT restart.
     assert invocations == 1, (
-        "must not silently retry once visible content has been streamed"
+        "must not silently retry once visible content has been streamed for non-disconnect errors"
     )
 
-    # The error surfaced to the caller (UI will render the retry banner).
     error_events = [e for e in events if e.get("type") == "error"]
     assert error_events, "error must be forwarded when retry is unsafe"
     assert error_events[0]["retryable"] is True
+
+    await agent.aclose()
+
+
+async def test_mid_stream_disconnect_auto_retries_with_continuation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When the upstream drops the connection mid-stream (peer closed,
+    incomplete chunked read) after content deltas have already been
+    emitted, the auto-retry layer materialises the partial assistant
+    message, appends a continuation prompt, and restarts loom — so the
+    user sees a seamless continuation instead of a Retry banner."""
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda *_a, **_k: _real_sleep(0))
+
+    agent = Agent(
+        provider=_NoopProvider(),
+        registry=SkillRegistry(tmp_path / "skills"),
+    )
+
+    invocations: list[list[Any]] = []
+
+    async def _fake_loom_stream(messages, *, model_id=None):  # type: ignore[no-untyped-def]
+        invocations.append([m.model_dump() for m in messages])
+        call_index = len(invocations)
+
+        if call_index == 1:
+            yield {"type": "content_delta", "delta": "partial "}
+            yield {
+                "type": "error",
+                "message": "peer closed connection without sending complete message body (incomplete chunked read)",
+                "reason": "timeout",
+                "retryable": True,
+                "status_code": None,
+            }
+            yield {
+                "type": "done",
+                "stop_reason": None,
+                "context": {"partial": True},
+                "model": "test/model",
+                "iterations": 1,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "tool_calls": 0,
+            }
+            return
+
+        yield {"type": "content_delta", "delta": "continuation"}
+        yield {
+            "type": "done",
+            "stop_reason": "stop",
+            "context": {"messages": [m for m in invocations[-1]]},
+            "model": "test/model",
+            "iterations": 1,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "tool_calls": 0,
+        }
+
+    agent._loom.run_turn_stream = _fake_loom_stream  # type: ignore[attr-defined]
+
+    events: list[dict[str, Any]] = []
+    async for ev in agent.run_turn_stream(
+        "build the investor deck",
+        history=None,
+        context=None,
+        session_id="s_disconnect",
+        model_id="test/model",
+    ):
+        events.append(ev)
+
+    assert len(invocations) == 2, (
+        f"expected 2 loom invocations (initial + mid-stream retry), got {len(invocations)}"
+    )
+
+    first_roles = [m["role"] for m in invocations[0]]
+    second_roles = [m["role"] for m in invocations[1]]
+    assert first_roles == ["user"], first_roles
+    assert second_roles == ["user", "assistant", "user"], second_roles
+    assert "partial " in invocations[1][1].get("content", "")
+    assert "Continue" in invocations[1][2].get("content", "")
+
+    error_events = [e for e in events if e.get("type") == "error"]
+    assert error_events == [], (
+        f"mid-stream disconnect error must not surface to UI: {error_events}"
+    )
+
+    reconnecting = [e for e in events if e.get("type") == "reconnecting"]
+    assert len(reconnecting) == 1
+    assert reconnecting[0]["reason"] == "mid_stream_disconnect"
+
+    deltas = [e for e in events if e.get("type") == "delta"]
+    assert [d["text"] for d in deltas] == ["partial ", "continuation"]
+
+    done = [e for e in events if e.get("type") == "done"]
+    assert done, "expected a final done after the mid-stream retry"
+    assert done[0]["reply"] == "partial continuation"
+
+    await agent.aclose()
+
+
+async def test_post_retry_compaction_on_repeated_server_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When all 3 retries exhaust on server_error (e.g. HTTP 524 Cloudflare
+    timeout) before any content is streamed, the agent auto-compacts the
+    context and retries once more with a smaller payload."""
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda *_a, **_k: _real_sleep(0))
+
+    from nexus.agent.loop.compact import CompactionReport
+
+    _fake_report = CompactionReport(
+        inspected=2, compacted=2, bytes_before=50000, bytes_after=1000,
+        skipped_already_compacted=0,
+    )
+
+    def _fake_auto_compact(messages):
+        return list(messages), _fake_report
+
+    monkeypatch.setattr(
+        "nexus.agent.loop.compact.auto_compact", _fake_auto_compact,
+    )
+
+    agent = Agent(
+        provider=_NoopProvider(),
+        registry=SkillRegistry(tmp_path / "skills"),
+    )
+
+    invocations: list[list[Any]] = []
+    _call = 0
+
+    async def _fake_loom_stream(messages, *, model_id=None):  # type: ignore[no-untyped-def]
+        nonlocal _call
+        _call += 1
+        invocations.append([m.model_dump() for m in messages])
+
+        if _call <= 4:
+            yield {
+                "type": "error",
+                "message": "HTTP 524: A timeout occurred",
+                "reason": "server_error",
+                "retryable": True,
+                "status_code": 524,
+            }
+            yield {
+                "type": "done",
+                "stop_reason": None,
+                "context": {},
+                "model": "test/model",
+                "iterations": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "tool_calls": 0,
+            }
+            return
+
+        yield {"type": "content_delta", "delta": "compacted response"}
+        yield {
+            "type": "done",
+            "stop_reason": "stop",
+            "context": {"messages": [m for m in invocations[-1]]},
+            "model": "test/model",
+            "iterations": 1,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "tool_calls": 0,
+        }
+
+    agent._loom.run_turn_stream = _fake_loom_stream  # type: ignore[attr-defined]
+
+    events: list[dict[str, Any]] = []
+    async for ev in agent.run_turn_stream(
+        "build the investor deck",
+        history=None,
+        context=None,
+        session_id="s_524",
+        model_id="test/model",
+    ):
+        events.append(ev)
+
+    assert _call == 5, (
+        f"expected 5 loom calls (initial + 3 retries + compact-retry), got {_call}"
+    )
+
+    error_events = [e for e in events if e.get("type") == "error"]
+    assert error_events == [], (
+        f"post-retry compaction should prevent error surfacing: {error_events}"
+    )
+
+    reconnecting = [e for e in events if e.get("type") == "reconnecting"]
+    reconnect_reasons = [r["reason"] for r in reconnecting]
+    assert "post_retry_compaction" in reconnect_reasons, (
+        f"expected post_retry_compaction reconnecting event, got {reconnect_reasons}"
+    )
+
+    deltas = [e for e in events if e.get("type") == "delta"]
+    assert deltas and deltas[0]["text"] == "compacted response"
+
+    done = [e for e in events if e.get("type") == "done"]
+    assert done
 
     await agent.aclose()
