@@ -227,19 +227,67 @@ class WorkflowEngine:
             await asyncio.sleep(step.duration_seconds)
             return {"waited_seconds": step.duration_seconds}
         elif step.type == StepType.transform:
-            template = resolve_templates(step.template or "", ctx)
-            if step.output_format == "json":
-                try:
-                    return json.loads(template)
-                except json.JSONDecodeError:
-                    return {"raw": template}
-            return {"result": template}
+            if step.output_format == "llm":
+                return await self._execute_llm_transform(step, ctx)
+            elif step.output_format == "script":
+                return await self._execute_script_transform(step, ctx)
+            else:
+                template = resolve_templates(step.template or "", ctx)
+                if step.output_format == "json":
+                    try:
+                        return json.loads(template)
+                    except json.JSONDecodeError:
+                        return {"raw": template}
+                return {"result": template}
         elif step.type == StepType.http_request:
             return await self._execute_http_request(step, ctx)
         elif step.type == StepType.mcp_call:
             return await self._execute_mcp_call(step, ctx)
         else:
             raise ValueError(f"unsupported step type: {step.type}")
+
+    async def _execute_llm_transform(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
+        from ..agent.loop.agent import Agent
+        from ..server.session_store.store import SessionStore
+
+        system_prompt = step.tool or "Transform the following input as instructed. Output only the result."
+        user_input = resolve_templates(step.template or "", ctx)
+        if not user_input:
+            raise ValueError(f"step '{step.name}' missing input for LLM transform")
+
+        agent: Agent | None = getattr(self, "_agent", None)
+        store: SessionStore | None = getattr(self, "_sessions", None)
+        if agent is None or store is None:
+            return {"result": user_input, "_simulated": True}
+
+        session = store.create()
+        prompt = f"{system_prompt}\n\n{user_input}"
+        final_text = ""
+        async for event in agent.run_turn_stream(
+            prompt,
+            history=[],
+            session_id=session.id,
+            model_id=step.model or None,
+        ):
+            etype = event.get("type")
+            if etype == "delta":
+                final_text += event.get("text", "")
+            elif etype == "error":
+                raise RuntimeError(event.get("message", "LLM transform error"))
+        return {"result": final_text.strip()}
+
+    async def _execute_script_transform(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
+        template = resolve_templates(step.template or "", ctx)
+        if not template:
+            raise ValueError(f"step '{step.name}' missing script")
+
+        data = ctx.get("steps", {})
+        local_vars: dict[str, Any] = {"data": data, "json": json, "result": None}
+        try:
+            exec(template, {"__builtins__": {}}, local_vars)
+            return {"result": local_vars.get("result")}
+        except Exception as exc:
+            raise ValueError(f"script error in step '{step.name}': {exc}") from exc
 
     async def _execute_tool_call(self, step: StepConfig, resolved_input: dict[str, Any] | None) -> Any:
         from ..agent._loom_bridge.registry import build_tool_registry
@@ -296,11 +344,39 @@ class WorkflowEngine:
 
     async def _execute_http_request(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
         import aiohttp
+        from ..secrets import resolve as resolve_secret
 
         url = resolve_templates(step.url or "", ctx)
         method = step.method.upper()
         headers = resolve_templates(step.headers or {}, ctx)
         body = resolve_templates(step.body, ctx) if step.body else None
+
+        if step.custom_headers:
+            resolved_custom = resolve_templates(step.custom_headers, ctx)
+            headers.update(resolved_custom)
+
+        if step.auth_type == "basic":
+            user = resolve_templates(step.auth_username or "", ctx)
+            pwd_name = step.auth_password_credential
+            pwd = resolve_secret(pwd_name) if pwd_name else ""
+            import base64
+            token = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+            headers["Authorization"] = f"Basic {token}"
+
+        elif step.auth_type == "apikey":
+            key_val = resolve_secret(step.auth_credential) if step.auth_credential else ""
+            prefix = step.auth_prefix or "Bearer"
+            if step.auth_location == "query":
+                sep = "&" if "?" in url else "?"
+                url = f"{url}{sep}{step.auth_query_name or 'api_key'}={key_val}"
+            elif step.auth_location == "header" and step.auth_header_name:
+                headers[step.auth_header_name] = f"{prefix} {key_val}" if prefix else key_val
+            else:
+                headers["Authorization"] = f"{prefix} {key_val}"
+
+        elif step.auth_type == "oauth":
+            token_val = resolve_secret(step.auth_credential) if step.auth_credential else ""
+            headers["Authorization"] = f"Bearer {token_val}"
 
         async with aiohttp.ClientSession() as session:
             kwargs: dict[str, Any] = {"headers": headers}
@@ -318,7 +394,28 @@ class WorkflowEngine:
                 }
 
     async def _execute_mcp_call(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        return {"_not_implemented": True, "mcp_server": step.mcp_server, "mcp_tool": step.mcp_tool}
+        server_name = step.mcp_server
+        tool_name = step.mcp_tool
+        if not server_name or not tool_name:
+            raise ValueError(f"step '{step.name}' missing mcp_server or mcp_tool")
+
+        mgr = getattr(self, "_mcp_manager", None)
+        if mgr is None:
+            try:
+                from ..server.app import app
+                mgr = getattr(app.state, "mcp_manager", None)
+            except Exception:
+                pass
+        if mgr is None:
+            raise RuntimeError("MCP manager not available")
+
+        client = mgr._clients.get(server_name)
+        if client is None:
+            raise ValueError(f"MCP server '{server_name}' not connected")
+
+        resolved_input = resolve_templates(step.input or {}, ctx)
+        result = await client.call_tool(tool_name, resolved_input)
+        return result
 
     def _load_workflow(self, path: str) -> WorkflowDef:
         from .. import vault as _vault

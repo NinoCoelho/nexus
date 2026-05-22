@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type {
   WorkflowDef,
   WorkflowSummary,
@@ -61,20 +61,30 @@ export default function WorkflowView({
     else setWf(null);
   }, [selectedPath, loadWorkflow]);
 
-  const save = useCallback(async (updated: WorkflowDef) => {
+  const saveTimerRef = useRef(0);
+  const latestWfRef = useRef<WorkflowDef | null>(null);
+
+  const save = useCallback((updated: WorkflowDef) => {
     if (!selectedPath) return;
-    setSaving(true);
-    try {
-      await api.updateWorkflow(selectedPath, {
-        title: updated.title,
-        enabled: updated.enabled,
-        triggers: updated.triggers.map((t) => ({ ...t, type: t.type })),
-        variables: updated.variables,
-        steps: updated.steps.map((s) => ({ ...s, type: s.type })),
-      });
-      setWf(updated);
-    } catch {}
-    setSaving(false);
+    setWf(updated);
+    latestWfRef.current = updated;
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(async () => {
+      setSaving(true);
+      try {
+        const d = latestWfRef.current;
+        if (d) {
+          await api.updateWorkflow(selectedPath, {
+            title: d.title,
+            enabled: d.enabled,
+            triggers: d.triggers.map((t) => ({ ...t, type: t.type })),
+            variables: d.variables,
+            steps: d.steps.map((s) => ({ ...s, type: s.type })),
+          });
+        }
+      } catch {}
+      setSaving(false);
+    }, 500);
   }, [selectedPath]);
 
   const handleCreate = async () => {

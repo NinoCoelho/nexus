@@ -29,6 +29,13 @@ class StepType(str, Enum):
     delay = "delay"
 
 
+class AuthType(str, Enum):
+    none = "none"
+    basic = "basic"
+    apikey = "apikey"
+    oauth = "oauth"
+
+
 class RunStatus(str, Enum):
     pending = "pending"
     running = "running"
@@ -90,6 +97,7 @@ class StepConfig:
     id: str
     name: str
     type: StepType
+    slug: str | None = None
     tool: str | None = None
     input: dict[str, Any] | None = None
     prompt: str | None = None
@@ -102,6 +110,15 @@ class StepConfig:
     method: str = "GET"
     headers: dict[str, str] | None = None
     body: Any = None
+    auth_type: str = "none"
+    auth_credential: str | None = None
+    auth_username: str | None = None
+    auth_password_credential: str | None = None
+    auth_header_name: str | None = None
+    auth_prefix: str = "Bearer"
+    auth_query_name: str | None = None
+    auth_location: str = "header"
+    custom_headers: dict[str, str] | None = None
     expression: str | None = None
     then_step: str | None = None
     else_step: str | None = None
@@ -115,6 +132,8 @@ class StepConfig:
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "name": self.name, "type": self.type.value}
+        if self.slug is not None:
+            out["slug"] = self.slug
         if self.tool is not None:
             out["tool"] = self.tool
         if self.input is not None:
@@ -139,6 +158,24 @@ class StepConfig:
             out["headers"] = self.headers
         if self.body is not None:
             out["body"] = self.body
+        if self.auth_type != "none":
+            out["auth_type"] = self.auth_type
+        if self.auth_credential is not None:
+            out["auth_credential"] = self.auth_credential
+        if self.auth_username is not None:
+            out["auth_username"] = self.auth_username
+        if self.auth_password_credential is not None:
+            out["auth_password_credential"] = self.auth_password_credential
+        if self.auth_header_name is not None:
+            out["auth_header_name"] = self.auth_header_name
+        if self.auth_prefix != "Bearer":
+            out["auth_prefix"] = self.auth_prefix
+        if self.auth_query_name is not None:
+            out["auth_query_name"] = self.auth_query_name
+        if self.auth_location != "header":
+            out["auth_location"] = self.auth_location
+        if self.custom_headers is not None:
+            out["custom_headers"] = self.custom_headers
         if self.expression is not None:
             out["expression"] = self.expression
         if self.then_step is not None:

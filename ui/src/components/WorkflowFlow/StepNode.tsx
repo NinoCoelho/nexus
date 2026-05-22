@@ -8,7 +8,6 @@ const STEP_ICONS: Record<string, string> = {
   agent_session: "🤖",
   mcp_call: "🔌",
   http_request: "🌐",
-  condition: "🔀",
   transform: "🔄",
   delay: "⏱️",
 };
@@ -16,9 +15,9 @@ const STEP_ICONS: Record<string, string> = {
 export interface StepNodeData extends Record<string, unknown> {
   stepId: string;
   stepName: string;
+  slug: string;
   stepType: StepType;
   summary: string;
-  condition?: string;
   selected?: boolean;
 }
 
@@ -34,10 +33,8 @@ function StepNodeComp({ data }: NodeProps) {
       </div>
       <div className="wf-node-body">
         <span className="name">{d.stepName}</span>
+        {d.slug && <span className="slug">{d.slug}</span>}
         {d.summary && <span className="summary">{d.summary}</span>}
-        {d.condition && (
-          <span className="condition-tag">if: {d.condition}</span>
-        )}
       </div>
       <Handle type="source" position={Position.Bottom} className="wf-handle" />
     </div>

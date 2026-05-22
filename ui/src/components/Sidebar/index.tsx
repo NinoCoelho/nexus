@@ -16,7 +16,7 @@ import { useVaultEvents } from "../../hooks/useVaultEvents";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
 import WorkflowListPanel from "../WorkflowListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream, IconUpdate } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconWorkflow, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -80,7 +80,7 @@ export default function Sidebar({
       { id: "vault" as View,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
       { id: "kanban" as View,   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
       { id: "calendar" as View, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
-      { id: "workflows" as View, label: "Workflows", Icon: IconGraph },
+      { id: "workflows" as View, label: "Workflows", Icon: IconWorkflow },
     ],
     analytics: [
       { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },

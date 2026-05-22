@@ -116,3 +116,23 @@ export function IconDream() {
     </svg>
   );
 }
+
+export function IconWorkflow() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="2 4 8 4 12 10 18 10" />
+      <polyline points="14 6 18 10 14 14" />
+    </svg>
+  );
+}
+
+export function IconUpdate() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 10a7 7 0 0 1 13.5-2.5" />
+      <path d="M17 10a7 7 0 0 1-13.5 2.5" />
+      <polyline points="17 4 17 7.5 13.5 7.5" />
+      <polyline points="3 16 3 12.5 6.5 12.5" />
+    </svg>
+  );
+}

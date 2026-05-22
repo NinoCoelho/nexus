@@ -153,7 +153,7 @@ export default function App() {
       if (window.location.hash === "#/database") {
         window.history.replaceState(null, "", "#/data");
       }
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat|dream)$/);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat|dream|workflows)$/);
       if (m) setView(m[1] as typeof view);
     };
     onHash();

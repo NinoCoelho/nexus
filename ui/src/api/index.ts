@@ -28,3 +28,4 @@ export * from "./nexusAccount";
 export * from "./heartbeat";
 export * from "./cookies";
 export * from "./dream";
+export * from "./update";

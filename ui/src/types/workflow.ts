@@ -28,6 +28,7 @@ export interface StepConfig {
   id: string;
   name: string;
   type: StepType;
+  slug?: string;
   tool?: string;
   input?: Record<string, unknown>;
   prompt?: string;
@@ -42,6 +43,15 @@ export interface StepConfig {
   method?: string;
   headers?: Record<string, string>;
   body?: unknown;
+  auth_type?: string;
+  auth_credential?: string;
+  auth_username?: string;
+  auth_password_credential?: string;
+  auth_header_name?: string;
+  auth_prefix?: string;
+  auth_query_name?: string;
+  auth_location?: string;
+  custom_headers?: Record<string, string>;
   expression?: string;
   then_step?: string;
   else_step?: string;

@@ -214,18 +214,31 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigat
 
   // Calendars are owned by the Calendar view (it has the dropdown of all
   // calendars in the vault). Hand off the path and bail out of inline render.
+  // Guard with handed-off state to avoid snapping back when mounted in display:none.
+  const [calendarHandedOff, setCalendarHandedOff] = useState(false);
   useEffect(() => {
-    if (isCalendar && selectedPath && onOpenCalendar) {
+    if (isCalendar && selectedPath && onOpenCalendar && !calendarHandedOff) {
+      setCalendarHandedOff(true);
       onOpenCalendar(selectedPath);
     }
-  }, [isCalendar, selectedPath, onOpenCalendar]);
+    if (!isCalendar && calendarHandedOff) {
+      setCalendarHandedOff(false);
+    }
+  }, [isCalendar, selectedPath, onOpenCalendar, calendarHandedOff]);
 
-  // Workflows are owned by the Workflows view. Hand off the path.
+  // Workflows are owned by the Workflows view. Hand off the path — but only
+  // on the first detection to avoid snapping the user back if they navigate
+  // away from workflows while the vault panel stays mounted (display:none).
+  const [handedOff, setHandedOff] = useState(false);
   useEffect(() => {
-    if (isWorkflow && selectedPath && onOpenWorkflow) {
+    if (isWorkflow && selectedPath && onOpenWorkflow && !handedOff) {
+      setHandedOff(true);
       onOpenWorkflow(selectedPath);
     }
-  }, [isWorkflow, selectedPath, onOpenWorkflow]);
+    if (!isWorkflow && handedOff) {
+      setHandedOff(false);
+    }
+  }, [isWorkflow, selectedPath, onOpenWorkflow, handedOff]);
 
   const breadcrumb = selectedPath
     ? selectedPath.split("/").map((part, i, arr) => (
