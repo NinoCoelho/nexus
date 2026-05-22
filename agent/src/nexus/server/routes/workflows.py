@@ -201,20 +201,69 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
     _vault.write_file(path, md)
 
     store = _get_store(request)
+
     for t in wf.triggers:
         if t.type == TriggerType.webhook and not t.token:
             t.token = secrets.token_hex(16)
-            now = datetime.datetime.utcnow().isoformat()
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
             store.register_webhook_token(t.token, path, t.id, now)
             md = parser.serialize(wf, original_content=raw)
             _vault.write_file(path, md)
 
+    _register_triggers(path, wf, request)
+
     return {"ok": True}
+
+
+def _register_triggers(path: str, wf: WorkflowDef, request: Request) -> None:
+    try:
+        fsw = getattr(request.app.state, "workflow_fsw_driver", None)
+        if fsw:
+            import asyncio
+            asyncio.create_task(fsw.start(path, wf))
+    except Exception:
+        pass
+    try:
+        evt = getattr(request.app.state, "workflow_event_listener", None)
+        if evt:
+            for t in wf.triggers:
+                if t.type == TriggerType.event and t.event:
+                    evt.register(path, t.id, t.event, t.filter)
+    except Exception:
+        pass
+
+
+def _unregister_triggers(path: str, wf: WorkflowDef | None, request: Request) -> None:
+    try:
+        fsw = getattr(request.app.state, "workflow_fsw_driver", None)
+        if fsw and wf:
+            import asyncio
+            for t in wf.triggers:
+                if t.type == TriggerType.fs_watch:
+                    asyncio.create_task(fsw.stop(path, t.id))
+    except Exception:
+        pass
+    try:
+        evt = getattr(request.app.state, "workflow_event_listener", None)
+        if evt and wf:
+            for t in wf.triggers:
+                if t.type == TriggerType.event:
+                    evt.unregister(path, t.id)
+    except Exception:
+        pass
 
 
 @router.delete("/workflows/{path:path}")
 async def delete_workflow(path: str, request: Request) -> dict:
     from ... import vault as _vault
+
+    wf = None
+    try:
+        content = _vault.read_file(path)
+        raw = content.get("content", "") if isinstance(content, dict) else str(content)
+        wf = parser.parse(raw)
+    except Exception:
+        pass
 
     try:
         _vault.delete(path)
@@ -223,6 +272,7 @@ async def delete_workflow(path: str, request: Request) -> dict:
 
     store = _get_store(request)
     store.remove_webhook_tokens(path)
+    _unregister_triggers(path, wf, request)
     return {"ok": True}
 
 

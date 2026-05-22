@@ -777,6 +777,30 @@ def create_app(
             from .routes.workflows import init as _wf_init
             _wf_init(wf_store, wf_engine)
 
+            from ..workflows.triggers.webhook import WebhookTriggerDriver
+            from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
+            from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
+
+            webhook_driver = WebhookTriggerDriver(wf_store)
+            event_listener = EventTriggerListener(wf_store)
+            fsw_driver = FsWatchTriggerDriver(wf_store)
+
+            _set_evt_ref(wf_engine)
+            _set_fsw_ref(wf_engine)
+
+            from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
+            _set_engine_evt(wf_engine)
+
+            app.state.workflow_webhook_driver = webhook_driver
+            app.state.workflow_event_listener = event_listener
+            app.state.workflow_fsw_driver = fsw_driver
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(event_listener.start())
+            except Exception:
+                log.exception("workflow event listener start failed")
+
             log.info("workflow engine initialised")
         except Exception:
             log.exception("workflow engine bootstrap failed")
@@ -842,6 +866,18 @@ def create_app(
                     wf_store.close()
             except Exception:
                 log.exception("workflow store close failed")
+            try:
+                fsw = getattr(app.state, "workflow_fsw_driver", None)
+                if fsw is not None:
+                    fsw.stop_all()
+            except Exception:
+                log.exception("workflow fs_watch stop failed")
+            try:
+                evt = getattr(app.state, "workflow_event_listener", None)
+                if evt is not None:
+                    await evt.stop()
+            except Exception:
+                log.exception("workflow event listener stop failed")
             if mcp_manager is not None:
                 try:
                     from ..mcp_lifecycle import stop_mcp

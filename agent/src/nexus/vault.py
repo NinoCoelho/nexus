@@ -248,6 +248,15 @@ def _post_write_hooks(rel_path: str, content: str) -> None:
     try:
         from .server.event_bus import publish
         publish({"type": "vault.indexed", "path": rel_path})
+        fm, _ = _parse_frontmatter(content)
+        event_type = "vault.updated"
+        if fm is not None:
+            if "kanban-plugin" in fm:
+                event_type = "vault.kanban_updated"
+            elif "workflow-plugin" in fm:
+                event_type = "vault.workflow_updated"
+        if event_type != "vault.indexed":
+            publish({"type": event_type, "path": rel_path})
     except Exception:
         pass
     try:

@@ -58,6 +58,9 @@ dependencies = [
     "markdown>=3.5",
     # PDF generation for vault export (write_html renders styled HTML to PDF).
     "fpdf2>=2.7",
+    # Filesystem watcher for workflow fs_watch triggers. Cross-platform,
+    # efficient OS-native polling (inotify / FSEvents / ReadDirectoryChangesW).
+    "watchdog>=4.0",
 ]
 
 [tool.uv.sources]
