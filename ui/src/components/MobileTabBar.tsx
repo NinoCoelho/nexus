@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights } from "./Sidebar/icons";
 import type { DatabaseSummary } from "../api/datatable";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream" | "workflows";
 
 interface Props {
   view: View;

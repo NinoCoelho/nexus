@@ -55,6 +55,15 @@ function isCalendarContent(content: string): boolean {
   return /^\s*calendar-plugin\s*:/m.test(fm);
 }
 
+/** Check if a markdown file declares itself as a workflow via frontmatter. */
+function isWorkflowContent(content: string): boolean {
+  if (!content.startsWith("---")) return false;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return false;
+  const fm = content.slice(3, end);
+  return /^\s*workflow-plugin\s*:/m.test(fm);
+}
+
 interface VaultEditorPanelProps {
   selectedPath: string | null;
   /** Kept for sidebar plumbing symmetry, not consumed in the editor itself. */
@@ -70,9 +79,11 @@ interface VaultEditorPanelProps {
   onOpenInVault?: (path: string) => void;
   /** Open another data-table (drill-down from related-rows panel). */
   onOpenTable?: (path: string) => void;
+  /** Navigate to the Workflows view with the given vault path selected. */
+  onOpenWorkflow?: (path: string) => void;
 }
 
-export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigateToSession, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultEditorPanelProps) {
+export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigateToSession, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable, onOpenWorkflow }: VaultEditorPanelProps) {
   const { t } = useTranslation("vault");
   const [content, setContent] = useState("");
   const [fileSize, setFileSize] = useState<number | undefined>(undefined);
@@ -196,8 +207,9 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigat
   }, [editMode, save]);
 
   const isKanban = !!selectedPath && selectedPath.endsWith(".md") && isKanbanContent(content);
-  const isCalendar = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && isCalendarContent(content);
-  const isDataTable = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && !isCalendar && isDataTableContent(content);
+  const isWorkflow = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && isWorkflowContent(content);
+  const isCalendar = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && !isWorkflow && isCalendarContent(content);
+  const isDataTable = !!selectedPath && selectedPath.endsWith(".md") && !isKanban && !isWorkflow && !isCalendar && isDataTableContent(content);
   const isCsv = fileKind === "csv";
 
   // Calendars are owned by the Calendar view (it has the dropdown of all
@@ -207,6 +219,13 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigat
       onOpenCalendar(selectedPath);
     }
   }, [isCalendar, selectedPath, onOpenCalendar]);
+
+  // Workflows are owned by the Workflows view. Hand off the path.
+  useEffect(() => {
+    if (isWorkflow && selectedPath && onOpenWorkflow) {
+      onOpenWorkflow(selectedPath);
+    }
+  }, [isWorkflow, selectedPath, onOpenWorkflow]);
 
   const breadcrumb = selectedPath
     ? selectedPath.split("/").map((part, i, arr) => (

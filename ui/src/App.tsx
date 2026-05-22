@@ -20,6 +20,7 @@ import DatabaseSchemaView from "./components/DatabaseSchemaView";
 import DataDashboardView from "./components/DataDashboardView";
 import HeartbeatView from "./components/HeartbeatView";
 import DreamView from "./components/DreamView";
+import WorkflowView from "./components/WorkflowView";
 import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
@@ -59,6 +60,8 @@ import { useSessionUsage } from "./hooks/useSessionUsage";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
 import SharedSessionView from "./components/SharedSessionView";
+import UpdateModal from "./components/UpdateModal";
+import { type UpdateCheckResult } from "./api/update";
 
 export default function App() {
   const toast = useToast();
@@ -118,6 +121,8 @@ export default function App() {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
 
   // Wizard background-build tracker — owns SSE subscriptions for any skill
   // builds the user dismissed mid-flight, so they keep running on the
@@ -626,6 +631,10 @@ export default function App() {
           setDataDiagramFolder(null);
           setView("data");
         }}
+        onUpdateAvailable={(check) => {
+          setUpdateCheck(check);
+          setUpdateModalOpen(true);
+        }}
       />
 
       <div className="app-main">
@@ -773,6 +782,7 @@ export default function App() {
               onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
               onOpenCalendar={handleOpenCalendar}
               onOpenInVault={handleOpenInVault}
+              onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
             />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
@@ -785,6 +795,7 @@ export default function App() {
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onOpenCalendar={handleOpenCalendar}
                 onOpenInVault={handleOpenInVault}
+                onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
               />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
@@ -821,10 +832,10 @@ export default function App() {
                   onOpenTable={(p) => {
                     setDataSelectedPath(p);
                     setDataDiagramFolder(null);
-                    // Pin the parent folder so "Back to dashboard" still works.
                     const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
                     setDataSelectedDatabase(parent);
                   }}
+                  onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
                 />
               </div>
             ) : dataSelectedDatabase !== null ? (
@@ -877,6 +888,9 @@ export default function App() {
           <div className="view-pane" style={{ display: view === "dream" ? "flex" : "none" }}>
             {view === "dream" && <DreamView />}
           </div>
+          <div className="view-pane" style={{ display: view === "workflows" ? "flex" : "none" }}>
+            {view === "workflows" && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
+          </div>
         </main>
       </div>
 
@@ -928,6 +942,15 @@ export default function App() {
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+
+      {updateModalOpen && updateCheck && (
+        <UpdateModal
+          check={updateCheck}
+          onClose={() => setUpdateModalOpen(false)}
+          onSkipped={() => setUpdateModalOpen(false)}
+          onInstalled={() => setUpdateModalOpen(false)}
+        />
+      )}
 
       <AlarmNotification
         alarms={alarms}

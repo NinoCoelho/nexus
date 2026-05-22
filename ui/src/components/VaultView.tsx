@@ -24,9 +24,10 @@ interface VaultViewProps {
   /** Open another data-table by path — drives "Open table" buttons in
    *  RelatedRowsPanel and any future drill-down. */
   onOpenTable?: (path: string) => void;
+  onOpenWorkflow?: (path: string) => void;
 }
 
-export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat, onNavigateToSession, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable }: VaultViewProps) {
+export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat, onNavigateToSession, onViewEntityGraph, onOpenCalendar, onOpenInVault, onOpenTable, onOpenWorkflow }: VaultViewProps) {
   return (
     <div className="vault-view vault-view--editor-only">
       <VaultEditorPanel
@@ -38,6 +39,7 @@ export default function VaultView({ selectedPath, onDispatchToChat, onOpenInChat
         onOpenCalendar={onOpenCalendar}
         onOpenInVault={onOpenInVault}
         onOpenTable={onOpenTable}
+        onOpenWorkflow={onOpenWorkflow}
       />
     </div>
   );

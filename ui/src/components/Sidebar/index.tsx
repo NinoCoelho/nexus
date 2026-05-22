@@ -11,10 +11,12 @@ import {
 } from "../../api";
 import { listDatabases, type DatabaseSummary } from "../../api/datatable";
 import { useToast } from "../../toast/ToastProvider";
+import { checkUpdate as apiCheckUpdate, type UpdateCheckResult } from "../../api/update";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream } from "./icons";
+import WorkflowListPanel from "../WorkflowListPanel";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -24,7 +26,7 @@ import { BrandMark } from "../BrandMark";
 import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream" | "workflows";
 
 interface Props {
   view: View;
@@ -55,6 +57,7 @@ interface Props {
   /** Mobile drawer open state. When true, sidebar slides in from the left. */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  onUpdateAvailable?: (check: UpdateCheckResult) => void;
 }
 
 export default function Sidebar({
@@ -66,6 +69,7 @@ export default function Sidebar({
   databaseSelectedFolder, databaseListRevision,
   onDatabaseSelectFolder,
   mobileOpen = false, onMobileClose,
+  onUpdateAvailable,
 }: Props) {
   const { t } = useTranslation("sidebar");
   const VIEWS = {
@@ -76,6 +80,7 @@ export default function Sidebar({
       { id: "vault" as View,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
       { id: "kanban" as View,   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
       { id: "calendar" as View, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+      { id: "workflows" as View, label: "Workflows", Icon: IconGraph },
     ],
     analytics: [
       { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
@@ -96,6 +101,22 @@ export default function Sidebar({
   useEffect(() => {
     listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
   }, [databaseListRevision]);
+
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      apiCheckUpdate().then((r) => {
+        if (!cancelled && r.update_available) {
+          setUpdateAvailable(true);
+          setUpdateCheck(r);
+          onUpdateAvailable?.(r);
+        }
+      }).catch(() => {});
+    }, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
 
   useVaultEvents((ev) => {
     if (ev.type === "vault.indexed" || ev.type === "vault.removed") {
@@ -376,14 +397,37 @@ export default function Sidebar({
         </div>
       )}
 
+      {/* Workflow list — only in Workflows view */}
+      {view === "workflows" && !collapsed && (
+        <div className="sidebar-section sidebar-vault-section">
+          <WorkflowListPanel
+            selectedPath={vaultSelectedPath}
+            onOpen={(p) => { onVaultSelectPath(p); onViewChange("workflows"); }}
+          />
+        </div>
+      )}
+
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && (
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && !(view === "workflows" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}
 
       {/* Settings */}
       <div className="sidebar-bottom">
         <NexusUsageGauges collapsed={collapsed} onOpenSettings={onOpenSettings} />
+        {updateAvailable && updateCheck && (
+          <button
+            className="sidebar-nav-item sidebar-update-btn"
+            onClick={() => onUpdateAvailable?.(updateCheck)}
+            title={collapsed ? `Update available: v${updateCheck.latest}` : undefined}
+          >
+            <span className="sidebar-nav-icon sidebar-update-icon">
+              <IconUpdate />
+              <span className="sidebar-update-dot" />
+            </span>
+            {!collapsed && <span className="sidebar-nav-label">Update v{updateCheck.latest}</span>}
+          </button>
+        )}
         <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? t("sidebar:settings") : undefined}>
           <span className="sidebar-nav-icon"><IconGear /></span>
           {!collapsed && <span className="sidebar-nav-label">{t("sidebar:settings")}</span>}
