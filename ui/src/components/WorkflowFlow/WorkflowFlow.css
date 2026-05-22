@@ -1,0 +1,426 @@
+@import "@xyflow/react/dist/style.css";
+
+.wf-flow-wrap {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.wf-flow-canvas {
+  flex: 1;
+  position: relative;
+  background: var(--bg);
+  background-image: radial-gradient(circle, var(--border) 0.8px, transparent 0.8px);
+  background-size: 24px 24px;
+}
+
+.wf-flow-canvas .react-flow__node {
+  cursor: pointer;
+}
+
+.wf-flow-canvas .react-flow__edge-path {
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+}
+
+.wf-flow-canvas .react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5;
+  animation: dash 0.6s linear infinite;
+}
+
+@keyframes dash {
+  to { stroke-dashoffset: -10; }
+}
+
+.wf-flow-canvas .react-flow__controls {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.wf-flow-canvas .react-flow__controls button {
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  width: 28px;
+  height: 28px;
+}
+
+.wf-flow-canvas .react-flow__controls button:hover {
+  background: var(--bg-hover);
+}
+
+.wf-flow-canvas .react-flow__controls button svg {
+  fill: var(--text-muted);
+}
+
+.wf-flow-canvas .react-flow__minimap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ── Nodes ────────────────────────────────────── */
+
+.wf-node {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 0;
+  min-width: 180px;
+  max-width: 240px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  font-size: 13px;
+}
+
+.wf-node:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+}
+
+.wf-node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 2px 12px rgba(0,0,0,0.1);
+}
+
+.wf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wf-node-header .icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.wf-node-header .label {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.wf-node-header .type-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.wf-node-body {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-node-body .name {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.wf-node-body .summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.wf-node-body .condition-tag {
+  font-size: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* trigger node */
+.wf-node.trigger-node {
+  border-color: var(--accent);
+}
+
+.wf-node.trigger-node .wf-node-header {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* add node */
+.wf-node.add-node {
+  border: 1.5px dashed var(--border);
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  min-width: 160px;
+}
+
+.wf-node.add-node:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  box-shadow: none;
+}
+
+.wf-node.add-node .wf-node-body {
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  gap: 4px;
+}
+
+.wf-node.add-node .plus {
+  font-size: 18px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.wf-node.add-node .hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Handle styling */
+.wf-handle {
+  width: 8px;
+  height: 8px;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.wf-handle:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* ── Config Panel ─────────────────────────────── */
+
+.wf-config-panel {
+  width: 320px;
+  min-width: 320px;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.wf-config-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.wf-config-panel-header .icon {
+  font-size: 16px;
+}
+
+.wf-config-panel-header .title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.wf-config-panel-header .close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--text-muted);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.wf-config-panel-header .close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.wf-config-panel-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-field label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.wf-field input,
+.wf-field select,
+.wf-field textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.wf-field textarea {
+  font-family: monospace;
+  min-height: 56px;
+  resize: vertical;
+}
+
+.wf-field input:focus,
+.wf-field select:focus,
+.wf-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.wf-field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.wf-field-row .wf-field {
+  flex: 1;
+}
+
+.wf-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.wf-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.wf-delete-btn {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border: 1px solid #e53e3e;
+  border-radius: 6px;
+  background: transparent;
+  color: #e53e3e;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+  width: 100%;
+}
+
+.wf-delete-btn:hover {
+  background: #fff5f5;
+}
+
+/* ── Toolbar ──────────────────────────────────── */
+
+.wf-flow-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.wf-flow-toolbar button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  white-space: nowrap;
+}
+
+.wf-flow-toolbar button:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.wf-flow-toolbar .sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+/* ── Add menu ─────────────────────────────────── */
+
+.wf-add-menu {
+  position: absolute;
+  z-index: 10;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  min-width: 180px;
+}
+
+.wf-add-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.wf-add-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.wf-add-menu-item .icon {
+  font-size: 14px;
+}
+
+.wf-add-menu-item .label {
+  flex: 1;
+}
+
+.wf-add-menu-item .desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
