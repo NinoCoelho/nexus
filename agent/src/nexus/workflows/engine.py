@@ -76,8 +76,23 @@ class WorkflowEngine:
             log.exception("workflow %s run %s failed", workflow_path, run.id)
         finally:
             self._running.pop(run.id, None)
+            self._publish_run_event(run)
 
         return run
+
+    def _publish_run_event(self, run: WorkflowRun) -> None:
+        try:
+            from ..server.event_bus import publish
+            publish({
+                "type": "workflow.run_completed",
+                "run_id": run.id,
+                "workflow_path": run.workflow_path,
+                "status": run.status.value,
+                "trigger_type": run.trigger_type.value,
+                "error": run.error,
+            })
+        except Exception:
+            pass
 
     def cancel_run(self, run_id: str) -> bool:
         task = self._running.get(run_id)
