@@ -151,6 +151,41 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     return {"webhooks": hooks}
 
 
+@router.get("/workflows/{path:path}/debug/{run_id}/events")
+async def debug_events(path: str, run_id: str) -> StreamingResponse:
+    import asyncio
+    from ...server.event_bus import subscribe, unsubscribe
+
+    q = subscribe()
+
+    async def stream():
+        try:
+            yield b": subscribed\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=20)
+                except asyncio.TimeoutError:
+                    yield b": ping\n\n"
+                    continue
+                if event.get("run_id") != run_id:
+                    continue
+                evt_type = event.get("type", "debug")
+                payload = {k: v for k, v in event.items() if k != "type"}
+                data = json.dumps(payload, default=str)
+                yield f"event: {evt_type}\ndata: {data}\n\n".encode()
+                if evt_type in ("workflow.debug.run_completed", "workflow.debug.step_failed"):
+                    if event.get("status") in ("completed", "failed", "cancelled"):
+                        break
+        finally:
+            unsubscribe(q)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 
 @router.get("/workflows/{path:path}")
 async def get_workflow(path: str, request: Request) -> dict:
@@ -573,38 +608,3 @@ async def test_step(path: str, body: TestStepBody, request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return result
-
-
-@router.get("/workflows/{path:path}/debug/{run_id}/events")
-async def debug_events(path: str, run_id: str) -> StreamingResponse:
-    import asyncio
-    from ...server.event_bus import subscribe, unsubscribe
-
-    q = subscribe()
-
-    async def stream():
-        try:
-            yield b": subscribed\n\n"
-            while True:
-                try:
-                    event = await asyncio.wait_for(q.get(), timeout=20)
-                except asyncio.TimeoutError:
-                    yield b": ping\n\n"
-                    continue
-                if event.get("run_id") != run_id:
-                    continue
-                evt_type = event.get("type", "debug")
-                payload = {k: v for k, v in event.items() if k != "type"}
-                data = json.dumps(payload, default=str)
-                yield f"event: {evt_type}\ndata: {data}\n\n".encode()
-                if evt_type in ("workflow.debug.run_completed", "workflow.debug.step_failed"):
-                    if event.get("status") in ("completed", "failed", "cancelled"):
-                        break
-        finally:
-            unsubscribe(q)
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
