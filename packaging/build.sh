@@ -303,6 +303,15 @@ SWIFT_BIN="$SWIFT_PKG/.build/arm64-apple-macosx/release/Nexus"
 echo "==> Assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SWIFT_BIN" "$APP/Contents/MacOS/$APP_NAME"
+
+# Sync version from pyproject.toml into Info.plist
+NEXUS_VERSION="$(/usr/bin/python3 -c '
+import re, sys
+m = re.search(r"version\s*=\s*\"([^\"]+)\"", open(sys.argv[1]).read())
+print(m.group(1) if m else "0.0.0")
+' "$REPO_ROOT/agent/pyproject.toml")"
+echo "    version: $NEXUS_VERSION"
+sed -i '' "s|<string>0.1.0</string>|<string>${NEXUS_VERSION}</string>|" "$PACKAGING/macos/Info.plist"
 cp "$PACKAGING/macos/Info.plist" "$APP/Contents/Info.plist"
 cp "$PACKAGING/macos/Nexus.icns" "$APP/Contents/Resources/Nexus.icns"
 

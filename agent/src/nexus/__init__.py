@@ -1,3 +1,8 @@
 """Nexus — self-evolving agentic platform."""
 
-__version__ = "0.1.0"
+from importlib import metadata
+
+try:
+    __version__ = metadata.version("nexus")
+except metadata.PackageNotFoundError:
+    __version__ = "dev"

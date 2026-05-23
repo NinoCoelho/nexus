@@ -47,6 +47,10 @@ class LoomProviderAdapter(LoomLLMProvider):
         # instead of yielding them to loom (loom's ContentDeltaEvent path
         # appends to assistant content and would persist the CoT to history).
         self._thinking_sink: Callable[[str], None] | None = None
+        # Accumulated reasoning_content from the most recent provider call.
+        # Reset at the start of each chat/chat_stream. The agent loop reads
+        # this after each LLM iteration to stamp onto assistant messages.
+        self._last_reasoning_content: str | None = None
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
         """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name).
@@ -130,6 +134,8 @@ class LoomProviderAdapter(LoomLLMProvider):
         # Collect tool call deltas so we can emit a stop event at the end.
         finish_reason: str = "stop"
         tool_parts: dict[str, dict[str, Any]] = {}
+        self._last_reasoning_content = None
+        _accumulated_reasoning: list[str] = []
 
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
@@ -155,12 +161,14 @@ class LoomProviderAdapter(LoomLLMProvider):
                 )
 
             if etype == "thinking_delta":
+                rc_piece = ev.get("text", "")
+                if rc_piece:
+                    _accumulated_reasoning.append(rc_piece)
                 sink = self._thinking_sink
                 if sink is not None:
                     try:
-                        sink(ev.get("text", ""))
+                        sink(rc_piece)
                     except Exception:
-                        # A broken sink must not poison the LLM stream.
                         pass
                 continue
 
@@ -189,6 +197,15 @@ class LoomProviderAdapter(LoomLLMProvider):
 
             elif etype == "finish":
                 finish_reason = ev.get("finish_reason", "stop")
+                # Capture reasoning_content from the provider's finish event.
+                # Prefer the finish event's value (accumulated by the provider);
+                # fall back to our own accumulation from thinking_delta events.
+                rc = ev.get("reasoning_content")
+                if rc:
+                    self._last_reasoning_content = rc
+                elif _accumulated_reasoning:
+                    self._last_reasoning_content = "".join(_accumulated_reasoning)
+                _accumulated_reasoning.clear()
                 # Emit validated tool call arguments from the finish event.
                 # By NOT forwarding raw streaming deltas above, loom's
                 # accumulation buffer is empty — so we safely emit the

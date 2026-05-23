@@ -9,10 +9,11 @@ _YELLOW_THRESHOLD = 0.80
 _ORANGE_THRESHOLD = 0.90
 
 
-def classify_zone(tokens_used: int, context_window: int) -> Zone:
-    if context_window <= 0:
-        return "green"
-    pct = tokens_used / context_window
+def classify_zone(tokens_used: int, context_window: int, *, tools_overhead: int = 0) -> Zone:
+    effective = context_window - tools_overhead
+    if effective <= 0:
+        return "red"
+    pct = tokens_used / effective
     if pct < _GREEN_THRESHOLD:
         return "green"
     if pct < _YELLOW_THRESHOLD:

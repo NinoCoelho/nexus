@@ -68,6 +68,38 @@
   100% { transform: scale(1.55); opacity: 0; }
 }
 
+.nexus-splash.is-loading .nexus-splash__ring--a,
+.nexus-splash.is-loading .nexus-splash__ring--b {
+  animation: none;
+  opacity: 0;
+}
+
+.nexus-splash__orbit {
+  position: absolute;
+  width: min(42vmin, 320px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(180, 140, 255, 0.15);
+  box-shadow: 0 0 60px 8px rgba(160, 100, 255, 0.12);
+  animation: nx-splash-orbit 6s linear infinite;
+}
+.nexus-splash__orbit::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: rgba(180, 160, 255, 0.7);
+  box-shadow: 0 0 12px 3px rgba(140, 100, 255, 0.5);
+}
+@keyframes nx-splash-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 .nexus-splash__banner {
   position: relative;
   display: flex;
@@ -78,6 +110,9 @@
 }
 .nexus-splash.is-leaving .nexus-splash__banner {
   animation: nx-splash-banner-out 520ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}
+.nexus-splash.is-loading .nexus-splash__banner {
+  animation: nx-splash-banner-in 1450ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
 }
 @keyframes nx-splash-banner-in {
   0%   { opacity: 0; transform: scale(0.55); filter: blur(16px) brightness(1.6); }
@@ -103,9 +138,17 @@
   to   { opacity: 0.55; transform: translateY(0); }
 }
 
+.nexus-splash.is-loading {
+  cursor: default;
+}
+.nexus-splash.is-loading .nexus-splash__hint {
+  color: rgba(180, 160, 255, 0.45);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nexus-splash__bg,
-  .nexus-splash__ring { animation: none; opacity: 0; }
+  .nexus-splash__ring,
+  .nexus-splash__orbit { animation: none; opacity: 0; }
   .nexus-splash__banner {
     animation: nx-splash-fade-in 320ms ease-out both;
     filter: none;

@@ -125,6 +125,10 @@ def _encode_msg(m: ChatMessage) -> dict[str, Any]:
         out["tool_call_id"] = m.tool_call_id
     if m.name is not None:
         out["name"] = m.name
+    # DeepSeek requires reasoning_content on assistant messages to be
+    # passed back verbatim on every subsequent turn.
+    if m.reasoning_content is not None:
+        out["reasoning_content"] = m.reasoning_content
     return out
 
 
@@ -155,6 +159,7 @@ def _decode_openai(data: dict[str, Any]) -> ChatResponse:
         tool_calls=tool_calls,
         stop_reason=stop_reason,
         usage=_usage_from_openai(data.get("usage") or {}),
+        reasoning_content=msg.get("reasoning_content"),
     )
 
 
@@ -373,6 +378,7 @@ class OpenAIProvider(LLMProvider):
 
                 # Aggregated state for the finish event
                 full_text = ""
+                full_reasoning = ""
                 # id -> {name, args_buf}
                 tool_bufs: dict[str, dict[str, Any]] = {}
 
@@ -416,6 +422,7 @@ class OpenAIProvider(LLMProvider):
                     # appended to assistant content / persisted to history.
                     reasoning_piece = delta.get("reasoning") or delta.get("reasoning_content")
                     if reasoning_piece:
+                        full_reasoning += reasoning_piece
                         yield {"type": "thinking_delta", "text": reasoning_piece}
 
                     # Text delta
@@ -461,6 +468,7 @@ class OpenAIProvider(LLMProvider):
                             "content": full_text,
                             "tool_calls": tool_calls,
                             "usage": stream_usage.model_dump(),
+                            "reasoning_content": full_reasoning or None,
                         }
 
                 if aborted_repeat:
@@ -474,6 +482,7 @@ class OpenAIProvider(LLMProvider):
                         "tool_calls": [],
                         "usage": stream_usage.model_dump(),
                         "abort_reason": "repetition",
+                        "reasoning_content": full_reasoning or None,
                     }
         except httpx.HTTPError as exc:
             raise LLMTransportError(str(exc)) from exc

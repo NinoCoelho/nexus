@@ -27,9 +27,9 @@ createRoot(root).render(
   <StrictMode>
     <ThemeProvider>
       <ToastProvider>
+        <SplashScreen />
         <AuthGate>
           <App />
-          <SplashScreen />
         </AuthGate>
       </ToastProvider>
     </ThemeProvider>

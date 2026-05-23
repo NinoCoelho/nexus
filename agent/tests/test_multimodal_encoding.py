@@ -42,6 +42,7 @@ def _isolate_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # breadcrumb branches and changes the wording these tests assert.
     monkeypatch.setattr("nexus.ocr._read_ocr_section", lambda: {})
     monkeypatch.setattr("nexus.ocr._resolve_vision_model", lambda: None)
+    monkeypatch.setattr("nexus.ocr_server.is_installed", lambda: False)
 
 
 def _write_vault(path: str, data: bytes) -> None:
@@ -63,6 +64,59 @@ def test_capability_lookup_recognises_vision_models() -> None:
     caps_imggen = capabilities_for_model_name("gpt-image-1")
     assert "image" in caps_imggen
     assert "chat" not in caps_imggen
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250115",
+        "claude-3-5-sonnet-latest",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-latest",
+        "claude-haiku-4-5-20251001",
+    ],
+)
+def test_heuristic_detects_vision_for_dated_claude_models(model_name: str) -> None:
+    caps = capabilities_for_model_name(model_name)
+    assert "vision" in caps, f"{model_name} should have vision capability"
+    assert "chat" in caps
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "gpt-4o-2024-11-20",
+        "gpt-4o-mini-2024-07-18",
+        "gpt-4-turbo-2024-04-09",
+    ],
+)
+def test_heuristic_detects_vision_for_dated_openai_models(model_name: str) -> None:
+    caps = capabilities_for_model_name(model_name)
+    assert "vision" in caps, f"{model_name} should have vision capability"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "gemini-2.5-flash-preview-05-20",
+        "gemini-1.5-pro-002",
+        "gemini-2.0-flash-001",
+    ],
+)
+def test_heuristic_detects_vision_for_dated_gemini_models(model_name: str) -> None:
+    caps = capabilities_for_model_name(model_name)
+    assert "vision" in caps, f"{model_name} should have vision capability"
+
+
+def test_heuristic_does_not_match_claude_2() -> None:
+    caps = capabilities_for_model_name("claude-2-1")
+    assert "vision" not in caps
+
+
+def test_heuristic_does_not_match_gemini_10() -> None:
+    caps = capabilities_for_model_name("gemini-1.0-pro-001")
+    assert "vision" not in caps
 
 
 def test_user_config_tags_extend_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -588,6 +588,117 @@ class TestStepBody(BaseModel):
     step_outputs: dict = {}
 
 
+class InteractiveStartBody(BaseModel):
+    payload: dict = {}
+    mode: str = "trigger"  # "trigger" (execute trigger only) or "all" (execute all steps)
+    seed_from_samples: bool = False
+
+
+class InteractiveExecuteStepBody(BaseModel):
+    pass
+
+
+@router.post("/workflows/{path:path}/interactive-run")
+async def start_interactive_run(path: str, body: InteractiveStartBody, request: Request) -> dict:
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    engine = _get_engine(request)
+    run = await engine.start_interactive(
+        workflow_path=path,
+        trigger_payload=body.payload,
+        wf_def=wf,
+        seed_from_samples=body.seed_from_samples,
+    )
+
+    if body.mode == "all":
+        completed_run = await engine.interactive_execute_all(run.id)
+        if completed_run:
+            run = completed_run
+
+    return {
+        "run": run.to_dict(),
+        "mode": body.mode,
+    }
+
+
+@router.get("/workflows/{path:path}/interactive-run/{run_id}")
+async def get_interactive_state(path: str, run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    state = engine.interactive_get_state(run_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="interactive run not found")
+    return state
+
+
+@router.post("/workflows/{path:path}/interactive-run/{run_id}/execute-step/{step_id}")
+async def interactive_execute_step(path: str, run_id: str, step_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    sr = await engine.interactive_execute_step(run_id, step_id)
+    if sr is None:
+        raise HTTPException(status_code=404, detail="step not found or not reachable")
+    return sr.to_dict()
+
+
+@router.post("/workflows/{path:path}/interactive-run/{run_id}/execute-all")
+async def interactive_execute_all(path: str, run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    run = await engine.interactive_execute_all(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="interactive run not found")
+    return run.to_dict()
+
+
+@router.post("/workflows/{path:path}/interactive-run/{run_id}/cancel")
+async def interactive_cancel(run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    ok = engine.interactive_cancel(run_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="interactive run not found")
+    return {"ok": True}
+
+
+@router.get("/workflows/{path:path}/interactive-run/{run_id}/events")
+async def interactive_events(path: str, run_id: str) -> StreamingResponse:
+    import asyncio
+    from ...server.event_bus import subscribe, unsubscribe
+
+    q = subscribe()
+
+    async def stream():
+        try:
+            yield b": subscribed\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=20)
+                except asyncio.TimeoutError:
+                    yield b": ping\n\n"
+                    continue
+                if event.get("run_id") != run_id:
+                    continue
+                evt_type = event.get("type", "interactive")
+                payload = {k: v for k, v in event.items() if k != "type"}
+                data = json.dumps(payload, default=str)
+                yield f"event: {evt_type}\ndata: {data}\n\n".encode()
+                if evt_type in ("workflow.interactive.run_completed", "workflow.interactive.run_failed", "workflow.interactive.run_cancelled"):
+                    break
+        finally:
+            unsubscribe(q)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/workflows/{path:path}/test-step")
 async def test_step(path: str, body: TestStepBody, request: Request) -> dict:
     from ... import vault as _vault
@@ -608,3 +719,13 @@ async def test_step(path: str, body: TestStepBody, request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return result
+
+
+@router.get("/workflows/{path:path}/samples")
+async def get_workflow_samples(path: str) -> dict:
+    from ...workflows.schema import load_step_samples, load_trigger_sample
+
+    return {
+        "trigger_payload": load_trigger_sample(path),
+        "steps": load_step_samples(path),
+    }

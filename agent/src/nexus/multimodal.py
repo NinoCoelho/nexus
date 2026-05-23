@@ -138,26 +138,11 @@ def read_vault_bytes(vault_path: str) -> bytes:
 
 
 async def materialize_message(message, capabilities: set[str]):
-    """Lower non-native ``ContentPart``s to text before provider encoding.
-
-    The active model's ``capabilities`` (from
-    ``providers.catalog.capabilities_for_model_name``) decide what stays
-    as-is vs. what gets transcribed/extracted to a text breadcrumb:
-
-    * ``image`` with ``"vision"`` capability  → pass through.
-    * ``image`` without vision               → text breadcrumb.
-    * ``audio`` with ``"audio"`` capability  → pass through.
-    * ``audio`` without audio                → transcribe via faster-whisper
-      and return a ``[transcribed audio]: ...`` text part.
-    * ``document`` with ``"document"`` cap   → pass through (Anthropic).
-    * ``document`` without that capability   → extract text (PDF/text) and
-      return a ``[document attached]: ...`` text part.
-
-    Non-multipart messages (``content: str``) are returned unchanged.
-    """
     from .agent.llm.types import ChatMessage, ContentPart
 
     if not isinstance(message, ChatMessage):
+        return message
+    if not isinstance(message.content, list):
         return message
     if not isinstance(message.content, list):
         return message

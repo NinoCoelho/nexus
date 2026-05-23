@@ -36,7 +36,6 @@ export default function WorkflowView({
   const [wf, setWf] = useState<WorkflowDef | null>(null);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [creating, setCreating] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
 
@@ -87,14 +86,13 @@ export default function WorkflowView({
     }, 500);
   }, [selectedPath]);
 
-  const handleCreate = async () => {
-    if (!newTitle.trim()) return;
+  const handleCreate = async (title: string) => {
+    if (!title.trim()) return;
     setCreating(false);
     try {
-      const res = await api.createWorkflow(`workflows/${newTitle.trim()}`);
+      const res = await api.createWorkflow(`workflows/${title.trim()}`, title.trim());
       await loadList();
       onOpen(res.path);
-      setNewTitle("");
     } catch {}
   };
 
@@ -159,7 +157,7 @@ export default function WorkflowView({
             title="New Workflow"
             message="Enter a name for the new workflow"
             defaultValue=""
-            onSubmit={(v: string) => { setNewTitle(v); if (v.trim()) handleCreate(); }}
+            onSubmit={(v: string) => { if (v.trim()) handleCreate(v); }}
             onCancel={() => setCreating(false)}
           />
         )}
@@ -190,7 +188,7 @@ export default function WorkflowView({
       </div>
 
       <div className="wf-flow-container">
-        <WorkflowFlow wf={wf} onSave={save} />
+        <WorkflowFlow wf={wf} onSave={save} wfPath={selectedPath} />
       </div>
 
       {runs.length > 0 && (

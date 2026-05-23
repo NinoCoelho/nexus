@@ -87,7 +87,8 @@ _trajectory_logger = (
 
 @router.get("/health", response_model=Health)
 async def health() -> Health:
-    return Health()
+    import nexus
+    return Health(version=nexus.__version__)
 
 
 def _derived_from_dto(skill: _SkillModel) -> DerivedFromDTO | None:

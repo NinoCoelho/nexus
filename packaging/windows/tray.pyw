@@ -13,6 +13,7 @@ just dispatches.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -24,17 +25,12 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-# When packaged with PyInstaller (--onefile), ``__file__`` points into the
-# temporary extraction dir under %TEMP%\_MEI…, NOT the folder where the
-# .exe lives. We need the bundle root (where ``python\``, ``bootstrap.py``,
-# etc. sit), so use ``sys.executable`` in frozen mode. In a dev run
-# (python tray.pyw), ``__file__`` is the right answer.
 if getattr(sys, "frozen", False):
     HERE = Path(sys.executable).resolve().parent
 else:
     HERE = Path(__file__).resolve().parent
 
-PYTHON_EXE = HERE / "python" / "pythonw.exe"  # GUI Python — no console flash
+PYTHON_EXE = HERE / "python" / "pythonw.exe"
 PYTHON_FALLBACK = HERE / "python" / "python.exe"
 BOOTSTRAP = HERE / "bootstrap.py"
 PORT_FILE = HERE / ".port"
@@ -73,25 +69,18 @@ class ServerController:
         if not BOOTSTRAP.is_file():
             raise RuntimeError(f"bootstrap.py not found at {BOOTSTRAP}")
 
-        # Stale port file would make waitForReady race against last run's value.
         for f in (PORT_FILE, HOST_FILE):
             try:
                 f.unlink()
             except FileNotFoundError:
                 pass
 
-        # Append-mode log so a restart preserves history. The Swift host
-        # does the same via FileHandle.seekToEndOfFile().
         self._log_handle = open(SERVER_LOG, "ab")
 
         env = os.environ.copy()
         env["NEXUS_PORT_FILE"] = str(PORT_FILE)
-        # python-build-standalone needs PYTHONHOME to find its stdlib.
         env["PYTHONHOME"] = str(HERE / "python")
 
-        # CREATE_NO_WINDOW (0x08000000) hides the console for any child
-        # process spawned by bootstrap (e.g. llama-server.exe). Without
-        # this, llama.cpp pops a black console window on every restart.
         creationflags = 0x08000000
 
         self.process = subprocess.Popen(
@@ -158,12 +147,105 @@ class ServerController:
             self._log_handle = None
 
 
-# ── Tray UI ─────────────────────────────────────────────────────────────────
+class UpdateChecker:
+    """Background thread that polls the local /update/check endpoint."""
+
+    def __init__(self) -> None:
+        self.port: int | None = None
+        self.update_available: bool = False
+        self.latest_version: str = ""
+        self.current_version: str = ""
+        self.download_state: str = "idle"
+        self.download_progress: float = 0
+        self.release_notes: str = ""
+        self.html_url: str = ""
+        self._stop = threading.Event()
+
+    def configure(self, port: int) -> None:
+        self.port = port
+        self.check_now()
+        threading.Thread(target=self._periodic_check, daemon=True).start()
+
+    def _periodic_check(self) -> None:
+        while not self._stop.wait(4 * 3600):
+            self.check_now()
+
+    def check_now(self) -> None:
+        if self.port is None:
+            return
+        try:
+            url = f"http://127.0.0.1:{self.port}/update/check"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read())
+            self.update_available = data.get("update_available", False)
+            self.latest_version = data.get("latest", "")
+            self.current_version = data.get("current", "")
+            self.release_notes = data.get("body", "")
+            self.html_url = data.get("html_url", "")
+        except Exception:
+            log.exception("update check failed")
+
+    def start_download(self) -> None:
+        if self.port is None:
+            return
+        self.download_state = "downloading"
+        self.download_progress = 0
+
+        def _do() -> None:
+            try:
+                url = f"http://127.0.0.1:{self.port}/update/download"
+                req = urllib.request.Request(url, method="POST", data=b"")
+                with urllib.request.urlopen(req, timeout=600):
+                    pass
+            except Exception:
+                log.exception("update download request failed")
+            self._poll_status()
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _poll_status(self) -> None:
+        while self.port is not None:
+            try:
+                url = f"http://127.0.0.1:{self.port}/update/status"
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    data = json.loads(resp.read())
+                self.download_state = data.get("state", "idle")
+                self.download_progress = data.get("progress", 0)
+                if self.download_state != "downloading":
+                    break
+            except Exception:
+                break
+            time.sleep(2)
+
+    def install_update(self) -> None:
+        if self.port is None:
+            return
+        try:
+            url = f"http://127.0.0.1:{self.port}/update/install"
+            req = urllib.request.Request(url, method="POST", data=b"")
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            log.exception("update install request failed")
+
+    def skip_version(self) -> None:
+        if self.port is None or not self.latest_version:
+            return
+        try:
+            url = f"http://127.0.0.1:{self.port}/update/skip"
+            body = json.dumps({"version": self.latest_version}).encode()
+            req = urllib.request.Request(url, data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            urllib.request.urlopen(req, timeout=5)
+            self.update_available = False
+        except Exception:
+            log.exception("skip version failed")
+
+    def open_release_page(self) -> None:
+        if self.html_url:
+            webbrowser.open(self.html_url)
+
 
 def _make_icon_image():
-    """Procedurally drawn tray icon — saves shipping a separate .ico asset.
-    Matches the macOS hexagon-grid motif loosely (a filled rounded square
-    with a small dot, recognizable at 16x16)."""
     from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
@@ -175,11 +257,10 @@ def _make_icon_image():
 
 def main() -> int:
     try:
-        import pystray  # type: ignore
+        import pystray
         from pystray import Menu, MenuItem
     except ImportError:
         log.exception("pystray missing — falling back to headless launch")
-        # Headless fallback: run the server, open browser, block on the process.
         ctl = ServerController()
         ctl.launch()
         try:
@@ -192,6 +273,7 @@ def main() -> int:
         return 0
 
     controller = ServerController()
+    updater = UpdateChecker()
     icon = pystray.Icon("Nexus", _make_icon_image(), "Nexus")
 
     state = {"opened_once": False}
@@ -209,15 +291,13 @@ def main() -> int:
                 port = controller.wait_for_ready()
                 webbrowser.open(f"http://127.0.0.1:{port}/")
                 icon.title = f"Nexus — running on {controller.bind_host}:{port}"
-            except Exception as exc:  # noqa: BLE001
+                updater.configure(port)
+            except Exception as exc:
                 log.exception("restart failed")
                 icon.title = f"Nexus — error: {exc}"
         threading.Thread(target=_do, daemon=True).start()
 
     def show_token(_=None) -> None:
-        # Mirror the Swift TokenDialog — show the persistent token from
-        # ~/.nexus/access_token via the system message box. ctypes is in
-        # the stdlib so this never needs an extra dep.
         import ctypes
         token_path = NEXUS_HOME / "access_token"
         try:
@@ -226,24 +306,75 @@ def main() -> int:
             tok = "(not yet generated — start the server first)"
         ctypes.windll.user32.MessageBoxW(
             0, tok, "Nexus access token",
-            0x00000040,  # MB_ICONINFORMATION
+            0x00000040,
         )
 
     def reveal_logs(_=None) -> None:
-        os.startfile(str(LOG_DIR))  # noqa: S606 — Windows-only helper
+        os.startfile(str(LOG_DIR))
 
     def reveal_state(_=None) -> None:
         NEXUS_HOME.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(NEXUS_HOME))  # noqa: S606
+        os.startfile(str(NEXUS_HOME))
+
+    def check_updates(_=None) -> None:
+        updater.check_now()
+        if updater.update_available:
+            icon.notify(f"Version {updater.latest_version} is available!", "Nexus Update")
+        else:
+            icon.notify("You're up to date!", "Nexus Update")
+
+    def download_update(_=None) -> None:
+        updater.start_download()
+        icon.notify("Downloading update…", "Nexus Update")
+
+    def install_update(_=None) -> None:
+        updater.install_update()
+
+    def skip_version(_=None) -> None:
+        updater.skip_version()
+        icon.notify("Version skipped.", "Nexus Update")
+
+    def view_release(_=None) -> None:
+        updater.open_release_page()
 
     def quit_app(_=None) -> None:
         controller.terminate()
         icon.stop()
 
+    def _update_label(item=None) -> str:
+        if updater.download_state == "ready":
+            return "Install Update & Restart"
+        if updater.download_state == "downloading":
+            pct = int(updater.download_progress * 100)
+            return f"Downloading… {pct}%"
+        if updater.update_available:
+            return f"● Update Available (v{updater.latest_version})"
+        return "Check for Updates…"
+
+    def _update_action(item=None) -> None:
+        if updater.download_state == "ready":
+            install_update()
+        elif updater.download_state == "downloading":
+            pass
+        elif updater.update_available:
+            download_update()
+        else:
+            check_updates()
+
+    def _skip_visible(item=None) -> bool:
+        return updater.update_available and updater.download_state not in ("downloading", "ready")
+
+    def _release_visible(item=None) -> bool:
+        return updater.update_available
+
     icon.menu = Menu(
         MenuItem("Open Nexus", open_browser, default=True),
         Menu.SEPARATOR,
         MenuItem("Restart Server", restart),
+        Menu.SEPARATOR,
+        MenuItem(_update_label, _update_action),
+        MenuItem("Skip This Version", skip_version, visible=_skip_visible),
+        MenuItem("View Release Notes…", view_release, visible=_release_visible),
         Menu.SEPARATOR,
         MenuItem("Show Access Token…", show_token),
         MenuItem("Show Logs", reveal_logs),
@@ -260,7 +391,8 @@ def main() -> int:
             if not state["opened_once"]:
                 state["opened_once"] = True
                 webbrowser.open(f"http://127.0.0.1:{port}/")
-        except Exception as exc:  # noqa: BLE001
+            updater.configure(port)
+        except Exception as exc:
             log.exception("startup failed")
             icon.title = f"Nexus — error: {exc}"
 

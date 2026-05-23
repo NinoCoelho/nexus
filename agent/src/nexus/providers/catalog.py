@@ -21,6 +21,7 @@ carries:
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any, Literal
@@ -281,6 +282,36 @@ def _user_config_capabilities(model_name: str) -> set[str]:
     return out
 
 
+_FAMILY_PATTERNS: list[tuple[re.Pattern[str], set[str]]] = [
+    # Claude 3+ all support vision + document.
+    # Matches: claude-3-5-sonnet-latest, claude-sonnet-4-20250514,
+    #   claude-opus-4-20250115, anthropic.claude-sonnet-4-5-20250929-v1:0, etc.
+    (re.compile(r"claude-(3|opus-4|sonnet-4|haiku-\d)", re.I),
+     {"chat", "tools", "vision", "document"}),
+    # GPT-4o and GPT-4-turbo support vision.
+    (re.compile(r"gpt-4(o|-turbo)", re.I),
+     {"chat", "tools", "vision"}),
+    # Gemini 1.5+ support vision.
+    (re.compile(r"gemini-(1\.5|2)", re.I),
+     {"chat", "tools", "vision"}),
+    # Grok 4 supports vision.
+    (re.compile(r"grok-4", re.I),
+     {"chat", "tools", "vision", "reasoning"}),
+]
+
+
+def _infer_capabilities_heuristic(model_name: str) -> set[str]:
+    """Pattern-based fallback: detect model families by regex and return
+    their known capabilities.  Used when the exact model name is absent
+    from the bundled catalog (e.g. dated API names like
+    ``claude-sonnet-4-20250514`` that don't match the catalog's
+    ``claude-sonnet-4-6``)."""
+    for pattern, caps in _FAMILY_PATTERNS:
+        if pattern.search(model_name):
+            return set(caps)
+    return set()
+
+
 def capabilities_for_model_name(model_name: str) -> set[str]:
     """Return the capability tags for a resolved upstream model name.
 
@@ -290,7 +321,10 @@ def capabilities_for_model_name(model_name: str) -> set[str]:
 
     1. The bundled provider catalog (``catalog.json``) — covers the
        cloud providers we ship metadata for.
-    2. The user's ``~/.nexus/config.toml`` ``[[models]]`` ``tags`` —
+    2. Heuristic pattern matching for model families whose dated API
+       names (e.g. ``claude-sonnet-4-20250514``) differ from the
+       catalog's short-form IDs (e.g. ``claude-sonnet-4-6``).
+    3. The user's ``~/.nexus/config.toml`` ``[[models]]`` ``tags`` —
        overrides for local GGUFs and unknown models.
 
     Returns an empty set for fully-unknown models — the encoder then
@@ -317,5 +351,7 @@ def capabilities_for_model_name(model_name: str) -> set[str]:
             tail = model_name.rsplit("/", 1)[-1]
             if tail in table:
                 caps = set(table[tail])
+    if not caps:
+        caps = _infer_capabilities_heuristic(model_name)
     caps |= _user_config_capabilities(model_name)
     return caps

@@ -74,6 +74,11 @@ class ChatMessage(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
+    # DeepSeek reasoning models require the full reasoning_content to be
+    # passed back on subsequent turns.  Stored here so it survives
+    # serialisation to/from the session DB and is re-encoded in the
+    # OpenAI-compat message payload.
+    reasoning_content: str | None = None
 
 
 class StopReason(StrEnum):
@@ -99,11 +104,18 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     stop_reason: StopReason = StopReason.STOP
     usage: Usage = Field(default_factory=Usage)
+    # Reasoning chain-of-thought from thinking models (DeepSeek-R1 etc).
+    # Carried here so the agent loop can stamp it onto the assistant
+    # ChatMessage before persisting.
+    reasoning_content: str | None = None
 
     @property
     def message(self) -> ChatMessage:
         return ChatMessage(
-            role=Role.ASSISTANT, content=self.content, tool_calls=list(self.tool_calls)
+            role=Role.ASSISTANT,
+            content=self.content,
+            tool_calls=list(self.tool_calls),
+            reasoning_content=self.reasoning_content,
         )
 
 

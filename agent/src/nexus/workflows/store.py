@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from typing import Any
 
 from .models import RunStatus, StepRun, StepRunStatus, TriggerType, WorkflowRun
 
@@ -116,7 +117,7 @@ class WorkflowStore:
         with _lock:
             with self._conn:
                 self._conn.execute(
-                    "INSERT INTO step_runs (run_id, step_id, status, input_resolved, output, "
+                    "INSERT OR REPLACE INTO step_runs (run_id, step_id, status, input_resolved, output, "
                     "error, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         step_run.run_id,
@@ -195,6 +196,26 @@ class WorkflowStore:
                     "DELETE FROM step_runs WHERE run_id NOT IN (SELECT id FROM workflow_runs)"
                 )
         return deleted
+
+    def delete_step_runs(self, run_id: str, step_ids: list[str]) -> int:
+        if not step_ids:
+            return 0
+        placeholders = ",".join("?" for _ in step_ids)
+        with _lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    f"DELETE FROM step_runs WHERE run_id=? AND step_id IN ({placeholders})",
+                    (run_id, *step_ids),
+                )
+                return cur.rowcount
+
+    def get_step_outputs(self, run_id: str) -> dict[str, Any]:
+        step_runs = self.list_step_runs(run_id)
+        outputs: dict[str, Any] = {}
+        for sr in step_runs:
+            if sr.status == StepRunStatus.completed and sr.output is not None:
+                outputs[sr.step_id] = sr.output
+        return outputs
 
     @staticmethod
     def _row_to_run(row: sqlite3.Row) -> WorkflowRun:

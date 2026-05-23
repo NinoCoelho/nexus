@@ -123,6 +123,20 @@ class SessionStore(PubSubMixin, QueryMixin):
             self._loom.set_context(session_id, context)
             d["context"] = context
         history = [_from_loom_msg(m) for m in self._loom.get_history(session_id)]
+        # Re-attach reasoning_content from the Nexus-managed column.
+        rc_rows = self._loom._db.execute(
+            "SELECT seq, reasoning_content FROM messages "
+            "WHERE session_id = ? AND reasoning_content IS NOT NULL",
+            (session_id,),
+        ).fetchall()
+        if rc_rows:
+            rc_map: dict[int, str] = {row[0]: row[1] for row in rc_rows}
+            history = [
+                msg.model_copy(update={"reasoning_content": rc_map[i]})
+                if i in rc_map and msg.role == Role.ASSISTANT
+                else msg
+                for i, msg in enumerate(history)
+            ]
         return Session(
             id=d["id"],
             title=d["title"] or "New session",
@@ -309,6 +323,19 @@ class SessionStore(PubSubMixin, QueryMixin):
     def replace_history(self, session_id: str, history: list[ChatMessage]) -> None:
         loom_msgs = [_to_loom_msg(m) for m in history]
         self._loom.replace_history(session_id, loom_msgs)
+
+        # Persist reasoning_content for assistant messages that carry it.
+        # Loom's replace_history writes all messages with seq = 0..N, so we
+        # can match by sequence index.
+        db = self._loom._db
+        for seq, msg in enumerate(history):
+            if msg.role == Role.ASSISTANT and msg.reasoning_content:
+                db.execute(
+                    "UPDATE messages SET reasoning_content = ? "
+                    "WHERE session_id = ? AND seq = ?",
+                    (msg.reasoning_content, session_id, seq),
+                )
+        db.commit()
 
         # Auto-title: if the session is still "New session", set title from
         # the first user message (loom's replace_history doesn't do this).

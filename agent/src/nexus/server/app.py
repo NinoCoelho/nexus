@@ -781,6 +781,11 @@ def create_app(
             app.state.workflow_store = wf_store
             app.state.workflow_engine = wf_engine
 
+            if agent is not None:
+                wf_engine._agent = agent
+            if sessions is not None:
+                wf_engine._sessions = sessions
+
             from .routes.workflows import init as _wf_init
             _wf_init(wf_store, wf_engine)
 

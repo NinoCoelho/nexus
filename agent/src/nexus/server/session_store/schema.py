@@ -198,6 +198,19 @@ def _ensure_subagent_columns(db) -> None:
     db.commit()
 
 
+def _ensure_reasoning_content_column(db) -> None:
+    """Add reasoning_content column to loom's messages table if missing.
+
+    DeepSeek reasoning models require the full chain-of-thought to be
+    passed back on every turn.  The column stores it per assistant message
+    so subsequent turns can re-encode it in the API payload.
+    """
+    cols = {r[1] for r in db.execute("PRAGMA table_info(messages)").fetchall()}
+    if cols and "reasoning_content" not in cols:
+        db.execute("ALTER TABLE messages ADD COLUMN reasoning_content TEXT")
+        db.commit()
+
+
 def init_fts(loom_store: LoomSessionStore) -> None:
     """Create the FTS5 virtual table + sync triggers if missing."""
     db = loom_store._db
@@ -215,6 +228,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_PAUSED_TURNS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
+    _ensure_reasoning_content_column(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:
         msg_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]

@@ -142,3 +142,25 @@ export interface StepSchema {
   output_schema?: { keys: string[]; types: Record<string, string> };
   sample_output?: unknown;
 }
+
+export interface InteractiveRunState {
+  run: WorkflowRun;
+  steps: StepRun[];
+  condition_branches: Record<string, string>;
+}
+
+export interface InteractiveStepEvent {
+  run_id: string;
+  step_id?: string;
+  step_name?: string;
+  step_type?: string;
+  status?: StepRunStatus;
+  input_resolved?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  started_at?: string;
+  finished_at?: string;
+  condition_result?: boolean;
+  condition_branch?: string;
+  trigger_payload?: Record<string, unknown>;
+}

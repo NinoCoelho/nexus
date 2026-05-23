@@ -105,3 +105,234 @@ export async function getWebhookUrl(
   );
   return _json(res);
 }
+
+export async function startDebug(
+  path: string,
+  payload?: Record<string, unknown>,
+): Promise<WorkflowRun> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/debug`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload }),
+    },
+  );
+  return _json(res);
+}
+
+export async function debugContinue(
+  path: string,
+  runId: string,
+  stepId?: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/debug/${runId}/continue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(stepId ? { step_id: stepId } : {}),
+    },
+  );
+  return _json(res);
+}
+
+export async function debugRerunStep(
+  path: string,
+  runId: string,
+  stepId: string,
+): Promise<import("../types/workflow").StepRun> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/debug/${runId}/step/${stepId}/rerun`,
+    { method: "POST" },
+  );
+  return _json(res);
+}
+
+export async function debugCancel(
+  path: string,
+  runId: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/debug/${runId}/cancel`,
+    { method: "POST" },
+  );
+  return _json(res);
+}
+
+export async function getWorkflowSchema(
+  path: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/schema`,
+  );
+  if (!res.ok) return {};
+  return _json(res);
+}
+
+export async function testTrigger(
+  path: string,
+  triggerId: string,
+): Promise<{
+  trigger_payload: Record<string, unknown>;
+  schema?: unknown;
+  sample?: unknown;
+}> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger_id: triggerId }),
+    },
+  );
+  return _json(res);
+}
+
+export async function testStep(
+  path: string,
+  stepId: string,
+  triggerPayload: Record<string, unknown>,
+  stepOutputs: Record<string, unknown>,
+): Promise<{
+  step_id: string;
+  step_name: string;
+  status: string;
+  input_resolved?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  schema?: unknown;
+  sample?: unknown;
+}> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/test-step`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        step_id: stepId,
+        trigger_payload: triggerPayload,
+        step_outputs: stepOutputs,
+      }),
+    },
+  );
+  return _json(res);
+}
+
+export function debugEventsUrl(path: string, runId: string): string {
+  return `${BASE}/workflows/${encodeURIComponent(path)}/debug/${runId}/events`;
+}
+
+export async function startInteractiveRun(
+  path: string,
+  payload: Record<string, unknown> = {},
+  mode: "trigger" | "all" = "trigger",
+  seedFromSamples = false,
+): Promise<{ run: WorkflowRun; mode: string }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload, mode, seed_from_samples: seedFromSamples }),
+    },
+  );
+  return _json(res);
+}
+
+export async function getInteractiveState(
+  path: string,
+  runId: string,
+): Promise<{
+  run: WorkflowRun;
+  steps: import("../types/workflow").StepRun[];
+  condition_branches: Record<string, string>;
+}> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run/${runId}`,
+  );
+  return _json(res);
+}
+
+export async function interactiveExecuteStep(
+  path: string,
+  runId: string,
+  stepId: string,
+): Promise<import("../types/workflow").StepRun> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run/${runId}/execute-step/${stepId}`,
+    { method: "POST" },
+  );
+  return _json(res);
+}
+
+export async function interactiveExecuteAll(
+  path: string,
+  runId: string,
+): Promise<WorkflowRun> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run/${runId}/execute-all`,
+    { method: "POST" },
+  );
+  return _json(res);
+}
+
+export async function interactiveCancel(
+  path: string,
+  runId: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run/${runId}/cancel`,
+    { method: "POST" },
+  );
+  return _json(res);
+}
+
+export function interactiveEventsUrl(path: string, runId: string): string {
+  return `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run/${runId}/events`;
+}
+
+export async function getWorkflowSamples(
+  path: string,
+): Promise<{
+  trigger_payload: Record<string, unknown>;
+  steps: Record<string, { name: string; slug: string; input_resolved?: unknown; output?: unknown }>;
+}> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/samples`,
+  );
+  if (!res.ok) return { trigger_payload: {}, steps: {} };
+  return _json(res);
+}
+
+export async function resolveTemplate(
+  template: string,
+  triggerPayload: Record<string, unknown>,
+  stepOutputs: Record<string, unknown>,
+  variables: Record<string, string>,
+): Promise<string> {
+  return template.replace(/\{\{([^}]+)\}\}/g, (_match, expr: string) => {
+    const parts = expr.trim().split(".");
+    let current: unknown;
+    if (parts[0] === "trigger") {
+      current = triggerPayload;
+      parts.shift();
+    } else if (parts[0] === "steps") {
+      current = stepOutputs;
+      parts.shift();
+    } else if (parts[0] === "vars") {
+      current = variables;
+      parts.shift();
+    } else {
+      return _match;
+    }
+    for (const part of parts) {
+      if (current && typeof current === "object") {
+        current = (current as Record<string, unknown>)[part];
+      } else {
+        return _match;
+      }
+    }
+    return current !== undefined ? JSON.stringify(current) : _match;
+  });
+}

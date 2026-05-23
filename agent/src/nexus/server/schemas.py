@@ -77,6 +77,7 @@ class SkillDetail(BaseModel):
 
 class Health(BaseModel):
     ok: bool = True
+    version: str = ""
 
 
 class RespondPayload(BaseModel):

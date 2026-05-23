@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 interface StepRef {
   slug: string;
@@ -6,73 +6,178 @@ interface StepRef {
   type: string;
 }
 
+interface SchemaField {
+  slug: string;
+  keys?: string[];
+  types?: Record<string, string>;
+}
+
 interface Props {
   value: string;
   onChange: (val: string) => void;
   steps: StepRef[];
+  stepSchemas?: SchemaField[];
   placeholder?: string;
   multiline?: boolean;
   minLines?: number;
 }
 
-export default function TemplateInput({ value, onChange, steps, placeholder, multiline, minLines }: Props) {
-  const ref = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
-  const [suggestion, setSuggestion] = useState<string | null>(null);
-  const [suggestionSlug, setSuggestionSlug] = useState("");
+interface CompletionItem {
+  label: string;
+  detail?: string;
+  insert: string;
+}
 
-  function findTrigger(text: string, cursor: number): { start: number; partial: string } | null {
-    const before = text.slice(0, cursor);
-    const match = before.match(/\{\{steps\.([a-zA-Z0-9]*)$/);
-    if (!match) return null;
-    return { start: cursor - match[0].length, partial: match[1] };
+function getCompletions(
+  partial: string,
+  steps: StepRef[],
+  stepSchemas?: SchemaField[],
+): CompletionItem[] {
+  const parts = partial.split(".");
+
+  if (parts.length <= 1) {
+    const prefix = parts[0].toLowerCase();
+    return steps
+      .filter((s) => s.slug.toLowerCase().startsWith(prefix) && prefix.length > 0)
+      .map((s) => ({
+        label: s.slug,
+        detail: s.name,
+        insert: s.slug + ".",
+      }));
   }
+
+  const slug = parts[0];
+  const afterSlug = parts.slice(1).join(".");
+
+  if (afterSlug === "") {
+    return [
+      { label: "result", detail: "step output", insert: "result}}" },
+    ];
+  }
+
+  const schema = stepSchemas?.find((s) => s.slug === slug);
+  if (schema?.keys && afterSlug.length > 0) {
+    const pathParts = afterSlug.split(".");
+    const lastPart = pathParts[pathParts.length - 1].toLowerCase();
+
+    if (pathParts.length === 1) {
+      const matchingKeys = schema.keys.filter((k) => k.toLowerCase().startsWith(lastPart));
+      if (matchingKeys.length > 0) {
+        return matchingKeys.map((k) => ({
+          label: k,
+          detail: schema.types?.[k] || "",
+          insert: k + "}}",
+        }));
+      }
+    }
+
+    if (pathParts.length === 1 && lastPart === "" && schema.keys.length > 0) {
+      return schema.keys.map((k) => ({
+        label: k,
+        detail: schema.types?.[k] || "",
+        insert: k + "}}",
+      }));
+    }
+  }
+
+  if (afterSlug.toLowerCase().startsWith("r")) {
+    return [{ label: "result", detail: "step output", insert: "result}}" }];
+  }
+
+  return [];
+}
+
+export default function TemplateInput({ value, onChange, steps, stepSchemas, placeholder, multiline, minLines }: Props) {
+  const ref = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
+  const [items, setItems] = useState<CompletionItem[]>([]);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [triggerInfo, setTriggerInfo] = useState<{ start: number; partial: string } | null>(null);
+
+  const findTrigger = useCallback((text: string, cursor: number): { start: number; partial: string } | null => {
+    const before = text.slice(0, cursor);
+    const match = before.match(/\{\{steps\.([a-zA-Z0-9._]*)$/);
+    if (!match) return null;
+    return { start: cursor - match[1].length, partial: match[1] };
+  }, []);
+
+  const updateCompletions = useCallback((text: string, cursor: number) => {
+    const trigger = findTrigger(text, cursor);
+    if (!trigger) {
+      setItems([]);
+      setTriggerInfo(null);
+      return;
+    }
+    setTriggerInfo(trigger);
+    const completions = getCompletions(trigger.partial, steps, stepSchemas);
+    setItems(completions);
+    setSelectedIdx(0);
+  }, [steps, stepSchemas, findTrigger]);
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) {
     const val = e.target.value;
     onChange(val);
-
     const cursor = (e.target as HTMLTextAreaElement).selectionStart ?? val.length;
-    const trigger = findTrigger(val, cursor);
-    if (trigger) {
-      const partial = trigger.partial.toLowerCase();
-      const match = steps.find((s) => s.slug.toLowerCase().startsWith(partial) && partial.length > 0);
-      if (match) {
-        setSuggestionSlug(match.slug);
-        setSuggestion(match.slug.slice(partial.length));
-      } else {
-        setSuggestion(null);
-      }
+    updateCompletions(val, cursor);
+  }
+
+  function applyItem(item: CompletionItem) {
+    const el = ref.current;
+    if (!el || !triggerInfo) return;
+    const cursor = el.selectionStart ?? value.length;
+    const before = value.slice(0, cursor);
+    const after = value.slice(cursor);
+    const partial = triggerInfo.partial;
+    const lastDot = partial.lastIndexOf(".");
+    const prefix = lastDot >= 0 ? partial.slice(0, lastDot + 1) : "";
+    const newVal = before + item.insert.slice(prefix.length + (partial.length - prefix.length)) + after;
+
+    if (newVal === value && item.insert.endsWith("}}")) {
+      const fixed = before.slice(0, before.length - partial.length) + partial.split(".")[0] + "." + item.insert + after;
+      onChange(fixed);
     } else {
-      setSuggestion(null);
+      onChange(newVal);
     }
+
+    setItems([]);
+    setTriggerInfo(null);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Tab" && suggestion !== null) {
-      e.preventDefault();
-      const el = ref.current;
-      if (!el) return;
-      const cursor = el.selectionStart ?? value.length;
-      const before = value.slice(0, cursor);
-      const after = value.slice(cursor);
-      const newVal = before + suggestion + `.result}}` + after;
-      onChange(newVal);
-      setSuggestion(null);
+    if (items.length === 0) return;
 
-      requestAnimationFrame(() => {
-        const newCursor = before.length + suggestion.length + `.result}}`.length;
-        el.setSelectionRange(newCursor, newCursor);
-      });
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIdx((i) => (i + 1) % items.length);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIdx((i) => (i - 1 + items.length) % items.length);
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      applyItem(items[selectedIdx]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setItems([]);
+      setTriggerInfo(null);
+      return;
     }
   }
 
   useEffect(() => {
-    if (suggestion !== null && ref.current) {
+    if (ref.current) {
       const cursor = ref.current.selectionStart ?? value.length;
       const trigger = findTrigger(value, cursor);
-      if (!trigger) setSuggestion(null);
+      if (!trigger) {
+        setItems([]);
+        setTriggerInfo(null);
+      }
     }
-  }, [value, suggestion]);
+  }, [value, findTrigger]);
 
   const shared = {
     ref: ref as React.RefObject<HTMLInputElement & HTMLTextAreaElement>,
@@ -84,15 +189,27 @@ export default function TemplateInput({ value, onChange, steps, placeholder, mul
     autoComplete: "off" as const,
   };
 
+  const dropdown = items.length > 0 && (
+    <div className="wf-autocomplete-dropdown">
+      {items.map((item, i) => (
+        <div
+          key={item.label}
+          className={`wf-autocomplete-item${i === selectedIdx ? " selected" : ""}`}
+          onMouseDown={(e) => { e.preventDefault(); applyItem(item); }}
+          onMouseEnter={() => setSelectedIdx(i)}
+        >
+          <span className="wf-ac-label">{item.label}</span>
+          {item.detail && <span className="wf-ac-detail">{item.detail}</span>}
+        </div>
+      ))}
+    </div>
+  );
+
   if (multiline) {
     return (
       <div className="wf-template-wrap">
         <textarea {...shared} style={{ minHeight: minLines ? minLines * 20 : undefined }} />
-        {suggestion !== null && (
-          <div className="wf-template-hint">
-            Tab to accept: <code>{suggestionSlug}</code>
-          </div>
-        )}
+        {dropdown}
       </div>
     );
   }
@@ -100,11 +217,7 @@ export default function TemplateInput({ value, onChange, steps, placeholder, mul
   return (
     <div className="wf-template-wrap">
       <input {...shared} />
-      {suggestion !== null && (
-        <div className="wf-template-hint">
-          Tab to accept: <code>{suggestionSlug}</code>
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }

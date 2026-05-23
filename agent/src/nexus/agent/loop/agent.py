@@ -504,6 +504,12 @@ class Agent:
         _saw_loom_error = False
         _history_snapshot = list(_auto_compacted_history if _auto_compacted_history is not None else (history or []))
 
+        # Per-iteration reasoning_content from thinking models (DeepSeek-R1
+        # etc). Each LLM call within the turn may produce reasoning; we
+        # collect it here and stamp it onto the corresponding assistant
+        # messages before persisting.
+        _per_iter_reasoning: list[str | None] = []
+
         # Mirror of loom's all_messages for the parking flow. We only need this
         # when ask_user_tool parks: the snapshot up through the ASSISTANT
         # message that issued the parked tool_call is what we persist as
@@ -583,6 +589,9 @@ class Agent:
                 )
             )
             materialised_for_iter = True
+            # Capture reasoning from the adapter for this iteration.
+            _rc = getattr(adapter, "_last_reasoning_content", None) if adapter else None
+            _per_iter_reasoning.append(_rc)
 
         # Wire a per-turn thinking sink on the loom adapter. Reasoning chunks
         # from thinking models (Ollama GLM-4.7-flash, DeepSeek-R1, …) flow
@@ -792,7 +801,14 @@ class Agent:
                         _history_snapshot
                         + [ChatMessage(role=Role.USER, content=user_msg_content)]
                         + (
-                            [ChatMessage(role=Role.ASSISTANT, content=full_text)]
+                            [ChatMessage(
+                                role=Role.ASSISTANT,
+                                content=full_text,
+                                reasoning_content=(
+                                    getattr(adapter, "_last_reasoning_content", None)
+                                    if adapter else None
+                                ),
+                            )]
                             if full_text
                             else []
                         )
@@ -1249,6 +1265,12 @@ class Agent:
                         err["context_window"] = ctx_window
                         err["actions"] = ["compact_history", "new_session"]
                     yield err
+                # Capture reasoning for the final iteration (the one that
+                # terminated with done, not tool_exec_start).
+                if not materialised_for_iter:
+                    _rc = getattr(adapter, "_last_reasoning_content", None) if adapter else None
+                    _per_iter_reasoning.append(_rc)
+
                 # Prefer the assembled message list from loom (includes
                 # tool_calls + TOOL role messages). Strip system messages
                 # (re-built each turn by before_llm_call). Fall back to a
@@ -1265,6 +1287,35 @@ class Agent:
                         ChatMessage(role=Role.USER, content=user_msg_content),
                         ChatMessage(role=Role.ASSISTANT, content=reply_text),
                     ]
+
+                # Stamp reasoning_content onto assistant messages from this
+                # turn. The turn's new messages start after the history
+                # snapshot (the user message + alternating assistant/tool).
+                # Also restore reasoning on pre-existing assistant messages
+                # (lost when loom's ChatMessage round-trips strip it).
+                _snap_len = len(_history_snapshot)
+                _snap_rc: dict[int, str] = {}
+                for _si, _sm in enumerate(_history_snapshot):
+                    if _sm.role == Role.ASSISTANT and _sm.reasoning_content:
+                        _snap_rc[_si] = _sm.reasoning_content
+                _rc_idx = 0
+                for _mi in range(len(persisted_messages)):
+                    msg = persisted_messages[_mi]
+                    if msg.role != Role.ASSISTANT:
+                        continue
+                    if _mi < _snap_len:
+                        if _mi in _snap_rc:
+                            persisted_messages[_mi] = msg.model_copy(
+                                update={"reasoning_content": _snap_rc[_mi]}
+                            )
+                    else:
+                        if _rc_idx < len(_per_iter_reasoning):
+                            rc_val = _per_iter_reasoning[_rc_idx]
+                            _rc_idx += 1
+                            if rc_val:
+                                persisted_messages[_mi] = msg.model_copy(
+                                    update={"reasoning_content": rc_val}
+                                )
                 yield {
                     "type": "done",
                     "session_id": session_id,
@@ -1393,6 +1444,8 @@ class Agent:
 
         full_text = ""
         history_snapshot = [_from_loom_message(m) for m in loom_messages[:-1]]
+        _rc_adapter = getattr(self._loom, "_provider", None)
+        _hitl_per_iter_reasoning: list[str | None] = []
 
         async for raw in self._loom.run_turn_stream(
             loom_messages, model_id=self._chosen_model,
@@ -1451,6 +1504,7 @@ class Agent:
             elif etype == "done":
                 ctx = ev.get("context") or {}
                 model_used = ev.get("model") or self._chosen_model
+                _rc_val = getattr(_rc_adapter, "_last_reasoning_content", None) if _rc_adapter else None
                 loom_msgs = ctx.get("messages")
                 if loom_msgs:
                     persisted_messages = [
@@ -1460,8 +1514,22 @@ class Agent:
                     ]
                 else:
                     persisted_messages = history_snapshot + [
-                        ChatMessage(role=Role.ASSISTANT, content=full_text),
+                        ChatMessage(
+                            role=Role.ASSISTANT,
+                            content=full_text,
+                            reasoning_content=_rc_val,
+                        ),
                     ]
+                # Restore reasoning on pre-existing assistant messages.
+                _snap_rc: dict[int, str] = {}
+                for _si, _sm in enumerate(history_snapshot):
+                    if _sm.role == Role.ASSISTANT and _sm.reasoning_content:
+                        _snap_rc[_si] = _sm.reasoning_content
+                for _mi in range(min(len(history_snapshot), len(persisted_messages))):
+                    if _mi in _snap_rc:
+                        persisted_messages[_mi] = persisted_messages[_mi].model_copy(
+                            update={"reasoning_content": _snap_rc[_mi]}
+                        )
                 yield {
                     "type": "done",
                     "session_id": session_id,

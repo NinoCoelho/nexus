@@ -143,6 +143,7 @@ def build_loom_agent(
         negatives=_NEGATIVES,
         context_window=_model_context_window,
         overflow_output_headroom=8192,
+        overflow_tools_overhead=12_000,
     )
     graphrag_engine = None
     if _init_cfg:

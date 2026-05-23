@@ -20,12 +20,16 @@ import type {
   WorkflowDef,
   StepConfig,
   StepType,
+  StepRun,
+  StepRunStatus,
   TriggerConfig,
 } from "../../types/workflow";
+import * as wfApi from "../../api/workflows";
 import { TriggerNode } from "./TriggerNode";
 import { StepNode } from "./StepNode";
 import { ConditionNode } from "./ConditionNode";
 import ConfigPanel from "./ConfigPanel";
+import StepInspector from "./StepInspector";
 import Modal from "../Modal";
 import {
   migrateWorkflow,
@@ -200,6 +204,44 @@ function Canvas({
   const nodePosMap = useRef<PosMap>({});
   const prevFingerprint = useRef("");
 
+  const [interactiveRunId, setInteractiveRunId] = useState<string | null>(null);
+  const [stepRunMap, setStepRunMap] = useState<Record<string, StepRun>>({});
+  const [triggerPayload, setTriggerPayload] = useState<Record<string, unknown>>({});
+  const [condBranches, setCondBranches] = useState<Record<string, string>>({});
+  const [executingStep, setExecutingStep] = useState<string | null>(null);
+  const [inspectorStepId, setInspectorStepId] = useState<string | null>(null);
+  const [showPayloadInput, setShowPayloadInput] = useState(false);
+  const [payloadInputMode, setPayloadInputMode] = useState<"trigger" | "all">("trigger");
+  const [payloadText, setPayloadText] = useState("{}");
+  const [execError, setExecError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!wfPath) return;
+    wfApi.getWorkflowSamples(wfPath).then((s) => {
+      if (s.trigger_payload && Object.keys(s.trigger_payload).length > 0) {
+        setPayloadText(JSON.stringify(s.trigger_payload, null, 2));
+        setTriggerPayload(s.trigger_payload);
+      }
+      const stepSampleMap: Record<string, StepRun> = {};
+      for (const [stepId, sample] of Object.entries(s.steps || {})) {
+        if (sample.output !== undefined) {
+          stepSampleMap[stepId] = {
+            run_id: "__sample__",
+            step_id: stepId,
+            status: "completed",
+            input_resolved: sample.input_resolved as Record<string, unknown> | undefined,
+            output: sample.output,
+            started_at: "",
+            finished_at: "",
+          };
+        }
+      }
+      if (Object.keys(stepSampleMap).length > 0) {
+        setStepRunMap(stepSampleMap);
+      }
+    }).catch(() => {});
+  }, [wfPath]);
+
   const saveWithUndo = useCallback((next: WorkflowDef) => {
     setUndoStack((prev) => [...prev.slice(-(MAX_UNDO - 1)), wfRef.current]);
     onSave(next);
@@ -301,6 +343,131 @@ function Canvas({
     [],
   );
 
+  const hasCompletedPrerequisites = useCallback(
+    (stepId: string): boolean => {
+      if (!interactiveRunId) return false;
+      const steps = wfRef.current.steps;
+      if (steps.length > 0 && steps[0].id === stepId) return true;
+      for (const s of steps) {
+        if (s.next_step === stepId || s.then_step === stepId || s.else_step === stepId) {
+          if (s.type === "condition") {
+            const branch = condBranches[s.id];
+            if (branch === "then" && s.then_step === stepId) {
+              return !!stepRunMap[s.id] && stepRunMap[s.id].status === "completed";
+            }
+            if (branch === "else" && s.else_step === stepId) {
+              return !!stepRunMap[s.id] && stepRunMap[s.id].status === "completed";
+            }
+            return false;
+          }
+          return !!stepRunMap[s.id] && stepRunMap[s.id].status === "completed";
+        }
+      }
+      return false;
+    },
+    [interactiveRunId, stepRunMap, condBranches],
+  );
+
+  const startRun = useCallback(
+    async (mode: "trigger" | "all") => {
+      if (!wfPath) return;
+      setExecError(null);
+      try {
+        let payload = {};
+        try { payload = JSON.parse(payloadText); } catch {}
+        const result = await wfApi.startInteractiveRun(wfPath, payload, mode);
+        setInteractiveRunId(result.run.id);
+        setTriggerPayload(payload);
+        setStepRunMap({});
+        setCondBranches({});
+        if (mode === "all") {
+          const state = await wfApi.getInteractiveState(wfPath, result.run.id);
+          const newMap: Record<string, StepRun> = {};
+          for (const sr of state.steps) {
+            newMap[sr.step_id] = sr;
+          }
+          setStepRunMap(newMap);
+          setCondBranches(state.condition_branches || {});
+        }
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        setExecError(msg);
+        console.error("Failed to start interactive run:", e);
+      }
+    },
+    [wfPath, payloadText],
+  );
+
+  const handleTriggerRun = useCallback(() => {
+    setShowPayloadInput(true);
+    setPayloadInputMode("trigger");
+  }, []);
+
+  const handleRunAll = useCallback(() => {
+    setShowPayloadInput(true);
+    setPayloadInputMode("all");
+  }, []);
+
+  const handlePayloadSubmit = useCallback(() => {
+    setShowPayloadInput(false);
+    startRun(payloadInputMode);
+  }, [startRun, payloadInputMode]);
+
+  const executeStep = useCallback(
+    async (stepId: string) => {
+      if (!wfPath) return;
+      setExecError(null);
+      setExecutingStep(stepId);
+      try {
+        let runId = interactiveRunId;
+        if (!runId) {
+          let payload = {};
+          try { payload = JSON.parse(payloadText); } catch {}
+          const result = await wfApi.startInteractiveRun(wfPath, payload, "trigger", true);
+          runId = result.run.id;
+          setInteractiveRunId(runId);
+          setTriggerPayload(payload);
+          const state = await wfApi.getInteractiveState(wfPath, runId);
+          const seededMap: Record<string, StepRun> = {};
+          for (const sr of state.steps) {
+            seededMap[sr.step_id] = sr;
+          }
+          setStepRunMap(seededMap);
+          setCondBranches(state.condition_branches || {});
+        }
+        const sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId);
+        setStepRunMap((prev) => ({ ...prev, [stepId]: sr }));
+        const step = wfRef.current.steps.find((s) => s.id === stepId);
+        if (step?.type === "condition" && sr.status === "completed") {
+          try {
+            const state = await wfApi.getInteractiveState(wfPath, runId);
+            setCondBranches(state.condition_branches || {});
+          } catch {}
+        }
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        setExecError(msg);
+        console.error("Failed to execute step:", e);
+      } finally {
+        setExecutingStep(null);
+      }
+    },
+    [wfPath, interactiveRunId, payloadText],
+  );
+
+  const handleOpenInspector = useCallback((stepId: string) => {
+    setInspectorStepId(stepId);
+  }, []);
+
+  const getStepExecStatus = useCallback(
+    (stepId: string): StepRunStatus | null => {
+      if (executingStep === stepId) return "running";
+      const sr = stepRunMap[stepId];
+      return sr?.status || null;
+    },
+    [executingStep, stepRunMap],
+  );
+
   const fingerprint = `${migratedWf.triggers.map((t) => t.id).join(",")}|${migratedWf.steps.map((s) => `${s.id}:${s.next_step || ""}:${s.then_step || ""}:${s.else_step || ""}`).join(",")}`;
 
   if (fingerprint !== prevFingerprint.current) {
@@ -324,6 +491,9 @@ function Canvas({
           label: t.type,
           detail: triggerSummary(t),
           selected: selectedId === id,
+          hasActiveRun: !!interactiveRunId,
+          onRunTrigger: handleTriggerRun,
+          onRunAll: handleRunAll,
           onAddFromHandle,
         },
       });
@@ -337,6 +507,10 @@ function Canvas({
         selectable: true,
         draggable: true,
       };
+      const execStatus = getStepExecStatus(s.id);
+      const canRun = !!interactiveRunId && !executingStep && hasCompletedPrerequisites(s.id);
+      const branch = condBranches[s.id];
+
       if (s.type === "condition") {
         nodes.push({
           ...base,
@@ -347,6 +521,11 @@ function Canvas({
             slug: s.slug || slugify(s.name),
             expression: s.expression || "",
             selected: selectedId === id,
+            execStatus,
+            conditionBranch: branch || null,
+            canRun,
+            onRun: () => executeStep(s.id),
+            onOpenInspector: () => handleOpenInspector(s.id),
             onAddFromHandle,
           },
         });
@@ -361,6 +540,11 @@ function Canvas({
             stepType: s.type,
             summary: stepSummary(s),
             selected: selectedId === id,
+            execStatus,
+            canRun,
+            executing: executingStep === s.id,
+            onRun: () => executeStep(s.id),
+            onOpenInspector: () => handleOpenInspector(s.id),
             onAddFromHandle,
           },
         });
@@ -368,7 +552,7 @@ function Canvas({
     }
 
     return nodes;
-  }, [migratedWf, selectedId, fingerprint]);
+  }, [migratedWf, selectedId, fingerprint, interactiveRunId, stepRunMap, condBranches, executingStep, getStepExecStatus, hasCompletedPrerequisites, executeStep, handleTriggerRun, handleRunAll, handleOpenInspector, onAddFromHandle]);
 
   const [controlledNodes, setControlledNodes] = useState<Node[]>([]);
 
@@ -675,6 +859,13 @@ function Canvas({
             + Add Trigger
           </button>
         )}
+
+        {execError && (
+          <div className="wf-exec-error-toast" onClick={() => setExecError(null)}>
+            <span className="wf-exec-error-msg">{execError}</span>
+            <button className="wf-exec-error-close">✕</button>
+          </div>
+        )}
         <ReactFlow
           nodes={controlledNodes}
           edges={edges}
@@ -760,6 +951,69 @@ function Canvas({
           onCancel={() => setDeleteConfirm(null)}
         />
       )}
+
+      {showPayloadInput && (
+        <div className="wf-payload-overlay" onClick={() => setShowPayloadInput(false)}>
+          <div className="wf-payload-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="wf-payload-header">
+              <span className="wf-payload-title">
+                {payloadInputMode === "all" ? "Run All Steps" : "Run Trigger"}
+              </span>
+              <button className="wf-payload-close" onClick={() => setShowPayloadInput(false)}>✕</button>
+            </div>
+            <div className="wf-payload-body">
+              <label style={{ fontSize: 10, fontWeight: 600, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Trigger Payload (JSON)
+              </label>
+              <textarea
+                value={payloadText}
+                onChange={(e) => setPayloadText(e.target.value)}
+                placeholder='{"key": "value"}'
+              />
+              <div className="wf-payload-actions">
+                <button className="wf-payload-btn wf-payload-btn-cancel" onClick={() => setShowPayloadInput(false)}>
+                  Cancel
+                </button>
+                <button className="wf-payload-btn wf-payload-btn-run" onClick={handlePayloadSubmit}>
+                  {payloadInputMode === "all" ? "⏩ Run All" : "▶ Run Trigger"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {inspectorStepId && wfPath && (() => {
+        const step = migratedWf.steps.find((s) => s.id === inspectorStepId);
+        if (!step) return null;
+        const sr = stepRunMap[inspectorStepId] || null;
+        return (
+          <StepInspector
+            step={step}
+            stepRun={sr}
+            allStepRuns={Object.values(stepRunMap)}
+            allSteps={migratedWf.steps}
+            triggerPayload={triggerPayload}
+            variables={migratedWf.variables}
+            wfPath={wfPath}
+            onStepPatch={(patch) => {
+              if (!selectedId) {
+                const nodeId = `step-${inspectorStepId}`;
+                setSelectedId(nodeId);
+              }
+              saveWithUndo({
+                ...wfRef.current,
+                steps: wfRef.current.steps.map((s) =>
+                  s.id === inspectorStepId ? { ...s, ...patch } : s
+                ),
+              });
+            }}
+            onExecute={() => executeStep(inspectorStepId)}
+            onClose={() => setInspectorStepId(null)}
+            executing={executingStep === inspectorStepId}
+          />
+        );
+      })()}
     </div>
   );
 }
