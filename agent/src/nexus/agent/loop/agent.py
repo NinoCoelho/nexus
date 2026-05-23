@@ -412,7 +412,7 @@ class Agent:
                     context_window=effective_window,
                     session_id=session_id,
                     model_id=model_id or self._chosen_model,
-                    provider=self._provider,
+                    provider=self._nexus_provider,
                     strategy="auto",
                 )
                 if _cs_report.compact_report.compacted > 0 or _cs_report.summarized:
