@@ -112,6 +112,46 @@ async def get_workflow_schema(path: str) -> dict:
     return load_schema(path)
 
 
+@router.get("/workflows/{path:path}/runs")
+async def list_runs(path: str, request: Request, limit: int = 50, offset: int = 0) -> dict:
+    store = _get_store(request)
+    runs = store.list_runs(path, limit=limit, offset=offset)
+    return {"runs": [r.to_dict() for r in runs]}
+
+
+@router.get("/workflows/{path:path}/runs/{run_id}")
+async def get_run(path: str, run_id: str, request: Request) -> dict:
+    store = _get_store(request)
+    run = store.get_run(run_id)
+    if run is None or run.workflow_path != path:
+        raise HTTPException(status_code=404, detail="run not found")
+    step_runs = store.list_step_runs(run_id)
+    return {"run": run.to_dict(), "steps": [sr.to_dict() for sr in step_runs]}
+
+
+@router.get("/workflows/{path:path}/webhook-url")
+async def get_webhook_url(path: str, request: Request) -> dict:
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    base_url = str(request.base_url).rstrip("/")
+    hooks = []
+    for t in wf.triggers:
+        if t.type == TriggerType.webhook:
+            url = f"{base_url}/workflow/trigger/{t.token}" if t.token else None
+            hooks.append({"trigger_id": t.id, "token": t.token, "url": url})
+
+    return {"webhooks": hooks}
+
+
+
 @router.get("/workflows/{path:path}")
 async def get_workflow(path: str, request: Request) -> dict:
     from ... import vault as _vault
@@ -353,23 +393,6 @@ async def manual_run(path: str, body: ManualRunBody, request: Request) -> dict:
     return run.to_dict()
 
 
-@router.get("/workflows/{path:path}/runs")
-async def list_runs(path: str, request: Request, limit: int = 50, offset: int = 0) -> dict:
-    store = _get_store(request)
-    runs = store.list_runs(path, limit=limit, offset=offset)
-    return {"runs": [r.to_dict() for r in runs]}
-
-
-@router.get("/workflows/{path:path}/runs/{run_id}")
-async def get_run(path: str, run_id: str, request: Request) -> dict:
-    store = _get_store(request)
-    run = store.get_run(run_id)
-    if run is None or run.workflow_path != path:
-        raise HTTPException(status_code=404, detail="run not found")
-    step_runs = store.list_step_runs(run_id)
-    return {"run": run.to_dict(), "steps": [sr.to_dict() for sr in step_runs]}
-
-
 @router.post("/workflow/trigger/{token}")
 async def webhook_trigger(token: str, request: Request) -> Response:
     store = _get_store(request)
@@ -442,28 +465,6 @@ async def webhook_trigger(token: str, request: Request) -> Response:
         status_code=status.HTTP_202_ACCEPTED,
         media_type="application/json",
     )
-
-
-@router.get("/workflows/{path:path}/webhook-url")
-async def get_webhook_url(path: str, request: Request) -> dict:
-    from ... import vault as _vault
-
-    try:
-        content = _vault.read_file(path)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="file not found")
-
-    raw = content.get("content", "") if isinstance(content, dict) else str(content)
-    wf = parser.parse(raw)
-
-    base_url = str(request.base_url).rstrip("/")
-    hooks = []
-    for t in wf.triggers:
-        if t.type == TriggerType.webhook:
-            url = f"{base_url}/workflow/trigger/{t.token}" if t.token else None
-            hooks.append({"trigger_id": t.id, "token": t.token, "url": url})
-
-    return {"webhooks": hooks}
 
 
 class DebugStartBody(BaseModel):
