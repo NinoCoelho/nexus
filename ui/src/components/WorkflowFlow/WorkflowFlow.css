@@ -1,7 +1,7 @@
 @import "@xyflow/react/dist/style.css";
 
 /* ═════════════════════════════════════════════════════════════════════════
-   Workflow Flow Editor — full rewrite
+   Workflow Flow Editor
    ═════════════════════════════════════════════════════════════════════════ */
 
 /* ── Canvas ────────────────────────────────────────────────────────────── */
@@ -10,6 +10,7 @@
   display: flex;
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 
 .wf-flow-canvas {
@@ -38,103 +39,123 @@
   to { stroke-dashoffset: -10; }
 }
 
-.wf-flow-canvas .react-flow__controls {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px var(--shadow-color, rgba(0,0,0,0.08));
-}
-
-.wf-flow-canvas .react-flow__controls button {
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
-  color: var(--fg);
-  width: 28px;
-  height: 28px;
-}
-
-.wf-flow-canvas .react-flow__controls button:hover {
-  background: var(--bg-hover);
-}
-
-.wf-flow-canvas .react-flow__controls button svg {
-  fill: var(--fg-dim);
-}
-
 .wf-flow-canvas .react-flow__minimap {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
 }
 
-/* ── Component Palette (left sidebar) ──────────────────────────────────── */
+/* ── Mini Toolbar (top-left floating) ──────────────────────────────── */
 
-.wf-palette {
-  width: 52px;
-  min-width: 52px;
-  border-right: 1px solid var(--border);
+.wf-mini-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  display: flex;
+  gap: 2px;
+  align-items: center;
   background: var(--bg-panel);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 0;
-  overflow-y: auto;
-}
-
-.wf-palette-item {
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: grab;
-  font-size: 16px;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
-  position: relative;
-}
-
-.wf-palette-item:hover {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-  transform: scale(1.08);
-  z-index: 2;
-}
-
-.wf-palette-item:active {
-  cursor: grabbing;
-  transform: scale(0.96);
-}
-
-.wf-palette-sep {
-  width: 24px;
-  height: 1px;
-  background: var(--border);
-  margin: 4px 0;
-}
-
-.wf-palette-rearrange {
-  width: 38px;
-  height: 38px;
   border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 16px;
+  padding: 3px;
+  box-shadow: 0 2px 8px var(--shadow-color, rgba(0,0,0,0.08));
+}
+
+.wf-tb-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
   color: var(--fg-dim);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+  line-height: 1;
 }
 
-.wf-palette-rearrange:hover {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+.wf-tb-btn:hover {
+  background: var(--bg-hover);
   color: var(--fg);
+}
+
+.wf-tb-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+/* ── Empty canvas add button (no longer used, kept for compat) ─────── */
+
+.wf-empty-add {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  padding: 10px 20px;
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  color: var(--fg-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.wf-empty-add:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+/* ── In-canvas (+) add node ─────────────────────────────────────────── */
+
+.wf-add-pill {
+  width: 180px;
+  padding: 6px 0;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--fg-dim);
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.wf-add-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-panel));
+}
+
+.wf-add-pill-icon {
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+/* ── Add dropdown menu ─────────────────────────────────────────────────── */
+
+.wf-add-menu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  z-index: 20;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 6px 24px var(--shadow-color, rgba(0,0,0,0.16));
+  min-width: 180px;
 }
 
 /* ── Standard Nodes (trigger, step) ────────────────────────────────────── */
@@ -257,22 +278,41 @@
 .wf-cond-diamond {
   width: 110px;
   height: 70px;
-  background: var(--bg-panel);
+  background: var(--border);
   clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition: background 0.15s, filter 0.15s;
+  filter: drop-shadow(0 1px 4px var(--shadow-color, rgba(0,0,0,0.06)));
+  position: relative;
+}
+
+.wf-cond-diamond::before {
+  content: "";
+  position: absolute;
+  inset: 1.5px;
+  background: var(--bg-panel);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
   transition: background 0.15s;
-  box-shadow: 0 1px 4px var(--shadow-color, rgba(0,0,0,0.06));
 }
 
 .wf-cond-diamond:hover {
+  background: var(--accent-lo);
+}
+
+.wf-cond-diamond:hover::before {
   background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel));
 }
 
 .wf-cond-diamond.selected {
+  background: var(--accent);
+  filter: drop-shadow(0 0 0 2px var(--accent)) drop-shadow(0 2px 12px var(--shadow-color, rgba(0,0,0,0.12)));
+}
+
+.wf-cond-diamond.selected::before {
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
 }
 
@@ -366,49 +406,7 @@
   background: color-mix(in srgb, var(--accent) 8%, var(--bg));
 }
 
-/* ── Add-pill (bottom of chain) ────────────────────────────────────────── */
-
-.wf-add-pill {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1.5px dashed var(--border);
-  background: var(--bg-panel);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-  position: relative;
-}
-
-.wf-add-pill:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
-}
-
-.wf-add-pill-icon {
-  font-size: 18px;
-  color: var(--fg-dim);
-  line-height: 1;
-  user-select: none;
-}
-
-/* ── Add dropdown menu ─────────────────────────────────────────────────── */
-
-.wf-add-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 4px;
-  box-shadow: 0 6px 24px var(--shadow-color, rgba(0,0,0,0.16));
-  min-width: 180px;
-}
+/* ── Add dropdown menu items ─────────────────────────────────────────────── */
 
 .wf-add-menu-item {
   display: flex;
@@ -449,21 +447,87 @@
   color: var(--fg-dim);
 }
 
+.wf-add-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.wf-add-menu-section {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  padding: 2px 8px 4px;
+}
+
 /* ── Handles ───────────────────────────────────────────────────────────── */
 
 .wf-handle {
-  width: 8px !important;
-  height: 8px !important;
+  width: 12px !important;
+  height: 12px !important;
   background: var(--bg-panel) !important;
   border: 2px solid var(--fg-dim) !important;
   border-radius: 50% !important;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, width 0.15s, height 0.15s;
+  pointer-events: all !important;
 }
 
 .wf-handle:hover {
   border-color: var(--accent) !important;
   background: var(--accent) !important;
 }
+
+/* ── Add-step handle (source handle with + overlay) ─────────────────── */
+
+.wf-add-handle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.wf-add-handle-plus {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 2px solid var(--fg-dim);
+  color: var(--fg-dim);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.15s, transform 0.15s, border-color 0.15s, background 0.15s, color 0.15s;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.wf-add-handle:hover .wf-add-handle-plus {
+  opacity: 1;
+  transform: scale(1);
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  pointer-events: auto;
+}
+
+.wf-add-handle:hover .wf-handle {
+  opacity: 0;
+}
+
+.wf-add-handle .wf-handle {
+  z-index: 1;
+}
+
+/* Condition node port handles need special positioning */
 
 .wf-handle-top {
   position: absolute !important;
@@ -631,44 +695,6 @@
   background: color-mix(in srgb, var(--bad) 8%, transparent);
 }
 
-/* ── Toolbar ───────────────────────────────────────────────────────────── */
-
-.wf-flow-toolbar {
-  position: absolute;
-  top: 10px;
-  left: 62px;
-  z-index: 5;
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.wf-flow-toolbar button {
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-panel);
-  color: var(--fg);
-  font-size: 11px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  box-shadow: 0 1px 3px var(--shadow-color, rgba(0,0,0,0.06));
-  white-space: nowrap;
-}
-
-.wf-flow-toolbar button:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent-lo);
-}
-
-.wf-flow-toolbar .sep {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
-}
-
 /* ── Webhook URL copy ────────────────────────────────────────────────── */
 
 .wf-webhook-url-row {
@@ -728,6 +754,56 @@
   width: 100%;
 }
 
+/* ── Autocomplete dropdown ─────────────────────────────────────────── */
+
+.wf-autocomplete-dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px var(--shadow-color, rgba(0,0,0,0.12));
+  min-width: 160px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.wf-autocomplete-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg);
+  transition: background 0.08s;
+}
+
+.wf-autocomplete-item.selected {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.wf-autocomplete-item:hover {
+  background: var(--bg-hover);
+}
+
+.wf-ac-label {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.wf-ac-detail {
+  font-size: 9px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  opacity: 0.7;
+}
+
 .wf-template-hint {
   position: absolute;
   bottom: -18px;
@@ -745,4 +821,298 @@
 .wf-template-hint code {
   font-family: var(--font-mono);
   font-weight: 600;
+}
+
+/* ── Debug Panel ─────────────────────────────────────────────────────── */
+
+.wf-debug-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  max-height: 50%;
+  overflow-y: auto;
+}
+
+.wf-debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  z-index: 1;
+}
+
+.wf-debug-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.wf-debug-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-dim);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.wf-debug-close:hover {
+  background: var(--bg-hover);
+}
+
+.wf-debug-body {
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-debug-start {
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+}
+
+.wf-debug-start:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.wf-debug-start:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wf-debug-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wf-debug-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wf-debug-badge-running {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+.wf-debug-badge-completed {
+  background: color-mix(in srgb, #4caf50 15%, transparent);
+  color: #4caf50;
+}
+
+.wf-debug-badge-failed {
+  background: color-mix(in srgb, var(--bad) 15%, transparent);
+  color: var(--bad);
+}
+
+.wf-debug-badge-cancelled {
+  background: var(--bg-hover);
+  color: var(--fg-dim);
+}
+
+.wf-debug-run-id {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+}
+
+.wf-debug-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.wf-debug-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.wf-debug-btn:hover {
+  background: var(--bg-hover);
+}
+
+.wf-debug-btn-danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.wf-debug-btn-danger:hover {
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+
+.wf-debug-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-debug-step {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.wf-debug-step:hover {
+  border-color: var(--accent-lo);
+}
+
+.wf-debug-step.selected {
+  border-color: var(--accent);
+}
+
+.wf-debug-step.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 8px color-mix(in srgb, var(--accent) 20%, transparent);
+  animation: wf-debug-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes wf-debug-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--accent), 0 0 8px color-mix(in srgb, var(--accent) 20%, transparent); }
+  50% { box-shadow: 0 0 0 2px var(--accent), 0 0 14px color-mix(in srgb, var(--accent) 30%, transparent); }
+}
+
+.wf-debug-step-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-debug-step-status {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.wf-dss-completed { color: #4caf50; }
+.wf-dss-failed { color: var(--bad); }
+.wf-dss-running { color: var(--accent); animation: wf-debug-blink 1s step-end infinite; }
+.wf-dss-pending { color: var(--fg-dim); }
+
+@keyframes wf-debug-blink {
+  50% { opacity: 0.3; }
+}
+
+.wf-debug-step-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.wf-debug-step-type {
+  font-size: 9px;
+  color: var(--fg-dim);
+  background: var(--bg-hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+
+.wf-debug-step-detail {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-debug-section label {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  margin-bottom: 2px;
+}
+
+.wf-debug-section pre {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-inset);
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--fg);
+  overflow-x: auto;
+  max-height: 120px;
+  overflow-y: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wf-debug-error {
+  color: var(--bad);
+}
+
+/* ── Add-step picker ─────────────────────────────────────────────────── */
+
+.wf-connect-picker {
+  position: absolute;
+  z-index: 20;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transform: translateX(-50%);
+}
+
+.wf-connect-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font-size: 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.wf-connect-picker-item:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.wf-cpi-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.wf-cpi-label {
+  font-size: 12px;
 }

@@ -65,6 +65,7 @@ def _build_step(raw: dict[str, Any]) -> StepConfig:
         on_error=str(raw.get("on_error", "stop")),
         retry_count=int(raw.get("retry_count", 0)),
         retry_delay_seconds=int(raw.get("retry_delay_seconds", 5)),
+        next_step=raw.get("next_step"),
     )
 
 

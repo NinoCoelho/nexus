@@ -6,7 +6,10 @@ export type StepType =
   | "http_request"
   | "condition"
   | "transform"
-  | "delay";
+  | "delay"
+  | "kanban_action"
+  | "table_action"
+  | "return_step";
 
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type StepRunStatus = "pending" | "running" | "completed" | "failed" | "skipped";
@@ -60,6 +63,19 @@ export interface StepConfig {
   duration_seconds?: number;
   mcp_server?: string;
   mcp_tool?: string;
+  action?: string;
+  board_path?: string;
+  lane_id?: string;
+  card_id?: string;
+  table_path?: string;
+  row_data?: Record<string, unknown>;
+  row_id?: string;
+  where?: Record<string, unknown>;
+  query_sql?: string;
+  llm_instructions?: string;
+  output_sample?: string;
+  response_template?: string;
+  next_step?: string;
 }
 
 export interface WorkflowDef {
@@ -106,4 +122,23 @@ export interface StepRun {
 export interface RunDetail {
   run: WorkflowRun;
   steps: StepRun[];
+}
+
+export interface DebugStepEvent {
+  run_id: string;
+  step_id: string;
+  step_name?: string;
+  step_type?: string;
+  status?: StepRunStatus;
+  input_resolved?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface StepSchema {
+  slug: string;
+  output_schema?: { keys: string[]; types: Record<string, string> };
+  sample_output?: unknown;
 }

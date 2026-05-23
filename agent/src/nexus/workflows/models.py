@@ -27,6 +27,9 @@ class StepType(str, Enum):
     condition = "condition"
     transform = "transform"
     delay = "delay"
+    kanban_action = "kanban_action"
+    table_action = "table_action"
+    return_step = "return_step"
 
 
 class AuthType(str, Enum):
@@ -129,6 +132,19 @@ class StepConfig:
     on_error: str = "stop"
     retry_count: int = 0
     retry_delay_seconds: int = 5
+    action: str | None = None
+    board_path: str | None = None
+    lane_id: str | None = None
+    card_id: str | None = None
+    table_path: str | None = None
+    row_data: dict[str, Any] | None = None
+    row_id: str | None = None
+    where: dict[str, Any] | None = None
+    query_sql: str | None = None
+    llm_instructions: str | None = None
+    output_sample: str | None = None
+    response_template: str | None = None
+    next_step: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "name": self.name, "type": self.type.value}
@@ -196,6 +212,32 @@ class StepConfig:
             out["retry_count"] = self.retry_count
         if self.retry_delay_seconds != 5:
             out["retry_delay_seconds"] = self.retry_delay_seconds
+        if self.action is not None:
+            out["action"] = self.action
+        if self.board_path is not None:
+            out["board_path"] = self.board_path
+        if self.lane_id is not None:
+            out["lane_id"] = self.lane_id
+        if self.card_id is not None:
+            out["card_id"] = self.card_id
+        if self.table_path is not None:
+            out["table_path"] = self.table_path
+        if self.row_data is not None:
+            out["row_data"] = self.row_data
+        if self.row_id is not None:
+            out["row_id"] = self.row_id
+        if self.where is not None:
+            out["where"] = self.where
+        if self.query_sql is not None:
+            out["query_sql"] = self.query_sql
+        if self.llm_instructions is not None:
+            out["llm_instructions"] = self.llm_instructions
+        if self.output_sample is not None:
+            out["output_sample"] = self.output_sample
+        if self.response_template is not None:
+            out["response_template"] = self.response_template
+        if self.next_step is not None:
+            out["next_step"] = self.next_step
         return out
 
 

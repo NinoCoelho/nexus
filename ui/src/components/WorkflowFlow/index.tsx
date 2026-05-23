@@ -1,16 +1,18 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
-  Controls,
   MiniMap,
   ReactFlowProvider,
   applyNodeChanges,
   useReactFlow,
+  BaseEdge,
+  getBezierPath,
+  ConnectionMode,
   type Node,
   type Edge,
+  type EdgeProps,
   type Connection,
-  type EdgeChange,
   type NodeChange,
 } from "@xyflow/react";
 
@@ -23,28 +25,72 @@ import type {
 import { TriggerNode } from "./TriggerNode";
 import { StepNode } from "./StepNode";
 import { ConditionNode } from "./ConditionNode";
-import { AddNode } from "./AddNode";
 import ConfigPanel from "./ConfigPanel";
+import Modal from "../Modal";
+import {
+  migrateWorkflow,
+  computeLayout,
+  buildEdges,
+} from "./workflow-layout";
+import type { PosMap } from "./workflow-layout";
 import "./WorkflowFlow.css";
 
 const NODE_TYPES = {
   trigger: TriggerNode,
   step: StepNode,
   condition: ConditionNode,
-  add: AddNode,
 };
 
-const STEP_PALETTE: { type: StepType; icon: string; tip: string }[] = [
-  { type: "tool_call", icon: "🔧", tip: "Tool Call" },
-  { type: "agent_session", icon: "🤖", tip: "Agent Session" },
-  { type: "condition", icon: "◇", tip: "Condition" },
-  { type: "transform", icon: "🔄", tip: "Transform" },
-  { type: "delay", icon: "⏱", tip: "Delay" },
-  { type: "http_request", icon: "🌐", tip: "HTTP Request" },
-  { type: "mcp_call", icon: "🔌", tip: "MCP Call" },
+function DeletableEdge({
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style,
+  label,
+  labelStyle,
+  labelBgStyle,
+  labelBgPadding,
+}: EdgeProps) {
+  const [edgePath] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+
+  return (
+    <BaseEdge
+      path={edgePath}
+      style={style}
+      label={label}
+      labelStyle={labelStyle}
+      labelBgStyle={labelBgStyle}
+      labelBgPadding={labelBgPadding}
+    />
+  );
+}
+
+const EDGE_TYPES = { deletable: DeletableEdge };
+
+export const STEP_PALETTE: { type: StepType; icon: string; tip: string; desc: string }[] = [
+  { type: "tool_call", icon: "🔧", tip: "Tool Call", desc: "Run a tool" },
+  { type: "agent_session", icon: "🤖", tip: "Agent", desc: "LLM session" },
+  { type: "condition", icon: "◇", tip: "Condition", desc: "Branch" },
+  { type: "transform", icon: "🔄", tip: "Transform", desc: "Map data" },
+  { type: "http_request", icon: "🌐", tip: "HTTP", desc: "Call API" },
+  { type: "kanban_action", icon: "📋", tip: "Kanban", desc: "Board action" },
+  { type: "table_action", icon: "📊", tip: "App Table", desc: "Table action" },
+  { type: "mcp_call", icon: "🔌", tip: "MCP", desc: "MCP server" },
+  { type: "delay", icon: "⏱", tip: "Delay", desc: "Wait" },
+  { type: "return_step", icon: "↩", tip: "Return", desc: "Send response" },
 ];
 
-const TRIGGER_PALETTE: { type: TriggerConfig["type"]; icon: string; tip: string }[] = [
+export const TRIGGER_PALETTE: { type: TriggerConfig["type"]; icon: string; tip: string }[] = [
   { type: "webhook", icon: "🔗", tip: "Webhook" },
   { type: "schedule", icon: "📅", tip: "Schedule" },
   { type: "fs_watch", icon: "📁", tip: "File Watch" },
@@ -83,507 +129,572 @@ function stepSummary(s: StepConfig): string {
     case "transform": return (s.template || "—").slice(0, 40);
     case "http_request": return `${s.method || "GET"} ${(s.url || "—").slice(0, 25)}`;
     case "mcp_call": return `${s.mcp_server || "?"}/${s.mcp_tool || "?"}`;
+    case "kanban_action": return `${s.action || "—"} ${s.board_path || ""}`;
+    case "table_action": return `${s.action || "—"} ${s.table_path || ""}`;
+    case "return_step": return (s.response_template || "response").slice(0, 40);
     default: return "";
   }
 }
 
-const NODE_H = 56;
-const COND_H = 90;
-const V_GAP = 100;
-const BRANCH_OFFSET = 240;
+const MAX_UNDO = 5;
 
-type PosMap = Record<string, { x: number; y: number }>;
-
-function computeLayout(wf: WorkflowDef): PosMap {
-  const pos: PosMap = {};
-  const branchTargets = new Set<string>();
-
-  for (const s of wf.steps) {
-    if (s.type === "condition") {
-      if (s.then_step) branchTargets.add(s.then_step);
-      if (s.else_step) branchTargets.add(s.else_step);
-    }
+function insertStepAfter(steps: StepConfig[], afterId: string, newStep: StepConfig): StepConfig[] {
+  const result = [...steps];
+  const idx = result.findIndex((s) => s.id === afterId);
+  if (idx === -1) {
+    result.push(newStep);
+    return result;
   }
-
-  let y = 40;
-  for (const t of wf.triggers) {
-    pos[`trigger-${t.id}`] = { x: 300, y };
-    y += NODE_H + V_GAP;
-  }
-
-  for (const s of wf.steps) {
-    if (branchTargets.has(s.id)) continue;
-    pos[`step-${s.id}`] = { x: 300, y };
-    y += (s.type === "condition" ? COND_H : NODE_H) + V_GAP;
-
-    if (s.type === "condition") {
-      if (s.then_step) {
-        pos[`step-${s.then_step}`] = { x: 300 - BRANCH_OFFSET, y };
-      }
-      if (s.else_step) {
-        pos[`step-${s.else_step}`] = { x: 300 + BRANCH_OFFSET, y };
-      }
-      if (s.then_step || s.else_step) {
-        y += NODE_H + V_GAP;
-      }
-    }
-  }
-
-  pos["add-node"] = { x: 370, y };
-  return pos;
+  result.splice(idx + 1, 0, newStep);
+  return result;
 }
 
-function buildNodes(
-  wf: WorkflowDef,
-  selectedId: string | null,
-  pos: PosMap,
-  addBranch: (stepId: string, branch: "then" | "else") => void,
-  onAdd: (type: StepType) => void,
-): Node[] {
-  const nodes: Node[] = [];
-
-  for (const t of wf.triggers) {
-    const id = `trigger-${t.id}`;
-    nodes.push({
-      id,
-      type: "trigger",
-      position: pos[id] || { x: 300, y: 40 },
-      data: {
-        triggerType: t.type,
-        triggerId: t.id,
-        label: t.type,
-        detail: triggerSummary(t),
-        selected: selectedId === id,
-      },
-    });
-  }
-
-  for (const s of wf.steps) {
-    const id = `step-${s.id}`;
-    const base = {
-      id,
-      position: pos[id] || { x: 300, y: 200 },
-      selectable: true,
-      draggable: true,
-    };
-    if (s.type === "condition") {
-      nodes.push({
-        ...base,
-        type: "condition",
-        data: {
-          stepId: s.id,
-          stepName: s.name,
-          slug: s.slug || slugify(s.name),
-          expression: s.expression || "",
-          selected: selectedId === id,
-          onAddBranch: addBranch,
-        },
-      });
-    } else {
-      nodes.push({
-        ...base,
-        type: "step",
-        data: {
-          stepId: s.id,
-          stepName: s.name,
-          slug: s.slug || slugify(s.name),
-          stepType: s.type,
-          summary: stepSummary(s),
-          selected: selectedId === id,
-        },
-      });
-    }
-  }
-
-  nodes.push({
-    id: "add-node",
-    type: "add",
-    position: pos["add-node"] || { x: 370, y: 400 },
-    data: { onAdd },
-    draggable: false,
-    selectable: false,
+function clearPredecessorTo(steps: StepConfig[], targetId: string): StepConfig[] {
+  return steps.map((s) => {
+    const patches: Partial<StepConfig> = {};
+    if (s.next_step === targetId) patches.next_step = undefined;
+    if (s.then_step === targetId) patches.then_step = undefined;
+    if (s.else_step === targetId) patches.else_step = undefined;
+    return Object.keys(patches).length > 0 ? { ...s, ...patches } : s;
   });
-
-  return nodes;
 }
 
-function buildEdges(wf: WorkflowDef, deletedEdges: Set<string>): Edge[] {
-  const edges: Edge[] = [];
-  const branchTargets = new Set<string>();
-
-  for (const s of wf.steps) {
-    if (s.type === "condition") {
-      if (s.then_step) branchTargets.add(s.then_step);
-      if (s.else_step) branchTargets.add(s.else_step);
-    }
-  }
-
-  if (wf.triggers.length > 0 && wf.steps.length > 0) {
-    const triggerId = `trigger-${wf.triggers[wf.triggers.length - 1].id}`;
-    const firstStep = wf.steps.find((s) => !branchTargets.has(s.id));
-    if (firstStep) {
-      const id = `seq:${triggerId}:step-${firstStep.id}`;
-      if (!deletedEdges.has(id)) {
-        edges.push({
-          id,
-          source: triggerId,
-          target: `step-${firstStep.id}`,
-          style: { stroke: "var(--fg-dim)", strokeWidth: 1.5 },
-        });
-      }
-    }
-  }
-
-  for (let i = 0; i < wf.steps.length; i++) {
-    const s = wf.steps[i];
-    if (s.type === "condition") {
-      if (s.then_step) {
-        const id = `branch:step-${s.id}:then:step-${s.then_step}`;
-        if (!deletedEdges.has(id)) {
-          edges.push({
-            id,
-            source: `step-${s.id}`,
-            sourceHandle: "then",
-            target: `step-${s.then_step}`,
-            label: "true",
-            labelStyle: { fontSize: 9, fontWeight: 700, fill: "var(--accent)" },
-            labelBgStyle: { fill: "var(--bg-panel)", fillOpacity: 0.95 },
-            labelBgPadding: [4, 3] as [number, number],
-            style: { stroke: "var(--accent)", strokeWidth: 1.5 },
-          });
-        }
-      }
-      if (s.else_step) {
-        const id = `branch:step-${s.id}:else:step-${s.else_step}`;
-        if (!deletedEdges.has(id)) {
-          edges.push({
-            id,
-            source: `step-${s.id}`,
-            sourceHandle: "else",
-            target: `step-${s.else_step}`,
-            label: "false",
-            labelStyle: { fontSize: 9, fontWeight: 700, fill: "var(--fg-dim)" },
-            labelBgStyle: { fill: "var(--bg-panel)", fillOpacity: 0.95 },
-            labelBgPadding: [4, 3] as [number, number],
-            style: { stroke: "var(--fg-dim)", strokeWidth: 1.5, strokeDasharray: "4 3" },
-          });
-        }
-      }
-      continue;
-    }
-
-    for (let j = i + 1; j < wf.steps.length; j++) {
-      const next = wf.steps[j];
-      if (branchTargets.has(next.id)) continue;
-      const id = `seq:step-${s.id}:step-${next.id}`;
-      if (!deletedEdges.has(id)) {
-        edges.push({
-          id,
-          source: `step-${s.id}`,
-          target: `step-${next.id}`,
-          animated: s.type === "delay",
-          style: { stroke: "var(--fg-dim)", strokeWidth: 1.5 },
-        });
-      }
-      break;
-    }
-  }
-
-  return edges;
+function moveAfter(steps: StepConfig[], afterId: string, targetId: string): StepConfig[] {
+  const target = steps.find((s) => s.id === targetId);
+  if (!target) return steps;
+  const rest = steps.filter((s) => s.id !== targetId);
+  const idx = rest.findIndex((s) => s.id === afterId);
+  if (idx === -1) return [...rest, target];
+  rest.splice(idx + 1, 0, target);
+  return rest;
 }
 
 function Canvas({
   wf,
   onSave,
-  insertStep,
+  wfPath,
 }: {
   wf: WorkflowDef;
   onSave: (updated: WorkflowDef) => void;
-  insertStep: (type: StepType, afterStepId: string | null, position?: { x: number; y: number }) => void;
+  wfPath?: string;
 }) {
   const rfInstance = useReactFlow();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [deletedEdges, setDeletedEdges] = useState<Set<string>>(new Set());
-  const [controlledNodes, setControlledNodes] = useState<Node[]>([]);
-  const wfRef = useRef(wf);
-  wfRef.current = wf;
 
-  // Sync nodes from wf data
-  const posRef = useRef<PosMap>({});
-  const [layoutVer, setLayoutVer] = useState(0);
-  const prevStepsLen = useRef(-1);
+  const migratedWf = useMemo(() => migrateWorkflow(wf), [wf]);
+  const wfRef = useRef(migratedWf);
+  wfRef.current = migratedWf;
 
-  // When wf changes, rebuild nodes keeping dragged positions
-  useMemo(() => {
-    // Preserve dragged positions from current controlled nodes
-    const currentPos: PosMap = {};
-    for (const n of controlledNodes) {
-      currentPos[n.id] = n.position;
-    }
-    // Merge with fresh layout for any new nodes
-    const fresh = computeLayout(wf);
-    const merged: PosMap = {};
-    for (const k of Object.keys(fresh)) {
-      merged[k] = currentPos[k] || fresh[k];
-    }
-    posRef.current = merged;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wf]);
+  const [undoStack, setUndoStack] = useState<WorkflowDef[]>([]);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    type: "step" | "trigger";
+    id: string;
+  } | null>(null);
+  const [handlePicker, setHandlePicker] = useState<{
+    sourceNodeId: string;
+    sourceHandle: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
-  const addBranch = useCallback((conditionStepId: string, branch: "then" | "else") => {
-    const cur = wfRef.current;
-    const newId = uid();
-    const newStep: StepConfig = { id: newId, name: `${branch} action`, type: "tool_call" };
-    const patch = branch === "then" ? { then_step: newId } : { else_step: newId };
-    onSave({
-      ...cur,
-      steps: cur.steps.map((s) => (s.id === conditionStepId ? { ...s, ...patch } : s)).concat([newStep]),
-    });
-    const condPos = posRef.current[`step-${conditionStepId}`];
-    if (condPos) {
-      const offsetX = branch === "then" ? -BRANCH_OFFSET : BRANCH_OFFSET;
-      posRef.current[`step-${newId}`] = { x: condPos.x + offsetX, y: condPos.y + COND_H + V_GAP };
-      setLayoutVer((v) => v + 1);
-    }
+  const nodePosMap = useRef<PosMap>({});
+  const prevFingerprint = useRef("");
+
+  const saveWithUndo = useCallback((next: WorkflowDef) => {
+    setUndoStack((prev) => [...prev.slice(-(MAX_UNDO - 1)), wfRef.current]);
+    onSave(next);
   }, [onSave]);
 
-  if (prevStepsLen.current !== wf.steps.length) {
-    prevStepsLen.current = wf.steps.length;
-    setDeletedEdges(new Set());
-  }
+  const handleUndo = useCallback(() => {
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const restored = prev[prev.length - 1];
+      onSave(restored);
+      return prev.slice(0, -1);
+    });
+  }, [onSave]);
 
-  const desiredNodes = useMemo(
-    () => buildNodes(wf, selectedId, posRef.current, addBranch, (t) => insertStep(t, selectedId)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [wf, selectedId, addBranch, insertStep, layoutVer],
+  const addStep = useCallback((type: StepType | "trigger", insertAfter?: { stepId: string; branch?: "then" | "else" }) => {
+    if (type === "trigger" || (typeof type === "string" && type.startsWith("trigger-"))) {
+      const trigType = (typeof type === "string" ? type.replace("trigger-", "") : type) as TriggerConfig["type"];
+      if (wfRef.current.triggers.length > 0) return;
+      saveWithUndo({ ...wfRef.current, triggers: [{ id: uid(), type: trigType }] });
+      return;
+    }
+
+    const stepType = type as StepType;
+    const newId = uid();
+    const name = `${stepType.replace(/_/g, " ")} ${wfRef.current.steps.length + 1}`;
+    const step: StepConfig = { id: newId, name, slug: slugify(name), type: stepType };
+
+    if (insertAfter?.branch) {
+      const condId = insertAfter.stepId;
+      const branch = insertAfter.branch;
+      const branchField = branch === "then" ? "then_step" : "else_step";
+
+      let steps = wfRef.current.steps.map((s) => ({ ...s }));
+      const condIdx = steps.findIndex((s) => s.id === condId);
+      if (condIdx === -1) return;
+
+      const cond = steps[condIdx];
+      const existingTarget = cond[branchField];
+      if (existingTarget) {
+        let chainEnd = existingTarget;
+        while (true) {
+          const chainStep = steps.find((s) => s.id === chainEnd);
+          if (!chainStep || !chainStep.next_step) break;
+          chainEnd = chainStep.next_step;
+        }
+        const chainEndStep = steps.find((s) => s.id === chainEnd);
+        if (chainEndStep) {
+          chainEndStep.next_step = newId;
+        }
+      } else {
+        (cond as Record<string, unknown>)[branchField] = newId;
+      }
+
+      let insertIdx = condIdx + 1;
+      const otherBranch = branch === "then" ? "else_step" : "then_step";
+      const otherTarget = cond[otherBranch as keyof StepConfig] as string | undefined;
+      if (otherTarget) {
+        const otherTargetIdx = steps.findIndex((s) => s.id === otherTarget);
+        if (otherTargetIdx !== -1 && otherTargetIdx > condIdx) {
+          insertIdx = condIdx + 1;
+        }
+      }
+
+      steps.splice(insertIdx, 0, step);
+      steps = steps.map((s) =>
+        s.id === condId ? { ...s, [branchField]: existingTarget || newId } : s
+      );
+
+      if (!existingTarget) {
+        steps = steps.map((s) =>
+          s.id === condId ? { ...s, [branchField]: newId } : s
+        );
+      }
+
+      saveWithUndo({ ...wfRef.current, steps });
+    } else if (insertAfter?.stepId) {
+      const afterId = insertAfter.stepId;
+      let steps = wfRef.current.steps.map((s) => ({ ...s }));
+      const afterStep = steps.find((s) => s.id === afterId);
+      if (!afterStep) return;
+
+      step.next_step = afterStep.next_step;
+      afterStep.next_step = newId;
+
+      steps = insertStepAfter(steps, afterId, step);
+      saveWithUndo({ ...wfRef.current, steps });
+    } else {
+      saveWithUndo({ ...wfRef.current, steps: [...wfRef.current.steps, step] });
+    }
+  }, [saveWithUndo]);
+
+  const onAddFromHandle = useCallback(
+    (nodeId: string, handleId: string, rect: DOMRect) => {
+      const containerRect = document.querySelector(".wf-flow-canvas")?.getBoundingClientRect();
+      const x = containerRect ? rect.left + rect.width / 2 - containerRect.left : rect.left;
+      const y = containerRect ? rect.bottom + 4 - containerRect.top : rect.bottom + 4;
+      setHandlePicker({ sourceNodeId: nodeId, sourceHandle: handleId, x, y });
+    },
+    [],
   );
 
-  // Rebuild controlled nodes from desired, but keep positions from state
-  useMemo(() => {
-    setControlledNodes((prev) => {
-      const posMap = new Map(prev.map((n) => [n.id, n.position]));
-      return desiredNodes.map((n) => {
-        const savedPos = posMap.get(n.id);
-        if (savedPos) {
-          return { ...n, position: savedPos };
-        }
-        return n;
+  const fingerprint = `${migratedWf.triggers.map((t) => t.id).join(",")}|${migratedWf.steps.map((s) => `${s.id}:${s.next_step || ""}:${s.then_step || ""}:${s.else_step || ""}`).join(",")}`;
+
+  if (fingerprint !== prevFingerprint.current) {
+    nodePosMap.current = computeLayout(migratedWf);
+    prevFingerprint.current = fingerprint;
+  }
+
+  const desiredNodes = useMemo(() => {
+    const nodes: Node[] = [];
+    const pos = nodePosMap.current;
+
+    for (const t of migratedWf.triggers) {
+      const id = `trigger-${t.id}`;
+      nodes.push({
+        id,
+        type: "trigger",
+        position: pos[id] || { x: 300, y: 40 },
+        data: {
+          triggerType: t.type,
+          triggerId: t.id,
+          label: t.type,
+          detail: triggerSummary(t),
+          selected: selectedId === id,
+          onAddFromHandle,
+        },
       });
-    });
+    }
+
+    for (const s of migratedWf.steps) {
+      const id = `step-${s.id}`;
+      const base = {
+        id,
+        position: pos[id] || { x: 300, y: 200 },
+        selectable: true,
+        draggable: true,
+      };
+      if (s.type === "condition") {
+        nodes.push({
+          ...base,
+          type: "condition",
+          data: {
+            stepId: s.id,
+            stepName: s.name,
+            slug: s.slug || slugify(s.name),
+            expression: s.expression || "",
+            selected: selectedId === id,
+            onAddFromHandle,
+          },
+        });
+      } else {
+        nodes.push({
+          ...base,
+          type: "step",
+          data: {
+            stepId: s.id,
+            stepName: s.name,
+            slug: s.slug || slugify(s.name),
+            stepType: s.type,
+            summary: stepSummary(s),
+            selected: selectedId === id,
+            onAddFromHandle,
+          },
+        });
+      }
+    }
+
+    return nodes;
+  }, [migratedWf, selectedId, fingerprint]);
+
+  const [controlledNodes, setControlledNodes] = useState<Node[]>([]);
+
+  useEffect(() => {
+    setControlledNodes(desiredNodes);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desiredNodes]);
 
-  const edges = useMemo(
-    () => buildEdges(wf, deletedEdges),
-    [wf, deletedEdges],
+  const rawEdges = useMemo(() => buildEdges(migratedWf), [migratedWf]);
+
+  const edges = useMemo(() => rawEdges, [rawEdges]);
+
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      if (edge.sourceHandle === "then" || edge.sourceHandle === "else") {
+        const stepId = edge.source.replace("step-", "");
+        const field = edge.sourceHandle === "then" ? "then_step" : "else_step";
+        saveWithUndo({
+          ...wfRef.current,
+          steps: wfRef.current.steps.map((s) =>
+            s.id === stepId ? { ...s, [field]: undefined } : s,
+          ),
+        });
+      } else {
+        const srcStepId = edge.source.replace("step-", "");
+        saveWithUndo({
+          ...wfRef.current,
+          steps: wfRef.current.steps.map((s) =>
+            s.id === srcStepId ? { ...s, next_step: undefined } : s,
+          ),
+        });
+      }
+    },
+    [saveWithUndo],
   );
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    if (node.id === "add-node") return;
     setSelectedId((prev) => (prev === node.id ? null : node.id));
   }, []);
 
-  const onPaneClick = useCallback(() => setSelectedId(null), []);
-
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setControlledNodes((prev) => applyNodeChanges(changes, prev));
-  }, []);
+    setControlledNodes((prev) => {
+      const childMap = new Map<string, string[]>();
+      for (const e of rawEdges) {
+        const list = childMap.get(e.source) || [];
+        list.push(e.target);
+        childMap.set(e.source, list);
+      }
+      function getDescendants(nodeId: string): string[] {
+        const result: string[] = [];
+        const stack = childMap.get(nodeId) || [];
+        for (const child of stack) {
+          result.push(child);
+          result.push(...getDescendants(child));
+        }
+        return result;
+      }
+
+      const dragDeltas = new Map<string, { dx: number; dy: number }>();
+      for (const change of changes) {
+        if (change.type !== "position" && change.type !== "dimensions") continue;
+        if (change.type !== "position") continue;
+        const node = prev.find((n) => n.id === change.id);
+        if (!node || !change.position) continue;
+        const dx = change.position.x - node.position.x;
+        const dy = change.position.y - node.position.y;
+        if (dx === 0 && dy === 0) continue;
+        dragDeltas.set(change.id, { dx, dy });
+      }
+
+      const next = applyNodeChanges(changes, prev);
+
+      const moved = new Set<string>();
+      for (const [parentId, delta] of dragDeltas) {
+        moved.add(parentId);
+        const descendants = getDescendants(parentId);
+        for (const descId of descendants) {
+          if (moved.has(descId)) continue;
+          moved.add(descId);
+          const idx = next.findIndex((n) => n.id === descId);
+          if (idx === -1) continue;
+          next[idx] = {
+            ...next[idx],
+            position: {
+              x: next[idx].position.x + delta.dx,
+              y: next[idx].position.y + delta.dy,
+            },
+          };
+        }
+      }
+
+      const pos = nodePosMap.current;
+      for (const n of next) {
+        pos[n.id] = { ...n.position };
+      }
+      return next;
+    });
+  }, [rawEdges]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) return;
+      const srcType = connection.source.startsWith("trigger-") ? "trigger" : "step";
+      const tgtType = connection.target.startsWith("step-") ? "step" : null;
+      if (tgtType !== "step") return;
+
+      const targetId = connection.target.replace("step-", "");
       const handle = connection.sourceHandle;
 
       if (handle === "then" || handle === "else") {
         const stepId = connection.source.replace("step-", "");
-        const targetId = connection.target.replace("step-", "");
         const patch = handle === "then" ? { then_step: targetId } : { else_step: targetId };
-        onSave({
-          ...wf,
-          steps: wf.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
+        saveWithUndo({
+          ...wfRef.current,
+          steps: wfRef.current.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
         });
+        return;
       }
 
-      const prefix = handle ? "branch" : "seq";
-      const handlePart = handle ? `:${handle}` : "";
-      const edgeId = `${prefix}:${connection.source}${handlePart}:${connection.target}`;
-      setDeletedEdges((prev) => {
-        const next = new Set(prev);
-        next.delete(edgeId);
-        return next;
-      });
+      if (srcType === "trigger") {
+        const targetStep = wfRef.current.steps.find((s) => s.id === targetId);
+        if (!targetStep) return;
+        const steps = wfRef.current.steps.filter((s) => s.id !== targetId);
+        steps.unshift(targetStep);
+        saveWithUndo({ ...wfRef.current, steps });
+        return;
+      }
+
+      const srcStepId = connection.source.replace("step-", "");
+
+      let steps = clearPredecessorTo(wfRef.current.steps, targetId);
+      steps = steps.map((s) =>
+        s.id === srcStepId ? { ...s, next_step: targetId } : s,
+      );
+      steps = moveAfter(steps, srcStepId, targetId);
+
+      saveWithUndo({ ...wfRef.current, steps });
     },
-    [wf, onSave],
+    [saveWithUndo],
   );
 
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => {
-      for (const change of changes) {
-        if (change.type === "remove") {
-          const edge = edges.find((e) => e.id === change.id);
-          if (!edge) continue;
+  const handlePickerSelect = useCallback((type: StepType) => {
+    if (!handlePicker) return;
+    const { sourceNodeId, sourceHandle } = handlePicker;
 
-          if (edge.sourceHandle === "then" || edge.sourceHandle === "else") {
-            const stepId = edge.source.replace("step-", "");
-            const patch =
-              edge.sourceHandle === "then" ? { then_step: undefined } : { else_step: undefined };
-            onSave({
-              ...wf,
-              steps: wf.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
-            });
-          }
+    const newId = uid();
+    const name = `${type.replace(/_/g, " ")} ${wfRef.current.steps.length + 1}`;
+    const step: StepConfig = { id: newId, name, slug: slugify(name), type };
 
-          setDeletedEdges((prev) => {
-            const next = new Set(prev);
-            next.add(change.id);
-            return next;
-          });
+    if (sourceHandle === "then" || sourceHandle === "else") {
+      const condId = sourceNodeId.replace("step-", "");
+      const branchField = sourceHandle === "then" ? "then_step" : "else_step";
+
+      let steps = wfRef.current.steps.map((s) => ({ ...s }));
+      const condIdx = steps.findIndex((s) => s.id === condId);
+      if (condIdx === -1) return;
+
+      const cond = steps[condIdx];
+      const existingTarget = cond[branchField] as string | undefined;
+
+      if (existingTarget) {
+        let chainEnd = existingTarget;
+        while (true) {
+          const chainStep = steps.find((s) => s.id === chainEnd);
+          if (!chainStep || !chainStep.next_step) break;
+          chainEnd = chainStep.next_step;
+        }
+        const chainEndStep = steps.find((s) => s.id === chainEnd);
+        if (chainEndStep) {
+          chainEndStep.next_step = newId;
         }
       }
-    },
-    [edges, wf, onSave],
-  );
+
+      const branchPatch = existingTarget
+        ? {}
+        : { [branchField]: newId };
+
+      let insertIdx = condIdx + 1;
+      const otherField = sourceHandle === "then" ? "else_step" : "then_step";
+      const otherTarget = cond[otherField as keyof StepConfig] as string | undefined;
+      if (otherTarget) {
+        const otherTargetIdx = steps.findIndex((s) => s.id === otherTarget);
+        if (otherTargetIdx !== -1 && otherTargetIdx > condIdx) {
+          insertIdx = condIdx + 1;
+        }
+      }
+
+      steps.splice(insertIdx, 0, step);
+      steps = steps.map((s) =>
+        s.id === condId ? { ...s, ...branchPatch } : s
+      );
+
+      saveWithUndo({ ...wfRef.current, steps });
+    } else if (sourceNodeId.startsWith("trigger-")) {
+      if (wfRef.current.steps.length > 0) {
+        step.next_step = wfRef.current.steps[0].id;
+      }
+      saveWithUndo({ ...wfRef.current, steps: [step, ...wfRef.current.steps] });
+    } else {
+      const afterId = sourceNodeId.replace("step-", "");
+      let steps = wfRef.current.steps.map((s) => ({ ...s }));
+      const afterStep = steps.find((s) => s.id === afterId);
+      if (!afterStep) return;
+
+      step.next_step = afterStep.next_step;
+      afterStep.next_step = newId;
+      steps = insertStepAfter(steps, afterId, step);
+      saveWithUndo({ ...wfRef.current, steps });
+    }
+    setHandlePicker(null);
+  }, [handlePicker, saveWithUndo]);
 
   const selectedNode = selectedId ? controlledNodes.find((n) => n.id === selectedId) : null;
 
+  const confirmDelete = useCallback(() => {
+    if (!deleteConfirm) return;
+    if (deleteConfirm.type === "step") {
+      const stepId = deleteConfirm.id;
+      saveWithUndo({
+        ...wfRef.current,
+        steps: wfRef.current.steps
+          .filter((s) => s.id !== stepId)
+          .map((s) => ({
+            ...s,
+            next_step: s.next_step === stepId ? undefined : s.next_step,
+            then_step: s.then_step === stepId ? undefined : s.then_step,
+            else_step: s.else_step === stepId ? undefined : s.else_step,
+          })),
+      });
+    } else {
+      saveWithUndo({ ...wfRef.current, triggers: [] });
+    }
+    setSelectedId(null);
+    setDeleteConfirm(null);
+  }, [deleteConfirm, saveWithUndo]);
+
   const handleDeleteStep = useCallback(() => {
     if (!selectedId?.startsWith("step-")) return;
-    const stepId = selectedId.replace("step-", "");
-    onSave({ ...wf, steps: wf.steps.filter((s) => s.id !== stepId) });
-    setSelectedId(null);
-  }, [selectedId, wf, onSave]);
+    setDeleteConfirm({ type: "step", id: selectedId.replace("step-", "") });
+  }, [selectedId]);
 
   const handleDeleteTrigger = useCallback(() => {
     if (!selectedId?.startsWith("trigger-")) return;
-    const triggerId = selectedId.replace("trigger-", "");
-    onSave({ ...wf, triggers: wf.triggers.filter((t) => t.id !== triggerId) });
-    setSelectedId(null);
-  }, [selectedId, wf, onSave]);
+    setDeleteConfirm({ type: "trigger", id: selectedId.replace("trigger-", "") });
+  }, [selectedId]);
 
   const handleChangeStep = useCallback(
     (patch: Partial<StepConfig>) => {
       if (!selectedId?.startsWith("step-")) return;
       const stepId = selectedId.replace("step-", "");
-      onSave({
-        ...wf,
-        steps: wf.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
+      saveWithUndo({
+        ...wfRef.current,
+        steps: wfRef.current.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
       });
     },
-    [selectedId, wf, onSave],
+    [selectedId, saveWithUndo],
   );
 
   const handleChangeTrigger = useCallback(
     (patch: Partial<TriggerConfig>) => {
       if (!selectedId?.startsWith("trigger-")) return;
       const triggerId = selectedId.replace("trigger-", "");
-      onSave({
-        ...wf,
-        triggers: wf.triggers.map((t) => (t.id === triggerId ? { ...t, ...patch } : t)),
+      saveWithUndo({
+        ...wfRef.current,
+        triggers: wfRef.current.triggers.map((t) => (t.id === triggerId ? { ...t, ...patch } : t)),
       });
     },
-    [selectedId, wf, onSave],
-  );
-
-  const handleAddTrigger = useCallback(
-    (type: TriggerConfig["type"]) => {
-      onSave({ ...wf, triggers: [...wf.triggers, { id: uid(), type }] });
-    },
-    [wf, onSave],
+    [selectedId, saveWithUndo],
   );
 
   const handleRearrange = useCallback(() => {
-    const fresh = computeLayout(wf);
-    posRef.current = fresh;
-    setDeletedEdges(new Set());
+    const fresh = computeLayout(migratedWf);
+    nodePosMap.current = fresh;
     setControlledNodes((prev) =>
       prev.map((n) => {
         const p = fresh[n.id];
         return p ? { ...n, position: p } : n;
       }),
     );
-  }, [wf]);
-
-  const onDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-  }, []);
-
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      const raw = e.dataTransfer.getData("application/wf-step");
-      if (!raw) return;
-
-      const position = rfInstance.screenToFlowPosition({
-        x: e.clientX,
-        y: e.clientY,
-      });
-
-      insertStep(raw as StepType, selectedId, position);
-    },
-    [insertStep, selectedId, rfInstance],
-  );
+  }, [migratedWf]);
 
   return (
     <div className="wf-flow-wrap">
-      <div className="wf-palette">
-        <button
-          className="wf-palette-rearrange"
-          title="Auto-arrange layout"
-          onClick={handleRearrange}
-        >
-          ⇅
-        </button>
-        <div className="wf-palette-sep" />
-        {STEP_PALETTE.map((p) => (
-          <div
-            key={p.type}
-            className="wf-palette-item"
-            title={selectedId ? `Insert ${p.tip} after selected` : `Add ${p.tip}`}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData("application/wf-step", p.type);
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onClick={() => insertStep(p.type, selectedId)}
-          >
-            {p.icon}
-          </div>
-        ))}
-        <div className="wf-palette-sep" />
-        {TRIGGER_PALETTE.map((p) => (
-          <div
-            key={p.type}
-            className="wf-palette-item"
-            title={p.tip}
-            onClick={() => handleAddTrigger(p.type)}
-          >
-            {p.icon}
-          </div>
-        ))}
+      <div className="wf-mini-toolbar">
+        <button className="wf-tb-btn" title="Zoom in" onClick={() => rfInstance.zoomIn()}>＋</button>
+        <button className="wf-tb-btn" title="Zoom out" onClick={() => rfInstance.zoomOut()}>－</button>
+        <button className="wf-tb-btn" title="Fit view" onClick={() => rfInstance.fitView({ padding: 0.3 })}>⊞</button>
+        <div className="wf-tb-sep" />
+        <button className="wf-tb-btn" title="Auto-arrange layout" onClick={handleRearrange}>⇅</button>
+        {undoStack.length > 0 && (
+          <>
+            <div className="wf-tb-sep" />
+            <button className="wf-tb-btn" title="Undo" onClick={handleUndo}>↩</button>
+          </>
+        )}
       </div>
 
-      <div className="wf-flow-canvas">
+      <div className="wf-flow-canvas" style={{ position: "relative" }}>
+        {migratedWf.triggers.length === 0 && (
+          <button
+            className="wf-empty-add"
+            onClick={() => addStep("trigger")}
+          >
+            + Add Trigger
+          </button>
+        )}
         <ReactFlow
           nodes={controlledNodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
           onNodeClick={onNodeClick}
-          onPaneClick={onPaneClick}
+          onEdgeClick={onEdgeClick}
+          onPaneClick={() => { setSelectedId(null); setHandlePicker(null); }}
           onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          onDragOver={onDragOver}
-          onDrop={onDrop}
+          connectionMode={ConnectionMode.Loose}
           fitView
           fitViewOptions={{ padding: 0.3 }}
           proOptions={{ hideAttribution: true }}
           minZoom={0.3}
           maxZoom={1.5}
-          defaultEdgeOptions={{ type: "default" }}
-          deleteKeyCode={["Backspace", "Delete"]}
+          defaultEdgeOptions={{ type: "deletable" }}
+          deleteKeyCode={null}
         >
           <Background gap={20} size={0.6} color="var(--border-soft)" />
-          <Controls showInteractive={false} />
           <MiniMap
             nodeColor={(n) => {
               if (n.type === "trigger") return "#5b8def";
@@ -596,6 +707,25 @@ function Canvas({
             style={{ background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 6 }}
           />
         </ReactFlow>
+
+        {handlePicker && (
+          <div
+            className="wf-connect-picker"
+            style={{ left: handlePicker.x, top: handlePicker.y }}
+          >
+            {STEP_PALETTE.map((s) => (
+              <button
+                key={s.type}
+                className="wf-connect-picker-item"
+                onClick={() => handlePickerSelect(s.type)}
+                title={s.desc}
+              >
+                <span className="wf-cpi-icon">{s.icon}</span>
+                <span className="wf-cpi-label">{s.tip}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {selectedNode && (
@@ -603,19 +733,31 @@ function Canvas({
           mode={selectedNode.id.startsWith("trigger-") ? "trigger" : "step"}
           step={
             selectedNode.id.startsWith("step-")
-              ? wf.steps.find((s) => s.id === selectedNode.id.replace("step-", ""))
+              ? migratedWf.steps.find((s) => s.id === selectedNode.id.replace("step-", ""))
               : undefined
           }
           trigger={
             selectedNode.id.startsWith("trigger-")
-              ? wf.triggers.find((t) => t.id === selectedNode.id.replace("trigger-", ""))
+              ? migratedWf.triggers.find((t) => t.id === selectedNode.id.replace("trigger-", ""))
               : undefined
           }
-          allSteps={wf.steps}
+          allSteps={migratedWf.steps}
           onChangeStep={handleChangeStep}
           onChangeTrigger={handleChangeTrigger}
           onDelete={selectedNode.id.startsWith("step-") ? handleDeleteStep : handleDeleteTrigger}
           onClose={() => setSelectedId(null)}
+          wfPath={wfPath}
+        />
+      )}
+
+      {deleteConfirm && (
+        <Modal
+          kind="confirm"
+          danger
+          title={`Delete ${deleteConfirm.type === "step" ? "Step" : "Trigger"}`}
+          message={`Are you sure you want to delete this ${deleteConfirm.type}?`}
+          onSubmit={confirmDelete}
+          onCancel={() => setDeleteConfirm(null)}
         />
       )}
     </div>
@@ -625,43 +767,15 @@ function Canvas({
 export default function WorkflowFlow({
   wf,
   onSave,
+  wfPath,
 }: {
   wf: WorkflowDef;
   onSave: (updated: WorkflowDef) => void;
+  wfPath?: string;
 }) {
-  const insertStep = useCallback(
-    (type: StepType, afterStepId: string | null, _position?: { x: number; y: number }) => {
-      const id = uid();
-      const name = `${type.replace(/_/g, " ")} ${wf.steps.length + 1}`;
-      const step: StepConfig = { id, name, slug: slugify(name), type };
-
-      if (!afterStepId) {
-        onSave({ ...wf, steps: [...wf.steps, step] });
-        return;
-      }
-
-      const afterId = afterStepId.startsWith("step-") ? afterStepId.replace("step-", "") : null;
-      if (!afterId) {
-        onSave({ ...wf, steps: [...wf.steps, step] });
-        return;
-      }
-
-      const idx = wf.steps.findIndex((s) => s.id === afterId);
-      if (idx === -1) {
-        onSave({ ...wf, steps: [...wf.steps, step] });
-        return;
-      }
-
-      const newSteps = [...wf.steps];
-      newSteps.splice(idx + 1, 0, step);
-      onSave({ ...wf, steps: newSteps });
-    },
-    [wf, onSave],
-  );
-
   return (
     <ReactFlowProvider>
-      <Canvas wf={wf} onSave={onSave} insertStep={insertStep} />
+      <Canvas wf={wf} onSave={onSave} wfPath={wfPath} />
     </ReactFlowProvider>
   );
 }
