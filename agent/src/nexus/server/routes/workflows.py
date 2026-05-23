@@ -393,7 +393,7 @@ async def manual_run(path: str, body: ManualRunBody, request: Request) -> dict:
     return run.to_dict()
 
 
-@router.post("/workflow/trigger/{token}")
+@router.api_route("/workflow/trigger/{token}", methods=["GET", "POST"])
 async def webhook_trigger(token: str, request: Request) -> Response:
     store = _get_store(request)
     result = store.lookup_webhook_token(token)
