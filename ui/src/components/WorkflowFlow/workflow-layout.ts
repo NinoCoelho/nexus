@@ -102,6 +102,34 @@ export function migrateWorkflow(wf: WorkflowDef): WorkflowDef {
 export function computeLayout(wf: WorkflowDef): PosMap {
   const pos: PosMap = {};
   const stepsById = new Map(wf.steps.map((s) => [s.id, s]));
+  const spanCache = new Map<string, number>();
+
+  function stepSpan(stepId: string): number {
+    const step = stepsById.get(stepId);
+    if (!step || step.type !== "condition") return 1;
+    const t = step.then_step ? chainSpan(step.then_step) : 0;
+    const e = step.else_step ? chainSpan(step.else_step) : 0;
+    return Math.max(t, 1) + Math.max(e, 1);
+  }
+
+  function chainSpan(startId: string | undefined): number {
+    if (!startId) return 0;
+    if (spanCache.has(startId)) return spanCache.get(startId)!;
+    let maxSpan = 1;
+    const visited = new Set<string>();
+    let cur: string | undefined = startId;
+    while (cur) {
+      if (visited.has(cur)) break;
+      visited.add(cur);
+      const step = stepsById.get(cur);
+      if (!step) break;
+      const sp = stepSpan(cur);
+      if (sp > maxSpan) maxSpan = sp;
+      cur = step.next_step;
+    }
+    spanCache.set(startId, maxSpan);
+    return maxSpan;
+  }
 
   function layoutChain(startId: string | undefined, x: number, startRow: number): number {
     let row = startRow;
@@ -120,13 +148,18 @@ export function computeLayout(wf: WorkflowDef): PosMap {
         const branchRow = row + 1;
         let maxEndRow = row;
 
+        const thenSp = step.then_step ? chainSpan(step.then_step) : 0;
+        const elseSp = step.else_step ? chainSpan(step.else_step) : 0;
+
         if (step.then_step) {
-          const endRow = layoutChain(step.then_step, x - LANE_W, branchRow);
+          const thenX = x - Math.max(elseSp, 1) * LANE_W;
+          const endRow = layoutChain(step.then_step, thenX, branchRow);
           if (endRow > maxEndRow) maxEndRow = endRow;
         }
 
         if (step.else_step) {
-          const endRow = layoutChain(step.else_step, x + LANE_W, branchRow);
+          const elseX = x + Math.max(thenSp, 1) * LANE_W;
+          const endRow = layoutChain(step.else_step, elseX, branchRow);
           if (endRow > maxEndRow) maxEndRow = endRow;
         }
 

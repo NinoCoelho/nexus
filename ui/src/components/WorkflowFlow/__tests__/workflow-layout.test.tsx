@@ -154,9 +154,12 @@ describe("computeLayout", () => {
     ]);
     const pos = computeLayout(w);
     expect(pos["step-outer"]).toEqual({ x: CENTER_X, y: ROW_H });
-    expect(pos["step-innerCond"]).toEqual({ x: CENTER_X - LANE_W, y: 2 * ROW_H });
-    expect(pos["step-deepT"]).toEqual({ x: CENTER_X - 2 * LANE_W, y: 3 * ROW_H });
-    expect(pos["step-outerElse"]).toEqual({ x: CENTER_X + LANE_W, y: 2 * ROW_H });
+    expect(pos["step-innerCond"]!.x).toBeLessThan(CENTER_X);
+    expect(pos["step-innerCond"]!.y).toBe(2 * ROW_H);
+    expect(pos["step-deepT"]!.x).toBeLessThan(pos["step-innerCond"]!.x);
+    expect(pos["step-deepT"]!.y).toBe(3 * ROW_H);
+    expect(pos["step-outerElse"]!.x).toBeGreaterThan(CENTER_X);
+    expect(pos["step-outerElse"]!.y).toBe(2 * ROW_H);
   });
 
   it("no triggers: steps start at row 0", () => {
@@ -332,10 +335,11 @@ describe("computeLayout + buildEdges integration", () => {
     expect(pos["step-after"]).toBeDefined();
 
     expect(pos["step-outer"]!.x).toBe(CENTER_X);
-    expect(pos["step-t1"]!.x).toBe(CENTER_X - LANE_W);
-    expect(pos["step-deepT"]!.x).toBe(CENTER_X - 2 * LANE_W);
-    expect(pos["step-deepF"]!.x).toBe(CENTER_X);
-    expect(pos["step-f1"]!.x).toBe(CENTER_X + LANE_W);
+    expect(pos["step-t1"]!.x).toBeLessThan(pos["step-outer"]!.x);
+    expect(pos["step-deepT"]!.x).toBeLessThan(pos["step-t1"]!.x);
+    expect(pos["step-deepF"]!.x).toBeGreaterThan(pos["step-t1"]!.x);
+    expect(pos["step-f1"]!.x).toBeGreaterThan(pos["step-outer"]!.x);
+    expect(pos["step-f1"]!.x).toBeGreaterThan(pos["step-deepF"]!.x);
 
     const edges = buildEdges(w);
     expect(hasEdge(edges, "step-outer", "step-t1", "then")).toBe(true);
@@ -446,6 +450,38 @@ describe("edge cases", () => {
     expect(pos["step-a"]).toBeDefined();
     const edges = buildEdges(w);
     expect(hasEdge(edges, "step-a", "step-nonexistent")).toBe(true);
+  });
+
+  it("sibling conditions' branches never collide", () => {
+    const w = wf([
+      cond("outer", "condL", "condR"),
+      cond("condL", undefined, "fL"),
+      s("fL"),
+      cond("condR", "tR", undefined),
+      s("tR"),
+    ]);
+    const pos = computeLayout(w);
+
+    expect(pos["step-fL"]!.x).not.toBe(pos["step-tR"]!.x);
+    expect(Math.abs(pos["step-fL"]!.x - pos["step-tR"]!.x)).toBeGreaterThanOrEqual(LANE_W);
+  });
+
+  it("deeply nested conditions have no x collisions among steps", () => {
+    const w = wf([
+      cond("root", "L", "R"),
+      cond("L", "LL", "LR"),
+      s("LL"),
+      s("LR"),
+      cond("R", "RL", "RR"),
+      s("RL"),
+      s("RR"),
+    ]);
+    const pos = computeLayout(w);
+    const stepXs = Object.entries(pos)
+      .filter(([k]) => k.startsWith("step-"))
+      .map(([, v]) => v.x);
+    const uniqueXs = new Set(stepXs);
+    expect(uniqueXs.size).toBe(stepXs.length);
   });
 
   it("cycle in next_step is detected and stopped", () => {
