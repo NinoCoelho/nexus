@@ -8,6 +8,7 @@ import secrets
 import datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ...workflows import parser
@@ -19,6 +20,7 @@ from ...workflows.models import (
     TriggerType,
     WorkflowDef,
 )
+from ...workflows.cache import WorkflowListCache
 from ...workflows.store import WorkflowStore
 
 log = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ router = APIRouter()
 
 _STORE: WorkflowStore | None = None
 _ENGINE: WorkflowEngine | None = None
+_CACHE = WorkflowListCache()
 
 
 def init(store: WorkflowStore, engine: WorkflowEngine) -> None:
@@ -95,8 +98,18 @@ class ManualRunBody(BaseModel):
 
 @router.get("/workflows")
 async def list_workflows(request: Request) -> dict:
+    if _CACHE.is_warm:
+        return {"workflows": _CACHE.get_all()}
     workflows = _scan_workflows(request)
+    for w in workflows:
+        _CACHE.update(w["path"], w)
     return {"workflows": workflows}
+
+
+@router.get("/workflows/{path:path}/schema")
+async def get_workflow_schema(path: str) -> dict:
+    from ...workflows.schema import load_schema
+    return load_schema(path)
 
 
 @router.get("/workflows/{path:path}")
@@ -128,6 +141,13 @@ async def create_workflow(body: WorkflowCreateBody, request: Request) -> dict:
     wf = WorkflowDef(title=body.title, enabled=body.enabled, description=body.description)
     md = parser.serialize(wf)
     _vault.write_file(body.path, md)
+    _CACHE.update(body.path, {
+        "path": body.path,
+        "title": wf.title,
+        "enabled": wf.enabled,
+        "step_count": len(wf.steps),
+        "trigger_count": len(wf.triggers),
+    })
     return {"ok": True, "path": body.path}
 
 
@@ -193,6 +213,28 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
                 duration_seconds=s.get("duration_seconds", 0),
                 mcp_server=s.get("mcp_server"),
                 mcp_tool=s.get("mcp_tool"),
+                action=s.get("action"),
+                board_path=s.get("board_path"),
+                lane_id=s.get("lane_id"),
+                card_id=s.get("card_id"),
+                table_path=s.get("table_path"),
+                row_data=s.get("row_data"),
+                row_id=s.get("row_id"),
+                where=s.get("where"),
+                query_sql=s.get("query_sql"),
+                llm_instructions=s.get("llm_instructions"),
+                output_sample=s.get("output_sample"),
+                response_template=s.get("response_template"),
+                auth_type=s.get("auth_type", "none"),
+                auth_credential=s.get("auth_credential"),
+                auth_username=s.get("auth_username"),
+                auth_password_credential=s.get("auth_password_credential"),
+                auth_header_name=s.get("auth_header_name"),
+                auth_prefix=s.get("auth_prefix", "Bearer"),
+                auth_query_name=s.get("auth_query_name"),
+                auth_location=s.get("auth_location", "header"),
+                custom_headers=s.get("custom_headers"),
+                next_step=s.get("next_step"),
             )
             for s in body.steps
         ]
@@ -211,6 +253,14 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
             _vault.write_file(path, md)
 
     _register_triggers(path, wf, request)
+
+    _CACHE.update(path, {
+        "path": path,
+        "title": wf.title,
+        "enabled": wf.enabled,
+        "step_count": len(wf.steps),
+        "trigger_count": len(wf.triggers),
+    })
 
     return {"ok": True}
 
@@ -273,6 +323,7 @@ async def delete_workflow(path: str, request: Request) -> dict:
     store = _get_store(request)
     store.remove_webhook_tokens(path)
     _unregister_triggers(path, wf, request)
+    _CACHE.invalidate(path)
     return {"ok": True}
 
 
@@ -356,6 +407,27 @@ async def webhook_trigger(token: str, request: Request) -> Response:
         raise HTTPException(status_code=400, detail="workflow is disabled")
 
     engine = _get_engine(request)
+
+    has_return = any(
+        s.get("type") == "return_step" for s in (wf.to_dict().get("steps") or [])
+    )
+
+    if has_return:
+        run = await engine.run_workflow(
+            workflow_path=workflow_path,
+            trigger_id=trigger_id,
+            trigger_type=TriggerType.webhook,
+            trigger_payload=payload,
+            wf_def=wf,
+        )
+        return_val = run.trigger_payload.get("_return_value", {})
+        resp = return_val.get("response", return_val) if isinstance(return_val, dict) else return_val
+        return Response(
+            content=json.dumps(resp, default=str),
+            status_code=status.HTTP_200_OK,
+            media_type="application/json",
+        )
+
     import asyncio
     asyncio.create_task(engine.run_workflow(
         workflow_path=workflow_path,
@@ -392,3 +464,146 @@ async def get_webhook_url(path: str, request: Request) -> dict:
             hooks.append({"trigger_id": t.id, "token": t.token, "url": url})
 
     return {"webhooks": hooks}
+
+
+class DebugStartBody(BaseModel):
+    payload: dict | None = None
+
+
+@router.post("/workflows/{path:path}/debug")
+async def start_debug(path: str, body: DebugStartBody, request: Request) -> dict:
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    engine = _get_engine(request)
+
+    run = await engine.run_workflow_debug(
+        workflow_path=path,
+        trigger_payload=body.payload or {},
+        wf_def=wf,
+    )
+    return run.to_dict()
+
+
+@router.post("/workflows/{path:path}/debug/{run_id}/continue")
+async def debug_continue(path: str, run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    step_id = None
+    body_data = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    step_id = body_data.get("step_id")
+    ok = engine.debug_continue(run_id, step_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="debug session not found or already completed")
+    return {"ok": True}
+
+
+@router.post("/workflows/{path:path}/debug/{run_id}/step/{step_id}/rerun")
+async def debug_rerun_step(path: str, run_id: str, step_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    sr = await engine.debug_rerun_step(run_id, step_id)
+    if sr is None:
+        raise HTTPException(status_code=404, detail="debug session or step not found")
+    return sr.to_dict()
+
+
+@router.post("/workflows/{path:path}/debug/{run_id}/cancel")
+async def debug_cancel(run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    ok = engine.cancel_run(run_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {"ok": True}
+
+
+class TestTriggerBody(BaseModel):
+    trigger_id: str
+
+
+@router.post("/workflows/{path:path}/test-trigger")
+async def test_trigger(path: str, body: TestTriggerBody, request: Request) -> dict:
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    engine = _get_engine(request)
+    try:
+        result = await engine.test_trigger(path, body.trigger_id, wf_def=wf)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return result
+
+
+class TestStepBody(BaseModel):
+    step_id: str
+    trigger_payload: dict = {}
+    step_outputs: dict = {}
+
+
+@router.post("/workflows/{path:path}/test-step")
+async def test_step(path: str, body: TestStepBody, request: Request) -> dict:
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    engine = _get_engine(request)
+    try:
+        result = await engine.test_step(
+            path, body.step_id, body.trigger_payload, body.step_outputs, wf_def=wf
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return result
+
+
+@router.get("/workflows/{path:path}/debug/{run_id}/events")
+async def debug_events(path: str, run_id: str) -> StreamingResponse:
+    import asyncio
+    from ...server.event_bus import subscribe, unsubscribe
+
+    q = subscribe()
+
+    async def stream():
+        try:
+            yield b": subscribed\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=20)
+                except asyncio.TimeoutError:
+                    yield b": ping\n\n"
+                    continue
+                if event.get("run_id") != run_id:
+                    continue
+                evt_type = event.get("type", "debug")
+                payload = {k: v for k, v in event.items() if k != "type"}
+                data = json.dumps(payload, default=str)
+                yield f"event: {evt_type}\ndata: {data}\n\n".encode()
+                if evt_type in ("workflow.debug.run_completed", "workflow.debug.step_failed"):
+                    if event.get("status") in ("completed", "failed", "cancelled"):
+                        break
+        finally:
+            unsubscribe(q)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

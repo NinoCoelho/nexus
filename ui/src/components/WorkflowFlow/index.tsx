@@ -216,7 +216,7 @@ function Canvas({
 
   const addStep = useCallback((type: StepType | "trigger", insertAfter?: { stepId: string; branch?: "then" | "else" }) => {
     if (type === "trigger" || (typeof type === "string" && type.startsWith("trigger-"))) {
-      const trigType = (typeof type === "string" ? type.replace("trigger-", "") : type) as TriggerConfig["type"];
+      const trigType = type === "trigger" ? "manual" as TriggerConfig["type"] : (type.replace("trigger-", "") as TriggerConfig["type"]);
       if (wfRef.current.triggers.length > 0) return;
       saveWithUndo({ ...wfRef.current, triggers: [{ id: uid(), type: trigType }] });
       return;
