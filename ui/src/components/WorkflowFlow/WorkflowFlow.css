@@ -647,6 +647,14 @@
   resize: vertical;
 }
 
+.wf-field-hint {
+  font-size: 10px;
+  color: var(--fg-dim);
+  margin-top: 2px;
+  display: block;
+  line-height: 1.4;
+}
+
 .wf-field input:focus,
 .wf-field select:focus,
 .wf-field textarea:focus {
@@ -1360,6 +1368,18 @@
   min-height: 0;
 }
 
+.wf-inspector-editor-panel > .wf-template-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wf-inspector-editor-panel > .wf-template-wrap > textarea {
+  flex: 1;
+  min-height: 0;
+}
+
 .wf-inspector-editor-label {
   font-size: 10px;
   font-weight: 600;
@@ -1395,6 +1415,51 @@
   display: flex;
   flex-direction: column;
   padding: 0 10px 10px;
+}
+
+.wf-inspector-gen-bar {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 6px;
+  align-items: center;
+}
+
+.wf-inspector-gen-input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.wf-inspector-gen-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.wf-inspector-gen-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.wf-inspector-gen-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.wf-inspector-gen-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .wf-preview-content {

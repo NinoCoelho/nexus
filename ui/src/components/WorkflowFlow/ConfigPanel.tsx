@@ -6,8 +6,46 @@ import { listCredentials, type Credential } from "../../api/credentials";
 import { listKanbanBoards, getVaultKanban, type KanbanBoardSummary, type KanbanLane } from "../../api/kanban";
 import { listDatabases, listDatabaseTables, getVaultDataTable, type DatabaseSummary, type DatabaseTableSummary } from "../../api/datatable";
 import { getModels, type Model } from "../../api/models";
-import { getWorkflowSchema } from "../../api/workflows";
+import { getWorkflowSchema, generateScript } from "../../api/workflows";
 import TemplateInput from "./TemplateInput";
+
+function ScriptGenerator({ wfPath, onGenerated }: { wfPath?: string; onGenerated: (code: string) => void }) {
+  const [desc, setDesc] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const generate = async () => {
+    if (!wfPath || !desc.trim()) return;
+    setLoading(true);
+    try {
+      const { code } = await generateScript(wfPath, desc);
+      onGenerated(code);
+      setDesc("");
+    } catch (e) {
+      console.error("Script generation failed:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="wf-inspector-gen-bar" style={{ padding: 0 }}>
+      <input
+        className="wf-inspector-gen-input"
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        placeholder="Describe what the script should do..."
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(); } }}
+      />
+      <button
+        className="wf-inspector-gen-btn"
+        onClick={generate}
+        disabled={loading || !desc.trim()}
+      >
+        {loading ? "⏳" : "✨ Generate"}
+      </button>
+    </div>
+  );
+}
 import { slugify } from "./index";
 
 const STEP_TYPES: { value: StepType; label: string }[] = [
@@ -53,9 +91,9 @@ const API_KEY_LOCATIONS = [
 ];
 
 const TRANSFORM_MODES = [
-  { value: "template", label: "Template" },
-  { value: "llm", label: "LLM Transform" },
-  { value: "script", label: "Script" },
+  { value: "template", label: "Template", desc: "Resolve {{...}} expressions into a string or JSON object" },
+  { value: "llm", label: "LLM Transform", desc: "Send resolved input to an LLM for extraction, summarization, or reformatting" },
+  { value: "script", label: "Script (Python)", desc: "Run a Python script with access to `data` (step outputs). Set `result` to return." },
 ];
 
 const KANBAN_ACTIONS = [
@@ -409,35 +447,50 @@ export default function ConfigPanel({
               )}
 
               {step.type === "transform" && (
-                <>
-                  <div className="wf-field">
-                    <label>Mode</label>
-                    <select
-                      value={transformMode}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        onChangeStep({ output_format: v });
-                      }}
-                    >
-                      {TRANSFORM_MODES.map((m) => (
-                        <option key={m.value} value={m.value}>{m.label}</option>
-                      ))}
-                    </select>
-                  </div>
+                 <>
+                   <div className="wf-field">
+                     <label>Mode</label>
+                     <select
+                       value={transformMode}
+                       onChange={(e) => {
+                         const v = e.target.value;
+                         onChangeStep({ output_format: v });
+                       }}
+                     >
+                       {TRANSFORM_MODES.map((m) => (
+                         <option key={m.value} value={m.value}>{m.label}</option>
+                       ))}
+                     </select>
+                     <span className="wf-field-hint">
+                       {TRANSFORM_MODES.find((m) => m.value === transformMode)?.desc}
+                     </span>
+                   </div>
 
                   {transformMode === "template" && (
-                    <div className="wf-field">
-                      <label>Template</label>
-                      <TemplateInput
-                        value={step.template || ""}
-                        onChange={(val) => onChangeStep({ template: val })}
-                        steps={stepRefs}
+                    <>
+                      <div className="wf-field">
+                        <label>Output Format</label>
+                        <select
+                          value={step.output_format === "json" ? "json" : "text"}
+                          onChange={(e) => onChangeStep({ output_format: e.target.value === "json" ? "json" : undefined })}
+                        >
+                          <option value="text">Plain text</option>
+                          <option value="json">JSON (parses result as JSON)</option>
+                        </select>
+                      </div>
+                      <div className="wf-field">
+                        <label>Template</label>
+                        <TemplateInput
+                          value={step.template || ""}
+                          onChange={(val) => onChangeStep({ template: val })}
+                          steps={stepRefs}
                   stepSchemas={stepSchemas}
-                        multiline
-                        minLines={3}
-                        placeholder="Hello {{vars.name}}! Result: {{steps.getData.result}}"
-                      />
-                    </div>
+                          multiline
+                          minLines={3}
+                          placeholder={"{{steps.prev.result}} processed by {{vars.name}}"}
+                        />
+                      </div>
+                    </>
                   )}
 
                   {transformMode === "llm" && (
@@ -488,15 +541,21 @@ export default function ConfigPanel({
                   )}
 
                   {transformMode === "script" && (
-                    <div className="wf-field">
-                      <label>Script (Python)</label>
-                      <textarea
-                        value={step.template || ""}
-                        onChange={(e) => onChangeStep({ template: e.target.value })}
-                        placeholder={"# input is in `data` variable\nresult = data.upper()"}
-                        style={{ fontFamily: "var(--font-mono)", fontSize: 11, minHeight: 80 }}
+                    <>
+                      <div className="wf-field">
+                        <label>Script (Python)</label>
+                        <textarea
+                          value={step.template || ""}
+                          onChange={(e) => onChangeStep({ template: e.target.value })}
+                          placeholder={"# input is in `data` variable\nresult = data.upper()"}
+                          style={{ fontFamily: "var(--font-mono)", fontSize: 11, minHeight: 80 }}
+                        />
+                      </div>
+                      <ScriptGenerator
+                        wfPath={wfPath}
+                        onGenerated={(code) => onChangeStep({ template: code })}
                       />
-                    </div>
+                    </>
                   )}
                 </>
               )}

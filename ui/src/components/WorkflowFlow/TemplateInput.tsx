@@ -17,9 +17,13 @@ interface Props {
   onChange: (val: string) => void;
   steps: StepRef[];
   stepSchemas?: SchemaField[];
+  triggerKeys?: string[];
+  varNames?: string[];
   placeholder?: string;
   multiline?: boolean;
   minLines?: number;
+  className?: string;
+  style?: React.CSSProperties;
 }
 
 interface CompletionItem {
@@ -30,9 +34,40 @@ interface CompletionItem {
 
 function getCompletions(
   partial: string,
+  prefix: string,
   steps: StepRef[],
   stepSchemas?: SchemaField[],
+  triggerKeys?: string[],
+  varNames?: string[],
 ): CompletionItem[] {
+  if (prefix === "trigger") {
+    if (!triggerKeys || triggerKeys.length === 0) {
+      return [{ label: "(payload)", detail: "trigger payload object", insert: partial + "}}" }];
+    }
+    const afterDot = partial.split(".").slice(1).join(".");
+    const lastPart = afterDot.toLowerCase();
+    if (!afterDot) {
+      return triggerKeys.map((k) => ({ label: k, detail: "trigger field", insert: k + "}}" }));
+    }
+    return triggerKeys
+      .filter((k) => k.toLowerCase().startsWith(lastPart))
+      .map((k) => ({ label: k, detail: "trigger field", insert: k + "}}" }));
+  }
+
+  if (prefix === "vars") {
+    if (!varNames || varNames.length === 0) {
+      return [{ label: "(variables)", detail: "workflow variables", insert: partial + "}}" }];
+    }
+    const afterDot = partial.split(".").slice(1).join(".");
+    const lastPart = afterDot.toLowerCase();
+    if (!afterDot) {
+      return varNames.map((v) => ({ label: v, detail: "variable", insert: v + "}}" }));
+    }
+    return varNames
+      .filter((v) => v.toLowerCase().startsWith(lastPart))
+      .map((v) => ({ label: v, detail: "variable", insert: v + "}}" }));
+  }
+
   const parts = partial.split(".");
 
   if (parts.length <= 1) {
@@ -87,17 +122,19 @@ function getCompletions(
   return [];
 }
 
-export default function TemplateInput({ value, onChange, steps, stepSchemas, placeholder, multiline, minLines }: Props) {
+export default function TemplateInput({ value, onChange, steps, stepSchemas, triggerKeys, varNames, placeholder, multiline, minLines, className, style }: Props) {
   const ref = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
   const [items, setItems] = useState<CompletionItem[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [triggerInfo, setTriggerInfo] = useState<{ start: number; partial: string } | null>(null);
+  const [triggerInfo, setTriggerInfo] = useState<{ start: number; partial: string; prefix: string } | null>(null);
 
-  const findTrigger = useCallback((text: string, cursor: number): { start: number; partial: string } | null => {
+  const findTrigger = useCallback((text: string, cursor: number): { start: number; partial: string; prefix: string } | null => {
     const before = text.slice(0, cursor);
-    const match = before.match(/\{\{steps\.([a-zA-Z0-9._]*)$/);
+    const match = before.match(/\{\{((?:trigger|steps|vars)\.([a-zA-Z0-9_.]*))$/);
     if (!match) return null;
-    return { start: cursor - match[1].length, partial: match[1] };
+    const fullPartial = match[1];
+    const prefix = fullPartial.split(".")[0];
+    return { start: cursor - fullPartial.length, partial: fullPartial.slice(prefix.length + 1), prefix };
   }, []);
 
   const updateCompletions = useCallback((text: string, cursor: number) => {
@@ -108,10 +145,10 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, pla
       return;
     }
     setTriggerInfo(trigger);
-    const completions = getCompletions(trigger.partial, steps, stepSchemas);
+    const completions = getCompletions(trigger.partial, trigger.prefix, steps, stepSchemas, triggerKeys, varNames);
     setItems(completions);
     setSelectedIdx(0);
-  }, [steps, stepSchemas, findTrigger]);
+  }, [steps, stepSchemas, triggerKeys, varNames, findTrigger]);
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) {
     const val = e.target.value;
@@ -132,7 +169,8 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, pla
     const newVal = before + item.insert.slice(prefix.length + (partial.length - prefix.length)) + after;
 
     if (newVal === value && item.insert.endsWith("}}")) {
-      const fixed = before.slice(0, before.length - partial.length) + partial.split(".")[0] + "." + item.insert + after;
+      const fullPrefix = triggerInfo.prefix;
+      const fixed = before.slice(0, before.length - partial.length) + fullPrefix + "." + item.insert + after;
       onChange(fixed);
     } else {
       onChange(newVal);
@@ -185,7 +223,7 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, pla
     onChange: handleChange,
     onKeyDown: handleKeyDown,
     placeholder,
-    className: "wf-template-input",
+    className: className || "wf-template-input",
     autoComplete: "off" as const,
   };
 
@@ -205,10 +243,12 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, pla
     </div>
   );
 
+  const wrapStyle = multiline && style ? { ...style, display: "flex", flexDirection: "column" as const } : undefined;
+
   if (multiline) {
     return (
-      <div className="wf-template-wrap">
-        <textarea {...shared} style={{ minHeight: minLines ? minLines * 20 : undefined }} />
+      <div className="wf-template-wrap" style={wrapStyle}>
+        <textarea {...shared} style={multiline && !className ? { minHeight: minLines ? minLines * 20 : undefined } : undefined} />
         {dropdown}
       </div>
     );

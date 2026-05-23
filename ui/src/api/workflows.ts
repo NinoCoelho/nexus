@@ -305,6 +305,23 @@ export async function getWorkflowSamples(
   return _json(res);
 }
 
+export async function generateScript(
+  path: string,
+  description: string,
+  inputSchema: Record<string, unknown> = {},
+  triggerKeys: string[] = [],
+): Promise<{ code: string }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/generate-script`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description, input_schema: inputSchema, trigger_keys: triggerKeys }),
+    },
+  );
+  return _json(res);
+}
+
 export async function resolveTemplate(
   template: string,
   triggerPayload: Record<string, unknown>,

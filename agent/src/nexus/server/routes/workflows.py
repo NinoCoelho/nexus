@@ -187,6 +187,16 @@ async def debug_events(path: str, run_id: str) -> StreamingResponse:
 
 
 
+@router.get("/workflows/{path:path}/samples")
+async def get_workflow_samples(path: str) -> dict:
+    from ...workflows.schema import load_step_samples, load_trigger_sample
+
+    return {
+        "trigger_payload": load_trigger_sample(path),
+        "steps": load_step_samples(path),
+    }
+
+
 @router.get("/workflows/{path:path}")
 async def get_workflow(path: str, request: Request) -> dict:
     from ... import vault as _vault
@@ -721,11 +731,69 @@ async def test_step(path: str, body: TestStepBody, request: Request) -> dict:
     return result
 
 
-@router.get("/workflows/{path:path}/samples")
-async def get_workflow_samples(path: str) -> dict:
-    from ...workflows.schema import load_step_samples, load_trigger_sample
+class GenerateScriptBody(BaseModel):
+    description: str
+    input_schema: dict = {}
+    trigger_keys: list[str] = []
 
-    return {
-        "trigger_payload": load_trigger_sample(path),
-        "steps": load_step_samples(path),
-    }
+
+@router.post("/workflows/{path:path}/generate-script")
+async def generate_script(path: str, body: GenerateScriptBody, request: Request) -> dict:
+    import json as _json
+    from ... import vault as _vault
+    from ...agent.llm import ChatMessage as LLMMsg, Role
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    engine = _get_engine(request)
+    agent = getattr(engine, "_agent", None)
+    if agent is None:
+        raise HTTPException(status_code=503, detail="agent not available")
+
+    model_id = getattr(agent, "_chosen_model", None)
+    resolved_provider, upstream_model = agent._resolve_provider(model_id)
+    chat_model = upstream_model or model_id
+
+    input_desc = ""
+    if body.input_schema:
+        input_desc = f"\nAvailable step output data (in `data` dict, keyed by step slug):\n```json\n{_json.dumps(body.input_schema, indent=2, default=str)[:3000]}\n```\n"
+    if body.trigger_keys:
+        input_desc += f"\nTrigger payload keys: {', '.join(body.trigger_keys)} (accessible via data dict)\n"
+
+    system_msg = LLMMsg(
+        role=Role.SYSTEM,
+        content=(
+            "You are a Python code generator. Generate a short Python script that transforms workflow data.\n"
+            "Rules:\n"
+            "- The script runs inside exec() with a sandboxed namespace.\n"
+            "- Available variables: `data` (dict with all step outputs, keyed by slug), `json` module.\n"
+            "- You MUST set the `result` variable to the output value.\n"
+            "- No imports, no file I/O, no network access. Only pure Python + json module.\n"
+            "- Output ONLY the Python code. No markdown fences, no explanation.\n"
+            "- Keep it concise. Prefer one-liners when possible.\n"
+        ),
+    )
+    user_msg = LLMMsg(
+        role=Role.USER,
+        content=f"{body.description}{input_desc}\n\nGenerate the Python script:",
+    )
+
+    try:
+        resp = await resolved_provider.chat([system_msg, user_msg], model=chat_model, max_tokens=1024)
+        code = resp.content or ""
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    cleaned = code.strip()
+    if cleaned.startswith("```python"):
+        cleaned = cleaned[len("```python"):]
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    return {"code": cleaned}

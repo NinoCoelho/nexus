@@ -130,7 +130,7 @@ async def run_insight_extraction(
             continue
 
         content_hash = _hash_insight(title, body)
-        if await asyncio.to_thread(_insight_exists, title):
+        if await asyncio.to_thread(state_store.has_explored, content_hash):
             log.debug("dream/insight: skipping duplicate insight '%s'", title)
             continue
 

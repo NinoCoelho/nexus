@@ -343,6 +343,7 @@ class WorkflowEngine:
     async def _execute_agent_session(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
         from ..agent.loop.agent import Agent
         from ..server.session_store.store import SessionStore
+        from ..agent.llm import ChatMessage as NxChatMessage
 
         prompt = resolve_templates(step.prompt or "", ctx)
         if not prompt:
@@ -358,6 +359,7 @@ class WorkflowEngine:
         session_id = session.id
 
         final_text = ""
+        final_messages: list[NxChatMessage] = []
         async for event in agent.run_turn_stream(
             prompt,
             history=[],
@@ -369,6 +371,15 @@ class WorkflowEngine:
                 final_text += event.get("text", "")
             elif etype == "error":
                 raise RuntimeError(event.get("message", "agent error"))
+            elif etype == "done":
+                raw_msgs = event.get("messages") or []
+                final_messages = [
+                    m if isinstance(m, NxChatMessage) else NxChatMessage(**m)
+                    for m in raw_msgs
+                ]
+
+        if final_messages:
+            store.replace_history(session_id, final_messages)
 
         return {"session_id": session_id, "result": final_text}
 

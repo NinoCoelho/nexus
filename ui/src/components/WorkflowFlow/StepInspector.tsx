@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { StepConfig, StepRun } from "../../types/workflow";
-import { resolveTemplate, getWorkflowSamples } from "../../api/workflows";
+import { resolveTemplate, getWorkflowSamples, generateScript } from "../../api/workflows";
 import { getSession } from "../../api/sessions";
+import TemplateInput from "./TemplateInput";
 import "./WorkflowFlow.css";
 
 interface StepSample {
@@ -264,9 +265,10 @@ export default function StepInspector({
   onClose,
   executing,
 }: StepInspectorProps) {
-  const editorRef = useRef<HTMLTextAreaElement>(null);
   const [samples, setSamples] = useState<Record<string, StepSample>>({});
   const [showLog, setShowLog] = useState(false);
+  const [genDesc, setGenDesc] = useState("");
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     if (!wfPath) return;
@@ -316,6 +318,15 @@ export default function StepInspector({
     return extractSessionId(ownOutput);
   }, [step.type, ownOutput]);
 
+  const stepRefs = useMemo(() =>
+    allSteps.map((s) => ({
+      slug: s.slug || s.id,
+      name: s.name,
+      type: s.type,
+    })),
+    [allSteps],
+  );
+
   const getTemplateField = useCallback((): { value: string; onChange: (v: string) => void; label: string } => {
     switch (step.type) {
       case "tool_call":
@@ -334,7 +345,7 @@ export default function StepInspector({
         return {
           value: step.template || "",
           onChange: (v) => onStepPatch({ template: v }),
-          label: step.output_format === "script" ? "Script (Python)" : "Template",
+          label: step.output_format === "script" ? "Script (Python)" : step.output_format === "llm" ? "Input (send to LLM)" : "Template",
         };
       case "http_request":
         return {
@@ -371,30 +382,30 @@ export default function StepInspector({
 
   const templateField = getTemplateField();
 
-  const handleDrop = useCallback((e: React.DragEvent<HTMLTextAreaElement>) => {
-    e.preventDefault();
-    const text = e.dataTransfer.getData("text/plain");
-    if (!text || !editorRef.current) return;
-    const textarea = editorRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const value = textarea.value;
-    const newValue = value.slice(0, start) + text + value.slice(end);
-    templateField.onChange(newValue);
-    setTimeout(() => {
-      if (editorRef.current) {
-        const pos = start + text.length;
-        editorRef.current.selectionStart = pos;
-        editorRef.current.selectionEnd = pos;
-        editorRef.current.focus();
+  const handleGenerateScript = useCallback(async () => {
+    if (!wfPath || !genDesc.trim()) return;
+    setGenerating(true);
+    try {
+      const inputSchema: Record<string, unknown> = {};
+      for (const [sid, sample] of Object.entries(samples)) {
+        const cfg = allSteps.find((s) => s.id === sid);
+        inputSchema[cfg?.slug || sid] = sample.output || {};
       }
-    }, 0);
-  }, [templateField]);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-  }, []);
+      for (const sr of allStepRuns) {
+        if (sr.status === "completed" && sr.output !== undefined) {
+          const cfg = allSteps.find((s) => s.id === sr.step_id);
+          inputSchema[cfg?.slug || sr.step_id] = sr.output;
+        }
+      }
+      const { code } = await generateScript(wfPath, genDesc, inputSchema, Object.keys(triggerPayload));
+      templateField.onChange(code);
+      setGenDesc("");
+    } catch (e: any) {
+      console.error("Script generation failed:", e);
+    } finally {
+      setGenerating(false);
+    }
+  }, [wfPath, genDesc, samples, allSteps, allStepRuns, triggerPayload, templateField]);
 
   const allOutputsForPreview = useMemo(() => {
     const map: Record<string, unknown> = {};
@@ -474,17 +485,36 @@ export default function StepInspector({
           <div className="wf-inspector-col-mid">
             <div className="wf-inspector-editor-panel">
               <label className="wf-inspector-editor-label">{templateField.label}</label>
-              <textarea
-                ref={editorRef}
-                className="wf-inspector-editor"
+              <TemplateInput
                 value={templateField.value}
-                onChange={(e) => templateField.onChange(e.target.value)}
-                onDrop={handleDrop}
-                onDragOver={handleDragOver}
+                onChange={templateField.onChange}
+                steps={stepRefs}
+                triggerKeys={Object.keys(triggerPayload)}
+                varNames={Object.keys(variables)}
+                multiline
+                className="wf-inspector-editor"
+                style={{ flex: 1, minHeight: 0 }}
                 placeholder="Drag data from the left panel or type {{steps.myStep.result}}"
-                spellCheck={false}
               />
             </div>
+            {step.type === "transform" && step.output_format === "script" && (
+              <div className="wf-inspector-gen-bar">
+                <input
+                  className="wf-inspector-gen-input"
+                  value={genDesc}
+                  onChange={(e) => setGenDesc(e.target.value)}
+                  placeholder="Describe what the script should do..."
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleGenerateScript(); } }}
+                />
+                <button
+                  className="wf-inspector-gen-btn"
+                  onClick={handleGenerateScript}
+                  disabled={generating || !genDesc.trim()}
+                >
+                  {generating ? "⏳" : "✨ Generate"}
+                </button>
+              </div>
+            )}
             <div className="wf-inspector-preview-section">
               <label className="wf-inspector-editor-label">Preview</label>
               <PreviewPanel

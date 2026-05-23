@@ -413,6 +413,24 @@ function Canvas({
     startRun(payloadInputMode);
   }, [startRun, payloadInputMode]);
 
+  const startSeededRun = useCallback(async (): Promise<string | null> => {
+    if (!wfPath) return null;
+    let payload = {};
+    try { payload = JSON.parse(payloadText); } catch {}
+    const result = await wfApi.startInteractiveRun(wfPath, payload, "trigger", true);
+    const runId = result.run.id;
+    setInteractiveRunId(runId);
+    setTriggerPayload(payload);
+    const state = await wfApi.getInteractiveState(wfPath, runId);
+    const seededMap: Record<string, StepRun> = {};
+    for (const sr of state.steps) {
+      seededMap[sr.step_id] = sr;
+    }
+    setStepRunMap(seededMap);
+    setCondBranches(state.condition_branches || {});
+    return runId;
+  }, [wfPath, payloadText]);
+
   const executeStep = useCallback(
     async (stepId: string) => {
       if (!wfPath) return;
@@ -421,21 +439,21 @@ function Canvas({
       try {
         let runId = interactiveRunId;
         if (!runId) {
-          let payload = {};
-          try { payload = JSON.parse(payloadText); } catch {}
-          const result = await wfApi.startInteractiveRun(wfPath, payload, "trigger", true);
-          runId = result.run.id;
-          setInteractiveRunId(runId);
-          setTriggerPayload(payload);
-          const state = await wfApi.getInteractiveState(wfPath, runId);
-          const seededMap: Record<string, StepRun> = {};
-          for (const sr of state.steps) {
-            seededMap[sr.step_id] = sr;
-          }
-          setStepRunMap(seededMap);
-          setCondBranches(state.condition_branches || {});
+          runId = (await startSeededRun()) || "";
         }
-        const sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId);
+        let sr: StepRun;
+        try {
+          sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId);
+        } catch (execErr: any) {
+          const detail = execErr?.message || "";
+          if (runId && (detail.includes("not found") || detail.includes("not reachable"))) {
+            runId = (await startSeededRun()) || "";
+            if (!runId) throw execErr;
+            sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId);
+          } else {
+            throw execErr;
+          }
+        }
         setStepRunMap((prev) => ({ ...prev, [stepId]: sr }));
         const step = wfRef.current.steps.find((s) => s.id === stepId);
         if (step?.type === "condition" && sr.status === "completed") {
@@ -452,7 +470,7 @@ function Canvas({
         setExecutingStep(null);
       }
     },
-    [wfPath, interactiveRunId, payloadText],
+    [wfPath, interactiveRunId, startSeededRun],
   );
 
   const handleOpenInspector = useCallback((stepId: string) => {
@@ -471,6 +489,7 @@ function Canvas({
   const fingerprint = `${migratedWf.triggers.map((t) => t.id).join(",")}|${migratedWf.steps.map((s) => `${s.id}:${s.next_step || ""}:${s.then_step || ""}:${s.else_step || ""}`).join(",")}`;
 
   if (fingerprint !== prevFingerprint.current) {
+    setInteractiveRunId(null);
     nodePosMap.current = computeLayout(migratedWf);
     prevFingerprint.current = fingerprint;
   }
