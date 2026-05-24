@@ -1,0 +1,271 @@
+.dm-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 20px 24px;
+  gap: 16px;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dm-view-scroll {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dm-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dm-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dm-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.dm-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dm-status-dot--running {
+  background: var(--ok);
+  animation: dm-pulse 1.5s ease-in-out infinite;
+}
+
+.dm-status-dot--idle {
+  background: var(--fg-faint);
+}
+
+.dm-status-dot--error {
+  background: var(--bad);
+}
+
+@keyframes dm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.dm-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.dm-tab {
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--fg-dim);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.dm-tab:hover {
+  color: var(--fg);
+}
+
+.dm-tab--active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.dm-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.dm-btn:hover {
+  background: var(--bg-soft);
+  color: var(--fg);
+}
+
+.dm-btn--primary {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+}
+
+.dm-btn--primary:hover {
+  opacity: 0.9;
+}
+
+.dm-btn--danger {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.dm-btn--danger:hover {
+  background: var(--bad);
+  color: var(--fg-on-status);
+}
+
+.dm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dm-card {
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.dm-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dm-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dm-card-meta {
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+
+.dm-card-body {
+  font-size: 13px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+
+.dm-budget-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-soft);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.dm-budget-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.dm-budget-fill--warn {
+  background: var(--warn);
+}
+
+.dm-budget-fill--full {
+  background: var(--bad);
+}
+
+.dm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: var(--fg-faint);
+  font-size: 13px;
+  text-align: center;
+  gap: 8px;
+}
+
+.dm-run-phases {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.dm-phase-tag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--bg-soft);
+  color: var(--fg-dim);
+}
+
+.dm-journal-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.dm-suggestion-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.dm-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+
+.dm-spin {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: dm-rotate 0.6s linear infinite;
+  margin-right: 8px;
+}
+
+@keyframes dm-rotate {
+  to { transform: rotate(360deg); }
+}
+
+.dm-error-banner {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--bad);
+  color: var(--fg-on-status);
+  font-size: 12px;
+}

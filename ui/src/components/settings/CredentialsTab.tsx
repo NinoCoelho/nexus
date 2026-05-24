@@ -1,11 +1,3 @@
-/**
- * CredentialsTab — manage entries in ~/.nexus/secrets.toml.
- *
- * The agent uses these for `$NAME` substitution at tool boundaries
- * (env vars take precedence — see secrets.resolve in the backend).
- * Skills that declare `requires_keys` add entries here on first use.
- */
-
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -16,7 +8,6 @@ import {
 } from "../../api";
 import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
-import SettingsField from "./SettingsField";
 import SettingsSection from "./SettingsSection";
 
 const NAME_RE = /^[A-Z][A-Z0-9_]*$/;
@@ -26,9 +17,12 @@ export default function CredentialsTab() {
   const toast = useToast();
   const [items, setItems] = useState<Credential[] | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
-  const [newSkill, setNewSkill] = useState("");
+
+  const [selected, setSelected] = useState<Credential | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -47,11 +41,15 @@ export default function CredentialsTab() {
 
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault();
+  function openAdd() {
+    setNewName("");
+    setNewValue("");
+    setAddOpen(true);
+  }
+
+  async function handleAdd() {
     if (!NAME_RE.test(newName)) {
       toast.error(t("settings:credentials.toast.nameInvalid"), {
         detail: t("settings:credentials.toast.nameInvalidDetail"),
@@ -63,14 +61,9 @@ export default function CredentialsTab() {
       return;
     }
     try {
-      await setCredential(newName, newValue, {
-        kind: newSkill ? "skill" : "generic",
-        skill: newSkill || undefined,
-      });
+      await setCredential(newName, newValue, { kind: "generic" });
       toast.success(t("settings:credentials.toast.saved", { name: newName }));
-      setNewName("");
-      setNewValue("");
-      setNewSkill("");
+      setAddOpen(false);
       await refresh();
     } catch (e) {
       toast.error(t("settings:credentials.toast.saveFailed"), {
@@ -116,51 +109,17 @@ export default function CredentialsTab() {
         icon={t("settings:credentials.sectionIcon")}
         description={t("settings:credentials.sectionDescription")}
       >
-        <form onSubmit={handleAdd} className="creds-add-form">
-          <SettingsField label={t("settings:credentials.nameLabel")} hint={t("settings:credentials.nameHint")} layout="row">
-            <input
-              type="text"
-              className="settings-input"
-              value={newName}
-              placeholder={t("settings:credentials.namePlaceholder")}
-              autoCapitalize="characters"
-              spellCheck={false}
-              onChange={(e) => setNewName(e.target.value.toUpperCase())}
-            />
-          </SettingsField>
-          <SettingsField label={t("settings:credentials.valueLabel")} hint={t("settings:credentials.valueHint")} layout="row">
-            <input
-              type="password"
-              className="settings-input"
-              value={newValue}
-              autoComplete="new-password"
-              spellCheck={false}
-              onChange={(e) => setNewValue(e.target.value)}
-            />
-          </SettingsField>
-          <SettingsField
-            label={t("settings:credentials.skillLabel")}
-            hint={t("settings:credentials.skillHint")}
-            layout="row"
-          >
-            <input
-              type="text"
-              className="settings-input"
-              value={newSkill}
-              placeholder={t("settings:credentials.skillPlaceholder")}
-              onChange={(e) => setNewSkill(e.target.value)}
-            />
-          </SettingsField>
-          <div className="creds-add-actions">
-            <button type="submit" className="settings-btn settings-btn--primary">
-              {t("settings:credentials.saveButton")}
-            </button>
-          </div>
-        </form>
-      </SettingsSection>
+        <button
+          type="button"
+          className="settings-btn settings-btn--primary creds-add-btn"
+          onClick={openAdd}
+        >
+          {t("settings:credentials.addButton")}
+        </button>
 
-      <SettingsSection title={t("settings:credentials.storedTitle")} icon={t("settings:credentials.storedIcon")}>
-        {loading && !items && <p className="s-field__hint">{t("settings:credentials.loading")}</p>}
+        {loading && !items && (
+          <p className="s-field__hint">{t("settings:credentials.loading")}</p>
+        )}
         {items && items.length === 0 && (
           <p className="s-field__hint">{t("settings:credentials.empty")}</p>
         )}
@@ -169,43 +128,137 @@ export default function CredentialsTab() {
             <thead>
               <tr>
                 <th>{t("settings:credentials.tableColName")}</th>
-                <th>{t("settings:credentials.tableColKind")}</th>
-                <th>{t("settings:credentials.tableColSkill")}</th>
                 <th>{t("settings:credentials.tableColValue")}</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
               {items.map((c) => (
-                <tr key={c.name}>
+                <tr
+                  key={c.name}
+                  className="creds-table__row--clickable"
+                  onClick={() => setSelected(c)}
+                >
                   <td>
                     <code>{c.name}</code>
                   </td>
-                  <td>{c.kind}</td>
-                  <td>{c.skill ?? "—"}</td>
                   <td className="creds-table__masked">{c.masked}</td>
-                  <td className="creds-table__actions">
-                    <button
-                      type="button"
-                      className="settings-btn"
-                      onClick={() => setEditing(c.name)}
-                    >
-                      {t("settings:credentials.updateButton")}
-                    </button>
-                    <button
-                      type="button"
-                      className="settings-btn settings-btn--danger"
-                      onClick={() => setConfirmDelete(c.name)}
-                    >
-                      {t("settings:credentials.deleteButton")}
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </SettingsSection>
+
+      {addOpen && (
+        <div className="modal-backdrop" onClick={() => setAddOpen(false)}>
+          <div
+            className="modal-dialog"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setAddOpen(false);
+              if (e.key === "Enter") { e.preventDefault(); void handleAdd(); }
+            }}
+          >
+            <div className="modal-title">
+              {t("settings:credentials.addModalTitle")}
+            </div>
+            <div className="creds-modal-fields">
+              <div className="s-field">
+                <label className="s-field__label">
+                  {t("settings:credentials.nameLabel")}
+                </label>
+                <p className="s-field__hint">
+                  {t("settings:credentials.nameHint")}
+                </p>
+                <input
+                  type="text"
+                  className="settings-input"
+                  value={newName}
+                  placeholder={t("settings:credentials.namePlaceholder")}
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  autoFocus
+                  onChange={(e) => setNewName(e.target.value.toUpperCase())}
+                />
+              </div>
+              <div className="s-field">
+                <label className="s-field__label">
+                  {t("settings:credentials.valueLabel")}
+                </label>
+                <p className="s-field__hint">
+                  {t("settings:credentials.valueHint")}
+                </p>
+                <input
+                  type="password"
+                  className="settings-input"
+                  value={newValue}
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  onChange={(e) => setNewValue(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="modal-btn" onClick={() => setAddOpen(false)}>
+                {t("common:buttons.cancel")}
+              </button>
+              <button
+                className="modal-btn modal-btn--primary"
+                onClick={() => void handleAdd()}
+                disabled={!NAME_RE.test(newName) || !newValue}
+              >
+                {t("settings:credentials.addModalSave")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selected && !editing && !confirmDelete && (
+        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+          <div
+            className="modal-dialog"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSelected(null);
+            }}
+          >
+            <div className="modal-title">
+              {t("settings:credentials.detailModalTitle", { name: selected.name })}
+            </div>
+            <div className="creds-detail-body">
+              <div className="creds-detail-row">
+                <span className="creds-detail-label">
+                  {t("settings:credentials.detailValueLabel")}
+                </span>
+                <span className="creds-detail-value">{selected.masked}</span>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn"
+                onClick={() => {
+                  const name = selected.name;
+                  setSelected(null);
+                  setEditing(name);
+                }}
+              >
+                {t("settings:credentials.updateButton")}
+              </button>
+              <button
+                className="modal-btn modal-btn--danger"
+                onClick={() => {
+                  const name = selected.name;
+                  setSelected(null);
+                  setConfirmDelete(name);
+                }}
+              >
+                {t("settings:credentials.deleteButton")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <Modal

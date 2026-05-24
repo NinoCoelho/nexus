@@ -17,6 +17,8 @@ interface UseApprovalQueueResult {
   pendingRequest: UserRequestPayload | null;
   /** Total pending count, for the "1 of N" indicator on the dialog. */
   queueLength: number;
+  /** The full head item (session_id + request) or null. */
+  headItem: QueuedRequest | null;
   handleApprovalSubmit: (answer: string | Record<string, unknown>) => Promise<void>;
   handleApprovalTimeout: () => void;
   clearPendingRequest: () => void;
@@ -134,6 +136,7 @@ export function useApprovalQueue(): UseApprovalQueueResult {
 
   return {
     pendingRequest: head?.request ?? null,
+    headItem: head,
     queueLength: queue.length,
     handleApprovalSubmit,
     handleApprovalTimeout,

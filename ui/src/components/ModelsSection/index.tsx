@@ -52,6 +52,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
 
   const embModelId = routing?.embedding_model_id ?? "";
   const extModelId = routing?.extraction_model_id ?? "";
+  const visionModelId = routing?.vision_model_id ?? "";
   const defaultModelId = routing?.default_model ?? "";
 
   const providerTypeMap = Object.fromEntries(providers.map((p) => [p.name, p.type ?? "openai_compat"]));
@@ -60,6 +61,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
     const roles: string[] = [];
     if (embModelId === m.id) roles.push("embedding");
     if (extModelId === m.id) roles.push("extraction");
+    if (visionModelId === m.id) roles.push("vision");
     return roles;
   }
 
@@ -69,7 +71,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   }
 
   function hasRole(m: Model): boolean {
-    return embModelId === m.id || extModelId === m.id;
+    return embModelId === m.id || extModelId === m.id || visionModelId === m.id;
   }
 
   async function assignRole(role: string, modelId: string) {

@@ -1,5 +1,6 @@
 // Sub-component for KnowledgeView: entity detail card with relations and source documents.
 
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import type { EntityDetail } from "../../api";
 import { typeColor } from "./utils";
 
@@ -49,7 +50,7 @@ export function EntityDetailCard({
               className="kv-relation-row"
               onClick={() => onSelectEntity(rel.entity_id)}
             >
-              <span className="kv-relation-dir">{rel.direction === "outgoing" ? "→" : "←"}</span>
+              <span className="kv-relation-dir">{rel.direction === "outgoing" ? <ArrowRight size={12} /> : <ArrowLeft size={12} />}</span>
               <span className="kv-relation-name">{rel.relation.replace(/_/g, " ")}</span>
               <span className="kv-relation-entity">
                 <span className="kv-entity-dot kv-entity-dot--sm" style={{ background: typeColor(rel.entity_type) }} />

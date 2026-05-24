@@ -4,26 +4,28 @@
  *
  * Sections:
  *   1. Hardware card (RAM / disk / chip) so the user knows what fits.
- *   2. Installed list with Activate / Delete.
- *   3. Recommended catalog (curated picks from `catalog.ts`) with one-click
- *      Install. No search box, no jargon.
+ *   2. Installed list with Start / Stop / Stop All / Remove.
+ *   3. HuggingFace search for discovering and downloading models.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  cancelDownload,
   deleteInstalled,
   fmtBytes,
+  getBinaryStatus,
   getHardware,
   listDownloads,
   listInstalled,
-  startDownload,
   startModel,
+  stopAllModels,
   stopModel,
+  updateBinary,
+  type BinaryStatus,
   type DownloadTask,
   type HardwareProbe,
   type InstalledModel,
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
-import { CATALOG, type CatalogEntry } from "./catalog";
 import SearchModal from "./SearchModal";
 import Modal, { type ModalProps } from "../Modal";
 import "./LocalModels.css";
@@ -41,6 +43,8 @@ export default function LocalModels({ onRefresh }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
+  const [binStatus, setBinStatus] = useState<BinaryStatus | null>(null);
+  const [binUpdating, setBinUpdating] = useState(false);
 
   const refreshLocal = useCallback(async () => {
     try {
@@ -55,6 +59,7 @@ export default function LocalModels({ onRefresh }: Props) {
   useEffect(() => {
     getHardware().then(setHw).catch((e) => setError(e.message));
     refreshLocal();
+    getBinaryStatus().then(setBinStatus).catch(() => {});
   }, [refreshLocal]);
 
   // Poll downloads while any task is in flight.
@@ -71,26 +76,14 @@ export default function LocalModels({ onRefresh }: Props) {
   const autoStartedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (installed.length === 0) return;
-    if (installed.some((m) => m.is_running)) return;
-    const candidate = installed.find((m) => !autoStartedRef.current.has(m.filename));
+    const visible = installed.filter((m) => !m.is_mmproj);
+    if (visible.some((m) => m.is_running)) return;
+    const candidate = visible.find((m) => !autoStartedRef.current.has(m.filename));
     if (!candidate) return;
     autoStartedRef.current.add(candidate.filename);
     onStart(candidate.filename);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [installed]);
-
-  const onInstall = useCallback(async (entry: CatalogEntry) => {
-    setBusy(entry.id);
-    try {
-      await startDownload(entry.repo_id, entry.filename);
-      toast.info(`Downloading ${entry.title}…`);
-      refreshLocal();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Download failed");
-    } finally {
-      setBusy(null);
-    }
-  }, [refreshLocal, toast]);
 
   const onStart = useCallback(async (filename: string) => {
     setBusy(filename);
@@ -120,12 +113,44 @@ export default function LocalModels({ onRefresh }: Props) {
     }
   }, [refreshLocal, onRefresh, toast]);
 
-  const onDelete = useCallback((filename: string) => {
+  const onCancelDownload = useCallback(async (taskId: string, filename: string) => {
+    setDownloads((prev) => prev.filter((t) => t.task_id !== taskId));
+    try {
+      await cancelDownload(taskId);
+      toast.info(`Cancelled ${filename}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Cancel failed");
+      refreshLocal();
+    }
+  }, [refreshLocal, toast]);
+
+  const onStopAll = useCallback(async () => {
+    setBusy("__stop_all__");
+    try {
+      const stopped = await stopAllModels();
+      if (stopped.length === 0) {
+        toast.info("No models running");
+      } else {
+        toast.success(`Stopped ${stopped.length} model${stopped.length > 1 ? "s" : ""}`);
+      }
+      await refreshLocal();
+      onRefresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Stop-all failed");
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshLocal, onRefresh, toast]);
+
+  const onDelete = useCallback((filename: string, isRunning: boolean) => {
+    const message = isRunning
+      ? `Stop and remove ${filename}? The model will be stopped and the file deleted from disk.`
+      : `Remove ${filename}? The file will be deleted from disk.`;
     setConfirmModal({
       kind: "confirm",
       title: "Remove model",
-      message: `Remove ${filename}? The file will be deleted from disk.`,
-      confirmLabel: "Remove",
+      message,
+      confirmLabel: isRunning ? "Stop & Remove" : "Remove",
       danger: true,
       onCancel: () => setConfirmModal(null),
       onSubmit: async () => {
@@ -135,6 +160,7 @@ export default function LocalModels({ onRefresh }: Props) {
           await deleteInstalled(filename);
           toast.success(`Removed ${filename}`);
           refreshLocal();
+          onRefresh();
         } catch (e) {
           toast.error(e instanceof Error ? e.message : "Delete failed");
         } finally {
@@ -142,21 +168,37 @@ export default function LocalModels({ onRefresh }: Props) {
         }
       },
     });
-  }, [refreshLocal, toast]);
+  }, [refreshLocal, onRefresh, toast]);
 
-  // Map repo_id+filename → in-flight download for catalog state.
-  const downloadByKey = useMemo(() => {
-    const m = new Map<string, DownloadTask>();
-    for (const t of downloads) m.set(`${t.repo_id}/${t.filename}`, t);
-    return m;
-  }, [downloads]);
+  const onBinaryUpdate = useCallback(async () => {
+    setBinUpdating(true);
+    try {
+      const res = await updateBinary();
+      if (res.status === "up_to_date") {
+        toast.info("Already up to date");
+      } else {
+        toast.info(`Updating llama-server to ${res.tag}…`);
+        const poll = setInterval(async () => {
+          try {
+            const s = await getBinaryStatus();
+            setBinStatus(s);
+            if (!s.downloading) {
+              clearInterval(poll);
+              setBinUpdating(false);
+              if (s.current_version === s.latest_version) {
+                toast.success(`Updated to b${s.latest_version}`);
+              }
+            }
+          } catch { /* keep polling */ }
+        }, 2000);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Update failed");
+      setBinUpdating(false);
+    }
+  }, [toast]);
 
-  // Quick lookup of what's already installed.
-  const installedByFilename = useMemo(() => {
-    const m = new Map<string, InstalledModel>();
-    for (const i of installed) m.set(i.filename, i);
-    return m;
-  }, [installed]);
+  const hasRunning = installed.some((m) => m.is_running && !m.is_mmproj);
 
   return (
     <div className="local-models-section">
@@ -176,12 +218,48 @@ export default function LocalModels({ onRefresh }: Props) {
         </div>
       )}
 
+      {binStatus && binStatus.update_available && !binStatus.downloading && (
+        <div className="local-update-banner">
+          <span className="local-update-text">
+            llama-server update available: b{binStatus.current_version} → b{binStatus.latest_version}
+          </span>
+          <button
+            type="button"
+            className="settings-btn"
+            disabled={binUpdating}
+            onClick={onBinaryUpdate}
+          >
+            {binUpdating ? "Updating…" : "Update"}
+          </button>
+        </div>
+      )}
+
+      {binStatus && binStatus.downloading && (
+        <div className="local-update-banner local-update-banner--active">
+          <span className="local-update-text">
+            Updating llama-server to b{binStatus.latest_version}…
+          </span>
+        </div>
+      )}
+
       {error && <p className="settings-error">{error}</p>}
 
       <div className="local-installed">
-        <div className="local-subhead">Installed</div>
+        <div className="local-subhead-row">
+          <div className="local-subhead">Installed</div>
+          {hasRunning && (
+            <button
+              className="settings-btn settings-btn--danger"
+              disabled={busy !== null}
+              onClick={onStopAll}
+              title="Stop all running local models"
+            >
+              Stop All
+            </button>
+          )}
+        </div>
         {installed.length === 0 && (
-          <p className="local-empty">No models installed yet — pick one below.</p>
+          <p className="local-empty">No models installed yet — search below.</p>
         )}
         {installed.map((m) => (
           <div key={m.filename} className={`local-row${m.is_running ? " local-row--active" : ""}`}>
@@ -191,12 +269,18 @@ export default function LocalModels({ onRefresh }: Props) {
                 {fmtBytes(m.size_bytes)}
                 {m.is_running ? ` · running on :${m.port}` : " · stopped"}
               </span>
+              {m.has_mamba_layers && !m.is_running && (
+                <span className="local-row-warn">
+                  Hybrid Mamba model — not supported by this llama.cpp build.
+                  Use a standard (non-UD) variant.
+                </span>
+              )}
             </div>
             <div className="local-row-actions">
               {m.is_running ? (
                 <button
                   className="settings-btn"
-                  disabled={busy === m.filename}
+                  disabled={busy === m.filename || busy === "__stop_all__"}
                   onClick={() => onStop(m.filename)}
                   title="Free memory and unregister from chat picker"
                 >
@@ -205,18 +289,17 @@ export default function LocalModels({ onRefresh }: Props) {
               ) : (
                 <button
                   className="settings-btn"
-                  disabled={busy === m.filename}
+                  disabled={busy === m.filename || !!m.has_mamba_layers}
                   onClick={() => onStart(m.filename)}
-                  title="Spin up llama-server and register for chat / extraction"
+                  title={m.has_mamba_layers ? "Not compatible with llama.cpp" : "Spin up llama-server and register for chat / extraction"}
                 >
                   Start
                 </button>
               )}
               <button
                 className="settings-btn settings-btn--danger"
-                disabled={busy === m.filename || m.is_running}
-                onClick={() => onDelete(m.filename)}
-                title={m.is_running ? "Stop the model first" : ""}
+                disabled={busy === m.filename || busy === "__stop_all__"}
+                onClick={() => onDelete(m.filename, m.is_running)}
               >
                 Remove
               </button>
@@ -242,6 +325,13 @@ export default function LocalModels({ onRefresh }: Props) {
                   </div>
                   <div className="local-dl-meta">
                     {fmtBytes(t.downloaded_bytes)} / {fmtBytes(t.total_bytes)} ({pct.toFixed(0)}%)
+                    <button
+                      type="button"
+                      className="settings-btn settings-btn--danger local-dl-cancel"
+                      onClick={() => onCancelDownload(t.task_id, t.filename)}
+                    >
+                      Cancel
+                    </button>
                   </div>
                 </div>
               );
@@ -249,75 +339,13 @@ export default function LocalModels({ onRefresh }: Props) {
         </div>
       )}
 
-      <div className="local-catalog">
-        <div className="local-subhead">Available to download</div>
-        <div className="local-catalog-grid">
-          {CATALOG.map((entry) => {
-            const ramOK = !hw || hw.ram_gb >= entry.min_ram_gb;
-            const installedHere = installedByFilename.has(entry.filename);
-            const dl = downloadByKey.get(`${entry.repo_id}/${entry.filename}`);
-            const inProgress = dl && (dl.status === "downloading" || dl.status === "pending");
-            const isBusy = busy === entry.id;
-
-            let label: string;
-            let disabled = false;
-            if (installedHere) {
-              label = "Installed";
-              disabled = true;
-            } else if (inProgress) {
-              label = "Downloading…";
-              disabled = true;
-            } else if (!ramOK) {
-              label = "Needs more RAM";
-              disabled = true;
-            } else if (isBusy) {
-              label = "Starting…";
-              disabled = true;
-            } else {
-              label = "Install";
-            }
-
-            return (
-              <div
-                key={entry.id}
-                className={`local-card${!ramOK ? " local-card--disabled" : ""}`}
-              >
-                <div className="local-card-head">
-                  <span className="local-card-title">{entry.title}</span>
-                  <span className="local-card-size">~{entry.approx_size_gb.toFixed(1)} GB</span>
-                </div>
-                <p className="local-card-desc">{entry.description}</p>
-                <div className="local-card-badges">
-                  <span className="local-card-badge local-card-badge--free">Free</span>
-                  {entry.badges.map((b) => (
-                    <span key={b} className="local-card-badge">{b}</span>
-                  ))}
-                  {!ramOK && (
-                    <span className="local-card-badge local-card-badge--warn">
-                      Needs {entry.min_ram_gb} GB RAM
-                    </span>
-                  )}
-                </div>
-                <button
-                  className="settings-btn local-card-action"
-                  disabled={disabled}
-                  onClick={() => onInstall(entry)}
-                >
-                  {label}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="local-more">
         <button
           type="button"
           className="settings-btn local-more-btn"
           onClick={() => setSearchOpen(true)}
         >
-          More models…
+          Search models…
         </button>
         <span className="local-more-hint">Browse Hugging Face</span>
       </div>
@@ -326,8 +354,6 @@ export default function LocalModels({ onRefresh }: Props) {
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
         onDownloadStarted={refreshLocal}
-        installedByFilename={installedByFilename}
-        downloadByKey={downloadByKey}
       />
 
       {confirmModal && <Modal {...confirmModal} />}

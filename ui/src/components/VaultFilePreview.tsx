@@ -7,6 +7,7 @@
  * graph node — the parent component controls positioning.
  */
 
+import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import FilePreview from "./FilePreview";
 import { getVaultFile, vaultRawUrl, type VaultFile } from "../api";
@@ -180,7 +181,7 @@ export default function VaultFilePreview({ path, onClose, onOpenInVault, onViewE
               </button>
             )}
             <button className="vault-preview-close" onClick={onClose} aria-label="Close">
-              ✕
+              <X size={16} />
             </button>
           </div>
         </div>

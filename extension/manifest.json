@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus Cookie Export",
+  "version": "1.0.0",
+  "description": "Export browser cookies to Nexus for authenticated web scraping.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApOojZKV60Sw5C7nukwP72HStRufHg1u1teMtdBvXyGf6ilS8tTX4I5vlK22wPs1J2uWCZGtAd5qfs9RT6G1rLHgwrI74hLge/Hi+km3gLPlH7u3L+xEChyuxI4oF/yDtMDAYCxkwQ//DXDZEL+g0Lb4mvMZNlKVFHThN6djlYRdsZge1hIJTQ9MJ2C70zl0c4v1+wJ42xXP5AiylpperZ0ZFaD17D46IjHUp2LHJEoQiwHB7uqr3x8T4kKli2AmpQ/gJJ031pNVvXUHBCDjIoMu8a/Ly7xEPNnfXECJi4I0+TjITkqW68ck1ihyg1rmqRXjnV+vyTD49dDpi8KarcQIDAQAB",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -5,9 +5,12 @@
  * one repo per row with breathing room, and clicking a repo expands its
  * GGUF file list inline with quant + size + Download button.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ChevronDown, ChevronRight, Heart, X } from "lucide-react";
 import {
   fmtBytes,
+  listDownloads,
+  listInstalled,
   listRepoFiles,
   searchHf,
   startDownload,
@@ -22,16 +25,12 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onDownloadStarted: () => void;
-  installedByFilename: Map<string, InstalledModel>;
-  downloadByKey: Map<string, DownloadTask>;
 }
 
 export default function SearchModal({
   open,
   onClose,
   onDownloadStarted,
-  installedByFilename,
-  downloadByKey,
 }: Props) {
   const toast = useToast();
   const [query, setQuery] = useState("");
@@ -42,6 +41,35 @@ export default function SearchModal({
   const [busy, setBusy] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [installed, setInstalled] = useState<InstalledModel[]>([]);
+  const [downloads, setDownloads] = useState<DownloadTask[]>([]);
+
+  const refreshData = useCallback(async () => {
+    try {
+      const [inst, dls] = await Promise.all([listInstalled(), listDownloads()]);
+      setInstalled(inst);
+      setDownloads(dls);
+    } catch {
+      // silent — stale data is fine for download-status badges
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) refreshData();
+  }, [open, refreshData]);
+
+  const installedByFilename = useMemo(() => {
+    const m = new Map<string, InstalledModel>();
+    for (const i of installed) m.set(i.filename, i);
+    return m;
+  }, [installed]);
+
+  const downloadByKey = useMemo(() => {
+    const m = new Map<string, DownloadTask>();
+    for (const t of downloads) m.set(`${t.repo_id}/${t.filename}`, t);
+    return m;
+  }, [downloads]);
 
   // Reset state when reopened.
   useEffect(() => {
@@ -112,12 +140,13 @@ export default function SearchModal({
       await startDownload(repoId, filename);
       toast.info(`Downloading ${filename}…`);
       onDownloadStarted();
+      refreshData();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Download failed");
     } finally {
       setBusy(null);
     }
-  }, [onDownloadStarted, toast]);
+  }, [onDownloadStarted, refreshData, toast]);
 
   if (!open) return null;
 
@@ -129,7 +158,7 @@ export default function SearchModal({
       >
         <div className="search-modal-head">
           <h3 className="search-modal-title">Browse Hugging Face</h3>
-          <button className="drawer-close" onClick={onClose} aria-label="Close">✕</button>
+          <button className="drawer-close" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
 
         <input
@@ -177,9 +206,9 @@ export default function SearchModal({
                     </div>
                   </div>
                   <div className="search-repo-stats">
-                    <span title="downloads">↓ {r.downloads.toLocaleString()}</span>
-                    <span title="likes">♥ {r.likes}</span>
-                    <span className="search-repo-chev">{isOpen ? "▾" : "▸"}</span>
+                    <span title="downloads"><ArrowDown size={12} /> {r.downloads.toLocaleString()}</span>
+                    <span title="likes"><Heart size={12} /> {r.likes}</span>
+                    <span className="search-repo-chev">{isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                   </div>
                 </button>
 

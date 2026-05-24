@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ..deps import get_agent, get_app_state
 
@@ -67,6 +67,44 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
         },
     }
     out["ui"] = {"language": cfg.ui.language}
+    na = getattr(cfg, "nexus_account", None)
+    if na is not None:
+        out["nexus_account"] = {
+            "base_url": na.base_url,
+            "gateway_url": na.gateway_url,
+            "poll_seconds": na.poll_seconds,
+            "auto_upgrade_default": na.auto_upgrade_default,
+        }
+    tts = cfg.tts
+    out["tts"] = {
+        "enabled": tts.enabled,
+        "ack_enabled": tts.ack_enabled,
+        "ack_mode": tts.ack_mode,
+        "ack_model": tts.ack_model,
+        "voices_dir": tts.voices_dir,
+    }
+    mcp = getattr(cfg, "mcp", None)
+    if mcp is not None:
+        out["mcp"] = {
+            "servers": {
+                name: {
+                    "transport": entry.transport,
+                    "command": entry.command,
+                    "env": entry.env,
+                    "url": entry.url,
+                    "headers": entry.headers,
+                    "enabled": entry.enabled,
+                }
+                for name, entry in mcp.servers.items()
+            },
+            "server_enabled": mcp.server_enabled,
+            "server_port": mcp.server_port,
+            "server_expose": mcp.server_expose,
+            "server_auth_token": "***" if mcp.server_auth_token else "",
+        }
+    srv = getattr(cfg, "server", None)
+    if srv is not None:
+        out["server"] = {"multi_user": srv.multi_user}
     return out
 
 
@@ -98,9 +136,15 @@ async def get_config(app_state: dict[str, Any] = Depends(get_app_state)) -> dict
 @router.patch("/config")
 async def patch_config(
     body: dict[str, Any],
+    request: Request,
     app_state: dict[str, Any] = Depends(get_app_state),
     a=Depends(get_agent),
 ) -> dict[str, Any]:
+    from ..permissions import can_manage_server
+    role = getattr(request.state, "user_role", None)
+    if not can_manage_server(role):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin only")
     from ...config_file import load as load_cfg, save as save_cfg, NexusConfig
     cfg = app_state["cfg"] or load_cfg()
     raw = cfg.model_dump()
@@ -155,7 +199,63 @@ async def patch_config(
         if lang in ("en", "pt-BR"):
             merged["language"] = lang
         raw["ui"] = merged
+    if "tts" in body:
+        existing = raw.get("tts", {}) or {}
+        patch = body["tts"] or {}
+        ALLOWED = {"enabled", "ack_enabled", "ack_mode", "ack_model", "voice_language", "voices_dir"}
+        clean = {k: v for k, v in patch.items() if k in ALLOWED}
+        raw["tts"] = {**existing, **clean}
+    if "mcp" in body:
+        existing = raw.get("mcp", {}) or {}
+        patch = body["mcp"] or {}
+        merged_mcp: dict[str, Any] = {**existing}
+        if "servers" in patch:
+            merged_servers = {**(existing.get("servers") or {})}
+            for sname, sdata in (patch["servers"] or {}).items():
+                if sdata is None:
+                    merged_servers.pop(sname, None)
+                else:
+                    merged_servers[sname] = {
+                        **(merged_servers.get(sname) or {}),
+                        **sdata,
+                    }
+            merged_mcp["servers"] = merged_servers
+        for scalar_key in ("server_enabled", "server_port", "server_auth_token"):
+            if scalar_key in patch:
+                merged_mcp[scalar_key] = patch[scalar_key]
+        if "server_expose" in patch:
+            merged_mcp["server_expose"] = patch["server_expose"]
+        raw["mcp"] = merged_mcp
+    if "server" in body:
+        existing = raw.get("server", {}) or {}
+        patch = body["server"] or {}
+        raw["server"] = {**existing, **patch}
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)
     return _redact_cfg(new_cfg)
+
+
+@router.post("/config/enable-multi-user")
+async def enable_multi_user(
+    request: Request,
+    app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
+) -> dict[str, Any]:
+    from ..permissions import can_manage_server
+    role = getattr(request.state, "user_role", None)
+    if not can_manage_server(role):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin only")
+    from ...config_file import load as load_cfg, save as save_cfg, NexusConfig
+    cfg = app_state["cfg"] or load_cfg()
+    if getattr(cfg, "server", None) and cfg.server.multi_user:
+        return {"enabled": True, "message": "Already enabled"}
+    raw = cfg.model_dump()
+    raw.setdefault("server", {})["multi_user"] = True
+    new_cfg = NexusConfig(**raw)
+    save_cfg(new_cfg)
+    return {
+        "enabled": True,
+        "message": "Multi-user mode enabled. Restart the server to activate.",
+    }

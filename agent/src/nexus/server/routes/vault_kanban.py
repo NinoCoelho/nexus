@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+import logging
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request, status
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -37,6 +42,24 @@ async def vault_kanban_create(body: dict) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return {"path": path, **board.to_dict()}
+
+
+@router.patch("/vault/kanban")
+async def vault_kanban_patch_board(body: dict, path: str) -> dict:
+    """Update board-level fields. Body: {title?, board_prompt?}."""
+    from ... import vault_kanban
+    updates: dict[str, Any] = {}
+    if "title" in body:
+        updates["title"] = body["title"]
+    if "board_prompt" in body:
+        updates["board_prompt"] = body["board_prompt"] or None
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="no fields to update")
+    try:
+        board = vault_kanban.update_board(path, updates)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
     return {"path": path, **board.to_dict()}
 
 
@@ -123,10 +146,21 @@ async def vault_kanban_add_lane(body: dict, path: str) -> dict:
 
 @router.patch("/vault/kanban/lanes/{lane_id}")
 async def vault_kanban_patch_lane(lane_id: str, body: dict, path: str) -> dict:
-    """Update a lane's title, prompt, or auto-dispatch model. Body: {title?, prompt?, model?}."""
+    """Update a lane's title/prompt/model and/or reorder it within the board.
+
+    Body: ``{title?, prompt?, model?, position?}``. Including ``position``
+    moves the lane to that zero-based index; metadata edits in the same call
+    are applied afterwards (mirrors how move_card folds in updates).
+    """
     from ... import vault_kanban
     try:
-        lane = vault_kanban.update_lane(path, lane_id, body)
+        if "position" in body:
+            lane = vault_kanban.move_lane(path, lane_id, body.get("position"))
+            updates = {k: body[k] for k in ("title", "prompt", "model") if k in body}
+            if updates:
+                lane = vault_kanban.update_lane(path, lane_id, updates)
+        else:
+            lane = vault_kanban.update_lane(path, lane_id, body)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return lane.to_dict()
@@ -136,3 +170,52 @@ async def vault_kanban_patch_lane(lane_id: str, body: dict, path: str) -> dict:
 async def vault_kanban_delete_lane(lane_id: str, path: str) -> None:
     from ... import vault_kanban
     vault_kanban.delete_lane(path, lane_id)
+
+
+@router.post("/vault/kanban/cards/{card_id}/cancel")
+async def vault_kanban_cancel_card(card_id: str, path: str) -> dict:
+    from ..kanban_queue import get_queue
+    cancelled = get_queue().cancel(path, card_id)
+    if not cancelled:
+        from ... import vault_kanban
+        from ...vault_kanban.cards import _find_card
+        try:
+            board = vault_kanban.read_board(path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+        found = _find_card(board, card_id)
+        if found is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="card not found")
+        if found[1].status != "running":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="card is not running or queued",
+            )
+        try:
+            vault_kanban.update_card(path, card_id, {"status": "failed"})
+        except Exception:
+            log.exception("cancel: status update failed for card %s", card_id)
+    return {"ok": True, "card_id": card_id}
+
+
+@router.post("/vault/kanban/cards/{card_id}/retry")
+async def vault_kanban_retry_card(
+    card_id: str,
+    path: str,
+    request: Request,
+) -> dict:
+    from ..deps import get_agent, get_sessions
+    from .vault_dispatch import _dispatch_impl
+    a = get_agent(request)
+    store = get_sessions(request)
+    try:
+        result = await _dispatch_impl(
+            path=path, card_id=card_id, mode="background", a=a, store=store,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    return result

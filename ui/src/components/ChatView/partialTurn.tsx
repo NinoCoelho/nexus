@@ -1,5 +1,6 @@
 // Partial-turn action banner for ChatView.
 
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Message } from "./index";
 
@@ -14,6 +15,10 @@ export const PARTIAL_CAN_CONTINUE: Record<NonNullable<Message["partial"]>["statu
   crashed: false,
   length: true,
   upstream_timeout: false,
+  rate_limited: true,
+  context_overflow: false,
+  message_too_large: false,
+  budget_exceeded: false,
 };
 
 const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
@@ -25,40 +30,92 @@ const PARTIAL_KEY: Record<NonNullable<Message["partial"]>["status"], string> = {
   crashed: "chat:partial.crashed",
   length: "chat:partial.length",
   upstream_timeout: "chat:partial.upstreamTimeout",
+  rate_limited: "chat:partial.rateLimited",
+  context_overflow: "chat:partial.contextOverflow",
+  message_too_large: "chat:partial.messageTooLarge",
+  budget_exceeded: "chat:partial.budgetExceeded",
 };
 
 export function PartialTurnActions({
   status,
   onRetry,
   onContinue,
+  onCompact,
+  onNewSession,
+  onRemoveLast,
 }: {
   status: NonNullable<Message["partial"]>["status"];
   onRetry?: () => void;
   onContinue?: () => void;
+  onCompact?: () => Promise<unknown>;
+  onNewSession?: () => void;
+  onRemoveLast?: () => void;
 }) {
   const { t } = useTranslation("chat");
+  const [compacting, setCompacting] = useState(false);
   const showContinue = PARTIAL_CAN_CONTINUE[status] && !!onContinue;
+  const isContextIssue = status === "context_overflow" || status === "message_too_large";
+  const doCompact = useCallback(() => {
+    if (compacting || !onCompact) return;
+    setCompacting(true);
+    onCompact().finally(() => setCompacting(false));
+  }, [compacting, onCompact]);
   return (
     <div className="limit-banner" style={{ marginTop: 4 }}>
       <div className="limit-banner-text">{t(PARTIAL_KEY[status])} {t("chat:partial.proceed")}</div>
       <div className="limit-banner-actions">
-        {showContinue && (
-          <button
-            className="limit-banner-btn limit-banner-btn-primary"
-            onClick={onContinue}
-            type="button"
-          >
-            {t("chat:partial.continue")}
-          </button>
-        )}
-        {onRetry && (
-          <button
-            className={showContinue ? "limit-banner-btn" : "limit-banner-btn limit-banner-btn-primary"}
-            onClick={onRetry}
-            type="button"
-          >
-            {t("chat:partial.retry")}
-          </button>
+        {isContextIssue ? (
+          <>
+            {onCompact && (
+              <button
+                className="limit-banner-btn limit-banner-btn-primary"
+                onClick={doCompact}
+                disabled={compacting}
+                type="button"
+              >
+                {compacting ? "Compacting…" : t("chat:partial.compact")}
+              </button>
+            )}
+            {onRemoveLast && (
+              <button
+                className="limit-banner-btn"
+                onClick={onRemoveLast}
+                type="button"
+              >
+                {t("chat:partial.removeLast")}
+              </button>
+            )}
+            {onNewSession && (
+              <button
+                className="limit-banner-btn"
+                onClick={onNewSession}
+                type="button"
+              >
+                {t("chat:partial.newSession")}
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            {showContinue && (
+              <button
+                className="limit-banner-btn limit-banner-btn-primary"
+                onClick={onContinue}
+                type="button"
+              >
+                {t("chat:partial.continue")}
+              </button>
+            )}
+            {onRetry && (
+              <button
+                className={showContinue ? "limit-banner-btn" : "limit-banner-btn limit-banner-btn-primary"}
+                onClick={onRetry}
+                type="button"
+              >
+                {t("chat:partial.retry")}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

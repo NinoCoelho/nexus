@@ -66,7 +66,7 @@ Vault data-tables are markdown files with `data-table-plugin: basic` frontmatter
 ## Conventions
 
 - **Sibling refs use `./name.md`**, cross-folder refs use `../folder/name.md`. Never use bare filenames — those are interpreted as vault-absolute paths.
-- **Primary key**: declare it via `schema.table.primary_key` only when the user has a meaningful natural key (`id`, `email`, `sku`). Otherwise let the auto-`_id` (8-char hex) do the work.
+- **Primary key**: pick *one* of two paths and stick with it. Either declare a meaningful natural key via `schema.table.primary_key` (`id`, `email`, `sku`) **and** add a matching field to `schema.fields`, or rely on the auto-`_id` (8-char hex). **Never have both an unused `pk` field and a populated `_id`** — every row will display `_id: <hex>` with `pk:` blank, which reads as "no primary key" to anyone scanning the YAML and tends to drift further as columns are added. If you inherit a table with that shape, drop the orphan column with `remove_field`.
 - **Junction tables**: keep them pure (just two refs). If the user wants quantity, price, or notes on the relationship, set `schema.table.is_junction: false` so the UI keeps the junction visible as its own entity.
 - **Don't pre-build schemas the user didn't ask for.** A "track invoices" prompt yields *invoices*, not invoices+contacts+payments+ledger. Ship the smallest model that matches the request and let the user grow it.
 - When the user describes a one-shot list ("a list of books I want to read"), one table is the right answer. Don't invent relations.

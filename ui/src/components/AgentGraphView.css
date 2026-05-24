@@ -57,6 +57,33 @@
   padding: 0 4px;
 }
 
+/* ── Add-skill button (filter-bar entry point for SkillWizard) ───────────── */
+
+.agent-graph-add-skill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.agent-graph-add-skill-btn:hover {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+}
+
+.agent-graph-add-skill-btn span:first-child {
+  font-size: 14px;
+  line-height: 1;
+}
+
 /* ── Error ───────────────────────────────────────────────────────────────── */
 
 .agent-graph-error {

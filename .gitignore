@@ -12,6 +12,7 @@ uv.lock
 # Secrets / local env
 .env
 .env.local
+packaging/build.conf
 
 # OS
 .DS_Store

@@ -26,7 +26,8 @@ def _table_title(schema: dict[str, Any], path: str) -> str:
 def _database_title(folder: str) -> str:
     if not folder:
         return "(root)"
-    return folder.rsplit("/", 1)[-1] or folder
+    raw = folder.rsplit("/", 1)[-1] or folder
+    return raw[0].upper() + raw[1:] if raw else raw
 
 
 def _walk_tables() -> list[dict[str, Any]]:
@@ -60,18 +61,24 @@ def _walk_tables() -> list[dict[str, Any]]:
 
 
 def list_databases() -> list[dict[str, Any]]:
-    """Return ``[{folder, title, table_count}]`` for every database in the vault.
+    """Return ``[{folder, title, icon, table_count}]`` for every database in the vault.
 
     A database is a folder (including the root, ``""``) that contains ≥1
     data-table file. Sorted by lower-cased title for stable rendering.
     """
+    from . import vault_dashboard
     by_folder: dict[str, int] = {}
     for tbl in _walk_tables():
         by_folder[tbl["folder"]] = by_folder.get(tbl["folder"], 0) + 1
-    out = [
-        {"folder": folder, "title": _database_title(folder), "table_count": count}
-        for folder, count in by_folder.items()
-    ]
+    out: list[dict[str, Any]] = []
+    for folder, count in by_folder.items():
+        dash = vault_dashboard.read_dashboard(folder)
+        out.append({
+            "folder": folder,
+            "title": _database_title(folder),
+            "icon": dash.get("icon"),
+            "table_count": count,
+        })
     out.sort(key=lambda d: d["title"].lower())
     return out
 
@@ -101,6 +108,8 @@ def list_tables_in_folder(folder: str) -> list[dict[str, Any]]:
 
 
 _ER_NAME_SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
+_MERMAID_BLOCK_KEYWORDS = frozenset({"pk", "fk", "uk"})
 
 
 def _erd_node_name(path: str) -> str:
@@ -220,6 +229,8 @@ def er_diagram(folder: str) -> str:
             elif kind == "ref":
                 type_str = "ref"
             safe = "".join(c if c in _ER_NAME_SAFE else "_" for c in fname) or "field"
+            if safe.lower() in _MERMAID_BLOCK_KEYWORDS:
+                safe += "_"
             tbl_meta = schema.get("table") if isinstance(schema, dict) else None
             pk = (
                 tbl_meta.get("primary_key")

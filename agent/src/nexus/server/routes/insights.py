@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -25,5 +26,9 @@ async def get_insights(
     """
     from ...insights import InsightsEngine
     days = max(1, min(int(days), 365))
-    engine = InsightsEngine(store._db_path)  # InsightsEngine reads loom's schema directly
-    return engine.generate(days=days, model_filter=model or None)
+
+    def _work():
+        engine = InsightsEngine(store._db_path)
+        return engine.generate(days=days, model_filter=model or None)
+
+    return await asyncio.to_thread(_work)

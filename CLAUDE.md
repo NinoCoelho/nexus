@@ -54,13 +54,25 @@ Nexus is a self-evolving single-agent platform with a Python FastAPI backend and
 
 ### Agent loop
 
-`agent/src/nexus/agent/loop.py` drives a tool-calling loop over a pluggable LLM provider (`llm.py`: OpenAI-compat + native Anthropic). The system prompt is built by `prompt_builder.py` using **progressive disclosure**: only skill *names + descriptions* go in; the agent fetches full skill bodies via the `skill_manage` / `skill_view` tools when it decides to use them.
+`agent/src/nexus/agent/loop/` (package) drives a tool-calling loop over a pluggable LLM provider (`llm.py`: OpenAI-compat + native Anthropic). The system prompt is built by `prompt_builder.py` using **progressive disclosure**: only skill *names + descriptions* go in; the agent fetches full skill bodies via the `skill_manage` / `skill_view` tools when it decides to use them. Context compaction strategies (auto / summarize / aggressive) live in `loop/compact.py` and `loop/summarize.py`.
 
 Tools wired into the loop live in `agent/src/nexus/tools/` and `agent/src/nexus/agent/*_tool.py`:
 - `skill_manage` (self-authoring — create/edit/patch/delete/view skills at runtime)
 - `vault_tool` (read/list/write markdown under `~/.nexus/vault/`)
 - `kanban_tool` (operates on vault .md files with `kanban-plugin: basic` frontmatter — boards are just markdown, not a separate store)
 - `memory_tool`, `state_tool`, `http_call`, `acp_call` (stub), `ask_user` (HITL), `terminal` (HITL)
+
+### Dreaming
+
+`agent/src/nexus/dream/` is a scheduled background agent that runs during idle periods. Four-phase cycle: consolidation → insight extraction → skill refinement → scenario rehearsal. State tracked in `dream_state.sqlite`. The engine is triggered by the `dream_trigger` heartbeat driver; the UI exposes a Dream view (`ui/src/components/DreamView/`). Skill suggestions are staged for user review, not auto-created.
+
+### Voice acknowledgments
+
+`agent/src/nexus/voice_ack.py` generates spoken confirmations for voice-input turns (start ack + completion ack), synthesized via Piper TTS. Gated by `[tts].ack_enabled`; uses `[tts].ack_model` for low-latency LLM calls. Language auto-detected via `langdetect`.
+
+### Calendar alarms
+
+`agent/src/nexus/alarm_store.py` (SQLite) persists per-occurrence alarm state (ringing / acknowledged / snoozed). The UI renders a stack of alarm cards (`AlarmNotification.tsx`) with countdown timers, snooze/dismiss actions. Alarm SSE events flow through the global notification channel.
 
 ### Self-evolution + safety
 
@@ -72,17 +84,46 @@ Two channels on each session:
 1. `POST /chat/stream` — per-turn SSE (deltas, tool calls, done, error).
 2. `GET /chat/{sid}/events` — session-scoped SSE for out-of-band events (`user_request`, `user_request_auto`, `user_request_cancelled`). The UI opens this *before* the first POST by using a client-generated `pendingSessionId`, so approval dialogs don't miss events during the first turn. YOLO mode (`/settings`) auto-answers requests.
 
+### Vault import wizard
+
+`agent/src/nexus/server/routes/vault_import.py` + `agent/src/nexus/vault_import_parsers.py` implement a universal import flow: drag-and-drop zip files, folders, or individual files onto the vault tree (or use the upload button). Multi-step modal (`ui/src/components/ImportModal/`) walks through file selection → export format detection → optional LLM processing → confirm → SSE-streamed progress. ChatGPT / Claude / Gemini conversation exports are auto-detected by JSON structure inspection (not filenames) and converted to per-conversation markdown files. CSV files can be promoted to DuckDB-backed data-table apps via an LLM analysis step. Large files (>1 MiB) use `write_file_bytes` (32 MiB limit) instead of `write_file` (1 MiB limit). Temp extraction lives in `~/.nexus/tmp/zip-import/` (1-hour TTL auto-cleanup).
+
 ### Vault
 
 `~/.nexus/vault/` is a folder of markdown files with FTS5 search (`vault_index.py`, `vault_search.py`), tag index, and a backlinks graph (`vault_graph.py`). Kanban boards are vault-native: any `.md` file whose frontmatter contains `kanban-plugin:` is interpreted as a board by both the `vault_kanban` module (Python) and `KanbanBoard.tsx` (UI). Do not add a separate kanban store — edit the vault markdown directly. `POST /vault/dispatch` creates a new chat session seeded from a vault file or kanban card and links the session id back into the card.
 
 ### Server layout
 
-`agent/src/nexus/server/app.py` registers all FastAPI routes. Sessions are persisted via `session_store.py` (SQLite under `~/.nexus/`). Routing logic (`agent/router.py`) picks a model — `fixed` (default) uses `agent.default_model`, `auto` scores models by per-model `strengths` against a simple keyword classifier.
+`agent/src/nexus/server/app.py` registers all FastAPI routes. Sessions are persisted via `session_store.py` (SQLite under `~/.nexus/`). Routing logic (`agent/router.py`) picks a model — `fixed` (default) uses `agent.default_model`, `auto` scores models by per-model `tier` against a simple keyword classifier.
 
 ### Frontend
 
-`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
+`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`, `heartbeat`, `dream`, `workflows`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
+
+### Workflows
+
+`agent/src/nexus/workflows/` implements a visual flow-based automation engine. Workflow definitions are stored as vault markdown files with `workflow-plugin: basic` frontmatter (consistent with kanban/calendar pattern — no separate store). The visual editor (`ui/src/components/WorkflowFlow/`) uses `@xyflow/react` (v12) for the node graph canvas with controlled nodes (`applyNodeChanges` for drag).
+
+**Models** (`models.py`): `StepType` enum (`tool_call`, `agent_session`, `mcp_call`, `http_request`, `condition`, `transform`, `delay`), `TriggerType` enum (`webhook`, `fs_watch`, `schedule`, `manual`, `event`). Each step has a `slug` (auto-generated camelCase from name) used for template references like `{{steps.mySlug.result}}`.
+
+**Engine** (`engine.py`): Executes steps sequentially with template resolution, retry logic, and error handling. Step dispatch:
+- `tool_call` — calls a registered Loom tool by name
+- `agent_session` — creates a real chat session with an LLM
+- `mcp_call` — calls a tool on a connected MCP server via `McpManager`
+- `http_request` — HTTP call with auth support (API key bearer/header/query, basic auth, OAuth 2.0, custom headers). Credentials resolved at runtime via `secrets.resolve()`
+- `transform` — three modes: `template` (standard `{{...}}` substitution), `llm` (LLM transform without tools/reasoning), `script` (Python `exec()` with `data` variable)
+- `condition` — evaluates expression, branches to `then_step` or `else_step`
+- `delay` — async sleep
+
+**Parser** (`parser.py`): Reads/writes vault markdown with YAML frontmatter. The `StepConfig.to_dict()` method only serializes non-default fields to keep the markdown clean.
+
+**Triggers**: Five trigger types, each with its own driver. Webhook triggers generate tokens and receive at `POST /workflow/trigger/{token}`. Schedule triggers use a cron-based heartbeat driver. FS watch uses `watchdog>=4.0`. Event triggers subscribe to the internal event bus. Manual triggers are user-initiated.
+
+**API** (`server/routes/workflows.py`): CRUD endpoints for workflow definitions, webhook receiver, run history, and manual trigger endpoint.
+
+**UI**: React-flow canvas with custom node types (`TriggerNode`, `StepNode`, `ConditionNode` as diamond with true/false ports, `AddNode`). Left sidebar palette with draggable step/trigger icons. ConfigPanel slides in on node selection. `TemplateInput` component provides `{{steps.slug...` autocomplete with Tab to accept. Node positions are controlled state persisted via `applyNodeChanges`. Rearrange button (⇅) resets to auto-computed layout. Debounced saves (500ms) prevent "Saving…" from blocking typing.
+
+**Run history**: Separate SQLite `~/.nexus/workflow_runs.sqlite` tracks run state and per-step outputs. SSE events (`workflow.run_completed`) published via the global event bus.
 
 ### Config precedence
 

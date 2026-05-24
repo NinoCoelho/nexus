@@ -57,7 +57,7 @@ export const SECRET_PATTERNS: SecretPattern[] = [
  * natural language (> 4.0 bits/char). The threshold is calibrated so plain
  * English prose, file paths, and version strings don't trip it.
  */
-const HIGH_ENTROPY_TOKEN_RE = /[A-Za-z0-9_+/=.-]{24,}/g;
+const HIGH_ENTROPY_TOKEN_RE = /[A-Za-z0-9_+=.-]{24,}/g;
 
 function shannonEntropy(s: string): number {
   if (!s) return 0;

@@ -7,9 +7,10 @@ All endpoint implementations live in ``server/routes/``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -30,6 +31,8 @@ TUNNEL_COOKIE = "nexus_tunnel_token"
 TUNNEL_PUBLIC_PATHS = frozenset({
     "/tunnel/redeem",
     "/tunnel/auth-status",
+    "/webhook",
+    "/workflow/trigger",
 })
 
 # API surface that must require a cookie when reached through the tunnel. This
@@ -41,7 +44,8 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/insights", "/share", "/local", "/notifications", "/push",
-    "/transcribe", "/audio", "/health",
+    "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
+    "/dream", "/mcp", "/jobs", "/update", "/workflows",
 )
 
 
@@ -72,6 +76,10 @@ def _tunnel_path_requires_auth(path: str) -> bool:
     UI content.
     """
     if path in TUNNEL_PUBLIC_PATHS:
+        return False
+    if path.startswith("/webhook/"):
+        return False
+    if path.startswith("/workflow/trigger/"):
         return False
     if path.startswith("/tunnel/"):
         # /tunnel/start, /stop, /status, /install — admin. Require a cookie
@@ -212,9 +220,14 @@ from ..agent.ask_user_tool import AskUserHandler
 from ..agent.context import CURRENT_SESSION_ID
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
+from .auth import AuthManager
+from .deps import SessionStoreProxy
 from .events import SessionEvent
+from .job_tracker import JobTracker
+from .middleware import MultiUserAuthMiddleware
 from .session_store import SessionStore
 from .settings import SettingsStore
+from .user_store import UserStore
 
 log = logging.getLogger(__name__)
 
@@ -249,6 +262,33 @@ def create_app(
     """
     sessions = sessions or SessionStore()
     settings_store = settings_store or SettingsStore()
+    job_tracker = JobTracker()
+
+    multi_user = bool(nexus_cfg and getattr(nexus_cfg, "server", None) and nexus_cfg.server.multi_user)
+    user_store = UserStore() if multi_user else None
+    auth_manager = AuthManager() if multi_user else None
+
+    session_registry = None
+    if multi_user:
+        from .session_store.registry import UserSessionRegistry
+        session_registry = UserSessionRegistry()
+
+    # Proxy that resolves the correct per-user SessionStore based on
+    # CURRENT_SESSION_ID.  In single-user mode this is a no-op wrapper
+    # that always returns the default store — identical to before.
+    # Used by agent._sessions, AskUserHandler, _trace, etc.
+    _app_state_ns = type("_AppState", (), {
+        "multi_user": multi_user,
+        "session_registry": session_registry,
+        "user_store": user_store,
+    })()
+    store_proxy = SessionStoreProxy(sessions, _app_state_ns)
+
+    def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
+        sessions.publish(
+            "__jobs__",
+            SessionEvent(kind=kind, data=data),
+        )
 
     # Mutable dict passed by reference into all route handlers that need to
     # read or update cfg/prov_reg (config, providers, models, routing).
@@ -260,9 +300,62 @@ def create_app(
     # restarting the server. Attached to the agent so its loop's
     # ``_tools()`` / ``_handle()`` branches pick it up.
     ask_user_handler = AskUserHandler(
-        session_store=sessions,
+        session_store=store_proxy,
         yolo_mode_getter=lambda: settings_store.get().yolo_mode,
     )
+
+    def _make_terminal_output_callback(
+        session_store: Any,
+        proc_registry: dict[str, asyncio.subprocess.Process],
+    ) -> Callable[[str, str], Awaitable[None]]:
+        async def _on_terminal_output(stdout: str, stderr: str) -> None:
+            session_id = CURRENT_SESSION_ID.get()
+            if session_id is None:
+                return
+            session_store.publish(
+                session_id,
+                SessionEvent(
+                    kind="terminal_output",
+                    data={
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "call_id": getattr(_on_terminal_output, "_call_id", ""),
+                    },
+                ),
+            )
+        return _on_terminal_output
+
+    def _make_proc_register(
+        proc_registry: dict[str, asyncio.subprocess.Process],
+    ) -> Callable[[asyncio.subprocess.Process], None]:
+        def _register(proc: asyncio.subprocess.Process) -> None:
+            session_id = CURRENT_SESSION_ID.get() or ""
+            call_id = ""
+            handler = agent._terminal_handler
+            if handler is not None and hasattr(handler, "_on_output"):
+                cb = handler._on_output
+                call_id = getattr(cb, "_call_id", "")
+            if not call_id:
+                return
+            key = f"{session_id}:{call_id}"
+            proc_registry[key] = proc
+        return _register
+
+    def _make_proc_unregister(
+        proc_registry: dict[str, asyncio.subprocess.Process],
+    ) -> Callable[[], None]:
+        def _unregister() -> None:
+            session_id = CURRENT_SESSION_ID.get() or ""
+            call_id = ""
+            handler = agent._terminal_handler
+            if handler is not None and hasattr(handler, "_on_output"):
+                cb = handler._on_output
+                call_id = getattr(cb, "_call_id", "")
+            if not call_id:
+                return
+            proc_registry.pop(f"{session_id}:{call_id}", None)
+        return _unregister
+
     # Late-bind the handler onto the agent. Constructed-outside-the-app
     # callers (``main.py``) don't know about HITL; constructing the
     # handler here keeps all the server-side wiring in one place.
@@ -270,14 +363,32 @@ def create_app(
     # and reads its session id from the shared CURRENT_SESSION_ID ContextVar.
     from loom.tools.terminal import TerminalTool
 
+    # Process registry for live terminal monitoring / kill support.
+    # Keyed by "session_id:tool_call_id" so the kill endpoint and the
+    # streaming callback can locate the running subprocess.
+    _terminal_procs: dict[str, asyncio.subprocess.Process] = {}
+
+    _on_term_output = _make_terminal_output_callback(store_proxy, _terminal_procs)
+    _proc_reg = _make_proc_register(_terminal_procs)
+    _proc_unreg = _make_proc_unregister(_terminal_procs)
+
     agent._ask_user_handler = ask_user_handler
     agent._terminal_handler = TerminalTool(
-        broker=sessions.broker,
+        broker=store_proxy.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
+        on_output=_on_term_output,
+        proc_register=_proc_reg,
+        proc_unregister=_proc_unreg,
     )
-    # Give the agent the SessionStore so the streaming loop can persist
-    # parked HITL snapshots and the resume entry-point can rehydrate them.
-    agent._sessions = sessions
+
+    # notify_user — fire-and-forget status pings the agent emits during
+    # long operations (TTS when the originating message was voice; toast
+    # in every case). The handler depends on the SessionStore both for
+    # publishing on the per-session SSE channel and for reading the
+    # original input_mode (stashed on the store by chat_stream).
+    from ..agent.notify_user_tool import NotifyUserHandler
+    agent._notify_user_handler = NotifyUserHandler(session_store=store_proxy)
+    agent._sessions = store_proxy
 
     # Trace callback routes every agent event (iter, tool_call,
     # tool_result, reply) into the SSE subscriber fanout for whichever
@@ -288,7 +399,7 @@ def create_app(
         session_id = CURRENT_SESSION_ID.get()
         if session_id is None:
             return
-        sessions.publish(session_id, SessionEvent(kind=kind, data=data))
+        store_proxy.publish(session_id, SessionEvent(kind=kind, data=data))
 
     # Install the trace hook without clobbering one the caller may
     # already have wired (main.py doesn't today, but a test might).
@@ -345,6 +456,15 @@ def create_app(
             except Exception:
                 log.exception("local_llm orphan reap failed")
 
+        # Non-blocking: pre-warm the latest llama.cpp release check so
+        # /local/binary/status responds instantly on first UI load.
+        if not skip_local_llm:
+            try:
+                from ..local_llm.binary_update import check_latest
+                await asyncio.to_thread(check_latest)
+            except Exception:
+                pass
+
         # Restart any local-* models the user had enabled in a prior run.
         # Each gets a fresh port; we refresh config and rebuild the registry
         # so the agent sees the live URLs without the user opening Settings.
@@ -368,6 +488,51 @@ def create_app(
                     _local_mgr.cleanup_stale_config()
             except Exception:
                 log.exception("local_llm restart failed")
+
+        # ── OCR model migration + startup ──────────────────────────────────
+        # Migrate chandra from models/llm/ to ocr-model/ if it was installed
+        # before this refactor, then start the dedicated OCR server.
+        try:
+            from ..ocr_server import (
+                migrate_from_local_llm,
+                cleanup_config_entries,
+                download_if_missing,
+                start as ocr_start,
+            )
+
+            def _ocr_bootstrap() -> None:
+                migrated = migrate_from_local_llm()
+                if migrated:
+                    cleanup_config_entries()
+                download_if_missing()
+                ocr_start()
+
+            await asyncio.to_thread(_ocr_bootstrap)
+        except Exception:
+            log.exception("[ocr_server] bootstrap failed")
+        # ── nexus status watcher ─────────────────────────────────────────────
+        # Polls https://www.nexus-model.us/api/status with the user's stored
+        # apiKey. On model-list changes we re-register provider models and
+        # auto-promote demo -> nexus when pro becomes available.
+        try:
+            from ..auth.status_watcher import StatusWatcher
+            from ..config_file import save as _save_cfg
+            from .routes.config import _rebuild_registry as _rebuild_reg
+
+            watcher = StatusWatcher(
+                mutable_state=mutable_state,
+                agent=agent,
+                sessions=sessions,
+                rebuild_registry=_rebuild_reg,
+                save_config=_save_cfg,
+            )
+            watcher.start()
+            app.state.nexus_status_watcher = watcher
+            log.info("[nexus] status watcher started")
+        except Exception:
+            log.exception("[nexus] status watcher start failed")
+            app.state.nexus_status_watcher = None
+
         # ── parked HITL sweep (durable async ask_user) ──────────────────────
         # Re-publish ``user_request`` for any rows that were left parked when
         # the server stopped, so connected clients re-queue them in the bell.
@@ -379,45 +544,54 @@ def create_app(
 
             now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             re_published = 0
-            for row in sessions.list_all_pending():
-                deadline = row.get("deadline_at")
-                if deadline and deadline < now_iso:
-                    sessions.cancel_hitl_pending(
-                        row["request_id"], reason="expired",
+
+            def _sweep_store(store: SessionStore) -> None:
+                nonlocal re_published
+                for row in store.list_all_pending():
+                    deadline = row.get("deadline_at")
+                    if deadline and deadline < now_iso:
+                        store.cancel_hitl_pending(
+                            row["request_id"], reason="expired",
+                        )
+                        store.publish(
+                            row["session_id"],
+                            _SE(
+                                kind="user_request_cancelled",
+                                data={
+                                    "request_id": row["request_id"],
+                                    "reason": "expired",
+                                },
+                            ),
+                        )
+                        continue
+                    ev_data: dict[str, Any] = {
+                        "request_id": row["request_id"],
+                        "prompt": row["prompt"],
+                        "kind": row["kind"],
+                        "choices": row.get("choices"),
+                        "default": row.get("default"),
+                        "timeout_seconds": row.get("timeout_seconds"),
+                    }
+                    if row.get("kind") == "form":
+                        ev_data["fields"] = row.get("fields")
+                        ev_data["form_title"] = row.get("form_title")
+                        ev_data["form_description"] = row.get("form_description")
+                    store.publish(
+                        row["session_id"], _SE(kind="user_request", data=ev_data),
                     )
-                    sessions.publish(
-                        row["session_id"],
-                        _SE(
-                            kind="user_request_cancelled",
-                            data={
-                                "request_id": row["request_id"],
-                                "reason": "expired",
-                            },
-                        ),
-                    )
-                    continue
-                ev_data: dict[str, Any] = {
-                    "request_id": row["request_id"],
-                    "prompt": row["prompt"],
-                    "kind": row["kind"],
-                    "choices": row.get("choices"),
-                    "default": row.get("default"),
-                    "timeout_seconds": row.get("timeout_seconds"),
-                }
-                if row.get("kind") == "form":
-                    ev_data["fields"] = row.get("fields")
-                    ev_data["form_title"] = row.get("form_title")
-                    ev_data["form_description"] = row.get("form_description")
-                sessions.publish(
-                    row["session_id"], _SE(kind="user_request", data=ev_data),
-                )
-                re_published += 1
+                    re_published += 1
+                store.trim_hitl_pending(keep_days=30)
+
+            if multi_user and session_registry is not None:
+                for _uid, user_store_inst in session_registry.all_stores().items():
+                    _sweep_store(user_store_inst)
+            else:
+                _sweep_store(sessions)
             if re_published:
                 log.info(
                     "[hitl] re-published %d parked request(s) at startup",
                     re_published,
                 )
-            sessions.trim_hitl_pending(keep_days=30)
         except Exception:
             log.exception("hitl parked sweep failed")
 
@@ -442,6 +616,15 @@ def create_app(
                     log.warning("[startup] builtin embedder prefetch failed", exc_info=True)
             asyncio.create_task(_prefetch_builtin())
 
+            # Pre-download the default Piper voices in the background so
+            # the user never waits on a model fetch the first time they
+            # click Play or send a voice message. No-op on warm starts.
+            try:
+                from ..tts.voice_setup import bootstrap_default_voices
+                asyncio.create_task(bootstrap_default_voices())
+            except Exception:
+                log.warning("[startup] piper voice prefetch failed", exc_info=True)
+
         # ── calendar bootstrap + heartbeat scheduler ─────────────────────────
         scheduler = None
         try:
@@ -449,6 +632,7 @@ def create_app(
             from ..calendar_runtime import (
                 set_dispatcher as _set_cal_dispatcher,
                 set_notifier as _set_cal_notifier,
+                set_alarm_store as _set_cal_alarm_store,
             )
             from ..heartbeat_drivers import DRIVERS_DIR
             from pathlib import Path
@@ -472,11 +656,53 @@ def create_app(
                 mode: str = "background",
                 occurrence_start: str | None = None,
             ) -> dict:
-                return await _cal_dispatch(
-                    path=path, card_id=None, event_id=event_id,
-                    mode=mode, a=agent, store=sessions,
-                    occurrence_start=occurrence_start,
+                import time as _time
+                from .. import vault_calendar as _vc
+                event_title = ""
+                try:
+                    _cal = _vc.read_calendar(path)
+                    _found = _vc.find_event(_cal, event_id)
+                    if _found:
+                        event_title = _found[0].title
+                except Exception:
+                    pass
+                _log_id = log_store.log_fire(
+                    heartbeat_id="calendar_trigger",
+                    event_id=event_id,
+                    event_title=event_title,
+                    calendar_path=path,
                 )
+                _t0 = _time.monotonic()
+                _cal_job_id = job_tracker.start(
+                    type="calendar",
+                    label=event_title or "Calendar trigger",
+                    session_id=None,
+                    extra={"event_id": event_id, "calendar_path": path},
+                    publish_fn=_publish_job_event,
+                )
+                try:
+                    result = await _cal_dispatch(
+                        path=path, card_id=None, event_id=event_id,
+                        mode=mode, a=agent, store=sessions,
+                        occurrence_start=occurrence_start,
+                    )
+                    _sid = result.get("session_id")
+                    if _sid:
+                        log_store.update_session_id(_log_id, _sid)
+                    log_store.update_status(
+                        _log_id, status="done",
+                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    )
+                    return result
+                except Exception as _dispatch_err:
+                    log_store.update_status(
+                        _log_id, status="failed",
+                        error=str(_dispatch_err),
+                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    )
+                    raise
+                finally:
+                    job_tracker.done(_cal_job_id, publish_fn=_publish_job_event)
             _set_cal_dispatcher(_calendar_dispatcher)
 
             # Notifier — fire-and-forget calendar_alert publishes onto the
@@ -488,10 +714,17 @@ def create_app(
                 # Use a synthetic session id so the fanout works through the
                 # store's per-session router; the UI ignores session_id for
                 # calendar_alert events.
-                sessions.publish(
-                    "__calendar__",
-                    SessionEvent(kind="calendar_alert", data=payload),
-                )
+                if multi_user and session_registry is not None:
+                    for _uid, user_store_inst in session_registry.all_stores().items():
+                        user_store_inst.publish(
+                            "__calendar__",
+                            SessionEvent(kind="calendar_alert", data=payload),
+                        )
+                else:
+                    sessions.publish(
+                        "__calendar__",
+                        SessionEvent(kind="calendar_alert", data=payload),
+                    )
             _set_cal_notifier(_calendar_notifier)
 
             heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
@@ -504,10 +737,14 @@ def create_app(
             registry.scan()
             store = HeartbeatStore(db_path)
 
+            from ..heartbeat_log import HeartbeatLogStore
+            log_store = HeartbeatLogStore(db_path)
+
+            from ..alarm_store import AlarmStore
+            alarm_store = AlarmStore(db_path)
+            _set_cal_alarm_store(alarm_store)
+
             async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
-                # Driver dispatches inline and returns events=[], so this is
-                # never called. Return a placeholder AgentTurn-shaped object
-                # in case loom's contract changes.
                 from loom.loop import AgentTurn
                 return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
 
@@ -516,13 +753,103 @@ def create_app(
             )
             scheduler.start()
             app.state.heartbeat_scheduler = scheduler
+            app.state.heartbeat_registry = registry
+            app.state.heartbeat_store = store
+            app.state.heartbeat_log_store = log_store
+            app.state.alarm_store = alarm_store
+
+            from loom.heartbeat import HeartbeatManager
+
+            def _hb_manager_getter():
+                return HeartbeatManager(registry=registry, store=store)
+
+            agent._handlers.hb_manager_getter = _hb_manager_getter
+
             log.info("heartbeat scheduler started (calendar_trigger registered)")
         except Exception:
             log.exception("heartbeat / calendar bootstrap failed")
 
+        # ── workflow engine ─────────────────────────────────────────────────
+        try:
+            from ..workflows.store import WorkflowStore
+            from ..workflows.engine import WorkflowEngine
+            from .. import home as _wf_home
+
+            wf_db = str(_wf_home.workflow_runs_db())
+            wf_store = WorkflowStore(wf_db)
+            wf_engine = WorkflowEngine(wf_store)
+            app.state.workflow_store = wf_store
+            app.state.workflow_engine = wf_engine
+
+            if agent is not None:
+                wf_engine._agent = agent
+            if sessions is not None:
+                wf_engine._sessions = sessions
+
+            from .routes.workflows import init as _wf_init
+            _wf_init(wf_store, wf_engine)
+
+            from ..workflows.triggers.webhook import WebhookTriggerDriver
+            from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
+            from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
+
+            webhook_driver = WebhookTriggerDriver(wf_store)
+            event_listener = EventTriggerListener(wf_store)
+            fsw_driver = FsWatchTriggerDriver(wf_store)
+
+            _set_evt_ref(wf_engine)
+            _set_fsw_ref(wf_engine)
+
+            from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
+            _set_engine_evt(wf_engine)
+
+            app.state.workflow_webhook_driver = webhook_driver
+            app.state.workflow_event_listener = event_listener
+            app.state.workflow_fsw_driver = fsw_driver
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(event_listener.start())
+            except Exception:
+                log.exception("workflow event listener start failed")
+
+            log.info("workflow engine initialised")
+        except Exception:
+            log.exception("workflow engine bootstrap failed")
+
+        # ── MCP server connections ────────────────────────────────────────
+        mcp_manager = None
+        mcp_server_bridge = None
+        try:
+            from ..mcp_lifecycle import build_mcp_manager, start_mcp
+            mcp_mgr = build_mcp_manager(nexus_cfg)
+            if mcp_mgr is not None:
+                tool_reg = getattr(agent._loom, "_tools", None)
+                if tool_reg is not None:
+                    await start_mcp(mcp_mgr, tool_reg, agent=agent)
+                    mcp_manager = mcp_mgr
+                    app.state.mcp_manager = mcp_manager
+        except Exception:
+            log.exception("MCP bootstrap failed")
+
+        # ── MCP server mode (expose tools to external hosts) ─────────────
+        try:
+            from ..mcp_lifecycle import start_mcp_server
+            tool_reg = getattr(agent._loom, "_tools", None)
+            if tool_reg is not None:
+                mcp_server_bridge = start_mcp_server(nexus_cfg, tool_reg)
+        except Exception:
+            log.exception("MCP server mode failed")
+
         try:
             yield
         finally:
+            watcher = getattr(app.state, "nexus_status_watcher", None)
+            if watcher is not None:
+                try:
+                    await watcher.stop()
+                except Exception:
+                    log.exception("[nexus] status watcher stop failed")
             if scheduler is not None:
                 try:
                     scheduler.stop()
@@ -533,8 +860,42 @@ def create_app(
                 _local_mgr.stop_all()
             except Exception:
                 log.exception("local_llm stop_all failed")
+            try:
+                from ..ocr_server import stop as _ocr_stop
+                _ocr_stop()
+            except Exception:
+                log.exception("[ocr_server] stop failed")
             from ..agent.memory import close_memory_store
             close_memory_store()
+            try:
+                from ..dream.engine import close_store as _close_dream_store
+                _close_dream_store()
+            except Exception:
+                log.exception("dream store close failed")
+            try:
+                wf_store = getattr(app.state, "workflow_store", None)
+                if wf_store is not None:
+                    wf_store.close()
+            except Exception:
+                log.exception("workflow store close failed")
+            try:
+                fsw = getattr(app.state, "workflow_fsw_driver", None)
+                if fsw is not None:
+                    fsw.stop_all()
+            except Exception:
+                log.exception("workflow fs_watch stop failed")
+            try:
+                evt = getattr(app.state, "workflow_event_listener", None)
+                if evt is not None:
+                    await evt.stop()
+            except Exception:
+                log.exception("workflow event listener stop failed")
+            if mcp_manager is not None:
+                try:
+                    from ..mcp_lifecycle import stop_mcp
+                    await stop_mcp(mcp_manager)
+                except Exception:
+                    log.exception("MCP shutdown failed")
             await agent.aclose()
 
     # Single-user app, not a third-party API — disable FastAPI's auto-generated
@@ -542,7 +903,7 @@ def create_app(
     # enumerate the full API surface, which is unnecessary information leakage.
     app = FastAPI(
         title="nexus",
-        version="0.1.0",
+        version=__import__("nexus").__version__,
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -553,11 +914,19 @@ def create_app(
     # auth path must remain reachable on every request so it can enforce the
     # token on traffic that traversed the public tunnel.
     _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
-    app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
+    if multi_user:
+        app.add_middleware(
+            MultiUserAuthMiddleware,
+            auth_manager=auth_manager,
+            user_store=user_store,
+        )
+    else:
+        app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -570,6 +939,16 @@ def create_app(
     app.state.mutable_state = mutable_state
     app.state.graphrag_cfg = graphrag_cfg
     app.state.ask_user_handler = ask_user_handler
+    app.state.terminal_procs = _terminal_procs
+    app.state.job_tracker = job_tracker
+    app.state.multi_user = multi_user
+    app.state.user_store = user_store
+    app.state.auth_manager = auth_manager
+    app.state.session_registry = session_registry
+
+    from .kanban_queue import init_queue
+    init_queue()
+    log.info("kanban queue initialised")
 
     # ── mount routers ──────────────────────────────────────────────────────────
     from .routes.chat import router as chat_router
@@ -600,12 +979,35 @@ def create_app(
     from .routes.push import router as push_router
     from .routes.skill_wizard import router as skill_wizard_router
     from .routes.tunnel import router as tunnel_router
+    from .routes.tts import router as tts_router
+    from .routes.nexus_account import router as nexus_account_router
+    from .routes.webhook import router as webhook_router
+    from .routes.heartbeat import router as heartbeat_router
+    from .routes.cookies import router as cookies_router
+    from .routes.dream import router as dream_router
+    from .routes.mcp import router as mcp_router
+    from .routes.jobs import router as jobs_router
+    from .routes.vault_import import router as vault_import_router
+    from .routes.update import router as update_router
+    from .routes.workflows import router as workflows_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
     app.include_router(chat_stream_router)
     app.include_router(settings_router)
     app.include_router(sessions_router)
+
+    if multi_user:
+        from .routes.auth import router as auth_router, generate_bootstrap_token
+        from .routes.admin import router as admin_router
+        from .routes.vault_share import router as vault_share_router
+        app.include_router(auth_router)
+        app.include_router(admin_router)
+        app.include_router(vault_share_router)
+        if user_store and not user_store.has_any_users():
+            setup_token = generate_bootstrap_token()
+            log.info("Multi-user mode: no users found. Setup URL: http://localhost:%d/auth/setup (token: %s)",
+                     int(os.environ.get("NEXUS_PORT", "18989")), setup_token)
     app.include_router(sessions_vault_router)
     app.include_router(graph_router)
     app.include_router(insights_router)
@@ -616,6 +1018,7 @@ def create_app(
     app.include_router(vault_dashboard_router)
     app.include_router(vault_dispatch_router)
     app.include_router(vault_history_router)
+    app.include_router(vault_import_router)
     app.include_router(config_router)
     app.include_router(catalog_router)
     app.include_router(oauth_router)
@@ -629,6 +1032,16 @@ def create_app(
     app.include_router(push_router)
     app.include_router(skill_wizard_router)
     app.include_router(tunnel_router)
+    app.include_router(tts_router)
+    app.include_router(nexus_account_router)
+    app.include_router(webhook_router)
+    app.include_router(heartbeat_router)
+    app.include_router(cookies_router)
+    app.include_router(dream_router)
+    app.include_router(mcp_router)
+    app.include_router(jobs_router)
+    app.include_router(update_router)
+    app.include_router(workflows_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent
@@ -636,7 +1049,7 @@ def create_app(
     from .routes.vault_dispatch import _dispatch_impl
 
     async def _agent_dispatcher(*, path: str, card_id: str | None, mode: str) -> dict:
-        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=sessions)
+        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=store_proxy)
 
     agent._dispatcher = _agent_dispatcher
 
@@ -647,18 +1060,21 @@ def create_app(
     # internally so the parent's context only sees the final assistant text.
     from ..agent.context import SUBAGENT_DEPTH
 
+    def _truncate_preview(val: Any, limit: int = 200) -> str:
+        s = str(val) if val is not None else ""
+        return s[:limit] + ("\u2026" if len(s) > limit else "")
+
     async def _run_one_subagent(
         task: dict[str, Any],
         *,
         parent_session_id: str,
         depth: int,
+        task_index: int,
+        total_tasks: int,
     ) -> dict[str, Any]:
+        task_name = task.get("name") or f"Task {task_index + 1}"
         prompt = task.get("prompt") or ""
         model_id = task.get("model_id") or None
-        # Build a fresh Agent that mirrors the parent's provider/registry/cfg
-        # but defaults all HITL + dispatch + subagent handlers to None. This
-        # is what restricts the sub-agent's tool surface without rebuilding
-        # a separate ToolRegistry.
         sub = Agent(
             provider=agent._nexus_provider,
             registry=agent._registry,
@@ -667,11 +1083,26 @@ def create_app(
             home=agent._home,
             permissions=agent._permissions,
         )
-        sub._sessions = sessions
-        # Persist the child session row up front so cleanup queries can find
-        # it even if the run crashes mid-stream.
-        child = sessions.create_child(parent_session_id=parent_session_id, hidden=True)
+        parent_store = store_proxy._resolve(parent_session_id)
+        sub._sessions = parent_store
+        child = parent_store.create_child(parent_session_id=parent_session_id, hidden=True)
         child_id = child.id
+
+        job_id = job_tracker.start(
+            type="subagent",
+            label=task_name,
+            session_id=parent_session_id,
+            extra={"child_session_id": child_id, "index": task_index, "total": total_tasks},
+            publish_fn=_publish_job_event,
+        )
+
+        parent_store.publish(
+            parent_session_id,
+            SessionEvent(
+                kind="subagent_start",
+                data={"name": task_name, "index": task_index, "total": total_tasks, "child_session_id": child_id},
+            ),
+        )
 
         depth_token = SUBAGENT_DEPTH.set(depth + 1)
         sid_token = CURRENT_SESSION_ID.set(child_id)
@@ -688,11 +1119,44 @@ def create_app(
                 ):
                     etype = event.get("type")
                     if etype == "delta":
-                        final_text += event.get("text", "") or ""
+                        chunk = event.get("text", "") or ""
+                        final_text += chunk
+                        parent_store.publish(
+                            parent_session_id,
+                            SessionEvent(
+                                kind="subagent_delta",
+                                data={"child_session_id": child_id, "text": chunk},
+                            ),
+                        )
+                    elif etype in ("tool_exec_start", "tool_exec_result"):
+                        tool_data: dict[str, Any] = {"child_session_id": child_id}
+                        if etype == "tool_exec_start":
+                            tool_data["name"] = event.get("name", "")
+                            tool_data["args_preview"] = _truncate_preview(event.get("args"))
+                            tool_data["status"] = "pending"
+                            if event.get("call_id"):
+                                tool_data["call_id"] = event["call_id"]
+                        else:
+                            tool_data["name"] = event.get("name", "")
+                            tool_data["result_preview"] = _truncate_preview(event.get("result_preview"))
+                            tool_data["status"] = "done"
+                        parent_store.publish(
+                            parent_session_id,
+                            SessionEvent(kind="subagent_tool", data=tool_data),
+                        )
+                        if etype == "done":
+                            final_messages = event.get("messages")
                     elif etype == "done":
                         final_messages = event.get("messages")
                     elif etype == "error":
                         error = str(event.get("message") or "subagent error")
+                        parent_store.publish(
+                            parent_session_id,
+                            SessionEvent(
+                                kind="subagent_done",
+                                data={"child_session_id": child_id, "error": error},
+                            ),
+                        )
             except Exception as exc:
                 log.exception("subagent run crashed (child=%s)", child_id)
                 error = f"subagent crashed: {exc!r}"
@@ -701,9 +1165,18 @@ def create_app(
             SUBAGENT_DEPTH.reset(depth_token)
             if final_messages is not None:
                 try:
-                    sessions.replace_history(child_id, final_messages)
+                    parent_store.replace_history(child_id, final_messages)
                 except Exception:
                     log.exception("subagent: persist final history failed (child=%s)", child_id)
+            job_tracker.done(job_id, publish_fn=_publish_job_event)
+            if error is None:
+                parent_store.publish(
+                    parent_session_id,
+                    SessionEvent(
+                        kind="subagent_done",
+                        data={"child_session_id": child_id, "result_preview": final_text[:200]},
+                    ),
+                )
         return {"session_id": child_id, "result": final_text, "error": error}
 
     async def _subagent_runner(
@@ -713,9 +1186,16 @@ def create_app(
         depth: int,
     ) -> list[dict[str, Any]]:
         import asyncio as _asyncio
+        total = len(tasks)
         return await _asyncio.gather(*[
-            _run_one_subagent(t, parent_session_id=parent_session_id, depth=depth)
-            for t in tasks
+            _run_one_subagent(
+                t,
+                parent_session_id=parent_session_id,
+                depth=depth,
+                task_index=i,
+                total_tasks=total,
+            )
+            for i, t in enumerate(tasks)
         ])
 
     agent._handlers.subagent_runner = _subagent_runner
@@ -760,7 +1240,7 @@ def create_app(
         loop.create_task(
             _dispatch_impl(
                 path=path, card_id=card_id, mode="background",
-                a=agent, store=sessions,
+                a=agent, store=store_proxy,
             )
         )
 
@@ -817,6 +1297,11 @@ def _mount_bundled_ui(app: FastAPI) -> None:
     # Registered as a Starlette route (not a FastAPI route) so FastAPI's
     # parameter introspection doesn't try to coerce ``request`` into a query
     # param. Mounted last, so all explicit API routes win.
+    #
+    # Cache policy: hashed assets under /assets/ are content-addressed and
+    # can be cached forever; index.html / sw.js / manifest.json must always
+    # be revalidated so a fresh build's new chunk hashes are picked up
+    # instead of clients holding onto vanished filenames.
     async def _spa(request: Request) -> Response:
         ui_path = request.path_params.get("ui_path", "") or ""
         if ui_path:
@@ -824,12 +1309,16 @@ def _mount_bundled_ui(app: FastAPI) -> None:
                 target = (dist / ui_path).resolve()
                 target.relative_to(dist_resolved)
                 if target.is_file():
-                    return FileResponse(target)
+                    if ui_path.startswith("assets/"):
+                        headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+                    else:
+                        headers = {"Cache-Control": "no-cache"}
+                    return FileResponse(target, headers=headers)
             except (ValueError, OSError):
                 pass
         accept = request.headers.get("accept", "")
         if "text/html" in accept or accept == "" or accept == "*/*":
-            return FileResponse(index_html)
+            return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
         return Response(status_code=404)
 
     app.router.add_route("/{ui_path:path}", _spa, methods=["GET"], include_in_schema=False)

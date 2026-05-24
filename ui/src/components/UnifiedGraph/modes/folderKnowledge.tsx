@@ -10,15 +10,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getFolderFullSubgraph,
+  type FolderOntology,
   type FolderSubgraphData,
 } from "../../../api/folderGraph";
 import { TYPE_COLORS, DEFAULT_TYPE_COLOR } from "../../KnowledgeView/typeColors";
 import type { ContextMenuItem, UnifiedGraphData, UnifiedNode } from "../types";
 
 interface FolderKnowledgeOptions {
-  /** Vault-relative folder path. */
   path: string;
-  /** Bumped externally (e.g. after reindex) to force a refetch. */
   refreshKey?: number;
 }
 
@@ -31,8 +30,21 @@ export interface FolderKnowledgeHook {
   empty?: React.ReactNode;
   refresh: () => void;
   loading: boolean;
-  /** Number of nodes returned. Lets the host show a quick header stat. */
   nodeCount: number;
+}
+
+function typeColorForFolder(t: string, ontology?: FolderOntology): string {
+  if (TYPE_COLORS[t]) return TYPE_COLORS[t];
+  const types = ontology?.entity_types ?? [];
+  const idx = types.indexOf(t);
+  if (idx >= 0) {
+    const palette = [
+      "#c9a84c", "#b87333", "#7a5e9e", "#5e7a9e", "#9e4a3a",
+      "#4a9e7a", "#9e7a4a", "#4a7a9e", "#7a9e4a", "#9e4a7a",
+    ];
+    return palette[idx % palette.length];
+  }
+  return DEFAULT_TYPE_COLOR;
 }
 
 export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnowledgeHook {
@@ -40,6 +52,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
   const [sg, setSg] = useState<FolderSubgraphData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!path) return;
@@ -60,11 +73,33 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
     void refresh();
   }, [refresh, refreshKey]);
 
+  const typeCounts = useMemo(() => {
+    if (!sg) return {} as Record<string, number>;
+    const counts: Record<string, number> = {};
+    for (const n of sg.nodes) {
+      counts[n.type] = (counts[n.type] || 0) + 1;
+    }
+    return counts;
+  }, [sg]);
+
+  const allTypes = useMemo(() => {
+    const ontologyTypes = sg?.ontology?.entity_types ?? [];
+    const actualTypes = Object.keys(typeCounts);
+    const merged = new Set([...ontologyTypes, ...actualTypes]);
+    return Array.from(merged);
+  }, [sg?.ontology, typeCounts]);
+
   const data: UnifiedGraphData = useMemo(() => {
     if (!sg) return { nodes: [], links: [] };
-    const N = sg.nodes.length;
+    const ontology = sg.ontology;
+    let filtered = sg.nodes;
+    if (typeFilter !== null) {
+      filtered = sg.nodes.filter((n) => n.type === typeFilter);
+    }
+    const N = filtered.length;
     const radius = Math.max(40, Math.cbrt(N) * 18);
-    const nodes: (UnifiedNode & { x?: number; y?: number; z?: number })[] = sg.nodes.map(
+    const filteredIds = new Set(filtered.map((n) => n.id));
+    const nodes: (UnifiedNode & { x?: number; y?: number; z?: number })[] = filtered.map(
       (n, i) => {
         const phi = Math.acos(1 - (2 * (i + 0.5)) / Math.max(1, N));
         const theta = Math.PI * (1 + Math.sqrt(5)) * i;
@@ -73,7 +108,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
           label: n.name,
           kind: n.type,
           degree: n.degree,
-          color: TYPE_COLORS[n.type] ?? DEFAULT_TYPE_COLOR,
+          color: typeColorForFolder(n.type, ontology),
           geometry: "sphere",
           meta: { entityId: n.id, entityName: n.name, entityType: n.type },
           x: radius * Math.sin(phi) * Math.cos(theta),
@@ -93,6 +128,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
       }
     >();
     for (const e of sg.edges) {
+      if (!filteredIds.has(e.source) || !filteredIds.has(e.target)) continue;
       const lo = Math.min(e.source, e.target);
       const hi = Math.max(e.source, e.target);
       const key = `${lo}|${hi}`;
@@ -106,7 +142,35 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
       g.relations.push({ from: fromName, to: toName, label: e.relation || "" });
     }
     return { nodes, links: Array.from(groups.values()) };
-  }, [sg]);
+  }, [sg, typeFilter]);
+
+  const filtersBar = useMemo(() => {
+    if (allTypes.length === 0) return null;
+    return (
+      <div className="kv-filters">
+        <button
+          className={`kv-pill${typeFilter === null ? " kv-pill--active" : ""}`}
+          onClick={() => setTypeFilter(null)}
+        >
+          All
+        </button>
+        {allTypes.map((t) => (
+          <button
+            key={t}
+            className={`kv-pill${typeFilter === t ? " kv-pill--active" : ""}`}
+            style={{ "--pill-color": typeColorForFolder(t, sg?.ontology) } as React.CSSProperties}
+            onClick={() => setTypeFilter(typeFilter === t ? null : t)}
+          >
+            <span
+              className="kv-pill-swatch"
+              style={{ background: typeColorForFolder(t, sg?.ontology) }}
+            />
+            {t} <span className="kv-pill-count">{typeCounts[t] ?? 0}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }, [allTypes, typeFilter, typeCounts, sg?.ontology]);
 
   const onNodeClick = useCallback(() => {
     /* v1: clicks are visual only — no entity-detail panel for folder graphs yet. */
@@ -132,7 +196,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
 
   return {
     data,
-    filtersBar: null,
+    filtersBar,
     sidebar: null,
     onNodeClick,
     refresh,

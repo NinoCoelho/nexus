@@ -28,6 +28,19 @@ class ServerHandle:
     slug: str
     model_path: Path
     is_embedding: bool = False
+    # True when an ``*mmproj*.gguf`` projector sidecar was found alongside
+    # the language GGUF and ``--mmproj`` was passed to llama-server. The
+    # caller surfaces this through a ``vision`` tag on the [[models]]
+    # entry so chat-side capability detection treats the model as
+    # vision-capable.
+    is_vision: bool = False
+    context_window: int = 0
+    # True when the GGUF contains multi-token prediction heads
+    # (``<arch>.nextn_predict_layers > 0``) and llama-server was launched
+    # with ``--spec-type draft-mtp``. The ``spec_draft_n_max`` field holds
+    # the number of draft tokens.
+    is_mtp: bool = False
+    spec_draft_n_max: int = 0
 
 
 # Architectures (from GGUF metadata `general.architecture`) that produce
@@ -57,6 +70,127 @@ _EMBEDDING_NAME_HINTS = (
     "minilm", "bge-", "bge_", "nomic-embed", "e5-", "e5_",
     "gte-", "mxbai-embed", "embed",
 )
+
+
+def _gguf_has_mamba_layers(model_path: Path) -> bool:
+    """Check whether a GGUF contains Mamba/SSM layers.
+
+    Hybrid Mamba-Transformer models (e.g. Qwen3-UD, Zamba) include
+    ``<arch>.ssm_*`` hyper-parameter keys in their metadata. Standard
+    transformer models do not.
+
+    Returns True if SSM/Mamba metadata is found, False otherwise.
+    """
+    import struct
+
+    arch = _read_gguf_architecture(model_path)
+    if not arch:
+        return False
+
+    ssm_prefix = f"{arch}.ssm_"
+    try:
+        with open(model_path, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return False
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return False
+            f.read(8)
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return False
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                if key.startswith(ssm_prefix):
+                    return True
+                _read_gguf_value(f, val_type)
+        return False
+    except Exception:
+        return False
+
+
+def _gguf_mtp_draft_layers(model_path: Path) -> int:
+    """Return the number of MTP (multi-token prediction) draft layers.
+
+    GGUF models with built-in speculative decoding (e.g. Qwen3.6-27B-MTP)
+    expose ``<arch>.nextn_predict_layers`` in their metadata. When > 0 the
+    model can use ``--spec-type draft-mtp`` in llama-server for ~2x speedup.
+
+    Returns the integer value, or 0 when absent / unreadable.
+    """
+    arch = _read_gguf_architecture(model_path)
+    if not arch:
+        return 0
+
+    target_key = f"{arch}.nextn_predict_layers"
+    try:
+        with open(model_path, "rb") as f:
+            import struct
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return 0
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return 0
+            f.read(8)
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return 0
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                if key == target_key:
+                    value = _read_gguf_value(f, val_type)
+                    if isinstance(value, (int, float)):
+                        return int(value)
+                    return 0
+                _read_gguf_value(f, val_type)
+        return 0
+    except Exception:
+        return 0
+
+
+def is_mmproj_file(path: Path) -> bool:
+    """Vision-language projector sidecar (e.g. ``*mmproj*.gguf``).
+
+    These files aren't models on their own — they pair with a language
+    GGUF and feed llama-server through ``--mmproj``. Callers that scan
+    ``~/.nexus/models/llm/`` for installable models must skip them so
+    each projector doesn't get treated as its own runnable model.
+    """
+    return "mmproj" in path.name.lower() and path.suffix.lower() == ".gguf"
+
+
+def find_mmproj_sidecar(model_path: Path) -> Path | None:
+    """Return the projector GGUF that pairs with ``model_path``, if any.
+
+    The convention used by community quantizers (e.g.
+    ``prithivMLmods/chandra-ocr-2-GGUF``) is to ship a sibling named
+    ``<base>.mmproj-<quant>.gguf`` alongside the language GGUF. We look
+    in the same directory for any ``*mmproj*.gguf`` and prefer the one
+    whose quant suffix matches the language file (``q8_0``, ``f16``,
+    etc.); otherwise fall back to the first match.
+    """
+    parent = model_path.parent
+    if not parent.is_dir():
+        return None
+    candidates = sorted(p for p in parent.glob("*mmproj*.gguf") if p.is_file())
+    if not candidates:
+        return None
+    # Try to match the quant tier of the language GGUF.
+    stem_lower = model_path.stem.lower()
+    for tier in ("q8_0", "q6_k", "q5_k_m", "q4_k_m", "f16", "bf16", "f32"):
+        if tier in stem_lower:
+            for c in candidates:
+                if tier in c.stem.lower():
+                    return c
+    return candidates[0]
 
 
 def _read_gguf_architecture(model_path: Path) -> str | None:
@@ -127,6 +261,51 @@ def _read_gguf_value(f, val_type: int):
     raise ValueError(f"unknown gguf value type {val_type}")
 
 
+def _read_gguf_context_length(model_path: Path) -> int:
+    """Read the context length from GGUF metadata.
+
+    Looks for ``<arch>.context_length`` (e.g. ``qwen2.context_length``,
+    ``llama.context_length``), then ``<arch>.max_position_embeddings``,
+    then ``general.context_length``.  Returns 0 when none are found.
+    """
+    import struct
+
+    arch = _read_gguf_architecture(model_path)
+    target_keys_ordered: list[str] = []
+    if arch:
+        target_keys_ordered.append(f"{arch}.context_length")
+        target_keys_ordered.append(f"{arch}.max_position_embeddings")
+    target_keys_ordered.append("general.context_length")
+    target_keys = set(target_keys_ordered)
+
+    try:
+        with open(model_path, "rb") as f:
+            magic = f.read(4)
+            if magic != b"GGUF":
+                return 0
+            version = struct.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return 0
+            f.read(8)
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+
+            for _ in range(min(kv_count, 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 4096:
+                    return 0
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                val_type = struct.unpack("<I", f.read(4))[0]
+                if key in target_keys:
+                    value = _read_gguf_value(f, val_type)
+                    if isinstance(value, (int, float)):
+                        return int(value)
+                    return 0
+                _read_gguf_value(f, val_type)
+        return 0
+    except Exception:
+        return 0
+
+
 def is_embedding_model(model_path: Path) -> bool:
     """Detect whether a GGUF file is an embedding model.
 
@@ -148,6 +327,7 @@ def is_embedding_model(model_path: Path) -> bool:
 
 # Keyed by GGUF filename (the basename, e.g. "Qwen2.5-7B-Instruct-Q4_K_M.gguf").
 _servers: dict[str, ServerHandle] = {}
+_VERSION_CACHE: dict[str, int] = {}
 
 
 def slugify(name: str) -> str:
@@ -181,6 +361,8 @@ def list_running() -> list[dict]:
             "port": h.port,
             "pid": h.proc.pid,
             "model_path": str(h.model_path),
+            "is_mtp": h.is_mtp,
+            "spec_draft_n_max": h.spec_draft_n_max,
         })
     return out
 
@@ -191,8 +373,7 @@ def discover_binary() -> Path | None:
     Search order:
     1. ``NEXUS_LLAMA_BIN`` environment variable.
     2. Bundled binary relative to ``NEXUS_BUNDLE_DIR`` (macOS .app).
-    3. ``~/.nexus/llama/**/llama-server`` (user-installed binary).
-    4. ``llama-server`` on ``PATH`` via ``shutil.which``.
+    3. Newest ``llama-server`` found across ``~/.nexus/llama/`` and ``PATH``.
 
     Returns:
         Path to the binary, or None if not found.
@@ -210,24 +391,68 @@ def discover_binary() -> Path | None:
             if candidate.is_file():
                 return candidate
 
+    candidates: list[tuple[int, Path]] = []
+
     user_llama = Path.home() / ".nexus" / "llama"
     if user_llama.is_dir():
         for candidate in user_llama.glob("**/llama-server"):
             if candidate.is_file():
-                return candidate
+                ver = _parse_build_version(candidate)
+                candidates.append((ver, candidate))
 
     which = shutil.which("llama-server")
     if which:
-        return Path(which)
+        p = Path(which)
+        ver = _parse_build_version(p)
+        candidates.append((ver, p))
 
-    return None
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates[0][1]
 
 
-def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
+def _parse_build_version(binary: Path) -> int:
+    """Extract the numeric build version from a llama-server path.
+
+    Looks for a ``b<digits>`` pattern in the parent directory name first
+    (e.g. ``llama-b8929``), then in the binary name itself.  Returns 0 if
+    no version can be determined.  Results are cached per resolved path.
+    """
+    key = str(binary.resolve())
+    if key in _VERSION_CACHE:
+        return _VERSION_CACHE[key]
+    ver = 0
+    for text in [binary.parent.name, binary.name]:
+        m = re.search(r"b(\d+)", text)
+        if m:
+            ver = int(m.group(1))
+            break
+    _VERSION_CACHE[key] = ver
+    return ver
+
+
+def start(
+    model_path: Path,
+    ctx_size: int = 16384,
+    spec_type: str | None = None,
+    spec_draft_n_max: int | None = None,
+) -> ServerHandle:
     """Start (or return existing) llama-server for the given model.
 
     If a server is already running for ``model_path.name``, returns its handle
     without spawning a duplicate.
+
+    Args:
+        model_path: Path to the GGUF file.
+        ctx_size: Context window size (0 = auto-detect from GGUF metadata).
+        spec_type: Override speculative decoding type (e.g. ``"draft-mtp"``).
+            When ``None`` and the model has MTP heads, ``"draft-mtp"`` is
+            used automatically.
+        spec_draft_n_max: Number of draft tokens for speculative decoding.
+            When ``None`` and MTP is active, the value is read from the
+            GGUF ``nextn_predict_layers`` metadata.
 
     Raises:
         RuntimeError: If the binary is missing or the server fails to become
@@ -248,6 +473,31 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
     slug = slugify(model_path.stem)
     is_emb = is_embedding_model(model_path)
 
+    mtp_layers = _gguf_mtp_draft_layers(model_path) if not is_emb else 0
+    is_mtp = mtp_layers > 0
+    effective_spec_type = spec_type or ("draft-mtp" if is_mtp else None)
+    effective_draft_n = spec_draft_n_max or (mtp_layers if is_mtp else 0)
+
+    detected_ctx = _read_gguf_context_length(model_path)
+    if detected_ctx > 0 and (ctx_size <= 0 or detected_ctx > ctx_size):
+        if ctx_size > 0:
+            log.info(
+                "[local_llm] GGUF context_length=%d overrides stale config value %d for %s",
+                detected_ctx, ctx_size, model_path.name,
+            )
+        else:
+            log.info(
+                "[local_llm] auto-detected context_length=%d from GGUF metadata for %s",
+                detected_ctx, model_path.name,
+            )
+        ctx_size = detected_ctx
+    elif ctx_size <= 0:
+        ctx_size = 32768
+        log.info(
+            "[local_llm] GGUF context_length not found; using fallback %d for %s",
+            ctx_size, model_path.name,
+        )
+
     log_path = Path.home() / "Library" / "Logs" / "Nexus" / "llama-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_path, "ab")
@@ -260,12 +510,21 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         "-c", str(ctx_size),
         "-ngl", "99",
     ]
+    mmproj_path: Path | None = None
     if is_emb:
         # Embedding-only mode: chat-template flags (--jinja) are incompatible
         # with --embeddings on most builds, and the OpenAI-compat
         # /v1/embeddings route only exists when this flag is set.
         cmd += ["--embeddings", "--pooling", "mean"]
     else:
+        # Vision-language models (e.g. chandra-ocr-2, llava-style) ship a
+        # projector sidecar that llama-server loads via --mmproj.
+        # Without it, image inputs get rejected with "image input is not
+        # supported - hint: ... mmproj". When we find a sibling, wire it up
+        # — chat-only GGUFs without a sidecar are unaffected.
+        mmproj_path = find_mmproj_sidecar(model_path)
+        if mmproj_path is not None:
+            cmd += ["--mmproj", str(mmproj_path)]
         # `--jinja` enables the chat template so tool-calling and reasoning
         # routing work as the model expects. We let `--reasoning-format`
         # default to `auto`: for thinking models (DeepSeek-R1, QwQ, GLM
@@ -276,6 +535,15 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         # parser, which only scans the post-think tail. The Nexus UI renders
         # the separate `thinking` SSE channel as a collapsed section.
         cmd += ["--jinja"]
+        if effective_spec_type:
+            cmd += ["--spec-type", effective_spec_type]
+            if effective_draft_n > 0:
+                cmd += ["--spec-draft-n-max", str(effective_draft_n)]
+            log.info(
+                "[local_llm] MTP speculative decoding: type=%s, draft_n=%d",
+                effective_spec_type, effective_draft_n,
+            )
+    is_vision = mmproj_path is not None
 
     log.info("[local_llm] starting llama-server: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
@@ -288,18 +556,35 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
     while time.time() < deadline:
         if proc.poll() is not None:
             log.warning("[local_llm] llama-server exited early; see %s", log_path)
-            raise RuntimeError(f"llama-server exited before becoming ready (see {log_path})")
+            raise RuntimeError(_diagnose_start_failure(log_path, model_path))
         try:
             with urllib.request.urlopen(health_url, timeout=1.5) as r:
                 if r.status == 200:
                     handle = ServerHandle(
                         proc=proc, port=port, slug=slug, model_path=model_path,
-                        is_embedding=is_emb,
+                        is_embedding=is_emb, is_vision=is_vision,
+                        context_window=ctx_size,
+                        is_mtp=effective_spec_type == "draft-mtp",
+                        spec_draft_n_max=effective_draft_n,
                     )
                     _servers[filename] = handle
+
+                    actual_ctx = _query_server_n_ctx(port)
+                    if actual_ctx > 0:
+                        handle.context_window = actual_ctx
+
+                    _MIN_CTX_WARNING = 24_576
+                    if not is_emb and handle.context_window > 0 and handle.context_window < _MIN_CTX_WARNING:
+                        log.warning(
+                            "[local_llm] context window (%d) may be too small for the "
+                            "agent's system prompt + tool definitions (~22K tokens). "
+                            "Consider using a model with at least 32K context.",
+                            handle.context_window,
+                        )
+
                     log.info(
-                        "[local_llm] llama-server ready: %s on :%d (slug=%s)",
-                        filename, port, slug,
+                        "[local_llm] llama-server ready: %s on :%d (slug=%s, ctx=%d)",
+                        filename, port, slug, handle.context_window,
                     )
                     return handle
         except (urllib.error.URLError, OSError):
@@ -307,7 +592,74 @@ def start(model_path: Path, ctx_size: int = 16384) -> ServerHandle:
         time.sleep(0.5)
 
     proc.terminate()
-    raise RuntimeError(f"llama-server did not become ready in 90s (see {log_path})")
+    raise RuntimeError(_diagnose_start_failure(log_path, model_path))
+
+
+def _query_server_n_ctx(port: int) -> int:
+    """Query llama-server ``/props`` for the actual ``n_ctx`` in use.
+
+    Returns 0 if the endpoint is unavailable or the value cannot be parsed.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        url = f"http://127.0.0.1:{port}/props"
+        with urllib.request.urlopen(url, timeout=2) as r:
+            if r.status == 200:
+                data = json.loads(r.read())
+                return int(
+                    data.get("default_generation_settings", {}).get("n_ctx", 0)
+                )
+    except Exception:
+        pass
+    return 0
+
+
+def _diagnose_start_failure(log_path: Path, model_path: Path) -> str:
+    """Read the tail of the llama-server log and produce a user-facing message.
+
+    Returns a string like ``"llama-server failed: <reason>. <hint>"``.
+    """
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return f"llama-server failed to start. Log: {log_path}"
+
+    missing_match = re.search(r"missing tensor '([^']+)'", text)
+    if missing_match:
+        tensor = missing_match.group(1)
+        arch = _read_gguf_architecture(model_path)
+        arch_label = f" (architecture: {arch})" if arch else ""
+        return (
+            f"This model{arch_label} is not compatible with the installed version of "
+            f"llama.cpp. It requires layers (e.g. {tensor}) that your build does not "
+            f"support. Try updating llama.cpp first (Settings → Local Models). If the "
+            f"update doesn't help, this architecture may not be supported yet — use a "
+            f"standard (non-hybrid) GGUF without \"UD\" or \"Mamba\" in the filename."
+        )
+
+    if "exceeds the available context size" in text:
+        return (
+            "Model context window is too small for the agent's system prompt + tools. "
+            "Try a model with at least 32K context, or update llama.cpp to a newer build."
+        )
+
+    if "CUDA out of memory" in text or "MPS out of memory" in text:
+        return (
+            "Not enough GPU/memory to load this model. Try a smaller quantization "
+            "(e.g. Q4_K_M instead of Q8_0) or a smaller model."
+        )
+
+    if "failed to load model" in text:
+        return (
+            "llama-server could not load this GGUF file. It may be corrupted or use "
+            "an unsupported format. Try re-downloading the model or choosing a "
+            "different quantization."
+        )
+
+    return f"llama-server failed to start. Check the log for details: {log_path}"
 
 
 def stop(filename: str) -> bool:
@@ -376,6 +728,9 @@ def add_to_config(
     port: int,
     is_embedding: bool = False,
     context_window: int = 0,
+    is_vision: bool = False,
+    is_mtp: bool = False,
+    spec_draft_n_max: int = 0,
 ) -> str:
     """Register a running local model in ``~/.nexus/config.toml``.
 
@@ -430,11 +785,19 @@ def add_to_config(
     ]
     # Also clean up legacy ``provider == "local"`` entries from the singleton era.
     models = [m for m in models if m.get("provider") != "local"]
+    if is_embedding:
+        tags = ["local", "offline", "embedding"]
+    else:
+        tags = ["local", "offline"]
+        if is_vision:
+            tags.append("vision")
+        if is_mtp:
+            tags.append("mtp")
     entry: dict = {
         "id": model_id,
         "provider": pname,
         "model_name": slug,
-        "tags": ["local", "offline", "embedding"] if is_embedding else ["local", "offline"],
+        "tags": tags,
         "tier": "fast",
         "notes": (
             "Local embedding model served by llama.cpp."
@@ -446,6 +809,9 @@ def add_to_config(
         entry["is_embedding_capable"] = True
     if context_window > 0:
         entry["context_window"] = context_window
+    if is_mtp and spec_draft_n_max > 0:
+        entry["spec_type"] = "draft-mtp"
+        entry["spec_draft_n_max"] = spec_draft_n_max
     models.append(entry)
     raw["models"] = models
 
@@ -555,7 +921,7 @@ def restart_local_models(models_dir: Path | None = None) -> int:
     providers = raw.get("providers", {}) or {}
     models = raw.get("models", []) or []
 
-    targets: list[tuple[str, int]] = []  # (slug, configured_ctx)
+    targets: list[tuple[str, int, str | None, int]] = []  # (slug, ctx, spec_type, spec_n)
     for pname in list(providers.keys()):
         if not pname.startswith("local-") or pname == "local":
             continue
@@ -563,28 +929,47 @@ def restart_local_models(models_dir: Path | None = None) -> int:
         if not slug:
             continue
         ctx = 0
+        spec_type: str | None = None
+        spec_n = 0
         for m in models:
-            if m.get("provider") == pname and isinstance(m.get("context_window"), int):
-                ctx = m["context_window"]
+            if m.get("provider") == pname:
+                if isinstance(m.get("context_window"), int):
+                    ctx = m["context_window"]
+                if isinstance(m.get("spec_type"), str):
+                    spec_type = m["spec_type"]
+                if isinstance(m.get("spec_draft_n_max"), int):
+                    spec_n = m["spec_draft_n_max"]
                 break
-        targets.append((slug, ctx))
+        targets.append((slug, ctx, spec_type, spec_n))
 
     if not targets:
         return 0
 
     mdir = models_dir or (Path.home() / ".nexus" / "models" / "llm")
-    ggufs: list[Path] = sorted(mdir.glob("*.gguf")) if mdir.is_dir() else []
+    # Filter out mmproj sidecars — those aren't runnable models.
+    ggufs: list[Path] = (
+        sorted(p for p in mdir.glob("*.gguf") if not is_mmproj_file(p))
+        if mdir.is_dir()
+        else []
+    )
     by_slug = {slugify(p.stem): p for p in ggufs}
 
     started = 0
-    for slug, ctx in targets:
+    for slug, ctx, model_spec_type, model_spec_n in targets:
         gguf = by_slug.get(slug)
         if gguf is None:
             log.warning("[local_llm] no GGUF found for slug %r — removing from config", slug)
             remove_from_config(slug)
             continue
         try:
-            handle = start(gguf, ctx_size=ctx) if ctx > 0 else start(gguf)
+            kwargs: dict = {}
+            if ctx > 0:
+                kwargs["ctx_size"] = ctx
+            if model_spec_type:
+                kwargs["spec_type"] = model_spec_type
+            if model_spec_n > 0:
+                kwargs["spec_draft_n_max"] = model_spec_n
+            handle = start(gguf, **kwargs)
         except RuntimeError as exc:
             log.warning(
                 "[local_llm] failed to restart %s (%s) — removing from config: %s",
@@ -595,7 +980,10 @@ def restart_local_models(models_dir: Path | None = None) -> int:
         add_to_config(
             handle.slug, handle.port,
             is_embedding=handle.is_embedding,
-            context_window=ctx,
+            is_vision=handle.is_vision,
+            context_window=handle.context_window or ctx,
+            is_mtp=handle.is_mtp,
+            spec_draft_n_max=handle.spec_draft_n_max,
         )
         started += 1
         log.info("[local_llm] restarted %s on :%d", slug, handle.port)

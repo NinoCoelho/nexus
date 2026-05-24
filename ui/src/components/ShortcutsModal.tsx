@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { X } from "lucide-react";
 import "./ShortcutsModal.css";
 
 interface Props {
@@ -60,7 +61,7 @@ export default function ShortcutsModal({ open, onClose }: Props) {
         <div className="shortcuts-modal-header">
           <h2>Keyboard shortcuts</h2>
           <button className="shortcuts-modal-close" onClick={onClose} aria-label="Close">
-            ×
+            <X size={16} />
           </button>
         </div>
         <div className="shortcuts-modal-body">

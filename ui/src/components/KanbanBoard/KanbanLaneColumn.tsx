@@ -1,3 +1,4 @@
+import { Settings as SettingsIcon, X, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { KanbanCard, KanbanLane } from "../../api";
 import KanbanCardItem from "./KanbanCardItem";
@@ -5,13 +6,22 @@ import type { BoardFilters } from "./utils";
 
 interface Props {
   lane: KanbanLane;
+  laneIndex: number;
+  isLastLane: boolean;
+  allLanes: { id: string; title: string }[];
   dragCard: string | null;
+  dragLane: string | null;
   dragOver: { lane: string; index: number } | null;
+  laneDragOver: number | null;
   filters: BoardFilters;
   matchesFilters: (card: KanbanCard) => boolean;
   onSetDragCard: (id: string | null) => void;
   onSetDragOver: (v: { lane: string; index: number } | null) => void;
   onDrop: (laneId: string, index: number) => void;
+  onLaneDragStart: (laneId: string) => void;
+  onLaneDragEnd: () => void;
+  onLaneDragOver: (insertIndex: number) => void;
+  onLaneDrop: (insertIndex: number) => void;
   onEditLane: (lane: KanbanLane) => void;
   onDeleteLane: (laneId: string) => void;
   onAddCard: (laneId: string) => void;
@@ -19,16 +29,28 @@ interface Props {
   onOpenCardActivity: (card: KanbanCard) => void;
   onOpenCardInChat: (card: KanbanCard) => void;
   onDeleteCard: (cardId: string) => void;
+  onCancelCard: (cardId: string) => void;
+  onRetryCard: (cardId: string) => void;
+  onMoveCard: (cardId: string, targetLaneId: string) => void;
 }
 
 export default function KanbanLaneColumn({
   lane,
+  laneIndex,
+  isLastLane,
+  allLanes,
   dragCard,
+  dragLane,
   dragOver,
+  laneDragOver,
   matchesFilters,
   onSetDragCard,
   onSetDragOver,
   onDrop,
+  onLaneDragStart,
+  onLaneDragEnd,
+  onLaneDragOver,
+  onLaneDrop,
   onEditLane,
   onDeleteLane,
   onAddCard,
@@ -36,15 +58,51 @@ export default function KanbanLaneColumn({
   onOpenCardActivity,
   onOpenCardInChat,
   onDeleteCard,
+  onCancelCard,
+  onRetryCard,
+  onMoveCard,
 }: Props) {
   const { t } = useTranslation("kanban");
+  const isLaneDragging = dragLane === lane.id;
+  // Lane dragOver indicator: highlight the left edge if the drop target is
+  // this column's index, or the right edge if it's the next index *and*
+  // this is the rightmost column (so the trailing slot still renders a hint).
+  const showLeftIndicator = dragLane !== null && laneDragOver === laneIndex;
+  const showRightIndicator = dragLane !== null && isLastLane && laneDragOver === laneIndex + 1;
   return (
-    <div className="kanban-lane">
-      <div className="kanban-lane-header">
+    <div
+      className={`kanban-lane${isLaneDragging ? " kanban-lane--dragging" : ""}${showLeftIndicator ? " kanban-lane--drop-before" : ""}${showRightIndicator ? " kanban-lane--drop-after" : ""}`}
+      onDragOver={(e) => {
+        if (!dragLane) return;
+        e.preventDefault();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const mid = rect.left + rect.width / 2;
+        const insertIdx = e.clientX < mid ? laneIndex : laneIndex + 1;
+        onLaneDragOver(insertIdx);
+      }}
+      onDrop={(e) => {
+        if (!dragLane) return;
+        e.preventDefault();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const mid = rect.left + rect.width / 2;
+        const insertIdx = e.clientX < mid ? laneIndex : laneIndex + 1;
+        onLaneDrop(insertIdx);
+      }}
+    >
+      <div
+        className="kanban-lane-header"
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          onLaneDragStart(lane.id);
+        }}
+        onDragEnd={onLaneDragEnd}
+        title={t("kanban:lane.dragHandle")}
+      >
         <span className="kanban-lane-title">
           {lane.title}
           {lane.prompt && (
-            <span className="kanban-lane-prompt-indicator" title={t("kanban:lane.promptIndicator")}>⚡</span>
+            <span className="kanban-lane-prompt-indicator" title={t("kanban:lane.promptIndicator")}><Zap size={12} /></span>
           )}
         </span>
         <span className="kanban-lane-count">{lane.cards.length}</span>
@@ -52,20 +110,22 @@ export default function KanbanLaneColumn({
           className="kanban-icon-btn"
           title={lane.prompt ? t("kanban:lane.editPrompt") : t("kanban:lane.setPrompt")}
           onClick={() => onEditLane(lane)}
-        >⚙</button>
+        ><SettingsIcon size={12} /></button>
         <button
           className="kanban-icon-btn"
           title={t("kanban:lane.deleteLane")}
           onClick={() => onDeleteLane(lane.id)}
-        >×</button>
+        ><X size={14} /></button>
       </div>
       <div
         className="kanban-lane-cards"
         onDragOver={(e) => {
+          if (!dragCard) return;
           e.preventDefault();
-          if (dragCard) onSetDragOver({ lane: lane.id, index: lane.cards.length });
+          onSetDragOver({ lane: lane.id, index: lane.cards.length });
         }}
         onDrop={(e) => {
+          if (!dragCard) return;
           e.preventDefault();
           const idx = dragOver?.lane === lane.id ? dragOver.index : lane.cards.length;
           onDrop(lane.id, idx);
@@ -79,6 +139,7 @@ export default function KanbanLaneColumn({
             dragCardId={dragCard}
             dragOver={dragOver}
             laneId={lane.id}
+            allLanes={allLanes}
             onDragStart={() => onSetDragCard(card.id)}
             onDragEnd={() => { onSetDragCard(null); onSetDragOver(null); }}
             onDragOver={(_e, insertIdx) => onSetDragOver({ lane: lane.id, index: insertIdx })}
@@ -87,6 +148,9 @@ export default function KanbanLaneColumn({
             onOpenInChat={() => onOpenCardInChat(card)}
             onDelete={() => onDeleteCard(card.id)}
             onViewActivity={() => onOpenCardActivity(card)}
+            onCancel={() => onCancelCard(card.id)}
+            onRetry={() => onRetryCard(card.id)}
+            onMoveCard={(targetLaneId) => onMoveCard(card.id, targetLaneId)}
           />
         ))}
         <button

@@ -42,7 +42,7 @@ import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
 
 const PAGE_SIZE = 5;
-const SKIP_KINDS = new Set(["textarea", "formula"]);
+const SKIP_KINDS = new Set(["textarea", "formula", "rollup"]);
 const MAX_COLS = 4;
 
 interface Props {
@@ -172,7 +172,7 @@ export default function RelatedRowsPanel({ path, rowId, onOpenTable }: Props) {
 
   function formFields(groupSchema: GroupSchema, fkField: string | null): FieldSchema[] {
     return groupSchema.fields.filter(
-      (f) => f.name !== fkField && f.kind !== "formula" && f.name !== "_id",
+      (f) => f.name !== fkField && f.kind !== "formula" && f.kind !== "rollup" && f.name !== "_id",
     );
   }
 

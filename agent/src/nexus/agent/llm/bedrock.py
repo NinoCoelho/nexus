@@ -73,11 +73,14 @@ def _encode_msg_bedrock(m: ChatMessage) -> dict[str, Any]:
 
 
 def _encode_tool_bedrock(t: ToolSpec) -> dict[str, Any]:
+    params = dict(t.parameters)
+    if params.get("type") == "object" and "additionalProperties" not in params:
+        params["additionalProperties"] = False
     return {
         "toolSpec": {
             "name": t.name,
             "description": t.description,
-            "inputSchema": {"json": t.parameters},
+            "inputSchema": {"json": params},
         }
     }
 
@@ -162,9 +165,11 @@ class BedrockProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,  # accepted for interface parity; unused
     ) -> ChatResponse:
         import asyncio
         import botocore.exceptions  # type: ignore[import-not-found]
+        _ = extra_payload  # intentionally ignored (Bedrock has no thinking-toggle field)
 
         resolved_model = model or self._model
         if not resolved_model:

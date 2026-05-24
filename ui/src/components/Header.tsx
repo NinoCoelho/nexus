@@ -1,19 +1,17 @@
 import type { ReactNode } from "react";
+import { useTheme } from "../theme/ThemeContext";
 
 interface Props {
   onReset: () => void;
-  /** When true, the header shows a pulsing "YOLO ON" badge — an
-   *  always-visible audit cue that prompts are being auto-approved. */
   yoloMode?: boolean;
-  /** Mobile-only: open the slide-in nav drawer. */
   onOpenMobileDrawer?: () => void;
-  /** Optional slot for live session metadata (model, tokens, cost). */
   statusSlot?: ReactNode;
-  /** Optional slot rendered before the YOLO badge (notification bell, etc). */
   notificationSlot?: ReactNode;
 }
 
 export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, statusSlot, notificationSlot }: Props) {
+  const { darkMode, toggleDarkMode } = useTheme();
+
   return (
     <header className="header">
       <div className="header-inner">
@@ -46,6 +44,22 @@ export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, 
               YOLO ON
             </span>
           )}
+          <button
+            className="header-btn"
+            onClick={toggleDarkMode}
+            title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {darkMode ? (
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM8 0a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0V.75A.75.75 0 0 1 8 0zm0 13a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 13zM2.34 2.34a.75.75 0 0 1 1.06 0l1.06 1.06a.75.75 0 0 1-1.06 1.06L2.34 3.4a.75.75 0 0 1 0-1.06zm9.2 9.2a.75.75 0 0 1 1.06 0l1.06 1.06a.75.75 0 1 1-1.06 1.06l-1.06-1.06a.75.75 0 0 1 0-1.06zM0 8a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 8zm13 0a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 0 1.5h-1.5A.75.75 0 0 1 13 8zM2.34 13.66a.75.75 0 0 1 0-1.06l1.06-1.06a.75.75 0 1 1 1.06 1.06L3.4 13.66a.75.75 0 0 1-1.06 0zm9.2-9.2a.75.75 0 0 1 0-1.06l1.06-1.06a.75.75 0 1 1 1.06 1.06l-1.06 1.06a.75.75 0 0 1-1.06 0z" />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M6 0a1 1 0 0 0-.89.55 8 8 0 1 0 10.34 10.34A1 1 0 0 0 14.56 9A6.5 6.5 0 0 1 6 0z" />
+              </svg>
+            )}
+          </button>
           <button
             className="header-btn"
             onClick={onReset}

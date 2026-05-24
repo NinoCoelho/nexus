@@ -2,15 +2,19 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  max-width: 90%;
+  max-width: 100%;
+  width: 100%;
   gap: 6px;
+  min-width: 0;
 }
 
 .asst-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding-left: 2px;
+  min-width: 0;
 }
 
 .asst-avatar {
@@ -38,6 +42,9 @@
   font-weight: 400;
   text-transform: none;
   letter-spacing: 0;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .asst-time {
@@ -54,10 +61,15 @@
   font-size: 14px;
   line-height: 1.6;
   color: var(--bubble-fg);
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .asst-body {
   color: var(--bubble-fg);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .asst-body p {
@@ -175,6 +187,9 @@
   text-decoration: none;
   transition: all 120ms ease;
   vertical-align: baseline;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 .vault-inline-link:hover {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
@@ -307,4 +322,41 @@
   word-break: break-word;
   max-height: 320px;
   overflow-y: auto;
+}
+
+/* Transient hint shown while the agent backs off after a retryable
+ * mid-stream error. Cleared on the next delta/tool/error event. */
+.asst-reconnecting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px 0;
+  padding: 6px 10px;
+  background: var(--bg-inset, rgba(255, 165, 0, 0.08));
+  border: 1px solid rgba(255, 165, 0, 0.25);
+  border-radius: var(--radius, 6px);
+  font-size: 12px;
+  color: var(--fg-muted, #8a6d3b);
+}
+.asst-reconnecting-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 165, 0, 0.35);
+  border-top-color: rgba(255, 165, 0, 0.9);
+  border-radius: 50%;
+  animation: asst-reconnecting-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+.asst-reconnecting-text {
+  flex: 1;
+}
+@keyframes asst-reconnecting-spin {
+  to { transform: rotate(360deg); }
+}
+
+.asst-inline-resource {
+  margin: 6px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 100%;
 }

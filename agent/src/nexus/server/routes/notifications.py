@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 
 from ..deps import get_sessions
 from ..session_store import SessionStore
+from ._sse import keepalive
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,11 @@ async def notifications_events(
 
     async def stream() -> AsyncIterator[bytes]:
         yield b": subscribed\n\n"
-        async for session_id, event in store.subscribe_global():
+        async for item in keepalive(store.subscribe_global(), interval=20.0):
+            if item is None:
+                yield b": ping\n\n"
+                continue
+            session_id, event = item
             payload = {"session_id": session_id, **event.data}
             yield f"event: {event.kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
@@ -82,25 +87,32 @@ async def notifications_pending(
     request: Request,
     store: SessionStore = Depends(get_sessions),
 ) -> dict[str, Any]:
-    """Snapshot of every pending HITL request across all sessions.
-
-    Two sources, UNION'd by ``request_id``:
-
-    1. ``broker._requests`` — live in-memory requests where the agent's
-       turn is still waiting. Lost on restart.
-    2. ``hitl_pending`` (status='parked') — durable rows for requests
-       that exhausted the synchronous wait threshold. Survive restart.
-
-    Live entries win over parked entries when a request_id appears in
-    both (the agent reactivated after a restart, e.g. via /respond
-    arriving while a parked row still exists transiently).
-    """
     ask_user_handler = request.app.state.ask_user_handler
-    seen: set[str] = set()
     items: list[dict[str, Any]] = []
 
-    # broker._requests is private but accessed here the same way
-    # ``cancel_pending`` accesses _pending in pubsub.py.
+    if getattr(request.app.state, "multi_user", False):
+        role = getattr(request.state, "user_role", None)
+        if role == "admin":
+            from .admin import _collect_pending
+            user_store = request.app.state.user_store
+            for user in user_store.list_users():
+                if user.status != "active":
+                    continue
+                registry = request.app.state.session_registry
+                user_store_inst = registry.get(user.id)
+                _collect_pending(user_store_inst, ask_user_handler, items, user)
+            return {"pending": items}
+
+    _collect_pending_local(store, ask_user_handler, items)
+    return {"pending": items}
+
+
+def _collect_pending_local(
+    store: SessionStore,
+    ask_user_handler: Any,
+    items: list[dict[str, Any]],
+) -> None:
+    seen: set[str] = set()
     for (sid, _rid), r in store.broker._requests.items():
         seen.add(r.request_id)
         payload: dict[str, Any] = {
@@ -136,5 +148,3 @@ async def notifications_pending(
             "status": "parked",
             "created_at": row.get("created_at"),
         })
-
-    return {"pending": items}

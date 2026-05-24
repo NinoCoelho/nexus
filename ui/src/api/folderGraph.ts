@@ -50,6 +50,7 @@ export interface FolderSubgraphEdge {
 export interface FolderSubgraphData {
   nodes: FolderSubgraphNode[];
   edges: FolderSubgraphEdge[];
+  ontology?: FolderOntology;
   exists?: boolean;
 }
 

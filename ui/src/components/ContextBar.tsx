@@ -6,6 +6,7 @@
  * for quick filtering or command-palette-style input.
  */
 
+import { X } from "lucide-react";
 import "./ContextBar.css";
 
 interface Props {
@@ -33,7 +34,7 @@ export default function ContextBar({ value, onChange, onDismiss, disabled }: Pro
         aria-label="Dismiss"
         disabled={disabled}
       >
-        ×
+        <X size={14} />
       </button>
     </div>
   );

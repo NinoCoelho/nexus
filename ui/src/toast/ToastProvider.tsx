@@ -8,6 +8,7 @@
  * oldest is evicted when the limit is hit.
  */
 
+import React from "react";
 import {
   createContext,
   useCallback,
@@ -16,6 +17,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { X } from "lucide-react";
 import { sounds } from "../hooks/useSounds";
 import "./ToastProvider.css";
 
@@ -34,6 +36,7 @@ export interface ToastOptions {
   detail?: string;
   duration?: number;
   action?: ToastAction;
+  silent?: boolean;
 }
 
 interface Toast {
@@ -47,7 +50,7 @@ interface Toast {
   exiting: boolean;
 }
 
-interface ToastAPI {
+export interface ToastAPI {
   success: (message: string, opts?: ToastOptions) => string;
   error: (message: string, opts?: ToastOptions) => string;
   info: (message: string, opts?: ToastOptions) => string;
@@ -58,6 +61,8 @@ interface ToastAPI {
 
 const DEFAULT_DURATION = 4000;
 const MAX_TOASTS = 5;
+
+const _stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -133,6 +138,7 @@ interface ToastCardProps {
 }
 
 function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardProps) {
+  const lines = toast.message.split(/(?<=\.)\s+/);
   return (
     <div
       role="status"
@@ -145,7 +151,14 @@ function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardPr
         <KindIcon kind={toast.kind} />
       </span>
       <div className="toast-body">
-        <span className="toast-message">{toast.message}</span>
+        <span className="toast-message">
+          {lines.map((line, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <br />}
+              {line}
+            </React.Fragment>
+          ))}
+        </span>
         {toast.detail && <span className="toast-detail">{toast.detail}</span>}
       </div>
       {toast.action && (
@@ -164,7 +177,7 @@ function ToastCard({ toast, onDismiss, onMouseEnter, onMouseLeave }: ToastCardPr
         aria-label="Dismiss"
         onClick={() => onDismiss(toast.id)}
       >
-        ×
+        <X size={14} />
       </button>
     </div>
   );
@@ -205,11 +218,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const show = useCallback((kind: ToastKind, message: string, opts: ToastOptions = {}): string => {
     const id = nextId();
     const duration = opts.duration ?? DEFAULT_DURATION;
+    const clean = _stripHtml(message);
     const newToast: Toast = {
       id,
       kind,
-      message,
-      detail: opts.detail,
+      message: clean,
+      detail: opts.detail ? _stripHtml(opts.detail) : opts.detail,
       duration,
       action: opts.action,
       exiting: false,
@@ -225,7 +239,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
-    sounds.notification();
+    if (!opts.silent) sounds.notification();
 
     if (duration > 0) startTimer(id, duration);
     return id;

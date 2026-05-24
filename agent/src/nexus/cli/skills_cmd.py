@@ -154,3 +154,49 @@ def skills_remove(name: str = typer.Argument(...)) -> None:
     skill_dir = SKILLS_DIR / name
     shutil.rmtree(skill_dir)
     typer.echo(f"Skill '{name}' removed.")
+
+
+@skills_app.command("sync-venvs")
+def skills_sync_venvs(
+    name: str = typer.Argument(None, help="Sync a single skill (default: all with requirements.txt)."),
+) -> None:
+    """Re-sync per-skill venvs from requirements.txt.
+
+    Compares bundled ``requirements.txt`` against the installed copy for
+    builtin skills, copies if changed, and re-creates the venv.  Also
+    re-syncs any installed skill whose venv is missing or stale.
+    """
+    from ..config import SKILLS_DIR
+    from ..skills.registry import SkillRegistry
+    from ..skills.venv_manager import ensure_venv, has_venv
+
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    reg = SkillRegistry(SKILLS_DIR)
+
+    skills = [reg.get(name)] if name else reg.list()
+    synced = 0
+    failed = 0
+    for skill in skills:
+        req = skill.source_dir / "requirements.txt"
+        if not req.is_file():
+            continue
+        if has_venv(skill.name):
+            try:
+                ensure_venv(skill.name, skill.source_dir, skill.python_version)
+            except Exception as exc:
+                typer.echo(f"  [fail] {skill.name}: {exc}")
+                failed += 1
+                continue
+            typer.echo(f"  [ok]   {skill.name} (up to date)")
+            synced += 1
+        else:
+            try:
+                py = ensure_venv(skill.name, skill.source_dir, skill.python_version)
+            except Exception as exc:
+                typer.echo(f"  [fail] {skill.name}: {exc}")
+                failed += 1
+                continue
+            typer.echo(f"  [new]  {skill.name} -> {py}")
+            synced += 1
+
+    typer.echo(f"\nDone: {synced} synced, {failed} failed.")

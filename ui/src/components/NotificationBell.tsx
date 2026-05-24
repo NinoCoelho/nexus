@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { HitlEventRow, HitlEventStatus } from "../api";
+import type { AdminPendingItem } from "../api/auth";
 import type { PushPermission } from "../hooks/usePushSubscription";
 import "./NotificationBell.css";
 
@@ -11,18 +13,17 @@ interface Props {
   pushSubscribed: boolean;
   onRequestPushPermission: () => void;
   onRefresh: () => void;
-  /** Clicking a pending row hops the approval queue to that request_id. */
   onSelectPending?: (request_id: string) => void;
-  /** Jump to the chat session that produced the request. */
   onJumpToChat?: (session_id: string) => void;
-  /** ✕ on a pending row — cancels the request (and the live turn behind it). */
   onCancel?: (session_id: string, request_id: string) => Promise<void> | void;
-  /** Inline answer (Allow/Deny on confirm kind, no modal needed). */
   onAnswer?: (
     session_id: string,
     request_id: string,
     answer: string,
   ) => Promise<void> | void;
+  teamPending?: AdminPendingItem[];
+  onAdminAnswer?: (sessionId: string, requestId: string, answer: string) => Promise<void>;
+  onAdminCancel?: (sessionId: string, requestId: string) => Promise<void>;
 }
 
 export default function NotificationBell({
@@ -36,6 +37,9 @@ export default function NotificationBell({
   onJumpToChat,
   onCancel,
   onAnswer,
+  teamPending,
+  onAdminAnswer,
+  onAdminCancel,
 }: Props) {
   const { t } = useTranslation("chat");
   const [open, setOpen] = useState(false);
@@ -205,7 +209,7 @@ export default function NotificationBell({
                           title={t("chat:notifications.cancelRequestTitle")}
                           aria-label={t("chat:notifications.cancelRequestAria")}
                         >
-                          ×
+                          <X size={14} />
                         </button>
                       )}
                     </div>
@@ -250,6 +254,56 @@ export default function NotificationBell({
                 );
               })}
             </ul>
+          )}
+
+          {teamPending && teamPending.length > 0 && (
+            <>
+              <div className="nx-bell-section-title">Team Requests</div>
+              <ul className="nx-bell-list">
+                {teamPending.map((item) => (
+                  <li
+                    key={item.request_id}
+                    className={`nx-bell-item nx-bell-item--pending`}
+                  >
+                    <div className="nx-bell-item-row">
+                      <span className="nx-bell-status nx-bell-status--pending">
+                        {item.status === "parked" ? "PARKED" : "LIVE"}
+                      </span>
+                      {item.user_name && (
+                        <span className="nx-bell-user-badge">{item.user_name}</span>
+                      )}
+                      <span className="nx-bell-spacer" />
+                    </div>
+                    <div className="nx-bell-prompt">{item.prompt}</div>
+                    {(item.kind === "confirm" || item.kind === "choice") && (
+                      <div className="nx-bell-inline-actions">
+                        <button
+                          type="button"
+                          className="nx-bell-act nx-bell-act--deny"
+                          onClick={() => onAdminAnswer?.(item.session_id, item.request_id, "no")}
+                        >
+                          Deny
+                        </button>
+                        <button
+                          type="button"
+                          className="nx-bell-act nx-bell-act--allow"
+                          onClick={() => onAdminAnswer?.(item.session_id, item.request_id, "yes")}
+                        >
+                          Allow
+                        </button>
+                        <button
+                          type="button"
+                          className="nx-bell-x"
+                          onClick={() => onAdminCancel?.(item.session_id, item.request_id)}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
       )}

@@ -1,11 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Nexus Adaptive Theme System — 4 themes × continuous brightness
+   Nexus Adaptive Theme System — 4 themes × dark / light mode
    ═══════════════════════════════════════════════════════════════════════════
 
    Architecture:
      Each theme defines _dk (dark) and _lt (light) endpoint tokens.
      A single --brightness <number> (0 = dark, 1 = light) drives color-mix()
-     interpolation across every token.  No JS colour math needed.
+     interpolation. Set to 0 or 1 by the dark/light toggle in the header.
 
      For alpha variants, components use:
        color-mix(in srgb, var(--accent) 12%, transparent)

@@ -10,6 +10,9 @@ export interface RenderCellOptions {
   onRefClick?: (target: string, id: string) => void;
   /** Used to resolve relative target_table paths. */
   hostPath?: string;
+  /** Lookup map from "fieldName::refValue" to a human-friendly label.
+   *  When present, ref cells display the label instead of the raw id. */
+  refLabels?: Map<string, string>;
 }
 
 function resolveTargetPath(hostPath: string | undefined, target: string): string {
@@ -38,8 +41,11 @@ export function renderCell(
   if (kind === "ref") {
     const target = resolveTargetPath(opts.hostPath, field.target_table ?? "");
     const onRefClick = opts.onRefClick;
+    const refLabels = opts.refLabels;
     const renderOne = (v: unknown) => {
       const s = String(v);
+      const label = refLabels?.get(`${field.name}::${s}`);
+      const display = label ?? s;
       if (onRefClick && target) {
         return (
           <button
@@ -50,14 +56,14 @@ export function renderCell(
               e.stopPropagation();
               onRefClick(target, s);
             }}
-            title={`Open ${target}#${s}`}
+            title={`${field.name}: ${s}`}
           >
-            {s}
+            {display}
           </button>
         );
       }
       const href = target ? `vault://${target}#${encodeURIComponent(s)}` : `vault://${s}`;
-      return <a key={s} href={href}>{s}</a>;
+      return <a key={s} href={href}>{display}</a>;
     };
     if (Array.isArray(value)) {
       return (
@@ -70,7 +76,7 @@ export function renderCell(
     }
     return renderOne(value);
   }
-  if (kind === "formula") {
+  if (kind === "formula" || kind === "rollup") {
     return <span className="dt-cell-formula">{String(value)}</span>;
   }
   if (Array.isArray(value)) return value.join(", ");
@@ -95,7 +101,7 @@ export function cmp(a: unknown, b: unknown): number {
 
 export function stripFormulas(values: Record<string, unknown>, fields: FieldSchema[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  const formulaNames = new Set(fields.filter((f) => f.kind === "formula").map((f) => f.name));
+  const formulaNames = new Set(fields.filter((f) => f.kind === "formula" || f.kind === "rollup").map((f) => f.name));
   for (const [k, v] of Object.entries(values)) {
     if (!formulaNames.has(k)) out[k] = v;
   }

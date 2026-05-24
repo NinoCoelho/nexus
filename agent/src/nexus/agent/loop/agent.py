@@ -10,16 +10,18 @@ from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
 from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
-from ..llm import ChatMessage, LLMProvider, Role, StreamEvent
+from ..llm import ChatMessage, ContentPart, LLMProvider, Role, StreamEvent
 from ...skills.registry import SkillRegistry
 from ._builder import build_loom_agent
 from .helpers import (
     AgentTurn,
     _annotate_short_reply,
+    _build_user_message,
     _from_loom_message,
     _to_loom_message,
 )
-from .overflow import check_overflow
+from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
+from .budget import check_tool_budget
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -49,6 +51,8 @@ _DROP_ASSISTANT_PLACEHOLDERS = (
     "[crashed]",
     "[interrupted]",
     "[cancelled]",
+    "[rate_limited]",
+    "[budget_exceeded]",
 )
 
 
@@ -145,13 +149,14 @@ class Agent:
             registry=self._registry,
             handlers=self._handlers,
             provider_registry=self._provider_registry,
-            nexus_cfg=self._nexus_cfg,
+            get_nexus_cfg=lambda: self._nexus_cfg,
             get_chosen_model=lambda: self._chosen_model,
             get_turn_trace=lambda: self._turn_trace,
             on_trace_event=self._on_event,
             home=self._home,
             permissions=self._permissions,
         )
+        self._loom._build_tools = self._filtered_tools
         # SessionStore is wired in by app.py so the streaming loop can
         # update the parked-tool-call snapshot used by ask_user_tool when
         # it parks a request. None during tests that drive the agent
@@ -163,6 +168,14 @@ class Agent:
         self._turn_trace.append(entry)
         if self._trace:
             self._trace(kind, payload)
+
+    def _filtered_tools(self) -> list:
+        from ..context import ALLOWED_TOOLS
+        all_tools = self._loom._tools.specs()
+        allowed = ALLOWED_TOOLS.get(None)
+        if allowed is None:
+            return all_tools
+        return [t for t in all_tools if t.name in allowed]
 
     # app.py sets these attributes directly after construction; we intercept
     # via properties so the mutable handler container stays in sync.
@@ -193,19 +206,55 @@ class Agent:
     def _dispatcher(self, value: Any) -> None:
         self._handlers.dispatcher = value
 
-    def _context_window_for(self, model_id: str | None) -> int:
-        """Lookup the configured context window for a model id.
+    @property
+    def _notify_user_handler(self) -> Any:
+        return self._handlers.notify_user
 
-        Returns 0 when unknown — the overflow checker treats that as
-        "skip the check" so this stays a strictly opt-in safety net.
-        """
+    @_notify_user_handler.setter
+    def _notify_user_handler(self, value: Any) -> None:
+        self._handlers.notify_user = value
+
+    def _context_window_for(self, model_id: str | None) -> int:
         cfg = self._nexus_cfg
-        if not (cfg and model_id):
-            return 0
-        for m in getattr(cfg, "models", []) or []:
-            if getattr(m, "id", None) == model_id:
-                return int(getattr(m, "context_window", 0) or 0)
+        resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)
+        if cfg and resolved:
+            for m in getattr(cfg, "models", []) or []:
+                if getattr(m, "id", None) == resolved:
+                    cw = int(getattr(m, "context_window", 0) or 0)
+                    if cw > 0:
+                        return cw
+            fallback = known_context_window(resolved)
+            if fallback > 0:
+                return fallback
         return 0
+
+    def _log_llm_error(
+        self,
+        *,
+        session_id: str | None,
+        error_type: str,
+        message: str | None = None,
+        retryable: bool = False,
+        retry_attempt: int | None = None,
+        model_id: str | None = None,
+        tokens_est: int | None = None,
+        ctx_window: int | None = None,
+    ) -> None:
+        if self._sessions is None or not session_id:
+            return
+        try:
+            self._sessions.log_error(
+                session_id,
+                error_type,
+                message=message,
+                model=model_id,
+                retryable=retryable,
+                retry_attempt=retry_attempt,
+                tokens_in=tokens_est,
+                context_window=ctx_window,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _resolve_provider(self, model_id: str | None) -> tuple[LLMProvider, str | None]:
         """Return (nexus_provider, upstream_model_name). Kept for app.py compat."""
@@ -224,6 +273,7 @@ class Agent:
         history: list[ChatMessage] | None = None,
         context: str | None = None,
         model_id: str | None = None,
+        attachments: list[ContentPart] | None = None,
     ) -> AgentTurn:
         """Execute a complete turn in blocking mode and return the result.
 
@@ -232,6 +282,12 @@ class Agent:
             history: Prior message history for the session.
             context: Optional additional context injected into the turn.
             model_id: Force a specific model; None uses the configured default.
+            attachments: Optional non-text parts (image/audio/document) to send
+                alongside ``user_message``. When present, the user message is
+                built as a multipart ``content`` list rather than a plain
+                string. Multimodal-capable models receive them natively;
+                others get a transcribed/extracted text breadcrumb at encode
+                time (see ``materialize_messages`` in ``multimodal.py``).
 
         Returns:
             AgentTurn containing the reply, token usage, event trace, and the
@@ -251,9 +307,8 @@ class Agent:
         # Annotate terse yes/no using loom agent's pending question
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
-        loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=annotated or user_message)
-        )
+        user_msg = _build_user_message(annotated or user_message, attachments)
+        loom_messages.append(_to_loom_message(user_msg))
 
         loom_turn = await self._loom.run_turn(loom_messages, model_id=model_id)
 
@@ -280,6 +335,7 @@ class Agent:
         context: str | None = None,
         session_id: str | None = None,
         model_id: str | None = None,
+        attachments: list[ContentPart] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Execute a turn in streaming mode, yielding typed SSE events.
 
@@ -304,17 +360,73 @@ class Agent:
         self._chosen_model = model_id
 
         loom_messages: list[lt.ChatMessage] = []
+        stripped_history: list[ChatMessage] = []
         if history:
-            loom_messages = [
-                _to_loom_message(m) for m in _strip_dead_placeholders(history)
-            ]
+            stripped_history = _strip_dead_placeholders(history)
+
+        ctx_window = self._context_window_for(model_id or self._chosen_model)
+        effective_window = ctx_window if ctx_window > 0 else _DEFAULT_FALLBACK_WINDOW
+
+        loom_messages = [_to_loom_message(m) for m in stripped_history]
+
+        from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW, TOOL_BUDGET_EXCEEDED
+        CURRENT_HISTORY.set(stripped_history)
+        CURRENT_CONTEXT_WINDOW.set(effective_window)
+        TOOL_BUDGET_EXCEEDED.set(False)
+        _tool_budget = 0
+        _scrape_call_limit = 0
+        _session_tool_budget = 0
+        if self._nexus_cfg:
+            agent_cfg = getattr(self._nexus_cfg, "agent", None)
+            if agent_cfg:
+                _tool_budget = int(getattr(agent_cfg, "tool_budget_tokens", 0) or 0)
+                _session_tool_budget = int(getattr(agent_cfg, "session_tool_budget_tokens", 0) or 0)
+            scrape_cfg = getattr(self._nexus_cfg, "scrape", None)
+            if scrape_cfg:
+                _scrape_call_limit = int(getattr(scrape_cfg, "max_scrape_calls", 0) or 0)
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
-        user_msg_content = annotated or user_message
-        loom_messages.append(
-            lt.ChatMessage(role=lt.Role.USER, content=user_msg_content)
-        )
+        user_msg_text = annotated or user_message
+        user_msg = _build_user_message(user_msg_text, attachments)
+        user_msg_content = user_msg.content
+        loom_messages.append(_to_loom_message(user_msg))
+
+        # Cross-turn cumulative tool budget: if total tool-result tokens
+        # across the session exceed the threshold, trigger compaction
+        # BEFORE the pre-flight overflow check. This prevents the death
+        # spiral where scraped content accumulates across turns without
+        # cleanup until the context window overflows.
+        _auto_compacted_history: list[ChatMessage] | None = None
+        if _session_tool_budget > 0 and stripped_history:
+            from .budget import estimate_session_tool_tokens
+            _session_tool_tok = estimate_session_tool_tokens(stripped_history)
+            if _session_tool_tok > _session_tool_budget:
+                log.info(
+                    "Cross-turn tool budget exceeded: %dK > %dK tokens — triggering compact_and_summarize",
+                    _session_tool_tok // 1024, _session_tool_budget // 1024,
+                )
+                from .compact import compact_and_summarize
+                compacted, _cs_report = await compact_and_summarize(
+                    stripped_history,
+                    context_window=effective_window,
+                    session_id=session_id,
+                    model_id=model_id or self._chosen_model,
+                    provider=self._nexus_provider,
+                    strategy="auto",
+                )
+                if _cs_report.compact_report.compacted > 0 or _cs_report.summarized:
+                    log.info(
+                        "Cross-turn compaction: compacted=%d summarized=%s tokens %dK→%dK",
+                        _cs_report.compact_report.compacted,
+                        _cs_report.summarized,
+                        _cs_report.tokens_before // 1024,
+                        _cs_report.tokens_after // 1024,
+                    )
+                    stripped_history = compacted
+                    _auto_compacted_history = compacted
+                    loom_messages = [_to_loom_message(m) for m in compacted]
+                    loom_messages.append(_to_loom_message(user_msg))
 
         # Pre-flight overflow check — refuse the turn now if the request can't
         # fit in the chosen model's context window. Without this, providers
@@ -322,39 +434,62 @@ class Agent:
         # which surfaces as the generic "empty_response" error and triggers an
         # endless retry loop.
         ctx_window = self._context_window_for(model_id or self._chosen_model)
-        if ctx_window > 0:
-            check = check_overflow(loom_messages, context_window=ctx_window)
-            if check.overflowed:
-                yield {
-                    "type": "error",
-                    "detail": check.detail,
-                    "reason": "context_overflow",
-                    "retryable": False,
-                    "status_code": None,
-                    "estimated_input_tokens": check.estimated_input_tokens,
-                    "context_window": check.context_window,
-                    "actions": ["compact_history", "new_session"],
-                }
-                yield {
-                    "type": "done",
-                    "session_id": session_id,
-                    "reply": "",
-                    "trace": [{"event": "context_overflow",
-                               "estimated_input_tokens": check.estimated_input_tokens,
-                               "context_window": check.context_window}],
-                    "skills_touched": [],
-                    "iterations": 0,
-                    "messages": list(history or []) + [
-                        ChatMessage(role=Role.USER, content=user_msg_content),
-                    ],
-                    "usage": {
-                        "input_tokens": check.estimated_input_tokens,
-                        "output_tokens": 0,
-                        "tool_calls": 0,
-                        "model": model_id or self._chosen_model,
-                    },
-                }
-                return
+        check = check_overflow(loom_messages, context_window=ctx_window)
+        if check.estimated_input_tokens > 100_000:
+            log.warning(
+                "High token usage: ~%dK estimated input tokens for session %s, model %s",
+                check.estimated_input_tokens // 1024, session_id, model_id,
+            )
+        if check.overflowed:
+            from .compact import auto_compact
+
+            compacted_stripped, compact_report = auto_compact(stripped_history)
+            if compact_report.compacted > 0:
+                loom_messages = [_to_loom_message(m) for m in compacted_stripped]
+                loom_messages.append(_to_loom_message(user_msg))
+                check = check_overflow(loom_messages, context_window=ctx_window)
+                if not check.overflowed:
+                    _auto_compacted_history = compacted_stripped
+
+        if check.overflowed:
+            self._log_llm_error(
+                session_id=session_id,
+                error_type="context_overflow",
+                message=check.detail,
+                model_id=model_id,
+                tokens_est=check.estimated_input_tokens,
+                ctx_window=check.context_window,
+            )
+            yield {
+                "type": "error",
+                "detail": check.detail,
+                "reason": "context_overflow",
+                "retryable": False,
+                "status_code": None,
+                "estimated_input_tokens": check.estimated_input_tokens,
+                "context_window": check.context_window,
+                "actions": ["compact_history", "new_session"],
+            }
+            yield {
+                "type": "done",
+                "session_id": session_id,
+                "reply": "",
+                "trace": [{"event": "context_overflow",
+                           "estimated_input_tokens": check.estimated_input_tokens,
+                           "context_window": check.context_window}],
+                "skills_touched": [],
+                "iterations": 0,
+                "messages": list(history or []) + [
+                    ChatMessage(role=Role.USER, content=user_msg_content),
+                ],
+                "usage": {
+                    "input_tokens": check.estimated_input_tokens,
+                    "output_tokens": 0,
+                    "tool_calls": 0,
+                    "model": model_id or self._chosen_model,
+                },
+            }
+            return
 
         # loom yields serialized dicts (via serialize_event=model_dump) but the
         # event structure differs from what app.py expects.  We translate here.
@@ -367,10 +502,13 @@ class Agent:
         # Setting this flag on the error branch lets the done branch skip
         # the synthetic emission.
         _saw_loom_error = False
-        # Snapshot inbound history so we can rebuild the persisted message list
-        # for app.py's `store.replace_history`. loom's streaming DoneEvent does
-        # not carry the assembled message list.
-        _history_snapshot = list(history or [])
+        _history_snapshot = list(_auto_compacted_history if _auto_compacted_history is not None else (history or []))
+
+        # Per-iteration reasoning_content from thinking models (DeepSeek-R1
+        # etc). Each LLM call within the turn may produce reasoning; we
+        # collect it here and stamp it onto the corresponding assistant
+        # messages before persisting.
+        _per_iter_reasoning: list[str | None] = []
 
         # Mirror of loom's all_messages for the parking flow. We only need this
         # when ask_user_tool parks: the snapshot up through the ASSISTANT
@@ -393,6 +531,40 @@ class Agent:
         # somehow drops it (older serialisers). Updated per dispatch.
         last_tool_exec_id: str | None = None
         last_tool_exec_name: str | None = None
+        _cumulative_tool_tokens: int = 0
+        _budget_hint_injected: bool = False
+        _tool_call_counts: dict[str, int] = {}
+        _call_limits: dict[str, int] = {}
+        if _scrape_call_limit > 0:
+            _call_limits["web_scrape"] = _scrape_call_limit
+
+        # Auto-retry on retryable mid-stream errors (peer-closed connections,
+        # 429 rate limits, transient 5xx, "empty response" from a flaky
+        # provider). Loom emits ErrorEvent + DoneEvent and ends the iterator;
+        # without this layer the UI would surface a "Retry" banner that the
+        # user has to click. Instead we silently restart the loom run from
+        # ``working_messages`` (which already mirrors loom's all_messages),
+        # so every completed tool call in this turn is preserved and not
+        # replayed. We only auto-retry when no visible content has been
+        # streamed for the current LLM iteration — restarting after partial
+        # text would duplicate tokens in the UI.
+        _MAX_LOOM_RETRIES = 3
+        _LOOM_RETRY_BACKOFFS = (2.0, 5.0, 12.0)
+        _loom_retry_attempts = 0
+        _delta_emitted_this_iter = False
+        _post_retry_compaction_done = False
+        _MID_STREAM_DISCONNECT_SIGNALS = (
+            "peer closed connection",
+            "incomplete chunked read",
+            "server disconnected",
+            "connection reset by peer",
+            "connection was closed",
+            "unexpected eof",
+        )
+
+        def _is_mid_stream_disconnect(ev: dict) -> bool:
+            msg = (ev.get("message") or "").lower()
+            return any(s in msg for s in _MID_STREAM_DISCONNECT_SIGNALS)
 
         def _materialise_assistant_if_needed() -> None:
             nonlocal materialised_for_iter
@@ -417,6 +589,9 @@ class Agent:
                 )
             )
             materialised_for_iter = True
+            # Capture reasoning from the adapter for this iteration.
+            _rc = getattr(adapter, "_last_reasoning_content", None) if adapter else None
+            _per_iter_reasoning.append(_rc)
 
         # Wire a per-turn thinking sink on the loom adapter. Reasoning chunks
         # from thinking models (Ollama GLM-4.7-flash, DeepSeek-R1, …) flow
@@ -428,6 +603,20 @@ class Agent:
         had_sink_attr = adapter is not None and hasattr(adapter, "_thinking_sink")
         if had_sink_attr:
             adapter._thinking_sink = thinking_q.put_nowait  # type: ignore[attr-defined]
+
+        # Populate the adapter's reasoning_content_map so that assistant
+        # messages from history survive the loom round-trip. Without this,
+        # loom's ChatMessage (which has no reasoning_content field) strips it
+        # and DeepSeek-R1 rejects the request.
+        if adapter is not None and hasattr(adapter, "_reasoning_content_map"):
+            rc_map: dict[tuple, str] = {}
+            for m in stripped_history:
+                if m.role == Role.ASSISTANT and m.reasoning_content:
+                    content_str = m.content if isinstance(m.content, str) else str(m.content or "")
+                    tc_ids = tuple(tc.id for tc in (m.tool_calls or []))
+                    fp = ("assistant", content_str[:500], tc_ids)
+                    rc_map[fp] = m.reasoning_content
+            adapter._reasoning_content_map = rc_map
 
         # Trace what we're handing to loom — pinpoints "iters=0" cases
         # (loom never calls the LLM) versus genuine empty-content cases
@@ -496,7 +685,7 @@ class Agent:
                     ev.get("stop_reason"),
                 )
             else:
-                log.warning(
+                log.debug(
                     "loom event: type=%s keys=%s",
                     etype,
                     sorted(ev.keys())[:8] if isinstance(ev, dict) else "?",
@@ -507,6 +696,7 @@ class Agent:
                 full_text += delta
                 pending_content_chunks.append(delta)
                 materialised_for_iter = False
+                _delta_emitted_this_iter = True
                 # Mirror to the trace bus so /chat/{sid}/events subscribers
                 # (e.g. CardActivityModal) can render typing live, not only
                 # after the post-turn `reply` event.
@@ -560,6 +750,12 @@ class Agent:
                         )
                     except Exception:  # noqa: BLE001
                         log.exception("set_pending_tool_call failed")
+                # Stash the call_id on the terminal output callback so the
+                # process registry can key by it and the SSE event carries it.
+                if tool_name == "terminal" and self._handlers is not None:
+                    th = self._handlers.terminal
+                    if th is not None and hasattr(th, "_on_output") and th._on_output is not None:
+                        th._on_output._call_id = tool_call_id
                 # Mirror to the trace bus so off-stream subscribers see
                 # tool steps live, not only on turn completion.
                 self._on_event("tool_call", {"name": tool_name, "args": tool_args})
@@ -567,6 +763,7 @@ class Agent:
                     "type": "tool_exec_start",
                     "name": tool_name,
                     "args": tool_args,
+                    "call_id": tool_call_id,
                 }
 
             elif etype == "tool_exec_result":
@@ -618,7 +815,14 @@ class Agent:
                         _history_snapshot
                         + [ChatMessage(role=Role.USER, content=user_msg_content)]
                         + (
-                            [ChatMessage(role=Role.ASSISTANT, content=full_text)]
+                            [ChatMessage(
+                                role=Role.ASSISTANT,
+                                content=full_text,
+                                reasoning_content=(
+                                    getattr(adapter, "_last_reasoning_content", None)
+                                    if adapter else None
+                                ),
+                            )]
                             if full_text
                             else []
                         )
@@ -657,11 +861,87 @@ class Agent:
                         name=tc_name,
                     )
                 )
+                bc = check_tool_budget(
+                    _cumulative_tool_tokens, result_text,
+                    budget=_tool_budget,
+                    call_counts=_tool_call_counts,
+                    tool_name=tool_name,
+                    call_limits=_call_limits,
+                )
+                _cumulative_tool_tokens = bc.cumulative_tool_tokens
+                if bc.exceeded and not _budget_hint_injected:
+                    _budget_hint_injected = True
+                    from ..context import TOOL_BUDGET_EXCEEDED
+                    TOOL_BUDGET_EXCEEDED.set(True)
+                    if bc.call_limit_exceeded:
+                        lim_tool, lim_count = bc.call_limit_exceeded
+                        log.warning(
+                            "Tool call limit exceeded: %d %s calls in turn",
+                            lim_count, lim_tool,
+                        )
+                    else:
+                        log.warning(
+                            "Tool budget exceeded: %d/%d tokens after %s",
+                            bc.cumulative_tool_tokens, bc.budget, tool_name,
+                        )
+                # Mid-turn compaction: clean failed scrapes at yellow zone
+                # (60%+) since they're pure waste; run heavier auto_compact
+                # only at orange/red (80%+). After compaction we must restart
+                # loom from the compacted working_messages because loom's
+                # internal all_messages is independent and still holds the
+                # originals.
+                if ctx_window > 0 and len(working_messages) > 6:
+                    from .compact import compact_failed_scrapes, auto_compact
+                    from .overflow import estimate_tokens, _TOOLS_AND_SYSTEM_OVERHEAD
+                    from .zones import classify_zone
+                    class _WM:
+                        pass
+                    _wm_compat = []
+                    for _wm in working_messages:
+                        _o = _WM()
+                        _o.content = _wm.content
+                        _o.role = _wm.role
+                        _o.tool_calls = getattr(_wm, "tool_calls", None)
+                        _wm_compat.append(_o)
+                    _est_tok = estimate_tokens(_wm_compat) if _wm_compat else 0
+                    _zone = classify_zone(_est_tok, ctx_window, tools_overhead=_TOOLS_AND_SYSTEM_OVERHEAD)
+                    _need_loom_restart = False
+                    if _zone in ("yellow", "orange", "red"):
+                        working_messages, _n_cleaned = compact_failed_scrapes(working_messages)
+                        if _n_cleaned > 0:
+                            log.info(
+                                "Mid-turn: cleaned %d failed scrape results (zone=%s, %dK tokens)",
+                                _n_cleaned, _zone, _est_tok // 1024,
+                            )
+                            _need_loom_restart = True
+                    if _zone in ("orange", "red"):
+                        working_messages, _mid_report = auto_compact(working_messages)
+                        if _mid_report.compacted > 0:
+                            log.info(
+                                "Mid-turn: auto_compact compacted=%d saved=%d bytes (zone=%s)",
+                                _mid_report.compacted, _mid_report.saved_bytes, _zone,
+                            )
+                            _need_loom_restart = True
+                    if _need_loom_restart:
+                        pending_content_chunks.clear()
+                        pending_tcs.clear()
+                        _tc_id_by_index.clear()
+                        materialised_for_iter = False
+                        loom_iter = self._loom.run_turn_stream(
+                            working_messages, model_id=model_id
+                        ).__aiter__()
+                        loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                        continue
                 # Reset per-iteration accumulators so the NEXT LLM call
                 # starts with a fresh content/tcs buffer.
                 pending_content_chunks.clear()
                 pending_tcs.clear()
                 materialised_for_iter = False
+                # A tool result completed an LLM iteration successfully;
+                # the next iteration starts fresh, so visible-content
+                # tracking and the retry budget both reset.
+                _delta_emitted_this_iter = False
+                _loom_retry_attempts = 0
                 self._on_event("tool_result", {"name": tool_name, "preview": preview})
                 yield {
                     "type": "tool_exec_result",
@@ -678,10 +958,14 @@ class Agent:
                 yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
 
             elif etype == "context_overflow":
-                # Loom refused the next LLM call because the prompt would
-                # overflow the model's context window. Forward as a
-                # structured error so the UI renders the existing
-                # "Compact history / New session" affordance.
+                self._log_llm_error(
+                    session_id=session_id,
+                    error_type="context_overflow",
+                    message=ev.get("message", "context overflow"),
+                    model_id=model_id,
+                    tokens_est=ev.get("estimated_input_tokens", 0),
+                    ctx_window=ev.get("context_window", 0),
+                )
                 yield {
                     "type": "error",
                     "detail": ev.get("message", "context overflow"),
@@ -694,16 +978,227 @@ class Agent:
                 }
 
             elif etype == "error":
-                # loom already classified this. Forward verbatim AND mark
-                # the turn as having seen an error so the done branch's
-                # empty-reply synthesis doesn't run and overwrite it in
-                # the UI's applyErrorEvent (last error wins there).
+                # Auto-recover from transient mid-stream failures (peer-closed
+                # connections, 429 rate limits, transient 5xx, "empty
+                # response" from a flaky provider). When loom flags the
+                # error retryable AND nothing visible has been streamed for
+                # this LLM iteration AND we still have retry budget, swallow
+                # the error+done frames, sleep, and restart loom from
+                # ``working_messages`` (which already has every successful
+                # tool result this turn — no replay). The user sees a brief
+                # pause instead of a "Retry" banner.
+                retryable = bool(ev.get("retryable", False))
+                if (
+                    retryable
+                    and not _delta_emitted_this_iter
+                    and _loom_retry_attempts < _MAX_LOOM_RETRIES
+                ):
+                    # Drain the loom DoneEvent that follows every ErrorEvent
+                    # before we swap iterators. ``loom_task`` is already
+                    # awaiting the next __anext__ result (line above), which
+                    # is the done frame. We discard it; the new loom run
+                    # will emit its own done when it finishes.
+                    try:
+                        await loom_task  # consume the trailing done event
+                    except StopAsyncIteration:
+                        pass
+                    except Exception:  # noqa: BLE001 — best-effort drain
+                        pass
+                    delay = _LOOM_RETRY_BACKOFFS[
+                        min(_loom_retry_attempts, len(_LOOM_RETRY_BACKOFFS) - 1)
+                    ]
+                    log.warning(
+                        "loom auto-retry: attempt=%d/%d delay=%.1fs reason=%r "
+                        "(message=%r)",
+                        _loom_retry_attempts + 1, _MAX_LOOM_RETRIES,
+                        delay, ev.get("reason"),
+                        (ev.get("message") or "")[:200],
+                    )
+                    # Surface the backoff so the UI can render a small
+                    # "Reconnecting…" hint instead of leaving the user
+                    # staring at a frozen bubble.
+                    yield {
+                        "type": "reconnecting",
+                        "attempt": _loom_retry_attempts + 1,
+                        "max_attempts": _MAX_LOOM_RETRIES,
+                        "delay_seconds": delay,
+                        "reason": ev.get("reason") or "",
+                    }
+                    await asyncio.sleep(delay)
+                    _loom_retry_attempts += 1
+                    # Reset per-iteration state from the failed attempt so
+                    # the new loom run doesn't see stale tool_call_delta or
+                    # content_delta fragments.
+                    pending_content_chunks.clear()
+                    pending_tcs.clear()
+                    _tc_id_by_index.clear()
+                    materialised_for_iter = False
+                    _delta_emitted_this_iter = False
+                    # Restart loom from the working_messages we've already
+                    # accumulated — every successful tool call/result is
+                    # there, so no work is replayed.
+                    loom_iter = self._loom.run_turn_stream(
+                        working_messages, model_id=model_id
+                    ).__aiter__()
+                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                    continue
+
+                # Mid-stream disconnect: the upstream provider dropped the
+                # connection after we had already started streaming content
+                # deltas. Unlike the clean-retry path above, we cannot simply
+                # restart — the UI has already rendered partial text. Instead:
+                # materialise the partial assistant message, append a short
+                # continuation prompt, and restart loom. New deltas append to
+                # ``full_text`` so the final ``reply_text`` is the complete
+                # response.
+                if (
+                    retryable
+                    and _delta_emitted_this_iter
+                    and _is_mid_stream_disconnect(ev)
+                    and _loom_retry_attempts < _MAX_LOOM_RETRIES
+                ):
+                    try:
+                        await loom_task
+                    except StopAsyncIteration:
+                        pass
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _materialise_assistant_if_needed()
+                    working_messages.append(lt.ChatMessage(
+                        role=lt.Role.USER,
+                        content="[Connection was interrupted. Continue your response from where you left off.]",
+                    ))
+                    delay = _LOOM_RETRY_BACKOFFS[
+                        min(_loom_retry_attempts, len(_LOOM_RETRY_BACKOFFS) - 1)
+                    ]
+                    log.warning(
+                        "loom mid-stream retry: attempt=%d/%d delay=%.1fs reason=%r "
+                        "partial_len=%d",
+                        _loom_retry_attempts + 1, _MAX_LOOM_RETRIES,
+                        delay, ev.get("reason"),
+                        len(full_text),
+                    )
+                    yield {
+                        "type": "reconnecting",
+                        "attempt": _loom_retry_attempts + 1,
+                        "max_attempts": _MAX_LOOM_RETRIES,
+                        "delay_seconds": delay,
+                        "reason": "mid_stream_disconnect",
+                    }
+                    await asyncio.sleep(delay)
+                    _loom_retry_attempts += 1
+                    pending_content_chunks.clear()
+                    pending_tcs.clear()
+                    _tc_id_by_index.clear()
+                    materialised_for_iter = False
+                    _delta_emitted_this_iter = False
+                    loom_iter = self._loom.run_turn_stream(
+                        working_messages, model_id=model_id
+                    ).__aiter__()
+                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                    continue
+
+                # Post-retry-exhaustion compaction: all retries failed on a
+                # server error (e.g. 524 Cloudflare timeout). The context is
+                # likely too large for the provider to process within its
+                # connection timeout. Compact and retry once more with a
+                # smaller payload.
+                if (
+                    retryable
+                    and not _delta_emitted_this_iter
+                    and _loom_retry_attempts >= _MAX_LOOM_RETRIES
+                    and not _post_retry_compaction_done
+                    and ev.get("reason") in ("server_error", "timeout")
+                ):
+                    from .compact import auto_compact
+
+                    compacted_wm, compact_report = auto_compact(working_messages)
+                    if compact_report.compacted > 0:
+                        try:
+                            await loom_task
+                        except StopAsyncIteration:
+                            pass
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _post_retry_compaction_done = True
+                        log.warning(
+                            "Post-retry compaction: compacted=%d saved=%d bytes, "
+                            "retrying with %d→%d messages",
+                            compact_report.compacted, compact_report.saved_bytes,
+                            len(working_messages), len(compacted_wm),
+                        )
+                        yield {
+                            "type": "reconnecting",
+                            "attempt": _MAX_LOOM_RETRIES + 1,
+                            "max_attempts": _MAX_LOOM_RETRIES + 1,
+                            "delay_seconds": 2.0,
+                            "reason": "post_retry_compaction",
+                        }
+                        await asyncio.sleep(2.0)
+                        _loom_retry_attempts = 0
+                        working_messages = compacted_wm
+                        pending_content_chunks.clear()
+                        pending_tcs.clear()
+                        _tc_id_by_index.clear()
+                        materialised_for_iter = False
+                        _delta_emitted_this_iter = False
+                        loom_iter = self._loom.run_turn_stream(
+                            working_messages, model_id=model_id
+                        ).__aiter__()
+                        loom_task = asyncio.ensure_future(loom_iter.__anext__())
+                        continue
+
+                # Either non-retryable, content already streamed, or budget
+                # exhausted — surface the error as before. _saw_loom_error
+                # suppresses the done branch's empty-reply synthesis so the
+                # UI's applyErrorEvent (last error wins) keeps loom's
+                # classified message instead of a generic banner.
                 _saw_loom_error = True
+                self._log_llm_error(
+                    session_id=session_id,
+                    error_type=ev.get("reason") or "llm_error",
+                    message=(ev.get("message") or "")[:2000],
+                    retryable=retryable,
+                    retry_attempt=_loom_retry_attempts if _loom_retry_attempts > 0 else None,
+                    model_id=model_id,
+                    tokens_est=check_overflow(loom_messages, context_window=ctx_window or 0).estimated_input_tokens if ctx_window > 0 else None,
+                    ctx_window=ctx_window,
+                )
+                error_reason = ev.get("reason") or ""
+                if error_reason == "rate_limit" and session_id and self._sessions is not None:
+                    try:
+                        from datetime import datetime, timezone, timedelta
+                        cooldown = 60
+                        retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+                        wm_json = json.dumps(
+                            [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
+                              "content": m.content if isinstance(m.content, str) else json.dumps(m.content, default=str),
+                              "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in (m.tool_calls or [])] if m.tool_calls else None,
+                              "tool_call_id": m.tool_call_id, "name": m.name}
+                             for m in working_messages],
+                            default=str,
+                        )
+                        self._sessions.pause_turn(
+                            session_id,
+                            user_message=user_msg_content,
+                            working_messages_json=wm_json,
+                            retry_after_iso=retry_after.isoformat(),
+                            model_id=model_id,
+                            error_detail=(ev.get("message") or "")[:500],
+                        )
+                        yield {
+                            "type": "paused_for_cooldown",
+                            "retry_after": retry_after.isoformat(),
+                            "estimated_seconds": cooldown,
+                            "reason": error_reason,
+                        }
+                    except Exception:
+                        log.debug("failed to persist paused turn", exc_info=True)
                 yield {
                     "type": "error",
                     "detail": ev.get("message", ""),
                     "reason": ev.get("reason"),
-                    "retryable": ev.get("retryable", False),
+                    "retryable": retryable,
                     "status_code": ev.get("status_code"),
                 }
 
@@ -751,6 +1246,14 @@ class Agent:
                         model_used, stop_reason, ev.get("iterations"),
                         usage_in, usage_out,
                     )
+                    self._log_llm_error(
+                        session_id=session_id,
+                        error_type="empty_response",
+                        message=f"stop_reason={stop_reason} iters={ev.get('iterations')} in={usage_in} out={usage_out}",
+                        model_id=model_id,
+                        tokens_est=usage_in,
+                        ctx_window=ctx_window,
+                    )
                     # Heuristic: if the request was already large, the most
                     # likely cause of a 200-with-empty-content is upstream
                     # context truncation. Surface that so the UI can offer
@@ -776,6 +1279,12 @@ class Agent:
                         err["context_window"] = ctx_window
                         err["actions"] = ["compact_history", "new_session"]
                     yield err
+                # Capture reasoning for the final iteration (the one that
+                # terminated with done, not tool_exec_start).
+                if not materialised_for_iter:
+                    _rc = getattr(adapter, "_last_reasoning_content", None) if adapter else None
+                    _per_iter_reasoning.append(_rc)
+
                 # Prefer the assembled message list from loom (includes
                 # tool_calls + TOOL role messages). Strip system messages
                 # (re-built each turn by before_llm_call). Fall back to a
@@ -792,6 +1301,35 @@ class Agent:
                         ChatMessage(role=Role.USER, content=user_msg_content),
                         ChatMessage(role=Role.ASSISTANT, content=reply_text),
                     ]
+
+                # Stamp reasoning_content onto assistant messages from this
+                # turn. The turn's new messages start after the history
+                # snapshot (the user message + alternating assistant/tool).
+                # Also restore reasoning on pre-existing assistant messages
+                # (lost when loom's ChatMessage round-trips strip it).
+                _snap_len = len(_history_snapshot)
+                _snap_rc: dict[int, str] = {}
+                for _si, _sm in enumerate(_history_snapshot):
+                    if _sm.role == Role.ASSISTANT and _sm.reasoning_content:
+                        _snap_rc[_si] = _sm.reasoning_content
+                _rc_idx = 0
+                for _mi in range(len(persisted_messages)):
+                    msg = persisted_messages[_mi]
+                    if msg.role != Role.ASSISTANT:
+                        continue
+                    if _mi < _snap_len:
+                        if _mi in _snap_rc:
+                            persisted_messages[_mi] = msg.model_copy(
+                                update={"reasoning_content": _snap_rc[_mi]}
+                            )
+                    else:
+                        if _rc_idx < len(_per_iter_reasoning):
+                            rc_val = _per_iter_reasoning[_rc_idx]
+                            _rc_idx += 1
+                            if rc_val:
+                                persisted_messages[_mi] = msg.model_copy(
+                                    update={"reasoning_content": rc_val}
+                                )
                 yield {
                     "type": "done",
                     "session_id": session_id,
@@ -812,6 +1350,8 @@ class Agent:
             # never inherit a closure pointing at this turn's queue.
             if had_sink_attr:
                 adapter._thinking_sink = None  # type: ignore[attr-defined]
+            if adapter is not None and hasattr(adapter, "_reasoning_content_map"):
+                adapter._reasoning_content_map = {}
             for t in (loom_task, q_task):
                 if t is not None and not t.done():
                     t.cancel()
@@ -920,6 +1460,8 @@ class Agent:
 
         full_text = ""
         history_snapshot = [_from_loom_message(m) for m in loom_messages[:-1]]
+        _rc_adapter = getattr(self._loom, "_provider", None)
+        _hitl_per_iter_reasoning: list[str | None] = []
 
         async for raw in self._loom.run_turn_stream(
             loom_messages, model_id=self._chosen_model,
@@ -978,6 +1520,7 @@ class Agent:
             elif etype == "done":
                 ctx = ev.get("context") or {}
                 model_used = ev.get("model") or self._chosen_model
+                _rc_val = getattr(_rc_adapter, "_last_reasoning_content", None) if _rc_adapter else None
                 loom_msgs = ctx.get("messages")
                 if loom_msgs:
                     persisted_messages = [
@@ -987,8 +1530,22 @@ class Agent:
                     ]
                 else:
                     persisted_messages = history_snapshot + [
-                        ChatMessage(role=Role.ASSISTANT, content=full_text),
+                        ChatMessage(
+                            role=Role.ASSISTANT,
+                            content=full_text,
+                            reasoning_content=_rc_val,
+                        ),
                     ]
+                # Restore reasoning on pre-existing assistant messages.
+                _snap_rc: dict[int, str] = {}
+                for _si, _sm in enumerate(history_snapshot):
+                    if _sm.role == Role.ASSISTANT and _sm.reasoning_content:
+                        _snap_rc[_si] = _sm.reasoning_content
+                for _mi in range(min(len(history_snapshot), len(persisted_messages))):
+                    if _mi in _snap_rc:
+                        persisted_messages[_mi] = persisted_messages[_mi].model_copy(
+                            update={"reasoning_content": _snap_rc[_mi]}
+                        )
                 yield {
                     "type": "done",
                     "session_id": session_id,

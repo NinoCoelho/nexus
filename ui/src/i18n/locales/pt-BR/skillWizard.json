@@ -1,0 +1,118 @@
+{
+  "openButton": "Adicionar uma nova habilidade",
+  "menu": {
+    "addSkill": "Adicionar uma nova habilidade…"
+  },
+  "title": "Ensine uma nova habilidade ao Nexus",
+  "close": "Fechar",
+  "back": "Voltar",
+  "step": {
+    "ask": "O que você quer que o Nexus aprenda?",
+    "searching": "Procurando habilidades correspondentes…",
+    "choose": "Escolha a opção que melhor combina"
+  },
+  "plan": {
+    "title": "Planeje a habilidade",
+    "helper": "Revise o que o Nexus está prestes a construir. Adicione qualquer contexto extra e, se quiser, agrupe habilidades relacionadas.",
+    "refineLabel": "Ajuste o escopo",
+    "refineHelper": "Qualquer coisa que o Nexus deva ter em mente — casos de uso adicionais, entradas de exemplo, situações limítrofes. Ex.: \"use também para carrossel e exportações de PowerPoint.\"",
+    "refinePlaceholder": "Opcional — deixe em branco para construir a habilidade como está.",
+    "bundleLabel": "Agrupar habilidades relacionadas",
+    "bundleHelper": "Selecione vizinhos da busca para incluir na mesma habilidade (o Nexus vai estudá-los em paralelo e sintetizar um único SKILL.md consolidado).",
+    "pickAnother": "Escolher outra habilidade",
+    "confirm": "Construir agora"
+  },
+  "ask": {
+    "placeholder": "ex.: Resumir minhas DMs do Slack toda manhã",
+    "helper": "Descreva a capacidade com suas palavras. O Nexus vai pesquisar coleções confiáveis de habilidades e mostrar as opções.",
+    "submit": "Buscar habilidades"
+  },
+  "searching": {
+    "registry": "Pesquisando fontes confiáveis…",
+    "analyzing": "Analisando candidatos…",
+    "noProvider": "Configure um provedor de LLM em Configurações para buscar habilidades."
+  },
+  "choose": {
+    "noResults": "Nenhuma habilidade combinou com esse pedido. Tente reformular o que você quer que o Nexus faça.",
+    "tryAgain": "Tentar uma descrição diferente",
+    "complexityLabel": "Complexidade",
+    "costLabel": "Custo",
+    "keysLabel": "Chaves necessárias",
+    "noKeys": "Nenhuma chave necessária",
+    "verifiedSource": "Fonte confiável",
+    "unverifiedSource": "Fonte não verificada",
+    "useThis": "Usar esta habilidade",
+    "viewMore": "O que isso faz?"
+  },
+  "cost": {
+    "free": "Grátis",
+    "low": "$",
+    "medium": "$$",
+    "high": "$$$"
+  },
+  "keys": {
+    "title": "Configurar acesso",
+    "intro": "{{title}} precisa de acesso a alguns serviços. Adicione as chaves abaixo — o Nexus vai guardar com segurança.",
+    "noneNeeded": "Nenhuma chave é necessária para esta habilidade.",
+    "ready": "Todas as chaves prontas",
+    "missing": "Ainda não definida",
+    "addButton": "Adicionar chave",
+    "updateButton": "Atualizar chave",
+    "freeTier": "Plano gratuito disponível",
+    "getKeyLink": "Como obter esta chave →",
+    "continue": "Continuar",
+    "modal": {
+      "title": "Adicionar {{name}}",
+      "message": "Cole o valor de {{vendor}}. O Nexus guarda localmente — nunca sai do seu computador.",
+      "messageNoVendor": "Cole o valor. O Nexus guarda localmente — nunca sai do seu computador.",
+      "placeholder": "Cole sua chave…",
+      "save": "Salvar chave",
+      "valueEmpty": "O valor da chave não pode ficar vazio."
+    },
+    "toast": {
+      "saved": "{{name}} salva.",
+      "saveFailed": "Não foi possível salvar {{name}}."
+    }
+  },
+  "build": {
+    "title": "Construindo sua habilidade",
+    "intro": "O Nexus está estudando a habilidade-fonte e outras parecidas, e escrevendo uma versão limpa para você.",
+    "stages": {
+      "starting": "Iniciando…",
+      "reviewing": "Revisando habilidades parecidas…",
+      "reviewingCount_one": "Revisando {{count}} habilidade parecida em paralelo…",
+      "reviewingCount_other": "Revisando {{count}} habilidades parecidas em paralelo…",
+      "synthesizing": "Escrevendo sua versão…",
+      "saving": "Salvando a habilidade…"
+    },
+    "elapsed": "Tempo {{elapsed}}",
+    "iterations_one": "iteração {{count}}",
+    "iterations_other": "iteração {{count}}",
+    "runInBackground": "Continuar em segundo plano",
+    "success": "Habilidade pronta!",
+    "successDetail": "Sua nova habilidade está instalada. Você já pode usar em qualquer conversa.",
+    "tryItButton": "Experimentar",
+    "doneButton": "Concluído",
+    "failed": "Falha ao construir",
+    "failedDetail": "Algo deu errado ao construir esta habilidade. Você pode tentar outra opção.",
+    "tryDifferent": "Tentar outra habilidade"
+  },
+  "bg": {
+    "trackingStarted": "Construção movida para segundo plano",
+    "trackingStartedDetail": "O Nexus continua construindo \"{{title}}\" e avisa quando estiver pronta.",
+    "success": "{{skillName}} construída",
+    "successDetail": "Derivada de \"{{title}}\". Já pode usar em qualquer conversa.",
+    "failed": "Falha na construção em segundo plano",
+    "tryItNow": "Mostrar"
+  },
+  "errors": {
+    "loadFailed": "Não foi possível carregar as opções: {{detail}}",
+    "buildFailed": "Falha ao construir: {{detail}}",
+    "credsLoadFailed": "Não foi possível carregar as chaves salvas: {{detail}}"
+  },
+  "provenance": {
+    "label": "Construída a partir do seu pedido",
+    "viewSourcesShort": "{{count}} fonte",
+    "viewSourcesShort_other": "{{count}} fontes"
+  }
+}

@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { X } from "lucide-react";
 import Modal, { type ModalProps } from "../Modal";
 import "../VaultView.css";
 import {
@@ -24,9 +25,12 @@ import {
   getVaultTree,
   reindexVault,
   searchVault,
+  uploadZipPreview,
   type VaultNode,
   type VaultSearchResult,
   type VaultTagCount,
+  type ImportTreeNode,
+  type ImportStats,
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
@@ -37,6 +41,9 @@ import { TreeHeader } from "./TreeHeader";
 import { buildTree, buildDescendantCounts } from "./treeUtils";
 import { useVaultActions } from "./useVaultActions";
 import type { TreeNode } from "./types";
+import { readDropEntries } from "../../utils/readDropEntries";
+import ImportModal, { type ImportSource } from "../ImportModal";
+import { useSession } from "../SessionProvider";
 
 interface VaultTreePanelProps {
   selectedPath: string | null;
@@ -47,6 +54,7 @@ interface VaultTreePanelProps {
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
   onVisualizeFolderGraph?: (path: string) => void;
+  multiUser?: boolean;
 }
 
 export default function VaultTreePanel({
@@ -58,9 +66,12 @@ export default function VaultTreePanel({
   onDispatchToChat,
   onViewEntityGraph,
   onVisualizeFolderGraph,
+  multiUser: multiUserProp,
 }: VaultTreePanelProps) {
   const { t } = useTranslation("vault");
   const toast = useToast();
+  const { authStatus } = useSession();
+  const multiUser = multiUserProp ?? (authStatus?.multi_user ?? false);
   const [rawNodes, setRawNodes] = useState<VaultNode[]>([]);
   const [treeError, setTreeError] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -109,6 +120,14 @@ export default function VaultTreePanel({
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const [modal, setModal] = useState<ModalProps | null>(null);
   const [historyEnabled, setHistoryEnabled] = useState(false);
+
+  const [importModal, setImportModal] = useState<{
+    source: ImportSource;
+    tree: ImportTreeNode[];
+    stats: ImportStats;
+    exportFormat: { format: string; conversation_count: number } | null;
+  } | null>(null);
+  const [dropOver, setDropOver] = useState(false);
 
   // Refresh history-enabled flag whenever the context menu is about to open
   // — cheap, and keeps the "Undo" item in sync with the settings toggle.
@@ -184,6 +203,21 @@ export default function VaultTreePanel({
     selectedPath, rawNodes, refreshTree, onSelectPath, onTreeChange,
     onDispatchToChat, toast, setModal: setModalTyped, setCtxMenu: setCtxMenuNull,
     descendantCounts, uploadCtxDirRef,
+    onImportZip: async (file) => {
+      try {
+        const result = await uploadZipPreview(file);
+        setImportModal({
+          source: { type: "zip", importId: result.import_id },
+          tree: result.tree,
+          stats: result.stats,
+          exportFormat: result.export_format ?? null,
+        });
+      } catch (err) {
+        toast.error(t("vault:toast.uploadFailed"), {
+          detail: err instanceof Error ? err.message : undefined,
+        });
+      }
+    },
   });
 
   // Close context menu on any click
@@ -218,11 +252,114 @@ export default function VaultTreePanel({
     setCtxMenu({ x: e.clientX, y: e.clientY, node });
   };
 
+  const handleShare = useCallback(async (node: TreeNode) => {
+    setCtxMenu(null);
+    try {
+      const { shareVaultResource } = await import("../../api/auth");
+      await shareVaultResource({
+        path: node.path,
+        grantee_type: "role",
+        grantee_id: "member",
+        access_level: "read",
+      });
+      toast.success(`Shared: ${node.path}`);
+    } catch (err) {
+      toast.error("Failed to share", {
+        detail: err instanceof Error ? err.message : undefined,
+      });
+    }
+  }, [toast]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropOver(false);
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    if ((!dt.items || dt.items.length === 0) && (!dt.files || dt.files.length === 0)) return;
+    const files = Array.from(dt.files);
+
+    const zipFile = files.find((f) => f.name.toLowerCase().endsWith(".zip"));
+    if (zipFile) {
+      try {
+        const result = await uploadZipPreview(zipFile);
+        setImportModal({
+          source: { type: "zip", importId: result.import_id },
+          tree: result.tree,
+          stats: result.stats,
+          exportFormat: result.export_format ?? null,
+        });
+      } catch (err) {
+        toast.error(t("vault:toast.uploadFailed"), {
+          detail: err instanceof Error ? err.message : undefined,
+        });
+      }
+      return;
+    }
+
+    try {
+      const { tree, files: fileMap } = await readDropEntries(dt);
+      if (tree.length === 0 && fileMap.size === 0) {
+        toast.error(t("vault:toast.uploadFailed"), { detail: "No files found in drop" });
+        return;
+      }
+      const csvs: ImportStats["csvs"] = [];
+      let totalFiles = 0;
+      let totalSize = 0;
+      const countNodes = (nodes: ImportTreeNode[]) => {
+        for (const n of nodes) {
+          if (n.type === "file") {
+            totalFiles++;
+            totalSize += n.size || 0;
+            if (n.name.toLowerCase().endsWith(".csv")) {
+              csvs.push({
+                path: n.path,
+                name: n.name,
+                headers: [],
+                column_count: 0,
+                estimated_rows: 0,
+                size: n.size || 0,
+              });
+            }
+          }
+          if (n.children) countNodes(n.children);
+        }
+      };
+      countNodes(tree);
+      setImportModal({
+        source: { type: "drop", files: fileMap },
+        tree,
+        stats: { total_files: totalFiles, total_size: totalSize, csvs },
+        exportFormat: null,
+      });
+    } catch (err) {
+      toast.error(t("vault:toast.uploadFailed"), {
+        detail: err instanceof Error ? err.message : undefined,
+      });
+    }
+  }, [toast, t]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDropOver(false);
+  }, []);
+
   const tree = buildTree(rawNodes);
   const showResultsPanel = !!searchQuery || !!activeTag;
 
   return (
-    <div className="vault-tree vault-tree--sidebar">
+    <div
+      className={`vault-tree vault-tree--sidebar${dropOver ? " vault-tree--drop-over" : ""}`}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+    >
       <TreeHeader
         onUploadClick={() => uploadInputRef.current?.click()}
         onNewFolder={() => void actions.handleNewFolder()}
@@ -254,7 +391,7 @@ export default function VaultTreePanel({
           spellCheck={false}
         />
         {searchQuery && (
-          <button className="vault-search-clear" onClick={() => { setSearchQuery(""); setSearchResults([]); }} title="Clear">×</button>
+          <button className="vault-search-clear" onClick={() => { setSearchQuery(""); setSearchResults([]); }} title="Clear"><X size={14} /></button>
         )}
         <button className="vault-search-reindex" onClick={() => void handleReindex()} title="Reindex vault">
           <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -314,11 +451,23 @@ export default function VaultTreePanel({
           onUndo={historyEnabled ? actions.handleUndo : undefined}
           onViewEntityGraph={onViewEntityGraph}
           onVisualizeFolderGraph={onVisualizeFolderGraph}
+          onShare={multiUser ? handleShare : undefined}
           onClose={() => setCtxMenu(null)}
         />
       )}
 
       {modal && <Modal {...modal} />}
+
+      {importModal && (
+        <ImportModal
+          source={importModal.source}
+          initialTree={importModal.tree}
+          stats={importModal.stats}
+          exportFormat={importModal.exportFormat}
+          onClose={() => setImportModal(null)}
+          onComplete={() => { refreshTree(); onTreeChange?.(); }}
+        />
+      )}
     </div>
   );
 }

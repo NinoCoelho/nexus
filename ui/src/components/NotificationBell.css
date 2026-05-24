@@ -291,3 +291,23 @@
   opacity: 0.5;
   cursor: progress;
 }
+
+.nx-bell-section-title {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted, #888);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.nx-bell-user-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-input, #f0f0f0);
+  color: var(--fg-muted, #666);
+  margin-left: 4px;
+}

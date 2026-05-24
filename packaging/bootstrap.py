@@ -1,7 +1,9 @@
-"""Launcher executed by the macOS bundle to start the Nexus FastAPI server.
+"""Launcher executed by the macOS / Windows bundle to start the Nexus FastAPI server.
 
-The Swift host app spawns this with the bundled standalone Python interpreter.
-Layout assumed at runtime (relative to this file):
+On macOS the Swift menu-bar host spawns this; on Windows the tray launcher
+(``packaging/windows/tray.pyw``) does. Both pass the bundled standalone
+Python interpreter as ``sys.executable``. Layout assumed at runtime
+(relative to this file):
 
     bootstrap.py
     site-packages/        # full venv contents
@@ -38,6 +40,21 @@ HOST_FILE = NEXUS_HOME / "host.json"
 TOKEN_FILE = NEXUS_HOME / "access_token"
 
 log = logging.getLogger("nexus.bootstrap")
+
+
+def _user_log_dir() -> Path:
+    """Standard per-user log directory for the host OS.
+
+    macOS  → ``~/Library/Logs/Nexus``
+    Windows → ``%LOCALAPPDATA%\\Nexus\\logs`` (falls back under home)
+    Linux   → ``~/.nexus/logs`` (matches the rest of Nexus state)
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "Nexus"
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "Nexus" / "logs"
+    return NEXUS_HOME / "logs"
 
 
 def _pick_free_port(host: str = "127.0.0.1") -> int:
@@ -98,6 +115,29 @@ def _seed_spacy_cache(bundled_models: Path) -> None:
     shutil.copytree(meta.parent, cache)
 
 
+def _seed_whisper_model(bundled_models: Path) -> None:
+    """Copy the bundled faster-whisper model into ~/.nexus/models/huggingface/.
+
+    faster-whisper downloads models via huggingface_hub; when the bundle is
+    read-only (e.g. /Applications), HF_HOME is redirected to ~/.nexus/ but
+    the model isn't there yet.  This copies it from the bundle so no runtime
+    download is needed.
+    """
+    hf_cache = NEXUS_HOME / "models" / "huggingface"
+    bundled_hf = bundled_models / "huggingface"
+    if not bundled_hf.is_dir():
+        return
+    for child in bundled_hf.iterdir():
+        if not child.is_dir():
+            continue
+        dest = hf_cache / child.name
+        if dest.is_dir():
+            continue
+        log.info("[bootstrap] seeding huggingface model %s → %s", child.name, dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(child, dest)
+
+
 def _start_llama(here: Path) -> tuple[subprocess.Popen | None, int | None, str | None]:
     """Launch the bundled llama.cpp server if a manifest is present.
 
@@ -118,7 +158,7 @@ def _start_llama(here: Path) -> tuple[subprocess.Popen | None, int | None, str |
         return None, None, None
 
     port = _pick_free_port()
-    log_path = Path.home() / "Library" / "Logs" / "Nexus" / "llama-server.log"
+    log_path = _user_log_dir() / "llama-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_path, "ab")
 
@@ -361,6 +401,109 @@ def _stop_proc(proc: subprocess.Popen | None) -> None:
         pass
 
 
+def _seed_extension(here: Path) -> Path | None:
+    """Copy the bundled Chrome extension to ~/.nexus/extension/.
+
+    Re-copies when the bundle version differs (tracked via
+    ``~/.nexus/extension/.bundled-version``). Returns the seeded
+    directory path, or None if no extension is bundled.
+    """
+    src = here / "extension"
+    if not src.is_dir() or not (src / "manifest.json").is_file():
+        return None
+
+    dest = NEXUS_HOME / "extension"
+    version_marker = dest / ".bundled-version"
+
+    bundle_version = (here / "extension" / "manifest.json").read_text().strip()
+    current_version = ""
+    if version_marker.is_file():
+        try:
+            current_version = version_marker.read_text().strip()
+        except OSError:
+            pass
+
+    if current_version == bundle_version and (dest / "manifest.json").is_file():
+        return dest
+
+    import shutil as _shutil
+
+    if dest.is_dir():
+        _shutil.rmtree(dest)
+    _shutil.copytree(src, dest)
+    try:
+        version_marker.write_text(bundle_version)
+    except OSError:
+        pass
+    log.info("[bootstrap] seeded extension to %s", dest)
+    return dest
+
+
+def _install_cookie_native_host(ext_dir: Path) -> None:
+    """Install the Chrome native messaging host for the cookie export extension.
+
+    Copies the NMH manifest + Python host script from the extension
+    directory into ``~/.nexus/native-host/`` and symlinks the manifest into
+    Chrome's NativeMessagingHosts directory. Safe to run repeatedly — skips if
+    the symlink already points at the right file.
+    """
+    nmh_src = ext_dir / "native-host"
+    manifest_tmpl = nmh_src / "com.nexus.cookies.json.tmpl"
+    host_script = nmh_src / "nexus_cookie_host.py"
+    if not manifest_tmpl.is_file() or not host_script.is_file():
+        return
+
+    dest_dir = NEXUS_HOME / "native-host"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil as _shutil
+
+    host_dst = dest_dir / "nexus_cookie_host.py"
+    _shutil.copy2(host_script, host_dst)
+    try:
+        host_dst.chmod(host_dst.stat().st_mode | 0o111)
+    except OSError:
+        pass
+
+    manifest_text = manifest_tmpl.read_text()
+    manifest_text = manifest_text.replace("HOST_SCRIPT_PATH", str(host_dst))
+    manifest_dst = dest_dir / "com.nexus.cookies.json"
+    manifest_dst.write_text(manifest_text)
+
+    nmh_dirs: list[Path] = []
+    if sys.platform == "darwin":
+        nmh_dirs.append(
+            Path.home() / "Library" / "Application Support" / "Google" / "Chrome" / "NativeMessagingHosts"
+        )
+        for profile in ("Chrome Dev", "Chrome Beta", "Chromium"):
+            nmh_dirs.append(
+                Path.home() / "Library" / "Application Support" / "Google" / profile / "NativeMessagingHosts"
+            )
+    elif sys.platform.startswith("linux"):
+        nmh_dirs.append(
+            Path.home() / ".config" / "google-chrome" / "NativeMessagingHosts"
+        )
+        nmh_dirs.append(
+            Path.home() / ".config" / "chromium" / "NativeMessagingHosts"
+        )
+
+    for nmh_dir in nmh_dirs:
+        if not nmh_dir.is_dir():
+            continue
+        link = nmh_dir / "com.nexus.cookies.json"
+        try:
+            if link.is_symlink():
+                if link.resolve() == manifest_dst.resolve():
+                    continue
+                link.unlink()
+            elif link.exists():
+                link.unlink()
+            link.symlink_to(manifest_dst)
+            log.info("[bootstrap] NMH symlinked to %s", nmh_dir)
+        except OSError:
+            pass
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     here = Path(__file__).resolve().parent
@@ -383,9 +526,27 @@ def main() -> int:
         os.environ.setdefault("XDG_CACHE_HOME", str(models_dir / "cache"))
         _seed_spacy_cache(models_dir)
 
+    _writable_models = NEXUS_HOME / "models"
+    _writable_models.mkdir(parents=True, exist_ok=True)
+
+    if models_dir.is_dir():
+        _test_file = models_dir / ".write_test"
+        try:
+            _test_file.write_text("x")
+            _test_file.unlink()
+        except OSError:
+            log.info("[bootstrap] Resources not writable — redirecting caches to ~/.nexus/")
+            os.environ["NEXUS_MODELS_DIR"] = str(_writable_models)
+            os.environ["HF_HOME"] = str(_writable_models / "huggingface")
+            os.environ["XDG_CACHE_HOME"] = str(_writable_models / "cache")
+            _seed_spacy_cache(models_dir)
+            _seed_whisper_model(models_dir)
+
     ui_dist = here / "ui"
     if (ui_dist / "index.html").is_file():
         os.environ.setdefault("NEXUS_UI_DIST", str(ui_dist))
+
+    os.environ.setdefault("NEXUS_BUNDLE_DIR", str(here))
 
     # Point the skill registry at the bundled skills tree. In a dev checkout
     # the registry walks up from its own __file__ to find <repo>/skills, but
@@ -395,6 +556,12 @@ def main() -> int:
     if skills_dir.is_dir():
         os.environ.setdefault("NEXUS_BUILTIN_SKILLS_DIR", str(skills_dir))
 
+    try:
+        ext_dir = _seed_extension(here)
+        if ext_dir is not None:
+            _install_cookie_native_host(ext_dir)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[bootstrap] could not set up cookie extension: %s", e)
     llama_proc, llama_port, llama_model = _start_llama(here)
     if llama_proc is not None:
         atexit.register(_stop_proc, llama_proc)
@@ -424,13 +591,14 @@ def main() -> int:
     # 0, which is the default) would tunnel to the hard-coded default 18989,
     # silently routing public traffic at the wrong daemon (or nowhere).
     os.environ["NEXUS_PORT"] = str(port)
-    port_file = Path(os.environ.get("NEXUS_PORT_FILE", here / ".port"))
+    port_file = Path(os.environ.get("NEXUS_PORT_FILE", ""))
+    if not port_file.parent.is_dir() or not os.access(port_file.parent, os.W_OK):
+        port_file = NEXUS_HOME / ".port"
+    NEXUS_HOME.mkdir(parents=True, exist_ok=True)
     try:
         port_file.write_text(str(port))
     except OSError:
         pass
-    # Write a sibling file with the bind host so the Swift host can show the
-    # right URL in its menu (otherwise it would assume 127.0.0.1).
     try:
         (port_file.parent / ".host").write_text(bind_host)
     except OSError:

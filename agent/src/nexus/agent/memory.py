@@ -10,22 +10,21 @@ the server lifespan.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
+
+from ..home import memory_dir, memory_index_db
 
 log = logging.getLogger(__name__)
 
-_store: Any | None = None
-
-_HOME = Path.home() / ".nexus"
-_MEMORY_DIR = _HOME / "memory"
-_INDEX_DB = _MEMORY_DIR / "_index" / "memory.sqlite"
+_stores: dict[str, Any] = {}
 
 
 def get_memory_store() -> Any:
-    global _store
-    if _store is not None:
-        return _store
+    from ..home import _base
+    key = str(_base())
+    s = _stores.get(key)
+    if s is not None:
+        return s
 
     from loom.store.memory import MemoryStore
     from ..vault_provider import NexusVaultProvider
@@ -39,22 +38,26 @@ def get_memory_store() -> Any:
 
     vault_provider = NexusVaultProvider()
 
-    _store = MemoryStore(
-        _MEMORY_DIR,
-        _INDEX_DB,
+    s = MemoryStore(
+        memory_dir(),
+        memory_index_db(),
         vault_provider=vault_provider,
         vault_prefix="memory",
         graphrag=graphrag_engine,
     )
+    _stores[key] = s
     log.info(
-        "MemoryStore initialized (vault-backed, graphrag=%s)",
+        "MemoryStore initialized (vault-backed, graphrag=%s, home=%s)",
         "enabled" if graphrag_engine is not None else "disabled",
+        key,
     )
-    return _store
+    return s
 
 
 def close_memory_store() -> None:
-    global _store
-    if _store is not None:
-        _store.close()
-        _store = None
+    for s in _stores.values():
+        try:
+            s.close()
+        except Exception:
+            pass
+    _stores.clear()

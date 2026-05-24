@@ -113,13 +113,15 @@ async def get_routing(app_state: dict[str, Any] = Depends(get_app_state)) -> dic
         return {"default_model": None, "last_used_model": None,
                 "available_models": available}
     embedding_id = cfg.graphrag.embedding_model_id
-    chat_available = [m for m in available if m != embedding_id]
+    vision_id = cfg.agent.vision_model or ""
+    chat_available = [m for m in available if m != embedding_id and m != vision_id]
     return {
         "default_model": cfg.agent.default_model,
         "last_used_model": cfg.agent.last_used_model,
         "available_models": chat_available,
         "embedding_model_id": embedding_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
+        "vision_model_id": cfg.agent.vision_model,
     }
 
 
@@ -134,11 +136,14 @@ async def set_routing(
     if "default_model" in body:
         requested = body["default_model"]
         if requested:
-            # Validate that the requested model is actually registered.
-            # Without this, a stale or mistyped model id makes the agent
-            # fall back silently to an unrelated provider that may not
-            # have valid auth.
             pr = app_state.get("prov_reg")
+            vision_id = (cfg.agent.vision_model or "") if cfg else ""
+            if requested == vision_id:
+                raise HTTPException(
+                    400,
+                    "Vision-role models are reserved for OCR and cannot be "
+                    "used as the default chat model.",
+                )
             if pr is not None:
                 available = pr.available_model_ids()
                 if requested not in available:
@@ -155,6 +160,8 @@ async def set_routing(
         cfg.graphrag.embedding_model_id = body["embedding_model_id"]
     if "extraction_model_id" in body:
         cfg.graphrag.extraction_model_id = body["extraction_model_id"]
+    if "vision_model_id" in body:
+        cfg.agent.vision_model = body["vision_model_id"] or ""
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
     if "embedding_model_id" in body or "extraction_model_id" in body:
@@ -169,6 +176,7 @@ async def set_routing(
         "last_used_model": cfg.agent.last_used_model,
         "embedding_model_id": cfg.graphrag.embedding_model_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
+        "vision_model_id": cfg.agent.vision_model,
     }
 
 
@@ -194,6 +202,10 @@ async def set_model_role(
         cfg.graphrag.embedding_model_id = new_id
     elif body.role == "extraction":
         cfg.graphrag.extraction_model_id = new_id
+    elif body.role == "vision":
+        if new_id and not any(m.id == new_id for m in cfg.models):
+            raise HTTPException(404, f"model {new_id!r} not found")
+        cfg.agent.vision_model = new_id
     else:
         raise HTTPException(400, f"Unknown role: {body.role}")
     save_cfg(cfg)

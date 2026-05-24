@@ -26,6 +26,7 @@ import enCalendar from "./locales/en/calendar.json";
 import enGraph from "./locales/en/graph.json";
 import enDatatable from "./locales/en/datatable.json";
 import enNotifications from "./locales/en/notifications.json";
+import enSkillWizard from "./locales/en/skillWizard.json";
 import ptCommon from "./locales/pt-BR/common.json";
 import ptSettings from "./locales/pt-BR/settings.json";
 import ptSidebar from "./locales/pt-BR/sidebar.json";
@@ -40,6 +41,7 @@ import ptCalendar from "./locales/pt-BR/calendar.json";
 import ptGraph from "./locales/pt-BR/graph.json";
 import ptDatatable from "./locales/pt-BR/datatable.json";
 import ptNotifications from "./locales/pt-BR/notifications.json";
+import ptSkillWizard from "./locales/pt-BR/skillWizard.json";
 
 export const SUPPORTED_LANGUAGES = ["en", "pt-BR"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -64,6 +66,7 @@ void i18n
         graph: enGraph,
         datatable: enDatatable,
         notifications: enNotifications,
+        skillWizard: enSkillWizard,
       },
       "pt-BR": {
         common: ptCommon,
@@ -80,6 +83,7 @@ void i18n
         graph: ptGraph,
         datatable: ptDatatable,
         notifications: ptNotifications,
+        skillWizard: ptSkillWizard,
       },
     },
     fallbackLng: "en",
@@ -90,6 +94,7 @@ void i18n
       "chat", "vault", "forms", "tunnel",
       "models", "providers", "kanban", "calendar",
       "graph", "datatable", "notifications",
+      "skillWizard",
     ],
     defaultNS: "common",
     interpolation: { escapeValue: false }, // React already escapes

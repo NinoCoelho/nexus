@@ -39,7 +39,18 @@ export interface DatabaseChatSession {
 
 const HIDDEN_SEED_PREFIX = "<!-- nx:hidden-seed -->";
 
-export function useDatabaseChatSession(folder: string | null): DatabaseChatSession {
+export interface UseDatabaseChatSessionOptions {
+  /** Fires after every assistant turn finishes (success or error). Used by
+   *  the dashboard view to reload `_data.md` so agent-driven mutations
+   *  (e.g. `dashboard_manage.add_operation`) become visible without a manual
+   *  page refresh. */
+  onTurnComplete?: () => void;
+}
+
+export function useDatabaseChatSession(
+  folder: string | null,
+  options?: UseDatabaseChatSessionOptions,
+): DatabaseChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<BubbleMessage[]>([]);
   const [thinking, setThinking] = useState(false);
@@ -48,6 +59,8 @@ export function useDatabaseChatSession(folder: string | null): DatabaseChatSessi
   const abortRef = useRef<AbortController | null>(null);
   const folderRef = useRef(folder);
   folderRef.current = folder;
+  const onTurnCompleteRef = useRef(options?.onTurnComplete);
+  onTurnCompleteRef.current = options?.onTurnComplete;
 
   // Load existing session id (and history) when folder changes.
   useEffect(() => {
@@ -213,6 +226,11 @@ export function useDatabaseChatSession(folder: string | null): DatabaseChatSessi
     } finally {
       setThinking(false);
       abortRef.current = null;
+      try {
+        onTurnCompleteRef.current?.();
+      } catch {
+        /* swallow — listener errors must not break the chat flow */
+      }
     }
   }, []);
 

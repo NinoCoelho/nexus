@@ -12,7 +12,7 @@ import { subscribeGlobalNotifications, type CalendarAlertPayload } from "../api/
 import { useToast } from "../toast/ToastProvider";
 
 interface Options {
-  onOpenInChat?: (sessionId: string, seedMessage: string, title: string) => void;
+  onOpenInChat?: (sessionId: string, seedMessage: string, title: string, model?: string) => void;
   onOpenCalendar?: (path: string) => void;
 }
 

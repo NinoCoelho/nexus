@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  deleteFolderGraph,
   getFolderStale,
   openFolderGraph,
   putFolderOntology,
@@ -39,8 +40,8 @@ interface Props {
   onReindexComplete: () => void;
   /** Triggered by a toolbar control in the parent UnifiedGraph. */
   externalEditOntology?: number;
-  /** Triggered by a toolbar control in the parent UnifiedGraph. */
   externalReindex?: number;
+  externalReset?: number;
 }
 
 export function FolderGraphTab({
@@ -49,6 +50,7 @@ export function FolderGraphTab({
   onReindexComplete,
   externalEditOntology = 0,
   externalReindex = 0,
+  externalReset = 0,
 }: Props) {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [stale, setStale] = useState<FolderStaleResult | null>(null);
@@ -91,10 +93,28 @@ export function FolderGraphTab({
   // External "Reindex" trigger from the toolbar
   useEffect(() => {
     if (externalReindex > 0 && phase.kind === "ready" && phase.current.ontology) {
-      setPhase({ kind: "indexing", ontology: phase.current.ontology, full: false });
+      setPhase({ kind: "indexing", ontology: phase.current.ontology, full: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalReindex]);
+
+  // External "Reset" trigger — delete index entirely and go back to needs-config
+  useEffect(() => {
+    if (externalReset > 0 && (phase.kind === "ready" || phase.kind === "editing-ontology")) {
+      deleteFolderGraph(folderPath)
+        .then(() => {
+          setStale(null);
+          setPhase({ kind: "needs-config", current: { path: folderPath, abs_path: "", exists: false, ontology: null, ontology_hash: null, embedder_id: null, extractor_id: null, file_count: 0, last_indexed_at: null } });
+          onReindexComplete();
+        })
+        .catch((err) => {
+          toastRef.current.error("Could not reset graph", {
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalReset]);
 
   async function handleConfirmOntology(ont: FolderOntology, opts: { triggerIndex: boolean }) {
     try {
@@ -106,7 +126,7 @@ export function FolderGraphTab({
       return;
     }
     if (opts.triggerIndex) {
-      setPhase({ kind: "indexing", ontology: ont, full: false });
+      setPhase({ kind: "indexing", ontology: ont, full: true });
     } else {
       await refresh();
     }
@@ -123,7 +143,7 @@ export function FolderGraphTab({
 
   function handleReindexFromBanner() {
     if (phase.kind !== "ready" || !phase.current.ontology) return;
-    setPhase({ kind: "indexing", ontology: phase.current.ontology, full: false });
+    setPhase({ kind: "indexing", ontology: phase.current.ontology, full: true });
   }
 
   if (phase.kind === "loading") {

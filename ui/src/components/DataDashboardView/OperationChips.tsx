@@ -10,6 +10,7 @@
  */
 
 import type { ReactNode } from "react";
+import { AlertTriangle, Check, FileText, MessageSquare, Sparkles, X } from "lucide-react";
 import type { DashboardOperation } from "../../api/dashboard";
 
 export type OpRunStatus = "running" | "done" | "failed";
@@ -28,6 +29,9 @@ interface Props {
   /** Click handler for the inline status icon — opens the run preview. */
   onOpenRun?: (op: DashboardOperation) => void;
   onAddOperation: () => void;
+  /** Click handler for the wizard entry point. When omitted, the wizard
+   *  chip is hidden. */
+  onAddOperationWizard?: () => void;
   onRemoveOperation?: (opId: string) => void;
 }
 
@@ -37,6 +41,7 @@ export default function OperationChips({
   onRunOperation,
   onOpenRun,
   onAddOperation,
+  onAddOperationWizard,
   onRemoveOperation,
 }: Props) {
   return (
@@ -63,7 +68,7 @@ export default function OperationChips({
               title={op.prompt || op.label}
               disabled={state?.status === "running"}
             >
-              <span className="data-dash-chip-kind">{op.kind === "form" ? "📝" : "💬"}</span>
+              <span className="data-dash-chip-kind">{op.kind === "form" ? <FileText size={14} /> : <MessageSquare size={14} />}</span>
               <span className="data-dash-chip-label">{op.label}</span>
             </button>
             {indicator && onOpenRun && (
@@ -91,7 +96,7 @@ export default function OperationChips({
                 title="Remove operation"
                 aria-label="Remove operation"
               >
-                ×
+                <X size={14} />
               </button>
             )}
           </div>
@@ -101,10 +106,20 @@ export default function OperationChips({
         type="button"
         className="data-dash-chip data-dash-chip--add"
         onClick={onAddOperation}
-        title="Add a new operation"
+        title="Add a new operation (simple form)"
       >
         + Operation
       </button>
+      {onAddOperationWizard && (
+        <button
+          type="button"
+          className="data-dash-chip data-dash-chip--add data-dash-chip--wizard"
+          onClick={onAddOperationWizard}
+          title="Design an operation with a wizard — describe what you want and the agent helps shape it."
+        >
+          <Sparkles size={14} /> Wizard
+        </button>
+      )}
     </div>
   );
 }
@@ -114,7 +129,7 @@ function renderIndicator(status: OpRunStatus): ReactNode {
     return <span className="kanban-card-spin" aria-hidden />;
   }
   if (status === "failed") {
-    return <span className="data-dash-chip-status-icon" aria-hidden>⚠</span>;
+    return <span className="data-dash-chip-status-icon" aria-hidden><AlertTriangle size={14} /></span>;
   }
-  return <span className="data-dash-chip-status-icon" aria-hidden>✓</span>;
+  return <span className="data-dash-chip-status-icon" aria-hidden><Check size={14} /></span>;
 }

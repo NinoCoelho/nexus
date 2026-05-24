@@ -10,7 +10,8 @@ export type AuthMethodId =
   | "iam_azure"
   | "anonymous"
   | "local_claude_code"
-  | "local_codex";
+  | "local_codex"
+  | "nexus_signin";
 
 export type RuntimeKind =
   | "openai_compat"
@@ -18,7 +19,8 @@ export type RuntimeKind =
   | "ollama"
   | "bedrock"
   | "vertex"
-  | "azure_openai";
+  | "azure_openai"
+  | "nexus";
 
 export type ProviderCategory =
   | "frontier"
@@ -90,6 +92,11 @@ export interface ProviderCatalogEntry {
   default_models: ModelInfo[];
   docs_url?: string;
   icon?: string;
+  /** Pinned at the top of the wizard's provider picker in its own
+   *  section. Used to surface the Nexus subscription. */
+  featured?: boolean;
+  /** One-line tagline shown beside featured tiles. */
+  tagline?: string;
 }
 
 export async function fetchProviderCatalog(): Promise<ProviderCatalogEntry[]> {

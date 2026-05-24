@@ -116,6 +116,11 @@ def parse(content: str) -> Calendar:
             # write normalises the file. The legacy ``prompt`` value itself
             # is dropped — body now carries the agent context.
             event.assignee = "agent"
+        if "remind-before" in meta:
+            try:
+                event.remind_before_min = int(meta["remind-before"])
+            except ValueError:
+                pass
         if "completed" in meta:
             raw = meta["completed"] or ""
             event.completed_occurrences = [
@@ -174,6 +179,8 @@ def serialize(cal: Calendar) -> str:
             out.append(f"<!-- nx:model={event.model} -->")
         if event.assignee:
             out.append(f"<!-- nx:assignee={event.assignee} -->")
+        if event.remind_before_min is not None:
+            out.append(f"<!-- nx:remind-before={event.remind_before_min} -->")
         if event.completed_occurrences:
             out.append(
                 f"<!-- nx:completed={','.join(event.completed_occurrences)} -->"

@@ -7,9 +7,52 @@ from typing import Any
 
 from ..agent.llm import ToolSpec
 
+_SESSION_PREFIX = "sessions/"
+
+
+def _current_session_id() -> str | None:
+    from ..agent.context import CURRENT_SESSION_ID
+    return CURRENT_SESSION_ID.get(None)
+
+
+def _top_level_exists(path: str) -> bool:
+    top = path.split("/", 1)[0]
+    if top == path:
+        return False
+    from .. import vault
+    return (vault._vault_root() / top).is_dir()
+
+
+def _scope_write_path(path: str) -> str:
+    sid = _current_session_id()
+    if sid and not path.startswith(_SESSION_PREFIX):
+        if _top_level_exists(path):
+            return path
+        return f"{_SESSION_PREFIX}{sid}/{path}"
+    return path
+
+
+def _resolve_read_path(path: str) -> str:
+    sid = _current_session_id()
+    if sid and not path.startswith(_SESSION_PREFIX):
+        if _top_level_exists(path):
+            return path
+        scoped = f"{_SESSION_PREFIX}{sid}/{path}"
+        try:
+            from .. import vault
+            vault.resolve_path(scoped)
+            return scoped
+        except (FileNotFoundError, ValueError):
+            pass
+    return path
+
 VAULT_LIST_TOOL = ToolSpec(
     name="vault_list",
-    description="List files and folders in the vault (or a subdirectory).",
+    description=(
+        "List files and folders in the vault (or a subdirectory). "
+        "Use this to discover valid paths before calling `vault_read`, `vault_write`, "
+        "`vault_csv`, or `datatable_manage`."
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -30,7 +73,15 @@ VAULT_READ_TOOL = ToolSpec(
         "When the result contains `truncated: true`, the response also includes a "
         "`slice` object with metadata (lines_returned, next_offset, …) so you can "
         "page through the file. Reading a 1MB CSV in one shot will pollute the "
-        "conversation context — always slice large files."
+        "conversation context — always slice large files.\n\n"
+        "Anti-patterns:\n"
+        "- Do NOT use `vault_read` for large structured datasets (`.csv`, `.tsv`, "
+        "`.jsonl`); prefer `vault_csv` (DuckDB-backed, no raw data into context) or "
+        "`datatable_manage.import_csv`. Dumping large raw files into context wastes "
+        "tokens and increases hallucination risk.\n"
+        "- Do NOT use `vault_read` on data-table `.md` files (frontmatter `data-table-plugin: basic`) "
+        "for analysis — use `datatable_manage action=view` instead.\n\n"
+        "To discover valid paths, use `vault_list`."
     ),
     parameters={
         "type": "object",
@@ -59,7 +110,17 @@ VAULT_READ_TOOL = ToolSpec(
 
 VAULT_WRITE_TOOL = ToolSpec(
     name="vault_write",
-    description="Write (create or overwrite) a file in the vault.",
+    description=(
+        "Write (create or overwrite) a file in the vault.\n\n"
+        "Safe usage pattern:\n"
+        "- Before overwriting an existing path, call `vault_read` with `head=20` to "
+        "verify content and confirm you intend to overwrite.\n"
+        "- If unsure whether the path exists, check with `vault_list` first.\n"
+        "- If you want to preserve existing content, write to a new path instead of "
+        "overwriting (e.g. append a timestamp or version suffix).\n"
+        "- Overwriting data-table or kanban `.md` files directly bypasses their "
+        "schema validation — prefer `datatable_manage`/`kanban_manage` for those."
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -161,6 +222,23 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
         if name == "vault_list":
             path = args.get("path", "")
             entries = vault.list_tree()
+            sid = _current_session_id()
+            if sid:
+                scoped_prefix = f"{_SESSION_PREFIX}{sid}/"
+                seen = set()
+                merged: list[dict] = []
+                for e in entries:
+                    p = e.path
+                    if p.startswith(scoped_prefix):
+                        stripped = p[len(scoped_prefix):]
+                        if not path or stripped.startswith(path.rstrip("/") + "/") or stripped == path:
+                            seen.add(stripped)
+                            merged.append({"path": stripped, "type": e.type, "size": e.size})
+                            continue
+                    if not path or p.startswith(path.rstrip("/") + "/") or p == path:
+                        if p not in seen:
+                            merged.append({"path": p, "type": e.type, "size": e.size})
+                return _dumps({"ok": True, "entries": merged})
             if path:
                 entries = [e for e in entries if e.path.startswith(path.rstrip("/") + "/") or e.path == path]
             return _dumps({"ok": True, "entries": [{"path": e.path, "type": e.type, "size": e.size} for e in entries]})
@@ -169,23 +247,22 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
             path = args.get("path", "")
             if not path:
                 return _dumps({"ok": False, "error": "`path` is required"})
+            resolved = _resolve_read_path(path)
             head = args.get("head")
             tail = args.get("tail")
             offset = int(args.get("offset", 0) or 0)
             limit = args.get("limit")
-            # Default cap: when the agent didn't request a specific slice we
-            # still avoid dumping multi-MB files into the conversation. 64KB
-            # ≈ ~16k tokens, which is a sane budget for a single tool result.
             DEFAULT_BYTE_CAP = 64 * 1024
             if head is None and tail is None and limit is None and offset == 0:
                 limit = DEFAULT_BYTE_CAP
             result = vault.read_file(
-                path,
+                resolved,
                 offset=offset,
                 limit=int(limit) if limit is not None else None,
                 head=int(head) if head is not None else None,
                 tail=int(tail) if tail is not None else None,
             )
+            result["path"] = path
             if result.get("truncated"):
                 result["hint"] = (
                     "Output truncated. Use `head=N`/`tail=N` for line slices, "
@@ -199,9 +276,10 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
             content = args.get("content", "")
             if not path:
                 return _dumps({"ok": False, "error": "`path` is required"})
-            vault.write_file(path, content)
-            _trigger_graphrag_index(path, content)
-            return _dumps({"ok": True})
+            scoped = _scope_write_path(path)
+            vault.write_file(scoped, content)
+            _trigger_graphrag_index(scoped, content)
+            return _dumps({"ok": True, "path": scoped})
 
         if name == "vault_search":
             from .. import vault_search
@@ -257,7 +335,27 @@ async def _handle_semantic_search(args: dict[str, Any], _dumps: Any) -> str:
     engine = _get_graphrag_engine()
     if engine is None:
         return _dumps({"ok": False, "error": "GraphRAG not enabled or not initialized"})
-    results = await engine.retrieve(query, top_k=limit)
+    try:
+        results = await engine.retrieve(query, top_k=limit)
+    except ValueError as exc:
+        # Loom's _batch_cosine calls np.array(vectors, ...) which raises
+        # "inhomogeneous shape" when stored embeddings have mixed
+        # dimensions — caused by switching embedding models without
+        # re-indexing. Surface an actionable error instead of the raw
+        # numpy traceback so the agent stops retrying blindly.
+        msg = str(exc)
+        if "inhomogeneous" in msg or "setting an array element with a sequence" in msg:
+            return _dumps({
+                "ok": False,
+                "error": (
+                    "Vault embeddings have mixed dimensions — likely after an "
+                    "embedding-model change. Re-index the vault before calling "
+                    "vault_semantic_search again. Use `vault_search` (FTS) "
+                    "for now."
+                ),
+                "recovery": "rebuild_vault_index",
+            })
+        raise
     return _dumps({
         "ok": True,
         "results": [

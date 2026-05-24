@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { Star, Palette, CheckCircle } from "lucide-react";
 import { putRouting, type Model, type Provider, type RoutingConfig } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import AppearanceSection from "../AppearanceSection";
@@ -46,7 +47,7 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
     <>
       <SettingsSection
         title={t("settings:defaultModel.title")}
-        icon="★"
+        icon={<Star size={16} />}
         description={t("settings:defaultModel.description")}
       >
         <div className="s-quick-card">
@@ -85,11 +86,11 @@ export default function QuickStartTab({ routing, models, providers, onChanged }:
         </div>
       </SettingsSection>
 
-      <SettingsSection title={t("settings:appearance.title")} icon="🎨">
+      <SettingsSection title={t("settings:appearance.title")} icon={<Palette size={16} />}>
         <AppearanceSection />
       </SettingsSection>
 
-      <SettingsSection title={t("settings:status.title")} icon="✓">
+      <SettingsSection title={t("settings:status.title")} icon={<CheckCircle size={16} />}>
         <div className="s-quick-status">
           <div className="s-quick-status__row">
             <span

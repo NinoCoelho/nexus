@@ -24,3 +24,8 @@ export * from "./events";
 export * from "./localLlm";
 export * from "./notifications";
 export * from "./tunnel";
+export * from "./nexusAccount";
+export * from "./heartbeat";
+export * from "./cookies";
+export * from "./dream";
+export * from "./update";

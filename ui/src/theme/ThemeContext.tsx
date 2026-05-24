@@ -1,30 +1,18 @@
-/**
- * ThemeContext — app-wide theme provider.
- *
- * Themes available: mermaidcore (default dark), neutrals (warm dark),
- * neon (high-contrast), biophilic (earthy/nature).
- *
- * Persists the selected theme to localStorage under "nexus-theme".
- * Applies the theme by setting a data-theme attribute on <html> and
- * swapping the active CSS class on the root element.
- */
-
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 export type ThemeName = "mermaidcore" | "neutrals" | "neon" | "biophilic";
 
 interface ThemeContextValue {
   theme: ThemeName;
-  brightness: number;
+  darkMode: boolean;
   setTheme: (t: ThemeName) => void;
-  setBrightness: (b: number) => void;
+  toggleDarkMode: () => void;
 }
 
 const LS_THEME = "nexus-theme";
-const LS_BRIGHTNESS = "nexus-brightness";
+const LS_DARK = "nexus-dark-mode";
 
 const DEFAULT_THEME: ThemeName = "neutrals";
-const DEFAULT_BRIGHTNESS = 0;
 
 const VALID_THEMES: ThemeName[] = ["mermaidcore", "neutrals", "neon", "biophilic"];
 
@@ -36,30 +24,34 @@ function readThemeLS(): ThemeName {
   return DEFAULT_THEME;
 }
 
-function readBrightnessLS(): number {
+function readDarkLS(): boolean {
   try {
-    const raw = localStorage.getItem(LS_BRIGHTNESS);
-    if (raw != null) {
-      const n = parseFloat(raw);
-      if (!isNaN(n) && n >= 0 && n <= 1) return n;
+    const raw = localStorage.getItem(LS_DARK);
+    if (raw != null) return raw === "true";
+  } catch {}
+  try {
+    const old = localStorage.getItem("nexus-brightness");
+    if (old != null) {
+      const n = parseFloat(old);
+      if (!isNaN(n)) return n < 0.5;
     }
   } catch {}
-  return DEFAULT_BRIGHTNESS;
+  return true;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeName>(readThemeLS);
-  const [brightness, setBrightnessState] = useState<number>(readBrightnessLS);
+  const [darkMode, setDarkModeState] = useState<boolean>(readDarkLS);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
   useEffect(() => {
-    document.documentElement.style.setProperty("--brightness", String(brightness));
-  }, [brightness]);
+    document.documentElement.style.setProperty("--brightness", darkMode ? "0" : "1");
+  }, [darkMode]);
 
   const setTheme = useCallback((t: ThemeName) => {
     const el = document.documentElement;
@@ -69,14 +61,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setTimeout(() => el.classList.remove("theme-transitioning"), 220);
   }, []);
 
-  const setBrightness = useCallback((b: number) => {
-    const clamped = Math.max(0, Math.min(1, Math.round(b * 100) / 100));
-    setBrightnessState(clamped);
-    try { localStorage.setItem(LS_BRIGHTNESS, String(clamped)); } catch {}
+  const toggleDarkMode = useCallback(() => {
+    setDarkModeState((prev) => {
+      const next = !prev;
+      const el = document.documentElement;
+      el.classList.add("theme-transitioning");
+      try { localStorage.setItem(LS_DARK, String(next)); } catch {}
+      setTimeout(() => el.classList.remove("theme-transitioning"), 220);
+      return next;
+    });
   }, []);
 
   return (
-    <ThemeContext.Provider value={{ theme, brightness, setTheme, setBrightness }}>
+    <ThemeContext.Provider value={{ theme, darkMode, setTheme, toggleDarkMode }}>
       {children}
     </ThemeContext.Provider>
   );

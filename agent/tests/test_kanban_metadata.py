@@ -149,6 +149,47 @@ def test_lane_model_round_trip():
     assert board.lanes[0].prompt == "Summarise this card."
 
 
+def test_move_lane_reorders_columns():
+    vault_kanban.create_empty("ml.md", columns=["Todo", "Doing", "Done"])
+    # Move "Done" to the front.
+    vault_kanban.move_lane("ml.md", "done", 0)
+    board = vault_kanban.read_board("ml.md")
+    assert [ln.id for ln in board.lanes] == ["done", "todo", "doing"]
+
+    # Position past the end appends.
+    vault_kanban.move_lane("ml.md", "done", 99)
+    board = vault_kanban.read_board("ml.md")
+    assert [ln.id for ln in board.lanes] == ["todo", "doing", "done"]
+
+    # Position None also appends.
+    vault_kanban.move_lane("ml.md", "todo", None)
+    board = vault_kanban.read_board("ml.md")
+    assert [ln.id for ln in board.lanes] == ["doing", "done", "todo"]
+
+
+def test_move_lane_unknown_raises():
+    vault_kanban.create_empty("mu.md", columns=["A"])
+    with pytest.raises(KeyError):
+        vault_kanban.move_lane("mu.md", "missing", 0)
+
+
+def test_kanban_manage_tool_move_lane():
+    vault_kanban.create_empty("mlt.md", columns=["A", "B", "C"])
+    out = json.loads(handle_kanban_tool({
+        "action": "move_lane", "path": "mlt.md", "lane": "c", "position": 0,
+    }))
+    assert out["ok"] is True
+    board = vault_kanban.read_board("mlt.md")
+    assert [ln.id for ln in board.lanes] == ["c", "a", "b"]
+
+    # Missing lane id fails fast.
+    out = json.loads(handle_kanban_tool({
+        "action": "move_lane", "path": "mlt.md", "position": 0,
+    }))
+    assert out["ok"] is False
+    assert "lane" in out["error"]
+
+
 def test_kanban_manage_tool_metadata():
     vault_kanban.create_empty("m.md")
     add = json.loads(handle_kanban_tool({

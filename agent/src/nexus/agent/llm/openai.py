@@ -13,6 +13,7 @@ from .auth import AuthStrategy
 from .types import (
     ChatMessage,
     ChatResponse,
+    ContentPart,
     LLMError,
     LLMProvider,
     LLMTransportError,
@@ -56,9 +57,60 @@ def _is_repeating_tail(text: str, threshold: int) -> bool:
     return False
 
 
+def _encode_part_openai(part: ContentPart) -> dict[str, Any] | None:
+    """Translate one ``ContentPart`` into OpenAI-compat multipart shape.
+
+    Image parts read bytes from the vault and produce a ``data:`` URL
+    (works on api.openai.com and on Google's ``/v1beta/openai`` shim).
+    Audio parts emit ``input_audio`` blocks (gpt-4o-audio-preview style).
+    The encoder assumes ``materialize_message`` has already lowered any
+    parts the model can't handle natively to text — so unsupported kinds
+    (e.g. document) simply fall back to a breadcrumb text block.
+    """
+    import base64
+
+    if part.kind == "text":
+        return {"type": "text", "text": part.text or ""}
+    if part.kind == "image":
+        from ...multimodal import read_vault_bytes, sniff_mime
+
+        path = part.vault_path or ""
+        mime = part.mime_type or sniff_mime(path)
+        try:
+            data = read_vault_bytes(path)
+        except FileNotFoundError:
+            return {"type": "text", "text": f"[image missing: {path}]"}
+        b64 = base64.b64encode(data).decode("ascii")
+        return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+    if part.kind == "audio":
+        from ...multimodal import read_vault_bytes, sniff_mime
+
+        path = part.vault_path or ""
+        mime = part.mime_type or sniff_mime(path)
+        try:
+            data = read_vault_bytes(path)
+        except FileNotFoundError:
+            return {"type": "text", "text": f"[audio missing: {path}]"}
+        # OpenAI's ``input_audio.format`` accepts the bare extension
+        # (``wav``, ``mp3``); normalise from the mime type.
+        fmt = mime.split("/", 1)[-1]
+        b64 = base64.b64encode(data).decode("ascii")
+        return {"type": "input_audio", "input_audio": {"data": b64, "format": fmt}}
+    # Document parts shouldn't reach the OpenAI encoder — materialize_message
+    # extracts them to text — but emit a safe breadcrumb just in case.
+    return {"type": "text", "text": f"[unsupported part kind: {part.kind}]"}
+
+
 def _encode_msg(m: ChatMessage) -> dict[str, Any]:
     out: dict[str, Any] = {"role": m.role.value}
-    if m.content is not None:
+    if isinstance(m.content, list):
+        encoded_parts: list[dict[str, Any]] = []
+        for part in m.content:
+            translated = _encode_part_openai(part)
+            if translated is not None:
+                encoded_parts.append(translated)
+        out["content"] = encoded_parts
+    elif m.content is not None:
         out["content"] = m.content
     if m.tool_calls:
         out["tool_calls"] = [
@@ -73,13 +125,20 @@ def _encode_msg(m: ChatMessage) -> dict[str, Any]:
         out["tool_call_id"] = m.tool_call_id
     if m.name is not None:
         out["name"] = m.name
+    # DeepSeek requires reasoning_content on assistant messages to be
+    # passed back verbatim on every subsequent turn.
+    if m.reasoning_content is not None:
+        out["reasoning_content"] = m.reasoning_content
     return out
 
 
 def _encode_tool(t: ToolSpec) -> dict[str, Any]:
+    params = dict(t.parameters)
+    if params.get("type") == "object" and "additionalProperties" not in params:
+        params["additionalProperties"] = False
     return {
         "type": "function",
-        "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
+        "function": {"name": t.name, "description": t.description, "parameters": params},
     }
 
 
@@ -103,6 +162,7 @@ def _decode_openai(data: dict[str, Any]) -> ChatResponse:
         tool_calls=tool_calls,
         stop_reason=stop_reason,
         usage=_usage_from_openai(data.get("usage") or {}),
+        reasoning_content=msg.get("reasoning_content"),
     )
 
 
@@ -151,7 +211,7 @@ class OpenAIProvider(LLMProvider):
         base_url: str,
         auth: AuthStrategy,
         model: str = "",
-        read_timeout: float | None = None,
+         read_timeout: float | None = 600,
         temperature: float = 0.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
@@ -172,11 +232,11 @@ class OpenAIProvider(LLMProvider):
         self._strict_compat = any(h in self._base_url for h in self._STRICT_COMPAT_HOSTS)
         # Local reasoning models (GLM-4.7-flash, DeepSeek-R1, Qwen-QwQ, …) can
         # spend many minutes on the chain-of-thought before emitting any
-        # `delta.content`. A 120s read timeout truncates them mid-thought; we
-        # keep the connect timeout tight but let the read side run unbounded
-        # by default. Callers that issue non-streaming batch requests
-        # (e.g. GraphRAG extraction) should pass an explicit ``read_timeout``
-        # to bound a hung Ollama from blocking the event loop indefinitely.
+        # `delta.content`. A 120s read timeout truncates them mid-thought; the
+        # default of 600s (10 min) is generous enough for extended reasoning
+        # while still preventing a hung provider from freezing the daemon
+        # indefinitely. Pass a lower ``read_timeout`` for batch callers
+        # (e.g. GraphRAG extraction).
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=60.0, pool=10.0)
         )
@@ -188,13 +248,19 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolSpec] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
         resolved_model = model or self._model
         if not resolved_model:
             raise LLMError("No model specified: pass model= or set a default at construction")
+        from ...multimodal import materialize_messages
+        from ...providers.catalog import capabilities_for_model_name
+
+        caps = capabilities_for_model_name(resolved_model)
+        prepared = await materialize_messages(messages, caps)
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": [_encode_msg(m) for m in messages],
+            "messages": [_encode_msg(m) for m in prepared],
             "temperature": self._temperature,
         }
         # OpenAI-extensions: silently ignored by most compat providers
@@ -210,6 +276,15 @@ class OpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
+        # Pass-through for caller-supplied extras (e.g. voice_ack disables
+        # extended thinking via {"thinking": {"type": "disabled"}} so the
+        # ack call doesn't burn its token budget on internal reasoning).
+        # Most OpenAI-compat providers silently ignore unknown fields;
+        # the strict ones (Gemini compat) reject them, so we skip there.
+        if extra_payload and not self._strict_compat:
+            for k, v in extra_payload.items():
+                if k not in payload:  # never overwrite explicit fields
+                    payload[k] = v
 
         try:
             resp = await self._client.post(
@@ -254,9 +329,14 @@ class OpenAIProvider(LLMProvider):
         resolved_model = model or self._model
         if not resolved_model:
             raise LLMError("No model specified: pass model= or set a default at construction")
+        from ...multimodal import materialize_messages
+        from ...providers.catalog import capabilities_for_model_name
+
+        caps = capabilities_for_model_name(resolved_model)
+        prepared = await materialize_messages(messages, caps)
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": [_encode_msg(m) for m in messages],
+            "messages": [_encode_msg(m) for m in prepared],
             "temperature": self._temperature,
             "stream": True,
         }
@@ -301,8 +381,11 @@ class OpenAIProvider(LLMProvider):
 
                 # Aggregated state for the finish event
                 full_text = ""
-                # id -> {name, args_buf}
-                tool_bufs: dict[str, dict[str, Any]] = {}
+                full_reasoning = ""
+                # index -> {name, args_buf}; keyed by index (not id) because
+                # some providers (DeepSeek) omit `id` on argument-only deltas.
+                tool_bufs: dict[int, dict[str, Any]] = {}
+                idx_to_id: dict[int, str] = {}
 
                 # Many OpenAI-compat providers emit the `usage` object only
                 # on the final SSE frame after all choice deltas — we stash
@@ -344,6 +427,7 @@ class OpenAIProvider(LLMProvider):
                     # appended to assistant content / persisted to history.
                     reasoning_piece = delta.get("reasoning") or delta.get("reasoning_content")
                     if reasoning_piece:
+                        full_reasoning += reasoning_piece
                         yield {"type": "thinking_delta", "text": reasoning_piece}
 
                     # Text delta
@@ -358,23 +442,28 @@ class OpenAIProvider(LLMProvider):
                     # Tool call deltas
                     for tc_delta in delta.get("tool_calls") or []:
                         idx = tc_delta.get("index", 0)
-                        tc_id = tc_delta.get("id", f"tc_{idx}")
                         fn = tc_delta.get("function", {})
                         tc_name = fn.get("name", "")
                         args_delta = fn.get("arguments", "")
 
-                        if tc_id not in tool_bufs and tc_name:
-                            tool_bufs[tc_id] = {"name": tc_name, "args_buf": ""}
+                        if idx not in tool_bufs and tc_name:
+                            tc_id = tc_delta.get("id", f"tc_{idx}")
+                            idx_to_id[idx] = tc_id
+                            tool_bufs[idx] = {"name": tc_name, "args_buf": ""}
                             yield {"type": "tool_call_start", "id": tc_id, "name": tc_name}
 
-                        if args_delta and tc_id in tool_bufs:
-                            tool_bufs[tc_id]["args_buf"] += args_delta
+                        if args_delta and idx in tool_bufs:
+                            tool_bufs[idx]["args_buf"] += args_delta
+                            tc_id = idx_to_id.get(idx, f"tc_{idx}")
                             yield {"type": "tool_call_delta", "id": tc_id, "args_delta": args_delta}
+                        elif tc_delta.get("id") and idx in tool_bufs:
+                            idx_to_id[idx] = tc_delta["id"]
 
                     if finish_reason is not None:
                         # Emit tool_call_end for each accumulated tool call
                         tool_calls: list[dict[str, Any]] = []
-                        for tc_id, buf in tool_bufs.items():
+                        for idx, buf in tool_bufs.items():
+                            tc_id = idx_to_id.get(idx, f"tc_{idx}")
                             yield {"type": "tool_call_end", "id": tc_id}
                             try:
                                 args = json.loads(buf["args_buf"] or "{}")
@@ -389,6 +478,7 @@ class OpenAIProvider(LLMProvider):
                             "content": full_text,
                             "tool_calls": tool_calls,
                             "usage": stream_usage.model_dump(),
+                            "reasoning_content": full_reasoning or None,
                         }
 
                 if aborted_repeat:
@@ -402,6 +492,7 @@ class OpenAIProvider(LLMProvider):
                         "tool_calls": [],
                         "usage": stream_usage.model_dump(),
                         "abort_reason": "repetition",
+                        "reasoning_content": full_reasoning or None,
                     }
         except httpx.HTTPError as exc:
             raise LLMTransportError(str(exc)) from exc

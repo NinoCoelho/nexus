@@ -7,13 +7,23 @@
     "filters": "Filtros",
     "activeFilterIndicator": " •",
     "addLane": "+ Coluna",
-    "boardDeleted": "O arquivo do quadro foi excluído"
+    "boardDeleted": "O arquivo do quadro foi excluído",
+    "boardSettingsTitle": "Configurações do quadro — {{title}}",
+    "boardPromptDescription": "O prompt do quadro é adicionado antes de qualquer prompt de coluna em cada despacho. Use para definir personalidade, comportamento e instruções gerais para todos os cartões deste quadro.",
+    "boardPromptLabel": "Prompt do quadro",
+    "boardPromptPlaceholder": "ex. Você é um assistente de escrita criativa. Seja imaginativo, use linguagem vívida e sugira ideias ousadas.",
+    "boardPromptIndicator": "Prompt do quadro definido",
+    "boardSettings": "Configurações",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "saving": "Salvando..."
   },
   "lane": {
     "promptIndicator": "Prompt de despacho automático definido",
     "editPrompt": "Editar prompt da coluna",
     "setPrompt": "Definir prompt da coluna",
     "deleteLane": "Excluir coluna",
+    "dragHandle": "Arraste para reordenar a coluna",
     "addCard": "+ Cartão",
     "addCardAria": "Adicionar cartão a esta coluna",
     "newLaneTitle": "Nova coluna",
@@ -28,7 +38,14 @@
   "card": {
     "deleteTitle": "Excluir cartão",
     "deleteMessage": "Este cartão será removido do quadro.",
-    "deleteConfirm": "Excluir"
+    "deleteConfirm": "Excluir",
+    "ctxOpenChat": "Abrir no chat",
+    "ctxViewActivity": "Ver atividade",
+    "ctxCancel": "Cancelar agente",
+    "ctxRetry": "Tentar novamente",
+    "ctxReRun": "Executar novamente",
+    "ctxMoveTo": "Mover para…",
+    "ctxDelete": "Excluir cartão"
   },
   "filter": {
     "textPlaceholder": "Buscar cartões…",

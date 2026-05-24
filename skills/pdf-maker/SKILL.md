@@ -22,7 +22,7 @@ pdf-maker.py (generic engine)
 
 ## Requirements
 
-- Install Nexus with the `pdf` extra: `uv sync --extra pdf` (provides `Pillow` + `fpdf2`)
+This skill has an isolated Python environment managed by Nexus (provides `Pillow` + `fpdf2`). After calling `skill_view(name="pdf-maker")`, use the `python.path` from the response (referred to as `$SKILL_PYTHON` below).
 - Inter + Montserrat fonts at `~/.nexus/fonts/` (optional — falls back to Arial)
 - Script (bundled with this skill): `~/.nexus/skills/pdf-maker/scripts/pdf-maker.py`
 
@@ -31,7 +31,7 @@ pdf-maker.py (generic engine)
 ### 1. From Markdown (quick)
 
 ```bash
-python3 ~/.nexus/skills/pdf-maker/scripts/pdf-maker.py from-md <input.md> -o output.pdf [options]
+"$SKILL_PYTHON" ~/.nexus/skills/pdf-maker/scripts/pdf-maker.py from-md <input.md> -o output.pdf [options]
 ```
 
 Options:
@@ -45,7 +45,7 @@ Markdown parsing: extracts `# Title`, `> subtitle`, `## Section` headers, and `-
 ### 2. From JSON Blueprint (full control)
 
 ```bash
-python3 ~/.nexus/skills/pdf-maker/scripts/pdf-maker.py build blueprint.json -o output.pdf
+"$SKILL_PYTHON" ~/.nexus/skills/pdf-maker/scripts/pdf-maker.py build blueprint.json -o output.pdf
 ```
 
 **Blueprint format:**

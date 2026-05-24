@@ -33,6 +33,14 @@ class ModelEntry(BaseModel):
     # Gates which models the UI offers for the embedding role; chat-only
     # models (gpt-4o, glm-4.7, etc.) should leave this false.
     is_embedding_capable: bool = False
+    # Speculative decoding type for local GGUF models. When set (e.g.
+    # ``"draft-mtp"``), passed to llama-server as ``--spec-type``.
+    # Auto-detected from GGUF metadata on first start; user can override.
+    spec_type: str = ""
+    # Number of draft tokens for speculative decoding. Passed to
+    # llama-server as ``--spec-draft-n-max``. Auto-detected from the
+    # GGUF ``nextn_predict_layers`` metadata.
+    spec_draft_n_max: int = 0
 
 
 AuthKind = Literal["api", "oauth", "iam", "anonymous"]
@@ -68,6 +76,31 @@ class ProviderConfig(BaseModel):
     iam_extra: dict[str, str] = Field(default_factory=dict)
 
 
+class NexusAccountConfig(BaseModel):
+    """Settings for the optional Nexus hosted-LLM subscription.
+
+    All fields are optional with sensible production defaults. Users who
+    don't sign in to a Nexus account get the same behavior as before —
+    the watcher just no-ops when no key is stored in
+    ``~/.nexus/secrets.toml`` under ``nexus_api_key``.
+    """
+
+    # The Next.js website that issues API keys (auth/verify) and exposes
+    # /api/status. The desktop app opens its /auth/signin in a popup and
+    # the new Settings tab embeds its root in an iframe.
+    base_url: str = "https://www.nexus-model.us"
+    # The OpenAI-compat LiteLLM gateway that actually serves chat
+    # completions for the Nexus-tier models.
+    gateway_url: str = "https://llm.nexus-model.us/v1"
+    # How often the status-watcher polls /api/status for tier / model
+    # changes. Clamped to >= 60s by the watcher itself.
+    poll_seconds: int = 300
+    # When True, the watcher upgrades the agent's default model from
+    # ``demo`` to ``nexus`` automatically the moment ``nexus`` becomes
+    # available (i.e. the user upgrades to pro).
+    auto_upgrade_default: bool = True
+
+
 class AgentConfig(BaseModel):
     default_model: str = ""
     last_used_model: str = ""
@@ -91,6 +124,22 @@ class AgentConfig(BaseModel):
     # legacy 4096 since its API requires the field). Per-model overrides on
     # ``ModelEntry.max_output_tokens`` win when > 0.
     default_max_output_tokens: int = 0
+    # Model id (matches a [[models]] entry) designated as the OCR / vision
+    # worker. Empty = no model is wired up; nexus.ocr falls back to whatever
+    # else is in [ocr] or returns no-op. Set via the "Vision" toggle in the
+    # models settings table.
+    vision_model: str = ""
+    # Per-turn cumulative token budget for tool results. When the total
+    # tool-result text in a single turn exceeds this threshold (estimated
+    # tokens), the agent receives a system hint to synthesize with what it
+    # has instead of calling more tools. 0 = disabled (no budget).
+    tool_budget_tokens: int = 15_000
+    # Cross-turn cumulative token budget. When total tool-result tokens
+    # across the entire session history exceed this threshold, the agent
+    # triggers compact_and_summarize before starting the next turn.
+    # Prevents the death spiral where scraped content accumulates across
+    # turns without cleanup. 0 = disabled.
+    session_tool_budget_tokens: int = 50_000
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
@@ -166,7 +215,8 @@ class ScrapeConfig(BaseModel):
     mode: str = "auto"
     headless: bool = True
     timeout: int = 30
-    max_content_bytes: int = 102400
+    max_content_bytes: int = 8192
+    max_scrape_calls: int = 3
 
 
 class RemoteTranscriptionConfig(BaseModel):
@@ -182,6 +232,36 @@ class TranscriptionConfig(BaseModel):
     device: Literal["cpu", "cuda", "auto"] = "auto"
     compute_type: str = "int8"
     remote: RemoteTranscriptionConfig = Field(default_factory=RemoteTranscriptionConfig)
+
+
+class TTSConfig(BaseModel):
+    """Voice output settings — intentionally minimal.
+
+    The engine is fixed (bundled Piper). The two default voices
+    (en_GB-northern_english_male-medium, pt_BR-faber-medium) auto-download
+    on first daemon start. Language is auto-detected per utterance via
+    ``langdetect``.
+    """
+    # Master switch. When False, click-to-listen buttons hide and no
+    # spoken acknowledgments fire.
+    enabled: bool = True
+    # Speak short feedback when a turn was started from a *voice* message
+    # (start + completion). Always-on when enabled — no per-kind toggles.
+    ack_enabled: bool = True
+    # When "voice", acks only fire on voice-input turns (classic behaviour).
+    # When "always", the agent speaks its completion summary on every turn,
+    # even when the user typed — useful for hands-free / accessibility use.
+    ack_mode: Literal["voice", "always"] = "voice"
+    # Model used for voice ack LLM calls (start + completion). Empty string
+    # falls back to the agent's default_model. Setting a fast/cheap model
+    # (e.g. gpt-4o-mini, claude-3-5-haiku) keeps ack latency low.
+    ack_model: str = ""
+    # Override language for spoken acks. Empty → auto-detect via langdetect.
+    # Set to a 2-letter code (e.g. "pt") to skip detection and always use
+    # that language — useful when langdetect misidentifies short utterances.
+    voice_language: str = ""
+    # Where the downloaded ONNX voice files live. Empty → ~/.nexus/tts/piper/.
+    voices_dir: str = ""
 
 
 class VaultHistoryConfig(BaseModel):
@@ -203,6 +283,49 @@ class UIConfig(BaseModel):
     language: Literal["en", "pt-BR"] = "en"
 
 
+class LocationConfig(BaseModel):
+    city: str = ""
+    region: str = ""
+    country: str = ""
+    timezone: str = ""
+    lat: float = 0.0
+    lon: float = 0.0
+    disabled: bool = False
+
+
+class DreamConfig(BaseModel):
+    enabled: bool = True
+    schedule_cron: str = "0 3 * * *"
+    min_sessions_since_last: int = 5
+    model_id: str = ""
+    context_budget_tokens: int = 8000
+    max_output_tokens: int = 4000
+    max_duration_seconds: int = 300
+    daily_token_budget: int = 500000
+    write_mode: Literal["direct", "stage"] = "direct"
+
+
+class McpServerEntry(BaseModel):
+    transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
+    command: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class McpConfig(BaseModel):
+    servers: dict[str, McpServerEntry] = Field(default_factory=dict)
+    server_enabled: bool = False
+    server_port: int = 18990
+    server_expose: list[str] = Field(default_factory=list)
+    server_auth_token: str = ""
+
+
+class ServerConfig(BaseModel):
+    multi_user: bool = False
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -211,8 +334,14 @@ class NexusConfig(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     scrape: ScrapeConfig = Field(default_factory=ScrapeConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    tts: TTSConfig = Field(default_factory=TTSConfig)
     vault: VaultConfig = Field(default_factory=VaultConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    nexus_account: NexusAccountConfig = Field(default_factory=NexusAccountConfig)
+    location: LocationConfig = Field(default_factory=LocationConfig)
+    dream: DreamConfig = Field(default_factory=DreamConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
 
 
 # Fresh install starts with providers configured but NO models.

@@ -22,6 +22,7 @@ export interface DataTable {
 export interface DatabaseSummary {
   folder: string;
   title: string;
+  icon?: string | null;
   table_count: number;
 }
 

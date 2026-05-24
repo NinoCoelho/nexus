@@ -135,10 +135,10 @@ async def test_preflight_passes_when_history_fits(agent_with_window) -> None:
     await agent.aclose()
 
 
-async def test_preflight_skipped_when_window_unconfigured(tmp_path: Path) -> None:
-    """A model without ``context_window`` (the default for new entries) must
-    not be falsely flagged — the safety net is opt-in."""
-    cfg = _cfg_with_window(window=0)  # disabled
+async def test_preflight_uses_fallback_when_window_unconfigured(tmp_path: Path) -> None:
+    """A model without ``context_window`` falls back to the 32K default and
+    still catches obvious overflows (gigantic history)."""
+    cfg = _cfg_with_window(window=0)  # disabled → uses _DEFAULT_FALLBACK_WINDOW
     spy = _SpyProvider()
     agent = Agent(
         provider=spy,
@@ -151,13 +151,13 @@ async def test_preflight_skipped_when_window_unconfigured(tmp_path: Path) -> Non
         "go", history=history, context=None, session_id="s3", model_id="test/model",
     ):
         events.append(ev)
-    # Provider WAS dialed even though history is gigantic — by design.
-    assert spy.stream_calls >= 1
+    # Provider should NOT be dialed — overflow was caught by the pre-flight.
+    assert spy.stream_calls == 0
     overflow = next(
         (e for e in events if e.get("type") == "error" and e.get("reason") == "context_overflow"),
         None,
     )
-    assert overflow is None
+    assert overflow is not None
     await agent.aclose()
 
 

@@ -187,13 +187,10 @@ class BuiltinExtractor:
             return _make_response({"entities": [], "relations": []})
 
         prompt = messages[0].content if hasattr(messages[0], "content") else str(messages[0])
-        entity_types, text = _parse_prompt(prompt)
+        entity_types, core_relations, text = _parse_prompt(prompt)
         if not text:
             return _make_response({"entities": [], "relations": []})
 
-        # spaCy NLP is CPU-bound. Pick the per-language pipeline once per
-        # chunk; en is the safe default if detection fails or returns a
-        # language we don't ship a model for.
         snippet = text[:3000]
         lang = _detect_lang(snippet)
         nlp = self._nlps.get(lang) or self._nlps["en"]
@@ -201,7 +198,7 @@ class BuiltinExtractor:
         doc = await loop.run_in_executor(None, lambda: nlp(snippet))
 
         entities = await self._extract_entities(doc, entity_types)
-        relations = await self._extract_relations(doc, entities)
+        relations = await self._extract_relations(doc, entities, core_relations)
 
         return _make_response({"entities": entities, "relations": relations})
 
@@ -323,10 +320,12 @@ class BuiltinExtractor:
 
     async def _extract_relations(
         self, doc: Any, entities: list[dict[str, str]],
+        core_relations: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if len(entities) < 2:
             return []
 
+        rel_set = set(core_relations) if core_relations else set()
         relations: list[dict[str, Any]] = []
         seen_pairs: set[frozenset[str]] = set()
 
@@ -344,23 +343,26 @@ class BuiltinExtractor:
                         continue
                     seen_pairs.add(pair)
 
-                    rel = await self._classify_relation(e1["name"], e2["name"])
+                    rel = await self._classify_relation(
+                        e1["name"], e2["name"], core_relations,
+                    )
                     relations.append({
                         "head": e1["name"],
                         "relation": rel,
                         "tail": e2["name"],
                         "description": f"{e1['name']} {rel} {e2['name']}",
                         "strength": 5,
-                        "custom": rel not in {
-                            "uses", "depends_on", "part_of",
-                            "created_by", "related_to",
-                        },
+                        "custom": rel not in rel_set,
                     })
 
         return relations[:20]
 
-    async def _classify_relation(self, head: str, tail: str) -> str:
-        if not self._rel_embs:
+    async def _classify_relation(
+        self, head: str, tail: str,
+        core_relations: list[str] | None = None,
+    ) -> str:
+        rels = core_relations if core_relations else list(self._rel_embs.keys())
+        if not rels:
             return "related_to"
 
         combined = f"{head} {tail}"
@@ -368,7 +370,11 @@ class BuiltinExtractor:
 
         best_rel = "related_to"
         best_score = -1.0
-        for rel, proto in self._rel_embs.items():
+        for rel in rels:
+            proto = self._rel_embs.get(rel)
+            if proto is None:
+                proto = (await self._embedder.embed([rel.replace("_", " ")]))[0]
+                self._rel_embs[rel] = proto
             score = _cosine_sim(emb, proto)
             if score > best_score:
                 best_score = score

@@ -25,6 +25,15 @@ export interface CatalogEntry {
   repo_id: string;
   /** Backing filename (not shown to the user). */
   filename: string;
+  /** Vision-language projector sidecar that ships in the same repo. When set,
+   *  the install flow downloads BOTH files and waits until the projector is
+   *  on disk before starting llama-server (which then loads it via --mmproj
+   *  so image inputs work). */
+  mmproj_filename?: string;
+  /** Routing role auto-assigned post-install when the matching field on
+   *  ``cfg.agent`` is empty. Currently only "vision" → ``agent.vision_model``,
+   *  which the OCR layer reads. */
+  role?: "vision";
 }
 
 export const CATALOG: CatalogEntry[] = [

@@ -17,6 +17,15 @@ from .message import _loom_to_nexus_message, _nexus_stop_to_loom
 log = logging.getLogger(__name__)
 
 
+def _msg_fingerprint(msg: lt.ChatMessage) -> tuple | None:
+    """Build a stable fingerprint for an assistant message for reasoning_content lookup."""
+    if msg.role != lt.Role.ASSISTANT:
+        return None
+    content_str = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    tc_ids = tuple(tc.id for tc in (msg.tool_calls or []))
+    return ("assistant", content_str[:500], tc_ids)
+
+
 class LoomProviderAdapter(LoomLLMProvider):
     """Wraps a Nexus LLMProvider to satisfy loom.llm.base.LLMProvider.
 
@@ -38,15 +47,15 @@ class LoomProviderAdapter(LoomLLMProvider):
         self._nexus = provider
         self._registry = provider_registry
         self._default_model = default_model
-        # Resolves the per-call max_tokens (per-model > global default > 0).
-        # 0 means "don't pass max_tokens" — providers handle that as either
-        # omitting the field (OpenAI-compat) or a legacy fallback (Anthropic).
         self._max_tokens_for = max_tokens_for
-        # Optional side-channel for thinking-model chain-of-thought. The Nexus
-        # Agent sets this per-turn; the adapter funnels reasoning chunks here
-        # instead of yielding them to loom (loom's ContentDeltaEvent path
-        # appends to assistant content and would persist the CoT to history).
         self._thinking_sink: Callable[[str], None] | None = None
+        self._last_reasoning_content: str | None = None
+        # Side-channel for reasoning_content survival. The agent loop populates
+        # this with fingerprints of assistant messages that carry reasoning,
+        # and the adapter re-attaches it when converting loom→nexus so
+        # thinking-model APIs (DeepSeek-R1, etc.) see reasoning_content on
+        # every assistant turn in the message history.
+        self._reasoning_content_map: dict[tuple, str] = {}
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
         """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name).
@@ -79,6 +88,22 @@ class LoomProviderAdapter(LoomLLMProvider):
             resolved = getattr(self._nexus, "_model", None) or None
         return self._nexus, resolved
 
+    def _restore_reasoning(self, loom_msgs: list[lt.ChatMessage]) -> list:
+        from nexus.agent.llm import ChatMessage as NexusChatMessage
+        nexus_messages = [_loom_to_nexus_message(m) for m in loom_msgs]
+        if not self._reasoning_content_map:
+            return nexus_messages
+        out: list[NexusChatMessage] = []
+        for loom_m, nexus_m in zip(loom_msgs, nexus_messages):
+            fp = _msg_fingerprint(loom_m)
+            if fp and fp in self._reasoning_content_map:
+                out.append(nexus_m.model_copy(
+                    update={"reasoning_content": self._reasoning_content_map[fp]}
+                ))
+            else:
+                out.append(nexus_m)
+        return out
+
     async def chat(
         self,
         messages: list[lt.ChatMessage],
@@ -86,7 +111,7 @@ class LoomProviderAdapter(LoomLLMProvider):
         tools: list[lt.ToolSpec] | None = None,
         model: str | None = None,
     ) -> lt.ChatResponse:
-        nexus_messages = [_loom_to_nexus_message(m) for m in messages]
+        nexus_messages = self._restore_reasoning(messages)
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
         log.warning(
@@ -125,11 +150,14 @@ class LoomProviderAdapter(LoomLLMProvider):
         tools: list[lt.ToolSpec] | None = None,
         model: str | None = None,
     ) -> AsyncIterator[lt.StreamEvent]:
-        nexus_messages = [_loom_to_nexus_message(m) for m in messages]
-        # Nexus streaming yields dicts; we translate to loom Pydantic events.
+        nexus_messages = self._restore_reasoning(messages)
         # Collect tool call deltas so we can emit a stop event at the end.
         finish_reason: str = "stop"
-        tool_parts: dict[str, dict[str, Any]] = {}
+        tool_parts: dict[int, dict[str, Any]] = {}
+        idx_to_tc_id: dict[int, str] = {}
+        self._last_reasoning_content = None
+        _accumulated_reasoning: list[str] = []
+        _accumulated_content: list[str] = []
 
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
@@ -155,24 +183,29 @@ class LoomProviderAdapter(LoomLLMProvider):
                 )
 
             if etype == "thinking_delta":
+                rc_piece = ev.get("text", "")
+                if rc_piece:
+                    _accumulated_reasoning.append(rc_piece)
                 sink = self._thinking_sink
                 if sink is not None:
                     try:
-                        sink(ev.get("text", ""))
+                        sink(rc_piece)
                     except Exception:
-                        # A broken sink must not poison the LLM stream.
                         pass
                 continue
 
             if etype == "delta":
-                yield lt.ContentDeltaEvent(delta=ev.get("text", ""))
+                _delta_text = ev.get("text", "")
+                if _delta_text:
+                    _accumulated_content.append(_delta_text)
+                yield lt.ContentDeltaEvent(delta=_delta_text)
 
             elif etype == "tool_call_start":
                 tc_id = ev.get("id", "")
                 tc_name = ev.get("name", "")
-                tool_parts[tc_id] = {"name": tc_name, "args": ""}
-                # Emit a tool_call_delta with index so loom.Agent assembles it
-                idx = len(tool_parts) - 1
+                idx = len(tool_parts)
+                idx_to_tc_id[idx] = tc_id
+                tool_parts[idx] = {"name": tc_name, "args": ""}
                 yield lt.ToolCallDeltaEvent(
                     index=idx, id=tc_id, name=tc_name, arguments_delta=None
                 )
@@ -180,45 +213,78 @@ class LoomProviderAdapter(LoomLLMProvider):
             elif etype == "tool_call_delta":
                 tc_id = ev.get("id", "")
                 args_delta = ev.get("args_delta", "")
-                if tc_id in tool_parts:
-                    tool_parts[tc_id]["args"] += args_delta
-                    # Find index by insertion order
-                    idx = list(tool_parts.keys()).index(tc_id)
-                    yield lt.ToolCallDeltaEvent(
-                        index=idx, id=tc_id, name=None, arguments_delta=args_delta
-                    )
+                # Find the index for this tc_id; providers that include the id
+                # on every delta can match directly, otherwise we fall back to
+                # the last-open tool part.
+                idx = None
+                for i, tid in idx_to_tc_id.items():
+                    if tid == tc_id:
+                        idx = i
+                        break
+                if idx is None and tool_parts:
+                    idx = max(tool_parts.keys())
+                if idx is not None and args_delta:
+                    tool_parts[idx]["args"] += args_delta
 
             elif etype == "tool_call_end":
                 pass  # loom assembles from deltas; no explicit end event in loom
 
             elif etype == "finish":
                 finish_reason = ev.get("finish_reason", "stop")
-                # Emit any tool calls from the finish event as delta events so
-                # loom.Agent can assemble them (some providers only emit tool
-                # calls in the finish frame, not as deltas).
-                # Only synthesize tool-call deltas for providers that DIDN'T
-                # already stream them. If we've seen any `tool_call_delta`
-                # event for a tc_id, its args are already assembled in loom's
-                # buffer — re-emitting the full payload here would duplicate.
+                # Capture reasoning_content from the provider's finish event.
+                # Prefer the finish event's value (accumulated by the provider);
+                # fall back to our own accumulation from thinking_delta events.
+                rc = ev.get("reasoning_content")
+                if rc:
+                    self._last_reasoning_content = rc
+                elif _accumulated_reasoning:
+                    self._last_reasoning_content = "".join(_accumulated_reasoning)
+                _accumulated_reasoning.clear()
+                # Emit validated tool call arguments from the finish event.
+                # By NOT forwarding raw streaming deltas above, loom's
+                # accumulation buffer is empty — so we safely emit the
+                # complete validated args here without duplication.
                 finish_tool_calls = ev.get("tool_calls") or []
-                for idx, tc_dict in enumerate(finish_tool_calls):
-                    tc_id = tc_dict.get("id", f"tc_{idx}")
-                    if tc_id in tool_parts and tool_parts[tc_id]["args"]:
-                        continue  # already streamed — skip
+                finish_tc_ids: set[str] = set()
+                for tc_dict in finish_tool_calls:
+                    tc_id = tc_dict.get("id", f"tc_{len(tool_parts)}")
+                    finish_tc_ids.add(tc_id)
                     tc_name = tc_dict.get("name", "")
                     tc_args = tc_dict.get("arguments", {})
                     if isinstance(tc_args, dict):
                         tc_args_str = json.dumps(tc_args)
                     else:
                         tc_args_str = str(tc_args)
-                    if tc_id not in tool_parts:
+                    # Find existing index by tc_id, or allocate new
+                    idx = None
+                    for i, tid in idx_to_tc_id.items():
+                        if tid == tc_id:
+                            idx = i
+                            break
+                    if idx is None:
+                        idx = len(tool_parts)
+                        idx_to_tc_id[idx] = tc_id
                         yield lt.ToolCallDeltaEvent(
                             index=idx, id=tc_id, name=tc_name, arguments_delta=None
                         )
-                        tool_parts[tc_id] = {"name": tc_name, "args": tc_args_str}
+                        tool_parts[idx] = {"name": tc_name, "args": tc_args_str}
                     yield lt.ToolCallDeltaEvent(
                         index=idx, id=tc_id, name=None, arguments_delta=tc_args_str
                     )
+                # Handle tool calls that were streamed as deltas but absent
+                # from the finish event — validate raw accumulated args.
+                for idx, parts in tool_parts.items():
+                    tc_id = idx_to_tc_id.get(idx, f"tc_{idx}")
+                    if tc_id not in finish_tc_ids:
+                        raw = parts["args"]
+                        try:
+                            json.loads(raw)
+                            validated = raw
+                        except json.JSONDecodeError:
+                            validated = "{}"
+                        yield lt.ToolCallDeltaEvent(
+                            index=idx, id=tc_id, name=None, arguments_delta=validated
+                        )
 
                 usage_dict = ev.get("usage") or {}
                 usage = lt.Usage(
@@ -233,6 +299,25 @@ class LoomProviderAdapter(LoomLLMProvider):
                 except ValueError:
                     loom_stop = lt.StopReason.UNKNOWN
                 yield lt.StopEvent(stop_reason=loom_stop)
+
+                # Self-register the fingerprint of the assistant message this
+                # call produced (content + tool_call IDs). When loom's iteration
+                # loop appends the assembled ChatMessage to all_messages and
+                # calls chat_stream again, the fingerprint will match and
+                # _restore_reasoning will re-attach reasoning_content.
+                if self._last_reasoning_content:
+                    _content_text = "".join(_accumulated_content) or None
+                    _tc_ids = tuple(
+                        tc_dict.get("id", f"tc_{i}")
+                        for i, tc_dict in enumerate(finish_tool_calls)
+                    )
+                    _fp = (
+                        "assistant",
+                        (_content_text or "")[:500],
+                        _tc_ids,
+                    )
+                    self._reasoning_content_map[_fp] = self._last_reasoning_content
+                _accumulated_content.clear()
 
         # Post-iteration summary — fires whether the provider yielded
         # one event or zero. A zero-event stream means the upstream

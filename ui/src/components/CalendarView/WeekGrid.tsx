@@ -13,6 +13,7 @@
  */
 
 import type { CSSProperties } from "react";
+import { MessageSquare, Play, Zap } from "lucide-react";
 import type { CalendarEvent } from "../../api/calendar";
 import {
   addDays,
@@ -222,7 +223,7 @@ export default function WeekGrid({
                     title={`${ev.title} — ${ev.status}`}
                   >
                     {isAgentAssigned(ev) && (
-                      <span style={{ marginRight: 3 }}>⚡</span>
+                      <span style={{ marginRight: 3 }}><Zap size={12} /></span>
                     )}
                     {ev.title}
                     {ev.status === "missed" && (
@@ -230,7 +231,7 @@ export default function WeekGrid({
                         className="cal-event-fire-btn"
                         onClick={(e) => { e.stopPropagation(); onEventFire(ev); }}
                         title="Fire now"
-                      >▶</button>
+                      ><Play size={12} /></button>
                     )}
                   </div>
                 );
@@ -291,7 +292,7 @@ export default function WeekGrid({
                     }}
                   >
                     {isAgentAssigned(ev) && (
-                      <span style={{ marginRight: 3 }}>⚡</span>
+                      <span style={{ marginRight: 3 }}><Zap size={12} /></span>
                     )}
                     {ev.title}
                   </div>
@@ -304,13 +305,13 @@ export default function WeekGrid({
                         className="cal-event-fire-btn"
                         onClick={(e) => { e.stopPropagation(); onEventFire(ev); }}
                         title="Fire now"
-                      >▶</button>
+                      ><Play size={12} /></button>
                     )}
                     <button
                       className="cal-event-chat-btn"
                       onClick={(e) => { e.stopPropagation(); onEventOpenChat(ev); }}
                       title="Open in chat"
-                    >💬</button>
+                    ><MessageSquare size={12} /></button>
                   </div>
                 </div>
               );

@@ -7,6 +7,7 @@ export interface RoutingConfig {
   available_models: string[];
   embedding_model_id: string;
   extraction_model_id: string;
+  vision_model_id: string;
 }
 
 export async function getRouting(): Promise<RoutingConfig> {
@@ -20,6 +21,7 @@ export async function putRouting(patch: {
   last_used_model?: string;
   embedding_model_id?: string;
   extraction_model_id?: string;
+  vision_model_id?: string;
 }): Promise<RoutingConfig> {
   const res = await fetch(`${BASE}/routing`, {
     method: "PUT",

@@ -112,6 +112,7 @@ async def vault_calendar_add_event(body: dict, path: str) -> dict:
             fire_every_min=body.get("fire_every_min"),
             model=body.get("model"),
             assignee=body.get("assignee"),
+            remind_before_min=body.get("remind_before_min"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -204,3 +205,66 @@ async def vault_calendar_query(body: dict) -> dict:
         limit=int(body.get("limit") or 500),
     )
     return {"events": hits, "count": len(hits)}
+
+
+# ── alarm endpoints ──────────────────────────────────────────────────────────
+
+
+@router.post("/vault/calendar/events/{event_id}/alarm/ack")
+async def vault_calendar_alarm_ack(event_id: str, body: dict) -> dict:
+    """Acknowledge a ringing alarm so it stops re-firing for this occurrence."""
+    from ...calendar_runtime import get_alarm_store
+    alarm_store = get_alarm_store()
+    if alarm_store is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="alarm store not initialized")
+    occurrence_start = body.get("occurrence_start")
+    if not occurrence_start:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="occurrence_start required")
+    existing = alarm_store.get(event_id, occurrence_start)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alarm not found")
+    alarm_store.acknowledge(event_id, occurrence_start)
+    return {"ok": True}
+
+
+@router.post("/vault/calendar/events/{event_id}/alarm/snooze")
+async def vault_calendar_alarm_snooze(event_id: str, body: dict) -> dict:
+    """Snooze a ringing alarm for N minutes."""
+    from datetime import UTC, datetime, timedelta
+    from ...calendar_runtime import get_alarm_store
+    alarm_store = get_alarm_store()
+    if alarm_store is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="alarm store not initialized")
+    occurrence_start = body.get("occurrence_start")
+    minutes = body.get("minutes", 5)
+    if not occurrence_start:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="occurrence_start required")
+    existing = alarm_store.get(event_id, occurrence_start)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alarm not found")
+    until = datetime.now(UTC) + timedelta(minutes=max(1, int(minutes)))
+    alarm_store.snooze(event_id, occurrence_start, until.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    return {"ok": True, "snoozed_until": until.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+@router.get("/vault/calendar/alarms")
+async def vault_calendar_alarms() -> dict:
+    """List all currently ringing alarms."""
+    from ...calendar_runtime import get_alarm_store
+    alarm_store = get_alarm_store()
+    if alarm_store is None:
+        return {"alarms": [], "count": 0}
+    ringing = alarm_store.list_ringing()
+    return {
+        "alarms": [
+            {
+                "event_id": a.event_id,
+                "occurrence_start": a.occurrence_start,
+                "status": a.status,
+                "calendar_path": a.calendar_path,
+                "created_at": a.created_at,
+            }
+            for a in ringing
+        ],
+        "count": len(ringing),
+    }

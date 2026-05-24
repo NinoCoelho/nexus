@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { listPins, type PinnedMessage } from "../../api";
 import "./PinnedPanel.css";
 
@@ -34,7 +35,7 @@ export default function PinnedPanel({ refreshKey, onOpenSession }: Props) {
         aria-expanded={open}
       >
         <span>Pinned ({pins.length})</span>
-        <span className={`sidebar-pinned-caret${open ? " is-open" : ""}`}>▸</span>
+        <span className={`sidebar-pinned-caret${open ? " is-open" : ""}`}><ChevronRight size={12} /></span>
       </button>
       {open && (
         <div className="sidebar-pinned-list">

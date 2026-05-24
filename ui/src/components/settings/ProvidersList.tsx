@@ -10,6 +10,7 @@
  * wizard in add mode.
  */
 
+import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteModel,
@@ -190,6 +191,19 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
     return out;
   }, [models]);
 
+  // Pin the hosted Nexus provider to the top of the list so the first
+  // thing the user sees in Settings → Models is the Nexus offering. BYO
+  // providers stay in their original (insertion / catalog) order below.
+  const sortedProviders = useMemo(() => {
+    const nexus: Provider[] = [];
+    const rest: Provider[] = [];
+    for (const p of providers) {
+      if (p.name === "nexus") nexus.push(p);
+      else rest.push(p);
+    }
+    return [...nexus, ...rest];
+  }, [providers]);
+
   const catalogById = useMemo(() => {
     const out: Record<string, ProviderCatalogEntry> = {};
     for (const e of catalog ?? []) out[e.id] = e;
@@ -259,11 +273,11 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
 
   return (
     <div className="providers-list">
-      {providers.length === 0 && (
+      {sortedProviders.length === 0 && (
         <p className="providers-list-empty">No providers configured yet.</p>
       )}
 
-      {providers.map((p) => {
+      {sortedProviders.map((p) => {
         const provModels = modelsByProvider[p.name] ?? [];
         return (
           <div key={p.name} className="providers-list-card">
@@ -286,7 +300,7 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
                 onClick={() => setConfirmRemoveProvider(p.name)}
                 aria-label={`Remove ${p.name}`}
               >
-                ✕
+                <X size={14} />
               </button>
             </div>
             <div className="providers-list-card__body">
@@ -301,7 +315,7 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
                     }
                     aria-label={`Remove ${m.model_name}`}
                   >
-                    ✕
+                    <X size={12} />
                   </button>
                 </span>
               ))}

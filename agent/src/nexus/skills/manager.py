@@ -41,6 +41,7 @@ class SkillManager:
             "delete": self._delete,
             "write_file": self._write_file,
             "remove_file": self._remove_file,
+            "ensure_venv": self._ensure_venv,
         }
         fn = dispatch.get(action)
         if fn is None:
@@ -67,9 +68,20 @@ class SkillManager:
                 message=f"skill blocked by guard: {[f.pattern for f in guard.findings]}",
                 rolled_back=True,
             )
+        # Optional ``trust`` override defaults to "agent" (back-compat for the
+        # plain skill_manage("create") path). The wizard's skill-builder skill
+        # passes ``trust="user"`` so wizard-built skills are owned, not flagged
+        # as runtime self-evolution. ``derived_from`` is the wizard provenance
+        # block — opaque to manager, persisted unmodified.
+        trust = _coerce_trust(args.get("trust"))
+        derived_from = args.get("derived_from")
         skill_dir.mkdir(parents=True)
         _atomic_write(skill_dir / "SKILL.md", content)
-        _write_meta(skill_dir, trust="agent", authored_at=_now())
+        meta_kwargs: dict[str, Any] = {"trust": trust, "authored_at": _now()}
+        if isinstance(derived_from, dict):
+            meta_kwargs["derived_from"] = derived_from
+        _write_meta(skill_dir, **meta_kwargs)
+        self._maybe_create_venv(name, skill_dir, content)
         self._registry.reload()
         return ManagerResult(ok=True, message=f"skill {name!r} created")
 
@@ -123,6 +135,9 @@ class SkillManager:
         skill_dir = self._skills_dir / name
         if not skill_dir.is_dir():
             return ManagerResult(ok=False, message=f"skill {name!r} not found")
+        from .venv_manager import remove_venv
+
+        remove_venv(name)
         import shutil
         shutil.rmtree(skill_dir)
         self._registry.reload()
@@ -143,6 +158,8 @@ class SkillManager:
         target = skill_dir / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(target, content)
+        if rel_path == "requirements.txt":
+            self._maybe_sync_venv(name, skill_dir)
         return ManagerResult(ok=True, message=f"wrote {rel_path} in skill {name!r}")
 
     def _remove_file(self, args: dict[str, Any]) -> ManagerResult:
@@ -173,6 +190,62 @@ class SkillManager:
             return ManagerResult(ok=False, message=f"frontmatter name must match skill dir: {expected_name!r}")
         return None
 
+    def _ensure_venv(self, args: dict[str, Any]) -> ManagerResult:
+        name = args.get("name", "")
+        skill_dir = self._skills_dir / name
+        if not skill_dir.is_dir():
+            return ManagerResult(ok=False, message=f"skill {name!r} not found")
+        req_file = skill_dir / "requirements.txt"
+        if not req_file.is_file():
+            return ManagerResult(ok=False, message=f"skill {name!r} has no requirements.txt")
+        try:
+            skill = self._registry.get(name)
+        except KeyError:
+            return ManagerResult(ok=False, message=f"skill {name!r} not loaded")
+        from .venv_manager import ensure_venv
+
+        try:
+            py = ensure_venv(name, skill_dir, skill.python_version)
+        except Exception as exc:
+            return ManagerResult(ok=False, message=f"venv creation failed: {exc}")
+        return ManagerResult(ok=True, message=f"venv ready for {name!r}: {py}")
+
+    def _maybe_create_venv(self, name: str, skill_dir: Path, content: str) -> None:
+        if not (skill_dir / "requirements.txt").is_file():
+            return
+        python_version = None
+        try:
+            post = frontmatter.loads(content)
+            pv = post.metadata.get("python_version")
+            if pv is not None:
+                python_version = str(pv)
+        except Exception:
+            pass
+        from .venv_manager import ensure_venv
+
+        try:
+            ensure_venv(name, skill_dir, python_version)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "failed to create venv for skill %s", name, exc_info=True
+            )
+
+    def _maybe_sync_venv(self, name: str, skill_dir: Path) -> None:
+        try:
+            skill = self._registry.get(name)
+        except KeyError:
+            return
+        from .venv_manager import sync_venv
+
+        try:
+            sync_venv(name, skill_dir, skill.python_version)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "failed to sync venv for skill %s", name, exc_info=True
+            )
+
 
 def _atomic_write(path: Path, content: str) -> None:
     dir_ = path.parent
@@ -193,8 +266,8 @@ def _check_path(rel_path: str, skill_dir: Path) -> str | None:
     if ".." in rel_path or rel_path.startswith("/"):
         return "path traversal not allowed"
     parts = Path(rel_path).parts
-    if parts and parts[0] not in _ALLOWED_SUBDIRS:
-        return f"first path component must be one of: {sorted(_ALLOWED_SUBDIRS)}"
+    if parts and parts[0] not in _ALLOWED_SUBDIRS and rel_path != "requirements.txt":
+        return f"first path component must be one of: {sorted(_ALLOWED_SUBDIRS)} (or requirements.txt at skill root)"
     resolved = (skill_dir / rel_path).resolve()
     if not str(resolved).startswith(str(skill_dir.resolve())):
         return "path escapes skill directory"
@@ -203,3 +276,13 @@ def _check_path(rel_path: str, skill_dir: Path) -> str | None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_TRUST_VALUES = {"builtin", "user", "agent"}
+
+
+def _coerce_trust(v: Any) -> str:
+    """Validate the optional ``trust`` arg from skill_manage("create", …)."""
+    if isinstance(v, str) and v in _TRUST_VALUES:
+        return v
+    return "agent"

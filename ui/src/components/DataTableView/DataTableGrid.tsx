@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import type { FieldSchema } from "../../types/form";
+import type { RefLabelLookup } from "../datatable/refOptions";
 import InlineEditor from "./InlineEditor";
 import { renderCell } from "./utils";
 import { RefPreviewPopup } from "./RefPreviewPopup";
@@ -31,6 +32,8 @@ interface Props {
   safePage: number;
   pageCount: number;
   hostPath?: string;
+  selectedRowId?: string | null;
+  refLabels?: RefLabelLookup;
   onToggleSort: (name: string) => void;
   onStartEdit: (rowId: string, field: FieldSchema, value: unknown) => void;
   onCellDraftChange: (v: unknown) => void;
@@ -38,6 +41,7 @@ interface Props {
   onCancelEdit: () => void;
   onEditRow: (row: RowRecord) => void;
   onDeleteRow: (rowId: string) => void;
+  onRowClick: (row: RowRecord) => void;
   onPageChange: (next: number) => void;
 }
 
@@ -69,9 +73,10 @@ interface Props {
  */
 export default function DataTableGrid({
   visibleFields, pageRows, sorted, rows, fields, sort,
-  editingCell, cellDraft, safePage, pageCount, hostPath,
+  editingCell, cellDraft, safePage, pageCount, hostPath, selectedRowId,
+  refLabels,
   onToggleSort, onStartEdit, onCellDraftChange, onCommitEdit, onCancelEdit,
-  onEditRow, onDeleteRow, onPageChange,
+  onEditRow, onDeleteRow, onRowClick, onPageChange,
 }: Props) {
   const [refPreview, setRefPreview] = useState<{ target: string; id: string } | null>(null);
   const handleRefClick = (target: string, id: string) => setRefPreview({ target, id });
@@ -98,6 +103,7 @@ export default function DataTableGrid({
         <table className="dt-table">
           <thead>
             <tr>
+              <th className="dt-actions-col dt-actions-col--icons"></th>
               {visibleFields.map((f) => (
                 <th
                   key={f.name}
@@ -111,17 +117,42 @@ export default function DataTableGrid({
                   )}
                 </th>
               ))}
-              <th className="dt-actions-col">Actions</th>
             </tr>
           </thead>
           <tbody>
             {pageRows.map((row, i) => {
               const rowId = String(row._id ?? i);
+              const isSelected = selectedRowId === rowId;
               return (
-                <tr key={rowId}>
+                <tr
+                  key={rowId}
+                  className={isSelected ? "dt-row--selected" : undefined}
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest("button") || target.closest("a") || target.closest("input") || target.closest("select") || target.closest("textarea")) return;
+                    onRowClick(row);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
+                  <td className="dt-actions-col dt-actions-col--icons">
+                    <button
+                      className="dt-icon-btn"
+                      onClick={() => onEditRow(row)}
+                      title="Edit"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2z" /></svg>
+                    </button>
+                    <button
+                      className="dt-icon-btn dt-icon-btn--delete"
+                      onClick={() => onDeleteRow(rowId)}
+                      title="Delete"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 0 1 1.34-1.34h2.66a1.33 1.33 0 0 1 1.34 1.34V4m2 0v9.33a1.33 1.33 0 0 1-1.34 1.34H4.67a1.33 1.33 0 0 1-1.34-1.34V4h9.34z" /></svg>
+                    </button>
+                  </td>
                   {visibleFields.map((f) => {
                     const isEditing = editingCell?.rowId === rowId && editingCell.field === f.name;
-                    const inlineable = INLINE_EDITABLE.has(f.kind ?? "text") && f.kind !== "formula";
+                    const inlineable = INLINE_EDITABLE.has(f.kind ?? "text") && f.kind !== "formula" && f.kind !== "rollup";
                     return (
                       <td
                         key={f.name}
@@ -141,27 +172,11 @@ export default function DataTableGrid({
                             onCancel={onCancelEdit}
                           />
                         ) : (
-                          renderCell(row[f.name], f, { onRefClick: handleRefClick, hostPath })
+                          renderCell(row[f.name], f, { onRefClick: handleRefClick, hostPath, refLabels })
                         )}
                       </td>
                     );
                   })}
-                  <td className="dt-actions-col">
-                    <button
-                      className="dt-action-btn"
-                      onClick={() => onEditRow(row)}
-                      title="Edit"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="dt-action-btn dt-action-btn--delete"
-                      onClick={() => onDeleteRow(rowId)}
-                      title="Delete"
-                    >
-                      Del
-                    </button>
-                  </td>
                 </tr>
               );
             })}

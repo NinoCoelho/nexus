@@ -1,0 +1,4 @@
+ifcopenshell
+ezdxf
+pymupdf
+openpyxl

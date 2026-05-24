@@ -12,13 +12,14 @@ import { parseHistoryTimestamp, type ChatState } from "../types/chat";
 
 type SetChatStates = React.Dispatch<React.SetStateAction<Map<string, ChatState>>>;
 
-const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed)\]\s*/;
+const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed|budget_exceeded)\]\s*/;
 
 export async function loadSessionHistory(
   id: string,
   setChatStates: SetChatStates,
-  computeSeedModel: () => string,
+  computeSeedModel: (preferred?: string) => string,
   patchState: (key: string, patch: Partial<ChatState>) => void,
+  forceRefresh?: boolean,
 ): Promise<void> {
   try {
     const detail = await getSession(id);
@@ -41,8 +42,36 @@ export async function loadSessionHistory(
       const m = raw[i];
 
       if (m.role === "user") {
-        const content = m.content ?? "";
-        if (content.trim().length === 0) continue;
+        // Server may serialize ``content`` as a plain string OR a list of
+        // ContentPart dicts when the turn carried image/audio/document
+        // attachments. Split a multipart payload into a text body + chip
+        // list so the bubble renders the same way it did during streaming.
+        // The TS type narrows to ``string`` for all the common paths; cast
+        // through ``unknown`` here to accept the array shape at runtime.
+        const rawContent = m.content as unknown;
+        let content = "";
+        let attachments: { name: string; vaultPath: string }[] | undefined;
+        if (typeof rawContent === "string") {
+          content = rawContent;
+        } else if (Array.isArray(rawContent)) {
+          const texts: string[] = [];
+          const atts: { name: string; vaultPath: string }[] = [];
+          for (const p of rawContent as Array<{
+            kind?: string; text?: string; vault_path?: string;
+          }>) {
+            if (p?.kind === "text" && typeof p.text === "string") {
+              texts.push(p.text);
+            } else if (typeof p?.vault_path === "string" && p.vault_path) {
+              atts.push({
+                name: p.vault_path.split("/").pop() ?? p.vault_path,
+                vaultPath: p.vault_path,
+              });
+            }
+          }
+          content = texts.join("\n\n");
+          if (atts.length > 0) attachments = atts;
+        }
+        if (content.trim().length === 0 && !attachments) continue;
         if (content.startsWith(HIDDEN_SEED_MARKER)) continue;
         flush();
         msgs.push({
@@ -51,6 +80,7 @@ export async function loadSessionHistory(
           timestamp: parseHistoryTimestamp(m.created_at),
           seq: m.seq,
           pinned: m.pinned ?? false,
+          ...(attachments ? { attachments } : {}),
         });
         continue;
       }
@@ -155,11 +185,16 @@ export async function loadSessionHistory(
       // Don't clobber in-flight state: if thinking or local-only messages
       // exist for this session already, preserve them; only seed history
       // for sessions we haven't loaded yet.
-      if (cur && cur.historyLoaded) return prev;
-      const seedModel = cur?.selectedModel || computeSeedModel();
+      if (!forceRefresh && cur && cur.historyLoaded) return prev;
+      // If history shows the last message is from the user with no assistant
+      // reply after it, the turn never completed on the server. Force thinking
+      // off so the UI doesn't show a stuck spinner after a server restart.
+      const lastFiltered = filtered[filtered.length - 1];
+      const neverReplied = lastFiltered?.role === "user";
+      const seedModel = computeSeedModel(cur?.selectedModel);
       next.set(id, {
         messages: filtered,
-        thinking: cur?.thinking ?? false,
+        thinking: neverReplied ? false : (cur?.thinking ?? false),
         input: cur?.input ?? "",
         historyLoaded: true,
         attachments: cur?.attachments ?? [],

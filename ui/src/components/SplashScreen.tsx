@@ -1,17 +1,40 @@
 import { useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
+import { BASE } from "../api/base";
 import "./SplashScreen.css";
 
 const SESSION_KEY = "nexus.splashShown.v1";
+const HEALTH_POLL_MS = 2000;
+const HEALTH_TIMEOUT_MS = 3000;
 
-function shouldShow(): boolean {
-  if (typeof window === "undefined") return false;
+type Mode = "loading" | "branding" | "leaving" | "done";
+
+function sessionSplashShown(): boolean {
   try {
-    if (sessionStorage.getItem(SESSION_KEY) === "1") return false;
+    return sessionStorage.getItem(SESSION_KEY) === "1";
   } catch {
-    /* sessionStorage unavailable — show anyway */
+    return false;
   }
-  return true;
+}
+
+function markSessionSplashShown(): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+async function isBackendUp(): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
+    const res = await fetch(`${BASE}/health`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 function playChime(): void {
@@ -22,7 +45,6 @@ function playChime(): void {
     if (!Ctor) return;
     const ctx = new Ctor();
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
-    // Soft major arpeggio: C5 → E5 → G5
     const notes = [523.25, 659.25, 783.99];
     const t0 = ctx.currentTime + 0.05;
     notes.forEach((freq, i) => {
@@ -38,11 +60,10 @@ function playChime(): void {
       osc.start(start);
       osc.stop(start + 0.75);
     });
-    // A subtle low pad to give it body
     const pad = ctx.createOscillator();
     const padGain = ctx.createGain();
     pad.type = "sine";
-    pad.frequency.value = 130.81; // C3
+    pad.frequency.value = 130.81;
     padGain.gain.setValueAtTime(0, t0);
     padGain.gain.linearRampToValueAtTime(0.025, t0 + 0.2);
     padGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.4);
@@ -51,62 +72,105 @@ function playChime(): void {
     pad.stop(t0 + 1.5);
     setTimeout(() => ctx.close().catch(() => {}), 1800);
   } catch {
-    /* autoplay blocked or no audio support — silent fallback */
+    /* autoplay blocked or no audio support */
   }
 }
 
+function removeFallback(): void {
+  const el = document.getElementById("nexus-fallback");
+  if (el) el.remove();
+}
+
 export function SplashScreen() {
-  const [show, setShow] = useState<boolean>(shouldShow);
-  const [leaving, setLeaving] = useState(false);
+  const [mode, setMode] = useState<Mode>("loading");
   const dismissedRef = useRef(false);
 
   useEffect(() => {
-    if (!show) return;
+    removeFallback();
+
+    let cancelled = false;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const total = reduce ? 900 : 2200;
-    const fadeOut = reduce ? 240 : 520;
+    const brandingDuration = reduce ? 900 : 2200;
+    const fadeOutDuration = reduce ? 240 : 520;
 
-    playChime();
-
-    const dismiss = () => {
+    function dismiss() {
       if (dismissedRef.current) return;
       dismissedRef.current = true;
-      setLeaving(true);
-      try {
-        sessionStorage.setItem(SESSION_KEY, "1");
-      } catch {
-        /* ignore */
+      setMode("leaving");
+      markSessionSplashShown();
+      setTimeout(() => {
+        if (!cancelled) setMode("done");
+      }, fadeOutDuration);
+    }
+
+    async function run() {
+      const up = await isBackendUp();
+      if (cancelled) return;
+
+      if (up && sessionSplashShown()) {
+        dismiss();
+        return;
       }
-      window.setTimeout(() => setShow(false), fadeOut);
-    };
 
-    const auto = window.setTimeout(dismiss, total);
-    const onKey = () => dismiss();
-    const onPointer = () => dismiss();
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointer);
+      if (!up) {
+        while (!cancelled) {
+          await new Promise<void>((r) => setTimeout(r, HEALTH_POLL_MS));
+          if (cancelled) return;
+          if (await isBackendUp()) break;
+        }
+        if (cancelled) return;
+
+        if (sessionSplashShown()) {
+          dismiss();
+          return;
+        }
+      }
+
+      setMode("branding");
+      playChime();
+
+      const auto = setTimeout(dismiss, brandingDuration);
+      const onKey = () => dismiss();
+      const onPointer = () => dismiss();
+      window.addEventListener("keydown", onKey);
+      window.addEventListener("pointerdown", onPointer);
+
+      return () => {
+        clearTimeout(auto);
+        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("pointerdown", onPointer);
+      };
+    }
+
+    const cleanup = run();
     return () => {
-      window.clearTimeout(auto);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointer);
+      cancelled = true;
+      cleanup?.then?.((fn) => fn?.());
     };
-  }, [show]);
+  }, []);
 
-  if (!show) return null;
+  if (mode === "done") return null;
+
+  const isLeaving = mode === "leaving";
+  const isLoading = mode === "loading";
+
   return (
     <div
-      className={`nexus-splash ${leaving ? "is-leaving" : "is-entering"}`}
+      className={`nexus-splash ${isLeaving ? "is-leaving" : "is-entering"} ${isLoading ? "is-loading" : ""}`}
       role="dialog"
-      aria-label="Nexus is loading"
+      aria-label={isLoading ? "Nexus is starting" : "Nexus is loading"}
       aria-live="polite"
     >
       <div className="nexus-splash__bg" aria-hidden="true" />
       <div className="nexus-splash__ring nexus-splash__ring--a" aria-hidden="true" />
       <div className="nexus-splash__ring nexus-splash__ring--b" aria-hidden="true" />
+      {isLoading && <div className="nexus-splash__orbit" aria-hidden="true" />}
       <div className="nexus-splash__banner">
         <BrandMark size="lg" />
       </div>
-      <div className="nexus-splash__hint">tap or press any key to skip</div>
+      <div className="nexus-splash__hint">
+        {isLoading ? "Starting Nexus…" : "tap or press any key to skip"}
+      </div>
     </div>
   );
 }

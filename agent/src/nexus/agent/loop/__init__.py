@@ -28,6 +28,7 @@ from .helpers import (
     _AFFIRMATIVES,
     _NEGATIVES,
     _annotate_short_reply,
+    _build_user_message,
     _extract_pending_question,
     _from_loom_message,
     _to_loom_message,
@@ -43,6 +44,7 @@ __all__ = [
     "_NEGATIVES",
     "_extract_pending_question",
     "_annotate_short_reply",
+    "_build_user_message",
     "_to_loom_message",
     "_from_loom_message",
 ]

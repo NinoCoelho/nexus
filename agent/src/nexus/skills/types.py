@@ -24,6 +24,32 @@ class KeyRequirement(BaseModel):
     url: str | None = None
 
 
+class DerivedFromSource(BaseModel):
+    """A single upstream source consulted while building a derived skill."""
+
+    model_config = ConfigDict(frozen=True)
+
+    slug: str = ""
+    url: str = ""
+    title: str = ""
+
+
+class DerivedFrom(BaseModel):
+    """Provenance of a skill built by the capability wizard.
+
+    Captures the user's plain-language ask plus the upstream sources the
+    agent reviewed when synthesizing the SKILL.md. Surfaced in the UI as
+    "Built from your request: '…'" so the lineage stays visible without
+    putting GitHub URLs front-and-center.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    wizard_ask: str = ""
+    wizard_built_at: str = ""
+    sources: tuple[DerivedFromSource, ...] = ()
+
+
 class Skill(BaseModel):
     """A single skill loaded from disk."""
 
@@ -35,3 +61,6 @@ class Skill(BaseModel):
     source_dir: Path
     trust: Literal["builtin", "user", "agent"] = "user"
     requires_keys: tuple[KeyRequirement, ...] = ()
+    derived_from: DerivedFrom | None = None
+    python_version: str | None = None
+    has_requirements: bool = False

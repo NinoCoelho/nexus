@@ -27,6 +27,7 @@ interface UseVaultActionsOptions {
   setCtxMenu: (m: null) => void;
   descendantCounts: Map<string, { files: number; dirs: number }>;
   uploadCtxDirRef: React.RefObject<HTMLInputElement | null>;
+  onImportZip?: (file: File) => Promise<void>;
 }
 
 export function useVaultActions({
@@ -41,6 +42,7 @@ export function useVaultActions({
   setCtxMenu,
   descendantCounts,
   uploadCtxDirRef,
+  onImportZip,
 }: UseVaultActionsOptions) {
   const { t } = useTranslation("vault");
   const handleMove = useCallback(async (fromPath: string, toDir: string) => {
@@ -276,6 +278,21 @@ export function useVaultActions({
   const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>, overrideDir?: string) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
+
+    const files = Array.from(fileList);
+    const zipFiles = files.filter((f) => f.name.toLowerCase().endsWith(".zip"));
+    const nonZipFiles = files.filter((f) => !f.name.toLowerCase().endsWith(".zip"));
+
+    if (zipFiles.length > 0 && onImportZip) {
+      for (const zf of zipFiles) {
+        await onImportZip(zf);
+      }
+      if (nonZipFiles.length === 0) {
+        e.target.value = "";
+        return;
+      }
+    }
+
     try {
       const destDir = overrideDir ?? (selectedPath
         ? rawNodes.find((n) => n.path === selectedPath && n.type === "dir")
@@ -284,7 +301,7 @@ export function useVaultActions({
             ? selectedPath.substring(0, selectedPath.lastIndexOf("/"))
             : undefined
         : undefined);
-      const result = await uploadVaultFiles(Array.from(fileList), destDir);
+      const result = await uploadVaultFiles(nonZipFiles.length > 0 ? nonZipFiles : files, destDir);
       toast.success(t("vault:toast.uploaded", { count: result.uploaded.length }));
       refreshTree();
       if (result.uploaded.length === 1) onSelectPath(result.uploaded[0].path);
@@ -292,7 +309,7 @@ export function useVaultActions({
       toast.error(t("vault:toast.uploadFailed"), { detail: err instanceof Error ? err.message : undefined });
     }
     e.target.value = "";
-  }, [selectedPath, rawNodes, refreshTree, onSelectPath, toast, t]);
+  }, [selectedPath, rawNodes, refreshTree, onSelectPath, toast, t, onImportZip]);
 
   return {
     handleMove,

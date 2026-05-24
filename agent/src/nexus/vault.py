@@ -10,9 +10,13 @@ from typing import Any
 
 import yaml
 
-_VAULT_ROOT = Path("~/.nexus/vault").expanduser()
-_MAX_SIZE = 1 * 1024 * 1024  # 1 MiB
+from . import home as _home
+
+_MAX_SIZE = 1 * 1024 * 1024  # 1 MiB — text writes
+_MAX_BINARY_SIZE = 32 * 1024 * 1024  # 32 MiB — images/audio/pdf attachments
 _SKIP_DIRS = {"node_modules", "__pycache__"}
+
+_VAULT_ROOT: Path | None = None
 
 
 @dataclass
@@ -24,8 +28,9 @@ class Entry:
 
 
 def _vault_root() -> Path:
-    _VAULT_ROOT.mkdir(parents=True, exist_ok=True)
-    return _VAULT_ROOT
+    if _VAULT_ROOT is not None:
+        return _VAULT_ROOT
+    return _home.vault_root()
 
 
 def _safe_resolve(rel: str, root: Path) -> Path:
@@ -243,6 +248,15 @@ def _post_write_hooks(rel_path: str, content: str) -> None:
     try:
         from .server.event_bus import publish
         publish({"type": "vault.indexed", "path": rel_path})
+        fm, _ = _parse_frontmatter(content)
+        event_type = "vault.updated"
+        if fm is not None:
+            if "kanban-plugin" in fm:
+                event_type = "vault.kanban_updated"
+            elif "workflow-plugin" in fm:
+                event_type = "vault.workflow_updated"
+        if event_type != "vault.indexed":
+            publish({"type": event_type, "path": rel_path})
     except Exception:
         pass
     try:
@@ -367,8 +381,10 @@ def move(from_path: str, to_path: str) -> None:
 
 
 def write_file_bytes(rel_path: str, data: bytes) -> None:
-    if len(data) > _MAX_SIZE:
-        raise ValueError("content exceeds 1 MiB limit")
+    if len(data) > _MAX_BINARY_SIZE:
+        raise ValueError(
+            f"content exceeds {_MAX_BINARY_SIZE // (1024 * 1024)} MiB limit"
+        )
     root = _vault_root()
     full = _safe_resolve(rel_path, root)
     full.parent.mkdir(parents=True, exist_ok=True)

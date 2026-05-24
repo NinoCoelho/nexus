@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Pencil, Lock, X } from "lucide-react";
 import type { Model } from "../../api";
 
 interface Props {
@@ -37,6 +38,7 @@ export default function ModelRow({
   const { t } = useTranslation("models");
   const isEmb = roles.includes("embedding");
   const isExt = roles.includes("extraction");
+  const isVision = roles.includes("vision");
 
   return (
     <div className="settings-card">
@@ -105,18 +107,34 @@ export default function ModelRow({
             >
               {t("models:row.roleExtraction")}
             </button>
+            <button
+              type="button"
+              className={`model-role-badge ${isVision ? "model-role-badge--active" : ""}`}
+              onClick={() => {
+                if (isVision) onUnassignRole("vision");
+                else onAssignRole("vision", m.id);
+              }}
+              disabled={roleSaving}
+              title={
+                isVision
+                  ? t("models:row.visionClear")
+                  : t("models:row.visionAssign")
+              }
+            >
+              {t("models:row.roleVision")}
+            </button>
           </div>
         </div>
         <div className="settings-card-actions">
           <button className="settings-icon-btn" title={t("models:row.editTitle")} onClick={onEdit}>
-            ✎
+            <Pencil size={14} />
           </button>
           {locked ? (
             <span
               className="settings-icon-btn settings-icon-btn--locked"
               title={t("models:row.lockedTitle")}
             >
-              🔒
+              <Lock size={14} />
             </span>
           ) : confirmRemove === m.id ? (
             <>
@@ -133,7 +151,7 @@ export default function ModelRow({
               title={t("models:row.removeTitle")}
               onClick={onConfirmRemove}
             >
-              ✕
+              <X size={14} />
             </button>
           )}
         </div>

@@ -57,8 +57,8 @@ Angle: <this sub-agent's specific angle, e.g. "criticism + limitations">
 
 Do the following, then return a STRUCTURED SUMMARY:
 1. Run 1–2 web_search calls scoped to this angle.
-2. From the results, scrape 3–5 of the highest-credibility unique-domain sources
-   using web_scrape with output_format=markdown. Prioritize: peer-reviewed,
+2. From the results, scrape at most 3 of the highest-credibility unique-domain
+   sources using web_scrape with max_content_chars=5000. Prioritize: peer-reviewed,
    government, established independent publications, then company/PR/affiliate.
 3. Read each scraped source. Extract concrete claims with attribution.
 4. Return ONLY the structured summary below — DO NOT dump raw content,
@@ -107,7 +107,8 @@ output>
 
 Do the following, then return a STRUCTURED SUMMARY:
 1. Run 1–2 narrow web_search calls (or scrape specific URLs if already known).
-2. Read the most authoritative 2–3 sources for this specific question.
+2. Read the most authoritative 2–3 sources for this specific question,
+   using web_scrape with max_content_chars=5000.
 3. Return:
 
 ## Verification (question: <question>)
@@ -176,7 +177,8 @@ Method:
 1. Run 2–3 web_search calls aimed at the negative space — phrases like
    "<topic> retracted", "<topic> lawsuit settled", "<topic> warning letter",
    "<topic> FTC", "<topic> criticism", "<topic> failed".
-2. Scrape 2–4 sources that returned hits.
+2. Scrape at most 2–3 sources that returned hits, using web_scrape with
+   max_content_chars=5000.
 3. Return:
 
 ## Adversarial findings

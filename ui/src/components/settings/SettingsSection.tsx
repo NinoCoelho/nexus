@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import HelpPopover from "./HelpPopover";
 
 interface Props {
@@ -47,7 +48,7 @@ export default function SettingsSection({
         .join(" ")}
     >
       <div className="s-section__header" {...headerProps}>
-        {collapsible && <span className="s-section__caret">▶</span>}
+        {collapsible && <span className="s-section__caret"><ChevronRight size={14} /></span>}
         {icon && <span className="s-section__icon">{icon}</span>}
         <span className="s-section__title">{title}</span>
         {help && (

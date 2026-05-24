@@ -49,7 +49,19 @@ ONTOLOGY_MANAGE_TOOL = ToolSpec(
         "Every successful write triggers GraphRAG re-init automatically; "
         "existing extractions keep their old type labels but new content uses "
         "the updated ontology. For a full re-extraction across the vault, the "
-        "user should run `uv run nexus graphrag reindex`."
+        "user should run `uv run nexus graphrag reindex`.\n\n"
+        "Safe usage pattern:\n"
+        "- Before `update_type`/`remove_type`/`update_relation`/`remove_relation`, "
+        "call `view` to confirm the target exists and inspect current values.\n"
+        "- `remove_type` and `remove_relation` are irreversible; use only after "
+        "confirming the target is not referenced by existing extractions.\n\n"
+        "Cost guidance: adding too many entity types or relations makes extraction "
+        "noisy and expensive — prefer a small, high-value set. Justify each new "
+        "type in the `rationale` field of `propose_from_documents`.\n\n"
+        "Cross-tool flow for proposing new types/relations: first inspect "
+        "representative data using `vault_semantic_search`, "
+        "`datatable_manage action=query`, or `vault_csv action=describe`, then "
+        "call `propose_from_documents` with examples grounded in those sources."
     ),
     parameters={
         "type": "object",

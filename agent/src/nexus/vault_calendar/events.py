@@ -66,6 +66,7 @@ def add_event(
     fire_every_min: int | None = None,
     model: str | None = None,
     assignee: str | None = None,
+    remind_before_min: int | None = None,
 ) -> Event:
     if status not in EVENT_STATUSES:
         raise ValueError(f"invalid status {status!r}; allowed: {sorted(EVENT_STATUSES)}")
@@ -90,6 +91,7 @@ def add_event(
         fire_every_min=fire_every_min,
         model=(model.strip() if isinstance(model, str) and model.strip() else None),
         assignee=(assignee.strip() if isinstance(assignee, str) and assignee.strip() else None),
+        remind_before_min=remind_before_min,
     )
     cal.events.append(event)
     write_calendar(path, cal)
@@ -173,6 +175,12 @@ def update_event(path: str, event_id: str, updates: dict[str, Any]) -> Event:
             ev.completed_occurrences = [
                 x for x in ev.completed_occurrences if x != iso
             ]
+    if "remind_before_min" in updates:
+        v = updates["remind_before_min"]
+        if v is None or v == "":
+            ev.remind_before_min = None
+        else:
+            ev.remind_before_min = int(v)
     write_calendar(path, cal)
     return ev
 

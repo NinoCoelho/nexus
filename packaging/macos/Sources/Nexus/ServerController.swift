@@ -48,8 +48,11 @@ final class ServerController {
         logHandle.seekToEndOfFile()
 
         // Clear any stale port file from a previous run so waitForReady reads a fresh one.
-        let portFile = resources.appendingPathComponent(".port")
-        try? FileManager.default.removeItem(at: portFile)
+        let homePortFile = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".nexus/.port")
+        try? FileManager.default.removeItem(at: homePortFile)
+        let resourcesPortFile = resources.appendingPathComponent(".port")
+        try? FileManager.default.removeItem(at: resourcesPortFile)
 
         let p = Process()
         p.executableURL = python
@@ -57,7 +60,7 @@ final class ServerController {
         p.standardOutput = logHandle
         p.standardError = logHandle
         var env = ProcessInfo.processInfo.environment
-        env["NEXUS_PORT_FILE"] = portFile.path
+        env["NEXUS_PORT_FILE"] = homePortFile.path
         // Tell Python where its own home is — python-build-standalone uses this.
         env["PYTHONHOME"] = resources.appendingPathComponent("python").path
         p.environment = env
@@ -69,13 +72,20 @@ final class ServerController {
     /// Polls the .port file then GET /health until success or timeout.
     func waitForReady(timeout seconds: Double) async throws -> Int {
         let deadline = Date().addingTimeInterval(seconds)
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let homePortFile = homeDir.appendingPathComponent(".nexus/.port")
         let resources = Bundle.main.resourceURL ?? Bundle.main.bundleURL
-        let portFile = resources.appendingPathComponent(".port")
+        let resourcesPortFile = resources.appendingPathComponent(".port")
+        let homeHostFile = homeDir.appendingPathComponent(".nexus/.host")
+        let resourcesHostFile = resources.appendingPathComponent(".host")
 
-        let hostFile = resources.appendingPathComponent(".host")
         while Date() < deadline {
-            if let port = readPort(at: portFile) {
+            // Prefer ~/.nexus/.port (writable from /Applications install),
+            // fall back to Resources/.port for dev-checkout runs.
+            if let port = readPort(at: homePortFile) ?? readPort(at: resourcesPortFile) {
                 self.port = port
+                let hostFile = FileManager.default.fileExists(atPath: homeHostFile.path)
+                    ? homeHostFile : resourcesHostFile
                 if let h = try? String(contentsOf: hostFile, encoding: .utf8) {
                     self.bindHost = h.trimmingCharacters(in: .whitespacesAndNewlines)
                 }

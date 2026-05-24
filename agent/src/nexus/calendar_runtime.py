@@ -13,18 +13,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-# Signature: (*, path, event_id, mode, occurrence_start=None) -> dict (with at
-# least "session_id"). ``occurrence_start`` is the UTC ISO of the resolved
-# occurrence the driver is firing — passed through to the background turn so
-# the helper can record per-occurrence completion on success without touching
-# the parent event's ``status`` field.
 Dispatcher = Callable[..., Awaitable[dict[str, Any]]]
-# Signature: (payload) -> None. Publishes a calendar_alert notification on
-# the cross-session channel so the UI can show a toast.
 Notifier = Callable[[dict[str, Any]], None]
 
 _dispatcher: Dispatcher | None = None
 _notifier: Notifier | None = None
+_alarm_store: Any = None
 
 
 def set_dispatcher(fn: Dispatcher) -> None:
@@ -43,3 +37,12 @@ def set_notifier(fn: Notifier) -> None:
 
 def get_notifier() -> Notifier | None:
     return _notifier
+
+
+def set_alarm_store(store: Any) -> None:
+    global _alarm_store
+    _alarm_store = store
+
+
+def get_alarm_store() -> Any:
+    return _alarm_store

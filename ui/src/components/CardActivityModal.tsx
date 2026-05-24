@@ -17,6 +17,9 @@ interface Props {
   cardTitle: string;
   status?: KanbanCardStatus;
   onClose: () => void;
+  /** Forwarded to the embedded vault-link preview so its "Open in Vault"
+   *  header button routes through the App's vault navigator. */
+  onOpenInVault?: (path: string) => void;
 }
 
 interface LiveState {
@@ -26,12 +29,12 @@ interface LiveState {
 }
 
 /** Read-only window into a background-running (or finished) agent turn for a kanban card. */
-export default function CardActivityModal({ sessionId, cardTitle, status, onClose }: Props) {
+export default function CardActivityModal({ sessionId, cardTitle, status, onClose, onOpenInVault }: Props) {
   const [live, setLive] = useState<LiveState>({ timeline: [], reply: "", iter: 0 });
   const [loading, setLoading] = useState(true);
   const stepCounter = useRef(0);
   const streaming = status === "running";
-  const { onPreview, modal } = useVaultLinkPreview();
+  const { onPreview, modal } = useVaultLinkPreview(onOpenInVault);
 
   // Seed from persisted history.
   useEffect(() => {

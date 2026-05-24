@@ -48,8 +48,8 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
         alignItems: "center",
         justifyContent: "center",
         padding: 24,
-        background: "var(--bg, #0e0e10)",
-        color: "var(--fg, #eee)",
+        background: "var(--bg)",
+        color: "var(--fg)",
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
@@ -81,7 +81,7 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
             lineHeight: 1.5,
           }}
         >
-          <strong style={{ color: "#ffb84d" }}>{t("tunnel:login.warning.headsUp")}</strong>{" "}
+          <strong style={{ color: "var(--warn)" }}>{t("tunnel:login.warning.headsUp")}</strong>{" "}
           {t("tunnel:login.warning.body")}
         </div>
 
@@ -103,8 +103,8 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
             textAlign: "center",
             padding: "14px 16px",
             borderRadius: 8,
-            border: "1px solid var(--border, #333)",
-            background: "var(--input-bg, #1a1a1d)",
+            border: "1px solid var(--border)",
+            background: "var(--input-bg)",
             color: "inherit",
             fontFamily: "ui-monospace, monospace",
           }}
@@ -115,7 +115,7 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
             role="alert"
             style={{
               fontSize: 13,
-              color: "var(--danger, #ff6b6b)",
+              color: "var(--bad)",
               textAlign: "center",
             }}
           >
@@ -130,7 +130,7 @@ export default function TunnelLoginScreen({ onSuccess }: Props) {
             padding: "12px 16px",
             borderRadius: 8,
             border: "none",
-            background: busy ? "var(--btn-disabled, #444)" : "var(--accent, #4f8cff)",
+            background: busy ? "var(--btn-disabled)" : "var(--accent)",
             color: "white",
             fontSize: 15,
             cursor: busy ? "default" : "pointer",

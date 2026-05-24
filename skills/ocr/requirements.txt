@@ -1,0 +1,4 @@
+rapidocr-onnxruntime
+Pillow
+numpy
+pdf2image

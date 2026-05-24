@@ -21,10 +21,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from . import home as _home
+
 log = logging.getLogger(__name__)
 
-_META_PATH = Path("~/.nexus/vault_meta.sqlite").expanduser()
-_VAULT_ROOT = Path("~/.nexus/vault").expanduser()
 _lock = threading.Lock()
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
@@ -63,8 +63,9 @@ CREATE TABLE IF NOT EXISTS file_meta (
 
 
 def _connect() -> sqlite3.Connection:
-    _META_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(_META_PATH), check_same_thread=False)
+    meta = _home.vault_meta_db()
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(meta), check_same_thread=False)
     con.executescript(_DDL)
     con.commit()
     return con
@@ -74,7 +75,7 @@ def _norm_path(path: str) -> str:
     p = Path(path)
     if p.is_absolute():
         try:
-            p = p.relative_to(_VAULT_ROOT.expanduser())
+            p = p.relative_to(_home.vault_root())
         except ValueError:
             pass
     return str(p)
@@ -123,7 +124,7 @@ def reindex_file(path: str, body: str, frontmatter: dict[str, Any] | None) -> No
     raw_links = extract_links(body or "")
 
     # Resolve link destinations to normalized paths
-    vault_root = _VAULT_ROOT.expanduser()
+    vault_root = _home.vault_root()
     src_full = vault_root / norm
     link_paths: set[str] = set()
     for dest in raw_links:
@@ -140,7 +141,7 @@ def reindex_file(path: str, body: str, frontmatter: dict[str, Any] | None) -> No
                 except ValueError:
                     pass
 
-    fp = _VAULT_ROOT.expanduser() / norm
+    fp = _home.vault_root() / norm
     try:
         st = fp.stat()
         mtime, size = st.st_mtime, st.st_size
@@ -310,7 +311,7 @@ def rebuild_from_disk(full: bool = False) -> int:
     """
     from .vault_index_rebuild import rebuild_from_disk as _rebuild
     return _rebuild(
-        vault_root=_VAULT_ROOT.expanduser(),
+        vault_root=_home.vault_root(),
         connect_fn=_connect,
         lock=_lock,
         extract_tags_fn=_extract_tags,

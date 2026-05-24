@@ -6,6 +6,7 @@ import typer
 
 from .backup_cmd import backup_app
 from .config_cmd import config_app
+from .cookies_cmd import cookies_app
 from .daemon_cmd import daemon_app
 from .graphrag_cmd import graphrag_app
 from .models_cmd import models_app
@@ -14,6 +15,7 @@ from .sessions_cmd import sessions_app
 from .skills_cmd import skills_app
 from .trajectories_cmd import trajectories_app
 from .tunnel_cmd import tunnel_app
+from .users_cmd import app as users_app
 from .vault_cmd import vault_app
 
 app = typer.Typer(help="Nexus agent CLI", no_args_is_help=True)
@@ -28,7 +30,9 @@ app.add_typer(daemon_app, name="daemon")
 app.add_typer(trajectories_app, name="trajectories")
 app.add_typer(graphrag_app, name="graphrag")
 app.add_typer(backup_app, name="backup")
+app.add_typer(cookies_app, name="cookies")
 app.add_typer(tunnel_app, name="tunnel")
+app.add_typer(users_app, name="users")
 
 
 @app.callback()

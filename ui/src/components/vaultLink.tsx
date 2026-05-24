@@ -18,11 +18,14 @@ import VaultFilePreview from "./VaultFilePreview";
 /** Best-effort detector — returns a normalized vault path or null. */
 export function asVaultPath(href: string): string | null {
   if (!href) return null;
+  const decode = (s: string): string => {
+    try { return decodeURIComponent(s); } catch { return s; }
+  };
   const m = href.match(/^vault:\/\/(.+)$/i) ?? href.match(/^vault:(.+)$/i);
-  if (m) return m[1].replace(/^\/+/, "");
+  if (m) return decode(m[1].replace(/^\/+/, ""));
   if (/^https?:\/\//i.test(href)) return null;
   if (href.startsWith("#") || href.startsWith("mailto:")) return null;
-  if (/\.mdx?$/i.test(href)) return href.replace(/^\/+/, "");
+  if (/\.mdx?$/i.test(href)) return decode(href.replace(/^\/+/, ""));
   return null;
 }
 

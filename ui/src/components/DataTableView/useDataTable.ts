@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { evalFormula } from "../datatable/formula";
+import { evalRollups } from "../datatable/rollup";
 import { downloadCSV, parseCSV, toCSV } from "../datatable/csv";
 import {
   addVaultDataTableRow,
@@ -89,6 +90,13 @@ export function useDataTable(path: string): UseDataTableReturn {
   const views = table?.views ?? [];
   const visibleFields = fields.filter((f) => !hidden.has(f.name));
 
+  const hasRollup = fields.some((f) => f.kind === "rollup");
+
+  const pkName = useMemo(() => {
+    const meta = table?.schema?.table;
+    return (meta && typeof meta === "object" && (meta as { primary_key?: string }).primary_key) || "_id";
+  }, [table?.schema?.table]);
+
   const enriched = useMemo(() =>
     rows.map((r) => {
       const out = { ...r };
@@ -98,13 +106,32 @@ export function useDataTable(path: string): UseDataTableReturn {
       return out;
     }), [rows, fields]);
 
+  const [rollupEnriched, setRollupEnriched] = useState<Record<string, unknown>[] | null>(null);
+
+  useEffect(() => {
+    if (!hasRollup || enriched.length === 0) {
+      setRollupEnriched(null);
+      return;
+    }
+    let cancelled = false;
+    const copy = enriched.map((r) => ({ ...r }));
+    evalRollups(copy, fields, path, pkName).then((result) => {
+      if (!cancelled) setRollupEnriched(result);
+    }).catch(() => {
+      if (!cancelled) setRollupEnriched(null);
+    });
+    return () => { cancelled = true; };
+  }, [enriched, fields, path, pkName, hasRollup]);
+
+  const finalEnriched = rollupEnriched ?? enriched;
+
   const searched = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return enriched;
-    return enriched.filter((r) =>
+    if (!q) return finalEnriched;
+    return finalEnriched.filter((r) =>
       fields.some((f) => { const v = r[f.name]; if (v == null) return false; return String(v).toLowerCase().includes(q); }),
     );
-  }, [enriched, search, fields]);
+  }, [finalEnriched, search, fields]);
 
   const sorted = useMemo(() => {
     if (!sort) return searched;

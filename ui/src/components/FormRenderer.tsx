@@ -9,7 +9,7 @@
 import { FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FieldSchema } from "../types/form";
-import { useRefOptions } from "./datatable/refOptions";
+import RefCombobox from "./Combobox";
 import "./FormRenderer.css";
 
 interface Props {
@@ -145,47 +145,13 @@ interface FieldInputProps {
 }
 
 function RefFieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
-  const { t } = useTranslation("forms");
-  const cardinality = field.cardinality ?? "one";
-  const { options, error } = useRefOptions(field, hostPath ?? "");
-  if (cardinality === "many") {
-    const arr = Array.isArray(value) ? (value as unknown[]) : value ? [value] : [];
-    return (
-      <input
-        type="text"
-        className="form-input"
-        value={arr.map(String).join(", ")}
-        onChange={(e) =>
-          onChange(e.target.value.split(",").map((s) => s.trim()).filter(Boolean))
-        }
-        placeholder={t("forms:commaSeparatedIds")}
-      />
-    );
-  }
-  if (options === null) {
-    return <input className="form-input" disabled value={t("forms:refLoading")} />;
-  }
-  if (error) {
-    return (
-      <input
-        type="text"
-        className="form-input"
-        value={String(value ?? "")}
-        onChange={(e) => onChange(e.target.value)}
-        title={t("forms:refLoadFailed", { error })}
-        placeholder={t("forms:refIdPlaceholder")}
-      />
-    );
-  }
   return (
-    <select
-      className="form-input"
-      value={String(value ?? "")}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      <option value="">{t("forms:refEmptyOption")}</option>
-      {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-    </select>
+    <RefCombobox
+      field={field}
+      hostPath={hostPath ?? ""}
+      value={value}
+      onChange={onChange}
+    />
   );
 }
 
@@ -304,14 +270,18 @@ function FieldInput({ field, value, onChange, hostPath }: FieldInputProps) {
     );
   }
 
-  if (kind === "formula") {
+  if (kind === "formula" || kind === "rollup") {
     return (
       <input
         type="text"
         className="form-input"
         value={String(value ?? "")}
         readOnly
-        placeholder={field.formula ? `= ${field.formula}` : t("forms:formulaComputed")}
+        placeholder={
+          field.formula ? `= ${field.formula}` :
+          field.rollup_aggregate ? `${field.rollup_aggregate}(${field.rollup_source_field ?? ""})` :
+          t("forms:formulaComputed")
+        }
         title={t("forms:formulaTitle")}
       />
     );

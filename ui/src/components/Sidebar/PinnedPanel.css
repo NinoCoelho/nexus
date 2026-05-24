@@ -48,7 +48,7 @@
 }
 
 .sidebar-pinned-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
 }
 
 .sidebar-pinned-title {

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from ...agent.llm import ChatMessage, Role, ToolCall
+from ...agent.llm import ChatMessage, ContentPart, Role, ToolCall
 
 
 # ── Dataclasses consumed by server handlers ───────────────────────────────────
@@ -44,10 +44,74 @@ class SessionSummary:
 # ── Type conversion helpers ───────────────────────────────────────────────────
 
 
+def _content_to_loom(content: Any) -> Any:
+    """Translate a Nexus message ``content`` value to loom's shape.
+
+    String / None pass through unchanged. A list of Nexus ``ContentPart``s
+    is mapped to loom's ``TextPart`` / ``ImagePart`` / ``FilePart``
+    discriminated union (loom has no audio/document part — both ride
+    ``FilePart`` carrying their mime type).
+    """
+    if not isinstance(content, list):
+        return content
+    import loom.types as lt
+
+    out: list[Any] = []
+    for p in content:
+        if not isinstance(p, ContentPart):
+            out.append(p)
+            continue
+        if p.kind == "text":
+            out.append(lt.TextPart(text=p.text or ""))
+        elif p.kind == "image":
+            out.append(
+                lt.ImagePart(
+                    source=p.vault_path or "", media_type=p.mime_type or ""
+                )
+            )
+        else:
+            out.append(
+                lt.FilePart(
+                    source=p.vault_path or "", media_type=p.mime_type or ""
+                )
+            )
+    return out
+
+
+def _content_from_loom(content: Any) -> Any:
+    """Reverse of :func:`_content_to_loom`. Re-classifies FilePart by
+    media_type so audio comes back as ``kind="audio"`` and everything
+    else as ``kind="document"``."""
+    if not isinstance(content, list):
+        return content
+    out: list[Any] = []
+    for p in content:
+        ptype = getattr(p, "type", None)
+        media = getattr(p, "media_type", "") or ""
+        source = getattr(p, "source", "") or ""
+        if ptype == "text":
+            out.append(ContentPart(kind="text", text=getattr(p, "text", "") or ""))
+        elif ptype == "image":
+            out.append(
+                ContentPart(kind="image", vault_path=source, mime_type=media or None)
+            )
+        elif media.startswith("audio/"):
+            out.append(
+                ContentPart(kind="audio", vault_path=source, mime_type=media)
+            )
+        else:
+            out.append(
+                ContentPart(kind="document", vault_path=source, mime_type=media or None)
+            )
+    return out
+
+
 def _to_loom_msg(msg: ChatMessage) -> "loom.types.ChatMessage":  # type: ignore[name-defined]
     """Convert a Nexus ChatMessage to loom's format.
 
     Nexus ``ToolCall.arguments`` is a ``dict``; loom expects a JSON string.
+    Multipart ``content`` (image/audio/document attachments) is translated
+    to loom's part discriminated union via :func:`_content_to_loom`.
     """
     import loom.types as lt
 
@@ -63,7 +127,7 @@ def _to_loom_msg(msg: ChatMessage) -> "loom.types.ChatMessage":  # type: ignore[
         ]
     return lt.ChatMessage(
         role=lt.Role(msg.role.value),
-        content=msg.content,
+        content=_content_to_loom(msg.content),
         tool_calls=loom_tcs,
         tool_call_id=msg.tool_call_id,
         name=msg.name,
@@ -74,6 +138,7 @@ def _from_loom_msg(msg: "loom.types.ChatMessage") -> ChatMessage:  # type: ignor
     """Convert loom's ChatMessage to Nexus's format.
 
     Loom ``ToolCall.arguments`` is a JSON string; Nexus expects a ``dict``.
+    Multipart ``content`` is rebuilt into Nexus ``ContentPart``s.
     """
     nexus_tcs: list[ToolCall] = []
     if msg.tool_calls:
@@ -85,7 +150,7 @@ def _from_loom_msg(msg: "loom.types.ChatMessage") -> ChatMessage:  # type: ignor
             nexus_tcs.append(ToolCall(id=tc.id, name=tc.name, arguments=args))
     return ChatMessage(
         role=Role(msg.role.value),
-        content=msg.content,
+        content=_content_from_loom(msg.content),
         tool_calls=nexus_tcs,
         tool_call_id=msg.tool_call_id,
         name=msg.name,

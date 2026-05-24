@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ChevronDown, ChevronUp, X } from "lucide-react";
 import {
   addVaultCsvRow,
   deleteVaultCsvRow,
@@ -7,6 +8,7 @@ import {
   updateVaultCsvCell,
   type CsvPage,
 } from "../../api/csv";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import "./CsvEditorView.css";
 
 interface CsvEditorViewProps {
@@ -42,6 +44,27 @@ export default function CsvEditorView({ path }: CsvEditorViewProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Live-refresh when something else writes to this CSV (e.g. the agent
+  // editing the file via a future write tool, or another browser tab).
+  // Skip while a local mutation is in flight — `load()` already runs after
+  // those, and we'd otherwise double-fetch.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useVaultEvents((ev) => {
+    if (ev.path !== path) return;
+    if (ev.type !== "vault.indexed") return;
+    if (busy) return;
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      void load();
+    }, 200);
+  });
+  useEffect(() => {
+    return () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    };
+  }, []);
 
   const onSort = (col: string) => {
     if (sort === col) {
@@ -163,7 +186,7 @@ export default function CsvEditorView({ path }: CsvEditorViewProps) {
                     disabled={busy}
                     onClick={() => void onDeleteRow(i)}
                   >
-                    ×
+                    <X size={14} />
                   </button>
                 </td>
               </tr>
@@ -247,16 +270,16 @@ function SchemaPanel({ path, columns, onClose, onSaved }: SchemaPanelProps) {
               }
             />
             <span className="csv-schema-from">
-              {c.rename_from ? `← ${c.rename_from}` : "(new)"}
+              {c.rename_from ? <><ArrowLeft size={12} /> {c.rename_from}</> : "(new)"}
             </span>
-            <button className="csv-row-del" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
-            <button className="csv-row-del" onClick={() => move(i, 1)} disabled={i === draft.length - 1}>↓</button>
+            <button className="csv-row-del" onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp size={14} /></button>
+            <button className="csv-row-del" onClick={() => move(i, 1)} disabled={i === draft.length - 1}><ChevronDown size={14} /></button>
             <button
               className="csv-row-del"
               onClick={() => setDraft((d) => d.filter((_, k) => k !== i))}
               title="Drop column"
             >
-              ×
+              <X size={14} />
             </button>
           </li>
         ))}

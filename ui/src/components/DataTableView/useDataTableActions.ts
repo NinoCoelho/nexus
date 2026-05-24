@@ -97,13 +97,15 @@ export function useDataTableActions({
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
 
   // Mutations
-  async function handleAdd(values: RowRecord) {
+  async function handleAdd(values: RowRecord): Promise<RowRecord | null> {
     try {
-      await addVaultDataTableRow(path, stripFormulas(values, fields));
+      const created = await addVaultDataTableRow(path, stripFormulas(values, fields));
       setShowAddForm(false);
       reload();
+      return created;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Add failed");
+      return null;
     }
   }
 

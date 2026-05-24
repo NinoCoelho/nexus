@@ -236,6 +236,13 @@ async def tunnel_auth_status(request: Request) -> dict[str, Any]:
         # local-network use keeps working.
         return {"requires_redeem": False, "tunnel_active": False, "proxied": proxied}
 
+    # Direct loopback (no proxy headers) always bypasses — the owner's own
+    # browser hitting 127.0.0.1 should never see a login form, even when the
+    # tunnel is active for remote devices.
+    client_host = request.client.host if request.client else ""
+    if not proxied and client_host in ("127.0.0.1", "::1", "localhost"):
+        return {"requires_redeem": False, "tunnel_active": True, "proxied": False}
+
     cookie = request.cookies.get(TUNNEL_COOKIE, "")
     auth_header = request.headers.get("authorization", "")
     bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""

@@ -1,36 +1,34 @@
-import { useMemo, useState } from "react";
-import type { AuthMethod, CredentialPrompt, ProviderCatalogEntry } from "../../../api";
+import { useEffect, useMemo, useState } from "react";
+import {
+  listCredentials,
+  type Credential,
+  type AuthMethod,
+  type CredentialPrompt,
+  type ProviderCatalogEntry,
+} from "../../../api";
 import type { FieldSchema } from "../../../types/form";
 import FormRenderer from "../../FormRenderer";
 
 interface Props {
   catalog: ProviderCatalogEntry;
   authMethod: AuthMethod;
-  /** Pre-filled values (used in edit mode + when revisiting the step). */
   initialValues: Record<string, string>;
-  /** Pre-filled base URL (catalog default, overridden in edit mode). */
   initialBaseUrl: string;
-  /** True when editing — secret fields show a "leave blank to keep current"
-   *  hint and aren't required. */
   editing: boolean;
-  /** Fired on every keystroke so the parent can keep wizard state fresh
-   *  (drives the Test connection button). */
-  onChange: (values: Record<string, string>, baseUrl: string) => void;
-  /** Called when the user clicks "Test connection". The parent runs the
-   *  /providers/{name}/test request and surfaces the result. */
+  selectedCredentialRef: string | null;
+  onChange: (
+    values: Record<string, string>,
+    baseUrl: string,
+    selectedCredentialRef: string | null,
+  ) => void;
   onTest: () => Promise<void>;
   testResult: { ok: boolean; error: string | null; latency_ms: number } | null;
   testing: boolean;
 }
 
-/** Map a raw upstream test-connection error to something a human can act on.
- *  Falls back to the original message when no pattern matches. The full
- *  detail is dropped — it's almost always an HTTP body that includes the
- *  partially-masked API key, which we don't want to surface in the UI. */
 function friendlyTestError(raw: string | null | undefined): string {
   if (!raw) return "Connection failed.";
   const lower = raw.toLowerCase();
-  // Match the leading "HTTP <code>" we synthesize backend-side.
   const httpMatch = raw.match(/^HTTP\s*(\d{3})/);
   const code = httpMatch ? Number(httpMatch[1]) : null;
   if (code === 401) return "Invalid API key — check the value and try again.";
@@ -47,7 +45,6 @@ function friendlyTestError(raw: string | null | undefined): string {
   if (lower.includes("no api key configured") || lower.includes("api_key_required")) {
     return "No API key bound to this provider yet.";
   }
-  // Generic fallback — still strip anything that looks like a leaked key.
   return raw.replace(/sk-[A-Za-z0-9_-]{4,}[*A-Za-z0-9_-]*/g, "<key>").slice(0, 200);
 }
 
@@ -67,8 +64,6 @@ function promptToFieldSchema(p: CredentialPrompt, editing: boolean): FieldSchema
   };
 }
 
-/** Evaluate a prompt's `when` clause against the current form values.
- *  An empty/missing `when` → always shown. */
 function isPromptVisible(p: CredentialPrompt, values: Record<string, string>): boolean {
   if (!p.when) return true;
   for (const [k, v] of Object.entries(p.when)) {
@@ -77,12 +72,15 @@ function isPromptVisible(p: CredentialPrompt, values: Record<string, string>): b
   return true;
 }
 
+const NEW_CRED = "__new__";
+
 export default function EnterCredentials({
   catalog,
   authMethod,
   initialValues,
   initialBaseUrl,
   editing,
+  selectedCredentialRef,
   onChange,
   onTest,
   testResult,
@@ -90,32 +88,78 @@ export default function EnterCredentials({
 }: Props) {
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
   const [values, setValues] = useState<Record<string, string>>(initialValues);
+  const [creds, setCreds] = useState<Credential[] | null>(null);
+
+  const secretPrompts = useMemo(
+    () => authMethod.prompts.filter((p) => p.secret),
+    [authMethod.prompts],
+  );
+  const hasSecrets = secretPrompts.length > 0 || authMethod.prompts.some(
+    (p) => p.name === "credential_name" || p.name === "credential_value",
+  );
+
+  const usingExisting = selectedCredentialRef !== null;
+
+  useEffect(() => {
+    if (!hasSecrets) return;
+    listCredentials()
+      .then(setCreds)
+      .catch(() => setCreds([]));
+  }, [hasSecrets]);
 
   const visiblePrompts = useMemo(
     () => authMethod.prompts.filter((p) => isPromptVisible(p, values)),
     [authMethod.prompts, values],
   );
 
-  const fields = useMemo(
-    () => visiblePrompts.map((p) => promptToFieldSchema(p, editing)),
-    [visiblePrompts, editing],
+  const nonSecretPrompts = useMemo(
+    () =>
+      usingExisting
+        ? visiblePrompts.filter(
+            (p) => !p.secret && p.name !== "credential_name" && p.name !== "credential_value",
+          )
+        : visiblePrompts,
+    [visiblePrompts, usingExisting],
   );
 
-  // Some catalog entries put base_url inside their prompts (Ollama, generic
-  // openai-compat). Detect that — when present, the dedicated baseUrl row is
-  // hidden because the prompt covers it.
+  const fields = useMemo(
+    () => nonSecretPrompts.map((p) => promptToFieldSchema(p, editing)),
+    [nonSecretPrompts, editing],
+  );
+
   const baseUrlInPrompts = visiblePrompts.some((p) => p.name === "base_url");
 
   function updateValues(next: Record<string, unknown>) {
     const stringified: Record<string, string> = {};
     for (const [k, v] of Object.entries(next)) stringified[k] = v == null ? "" : String(v);
     setValues(stringified);
-    onChange(stringified, baseUrlInPrompts ? (stringified.base_url ?? "") : baseUrl);
+    onChange(
+      stringified,
+      baseUrlInPrompts ? (stringified.base_url ?? "") : baseUrl,
+      selectedCredentialRef,
+    );
   }
 
   function updateBaseUrl(v: string) {
     setBaseUrl(v);
-    onChange(values, v);
+    onChange(values, v, selectedCredentialRef);
+  }
+
+  function handleCredentialSelect(name: string) {
+    if (name === NEW_CRED) {
+      const cleared = { ...values };
+      delete cleared.credential_name;
+      delete cleared.credential_value;
+      for (const p of secretPrompts) delete cleared[p.name];
+      setValues(cleared);
+      onChange(
+        cleared,
+        baseUrlInPrompts ? (cleared.base_url ?? "") : baseUrl,
+        null,
+      );
+    } else {
+      onChange(values, baseUrlInPrompts ? (values.base_url ?? "") : baseUrl, name);
+    }
   }
 
   return (
@@ -136,13 +180,47 @@ export default function EnterCredentials({
         </label>
       )}
 
-      <FormRenderer
-        fields={fields}
-        initialValues={values}
-        onChange={updateValues}
-        onSubmit={() => undefined}
-        hideActions
-      />
+      {hasSecrets && (
+        <label className="provider-wizard-field">
+          <span className="provider-wizard-field__label">Credential</span>
+          <select
+            className="form-input"
+            value={selectedCredentialRef ?? NEW_CRED}
+            onChange={(e) => handleCredentialSelect(e.target.value)}
+          >
+            <option value={NEW_CRED}>New credential…</option>
+            {creds && creds.length > 0 && (
+              <optgroup label="Saved credentials">
+                {creds.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    ${c.name} — {c.masked}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </label>
+      )}
+
+      {!usingExisting && (
+        <FormRenderer
+          fields={fields}
+          initialValues={values}
+          onChange={updateValues}
+          onSubmit={() => undefined}
+          hideActions
+        />
+      )}
+
+      {usingExisting && nonSecretPrompts.length > 0 && (
+        <FormRenderer
+          fields={fields}
+          initialValues={values}
+          onChange={updateValues}
+          onSubmit={() => undefined}
+          hideActions
+        />
+      )}
 
       <div className="provider-wizard-test-row">
         <button

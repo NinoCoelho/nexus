@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import type { Message } from "./index";
 import "./ChatSearchBar.css";
 
@@ -97,7 +98,7 @@ export default function ChatSearchBar({ open, messages, onClose, onJumpTo }: Pro
         aria-label="Previous match"
         title="Previous (Shift+Enter)"
       >
-        ↑
+        <ChevronUp size={14} />
       </button>
       <button
         type="button"
@@ -107,7 +108,7 @@ export default function ChatSearchBar({ open, messages, onClose, onJumpTo }: Pro
         aria-label="Next match"
         title="Next (Enter)"
       >
-        ↓
+        <ChevronDown size={14} />
       </button>
       <button
         type="button"
@@ -116,7 +117,7 @@ export default function ChatSearchBar({ open, messages, onClose, onJumpTo }: Pro
         aria-label="Close search"
         title="Close (Esc)"
       >
-        ×
+        <X size={14} />
       </button>
     </div>
   );

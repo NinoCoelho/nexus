@@ -13,9 +13,12 @@ Scrapling is an adaptive Web Scraping framework that handles everything from a s
 
 ## Prerequisites
 
+This skill has an isolated Python environment managed by Nexus. After calling `skill_view(name="web-scrape")`, use the `python.path` from the response to run Python scripts that import `scrapling`.
+
+First-time setup also requires the Scrapling browser dependencies:
+
 ```bash
-pip install "scrapling[all]"
-scrapling install --force   # downloads browser dependencies
+"$SKILL_PYTHON" -m scrapling install --force
 ```
 
 ## Decision: Which Fetcher?
@@ -404,18 +407,37 @@ result = PlayWrightFetcher.fetch(
 ```python
 from scrapling import StealthyFetcher
 
-# Parse Netscape cookie file format (common browser export format)
-cookie_path = '~/Downloads/www.example.com_cookies.txt'
+# Cookies exported via the Nexus Chrome extension live at ~/.nexus/cookies/
+# as Netscape-format files named <domain>.cookies.txt — parse them directly.
+import os
+cookie_dir = os.path.expanduser('~/.nexus/cookies/')
+cookie_file = os.path.join(cookie_dir, 'www.example.com.cookies.txt')
+
 cookie_pairs = []
-with open(cookie_path) as f:
-    for line in f:
-        if line.startswith('#') or not line.strip():
-            continue
-        parts = line.strip().split('\t')
-        if len(parts) >= 7:
-            name = parts[5].strip()
-            value = parts[6].strip().strip('"')
-            cookie_pairs.append(f"{name}={value}")
+if os.path.exists(cookie_file):
+    with open(cookie_file) as f:
+        for line in f:
+            if line.startswith('#') or not line.strip():
+                continue
+            parts = line.strip().split('\t')
+            if len(parts) >= 7:
+                name = parts[5].strip()
+                value = parts[6].strip().strip('"')
+                cookie_pairs.append(f"{name}={value}")
+
+# Fallback: also check for dot-prefixed domain names
+if not cookie_pairs:
+    alt = os.path.join(cookie_dir, '.www.example.com.cookies.txt')
+    if os.path.exists(alt):
+        with open(alt) as f:
+            for line in f:
+                if line.startswith('#') or not line.strip():
+                    continue
+                parts = line.strip().split('\t')
+                if len(parts) >= 7:
+                    name = parts[5].strip()
+                    value = parts[6].strip().strip('"')
+                    cookie_pairs.append(f"{name}={value}")
 
 cookie_header = "; ".join(cookie_pairs)
 
@@ -427,6 +449,10 @@ page = StealthyFetcher.fetch(
     timeout=30000,
 )
 ```
+
+> **Tip:** Use the Nexus Cookie Export Chrome extension to populate
+> `~/.nexus/cookies/` with a single click. Run `nexus cookies setup-chrome`
+> to install it.
 
 ## Tips
 

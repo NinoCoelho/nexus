@@ -11,6 +11,7 @@ export interface DispatchResult {
   card_id?: string | null;
   event_id?: string | null;
   mode?: DispatchMode;
+  model?: string | null;
 }
 
 /**
@@ -29,5 +30,22 @@ export async function dispatchFromVault(
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Dispatch error: ${res.status}`);
+  return res.json();
+}
+
+export interface CardSession {
+  id: string;
+  title: string;
+  model: string | null;
+  updated_at: string;
+}
+
+export async function fetchCardSessions(
+  path: string,
+  card_id: string,
+): Promise<CardSession[]> {
+  const params = new URLSearchParams({ path, card_id });
+  const res = await fetch(`${BASE}/vault/dispatch/sessions?${params}`);
+  if (!res.ok) return [];
   return res.json();
 }

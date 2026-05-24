@@ -47,6 +47,17 @@
   margin: 4px 0 6px;
 }
 
+.local-subhead-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0 6px;
+}
+
+.local-subhead-row .local-subhead {
+  margin: 0;
+}
+
 .local-empty {
   font-size: 12px;
   color: var(--fg-dim);
@@ -84,6 +95,12 @@
   font-size: 11px;
   color: var(--fg-dim);
 }
+.local-row-warn {
+  font-size: 11px;
+  color: var(--accent-red, #e5484d);
+  display: block;
+  margin-top: 2px;
+}
 .local-row-actions {
   display: flex;
   gap: 6px;
@@ -118,6 +135,13 @@
 .local-dl-meta {
   font-size: 11px;
   color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.local-dl-cancel {
+  font-size: 10px;
+  padding: 2px 8px;
 }
 
 .local-search {
@@ -441,5 +465,24 @@
 }
 .search-file-warn {
   color: var(--warn, #c66);
+}
+
+.local-update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg-input, var(--bg-panel));
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.local-update-banner--active {
+  border-color: var(--accent, #6c8);
+  background: color-mix(in srgb, var(--accent, #6c8) 8%, var(--bg-input, var(--bg-panel)));
+}
+.local-update-text {
+  font-size: 12px;
+  color: var(--fg);
 }
 

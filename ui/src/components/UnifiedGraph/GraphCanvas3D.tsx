@@ -18,6 +18,7 @@ import type {
   UnifiedLink,
   UnifiedNode,
 } from "./types";
+import type { GraphSettings } from "./graphSettings";
 import { makeGeometry, makeTextSprite, escapeHtml } from "./threeHelpers";
 
 interface Props {
@@ -27,6 +28,7 @@ interface Props {
   search: string;
   /** Highlight from the floating /-find widget — sharper cyan pulse. */
   findQuery?: string;
+  settings: GraphSettings;
   onSelect: (node: UnifiedNode | null) => void;
   onNodeRightClick?: (node: UnifiedNode, x: number, y: number) => void;
   contextMenu?: { node: UnifiedNode; items: ContextMenuItem[]; x: number; y: number } | null;
@@ -47,7 +49,7 @@ type FgInstance = {
 };
 
 export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function GraphCanvas3D(
-  { data, selectedId, search, findQuery, onSelect, onNodeRightClick, contextMenu, onCloseContextMenu, emptyState },
+  { data, selectedId, search, findQuery, settings, onSelect, onNodeRightClick, contextMenu, onCloseContextMenu, emptyState },
   ref,
 ) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -144,8 +146,8 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
       if (!fg) return;
       try {
         const n = data.nodes.length;
-        const linkDist = Math.max(40, Math.min(80, 30 + Math.sqrt(n) * 3));
-        const charge = -Math.max(120, Math.min(400, 60 + Math.sqrt(n) * 18));
+        const linkDist = Math.max(40, Math.min(80, 30 + Math.sqrt(n) * 3)) * settings.linkDistance;
+        const charge = -Math.max(120, Math.min(400, 60 + Math.sqrt(n) * 18)) * settings.chargeStrength;
         fg.d3Force?.("link")?.distance?.(linkDist);
         fg.d3Force?.("charge")?.strength?.(charge);
         fg.d3ReheatSimulation?.();
@@ -160,7 +162,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     };
     const id = setTimeout(apply, 0);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [data.nodes.length]);
+  }, [data.nodes.length, settings.linkDistance, settings.chargeStrength]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -261,13 +263,14 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     const isMatch = matchedIds.size > 0 && matchedIds.has(node.id);
     const isFindMatch = findMatchedIds.size > 0 && findMatchedIds.has(node.id);
     const isSelected = node.id === selectedId;
-    const radius = (1.6 + Math.log(node.degree + 1) * 0.7) + (node.radiusBoost ?? 0);
+    const radius = ((1.6 + Math.log(node.degree + 1) * 0.7) + (node.radiusBoost ?? 0)) * settings.nodeSize;
     const baseColor = node.color ?? "#7a9e7e";
-    // Visual priority: selected → find-match → search-match → default.
+    const cs = getComputedStyle(document.documentElement);
+    const fg = cs.getPropertyValue("--fg").trim() || "#ece8e1";
     const initial = isSelected
       ? "#ffd06a"
       : isFindMatch ? "#5cf0ff"
-      : isMatch ? "#ffffff"
+      : isMatch ? fg
       : baseColor;
     const emissiveIntensity = isSelected ? 0.9 : isFindMatch ? 1.2 : isMatch ? 0.7 : 0;
 
@@ -292,7 +295,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
       pulseRef.current.set(node.id, {
         mat: material,
         baseColor: new THREE.Color(baseColor),
-        matchColor: new THREE.Color("#ffffff"),
+        matchColor: new THREE.Color(fg),
       });
       pulseFindRef.current.delete(node.id);
     } else {
@@ -312,11 +315,11 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     }
 
     const label = node.label.length > 28 ? node.label.slice(0, 27) + "…" : node.label;
-    const sprite = makeTextSprite(label, isMatch || isFindMatch || isSelected);
+    const sprite = makeTextSprite(label, settings.labelScale);
     sprite.position.set(0, (isSelected ? radius + 1 : radius) + 1.5, 0);
     group.add(sprite);
     return group;
-  }, [matchedIds, findMatchedIds, selectedId]);
+  }, [matchedIds, findMatchedIds, selectedId, settings]);
 
   const linkColor = useCallback((raw: object) => {
     const l = raw as UnifiedLink;
@@ -422,15 +425,15 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
         showNavInfo={false}
         controlType="orbit"
         nodeRelSize={4}
-        nodeOpacity={0.9}
+        nodeOpacity={settings.nodeOpacity}
         nodeThreeObject={nodeThreeObject}
         linkColor={linkColor}
-        linkOpacity={0.5}
-        linkWidth={0.4}
-        linkCurvature={0.1}
+        linkOpacity={settings.linkOpacity}
+        linkWidth={settings.linkWidth}
+        linkCurvature={settings.linkCurvature}
         linkDirectionalParticles={1}
-        linkDirectionalParticleSpeed={0.005}
-        linkDirectionalParticleWidth={1.2}
+        linkDirectionalParticleSpeed={settings.particleSpeed}
+        linkDirectionalParticleWidth={settings.particleWidth}
         enableNodeDrag={false}
         linkHoverPrecision={4}
         onNodeClick={onNodeClick}

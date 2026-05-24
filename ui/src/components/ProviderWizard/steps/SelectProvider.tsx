@@ -41,9 +41,17 @@ export default function SelectProvider({ catalog, onPick, configuredNames }: Pro
     );
   }, [catalog, query]);
 
+  // Featured entries jump above the regular categories. Keeps the wizard
+  // visually anchored on the Nexus subscription on first run.
+  const featured = useMemo(
+    () => filtered.filter((e) => e.featured),
+    [filtered],
+  );
+
   const groups = useMemo(() => {
     const out: Partial<Record<ProviderCatalogEntry["category"], ProviderCatalogEntry[]>> = {};
     for (const e of filtered) {
+      if (e.featured) continue;
       (out[e.category] ??= []).push(e);
     }
     return out;
@@ -58,6 +66,34 @@ export default function SelectProvider({ catalog, onPick, configuredNames }: Pro
         onChange={(e) => setQuery(e.target.value)}
         autoFocus
       />
+
+      {featured.length > 0 && (
+        <section className="provider-wizard-group provider-wizard-group--featured">
+          <h3 className="provider-wizard-group__title">Recommended</h3>
+          <div className="provider-wizard-grid">
+            {featured.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                className="provider-wizard-tile provider-wizard-tile--featured"
+                onClick={() => onPick(e)}
+              >
+                <span className="provider-wizard-tile__name">
+                  {e.display_name}
+                  <span className="provider-wizard-tile__featured-badge">Recommended</span>
+                </span>
+                <span className="provider-wizard-tile__meta">
+                  {e.tagline ?? e.runtime_kind.replace(/_/g, " ")}
+                  {configured.has(e.id) && (
+                    <span className="provider-wizard-tile__configured"> · configured</span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {CATEGORY_ORDER.map((cat) => {
         const entries = groups[cat];
         if (!entries || entries.length === 0) return null;

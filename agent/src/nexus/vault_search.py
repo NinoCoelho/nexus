@@ -12,10 +12,13 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from . import home as _home
+
 log = logging.getLogger(__name__)
 
-_INDEX_PATH = Path("~/.nexus/vault_index.sqlite").expanduser()
-_VAULT_ROOT = Path("~/.nexus/vault").expanduser()
+_VAULT_ROOT: Path | None = None
+_INDEX_PATH: Path | None = None
+
 _lock = threading.Lock()
 
 _DDL = """
@@ -35,9 +38,14 @@ CREATE TABLE IF NOT EXISTS file_meta (
 """
 
 
+def _vr() -> Path:
+    return _VAULT_ROOT if _VAULT_ROOT is not None else _home.vault_root()
+
+
 def _connect() -> sqlite3.Connection:
-    _INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(_INDEX_PATH), check_same_thread=False)
+    idx = _INDEX_PATH if _INDEX_PATH is not None else _home.vault_index_db()
+    idx.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(idx), check_same_thread=False)
     con.execute(_DDL)
     con.execute(_META_DDL)
     con.commit()
@@ -49,7 +57,7 @@ def _norm_path(path: str) -> str:
     p = Path(path)
     if p.is_absolute():
         try:
-            p = p.relative_to(_VAULT_ROOT.expanduser())
+            p = p.relative_to(_vr())
         except ValueError:
             pass
     return str(p)
@@ -69,7 +77,7 @@ def index_path(path: str, body: str) -> None:
     """Upsert a document (delete + insert, FTS5 has no UPDATE)."""
     norm = _norm_path(path)
     size = len(body.encode("utf-8", errors="replace"))
-    fp = _VAULT_ROOT / norm
+    fp = _vr() / norm
     try:
         mtime = fp.stat().st_mtime
     except OSError:
@@ -117,7 +125,7 @@ def rename_path(from_path: str, to_path: str) -> None:
                 con.execute(
                     "INSERT INTO vault_fts(path, body) VALUES (?, ?)", (to_norm, row[0])
                 )
-                fp = _VAULT_ROOT / to_norm
+                fp = _vr() / to_norm
                 try:
                     mtime = fp.stat().st_mtime
                     size = fp.stat().st_size
@@ -172,7 +180,7 @@ def rebuild_from_disk(full: bool = False) -> int:
 
     Returns the number of files now indexed (total, not delta).
     """
-    vault_root = _VAULT_ROOT
+    vault_root = _vr()
     vault_root.mkdir(parents=True, exist_ok=True)
 
     files = list(vault_root.rglob("*.md"))

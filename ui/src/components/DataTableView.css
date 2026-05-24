@@ -125,7 +125,7 @@
 .dt-related-mini th {
   text-align: left;
   padding: 4px 8px;
-  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--border, color-mix(in srgb, var(--fg) 8%, transparent));
   color: var(--fg-faint);
   font-weight: 600;
   font-size: 10px;
@@ -135,7 +135,7 @@
 
 .dt-related-mini td {
   padding: 4px 8px;
-  border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.04));
+  border-bottom: 1px solid var(--border-soft, color-mix(in srgb, var(--fg) 4%, transparent));
   color: var(--fg);
   vertical-align: middle;
   max-width: 220px;
@@ -258,7 +258,7 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-panel, #11182a);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 12%, transparent));
   border-radius: 10px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
   color: var(--fg, #e5edf5);
@@ -270,7 +270,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 14px 18px 8px;
-  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--border, color-mix(in srgb, var(--fg) 8%, transparent));
 }
 
 .dt-ref-popup-titles {
@@ -301,7 +301,7 @@
 }
 
 .dt-ref-popup-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
   color: var(--fg);
 }
 
@@ -351,12 +351,12 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 10px 18px 14px;
-  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-top: 1px solid var(--border, color-mix(in srgb, var(--fg) 8%, transparent));
 }
 
 .dt-ref-popup-action {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 14%, transparent));
   color: var(--fg);
   padding: 6px 12px;
   border-radius: 6px;
@@ -365,7 +365,7 @@
 }
 
 .dt-ref-popup-action:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
 }
 
 /* ── Recursive drill-down (clickable refs + related lists) ─────────── */
@@ -409,7 +409,7 @@
 .dt-ref-popup-related {
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  border-top: 1px solid var(--border-soft, color-mix(in srgb, var(--fg) 8%, transparent));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -434,7 +434,7 @@
 }
 
 .dt-ref-popup-related-group {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
   border-radius: 6px;
   padding: 6px 10px;
   display: flex;
@@ -481,7 +481,7 @@
   width: 100%;
 }
 .dt-ref-popup-related-row-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .dt-ref-popup-related-row-btn:disabled {
   cursor: default;
@@ -502,7 +502,15 @@
 
 .dt-table-wrap {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+}
+
+.dt-grid-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .dt-table {
@@ -546,6 +554,43 @@
   width: 100px;
   text-align: right;
   white-space: nowrap;
+}
+
+.dt-actions-col--icons {
+  width: auto;
+  text-align: left;
+  padding-left: 8px;
+  padding-right: 4px;
+}
+
+.dt-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+tr:hover .dt-icon-btn {
+  opacity: 1;
+}
+
+.dt-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.dt-icon-btn--delete:hover {
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad);
 }
 
 .dt-action-btn {
@@ -780,4 +825,216 @@
   gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border-soft);
+}
+
+/* ── Row Detail Drawer ──────────────────────────────────────────────── */
+
+.dt-with-drawer {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dt-with-drawer > .dt-table-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.dt-drawer {
+  width: 420px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel, var(--bg-soft));
+  overflow: hidden;
+}
+
+.dt-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.dt-drawer-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dt-drawer-close {
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 20px;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.dt-drawer-close:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
+.dt-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dt-drawer-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dt-drawer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dt-drawer-field-label {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
+.dt-drawer-field-value {
+  font-size: 13px;
+  color: var(--fg);
+  word-break: break-word;
+  padding: 4px 0;
+}
+
+.dt-drawer-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.dt-drawer-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.dt-drawer-related {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.dt-drawer-related-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+.dt-drawer-related-empty {
+  font-size: 12px;
+  color: var(--fg-faint);
+  font-style: italic;
+}
+
+.dt-drawer-group {
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dt-drawer-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dt-drawer-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dt-drawer-group-meta {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.dt-drawer-group-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.dt-drawer-inline-form {
+  padding: 8px;
+  background: var(--bg-panel, var(--bg-soft));
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+}
+
+.dt-drawer .dt-related-mini {
+  font-size: 11px;
+}
+
+.dt-drawer .dt-related-mini th {
+  font-size: 9px;
+  padding: 3px 6px;
+}
+
+.dt-drawer .dt-related-mini td {
+  padding: 3px 6px;
+  max-width: 160px;
+}
+
+.dt-drawer .dt-action-btn {
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+/* Highlight the selected row in the grid when drawer is open */
+.dt-table tr.dt-row--selected td {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.dt-table tr.dt-row--selected:hover td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+@media (max-width: 760px) {
+  .dt-drawer {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border-soft);
+  }
+  .dt-with-drawer {
+    flex-direction: column;
+  }
 }

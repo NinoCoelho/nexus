@@ -205,8 +205,12 @@ def parse(content: str) -> Board:
     if lane is not None:
         board.lanes.append(lane)
 
+    bp = frontmatter.get("board_prompt")
+    if bp and isinstance(bp, str):
+        board.board_prompt = bp
     lane_prompts: dict[str, str] = frontmatter.get("lane_prompts") or {}
     lane_models: dict[str, str] = frontmatter.get("lane_models") or {}
+    lane_webhooks: dict[str, dict[str, Any]] = frontmatter.get("lane_webhooks") or {}
     for ln in board.lanes:
         lp = lane_prompts.get(ln.id)
         if lp:
@@ -214,6 +218,10 @@ def parse(content: str) -> Board:
         lm = lane_models.get(ln.id)
         if lm:
             ln.model = str(lm)
+        wh = lane_webhooks.get(ln.id)
+        if wh and isinstance(wh, dict):
+            ln.webhook_token = str(wh.get("token", "")) or None
+            ln.webhook_enabled = bool(wh.get("enabled", False))
 
     return board
 
@@ -237,6 +245,10 @@ def serialize(board: Board) -> str:
     """
     fm = dict(board.frontmatter)
     fm.setdefault(KANBAN_PLUGIN_KEY, "basic")
+    if board.board_prompt:
+        fm["board_prompt"] = board.board_prompt
+    else:
+        fm.pop("board_prompt", None)
     lp = {ln.id: ln.prompt for ln in board.lanes if ln.prompt}
     if lp:
         fm["lane_prompts"] = lp
@@ -247,6 +259,11 @@ def serialize(board: Board) -> str:
         fm["lane_models"] = lm
     else:
         fm.pop("lane_models", None)
+    wh = {ln.id: {"token": ln.webhook_token, "enabled": ln.webhook_enabled} for ln in board.lanes if ln.webhook_token}
+    if wh:
+        fm["lane_webhooks"] = wh
+    else:
+        fm.pop("lane_webhooks", None)
     fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False).rstrip()
     out: list[str] = [f"---\n{fm_text}\n---", "", f"# {board.title}", ""]
     for lane in board.lanes:

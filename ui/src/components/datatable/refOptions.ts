@@ -42,10 +42,7 @@ export function deriveLabelInfo(
 ): { pkName: string; labelField: FieldSchema | null } {
   let pk = tableMeta?.primary_key;
   if (!pk) {
-    const naturalPk = fields.find(
-      (f) => f.required === true && (f.kind === "text" || f.kind === "number"),
-    );
-    pk = naturalPk?.name ?? "_id";
+    pk = "_id";
   }
   const NAME_HINTS = new Set(["name", "title", "label", "full_name"]);
   let labelField = fields.find(
@@ -150,14 +147,35 @@ export function fetchTableCached(absPath: string): Promise<DataTable> {
   let p = _tableCache.get(absPath);
   if (!p) {
     p = getVaultDataTable(absPath).catch((err) => {
-      // Drop failed entries so the next call retries instead of returning
-      // the stale rejection forever.
       _tableCache.delete(absPath);
       throw err;
     });
     _tableCache.set(absPath, p);
   }
   return p;
+}
+
+let _cacheRevision = 0;
+const _revListeners = new Set<() => void>();
+
+export function invalidateTableCache(absPath?: string) {
+  if (absPath) {
+    _tableCache.delete(absPath);
+  } else {
+    _tableCache.clear();
+  }
+  _cacheRevision++;
+  for (const fn of _revListeners) fn();
+}
+
+function useCacheRevision() {
+  const [rev, setRev] = useState(_cacheRevision);
+  useEffect(() => {
+    const fn = () => setRev(_cacheRevision);
+    _revListeners.add(fn);
+    return () => { _revListeners.delete(fn); };
+  }, []);
+  return rev;
 }
 
 /**
@@ -169,6 +187,7 @@ export function useRefOptions(field: FieldSchema, hostPath: string): {
   error: string | null;
 } {
   const target = resolveRefPath(hostPath, field.target_table ?? "");
+  const rev = useCacheRevision();
   const [state, setState] = useState<{ options: RefOption[] | null; error: string | null }>({
     options: null,
     error: null,
@@ -199,7 +218,57 @@ export function useRefOptions(field: FieldSchema, hostPath: string): {
     return () => {
       cancelled = true;
     };
-  }, [target]);
+  }, [target, rev]);
 
   return state;
+}
+
+export type RefLabelLookup = Map<string, string>;
+
+/**
+ * Resolve all `kind: "ref"` fields' stored values to human-friendly labels.
+ *
+ * Returns a `Map<"fieldName::refValue", label>` that can be passed to
+ * `renderCell` via `RenderCellOptions.refLabels`. Re-resolves when fields
+ * or the cache revision change.
+ */
+export function useRefLabels(fields: FieldSchema[], hostPath: string): RefLabelLookup {
+  const [lookup, setLookup] = useState<RefLabelLookup>(new Map());
+  const rev = useCacheRevision();
+
+  const refFields = fields.filter((f) => f.kind === "ref" && f.target_table);
+
+  useEffect(() => {
+    if (refFields.length === 0) return;
+    let cancelled = false;
+    const next = new Map<string, string>();
+
+    void (async () => {
+      const targets = new Map<string, { pkName: string; labelField: FieldSchema | null; rows: Record<string, unknown>[] }>();
+      for (const f of refFields) {
+        const absPath = resolveRefPath(hostPath, f.target_table!);
+        if (targets.has(absPath)) continue;
+        try {
+          const tbl = await fetchTableCached(absPath);
+          const info = deriveLabelInfo(tbl.schema.fields, tbl.schema.table);
+          targets.set(absPath, { pkName: info.pkName, labelField: info.labelField, rows: tbl.rows });
+        } catch { /* skip */ }
+      }
+      if (cancelled) return;
+      for (const f of refFields) {
+        const absPath = resolveRefPath(hostPath, f.target_table!);
+        const target = targets.get(absPath);
+        if (!target) continue;
+        for (const r of target.rows) {
+          const id = String(r[target.pkName] ?? r._id ?? "");
+          if (id) next.set(`${f.name}::${id}`, summarizeRow(r, target.pkName, target.labelField));
+        }
+      }
+      if (!cancelled) setLookup(next);
+    })();
+
+    return () => { cancelled = true; };
+  }, [refFields.map((f) => `${f.name}::${f.target_table}`).join(","), hostPath, rev]);
+
+  return lookup;
 }

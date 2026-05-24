@@ -123,6 +123,20 @@ class SessionStore(PubSubMixin, QueryMixin):
             self._loom.set_context(session_id, context)
             d["context"] = context
         history = [_from_loom_msg(m) for m in self._loom.get_history(session_id)]
+        # Re-attach reasoning_content from the Nexus-managed column.
+        rc_rows = self._loom._db.execute(
+            "SELECT seq, reasoning_content FROM messages "
+            "WHERE session_id = ? AND reasoning_content IS NOT NULL",
+            (session_id,),
+        ).fetchall()
+        if rc_rows:
+            rc_map: dict[int, str] = {row[0]: row[1] for row in rc_rows}
+            history = [
+                msg.model_copy(update={"reasoning_content": rc_map[i]})
+                if i in rc_map and msg.role == Role.ASSISTANT
+                else msg
+                for i, msg in enumerate(history)
+            ]
         return Session(
             id=d["id"],
             title=d["title"] or "New session",
@@ -138,7 +152,7 @@ class SessionStore(PubSubMixin, QueryMixin):
         if row is None:
             return None
         msg_rows = self._loom._db.execute(
-            "SELECT role, content, tool_calls, tool_call_id, name, created_at "
+            "SELECT role, content, tool_calls, tool_call_id, name, created_at, reasoning_content "
             "FROM messages WHERE session_id = ? ORDER BY seq",
             (session_id,),
         ).fetchall()
@@ -153,14 +167,44 @@ class SessionStore(PubSubMixin, QueryMixin):
                     loom_tcs = [lt.ToolCall(**tc) for tc in raw]
                 except Exception:
                     pass
+            # ``content`` is stored as text. For multipart messages loom's
+            # _serialize_content emits a JSON-encoded list of parts; we
+            # have to reverse that here or loom's pydantic validator
+            # rejects the row at construction time. Mirrors
+            # loom.store.session.SessionStore._deserialize_content.
+            content_raw = r[1]
+            content: Any = content_raw
+            if isinstance(content_raw, str) and content_raw.startswith("["):
+                try:
+                    parsed = json.loads(content_raw)
+                except json.JSONDecodeError:
+                    parsed = None
+                if (
+                    isinstance(parsed, list)
+                    and parsed
+                    and isinstance(parsed[0], dict)
+                    and "type" in parsed[0]
+                ):
+                    try:
+                        from pydantic import TypeAdapter
+
+                        adapter = TypeAdapter(list[lt.ContentPart])
+                        content = adapter.validate_python(parsed)
+                    except Exception:  # noqa: BLE001 — fall back to raw text
+                        content = content_raw
             loom_msg = lt.ChatMessage(
                 role=lt.Role(r[0]),
-                content=r[1],
+                content=content,
                 tool_calls=loom_tcs,
                 tool_call_id=r[3],
                 name=r[4],
             )
-            history.append(_from_loom_msg(loom_msg))
+            nexus_msg = _from_loom_msg(loom_msg)
+            # Re-attach reasoning_content from the Nexus-managed column.
+            rc_val = r[6] if len(r) > 6 else None
+            if rc_val and nexus_msg.role == Role.ASSISTANT:
+                nexus_msg = nexus_msg.model_copy(update={"reasoning_content": rc_val})
+            history.append(nexus_msg)
             timestamps.append(_ts_to_int(r[5]))
         sess = Session(id=row[0], title=row[1] or "New session", history=history, context=row[2])
         sess._message_timestamps = timestamps  # type: ignore[attr-defined]
@@ -285,6 +329,19 @@ class SessionStore(PubSubMixin, QueryMixin):
         loom_msgs = [_to_loom_msg(m) for m in history]
         self._loom.replace_history(session_id, loom_msgs)
 
+        # Persist reasoning_content for assistant messages that carry it.
+        # Loom's replace_history writes all messages with seq = 0..N, so we
+        # can match by sequence index.
+        db = self._loom._db
+        for seq, msg in enumerate(history):
+            if msg.role == Role.ASSISTANT and msg.reasoning_content:
+                db.execute(
+                    "UPDATE messages SET reasoning_content = ? "
+                    "WHERE session_id = ? AND seq = ?",
+                    (msg.reasoning_content, session_id, seq),
+                )
+        db.commit()
+
         # Auto-title: if the session is still "New session", set title from
         # the first user message (loom's replace_history doesn't do this).
         row = self._loom._db.execute(
@@ -292,19 +349,47 @@ class SessionStore(PubSubMixin, QueryMixin):
         ).fetchone()
         if row and (row[0] is None or row[0] == "New session"):
             for msg in history:
-                if msg.role == Role.USER and msg.content:
-                    title = msg.content.strip()[:40]
+                if msg.role != Role.USER or not msg.content:
+                    continue
+                # Multipart content (image/audio/document attachments) is a
+                # list of ``ContentPart`` — pull the first text part for the
+                # title rather than calling .strip() on the list.
+                text_for_title = ""
+                if isinstance(msg.content, str):
+                    text_for_title = msg.content
+                elif isinstance(msg.content, list):
+                    for part in msg.content:
+                        if getattr(part, "kind", None) == "text" and part.text:
+                            text_for_title = part.text
+                            break
+                title = text_for_title.strip()[:40]
+                if title:
                     self._loom.set_title(session_id, title)
-                    break
+                break
 
     def reset(self, session_id: str) -> None:
         self._loom.reset(session_id)
         self._cancel_all_pending(session_id)
 
     def delete(self, session_id: str) -> None:
+        self._loom._db.execute(
+            "DELETE FROM messages WHERE session_id = ?", (session_id,)
+        )
         self._loom.delete_session(session_id)
         self._loom._db.execute(
             "DELETE FROM message_feedback WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM hitl_events WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM hitl_pending WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM llm_errors WHERE session_id = ?", (session_id,)
+        )
+        self._loom._db.execute(
+            "DELETE FROM paused_turns WHERE session_id = ?", (session_id,)
         )
         self._loom._db.commit()
         self._cancel_all_pending(session_id)
@@ -391,6 +476,40 @@ class SessionStore(PubSubMixin, QueryMixin):
             for r in rows
         ]
 
+    def log_error(
+        self,
+        session_id: str,
+        error_type: str,
+        *,
+        status_code: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        message: str | None = None,
+        retryable: bool = False,
+        retry_attempt: int | None = None,
+        tokens_in: int | None = None,
+        context_window: int | None = None,
+    ) -> None:
+        self._loom._db.execute(
+            "INSERT INTO llm_errors "
+            "(session_id, error_type, status_code, provider, model, message, "
+            "retryable, retry_attempt, tokens_in, context_window) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                error_type,
+                status_code,
+                provider,
+                model,
+                (message or "")[:4000],
+                1 if retryable else 0,
+                retry_attempt,
+                tokens_in,
+                context_window,
+            ),
+        )
+        self._loom._db.commit()
+
     def rename(self, session_id: str, title: str) -> None:
         self._loom.set_title(session_id, title)
         # Also bump updated_at.
@@ -416,3 +535,58 @@ class SessionStore(PubSubMixin, QueryMixin):
                 (model, session_id),
             )
             self._loom._db.commit()
+
+    def pause_turn(
+        self,
+        session_id: str,
+        *,
+        user_message: str,
+        working_messages_json: str,
+        retry_after_iso: str,
+        model_id: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        self._loom._db.execute(
+            "INSERT OR REPLACE INTO paused_turns "
+            "(session_id, user_message, working_messages, retry_after, model_id, error_detail, status, resume_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'paused', COALESCE("
+            "  (SELECT resume_count FROM paused_turns WHERE session_id = ?), 0"
+            "))",
+            (session_id, user_message, working_messages_json, retry_after_iso,
+             model_id, error_detail, session_id),
+        )
+        self._loom._db.commit()
+
+    def load_paused(self, session_id: str) -> dict[str, Any] | None:
+        row = self._loom._db.execute(
+            "SELECT session_id, user_message, working_messages, paused_at, "
+            "retry_after, status, model_id, error_detail, resume_count "
+            "FROM paused_turns WHERE session_id = ? AND status = 'paused'",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "session_id": row[0],
+            "user_message": row[1],
+            "working_messages_json": row[2],
+            "paused_at": row[3],
+            "retry_after": row[4],
+            "status": row[5],
+            "model_id": row[6],
+            "error_detail": row[7],
+            "resume_count": row[8],
+        }
+
+    def resume_paused(self, session_id: str) -> dict[str, Any] | None:
+        paused = self.load_paused(session_id)
+        if not paused:
+            return None
+        self._loom._db.execute(
+            "UPDATE paused_turns SET status = 'resumed', resume_count = resume_count + 1 "
+            "WHERE session_id = ?",
+            (session_id,),
+        )
+        self._loom._db.commit()
+        paused["resume_count"] += 1
+        return paused

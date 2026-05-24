@@ -13,18 +13,24 @@ from ._constants import _NUMERIC_RE, _STOP_NOUNS
 # ---------------------------------------------------------------------------
 
 _TYPES_RE = re.compile(r"Entity types to look for:\s*(.+?)(?:\n\n|\r\n\r\n)", re.DOTALL)
+_RELS_RE = re.compile(r"relation types when they fit:\s*(.+?)(?:\n\n|\r\n\r\n)", re.DOTALL)
 _TEXT_RE = re.compile(r"Text:\n(.+)", re.DOTALL)
 _RESPOND_MARKER = "\n\nRespond with ONLY"
 
 
-def _parse_prompt(prompt: str) -> tuple[list[str], str]:
-    """Return ``(entity_types, text)`` from the extraction prompt."""
+def _parse_prompt(prompt: str) -> tuple[list[str], list[str], str]:
+    """Return ``(entity_types, core_relations, text)`` from the extraction prompt."""
     entity_types: list[str] = []
+    core_relations: list[str] = []
     text = ""
 
     m = _TYPES_RE.search(prompt)
     if m:
         entity_types = [t.strip().lower() for t in m.group(1).split(",") if t.strip()]
+
+    m = _RELS_RE.search(prompt)
+    if m:
+        core_relations = [r.strip().lower() for r in m.group(1).split(",") if r.strip()]
 
     m = _TEXT_RE.search(prompt)
     if m:
@@ -32,7 +38,7 @@ def _parse_prompt(prompt: str) -> tuple[list[str], str]:
         idx = raw.find(_RESPOND_MARKER)
         text = (raw[:idx] if idx > 0 else raw).strip()
 
-    return entity_types, text
+    return entity_types, core_relations, text
 
 
 def _has_capitalized_token(name: str) -> bool:

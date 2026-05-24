@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Settings as SettingsIcon, RefreshCw, X, Search, Maximize, Maximize2 } from "lucide-react";
 import "../KnowledgeView.css";
 import "../GraphView.css";
 import "../AgentGraphView.css";
@@ -34,6 +35,12 @@ import {
 } from "../../api/folderGraph";
 import { WebGLBoundary, WebGLFallback, probeWebGL } from "./WebGLBoundary";
 import type { ContextMenuItem, GraphCanvasHandle, ModeId, UnifiedNode } from "./types";
+import {
+  type GraphSettings,
+  loadGraphSettings,
+  saveGraphSettings,
+} from "./graphSettings";
+import { GraphSettingsPanel } from "./GraphSettingsPanel";
 
 /** "vault" = the global GraphRAG knowledge graph. Anything else = a folder path. */
 type KnowledgeTab = "vault" | string;
@@ -75,6 +82,7 @@ export default function UnifiedGraph({
   // Bumped to forward toolbar Edit/Reindex actions to the active FolderGraphTab.
   const [folderEditTrigger, setFolderEditTrigger] = useState(0);
   const [folderReindexTrigger, setFolderReindexTrigger] = useState(0);
+  const [folderResetTrigger, setFolderResetTrigger] = useState(0);
 
   const [graphSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -82,6 +90,13 @@ export default function UnifiedGraph({
   const [fullscreen, setFullscreen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [graphSettings, setGraphSettings] = useState<GraphSettings>(loadGraphSettings);
+
+  const handleSettingsChange = useCallback((next: GraphSettings) => {
+    setGraphSettings(next);
+    saveGraphSettings(next);
+  }, []);
 
   const canvasRef = useRef<GraphCanvasHandle | null>(null);
   // Probe once on mount. If the host can't give us a WebGL context, render
@@ -258,17 +273,32 @@ export default function UnifiedGraph({
             onClick={() => setFolderEditTrigger((v) => v + 1)}
             title="Edit ontology"
           >
-            ⚙
+            <SettingsIcon size={14} />
           </button>
           <button
             className="ug-tool-btn"
             onClick={() => setFolderReindexTrigger((v) => v + 1)}
-            title="Reindex this folder"
+            title="Rebuild graph from scratch"
           >
-            ⟳⟳
+            <RefreshCw size={14} />
+          </button>
+          <button
+            className="ug-tool-btn"
+            onClick={() => setFolderResetTrigger((v) => v + 1)}
+            title="Delete graph and start over"
+          >
+            <X size={14} />
           </button>
         </>
       )}
+
+      <button
+        className={`ug-tool-btn${settingsOpen ? " ug-tool-btn--active" : ""}`}
+        onClick={() => setSettingsOpen((v) => !v)}
+        title="Display settings"
+      >
+        <SettingsIcon size={14} />
+      </button>
 
       <button
         className={`ug-tool-btn${findOpen ? " ug-tool-btn--active" : ""}`}
@@ -278,22 +308,22 @@ export default function UnifiedGraph({
         }}
         title="Find in graph (/)"
       >
-        🔍
+        <Search size={14} />
       </button>
       <button className="ug-tool-btn ug-tool-btn--hint" title="Drag = rotate · Right-drag = pan · Scroll = zoom · / = find in graph · Esc = close find / exit full view">?</button>
-      <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)">↻</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.reheat()} title="Re-energize layout (r)"><RefreshCw size={14} /></button>
       <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomIn()} title="Zoom in">+</button>
       <button className="ug-tool-btn" onClick={() => canvasRef.current?.zoomOut()} title="Zoom out">−</button>
-      <button className="ug-tool-btn" onClick={() => canvasRef.current?.fit()} title="Fit to view (f)">⛶</button>
+      <button className="ug-tool-btn" onClick={() => canvasRef.current?.fit()} title="Fit to view (f)"><Maximize size={14} /></button>
       {showRefresh && refresh && (
-        <button className="ug-tool-btn" onClick={refresh} title="Refresh data">⟳</button>
+        <button className="ug-tool-btn" onClick={refresh} title="Refresh data"><RefreshCw size={14} /></button>
       )}
       <button
         className={`ug-tool-btn${fullscreen ? " ug-tool-btn--active" : ""}`}
         onClick={() => setFullscreen((v) => !v)}
         title={fullscreen ? "Exit full view (Esc)" : "Full view"}
       >
-        {fullscreen ? "✕" : "▢"}
+        {fullscreen ? <X size={14} /> : <Maximize2 size={14} />}
       </button>
     </div>
   );
@@ -337,7 +367,7 @@ export default function UnifiedGraph({
                 title="Close tab (keeps the .nexus-graph index on disk)"
                 aria-label={`Close ${t.label}`}
               >
-                ×
+                <X size={14} />
               </button>
             </span>
           ))}
@@ -380,7 +410,7 @@ export default function UnifiedGraph({
             title="Close (Esc)"
             aria-label="Close find widget"
           >
-            ×
+            <X size={14} />
           </button>
         </div>
       )}
@@ -404,6 +434,7 @@ export default function UnifiedGraph({
                 selectedId={selectedId}
                 search={canvasSearch}
                 findQuery={findOpen ? findQuery : ""}
+                settings={graphSettings}
                 onSelect={handleNodeClick}
                 onNodeRightClick={handleNodeRightClick}
                 contextMenu={contextMenu}
@@ -417,6 +448,14 @@ export default function UnifiedGraph({
               nodeCount={stats.nodes}
               edgeCount={stats.links}
               onRetry={() => setWebglProbe(probeWebGL())}
+            />
+          )}
+
+          {settingsOpen && (
+            <GraphSettingsPanel
+              settings={graphSettings}
+              onChange={handleSettingsChange}
+              onClose={() => setSettingsOpen(false)}
             />
           )}
 
@@ -434,6 +473,7 @@ export default function UnifiedGraph({
               onReindexComplete={() => setFolderRefreshKey((v) => v + 1)}
               externalEditOntology={folderEditTrigger}
               externalReindex={folderReindexTrigger}
+              externalReset={folderResetTrigger}
             />
           )}
         </div>

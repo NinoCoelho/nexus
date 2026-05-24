@@ -8,7 +8,8 @@
  */
 
 import { useState } from "react";
-import type { FieldKind, FieldSchema } from "../../types/form";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
+import type { FieldKind, FieldSchema, RollupAggregate } from "../../types/form";
 
 interface Props {
   initialTitle?: string;
@@ -19,8 +20,10 @@ interface Props {
 
 const KINDS: FieldKind[] = [
   "text", "textarea", "number", "boolean",
-  "select", "multiselect", "date", "vault-link", "formula", "ref",
+  "select", "multiselect", "date", "vault-link", "formula", "rollup", "ref",
 ];
+
+const ROLLUP_AGGREGATES: RollupAggregate[] = ["sum", "count", "avg", "min", "max"];
 
 export default function SchemaEditor({ initialTitle, initialFields, onSave, onCancel }: Props) {
   const [title, setTitle] = useState(initialTitle ?? "");
@@ -80,7 +83,7 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
             <span>Name</span>
             <span>Label</span>
             <span>Kind</span>
-            <span>Choices / Formula / Ref target</span>
+            <span>Choices / Formula / Rollup / Ref target</span>
             <span>Req</span>
             <span></span>
           </div>
@@ -112,6 +115,52 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
                   onChange={(e) => update(i, { formula: e.target.value })}
                   placeholder="e.g. price * qty"
                 />
+              ) : f.kind === "rollup" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <input
+                      className="form-input"
+                      style={{ flex: 2 }}
+                      value={f.rollup_target_table ?? ""}
+                      onChange={(e) => update(i, { rollup_target_table: e.target.value })}
+                      placeholder="./items.md"
+                      title="Path to the detail table"
+                    />
+                    <input
+                      className="form-input"
+                      style={{ flex: 1 }}
+                      value={f.rollup_relation_field ?? ""}
+                      onChange={(e) => update(i, { rollup_relation_field: e.target.value })}
+                      placeholder="FK field"
+                      title="FK field on the detail table pointing back to this table"
+                    />
+                    <select
+                      className="form-input"
+                      style={{ flex: 1 }}
+                      value={f.rollup_aggregate ?? "sum"}
+                      onChange={(e) => update(i, { rollup_aggregate: e.target.value as RollupAggregate })}
+                      title="Aggregate function"
+                    >
+                      {ROLLUP_AGGREGATES.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                    <input
+                      className="form-input"
+                      style={{ flex: 1 }}
+                      value={f.rollup_source_field ?? ""}
+                      onChange={(e) => update(i, { rollup_source_field: e.target.value })}
+                      placeholder="field"
+                      title="Field on detail table to aggregate (not needed for count)"
+                      disabled={f.rollup_aggregate === "count"}
+                    />
+                  </div>
+                  <input
+                    className="form-input"
+                    value={f.rollup_filter ?? ""}
+                    onChange={(e) => update(i, { rollup_filter: e.target.value || undefined })}
+                    placeholder='filter: e.g. status == "active"'
+                    title="Optional formula filter on detail rows (truthy = included)"
+                  />
+                </div>
               ) : (f.kind === "select" || f.kind === "multiselect") ? (
                 <input
                   className="form-input"
@@ -151,14 +200,14 @@ export default function SchemaEditor({ initialTitle, initialFields, onSave, onCa
                 onChange={(e) => update(i, { required: e.target.checked })}
               />
               <div className="dt-schema-field-actions">
-                <button className="dt-action-btn" type="button" onClick={() => move(i, -1)}>↑</button>
-                <button className="dt-action-btn" type="button" onClick={() => move(i, 1)}>↓</button>
+                <button className="dt-action-btn" type="button" onClick={() => move(i, -1)}><ChevronUp size={14} /></button>
+                <button className="dt-action-btn" type="button" onClick={() => move(i, 1)}><ChevronDown size={14} /></button>
                 <button
                   className="dt-action-btn dt-action-btn--delete"
                   type="button"
                   onClick={() => remove(i)}
                 >
-                  ×
+                  <X size={14} />
                 </button>
               </div>
             </div>

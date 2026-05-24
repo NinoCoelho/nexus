@@ -57,11 +57,13 @@ export function useSessionActions({
 }: SessionActionsOptions) {
   const { t } = useTranslation("sidebar");
   const handleRename = async (id: string) => {
+    const newTitle = renameValue.trim() || "Untitled";
+    setSessions((prev) =>
+      prev.map((s) => s.id === id ? { ...s, title: newTitle } : s)
+    );
     try {
-      await patchSession(id, { title: renameValue.trim() || "Untitled" });
-      setSessions((prev) =>
-        prev.map((s) => s.id === id ? { ...s, title: renameValue.trim() || "Untitled" } : s)
-      );
+      await patchSession(id, { title: newTitle });
+      onSessionsRevisionBump();
     } catch { /* ignore */ }
     setRenamingId(null);
     setMenuNull();
@@ -72,6 +74,7 @@ export function useSessionActions({
       await deleteSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (id === activeSessionId) onActiveSessionDeleted();
+      onSessionsRevisionBump();
     } catch { /* ignore */ }
     setMenuNull();
   };

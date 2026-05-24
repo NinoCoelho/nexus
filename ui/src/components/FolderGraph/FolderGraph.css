@@ -10,15 +10,15 @@
   justify-content: center;
   gap: 12px;
   padding: 40px;
-  color: var(--fg, #e5edf5);
-  background: var(--bg, #0e1422);
+  color: var(--fg);
+  background: var(--bg);
 }
 
 .fg-spinner {
   width: 28px;
   height: 28px;
-  border: 2px solid rgba(255, 255, 255, 0.18);
-  border-top-color: rgba(120, 200, 255, 0.85);
+  border: 2px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent) 85%, transparent);
   border-radius: 50%;
   animation: fg-spin 0.9s linear infinite;
 }
@@ -35,10 +35,9 @@
   z-index: 8;
   display: flex;
   flex-direction: column;
-  /* Body scrolls, not the whole pane — keeps header + footer pinned. */
   overflow: hidden;
-  color: var(--fg, #e5edf5);
-  background: var(--bg, #0e1422);
+  color: var(--fg);
+  background: var(--bg);
 }
 
 .fg-config-header {
@@ -53,13 +52,13 @@
 }
 
 .fg-folder-name {
-  color: rgba(180, 220, 255, 0.95);
+  color: var(--accent-hi);
   font-weight: 600;
 }
 
 .fg-config-subtitle {
   margin-top: 4px;
-  color: rgba(220, 230, 245, 0.65);
+  color: var(--fg-dim);
   font-size: 13px;
 }
 
@@ -80,8 +79,8 @@
 }
 
 .fg-section {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
   padding: 14px 16px;
 }
@@ -98,12 +97,12 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: rgba(220, 230, 245, 0.75);
+  color: var(--fg-dim);
 }
 
 .fg-section-hint {
   font-size: 12px;
-  color: rgba(220, 230, 245, 0.45);
+  color: var(--fg-faint);
 }
 
 .fg-list-editor {
@@ -120,23 +119,23 @@
 
 .fg-input {
   flex: 1;
-  background: var(--bg-input, rgba(255, 255, 255, 0.06));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.16));
+  background: var(--bg-input);
+  border: 1px solid var(--border);
   border-radius: 5px;
   padding: 7px 10px;
-  color: var(--fg, #f2f6fb);
+  color: var(--fg);
   font-size: 13px;
   font-family: inherit;
   outline: none;
 }
 
 .fg-input::placeholder {
-  color: rgba(220, 230, 245, 0.4);
+  color: var(--fg-faint);
 }
 
 .fg-input:focus {
-  border-color: rgba(120, 200, 255, 0.7);
-  box-shadow: 0 0 0 2px rgba(120, 200, 255, 0.18);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .fg-icon-btn {
@@ -144,8 +143,8 @@
   height: 26px;
   border-radius: 5px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(220, 230, 245, 0.7);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--fg-dim);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -155,8 +154,8 @@
 }
 
 .fg-icon-btn:hover {
-  background: rgba(255, 90, 90, 0.18);
-  color: rgba(255, 180, 180, 0.95);
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+  color: var(--danger-hi);
 }
 
 .fg-checkbox-row {
@@ -164,7 +163,7 @@
   gap: 8px;
   align-items: center;
   font-size: 13px;
-  color: rgba(220, 230, 245, 0.85);
+  color: var(--fg-dim);
   cursor: pointer;
 }
 
@@ -174,16 +173,16 @@
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 32px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  background: var(--bg, #0e1422);
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg);
 }
 
 /* ---------- Buttons ---------- */
 
 .fg-btn {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(220, 230, 245, 0.9);
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--fg);
   border-radius: 6px;
   padding: 7px 14px;
   font-size: 13px;
@@ -193,8 +192,8 @@
 }
 
 .fg-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border-color: var(--border);
 }
 
 .fg-btn:disabled {
@@ -203,23 +202,23 @@
 }
 
 .fg-btn--primary {
-  background: rgba(120, 200, 255, 0.18);
-  border-color: rgba(120, 200, 255, 0.35);
-  color: rgba(220, 240, 255, 1);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent-hi);
 }
 
 .fg-btn--primary:hover {
-  background: rgba(120, 200, 255, 0.28);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .fg-btn--secondary {
-  background: rgba(180, 130, 255, 0.14);
-  border-color: rgba(180, 130, 255, 0.32);
-  color: rgba(230, 220, 255, 0.95);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--accent-hi);
 }
 
 .fg-btn--secondary:hover {
-  background: rgba(180, 130, 255, 0.22);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .fg-btn--ghost {
@@ -242,22 +241,22 @@
 }
 
 .fg-banner--warn {
-  background: rgba(255, 200, 90, 0.12);
-  border: 1px solid rgba(255, 200, 90, 0.32);
-  color: rgba(255, 220, 160, 0.95);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+  color: var(--warn);
 }
 
 .fg-banner--error {
-  background: rgba(255, 100, 100, 0.12);
-  border: 1px solid rgba(255, 100, 100, 0.32);
-  color: rgba(255, 190, 190, 0.95);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 32%, transparent);
+  color: var(--danger-hi);
 }
 
 /* ---------- Wizard ---------- */
 
 .fg-wizard {
-  background: rgba(15, 22, 36, 0.7);
-  border: 1px solid rgba(180, 130, 255, 0.28);
+  background: color-mix(in srgb, var(--bg-inset) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: 8px;
   padding: 14px 16px;
   display: flex;
@@ -275,12 +274,12 @@
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: rgba(220, 200, 255, 0.95);
+  color: var(--accent-hi);
 }
 
 .fg-wizard-rationale {
   font-size: 13px;
-  color: rgba(220, 230, 245, 0.85);
+  color: var(--fg-dim);
   font-style: italic;
 }
 
@@ -300,7 +299,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: rgba(220, 230, 245, 0.55);
+  color: var(--fg-faint);
 }
 
 .fg-chip-row {
@@ -310,32 +309,32 @@
 }
 
 .fg-chip {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: 12px;
   padding: 3px 10px;
   font-size: 12px;
-  color: rgba(220, 230, 245, 0.85);
+  color: var(--fg-dim);
 }
 
 .fg-chip--provisional {
   border-style: dashed;
-  border-color: rgba(180, 130, 255, 0.45);
-  color: rgba(220, 200, 255, 0.85);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent-hi);
 }
 
 .fg-wizard-question {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
   border-radius: 6px;
   padding: 10px 12px;
 }
 
 .fg-wizard-question-text {
   font-size: 14px;
-  color: rgba(230, 240, 255, 0.95);
+  color: var(--fg);
 }
 
 .fg-wizard-choice-row {
@@ -350,7 +349,7 @@
 
 .fg-wizard-status {
   font-size: 12px;
-  color: rgba(220, 230, 245, 0.55);
+  color: var(--fg-faint);
   font-style: italic;
 }
 
@@ -371,20 +370,20 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: var(--bg, #0e1422);
+  background: var(--bg);
 }
 
 .fg-progress-card {
   width: 100%;
   max-width: 520px;
-  background: rgba(15, 22, 36, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--bg-inset) 85%, transparent);
+  border: 1px solid var(--border-soft);
   border-radius: 10px;
   padding: 22px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  color: var(--ug-text, #cdd5e0);
+  color: var(--fg-dim);
 }
 
 .fg-progress-title {
@@ -394,12 +393,12 @@
 
 .fg-progress-phase {
   font-size: 13px;
-  color: rgba(220, 230, 245, 0.85);
+  color: var(--fg-dim);
 }
 
 .fg-progress-status {
   font-size: 12px;
-  color: rgba(220, 230, 245, 0.6);
+  color: var(--fg-faint);
 }
 
 .fg-progress-bar-wrap {
@@ -411,7 +410,7 @@
 .fg-progress-bar {
   width: 100%;
   height: 6px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -420,20 +419,20 @@
   height: 100%;
   background: linear-gradient(
     90deg,
-    rgba(120, 200, 255, 0.7),
-    rgba(180, 130, 255, 0.7)
+    color-mix(in srgb, var(--accent) 70%, transparent),
+    color-mix(in srgb, var(--accent-lo) 70%, transparent)
   );
   transition: width 0.2s linear;
 }
 
 .fg-progress-counts {
   font-size: 11px;
-  color: rgba(220, 230, 245, 0.6);
+  color: var(--fg-faint);
 }
 
 .fg-progress-current {
   font-size: 11px;
-  color: rgba(220, 230, 245, 0.45);
+  color: var(--fg-faint);
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
@@ -442,12 +441,12 @@
 
 .fg-progress-stats {
   font-size: 12px;
-  color: rgba(180, 220, 255, 0.85);
+  color: var(--accent);
 }
 
 .fg-progress-errors {
   font-size: 12px;
-  color: rgba(255, 180, 180, 0.85);
+  color: var(--danger-hi);
 }
 
 .fg-progress-errors summary {
@@ -475,13 +474,13 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  background: rgba(40, 30, 18, 0.94);
-  border: 1px solid rgba(255, 200, 90, 0.4);
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-inset));
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
   border-radius: 6px;
   padding: 8px 14px;
   font-size: 13px;
-  color: rgba(255, 220, 160, 0.95);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  color: var(--warn);
+  box-shadow: 0 4px 12px var(--shadow-color);
 }
 
 .fg-stale-text {

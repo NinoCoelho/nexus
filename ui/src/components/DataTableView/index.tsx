@@ -11,7 +11,7 @@
  *   - formula cells are computed at render time from other fields
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import FormRenderer from "../FormRenderer";
 import Modal, { type ModalProps } from "../Modal";
 import SchemaEditor from "../datatable/SchemaEditor";
@@ -19,8 +19,10 @@ import { getVaultDataTable } from "../../api";
 import DataTableToolbar from "./DataTableToolbar";
 import DataTableGrid from "./DataTableGrid";
 import RelatedRowsPanel from "./RelatedRowsPanel";
-import { deriveLabelInfo, suggestNextPk } from "../datatable/refOptions";
+import RowDetailDrawer from "./RowDetailDrawer";
+import { deriveLabelInfo, suggestNextPk, useRefLabels } from "../datatable/refOptions";
 import { useDataTableActions } from "./useDataTableActions";
+import { useVaultEvents } from "../../hooks/useVaultEvents";
 import { useVaultLinkPreview, VaultLinkPreviewProvider } from "../vaultLink";
 import "../DataTableView.css";
 
@@ -40,6 +42,8 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showSchemaEditor, setShowSchemaEditor] = useState(false);
   const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
+  const [detailRow, setDetailRow] = useState<RowRecord | null>(null);
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const { onPreview: onVaultPreview, modal: vaultPreviewModal } = useVaultLinkPreview();
 
   // toolbar state
@@ -67,6 +71,28 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   // Reset paging on filter/search/path change
   useEffect(() => { setPage(0); }, [path, search, sort]);
 
+  // Live-refresh when the agent (or another client) edits this table file.
+  // Mutations route through vault.write_file → event_bus → the SSE stream
+  // consumed by useVaultEvents. Debounce 200ms to coalesce a tool turn that
+  // does several mutations (e.g. add_row + update_row). Skip while the user
+  // is mid inline-edit so we don't blow away their cellDraft.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useVaultEvents((ev) => {
+    if (ev.path !== path) return;
+    if (ev.type !== "vault.indexed") return;
+    if (editingCell) return;
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      reload();
+    }, 200);
+  });
+  useEffect(() => {
+    return () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    };
+  }, []);
+
   const actions = useDataTableActions({
     path, table, search, sort, hidden, activeView,
     reload, setError, setEditingRow, setShowAddForm, setShowSchemaEditor,
@@ -74,6 +100,13 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   });
 
   const { fields, views, visibleFields, sorted, pageCount } = actions;
+  const refLabels = useRefLabels(fields, path);
+
+  const handleRowClick = useCallback((row: RowRecord) => {
+    setDetailRow(row);
+    setEditingRow(null);
+    setShowAddForm(false);
+  }, []);
 
   if (error) return <div className="dt-error">{error}</div>;
   if (!table) return <div className="dt-loading">Loading…</div>;
@@ -84,6 +117,8 @@ export default function DataTableView({ path, onOpenTable }: Props) {
   const editingValues = editingRow
     ? Object.fromEntries(fields.map((f) => [f.name, editingRow[f.name]]))
     : undefined;
+
+  const detailRowId = detailRow ? String(detailRow._id ?? "") : null;
 
   return (
     <VaultLinkPreviewProvider onPreview={onVaultPreview}>
@@ -119,13 +154,10 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         onExportCSV={actions.exportCSV}
         onImportCSV={actions.importCSV}
         onOpenSchema={() => setShowSchemaEditor(true)}
-        onAddRow={() => { setShowAddForm(true); setEditingRow(null); }}
+        onAddRow={() => { setShowAddForm(true); setEditingRow(null); setDetailRow(null); }}
       />
 
       {showAddForm && (() => {
-        // Pre-fill the primary-key column with a suggested next id (e.g.
-        // following C001 C002 C003 with C004) so the user doesn't have to
-        // type it. Only applied on Add — Edit never overwrites existing PKs.
         const { pkName } = deriveLabelInfo(fields, table.schema.table);
         const next = suggestNextPk(actions.rows, pkName);
         const initialValues = next ? { [pkName]: next } : undefined;
@@ -134,9 +166,12 @@ export default function DataTableView({ path, onOpenTable }: Props) {
             <div className="dt-form-heading">New Row</div>
             <FormRenderer
               hostPath={path}
-              fields={fields.filter((f) => f.kind !== "formula")}
+              fields={fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup")}
               initialValues={initialValues}
-              onSubmit={(v) => void actions.handleAdd(v)}
+              onSubmit={async (v) => {
+                const created = await actions.handleAdd(v);
+                if (created) setDetailRow(created);
+              }}
               onCancel={() => setShowAddForm(false)}
               submitLabel="Add"
             />
@@ -145,11 +180,6 @@ export default function DataTableView({ path, onOpenTable }: Props) {
       })()}
 
       {editingRow && (() => {
-        // Resolve the row's "natural" id the same way the picker + popup do —
-        // explicit primary_key wins, otherwise infer from the first
-        // required text/number field. Falling back to `_id` (the auto-hash)
-        // would mean inbound refs never match because they store the
-        // user-facing key (e.g. "C002"), not the hash.
         const { pkName } = deriveLabelInfo(fields, table.schema.table);
         const editingRowId = editingRow[pkName] ?? editingRow._id;
         return (
@@ -157,7 +187,7 @@ export default function DataTableView({ path, onOpenTable }: Props) {
             <div className="dt-form-heading">Edit Row</div>
             <FormRenderer
               hostPath={path}
-              fields={fields.filter((f) => f.kind !== "formula")}
+              fields={fields.filter((f) => f.kind !== "formula" && f.kind !== "rollup")}
               initialValues={editingValues}
               onSubmit={(v) => void actions.handleUpdate(editingRow, v)}
               onCancel={() => setEditingRow(null)}
@@ -174,31 +204,58 @@ export default function DataTableView({ path, onOpenTable }: Props) {
         );
       })()}
 
-      <DataTableGrid
-        visibleFields={visibleFields}
-        pageRows={pageRows}
-        sorted={sorted}
-        rows={actions.rows}
-        fields={fields}
-        sort={sort}
-        editingCell={editingCell}
-        cellDraft={cellDraft}
-        safePage={safePage}
-        pageCount={pageCount}
-        hostPath={path}
-        onToggleSort={(name) => setSort((s) => {
-          if (!s || s.field !== name) return { field: name, dir: "asc" };
-          if (s.dir === "asc") return { field: name, dir: "desc" };
-          return null;
-        })}
-        onStartEdit={(rowId, f, value) => { setEditingCell({ rowId, field: f.name }); setCellDraft(value); }}
-        onCellDraftChange={setCellDraft}
-        onCommitEdit={() => void actions.commitInlineEdit(editingCell, cellDraft, () => setEditingCell(null))}
-        onCancelEdit={() => setEditingCell(null)}
-        onEditRow={(row) => { setEditingRow(row); setShowAddForm(false); }}
-        onDeleteRow={actions.handleDelete}
-        onPageChange={setPage}
-      />
+      <div className={`dt-grid-area${detailRow ? " dt-with-drawer" : ""}`}>
+        <DataTableGrid
+          visibleFields={visibleFields}
+          pageRows={pageRows}
+          sorted={sorted}
+          rows={actions.rows}
+          fields={fields}
+          sort={sort}
+          editingCell={editingCell}
+          cellDraft={cellDraft}
+          safePage={safePage}
+          pageCount={pageCount}
+          hostPath={path}
+          selectedRowId={detailRowId}
+          refLabels={refLabels}
+          onToggleSort={(name) => setSort((s) => {
+            if (!s || s.field !== name) return { field: name, dir: "asc" };
+            if (s.dir === "asc") return { field: name, dir: "desc" };
+            return null;
+          })}
+          onStartEdit={(rowId, f, value) => { setEditingCell({ rowId, field: f.name }); setCellDraft(value); }}
+          onCellDraftChange={setCellDraft}
+          onCommitEdit={() => void actions.commitInlineEdit(editingCell, cellDraft, () => setEditingCell(null))}
+          onCancelEdit={() => setEditingCell(null)}
+          onEditRow={(row) => { setEditingRow(row); setShowAddForm(false); setDetailRow(null); }}
+          onDeleteRow={actions.handleDelete}
+          onRowClick={handleRowClick}
+          onPageChange={setPage}
+        />
+        {detailRow && table && (
+          <RowDetailDrawer
+            path={path}
+            rowId={detailRowId ?? ""}
+            row={detailRow}
+            table={table}
+            onClose={() => setDetailRow(null)}
+            onOpenTable={onOpenTable}
+            onRefresh={() => {
+              getVaultDataTable(path).then((fresh) => {
+                setTable(fresh);
+                const id = detailRow?._id;
+                if (id) {
+                  const updated = fresh.rows.find((r: RowRecord) => r._id === id);
+                  if (updated) setDetailRow(updated);
+                }
+                setDetailRefreshKey((k) => k + 1);
+              }).catch(() => {});
+            }}
+            refreshKey={detailRefreshKey}
+          />
+        )}
+      </div>
       {vaultPreviewModal}
     </div>
     </VaultLinkPreviewProvider>

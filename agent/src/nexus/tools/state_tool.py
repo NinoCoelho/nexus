@@ -97,11 +97,6 @@ class StateToolHandler:
                 return prompted
 
         data: dict[str, Any] = {"name": skill.name, "body": skill.body}
-        # Tell the LLM how to consume credentials this skill declared. Without
-        # this hint, the model falls back to its trained behavior of asking
-        # the user to export an env var or paste the key — even though we
-        # already collected it. The values themselves are NOT included; the
-        # placeholder is everything the model needs.
         if skill.requires_keys:
             data["credentials"] = {
                 "available": [req.name for req in skill.requires_keys],
@@ -116,6 +111,33 @@ class StateToolHandler:
                     "messages. Just write `$NAME` in the tool args."
                 ),
             }
+        if skill.has_requirements:
+            from ..skills.venv_manager import venv_info
+
+            vi = venv_info(skill.name, skill.source_dir)
+            if vi.get("venv_exists"):
+                data["python"] = {
+                    "path": vi["python_path"],
+                    "note": (
+                        "This skill has an isolated Python environment. "
+                        "Run scripts using this Python binary, e.g. "
+                        f"`{vi['python_path']} scripts/foo.py`. "
+                        "Do NOT use bare `python3` for this skill's scripts."
+                    ),
+                }
+                req = vi.get("requirements")
+                if req:
+                    data["python"]["requirements"] = req
+            else:
+                data["python"] = {
+                    "note": (
+                        "This skill declares Python dependencies but its "
+                        "venv is not ready. Call "
+                        "`skill_manage(action=\"ensure_venv\", name=\""
+                        + skill.name
+                        + "\")` to create it."
+                    ),
+                }
         return ToolResult(ok=True, data=data)
 
     async def _prompt_for_missing_keys(

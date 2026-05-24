@@ -11,16 +11,20 @@
  * the agent receives them as markdown links in the user message.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { transcribeAudio, uploadVaultFiles, type SlashCommand } from "../../api";
+import { transcribeVaultAudio, uploadVaultFiles, type SlashCommand } from "../../api";
+import { sounds } from "../../hooks/useSounds";
+import { looksLikeSpeech } from "../../lib/speechDetect";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
+import SecretPicker, { type SecretPickerHandle } from "../SecretPicker";
 import SlashCommandPicker, { type SlashPickerHandle } from "../SlashCommandPicker";
 import "../InputBar.css";
 import { useAudioRecorder } from "./useAudioRecorder";
 import { useMentionPicker } from "./useMentionPicker";
+import { useSecretPicker } from "./useSecretPicker";
 import { useSlashPicker } from "./useSlashPicker";
 import AttachmentsBar from "./AttachmentsBar";
 import ModelBadge from "./ModelBadge";
@@ -32,10 +36,22 @@ interface AttachedFile {
   vaultPath: string;
 }
 
+interface ExtraAttachment extends AttachedFile {
+  /** Optional explicit mime type. Forces backend routing for ambiguous
+   * extensions — voice memos use ``audio/webm`` because ``.webm`` would
+   * otherwise sniff to ``video/webm`` and skip the audio transcription
+   * branch in ``materialize_message``. */
+  mimeType?: string;
+}
+
 interface SendOptions {
   text?: string;
   inPlace?: boolean;
   bypassSecretGuard?: boolean;
+  extraAttachments?: ExtraAttachment[];
+  /** "voice" when the user dictated this turn (hold-to-record). The backend
+   * uses this signal to decide whether to fire spoken acknowledgments. */
+  inputMode?: "voice" | "text";
 }
 
 interface Props {
@@ -70,12 +86,14 @@ export default function InputBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mentionRef = useRef<MentionPickerHandle>(null);
+  const secretRef = useRef<SecretPickerHandle>(null);
   const slashRef = useRef<SlashPickerHandle>(null);
   const toast = useToast();
 
   const [uploading, setUploading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [conversationMode, setConversationMode] = useState(false);
   // ``pendingSecret`` parks a send while the user decides what to do with a
   // secret-shaped substring. ``pendingSendText`` carries the exact text we
   // were about to send so "Send anyway" doesn't lose attachments or
@@ -97,7 +115,60 @@ export default function InputBar({
   };
 
   const { recording, audio, setAudio, levels, seconds, startRecording, stopRecording, cancelRecording, clearAudio } = useAudioRecorder();
+
+  const conversationModeRef = useRef(conversationMode);
+  conversationModeRef.current = conversationMode;
+  const transcribingRef = useRef(transcribing);
+  transcribingRef.current = transcribing;
+
+  // iOS Safari refuses async `audio.play()` (e.g. from an SSE-driven
+  // voice ack) unless the page has a "consumed" user gesture. Pressing
+  // record IS such a gesture — but we need to actually *touch* the
+  // audio system inside the gesture for Safari to remember it. The
+  // Web Audio API trick is the most reliable: create an AudioContext,
+  // play a 1-sample buffer at zero volume, and Safari unlocks ALL
+  // subsequent audio for the page lifetime.
+  const audioUnlockedRef = useRef(false);
+  const unlockAudioForIOS = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true;
+    if (typeof window === "undefined") return;
+    try {
+      // 1) Web Audio path — required for HTMLAudioElement playback on
+      //    iOS Safari to work from later async callbacks.
+      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (Ctx) {
+        const ctx = new Ctx();
+        // resume() is a no-op on browsers that don't suspend new contexts,
+        // but iOS suspends until user gesture; this is what unlocks it.
+        if (typeof ctx.resume === "function") void ctx.resume().catch(() => {});
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        if (typeof source.start === "function") source.start(0);
+        // Don't close the context — keep it alive so subsequent plays inherit
+        // the unlock. Safari will GC it on tab close.
+      }
+      // 2) Belt-and-suspenders: also prime an HTMLAudioElement. Some iOS
+      //    versions need both paths primed.
+      const SILENT_WAV =
+        "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+      const a = new Audio(SILENT_WAV);
+      a.muted = false;
+      a.volume = 0;
+      void a.play().then(() => a.pause()).catch(() => { /* ignore */ });
+    } catch {
+      // Not fatal — Web Speech fallback in the player still works.
+    }
+  }, []);
+  const handleCancelRecording = useCallback(() => {
+    cancelRecording();
+    setConversationMode(false);
+  }, [cancelRecording]);
+
   const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(value, onChange);
+  const { secret, setSecret, secretResults, detectSecret, insertSecret } = useSecretPicker(value, onChange);
   const { slash, setSlash, commands: slashCommands } = useSlashPicker(value);
 
   const insertSlashCommand = (cmd: SlashCommand) => {
@@ -138,46 +209,124 @@ export default function InputBar({
     adjust();
     const caret = textareaRef.current?.selectionStart ?? text.length;
     setMention(detectMention(text, caret));
+    setSecret(detectSecret(text, caret));
   };
 
   const handleSelectionChange = () => {
     const el = textareaRef.current;
     if (!el) return;
-    setMention(detectMention(el.value, el.selectionStart ?? 0));
+    const caret = el.selectionStart ?? 0;
+    setMention(detectMention(el.value, caret));
+    setSecret(detectSecret(el.value, caret));
   };
 
-  const runTranscribeAndSend = async () => {
-    if (!audio) return;
-    setTranscribing(true);
+  const retryFollowUpRef = useRef<() => void>(() => {});
+
+  const uploadAudioAndSend = async (blob: Blob, urlToRevoke?: string) => {
     try {
-      const { text } = await transcribeAudio(audio.blob);
-      const typed = value.trim();
-      const combined = typed ? `${text.trim()}\n\n${typed}` : text.trim();
-      if (!combined) { toast.error(t("chat:input.transcriptionNoText")); return; }
-      const proceed = () => {
-        if (audio) {
-          URL.revokeObjectURL(audio.url);
-          setAudio(null);
-        }
-        onChange("");
-        onSend(combined);
+      const rawMime = (blob.type || "audio/webm").split(";")[0].trim();
+      const extByMime: Record<string, string> = {
+        "audio/webm": "webm",
+        "audio/ogg": "ogg",
+        "audio/mp4": "m4a",
+        "audio/mpeg": "mp3",
+        "audio/wav": "wav",
+        "audio/x-wav": "wav",
       };
-      guardedSend(combined, proceed);
+      const ext = extByMime[rawMime] || "webm";
+      const stamp = new Date().toISOString().replace(/[:T]/g, "-").replace(/\..*/, "");
+      const file = new File([blob], `voice-${stamp}.${ext}`, { type: rawMime });
+      const result = await uploadVaultFiles([file], "uploads/voice");
+      const newAttachments: ExtraAttachment[] = result.uploaded.map((f) => ({
+        name: f.path.split("/").pop() ?? f.path,
+        vaultPath: f.path,
+        mimeType: rawMime,
+      }));
+      if (newAttachments.length === 0) {
+        toast.error(t("chat:input.uploadFailed"));
+        return;
+      }
+
+      const vaultPath = newAttachments[0].vaultPath;
+      let transcript = "";
+      try {
+        const r = await transcribeVaultAudio(vaultPath);
+        transcript = r.text ?? "";
+        if (!looksLikeSpeech(transcript)) {
+          toast.info("I couldn\u2019t understand. Please try again.");
+          if (conversationModeRef.current) {
+            setTimeout(() => retryFollowUpRef.current(), 300);
+          }
+          return;
+        }
+      } catch {
+        // Transcription check failed — send anyway, let the backend handle it.
+      }
+
+      const typed = value.trim() || transcript.trim();
+      onChange("");
+      onSend({ text: typed, extraAttachments: newAttachments, inputMode: "voice" });
     } catch (err) {
-      toast.error(t("chat:input.transcriptionFailed"), { detail: err instanceof Error ? err.message : undefined });
+      toast.error(t("chat:input.uploadFailed"), { detail: err instanceof Error ? err.message : undefined });
     } finally {
+      if (urlToRevoke) URL.revokeObjectURL(urlToRevoke);
       setTranscribing(false);
     }
   };
 
+  // Legacy path: keyboard-only Enter on a stored audio attachment. Now uploads
+  // the staged blob the same way the live recording flow does, so behavior
+  // stays consistent if `audio` ever lands in state via a future entry point.
+  const runTranscribeAndSend = async () => {
+    if (!audio) return;
+    const { blob, url } = audio;
+    setAudio(null);
+    await uploadAudioAndSend(blob, url);
+  };
+
+  // Stop the current recording and immediately upload + send the result.
+  // The audio rides as a chat attachment; the backend transcribes inline as
+  // part of preparing the model call (see multimodal.materialize_message),
+  // so the user perceives "recording → message in chat" with no separate
+  // transcribe round-trip and no input-bar pill.
+  const stopRecordingAndSend = () => {
+    if (transcribing) return;
+    setTranscribing(true);
+    setConversationMode(true);
+    sounds.micSilence();
+    stopRecording({
+      onComplete: (a) => { void uploadAudioAndSend(a.blob, a.url); },
+    });
+  };
+
+  const stopRecordingAndSendRef = useRef(stopRecordingAndSend);
+  stopRecordingAndSendRef.current = stopRecordingAndSend;
+
+  const handleSilenceTimeout = useCallback(() => {
+    stopRecordingAndSendRef.current();
+  }, []);
+
+  const handleFollowUpTimeout = useCallback(() => {
+    setConversationMode(false);
+  }, []);
+
+  retryFollowUpRef.current = () => {
+    setConversationMode(true);
+    openFollowUpMic();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mention && mentionRef.current?.handleKey(e)) return;
+    if (secret && secretRef.current?.handleKey(e)) return;
     if (slash && slashRef.current?.handleKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (disabled || transcribing) return;
       if (audio) { void runTranscribeAndSend(); return; }
-      if (hasContent) guardedSend(value, () => onSend());
+      if (hasContent) {
+        setConversationMode(false);
+        guardedSend(value, () => onSend());
+      }
     }
   };
 
@@ -216,14 +365,111 @@ export default function InputBar({
     return () => document.removeEventListener("mousedown", handler);
   }, [menuOpen]);
 
+  // Voice-button gesture state. The button supports two flows:
+  //   - tap → starts recording; a second tap stops + sends.
+  //   - press-and-hold → records while held; release stops + sends.
+  // We discriminate at pointerup: a release within HOLD_THRESHOLD_MS of
+  // pointerdown is treated as a tap (recording stays on); anything longer is
+  // a hold (auto-send on release).
+  const HOLD_THRESHOLD_MS = 250;
+  const pressStartedAtRef = useRef<number | null>(null);
+  const tapModeRef = useRef(false);
+
   const handleActionClick = () => {
     if (busy && onStop) { onStop(); return; }
-    if (recording) { stopRecording(); return; }
+    if (recording) return;
     if (transcribing) return;
     if (audio) { void runTranscribeAndSend(); return; }
-    if (hasContent) { guardedSend(value, () => onSend()); return; }
-    void startRecording();
+    if (hasContent) {
+      setConversationMode(false);
+      guardedSend(value, () => onSend());
+      return;
+    }
+    tapModeRef.current = true;
+    unlockAudioForIOS();
+    void startRecording({
+      onSilenceTimeout: handleSilenceTimeout,
+    });
   };
+
+  const handleActionPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return;
+    if (busy || transcribing) return;
+    if (hasContent || audio) return;
+    if (recording && tapModeRef.current) {
+      e.preventDefault();
+      tapModeRef.current = false;
+      pressStartedAtRef.current = null;
+      stopRecordingAndSend();
+      return;
+    }
+    if (recording) return;
+    e.preventDefault();
+    pressStartedAtRef.current = Date.now();
+    tapModeRef.current = false;
+    unlockAudioForIOS();
+    void startRecording({
+      onSilenceTimeout: handleSilenceTimeout,
+    });
+  };
+
+  const handleActionPointerUp = () => {
+    const startedAt = pressStartedAtRef.current;
+    if (startedAt == null) return;
+    pressStartedAtRef.current = null;
+    const elapsed = Date.now() - startedAt;
+    if (elapsed >= HOLD_THRESHOLD_MS) {
+      stopRecordingAndSend();
+    } else {
+      tapModeRef.current = true;
+    }
+  };
+
+  const turnDoneRef = useRef(true);
+  const pendingMicReopenRef = useRef(false);
+  const prevBusyRef = useRef(busy);
+
+  const openFollowUpMic = useCallback(() => {
+    if (transcribingRef.current || recording) return;
+    if (!conversationModeRef.current) return;
+    sounds.micReady();
+    void startRecording({
+      onSilenceTimeout: handleSilenceTimeout,
+      followUpMode: true,
+      onFollowUpTimeout: handleFollowUpTimeout,
+    });
+  }, [startRecording, handleSilenceTimeout, handleFollowUpTimeout, recording]);
+
+  useEffect(() => {
+    if (busy) {
+      turnDoneRef.current = false;
+      pendingMicReopenRef.current = false;
+    }
+    if (prevBusyRef.current && !busy) {
+      turnDoneRef.current = true;
+      if (pendingMicReopenRef.current) {
+        pendingMicReopenRef.current = false;
+        openFollowUpMic();
+      }
+    }
+    prevBusyRef.current = busy;
+  }, [busy, openFollowUpMic]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const kind = (e as CustomEvent).detail?.kind;
+      if (kind !== "complete") return;
+      if (!conversationModeRef.current) return;
+      if (transcribingRef.current || recording) return;
+      if (turnDoneRef.current) {
+        openFollowUpMic();
+      } else {
+        pendingMicReopenRef.current = true;
+      }
+    };
+    window.addEventListener("nexus:voice-ack-done", handler);
+    return () => window.removeEventListener("nexus:voice-ack-done", handler);
+  }, [openFollowUpMic]);
 
   const isStop = busy || recording;
   const showModelBadge = !hasContent && !!selectedModel;
@@ -247,7 +493,15 @@ export default function InputBar({
             onClose={() => setMention(null)}
           />
         )}
-        {slash && !mention && (
+        {secret && !mention && (
+          <SecretPicker
+            ref={secretRef}
+            results={secretResults}
+            onSelect={(name) => insertSecret(name, textareaRef)}
+            onClose={() => setSecret(null)}
+          />
+        )}
+        {slash && !mention && !secret && (
           <SlashCommandPicker
             ref={slashRef}
             results={slashCommands}
@@ -275,7 +529,7 @@ export default function InputBar({
             <RecordingIndicator
               levels={levels}
               seconds={seconds}
-              onCancel={cancelRecording}
+              onCancel={handleCancelRecording}
             />
           ) : (
             <textarea
@@ -288,7 +542,7 @@ export default function InputBar({
               onKeyDown={handleKeyDown}
               onKeyUp={handleSelectionChange}
               onClick={handleSelectionChange}
-              onBlur={() => setTimeout(() => setMention(null), 120)}
+              onBlur={() => setTimeout(() => { setMention(null); setSecret(null); }, 120)}
               disabled={disabled}
             />
           )}
@@ -305,6 +559,10 @@ export default function InputBar({
           <button
             className={`input-send-btn${isStop ? " input-stop-btn" : ""}${!hasContent && !isStop ? " input-send-btn--mic" : ""}`}
             onClick={handleActionClick}
+            onPointerDown={handleActionPointerDown}
+            onPointerUp={handleActionPointerUp}
+            onPointerLeave={handleActionPointerUp}
+            onPointerCancel={handleActionPointerUp}
             disabled={disabled && !busy}
             aria-label={isStop ? t("chat:input.stop") : hasContent ? t("chat:input.send") : t("chat:input.voiceMessage")}
           >

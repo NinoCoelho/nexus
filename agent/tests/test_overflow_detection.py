@@ -30,8 +30,8 @@ def test_estimate_tokens_handles_strings_and_tool_calls() -> None:
 
 def test_check_overflow_skips_when_window_unknown() -> None:
     out = check_overflow([_Msg("x" * 10_000_000)], context_window=0)
-    assert out.overflowed is False
-    assert out.context_window == 0
+    assert out.overflowed is True
+    assert out.estimated_input_tokens > 0
 
 
 def test_check_overflow_clears_with_room_to_spare() -> None:

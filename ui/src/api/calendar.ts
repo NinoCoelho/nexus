@@ -32,8 +32,11 @@ export interface CalendarEvent {
   fire_every_min?: number | null;
   /** Per-event model id used when the agent runs this event. */
   model?: string | null;
-  /** ``"agent"`` opts the event into auto-firing; anything else is a plain entry. */
+  /** ``"agent"`` opts the event into auto-firing; ``"user"`` enables alarm
+   *  notifications; ``"agent,user"`` does both. Anything else is a plain entry. */
   assignee?: string | null;
+  /** Minutes before event start to fire the user alarm. null = no alarm. */
+  remind_before_min?: number | null;
   /** UTC ISO occurrence_starts that have been marked done individually for a
    * recurring event. Each is treated as a per-instance ``status="done"`` in
    * the grid; the parent record's ``status`` stays "scheduled". */
@@ -143,6 +146,7 @@ export async function addVaultCalendarEvent(
     fire_every_min?: number;
     model?: string;
     assignee?: string;
+    remind_before_min?: number | null;
   },
 ): Promise<CalendarEvent> {
   const res = await fetch(
@@ -174,6 +178,7 @@ export async function patchVaultCalendarEvent(
     fire_every_min: number | null;
     model: string | null;
     assignee: string | null;
+    remind_before_min: number | null;
     completed_occurrences: string[];
     /** Append one ISO occurrence_start to the parent's completed list. Use
      * this (instead of `status: "done"`) for a single instance of a recurring
@@ -227,4 +232,32 @@ export async function queryVaultCalendarEvents(
     body: JSON.stringify(q),
   });
   return jsonOrThrow<{ events: CalendarEvent[]; count: number }>(res, "Event query error");
+}
+
+export async function ackAlarm(eventId: string, occurrenceStart: string): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/vault/calendar/events/${encodeURIComponent(eventId)}/alarm/ack`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ occurrence_start: occurrenceStart }),
+    },
+  );
+  return jsonOrThrow<{ ok: boolean }>(res, "Alarm ack error");
+}
+
+export async function snoozeAlarm(
+  eventId: string,
+  occurrenceStart: string,
+  minutes: number = 5,
+): Promise<{ ok: boolean; snoozed_until: string }> {
+  const res = await fetch(
+    `${BASE}/vault/calendar/events/${encodeURIComponent(eventId)}/alarm/snooze`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ occurrence_start: occurrenceStart, minutes }),
+    },
+  );
+  return jsonOrThrow<{ ok: boolean; snoozed_until: string }>(res, "Alarm snooze error");
 }

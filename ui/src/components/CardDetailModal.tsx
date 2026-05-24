@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Link } from "lucide-react";
 import MarkdownView from "./MarkdownView";
 import MarkdownEditor, { type MarkdownEditorHandle } from "./MarkdownEditor";
 import { useVaultLinkPreview } from "./vaultLink";
@@ -19,6 +20,9 @@ interface Props {
   boardPath: string;
   onClose: () => void;
   onSaved: (card: KanbanCard) => void;
+  /** Forwarded to the embedded vault-link preview so its "Open in Vault"
+   *  header button routes through the App's vault navigator. */
+  onOpenInVault?: (path: string) => void;
 }
 
 const TOOLBAR_ACTIONS = [
@@ -34,7 +38,7 @@ const TOOLBAR_ACTIONS = [
   { label: "🔗",  title: "Link",          action: "link",  args: [],            cls: "" },
 ] as const;
 
-export default function CardDetailModal({ card, lane, boardPath, onClose, onSaved }: Props) {
+export default function CardDetailModal({ card, lane, boardPath, onClose, onSaved, onOpenInVault }: Props) {
   const isCreate = !card;
   // Create mode skips the read-only view and lands directly on the form.
   const [mode, setMode] = useState<"view" | "edit">(isCreate ? "edit" : "view");
@@ -48,7 +52,7 @@ export default function CardDetailModal({ card, lane, boardPath, onClose, onSave
   const [editAssignees, setEditAssignees] = useState((card?.assignees ?? []).join(", "));
   const [saving, setSaving] = useState(false);
   const editorRef = useRef<MarkdownEditorHandle>(null);
-  const { onPreview, modal } = useVaultLinkPreview();
+  const { onPreview, modal } = useVaultLinkPreview(onOpenInVault);
 
   const splitCSV = (s: string): string[] =>
     s.split(",").map((x) => x.trim()).filter(Boolean);
@@ -230,7 +234,7 @@ export default function CardDetailModal({ card, lane, boardPath, onClose, onSave
                       handleToolbar(btn.action, btn.args);
                     }}
                   >
-                    {btn.label}
+                    {btn.action === "link" ? <Link size={14} /> : btn.label}
                   </button>
                 )
               )}

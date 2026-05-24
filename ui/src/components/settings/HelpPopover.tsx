@@ -18,8 +18,14 @@ export default function HelpPopover({ title, body }: Props) {
     const r = btnRef.current?.getBoundingClientRect();
     if (r) {
       const popoverW = 360;
+      const popoverH = 260;
+      const viewportH = window.innerHeight;
       const left = Math.max(8, Math.min(window.innerWidth - popoverW - 8, r.right - popoverW));
-      setPos({ top: r.bottom + 6, left });
+      const spaceBelow = viewportH - r.bottom - 6;
+      const top = spaceBelow < popoverH
+        ? Math.max(8, r.top - popoverH - 6)
+        : r.bottom + 6;
+      setPos({ top, left });
     }
     setOpen(true);
   }, [open]);

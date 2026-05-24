@@ -13,6 +13,7 @@
  * keep their internal form state where it matters (ModelsSection's editingId).
  */
 
+import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -28,32 +29,50 @@ import {
   type RoutingConfig,
 } from "../api";
 import AdvancedTab from "./settings/AdvancedTab";
+import AdminPanel from "./settings/AdminPanel";
 import CredentialsTab from "./settings/CredentialsTab";
 import DefaultModelStrip from "./settings/DefaultModelStrip";
 import FeaturesTab from "./settings/FeaturesTab";
+import IntegrationsTab from "./settings/IntegrationsTab";
 import ModelsTab from "./settings/ModelsTab";
+import NexusTab from "./settings/NexusTab";
+import ProfileTab from "./settings/ProfileTab";
 import QuickStartTab from "./settings/QuickStartTab";
 import SettingsTabs from "./settings/SettingsTabs";
 import "./SettingsDrawer.css";
 import "./settings/settings.css";
+import { useSession } from "./SessionProvider";
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
-type TabId = "quick" | "models" | "credentials" | "features" | "advanced";
+type TabId = "profile" | "nexus" | "quick" | "models" | "credentials" | "features" | "integrations" | "admin" | "advanced";
+
+const _ADMIN_ONLY: TabId[] = ["nexus", "models", "credentials", "integrations", "advanced"];
 
 export default function SettingsDrawer({ open, onClose }: Props) {
   const { t } = useTranslation("settings");
+  const { user, authStatus } = useSession();
+  const isAdmin = user?.role === "admin";
+  const isMultiUser = authStatus?.multi_user ?? false;
 
-  const TABS: { id: TabId; label: string }[] = [
+  const ALL_TABS: { id: TabId; label: string }[] = [
+    ...(isMultiUser ? [{ id: "profile" as TabId, label: "Profile" }] : []),
+    { id: "nexus", label: t("settings:tabs.nexus") },
     { id: "quick", label: t("settings:tabs.quick") },
     { id: "models", label: t("settings:tabs.models") },
     { id: "credentials", label: t("settings:tabs.credentials") },
     { id: "features", label: t("settings:tabs.features") },
+    { id: "integrations", label: t("settings:tabs.integrations", { defaultValue: "MCP" }) },
+    ...(isAdmin ? [{ id: "admin" as TabId, label: "Admin" }] : []),
     { id: "advanced", label: t("settings:tabs.advanced") },
   ];
+
+  const TABS = isMultiUser && !isAdmin
+    ? ALL_TABS.filter((tab) => !_ADMIN_ONLY.includes(tab.id))
+    : ALL_TABS;
 
   const [routing, setRouting] = useState<RoutingConfig | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -62,7 +81,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [graphStats, setGraphStats] = useState<KnowledgeStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<TabId>("quick");
+  const [active, setActive] = useState<TabId>(isMultiUser && !isAdmin ? "profile" : "nexus");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -109,7 +128,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
         <div className="drawer-header">
           <span className="drawer-title">{t("settings:drawer.title")}</span>
           <button className="drawer-close" onClick={onClose} aria-label={t("settings:drawer.closeAria")}>
-            ✕
+            <X size={16} />
           </button>
         </div>
 
@@ -130,6 +149,8 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           {loading && !routing && <p className="settings-loading">Loading…</p>}
           {error && <p className="settings-error">{error}</p>}
 
+          {active === "profile" && <ProfileTab />}
+          {active === "nexus" && <NexusTab />}
           {active === "quick" && (
             <QuickStartTab
               routing={routing}
@@ -147,7 +168,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             />
           )}
           {active === "credentials" && <CredentialsTab />}
-          {active === "features" && <FeaturesTab graphStats={graphStats} />}
+          {active === "features" && <FeaturesTab graphStats={graphStats} models={models} />}
+          {active === "integrations" && <IntegrationsTab />}
+          {active === "admin" && isAdmin && <AdminPanel />}
           {active === "advanced" && (
             <AdvancedTab hitl={hitl} onHitlChanged={setHitl} />
           )}

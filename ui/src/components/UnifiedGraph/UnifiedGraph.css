@@ -377,6 +377,130 @@
 /* Keep the widget reachable in fullscreen too. */
 .ug--fullscreen .ug-find-widget { top: 40px; }
 
+/* Graph display-settings panel. */
+.ug-settings-panel {
+  position: absolute;
+  top: 36px;
+  right: 8px;
+  width: 280px;
+  max-height: calc(100% - 48px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ug-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ug-settings-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ug-settings-close,
+.ug-settings-reset {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+
+.ug-settings-reset {
+  width: auto;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
+.ug-settings-close:hover,
+.ug-settings-reset:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.ug-settings-body {
+  overflow-y: auto;
+  padding: 6px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ug-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.ug-settings-label {
+  min-width: 82px;
+  flex-shrink: 0;
+}
+
+.ug-settings-slider {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.ug-settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent, #d4855c);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.ug-settings-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent, #d4855c);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.ug-settings-value {
+  min-width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--fg-faint);
+}
+
+.ug--fullscreen .ug-settings-panel { top: 40px; }
+
 .ug-webgl-fallback {
   position: absolute;
   inset: 0;
