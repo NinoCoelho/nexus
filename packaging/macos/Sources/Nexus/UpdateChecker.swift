@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import UserNotifications
 
 @MainActor
 final class UpdateChecker: ObservableObject {
@@ -18,7 +19,8 @@ final class UpdateChecker: ObservableObject {
         self.port = port
         checkNow()
         timer = Timer.scheduledTimer(withTimeInterval: 4 * 3600, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkNow() }
+            guard let self else { return }
+            Task { @MainActor in self.checkNow() }
         }
     }
 
@@ -101,8 +103,9 @@ final class UpdateChecker: ObservableObject {
         let body = ["version": version]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+            guard let self else { return }
             DispatchQueue.main.async {
-                self?.updateAvailable = false
+                self.updateAvailable = false
             }
         }.resume()
     }
