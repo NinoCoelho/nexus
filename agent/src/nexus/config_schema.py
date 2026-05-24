@@ -94,7 +94,7 @@ class NexusAccountConfig(BaseModel):
     gateway_url: str = "https://llm.nexus-model.us/v1"
     # How often the status-watcher polls /api/status for tier / model
     # changes. Clamped to >= 60s by the watcher itself.
-    poll_seconds: int = 300
+    poll_seconds: int = 3600
     # When True, the watcher upgrades the agent's default model from
     # ``demo`` to ``nexus`` automatically the moment ``nexus`` becomes
     # available (i.e. the user upgrades to pro).

@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 _NEXUS_CHANNEL = "__nexus__"
 _MIN_POLL_SECONDS = 60
+_DEFAULT_POLL_SECONDS = 3600
 
 
 class StatusWatcher:
@@ -108,7 +109,7 @@ class StatusWatcher:
             cfg = self._cfg()
             poll_seconds = max(
                 _MIN_POLL_SECONDS,
-                int(getattr(cfg.nexus_account, "poll_seconds", 300)),
+                int(getattr(cfg.nexus_account, "poll_seconds", _DEFAULT_POLL_SECONDS)),
             )
 
             if nexus_account.is_signed_in():

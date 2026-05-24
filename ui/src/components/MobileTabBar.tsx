@@ -52,7 +52,7 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databas
           <span>{label}</span>
         </button>
       ))}
-      {appTabs.map((db) => {
+      {isViewVisible("data") && appTabs.map((db) => {
         const active = view === "data" && selectedApp === db.folder;
         return (
           <button

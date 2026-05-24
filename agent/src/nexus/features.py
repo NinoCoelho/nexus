@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import logging
+import os
 import threading
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 ALL_FEATURES = frozenset({
     "chat",
@@ -38,6 +46,59 @@ FEATURE_ROUTES: dict[str, list[str]] = {
 _cache_lock = threading.Lock()
 _cached_features: set[str] | None = None
 
+_CACHE_PATH = Path.home() / ".nexus" / "feature_cache.json"
+_HMAC_KEY = b"nexus-features-cache-v1-vE7kQ2zN9pXmR4wL"
+
+
+def _sign_payload(data: bytes) -> str:
+    return hmac.new(_HMAC_KEY, data, hashlib.sha256).hexdigest()
+
+
+def _save_cache(features: set[str]) -> None:
+    payload = {
+        "features": sorted(features),
+        "nonce": os.urandom(16).hex(),
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    sig = _sign_payload(raw)
+    envelope = {"data": raw.decode(), "sig": sig}
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CACHE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(envelope, separators=(",", ":")))
+        tmp.replace(_CACHE_PATH)
+    except Exception:
+        log.debug("[features] cache write failed", exc_info=True)
+
+
+def _load_cache() -> set[str] | None:
+    try:
+        if not _CACHE_PATH.exists():
+            return None
+        envelope = json.loads(_CACHE_PATH.read_text())
+        raw = envelope.get("data", "")
+        sig = envelope.get("sig", "")
+        expected = _sign_payload(raw.encode())
+        if not hmac.compare_digest(sig, expected):
+            log.warning("[features] cache signature mismatch — ignoring stale cache")
+            return None
+        payload = json.loads(raw)
+        features = payload.get("features")
+        if not isinstance(features, list):
+            return None
+        return set(features)
+    except Exception:
+        log.debug("[features] cache read failed", exc_info=True)
+        return None
+
+
+def _clear_cache() -> None:
+    try:
+        if _CACHE_PATH.exists():
+            _CACHE_PATH.unlink()
+    except Exception:
+        pass
+
 
 def set_features(features: set[str] | None) -> bool:
     global _cached_features
@@ -45,17 +106,24 @@ def set_features(features: set[str] | None) -> bool:
         if features is None:
             changed = _cached_features is not None
             _cached_features = None
+            _clear_cache()
             return changed
         changed = _cached_features != features
         _cached_features = features
+        _save_cache(features)
         return changed
 
 
 def get_features() -> set[str]:
+    global _cached_features
     with _cache_lock:
-        if _cached_features is None:
-            return set(ALL_FEATURES)
-        return set(_cached_features)
+        if _cached_features is not None:
+            return set(_cached_features)
+        cached = _load_cache()
+        if cached is not None:
+            _cached_features = cached
+            return set(cached)
+        return set(ALL_FEATURES)
 
 
 def is_enabled(feature: str) -> bool:

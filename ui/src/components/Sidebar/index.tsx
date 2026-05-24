@@ -305,7 +305,7 @@ export default function Sidebar({
               {!collapsed && <span className="sidebar-nav-label">{label}</span>}
             </button>
           ))}
-          {appDatabases.length > 0 && (
+          {appDatabases.length > 0 && isViewVisible("data") && (
             <>
               {!collapsed && <div className="sidebar-nav-divider" />}
               {appDatabases.map((db) => {

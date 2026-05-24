@@ -453,8 +453,8 @@ export default function App() {
         } else if (downgraded) {
           toast.info(tSettings("settings:nexus.tierChanged.downgraded"));
         }
-        // Refresh settings so the Default model strip + ModelsTab pick
-        // up the new registry contents.
+        bumpSettingsRevision();
+      } else if (event.kind === "features_changed") {
         bumpSettingsRevision();
       }
     });
@@ -811,7 +811,7 @@ export default function App() {
               </div>
             )}
           </div>
-          <div className="view-pane" style={{ display: view === "data" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "data" && isViewVisible("data") ? "flex" : "none" }}>
             {dataDiagramFolder !== null ? (
               <DatabaseSchemaView
                 folder={dataDiagramFolder}
@@ -865,7 +865,7 @@ export default function App() {
               </div>
             )}
           </div>
-          <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "graph" && isViewVisible("graph") ? "flex" : "none" }}>
             {view === "graph" && isViewVisible("graph") && (
               <UnifiedGraphView
               onOpenSkill={(name) => setOpenSkill(name)}
@@ -880,7 +880,7 @@ export default function App() {
             />
             )}
           </div>
-          <div className="view-pane" style={{ display: view === "heartbeat" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "heartbeat" && isViewVisible("heartbeat") ? "flex" : "none" }}>
             {view === "heartbeat" && isViewVisible("heartbeat") && (
               <HeartbeatView
                 onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
@@ -888,10 +888,10 @@ export default function App() {
               />
             )}
           </div>
-          <div className="view-pane" style={{ display: view === "dream" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "dream" && isViewVisible("dream") ? "flex" : "none" }}>
             {view === "dream" && isViewVisible("dream") && <DreamView />}
           </div>
-          <div className="view-pane" style={{ display: view === "workflows" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "workflows" && isViewVisible("workflows") ? "flex" : "none" }}>
             {view === "workflows" && isViewVisible("workflows") && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
           </div>
         </main>
