@@ -98,7 +98,7 @@ Two channels on each session:
 
 ### Frontend
 
-`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `insights`, `agentgraph`, `heartbeat`, `dream`, `workflows`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
+`ui/src/App.tsx` owns all chat state keyed by session id (plus a `__new__` slot for the not-yet-created session). View switches and session switches never drop in-flight `thinking` or `input` state. Views: `chat`, `vault`, `graph`, `agentgraph`, `heartbeat`, `dream`, `workflows`. Kanban is **not** a top-level view — it's rendered by `VaultEditorPanel.tsx` when the selected file's frontmatter declares `kanban-plugin`. All markdown rendering goes through `components/MarkdownView.tsx` (react-markdown + remark-gfm + lazy mermaid).
 
 ### Workflows
 
@@ -129,6 +129,38 @@ Two channels on each session:
 
 `~/.nexus/config.toml` is canonical. Legacy env-var path (`NEXUS_LLM_BASE_URL` + `NEXUS_LLM_API_KEY` + `NEXUS_LLM_MODEL`) overrides the config file when **all three** are set. Provider API keys are referenced by env var name (`key_env`), never stored inline.
 
+### Feature flags
+
+Features are subscription-gated via nexus-llm plans. The active feature set is resolved from the plan and cached in `agent/src/nexus/features.py`. The flow:
+
+1. `GET /api/status` (nexus-llm) returns `features: string[]` from the plan.
+2. `status_watcher.py` calls `features.set_features()` on each poll; emits `features_changed` SSE on change.
+3. `features.py` caches the set and provides `is_enabled()`, `feature_for_route()`, `FEATURE_TOOLS`, `FEATURE_ROUTES`.
+4. `GET /config` exposes `{ features: { active: [...], all: [...] } }` for the frontend.
+
+**Feature key → tool/route/view mapping:**
+
+| Feature | Agent tools | Routes | UI view |
+|---|---|---|---|
+| `kanban` | `kanban_manage`, `kanban_query`, `show_kanban` | `/vault/kanban` | `kanban` |
+| `calendar` | `calendar_manage` | `/vault/calendar` | `calendar` |
+| `workflow` | — (HTTP API) | `/workflows`, `/workflow/trigger` | `workflows` |
+| `knowledge` | `vault_semantic_search`, `ontology_manage` | `/graph`, `/graphrag` | `graph` |
+| `database` | `datatable_manage`, `dashboard_manage`, `vault_csv`, `visualize_table`, `show_data_table`, `show_dashboard_widget` | `/vault/datatable`, `/vault/dashboard` | `data` |
+| `dream` | — (background engine) | `/dream` | `dream` |
+| `heartbeat` | `manage_heartbeat`, `dispatch_card` | `/heartbeat` | `heartbeat` |
+| `cloud_models` | — (provider gating) | — | Provider wizard filtering |
+| `multi_user` | — | `/auth/*`, `/admin/*`, `/share/*` | Login/register |
+
+**Gating mechanisms:**
+
+- **Tool registration** (`registry.py`): `build_tool_registry(features=...)` skips feature-gated tools via `_should_register()`.
+- **Route middleware** (`app.py`): `FeatureGateMiddleware` returns 403 for routes whose feature is disabled.
+- **UI** (`useFeatures` hook): sidebar filters views by feature; `useFeatures().isViewVisible(viewId)`.
+- **UI mode** (`settings.json`): per-user `ui_mode: normal | advanced`. Normal hides knowledge, heartbeat, dream.
+
+When adding a new tool or route behind a feature gate, add it to `FEATURE_TOOLS` / `FEATURE_ROUTES` in `features.py` and wrap the registration with `_should_register()`.
+
 ### Network model + sharing security
 
 The server **always** binds to `127.0.0.1`. There is no `--host` flag and no supported way to expose it on `0.0.0.0`. Remote access is only via a tunnel that runs as a local client connecting *to* the loopback bind:
@@ -154,3 +186,4 @@ Sharing flow ([agent/src/nexus/tunnel/manager.py](agent/src/nexus/tunnel/manager
 - When referencing a vault file in agent output, format as a markdown link with a `vault://path` href — the UI intercepts this to preview inline.
 - Tests use `asyncio_mode = "auto"` — async test functions don't need `@pytest.mark.asyncio`.
 - **Never use native browser dialogs** (`window.alert`, `window.confirm`, `window.prompt`). They're blocking, unstyled, and inconsistent across platforms. Use the system standards instead: `components/Modal.tsx` (`kind: "confirm" | "prompt"`) for confirmations and text input, and `useToast()` from `toast/ToastProvider` for non-blocking notifications (with a `detail` field and optional `action` button for follow-ups like copy-to-clipboard).
+- When adding new feature-gated tools or routes, register them in `features.py` (`FEATURE_TOOLS` / `FEATURE_ROUTES`) and gate the registration with `_should_register()`.

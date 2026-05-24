@@ -54,13 +54,6 @@ from .serve import serve as _serve_fn  # noqa: E402
 app.command()(_serve_fn)
 
 
-# ── insights ───────────────────────────────────────────────────────────────────
-
-from .insights_cmd import insights as _insights_fn  # noqa: E402
-
-app.command()(_insights_fn)
-
-
 # ── chat ───────────────────────────────────────────────────────────────────────
 
 from .chat import chat as _chat_fn  # noqa: E402

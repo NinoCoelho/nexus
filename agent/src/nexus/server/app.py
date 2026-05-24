@@ -43,7 +43,7 @@ TUNNEL_PUBLIC_PATHS = frozenset({
 TUNNEL_PROTECTED_PREFIXES = (
     "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
-    "/insights", "/share", "/local", "/notifications", "/push",
+    "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
     "/dream", "/mcp", "/jobs", "/update", "/workflows",
 )
@@ -86,6 +86,18 @@ def _tunnel_path_requires_auth(path: str) -> bool:
         # so the request gets to the route, where _require_loopback will 403.
         return True
     return any(path.startswith(p) for p in TUNNEL_PROTECTED_PREFIXES)
+
+
+class FeatureGateMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        from ..features import feature_for_route, is_enabled
+        feat = feature_for_route(request.url.path)
+        if feat and not is_enabled(feat):
+            return JSONResponse(
+                {"detail": f"Feature '{feat}' is not available on your plan"},
+                status_code=403,
+            )
+        return await call_next(request)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -627,195 +639,198 @@ def create_app(
 
         # ── calendar bootstrap + heartbeat scheduler ─────────────────────────
         scheduler = None
-        try:
-            from .. import vault_calendar
-            from ..calendar_runtime import (
-                set_dispatcher as _set_cal_dispatcher,
-                set_notifier as _set_cal_notifier,
-                set_alarm_store as _set_cal_alarm_store,
-            )
-            from ..heartbeat_drivers import DRIVERS_DIR
-            from pathlib import Path
-            from loom.heartbeat import (
-                HeartbeatRegistry,
-                HeartbeatScheduler,
-                HeartbeatStore,
-            )
-
-            vault_calendar.ensure_default_calendar()
-            vault_calendar.sweep_missed(grace_minutes=5)
-
-            # Hand the calendar driver a way to invoke vault dispatch. Bound
-            # here (not at module-load time) so it sees the live agent + store.
-            from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
-
-            async def _calendar_dispatcher(
-                *,
-                path: str,
-                event_id: str,
-                mode: str = "background",
-                occurrence_start: str | None = None,
-            ) -> dict:
-                import time as _time
-                from .. import vault_calendar as _vc
-                event_title = ""
-                try:
-                    _cal = _vc.read_calendar(path)
-                    _found = _vc.find_event(_cal, event_id)
-                    if _found:
-                        event_title = _found[0].title
-                except Exception:
-                    pass
-                _log_id = log_store.log_fire(
-                    heartbeat_id="calendar_trigger",
-                    event_id=event_id,
-                    event_title=event_title,
-                    calendar_path=path,
+        from ..features import is_enabled as _feat_enabled
+        if _feat_enabled("heartbeat"):
+            try:
+                from .. import vault_calendar
+                from ..calendar_runtime import (
+                    set_dispatcher as _set_cal_dispatcher,
+                    set_notifier as _set_cal_notifier,
+                    set_alarm_store as _set_cal_alarm_store,
                 )
-                _t0 = _time.monotonic()
-                _cal_job_id = job_tracker.start(
-                    type="calendar",
-                    label=event_title or "Calendar trigger",
-                    session_id=None,
-                    extra={"event_id": event_id, "calendar_path": path},
-                    publish_fn=_publish_job_event,
+                from ..heartbeat_drivers import DRIVERS_DIR
+                from pathlib import Path
+                from loom.heartbeat import (
+                    HeartbeatRegistry,
+                    HeartbeatScheduler,
+                    HeartbeatStore,
                 )
-                try:
-                    result = await _cal_dispatch(
-                        path=path, card_id=None, event_id=event_id,
-                        mode=mode, a=agent, store=sessions,
-                        occurrence_start=occurrence_start,
+    
+                vault_calendar.ensure_default_calendar()
+                vault_calendar.sweep_missed(grace_minutes=5)
+    
+                # Hand the calendar driver a way to invoke vault dispatch. Bound
+                # here (not at module-load time) so it sees the live agent + store.
+                from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
+    
+                async def _calendar_dispatcher(
+                    *,
+                    path: str,
+                    event_id: str,
+                    mode: str = "background",
+                    occurrence_start: str | None = None,
+                ) -> dict:
+                    import time as _time
+                    from .. import vault_calendar as _vc
+                    event_title = ""
+                    try:
+                        _cal = _vc.read_calendar(path)
+                        _found = _vc.find_event(_cal, event_id)
+                        if _found:
+                            event_title = _found[0].title
+                    except Exception:
+                        pass
+                    _log_id = log_store.log_fire(
+                        heartbeat_id="calendar_trigger",
+                        event_id=event_id,
+                        event_title=event_title,
+                        calendar_path=path,
                     )
-                    _sid = result.get("session_id")
-                    if _sid:
-                        log_store.update_session_id(_log_id, _sid)
-                    log_store.update_status(
-                        _log_id, status="done",
-                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    _t0 = _time.monotonic()
+                    _cal_job_id = job_tracker.start(
+                        type="calendar",
+                        label=event_title or "Calendar trigger",
+                        session_id=None,
+                        extra={"event_id": event_id, "calendar_path": path},
+                        publish_fn=_publish_job_event,
                     )
-                    return result
-                except Exception as _dispatch_err:
-                    log_store.update_status(
-                        _log_id, status="failed",
-                        error=str(_dispatch_err),
-                        duration_ms=int((_time.monotonic() - _t0) * 1000),
-                    )
-                    raise
-                finally:
-                    job_tracker.done(_cal_job_id, publish_fn=_publish_job_event)
-            _set_cal_dispatcher(_calendar_dispatcher)
-
-            # Notifier — fire-and-forget calendar_alert publishes onto the
-            # cross-session SSE channel. The UI's useCalendarAlerts hook
-            # subscribes to /notifications/events and surfaces a toast.
-            from .events import SessionEvent
-
-            def _calendar_notifier(payload: dict) -> None:
-                # Use a synthetic session id so the fanout works through the
-                # store's per-session router; the UI ignores session_id for
-                # calendar_alert events.
-                if multi_user and session_registry is not None:
-                    for _uid, user_store_inst in session_registry.all_stores().items():
-                        user_store_inst.publish(
+                    try:
+                        result = await _cal_dispatch(
+                            path=path, card_id=None, event_id=event_id,
+                            mode=mode, a=agent, store=sessions,
+                            occurrence_start=occurrence_start,
+                        )
+                        _sid = result.get("session_id")
+                        if _sid:
+                            log_store.update_session_id(_log_id, _sid)
+                        log_store.update_status(
+                            _log_id, status="done",
+                            duration_ms=int((_time.monotonic() - _t0) * 1000),
+                        )
+                        return result
+                    except Exception as _dispatch_err:
+                        log_store.update_status(
+                            _log_id, status="failed",
+                            error=str(_dispatch_err),
+                            duration_ms=int((_time.monotonic() - _t0) * 1000),
+                        )
+                        raise
+                    finally:
+                        job_tracker.done(_cal_job_id, publish_fn=_publish_job_event)
+                _set_cal_dispatcher(_calendar_dispatcher)
+    
+                # Notifier — fire-and-forget calendar_alert publishes onto the
+                # cross-session SSE channel. The UI's useCalendarAlerts hook
+                # subscribes to /notifications/events and surfaces a toast.
+                from .events import SessionEvent
+    
+                def _calendar_notifier(payload: dict) -> None:
+                    # Use a synthetic session id so the fanout works through the
+                    # store's per-session router; the UI ignores session_id for
+                    # calendar_alert events.
+                    if multi_user and session_registry is not None:
+                        for _uid, user_store_inst in session_registry.all_stores().items():
+                            user_store_inst.publish(
+                                "__calendar__",
+                                SessionEvent(kind="calendar_alert", data=payload),
+                            )
+                    else:
+                        sessions.publish(
                             "__calendar__",
                             SessionEvent(kind="calendar_alert", data=payload),
                         )
-                else:
-                    sessions.publish(
-                        "__calendar__",
-                        SessionEvent(kind="calendar_alert", data=payload),
-                    )
-            _set_cal_notifier(_calendar_notifier)
-
-            heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
-            heartbeats_dir.mkdir(parents=True, exist_ok=True)
-            db_path = Path("~/.nexus/heartbeat.db").expanduser()
-            registry = HeartbeatRegistry(
-                heartbeats_dir=heartbeats_dir,
-                additional_dirs=[DRIVERS_DIR],
-            )
-            registry.scan()
-            store = HeartbeatStore(db_path)
-
-            from ..heartbeat_log import HeartbeatLogStore
-            log_store = HeartbeatLogStore(db_path)
-
-            from ..alarm_store import AlarmStore
-            alarm_store = AlarmStore(db_path)
-            _set_cal_alarm_store(alarm_store)
-
-            async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
-                from loom.loop import AgentTurn
-                return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
-
-            scheduler = HeartbeatScheduler(
-                registry, store, run_fn=_noop_run_fn, tick_interval=60.0,
-            )
-            scheduler.start()
-            app.state.heartbeat_scheduler = scheduler
-            app.state.heartbeat_registry = registry
-            app.state.heartbeat_store = store
-            app.state.heartbeat_log_store = log_store
-            app.state.alarm_store = alarm_store
-
-            from loom.heartbeat import HeartbeatManager
-
-            def _hb_manager_getter():
-                return HeartbeatManager(registry=registry, store=store)
-
-            agent._handlers.hb_manager_getter = _hb_manager_getter
-
-            log.info("heartbeat scheduler started (calendar_trigger registered)")
-        except Exception:
-            log.exception("heartbeat / calendar bootstrap failed")
+                _set_cal_notifier(_calendar_notifier)
+    
+                heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
+                heartbeats_dir.mkdir(parents=True, exist_ok=True)
+                db_path = Path("~/.nexus/heartbeat.db").expanduser()
+                registry = HeartbeatRegistry(
+                    heartbeats_dir=heartbeats_dir,
+                    additional_dirs=[DRIVERS_DIR],
+                )
+                registry.scan()
+                store = HeartbeatStore(db_path)
+    
+                from ..heartbeat_log import HeartbeatLogStore
+                log_store = HeartbeatLogStore(db_path)
+    
+                from ..alarm_store import AlarmStore
+                alarm_store = AlarmStore(db_path)
+                _set_cal_alarm_store(alarm_store)
+    
+                async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
+                    from loom.loop import AgentTurn
+                    return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
+    
+                scheduler = HeartbeatScheduler(
+                    registry, store, run_fn=_noop_run_fn, tick_interval=60.0,
+                )
+                scheduler.start()
+                app.state.heartbeat_scheduler = scheduler
+                app.state.heartbeat_registry = registry
+                app.state.heartbeat_store = store
+                app.state.heartbeat_log_store = log_store
+                app.state.alarm_store = alarm_store
+    
+                from loom.heartbeat import HeartbeatManager
+    
+                def _hb_manager_getter():
+                    return HeartbeatManager(registry=registry, store=store)
+    
+                agent._handlers.hb_manager_getter = _hb_manager_getter
+    
+                log.info("heartbeat scheduler started (calendar_trigger registered)")
+            except Exception:
+                log.exception("heartbeat / calendar bootstrap failed")
 
         # ── workflow engine ─────────────────────────────────────────────────
-        try:
-            from ..workflows.store import WorkflowStore
-            from ..workflows.engine import WorkflowEngine
-            from .. import home as _wf_home
-
-            wf_db = str(_wf_home.workflow_runs_db())
-            wf_store = WorkflowStore(wf_db)
-            wf_engine = WorkflowEngine(wf_store)
-            app.state.workflow_store = wf_store
-            app.state.workflow_engine = wf_engine
-
-            if agent is not None:
-                wf_engine._agent = agent
-            if sessions is not None:
-                wf_engine._sessions = sessions
-
-            from .routes.workflows import init as _wf_init
-            _wf_init(wf_store, wf_engine)
-
-            from ..workflows.triggers.webhook import WebhookTriggerDriver
-            from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
-            from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
-
-            webhook_driver = WebhookTriggerDriver(wf_store)
-            event_listener = EventTriggerListener(wf_store)
-            fsw_driver = FsWatchTriggerDriver(wf_store)
-
-            _set_evt_ref(wf_engine)
-            _set_fsw_ref(wf_engine)
-
-            from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
-            _set_engine_evt(wf_engine)
-
-            app.state.workflow_webhook_driver = webhook_driver
-            app.state.workflow_event_listener = event_listener
-            app.state.workflow_fsw_driver = fsw_driver
-
+        if _feat_enabled("workflow"):
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(event_listener.start())
+                from ..workflows.store import WorkflowStore
+                from ..workflows.engine import WorkflowEngine
+                from .. import home as _wf_home
+    
+                wf_db = str(_wf_home.workflow_runs_db())
+                wf_store = WorkflowStore(wf_db)
+                wf_engine = WorkflowEngine(wf_store)
+                app.state.workflow_store = wf_store
+                app.state.workflow_engine = wf_engine
+    
+                if agent is not None:
+                    wf_engine._agent = agent
+                if sessions is not None:
+                    wf_engine._sessions = sessions
+    
+                from .routes.workflows import init as _wf_init
+                _wf_init(wf_store, wf_engine)
+    
+                from ..workflows.triggers.webhook import WebhookTriggerDriver
+                from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
+                from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
+    
+                webhook_driver = WebhookTriggerDriver(wf_store)
+                event_listener = EventTriggerListener(wf_store)
+                fsw_driver = FsWatchTriggerDriver(wf_store)
+    
+                _set_evt_ref(wf_engine)
+                _set_fsw_ref(wf_engine)
+    
+                from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
+                _set_engine_evt(wf_engine)
+    
+                app.state.workflow_webhook_driver = webhook_driver
+                app.state.workflow_event_listener = event_listener
+                app.state.workflow_fsw_driver = fsw_driver
+    
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(event_listener.start())
+                except Exception:
+                    log.exception("workflow event listener start failed")
+    
+                log.info("workflow engine initialised")
             except Exception:
-                log.exception("workflow event listener start failed")
-
-            log.info("workflow engine initialised")
-        except Exception:
-            log.exception("workflow engine bootstrap failed")
+                log.exception("workflow engine bootstrap failed")
 
         # ── MCP server connections ────────────────────────────────────────
         mcp_manager = None
@@ -923,6 +938,7 @@ def create_app(
     else:
         app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(FeatureGateMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",
@@ -958,7 +974,6 @@ def create_app(
     from .routes.sessions import router as sessions_router
     from .routes.sessions_vault import router as sessions_vault_router
     from .routes.graph import router as graph_router
-    from .routes.insights import router as insights_router
     from .routes.vault import router as vault_router
     from .routes.vault_kanban import router as vault_kanban_router
     from .routes.vault_calendar import router as vault_calendar_router
@@ -1010,7 +1025,6 @@ def create_app(
                      int(os.environ.get("NEXUS_PORT", "18989")), setup_token)
     app.include_router(sessions_vault_router)
     app.include_router(graph_router)
-    app.include_router(insights_router)
     app.include_router(vault_router)
     app.include_router(vault_kanban_router)
     app.include_router(vault_calendar_router)

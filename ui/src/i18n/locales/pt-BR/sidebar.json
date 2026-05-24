@@ -14,8 +14,7 @@
     "vault": "Vault",
     "kanban": "Kanban",
     "data": "Dados",
-    "graph": "Conhecimento",
-    "insights": "Insights"
+    "graph": "Conhecimento"
   },
   "session": {
     "downloadedFile": "{{filename}} baixado",

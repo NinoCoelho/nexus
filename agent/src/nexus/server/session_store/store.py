@@ -67,7 +67,7 @@ class SessionStore(PubSubMixin, QueryMixin):
         self._init_pubsub()
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a read-only-ish connection for ad-hoc queries (e.g. InsightsEngine)."""
+        """Open a read-only-ish connection for ad-hoc queries."""
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
         return conn

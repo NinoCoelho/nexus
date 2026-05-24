@@ -16,7 +16,7 @@ import { useVaultEvents } from "../../hooks/useVaultEvents";
 import VaultTreePanel from "../VaultTreePanel";
 import KanbanListPanel from "../KanbanListPanel";
 import WorkflowListPanel from "../WorkflowListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconWorkflow, IconInsights, IconGear, IconCollapse, IconHeartbeat, IconDream, IconUpdate } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconWorkflow, IconGear, IconCollapse, IconHeartbeat, IconDream, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -26,7 +26,7 @@ import { BrandMark } from "../BrandMark";
 import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream" | "workflows";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
 
 interface Props {
   view: View;
@@ -58,6 +58,7 @@ interface Props {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
+  isViewVisible?: (viewId: string) => boolean;
 }
 
 export default function Sidebar({
@@ -70,6 +71,7 @@ export default function Sidebar({
   onDatabaseSelectFolder,
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
+  isViewVisible = () => true,
 }: Props) {
   const { t } = useTranslation("sidebar");
   const VIEWS = {
@@ -86,8 +88,12 @@ export default function Sidebar({
       { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
       { id: "heartbeat" as View, label: "Heartbeat", Icon: IconHeartbeat },
       { id: "dream" as View, label: "Dream", Icon: IconDream },
-      { id: "insights" as View, label: t("sidebar:viewNames.insights"), Icon: IconInsights },
     ],
+  };
+  const filteredViews = {
+    primary: VIEWS.primary.filter((v) => isViewVisible(v.id)),
+    content: VIEWS.content.filter((v) => isViewVisible(v.id)),
+    analytics: VIEWS.analytics.filter((v) => isViewVisible(v.id)),
   };
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -276,8 +282,7 @@ export default function Sidebar({
       <div className="sidebar-section">
         {!collapsed && <div className="sidebar-section-label">{t("sidebar:views")}</div>}
         <nav className="sidebar-nav">
-          {/* Primary */}
-          {VIEWS.primary.map(({ id, label, Icon }) => (
+          {filteredViews.primary.map(({ id, label, Icon }) => (
             <button
               key={id}
               className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
@@ -288,9 +293,8 @@ export default function Sidebar({
               {!collapsed && <span className="sidebar-nav-label">{label}</span>}
             </button>
           ))}
-          {!collapsed && <div className="sidebar-nav-divider" />}
-          {/* Content */}
-          {VIEWS.content.map(({ id, label, Icon }) => (
+          {!collapsed && filteredViews.content.length > 0 && <div className="sidebar-nav-divider" />}
+          {filteredViews.content.map(({ id, label, Icon }) => (
             <button
               key={id}
               className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
@@ -301,7 +305,6 @@ export default function Sidebar({
               {!collapsed && <span className="sidebar-nav-label">{label}</span>}
             </button>
           ))}
-          {/* Databases (dynamic) */}
           {appDatabases.length > 0 && (
             <>
               {!collapsed && <div className="sidebar-nav-divider" />}
@@ -326,9 +329,8 @@ export default function Sidebar({
               })}
             </>
           )}
-          {!collapsed && <div className="sidebar-nav-divider" />}
-          {/* Analytics */}
-          {VIEWS.analytics.map(({ id, label, Icon }) => (
+          {!collapsed && filteredViews.analytics.length > 0 && <div className="sidebar-nav-divider" />}
+          {filteredViews.analytics.map(({ id, label, Icon }) => (
             <button
               key={id}
               className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}

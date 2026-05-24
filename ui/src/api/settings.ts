@@ -3,6 +3,7 @@ import { BASE } from "./base";
 
 export interface HitlSettings {
   yolo_mode: boolean;
+  ui_mode?: string;
 }
 
 export async function getHitlSettings(): Promise<HitlSettings> {

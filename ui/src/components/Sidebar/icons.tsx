@@ -31,15 +31,6 @@ export function IconGraph() {
   );
 }
 
-export function IconInsights() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 14 7 10 11 13 17 5" />
-      <polyline points="13 5 17 5 17 9" />
-    </svg>
-  );
-}
-
 export function IconKanban() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

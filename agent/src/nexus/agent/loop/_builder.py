@@ -69,6 +69,8 @@ def build_loom_agent(
         ) if _init_cfg else None,
         max_tokens_for=_model_max_output_tokens,
     )
+    from nexus.features import get_features
+    _features = get_features()
     tool_reg = build_tool_registry(
         skill_registry=registry,
         handlers=handlers,
@@ -76,7 +78,9 @@ def build_loom_agent(
         scrape_cfg=_init_cfg.scrape if _init_cfg else None,
         home=home,
         permissions=permissions,
+        features=_features,
     )
+    tool_reg._nexus_features = frozenset(_features)
 
     max_iter = (
         getattr(_init_cfg.agent, "max_iterations", None)

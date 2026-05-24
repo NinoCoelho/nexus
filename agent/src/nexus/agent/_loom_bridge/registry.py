@@ -10,6 +10,7 @@ from loom.tools.base import ToolHandler, ToolResult
 from loom.tools.registry import ToolRegistry
 
 from nexus.agent.llm import ToolSpec
+from nexus.features import FEATURE_TOOLS
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,15 @@ class AgentHandlers:
         self.hb_manager_getter = hb_manager_getter
 
 
+def _should_register(tool_name: str, features: set[str] | None) -> bool:
+    if features is None:
+        return True
+    for feat, tools in FEATURE_TOOLS.items():
+        if tool_name in tools and feat not in features:
+            return False
+    return True
+
+
 def build_tool_registry(
     *,
     skill_registry: Any,
@@ -72,6 +82,7 @@ def build_tool_registry(
     scrape_cfg: Any | None = None,
     home: "AgentHome | None" = None,
     permissions: "AgentPermissions | None" = None,
+    features: set[str] | None = None,
 ) -> ToolRegistry:
     """Build a loom ToolRegistry populated with all Nexus tools.
 
@@ -159,7 +170,8 @@ def build_tool_registry(
     async def _ontology_manage(args: dict) -> str:
         return await _ontology_handler(args)
 
-    registry.register(_SimpleToolHandler(ONTOLOGY_MANAGE_TOOL, _ontology_manage))
+    if _should_register("ontology_manage", features):
+        registry.register(_SimpleToolHandler(ONTOLOGY_MANAGE_TOOL, _ontology_manage))
 
     # http_call
     async def _http_call(args: dict) -> str:
@@ -193,31 +205,36 @@ def build_tool_registry(
     async def _vault_semantic_search(args: dict) -> str:
         return await handle_vault_tool("vault_semantic_search", args)
 
-    registry.register(_SimpleToolHandler(VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search))
+    if _should_register("vault_semantic_search", features):
+        registry.register(_SimpleToolHandler(VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search))
 
     # kanban_manage
     async def _kanban(args: dict) -> str:
         return handle_kanban_tool(args)
 
-    registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
+    if _should_register("kanban_manage", features):
+        registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
 
     # kanban_query — cross-board search
     async def _kanban_query(args: dict) -> str:
         return handle_kanban_query_tool(args)
 
-    registry.register(_SimpleToolHandler(KANBAN_QUERY_TOOL, _kanban_query))
+    if _should_register("kanban_query", features):
+        registry.register(_SimpleToolHandler(KANBAN_QUERY_TOOL, _kanban_query))
 
     # calendar_manage
     async def _calendar(args: dict) -> str:
         return handle_calendar_tool(args)
 
-    registry.register(_SimpleToolHandler(CALENDAR_MANAGE_TOOL, _calendar))
+    if _should_register("calendar_manage", features):
+        registry.register(_SimpleToolHandler(CALENDAR_MANAGE_TOOL, _calendar))
 
     # dispatch_card — spawn a chat session seeded from a card or vault file
     async def _dispatch_card(args: dict) -> str:
         return await handle_dispatch_card_tool(args, handlers.dispatcher)
 
-    registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
+    if _should_register("dispatch_card", features):
+        registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
 
     # manage_heartbeat — CRUD for heartbeat drivers. The manager getter is
     # resolved lazily via handlers.hb_manager_getter because the
@@ -229,7 +246,8 @@ def build_tool_registry(
     async def _manage_heartbeat(args: dict) -> str:
         return await handle_heartbeat_manage_tool(args, handlers.hb_manager_getter)
 
-    registry.register(_SimpleToolHandler(HEARTBEAT_MANAGE_TOOL, _manage_heartbeat))
+    if _should_register("manage_heartbeat", features):
+        registry.register(_SimpleToolHandler(HEARTBEAT_MANAGE_TOOL, _manage_heartbeat))
 
     # spawn_subagents — run N agent loops in parallel with fresh contexts.
     # Loom's SpawnSubagentsTool reads CURRENT_SESSION_ID and SUBAGENT_DEPTH
@@ -245,7 +263,8 @@ def build_tool_registry(
     async def _datatable(args: dict) -> str:
         return handle_datatable_tool(args)
 
-    registry.register(_SimpleToolHandler(DATATABLE_MANAGE_TOOL, _datatable))
+    if _should_register("datatable_manage", features):
+        registry.register(_SimpleToolHandler(DATATABLE_MANAGE_TOOL, _datatable))
 
     # dashboard_manage — per-database `_data.md` operations + chat session id.
     async def _dashboard(args: dict) -> str:
@@ -254,37 +273,43 @@ def build_tool_registry(
             skill_registry.reload()
         return result
 
-    registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
+    if _should_register("dashboard_manage", features):
+        registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
 
     # show_kanban — render kanban board as inline MCP App
     async def _show_kanban(args: dict) -> str:
         return await handle_show_kanban(args)
 
-    registry.register(_SimpleToolHandler(SHOW_KANBAN_TOOL, _show_kanban))
+    if _should_register("show_kanban", features):
+        registry.register(_SimpleToolHandler(SHOW_KANBAN_TOOL, _show_kanban))
 
     # show_dashboard_widget — render chart widget as inline MCP App
     async def _show_dashboard_widget(args: dict) -> str:
         return await handle_show_dashboard_widget(args)
 
-    registry.register(_SimpleToolHandler(SHOW_DASHBOARD_WIDGET_TOOL, _show_dashboard_widget))
+    if _should_register("show_dashboard_widget", features):
+        registry.register(_SimpleToolHandler(SHOW_DASHBOARD_WIDGET_TOOL, _show_dashboard_widget))
 
     # show_data_table — render data table as inline MCP App
     async def _show_data_table(args: dict) -> str:
         return await handle_show_data_table(args)
 
-    registry.register(_SimpleToolHandler(SHOW_DATA_TABLE_TOOL, _show_data_table))
+    if _should_register("show_data_table", features):
+        registry.register(_SimpleToolHandler(SHOW_DATA_TABLE_TOOL, _show_data_table))
 
     # vault_csv — DuckDB analytics over CSV/TSV files
     async def _csv(args: dict) -> str:
         return handle_csv_tool(args)
 
-    registry.register(_SimpleToolHandler(CSV_TOOL, _csv))
+    if _should_register("vault_csv", features):
+        registry.register(_SimpleToolHandler(CSV_TOOL, _csv))
 
     # visualize_table
     async def _visualize(args: dict) -> str:
         return handle_visualize_tool(args)
 
-    registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
+    if _should_register("visualize_table", features):
+        registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
 
     # ocr_image — extract text from a vault image / scanned PDF using the
     # engine declared under [ocr] in config.toml. Always advertised so

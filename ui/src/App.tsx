@@ -9,7 +9,6 @@ import MobileTabBar from "./components/MobileTabBar";
 import ChatView from "./components/ChatView";
 import CalendarView from "./components/CalendarView";
 import VaultView from "./components/VaultView";
-import InsightsView from "./components/InsightsView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
@@ -57,6 +56,7 @@ import { adminAllPending, adminAnswerHitl, adminCancelHitl } from "./api/auth";
 import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useActiveDownloads } from "./hooks/useActiveDownloads";
 import { useSessionUsage } from "./hooks/useSessionUsage";
+import { useFeatures } from "./hooks/useFeatures";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
 import SharedSessionView from "./components/SharedSessionView";
@@ -124,6 +124,8 @@ export default function App() {
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
 
+  const { isViewVisible } = useFeatures();
+
   // Wizard background-build tracker — owns SSE subscriptions for any skill
   // builds the user dismissed mid-flight, so they keep running on the
   // server and surface a toast when the agent finishes.
@@ -149,17 +151,22 @@ export default function App() {
   }, [view]);
   useEffect(() => {
     const onHash = () => {
-      // Migrate legacy #/database deep links to the renamed #/data view.
       if (window.location.hash === "#/database") {
         window.history.replaceState(null, "", "#/data");
       }
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|insights|heartbeat|dream|workflows)$/);
-      if (m) setView(m[1] as typeof view);
+      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|heartbeat|dream|workflows)$/);
+      if (m) {
+        if (!isViewVisible(m[1])) {
+          window.location.hash = "#/chat";
+          return;
+        }
+        setView(m[1] as typeof view);
+      }
     };
     onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [isViewVisible]);
 
   // Dismiss any full-screen overlay (settings, skill drawer, mobile nav)
   // when the user switches top-level views — otherwise on mobile the
@@ -635,6 +642,7 @@ export default function App() {
           setUpdateCheck(check);
           setUpdateModalOpen(true);
         }}
+        isViewVisible={isViewVisible}
       />
 
       <div className="app-main">
@@ -766,7 +774,7 @@ export default function App() {
               onModelChange={handleModelChange}
             />
           </div>
-          <div className="view-pane" style={{ display: view === "calendar" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "calendar" && isViewVisible("calendar") ? "flex" : "none" }}>
             <CalendarView
               selectedPath={calendarSelectedPath}
               onSelectPath={setCalendarSelectedPath}
@@ -785,7 +793,7 @@ export default function App() {
               onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
             />
           </div>
-          <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "kanban" && isViewVisible("kanban") ? "flex" : "none" }}>
             {kanbanSelectedPath ? (
               <VaultView
                 selectedPath={kanbanSelectedPath}
@@ -858,7 +866,8 @@ export default function App() {
             )}
           </div>
           <div className="view-pane" style={{ display: view === "graph" ? "flex" : "none" }}>
-            <UnifiedGraphView
+            {view === "graph" && isViewVisible("graph") && (
+              <UnifiedGraphView
               onOpenSkill={(name) => setOpenSkill(name)}
               onSelectSession={handleSessionSelect}
               graphSourceFilter={graphSourceFilter}
@@ -869,16 +878,10 @@ export default function App() {
               onStartGraphIndex={handleStartGraphIndex}
               onSpawnSession={handleSpawnSessionFromEntity}
             />
-          </div>
-          <div className="view-pane" style={{ display: view === "insights" ? "flex" : "none" }}>
-            {view === "insights" && (
-              <InsightsView
-                onOpenSession={(sid) => { setView("chat"); handleSessionSelect(sid); }}
-              />
             )}
           </div>
           <div className="view-pane" style={{ display: view === "heartbeat" ? "flex" : "none" }}>
-            {view === "heartbeat" && (
+            {view === "heartbeat" && isViewVisible("heartbeat") && (
               <HeartbeatView
                 onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
                 onOpenInVault={handleOpenInVault}
@@ -886,10 +889,10 @@ export default function App() {
             )}
           </div>
           <div className="view-pane" style={{ display: view === "dream" ? "flex" : "none" }}>
-            {view === "dream" && <DreamView />}
+            {view === "dream" && isViewVisible("dream") && <DreamView />}
           </div>
           <div className="view-pane" style={{ display: view === "workflows" ? "flex" : "none" }}>
-            {view === "workflows" && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
+            {view === "workflows" && isViewVisible("workflows") && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
           </div>
         </main>
       </div>
@@ -939,6 +942,7 @@ export default function App() {
           setDataDiagramFolder(null);
           setView("data");
         }}
+        isViewVisible={isViewVisible}
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />

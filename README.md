@@ -893,7 +893,7 @@ graph TB
 ```
 
 - **Pins**: Cmd-pin assistant turns; the sidebar shows a bookmarks list across sessions.
-- **Per-message feedback**: thumbs up/down stored per turn, surfaced in `nexus insights`.
+- **Per-message feedback**: thumbs up/down stored per turn, surfaced in usage analytics.
 - **Read-only share links**: `POST /sessions/{sid}/share` mints a token; `GET /share/{token}` returns the public read-only view.
 - **Compact / truncate**: `POST /sessions/{sid}/compact` and `/truncate` to manage long contexts.
 - **Vault export**: `POST /sessions/{sid}/to-vault` saves raw or LLM-summarized.
@@ -945,10 +945,9 @@ graph TB
     VAULT["VaultView → VaultEditorPanel (preview / edit / calendar / csv / datatable)"]
     KANBAN["KanbanListPanel (vault-wide board picker → KanbanBoard)"]
     GRAPH["GraphView (Canvas2D + 3D, vault + per-folder sub-tabs)"]
-    INSIGHTS["InsightsView"]
     AGENTG["AgentGraphView (lazy)"]
 
-    CONTENT --> CHAT & VAULT & KANBAN & GRAPH & INSIGHTS & AGENTG
+    CONTENT --> CHAT & VAULT & KANBAN & GRAPH & AGENTG
 
     DREAM["DreamView (status / journal / suggestions / history)"]
     WORKFLOW["WorkflowFlow (react-flow editor, palette, inspector)"]
@@ -999,7 +998,6 @@ nexus/
 │       ├── config.py / config_file.py / config_schema.py
 │       ├── secrets.py                  # 0600 secrets.toml
 │       ├── redact.py                   # Secret redaction for logs
-│       ├── insights/                   # Session analytics
 │       ├── usage_pricing.py
 │       ├── trajectory.py               # RL trajectory logger
 │       ├── push/                       # Web Push (VAPID)
@@ -1031,7 +1029,7 @@ nexus/
 │       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py / vault_import.py
 │       │       ├── providers.py / models.py / config.py / settings.py
 │       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
-│       │       ├── insights.py / graph.py / mcp.py / skill_wizard.py
+│               │       ├── graph.py / mcp.py / skill_wizard.py
 │       │       ├── dream.py                 # Dream status, trigger, journal, suggestions
 │       │       ├── workflows.py             # Workflow CRUD, webhook receiver, run history
 │       ├── workflows/                    # Visual flow-based automation engine
@@ -1066,7 +1064,6 @@ nexus/
 │           ├── KanbanBoard.tsx
 │           ├── CalendarView/                # MonthGrid + WeekGrid + RepeatPicker + EventModal
 │           ├── GraphView.tsx + AgentGraphView.tsx + SubgraphCanvas3D.tsx
-│           ├── InsightsView.tsx
 │           ├── DreamView/                     # Dream status, journal, suggestions, run history
 │           ├── WorkflowFlow/                  # React-flow graph editor, step config panels, inspector
 │           ├── McpAppSandbox/                  # Sandboxed iframe for MCP App rendering
@@ -1347,7 +1344,6 @@ nexus doctor
 nexus sessions list | show <id> | export <id> | import <path> | edit <id> | stats | query <q>
 nexus vault     ls | search <q> | reindex | tags | backlinks <path>
 nexus kanban    boards | list [--board default]
-nexus insights  [--days 30] [--json]
 nexus backup    create [--out <path>] | restore <path>
 ```
 
@@ -1524,7 +1520,6 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/health` | GET | Liveness |
 | `/skills` / `/skills/{name}` | GET | Skill list / body |
 | `/graph` | GET | Agent / skill / session graph |
-| `/insights` | GET | Token / cost / model / tool analytics |
 
 ### MCP
 

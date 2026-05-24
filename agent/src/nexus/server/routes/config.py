@@ -105,6 +105,11 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
     srv = getattr(cfg, "server", None)
     if srv is not None:
         out["server"] = {"multi_user": srv.multi_user}
+    from ...features import get_features, ALL_FEATURES
+    out["features"] = {
+        "active": sorted(get_features()),
+        "all": sorted(ALL_FEATURES),
+    }
     return out
 
 

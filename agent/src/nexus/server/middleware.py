@@ -56,7 +56,7 @@ def _is_api_path(path: str) -> bool:
     api_prefixes = (
         "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
         "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
-        "/insights", "/share", "/local", "/notifications", "/push",
+        "/share", "/local", "/notifications", "/push",
         "/transcribe", "/audio", "/heartbeat", "/cookies",
         "/dream", "/mcp", "/jobs", "/admin",
     )

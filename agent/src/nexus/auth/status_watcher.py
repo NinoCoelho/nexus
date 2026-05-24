@@ -56,6 +56,7 @@ class StatusWatcher:
         self._stop_event = asyncio.Event()
         self._last_status: dict[str, Any] | None = None
         self._last_models: tuple[str, ...] = ()
+        self._last_features: frozenset[str] = frozenset()
 
     @property
     def last_status(self) -> dict[str, Any] | None:
@@ -86,6 +87,7 @@ class StatusWatcher:
         if not nexus_account.is_signed_in():
             self._last_status = None
             self._last_models = ()
+            self._last_features = frozenset()
             return None
         cfg = self._cfg()
         base_url = cfg.nexus_account.base_url
@@ -122,6 +124,7 @@ class StatusWatcher:
                 # Not signed in — clear any stale cache so the route reports it.
                 self._last_status = None
                 self._last_models = ()
+                self._last_features = frozenset()
 
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=poll_seconds)
@@ -138,11 +141,34 @@ class StatusWatcher:
         return cfg
 
     def _apply_status(self, payload: dict[str, Any]) -> None:
-        """Update cached status and reconcile the registry / default model."""
         new_models: tuple[str, ...] = tuple(payload.get("models") or [])
+        new_features: frozenset[str] = frozenset(payload.get("features") or [])
         prev_models = self._last_models
+        prev_features = self._last_features
         self._last_status = payload
         self._last_models = new_models
+        self._last_features = new_features
+
+        if new_features != prev_features:
+            from ..features import set_features
+            set_features(set(new_features))
+
+            if self._sessions is not None:
+                try:
+                    from ..server.events import SessionEvent
+
+                    self._sessions.publish(
+                        _NEXUS_CHANNEL,
+                        SessionEvent(
+                            kind="features_changed",
+                            data={
+                                "from": sorted(prev_features),
+                                "to": sorted(new_features),
+                            },
+                        ),
+                    )
+                except Exception:
+                    log.exception("[nexus_watcher] features_changed publish failed")
 
         if new_models == prev_models:
             return

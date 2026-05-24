@@ -312,9 +312,15 @@ async def refresh_status(*, base_url: str) -> dict[str, Any]:
         k: payload.get(k)
         for k in (
             "tier", "spend", "maxBudget", "remaining", "budgetDuration",
-            "models", "rpmLimit", "tpmLimit", "budgetResetAt",
+            "models", "rpmLimit", "tpmLimit", "budgetResetAt", "features",
         )
         if k in payload
     }
     save_account(record)
+
+    features_list = payload.get("features")
+    if features_list is not None:
+        from ..features import set_features
+        set_features(set(features_list))
+
     return payload

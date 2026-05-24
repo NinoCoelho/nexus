@@ -1,8 +1,8 @@
 import type { ComponentType } from "react";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconInsights } from "./Sidebar/icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph } from "./Sidebar/icons";
 import type { DatabaseSummary } from "../api/datatable";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "insights" | "heartbeat" | "dream" | "workflows";
+type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
 
 interface Props {
   view: View;
@@ -11,6 +11,7 @@ interface Props {
   databases?: DatabaseSummary[];
   selectedApp?: string | null;
   onAppSelect?: (folder: string) => void;
+  isViewVisible?: (viewId: string) => boolean;
 }
 
 const STATIC_TABS: ReadonlyArray<{ id: View; label: string; Icon: ComponentType }> = [
@@ -19,11 +20,11 @@ const STATIC_TABS: ReadonlyArray<{ id: View; label: string; Icon: ComponentType 
   { id: "vault", label: "Vault", Icon: IconVault },
   { id: "kanban", label: "Kanban", Icon: IconKanban },
   { id: "graph", label: "Graph", Icon: IconGraph },
-  { id: "insights", label: "Insights", Icon: IconInsights },
 ];
 
-export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databases, selectedApp, onAppSelect }: Props) {
+export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databases, selectedApp, onAppSelect, isViewVisible = () => true }: Props) {
   const appTabs = (databases ?? []).slice(0, 3);
+  const visibleTabs = STATIC_TABS.filter((tab) => isViewVisible(tab.id));
   return (
     <nav className="mobile-tab-bar" aria-label="Primary">
       <button
@@ -38,7 +39,7 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databas
         </svg>
         <span>Menu</span>
       </button>
-      {STATIC_TABS.map(({ id, label, Icon }) => (
+      {visibleTabs.map(({ id, label, Icon }) => (
         <button
           key={id}
           type="button"

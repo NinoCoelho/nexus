@@ -218,7 +218,7 @@ async def download_update() -> StreamingResponse:
     _download_error = ""
     _write_state(UpdateState.downloading, file=str(dest), tag=tag)
 
-    async def _do_download() -> None:
+    def _do_download() -> None:
         global _download_progress, _download_error
         try:
             tmp = dest.with_suffix(".tmp")
@@ -245,7 +245,7 @@ async def download_update() -> StreamingResponse:
             log.exception("update download failed")
 
     loop = asyncio.get_running_loop()
-    _download_task = loop.create_task(loop.run_in_executor(None, lambda: asyncio.run(_do_download())))
+    _download_task = loop.run_in_executor(None, _do_download)
 
     return StreamingResponse(
         _stream_progress(),

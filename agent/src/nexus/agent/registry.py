@@ -129,6 +129,12 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             log.info("[provider] %s initialized (anonymous)", name)
             continue
 
+        from ..features import is_enabled
+        if not is_enabled("cloud_models"):
+            rk = getattr(pcfg, "runtime_kind", "") or ""
+            if rk not in ("ollama", "nexus") and not name.startswith("local-"):
+                continue
+
         # Nexus subscription — OpenAI-compatible LiteLLM gateway, but kept
         # as its own ``runtime_kind`` so the config visually distinguishes
         # the hosted subscription from any BYO ``openai_compat`` provider

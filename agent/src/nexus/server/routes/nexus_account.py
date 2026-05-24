@@ -71,6 +71,8 @@ def _account_view(*, watcher: StatusWatcher | None) -> dict[str, Any]:
     }
     if last_status:
         out["status"] = last_status
+    from ...features import get_features
+    out["features"] = list(get_features())
     return out
 
 

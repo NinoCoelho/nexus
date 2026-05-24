@@ -5,6 +5,7 @@ import {
   getConfig,
   patchAgentConfig,
   setHitlSettings,
+  getHitlSettings,
   type AgentConfig,
   type HitlSettings,
 } from "../../api";
@@ -37,15 +38,17 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
   const [hitlSaving, setHitlSaving] = useState(false);
   const [multiUserEnabled, setMultiUserEnabled] = useState<boolean | null>(null);
   const [muBusy, setMuBusy] = useState(false);
+  const [uiMode, setUiMode] = useState<"normal" | "advanced">("normal");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getConfig()
-      .then((c) => {
+    Promise.all([getConfig(), getHitlSettings()])
+      .then(([c, s]) => {
         if (!cancelled) {
           setAgent(c.agent);
           setMultiUserEnabled(c.server?.multi_user ?? false);
+          setUiMode((s as any).ui_mode === "advanced" ? "advanced" : "normal");
         }
       })
       .catch((e) => {
@@ -417,6 +420,54 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
                 );
               } finally {
                 setMuBusy(false);
+              }
+            }}
+          >
+            <span className="hitl-switch-knob" />
+          </button>
+        </SettingsField>
+      </SettingsSection>
+
+      <SettingsSection
+        title={t("settings:advanced.uiModeTitle", "Interface Mode")}
+        icon={t("settings:advanced.uiModeIcon", "🎛️")}
+        description={t(
+          "settings:advanced.uiModeDescription",
+          "Advanced mode shows all views including Knowledge Graph, Heartbeat, and Dream.",
+        )}
+      >
+        <SettingsField
+          label={t("settings:advanced.uiModeLabel", "UI mode")}
+          hint={t(
+            "settings:advanced.uiModeHint",
+            "Normal hides power-user views. Advanced shows everything.",
+          )}
+          help={{
+            title: t("settings:advanced.uiModeHelpTitle", "Interface mode"),
+            body: (
+              <>
+                <b>Normal</b> hides advanced views (Knowledge Graph, Heartbeat,
+                Dream) for a simpler interface. <b>Advanced</b> shows all views.
+              </>
+            ),
+          }}
+          layout="row"
+        >
+          <button
+            type="button"
+            role="switch"
+            aria-checked={uiMode === "advanced"}
+            className={`hitl-switch ${uiMode === "advanced" ? "on" : "off"}`}
+            onClick={async () => {
+              const next = uiMode === "normal" ? "advanced" : "normal";
+              try {
+                await setHitlSettings({ ui_mode: next });
+                setUiMode(next);
+                toast.success(next === "advanced" ? "Advanced mode enabled" : "Normal mode enabled");
+              } catch (e) {
+                toast.error(t("settings:advanced.toast.saveFailed"), {
+                  detail: e instanceof Error ? e.message : undefined,
+                });
               }
             }}
           >

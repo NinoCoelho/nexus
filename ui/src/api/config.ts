@@ -102,6 +102,10 @@ export interface Config {
   nexus_account?: NexusAccountConfig;
   mcp?: McpConfig;
   server?: { multi_user: boolean };
+  features?: {
+    active: string[];
+    all: string[];
+  };
 }
 
 // Patch payload — every nested object is independently partial because the

@@ -469,7 +469,7 @@ async def chat_stream_route(
                     final_messages = event.get("messages")
                     usage = event.get("usage") or {}
                     # Persist the turn's usage onto the session so
-                    # /insights can roll it up later. Done here (not
+                    # it can be rolled up later. Done here (not
                     # in `finally`) because the done event is only
                     # emitted on successful completion of the turn.
                     try:
