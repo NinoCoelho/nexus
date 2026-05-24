@@ -1676,7 +1676,7 @@
 }
 
 .wf-node-status.wf-status-running {
-  background: var(--accent);
+  background: hsl(210, 80%, 50%);
   color: #fff;
   animation: wf-status-pulse 1s ease-in-out infinite;
 }
@@ -1702,14 +1702,19 @@
 }
 
 .wf-node.wf-node-executing {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent), 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: hsl(210, 80%, 50%);
+  background: linear-gradient(135deg, color-mix(in srgb, hsl(210, 80%, 50%) 8%, var(--bg-panel)), var(--bg-panel));
+  box-shadow: 0 0 0 2px hsl(210, 80%, 50%), 0 0 16px color-mix(in srgb, hsl(210, 80%, 50%) 25%, transparent);
   animation: wf-node-exec 1.5s ease-in-out infinite;
 }
 
+.wf-node.wf-node-executing .wf-node-header .icon {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, hsl(210, 80%, 50%) 60%, transparent));
+}
+
 @keyframes wf-node-exec {
-  0%, 100% { box-shadow: 0 0 0 2px var(--accent), 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent); }
-  50% { box-shadow: 0 0 0 3px var(--accent), 0 0 24px color-mix(in srgb, var(--accent) 40%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 2px hsl(210, 80%, 50%), 0 0 16px color-mix(in srgb, hsl(210, 80%, 50%) 25%, transparent); }
+  50% { box-shadow: 0 0 0 3px hsl(210, 80%, 50%), 0 0 24px color-mix(in srgb, hsl(210, 80%, 50%) 35%, transparent); }
 }
 
 .wf-node.wf-node-failed {
