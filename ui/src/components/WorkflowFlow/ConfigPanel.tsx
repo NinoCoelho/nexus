@@ -699,16 +699,17 @@ export default function ConfigPanel({
                   {(step.output_format === "json") && (
                     <div className="wf-field">
                       <label>Output Schema</label>
-                      <textarea
+                      <TemplateInput
                         value={step.output_schema || ""}
-                        onChange={(e) => onChangeStep({ output_schema: e.target.value || undefined })}
+                        onChange={(val) => onChangeStep({ output_schema: val || undefined })}
+                        steps={stepRefs}
+                        stepSchemas={stepSchemas}
+                        multiline
+                        minLines={4}
                         placeholder='{"key": "value", "count": 0}'
-                        rows={4}
-                        style={{ fontFamily: "monospace", fontSize: 12 }}
                       />
                       <span className="wf-field-hint">
                         JSON example showing expected structure. LLM will match this shape.
-                        Use &#123;&#123;templates&#125;&#125; for dynamic values.
                       </span>
                     </div>
                   )}
@@ -764,12 +765,15 @@ export default function ConfigPanel({
                     <>
                       <div className="wf-field">
                         <label>Instructions</label>
-                        <textarea
-                          value={step.llm_instructions || ""}
-                          onChange={(e) => onChangeStep({ llm_instructions: e.target.value || undefined })}
-                          placeholder="Extract the name and email from the input. Return as JSON."
-                          style={{ fontFamily: "var(--font-mono)", fontSize: 11, minHeight: 60 }}
-                        />
+                         <TemplateInput
+                           value={step.llm_instructions || ""}
+                           onChange={(val) => onChangeStep({ llm_instructions: val || undefined })}
+                           steps={stepRefs}
+                           stepSchemas={stepSchemas}
+                           multiline
+                           minLines={3}
+                           placeholder="Extract the name and email from the input. Return as JSON."
+                         />
                       </div>
                       <div className="wf-field">
                         <label>Input</label>
@@ -783,12 +787,15 @@ export default function ConfigPanel({
                       </div>
                       <div className="wf-field">
                         <label>Output Sample (optional)</label>
-                        <textarea
-                          value={step.output_sample || ""}
-                          onChange={(e) => onChangeStep({ output_sample: e.target.value || undefined })}
-                          placeholder='{"name": "John", "email": "john@example.com"}'
-                          style={{ fontFamily: "var(--font-mono)", fontSize: 11, minHeight: 40 }}
-                        />
+                         <TemplateInput
+                           value={step.output_sample || ""}
+                           onChange={(val) => onChangeStep({ output_sample: val || undefined })}
+                           steps={stepRefs}
+                           stepSchemas={stepSchemas}
+                           multiline
+                           minLines={2}
+                           placeholder='{"name": "John", "email": "john@example.com"}'
+                         />
                       </div>
                       <div className="wf-field">
                         <label>Model</label>
@@ -976,13 +983,16 @@ export default function ConfigPanel({
                   <div className="wf-section-label">Custom Headers</div>
                   <div className="wf-field">
                     <label>Headers (JSON)</label>
-                    <textarea
+                    <TemplateInput
                       value={step.custom_headers ? JSON.stringify(step.custom_headers, null, 2) : ""}
-                      onChange={(e) => {
-                        try { onChangeStep({ custom_headers: JSON.parse(e.target.value) }); } catch {}
+                      onChange={(val) => {
+                        try { onChangeStep({ custom_headers: JSON.parse(val) }); } catch {}
                       }}
+                      steps={stepRefs}
+                      stepSchemas={stepSchemas}
+                      multiline
+                      minLines={2}
                       placeholder='{"X-Custom": "value"}'
-                      style={{ minHeight: 48 }}
                     />
                   </div>
 

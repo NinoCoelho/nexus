@@ -506,14 +506,14 @@ export default function StepInspector({
                   <option value="json">JSON</option>
                 </select>
                 {step.output_format === "json" && (
-                  <textarea
+                  <TemplateInput
                     className="wf-inspector-schema-input"
                     value={step.output_schema || ""}
-                    onChange={(e) => onStepPatch({ output_schema: e.target.value || undefined })}
+                    onChange={(val) => onStepPatch({ output_schema: val || undefined })}
+                    steps={stepRefs}
+                    multiline
+                    minLines={2}
                     placeholder='Schema: {"key": "value"}'
-                    title="JSON schema template for expected output structure"
-                    rows={2}
-                    style={{ fontFamily: "monospace", fontSize: 12 }}
                   />
                 )}
               </div>
