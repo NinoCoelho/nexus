@@ -16,6 +16,7 @@
 - **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
+- **Workflows** — visual flow-based automation with a React-flow graph editor, seven step types, five trigger types (webhook, schedule, fs_watch, event, manual), template autocomplete, and per-step run history.
 - **MCP integration** — connect to external MCP servers (stdio, HTTP, SSE) and use their tools natively, or expose Nexus tools to external hosts via server mode. One-box paste wizard in the Integrations tab makes setup trivial.
 - **Dreaming** — scheduled background agent that consolidates memories, extracts cross-session insights, refines skills, and rehearses scenarios during idle time. Dream journal, manual triggers, and staged skill-suggestion review in the UI.
 - **Packaged desktop apps** — ships as `Nexus.app` (macOS) and `Nexus.exe` (Windows) with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh machine. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
@@ -118,6 +119,17 @@ The named volume holds `~/.nexus/` — sessions, vault, skills, secrets, and the
 - [Overview](#overview)
 - [Key Features](#key-features)
 - [Architecture](#architecture)
+  - [High-Level System Diagram](#high-level-system-diagram)
+  - [Loom Integration](#loom-integration)
+  - [Agent Loop](#agent-loop)
+  - [Progressive Disclosure](#progressive-disclosure)
+  - [Tool System](#tool-system)
+  - [Vault & Knowledge Graph](#vault--knowledge-graph)
+  - [Kanban, Calendar, DataTables, CSV](#kanban-calendar-datatables-csv)
+  - [Calendar Triggers (Heartbeat)](#calendar-triggers-heartbeat)
+  - [Dreaming (Background Agent)](#dreaming-background-agent)
+  - [Workflows](#workflows)
+  - [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
 - [Project Layout](#project-layout)
 - [Getting Started](#getting-started)
 - [CLI Reference](#cli-reference)
@@ -147,12 +159,12 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 │                    │  (SQLite WAL)    │  │  (20+ tools)     │   │
 │                    └──────────────────┘  └──────┬───────────┘   │
 │                                                 │               │
-│      ┌─────────┬─────────┬─────────┬────────────┼──────────┐    │
-│      │         │         │         │            │          │    │
-│  ┌───▼───┐ ┌───▼────┐ ┌──▼─────┐ ┌─▼────┐ ┌─────▼────┐ ┌───▼──┐ │
-│  │ Vault │ │Kanban+ │ │Skills+ │ │HITL +│ │Local LLM │ │Tunnel│ │
-│  │GraphRAG│ │Calendar│ │ Guard │ │ Push │ │llama.cpp │ │tunnel│ │
-│  └───────┘ └────────┘ └───────┘ └──────┘ └──────────┘ └──────┘  │
+│      ┌─────────┬─────────┬─────────┬────────────┼──────────┬──────────┐    │
+│      │         │         │         │            │          │          │    │
+│  ┌───▼───┐ ┌───▼────┐ ┌──▼─────┐ ┌─▼────┐ ┌─────▼────┐ ┌───▼──┐ ┌───▼────┐ │
+│  │ Vault │ │Kanban+ │ │Skills+ │ │HITL +│ │Local LLM │ │Tunnel│ │Workflow│ │
+│  │GraphRAG│ │Calendar│ │ Guard │ │ Push │ │llama.cpp │ │tunnel│ │ Engine │ │
+│  └───────┘ └────────┘ └───────┘ └──────┘ └──────────┘ └──────┘ └────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -165,7 +177,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Sub-Agent Fan-Out** | `spawn_subagents` runs N agent loops in parallel with fresh contexts; recursion is bounded |
 | **Persistent User Identity** | Loom `USER.md` is injected into the system prompt every turn; agent-edited via the `edit_profile` tool (permission-gated) |
 | **Chat Slash Commands** | `/compact`, `/clear`, `/title`, `/usage`, `/help` — local-only fast paths handled before the LLM call |
-| **Context Management** | Header dropdown showing live context usage (color-coded zone), token breakdown by role, per-tool stats, and three compaction strategies (auto / summarize / aggressive) |
+| **Context Management** | Header dropdown showing live context usage (color-coded zone), token breakdown by role, per-tool stats, and three compaction strategies (auto / summarize / aggressive). Mid-turn auto-compaction at 80%+ usage. Cross-turn cumulative budget tracking with per-tool call limits and hard tool stop |
 | **Output Token Caps** | Per-model `max_output_tokens` with `[agent].default_max_output_tokens` fallback |
 | **Multi-Provider LLMs** | Any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, Groq, vLLM) plus native Anthropic and local Ollama / llama.cpp |
 | **Bundled Local LLM** | Ship-and-run Qwen2.5-3B-Instruct via llama.cpp; UI for searching / downloading / activating Hugging Face GGUFs. Fresh installs (and the macOS `.app`) auto-seed a default demo model so the agent works out of the box |
@@ -204,6 +216,7 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **LaTeX / KaTeX** | Inline (`$...$`) and display (`$$...$$`) math rendering in MarkdownView via `remark-math` + `rehype-katex` |
 | **Per-Skill Venvs** | Skills can declare Python dependencies in `SKILL.toml`; Nexus creates isolated venvs per skill with managed dependencies, so skill installs never pollute the global environment |
 | **Dreaming** | Scheduled background agent consolidates memories, extracts insights, refines skills, rehearses scenarios. Four-phase cycle (consolidation → insight → skill refinement → rehearsal) with progressive depth, token budget, and a Dream Journal UI |
+| **Workflows** | Visual flow-based automation engine. Define multi-step workflows as vault markdown with `workflow-plugin: basic` frontmatter. Seven step types (tool call, agent session, MCP call, HTTP request, condition, transform, delay), five trigger types (webhook, schedule, fs_watch, event, manual). React-flow graph editor with drag-and-drop, template autocomplete (`{{steps.slug.result}}`), schema-driven parameter fields, interactive step inspector with live execution, and per-step run history |
 
 ---
 
@@ -576,6 +589,71 @@ graph TB
 
 **Prompt builder integration:** `_memory_summary()` includes "Recent Dream Insights" so the waking agent naturally references dream output.
 
+### Workflows
+
+`agent/src/nexus/workflows/` implements a visual flow-based automation engine. Workflow definitions are stored as vault markdown files with `workflow-plugin: basic` frontmatter (consistent with kanban/calendar — no separate store).
+
+```mermaid
+graph TB
+    subgraph "Triggers"
+        WH["Webhook"]
+        CRON["Schedule (cron)"]
+        FSW["FS Watch (watchdog)"]
+        EVT["Event Bus"]
+        MAN["Manual"]
+    end
+
+    subgraph "Step Types"
+        TC["tool_call — call a registered tool"]
+        AS["agent_session — run an LLM chat"]
+        MC["mcp_call — call an MCP server tool"]
+        HR["http_request — HTTP with auth"]
+        COND["condition — branch (then/else)"]
+        XFORM["transform — template / LLM / script"]
+        DLY["delay — async sleep"]
+    end
+
+    subgraph "Engine"
+        ENG["Workflow Engine"]
+        TPL["Template Resolver ({{steps.slug...}})"]
+        RETRY["Retry Logic"]
+        HIST["Run History (SQLite)"]
+    end
+
+    subgraph "UI"
+        EDITOR["React-flow Graph Editor"]
+        INSPECTOR["Step Inspector"]
+        PALETTE["Palette (drag-and-drop)"]
+        RUNS["Run History Panel"]
+    end
+
+    WH & CRON & FSW & EVT & MAN --> ENG
+    ENG --> TC & AS & MC & HR & COND & XFORM & DLY
+    TC & AS & MC & HR & XFORM --> TPL
+    ENG --> RETRY --> HIST
+    EDITOR --> PALETTE
+    EDITOR --> INSPECTOR
+    HIST --> RUNS
+```
+
+**Step types:**
+
+| Type | Description |
+|---|---|
+| `tool_call` | Calls a registered Loom tool by name. Schema-driven parameter fields in the UI. |
+| `agent_session` | Creates a real chat session with an LLM. Supports text and JSON output formats with optional schema templates. |
+| `mcp_call` | Calls a tool on a connected MCP server via `McpManager`. |
+| `http_request` | HTTP call with auth support (API key bearer/header/query, basic auth, OAuth 2.0, custom headers). Credentials resolved at runtime via `secrets.resolve()`. |
+| `condition` | Evaluates an expression, branches to `then_step` or `else_step`. |
+| `transform` | Three modes: `template` (standard `{{...}}` substitution), `llm` (LLM transform without tools/reasoning), `script` (Python `exec()` with `data` variable). |
+| `delay` | Async sleep between steps. |
+
+**Triggers:** Five trigger types, each with its own driver. Webhook triggers generate tokens and receive at `POST /workflow/trigger/{token}`. Schedule triggers use cron-based heartbeat drivers. FS watch uses `watchdog`. Event triggers subscribe to the internal event bus. Manual triggers are user-initiated.
+
+**Template system:** Steps reference outputs from previous steps via `{{steps.mySlug.result}}` syntax. The UI provides a `TemplateInput` component with autocomplete (Tab to accept) for drag-and-drop step output references across all config fields.
+
+**Run history:** Separate SQLite at `~/.nexus/workflow_runs.sqlite` tracks run state and per-step outputs. SSE events (`workflow.run_completed`) published via the global event bus.
+
 ### Human-in-the-Loop (HITL)
 
 Two SSE channels per session:
@@ -873,11 +951,12 @@ graph TB
     CONTENT --> CHAT & VAULT & KANBAN & GRAPH & INSIGHTS & AGENTG
 
     DREAM["DreamView (status / journal / suggestions / history)"]
+    WORKFLOW["WorkflowFlow (react-flow editor, palette, inspector)"]
     ALARM["AlarmNotification (calendar alarm stack)"]
     CTXDRP["ContextDropdown (zone gauge + strategies)"]
     MCPAPP["McpAppSandbox (sandboxed iframe for MCP Apps)"]
 
-    CONTENT --> DREAM & ALARM & CTXDRP & MCPAPP
+    CONTENT --> DREAM & ALARM & CTXDRP & MCPAPP & WORKFLOW
 
     SKILLD["SkillDrawer"]
     SETTD["SettingsDrawer (providers / models / advanced / integrations)"]
@@ -898,6 +977,7 @@ Frontend design decisions:
 | **SSE** | Manual `ReadableStream` parsing for POST SSE; native `EventSource` for session events |
 | **Mermaid** | Lazy-loaded on first `language-mermaid` block |
 | **Math** | `remark-math` + `rehype-katex` for inline/display LaTeX rendering |
+| **Workflow editor** | `@xyflow/react` v12 with controlled nodes (`applyNodeChanges`), draggable palette, debounced saves, template autocomplete (`TemplateInput`) |
 | **MCP Apps** | Sandboxed `<iframe sandbox="allow-scripts">` with `postMessage` JSON-RPC; `ui://nexus/*` resources rendered inline |
 | **3D graph** | force-graph + custom physics; 2D fallback |
 | **Mobile** | Capacitor-friendly responsive layout; iOS Xcode project under `ui/ios/` |
@@ -953,7 +1033,13 @@ nexus/
 │       │       ├── local_llm.py / tunnel.py / push.py / share.py / notifications.py
 │       │       ├── insights.py / graph.py / mcp.py / skill_wizard.py
 │       │       ├── dream.py                 # Dream status, trigger, journal, suggestions
-│       ├── mcp_lifecycle.py            # MCP client + server startup, tool discovery
+│       │       ├── workflows.py             # Workflow CRUD, webhook receiver, run history
+│       ├── workflows/                    # Visual flow-based automation engine
+│       │   ├── models.py                  # StepType, TriggerType, StepConfig, WorkflowConfig
+│       │   ├── engine.py                  # Sequential step execution with template resolution
+│       │   ├── parser.py                  # Vault markdown ↔ YAML frontmatter read/write
+│       │   ├── triggers.py                # Webhook, schedule, fs_watch, event, manual drivers
+│       │   └── store.py                   # Run history (SQLite)
 │       ├── mcp_resources/              # Internal ui://nexus/* HTML generators (kanban, dashboard, data_table)
 │       ├── skills/                     # SkillRegistry + SkillManager + guard
 │       ├── tools/                      # vault, kanban, kanban_query, calendar, datatable, csv,
@@ -982,6 +1068,7 @@ nexus/
 │           ├── GraphView.tsx + AgentGraphView.tsx + SubgraphCanvas3D.tsx
 │           ├── InsightsView.tsx
 │           ├── DreamView/                     # Dream status, journal, suggestions, run history
+│           ├── WorkflowFlow/                  # React-flow graph editor, step config panels, inspector
 │           ├── McpAppSandbox/                  # Sandboxed iframe for MCP App rendering
 │           ├── SkillWizard/                    # Multi-step guided skill discovery + build
 │           ├── MarkdownView.tsx             # react-markdown + remark-gfm + lazy mermaid + KaTeX
@@ -1418,6 +1505,18 @@ A user message that starts with `/` is intercepted before the LLM call and handl
 | `/dream/suggestions/{filename}` | DELETE | Dismiss suggestion |
 | `/dream/runs` | GET | Run history |
 
+### Workflows
+
+| Route | Method | Description |
+|---|---|---|
+| `/workflow` | GET | List workflow definitions |
+| `/workflow` | POST | Create workflow |
+| `/workflow/{path}` | GET / PUT / DELETE | Read / update / delete workflow |
+| `/workflow/{path}/trigger` | POST | Manual trigger |
+| `/workflow/trigger/{token}` | POST | Webhook trigger (token-based) |
+| `/workflow/{path}/runs` | GET | Run history for a workflow |
+| `/workflow/{path}/runs/{run_id}` | GET | Single run detail (per-step outputs) |
+
 ### Misc
 
 | Route | Method | Description |
@@ -1596,6 +1695,7 @@ export NEXUS_LLM_MODEL="gpt-4o"
 ├── graphrag/            # Vault-wide GraphRAG store (entities + relations + embeddings)
 ├── skills/              # Agent skills
 ├── dream_state.sqlite   # Dream run history, budget tracking, explored territory
+├── workflow_runs.sqlite # Workflow execution history, per-step outputs
 ├── local_llm/           # Downloaded GGUFs
 ├── push/                # VAPID keys + subscriptions
 ├── cookies/              # Exported browser cookies (Netscape format, per domain)

@@ -145,3 +145,26 @@ This produces:
 - `dist/Nexus.pkg` — signed installer, compressed (~600 MB)
 
 The `.pkg` installs into `/Applications`. Users double-click it to install.
+
+### CI (GitHub Actions) setup
+
+The release workflow (`.github/workflows/release.yml`) automatically signs and notarizes the macOS build when the following repository secrets are configured:
+
+| Secret | Value |
+|---|---|
+| `APPLE_CERT_BASE64` | Base64-encoded `.p12` export of the Developer ID Application certificate (includes private key) |
+| `APPLE_CERT_PASSWORD` | Password used when exporting the `.p12` |
+| `APPLE_SIGN_IDENTITY` | Full identity string, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_INSTALLER_IDENTITY` | Full identity string, e.g. `Developer ID Installer: Your Name (TEAMID)` |
+| `APPLE_NOTARY_APPLE_ID` | Apple ID email |
+| `APPLE_NOTARY_TEAM_ID` | Developer Team ID |
+| `APPLE_NOTARY_PASSWORD` | App-specific password for `notarytool` |
+
+To create the `.p12` for `APPLE_CERT_BASE64`:
+
+1. Open **Keychain Access**, find the Developer ID Application certificate.
+2. Right-click → **Export…** → save as `.p12` with a password.
+3. Base64-encode it: `base64 -i certificate.p12 | pbcopy`
+4. Paste into the `APPLE_CERT_BASE64` secret.
+
+When any secret is missing, the workflow falls back to ad-hoc signing (unsigned build).

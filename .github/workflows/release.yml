@@ -4,6 +4,16 @@ name: Release bundles
 # Both jobs run in parallel and attach their zip to that same release as
 # downloadable assets. Total wall time ≈ time of the slower job (Windows,
 # typically ~12-18 min with models bundled).
+#
+# macOS builds are signed + notarized when the following secrets are set:
+#   APPLE_CERT_BASE64  — base64-encoded .p12 Developer ID certificate
+#   APPLE_CERT_PASSWORD — password used to export the .p12
+#   APPLE_SIGN_IDENTITY  — e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_INSTALLER_IDENTITY — e.g. "Developer ID Installer: Name (TEAMID)"
+#   APPLE_NOTARY_APPLE_ID — Apple ID email
+#   APPLE_NOTARY_TEAM_ID  — Developer Team ID
+#   APPLE_NOTARY_PASSWORD — app-specific password for notarytool
+# When any are missing the build falls back to ad-hoc signing (unsigned).
 
 on:
   release:
@@ -36,28 +46,66 @@ jobs:
           cache: npm
           cache-dependency-path: nexus/ui/package-lock.json
 
+      - name: Import Apple Developer ID certificate
+        if: env.APPLE_CERT_BASE64 != ''
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          # Create a temporary keychain, import the Developer ID certificate,
+          # and set it as the default for codesign / productbuild.
+          CERT_PATH="$RUNNER_TEMP/build-cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          echo "$APPLE_CERT_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" \
+            -P "$APPLE_CERT_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          rm -f "$CERT_PATH"
+
       - name: Build .app bundle
         working-directory: nexus
         env:
-          # build.sh defaults to ../loom relative to the repo, which would be
-          # one level above the workspace. Pin it to the sibling checkout.
           LOOM_DIR: ${{ github.workspace }}/loom
-        # Pass --skip-models to drop the ~150 MB embedder/spaCy prefetch if you
-        # want a leaner zip; the app will download them on first launch.
-        run: bash packaging/build.sh
+          NEXUS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+          NEXUS_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          ARGS=()
+          if [[ -n "$NEXUS_SIGN_IDENTITY" && -n "$NOTARY_APPLE_ID" ]]; then
+            ARGS+=(--notarize)
+          fi
+          bash packaging/build.sh "${ARGS[@]}"
 
       - name: Zip Nexus.app
         working-directory: nexus/dist
-        # ditto preserves macOS metadata (resource forks, signatures) where
-        # `zip -r` would mangle them — required for the .app to launch after
-        # extraction without "is damaged" errors.
         run: ditto -c -k --keepParent Nexus.app Nexus-macos-arm64.zip
 
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
-          files: nexus/dist/Nexus-macos-arm64.zip
-          fail_on_unmatched_files: true
+          files: |
+            nexus/dist/Nexus-macos-arm64.zip
+            nexus/dist/Nexus.pkg
 
   windows:
     name: Windows · Nexus.exe
@@ -85,8 +133,6 @@ jobs:
       - name: Build Nexus.exe bundle
         working-directory: nexus
         shell: pwsh
-        # build.ps1 already produces dist\Nexus.zip with the canonical layout.
-        # Pass -SkipModels to drop the embedder/spaCy prefetch (see macOS note).
         run: .\packaging\build.ps1 -LoomDir "$env:GITHUB_WORKSPACE\loom"
 
       - name: Rename for clarity
