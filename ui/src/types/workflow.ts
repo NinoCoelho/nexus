@@ -139,6 +139,22 @@ export interface DebugStepEvent {
   finished_at?: string;
 }
 
+export interface ToolInfo {
+  name: string;
+  description: string;
+  parameters: {
+    type?: string;
+    properties?: Record<string, {
+      type?: string;
+      description?: string;
+      enum?: string[];
+      items?: { type?: string };
+      default?: unknown;
+    }>;
+    required?: string[];
+  };
+}
+
 export interface StepSchema {
   slug: string;
   output_schema?: { keys: string[]; types: Record<string, string> };

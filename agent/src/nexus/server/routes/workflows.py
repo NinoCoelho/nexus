@@ -6,6 +6,7 @@ import json
 import logging
 import secrets
 import datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -93,6 +94,127 @@ class WorkflowUpdateBody(BaseModel):
 
 class ManualRunBody(BaseModel):
     payload: dict | None = None
+
+
+@router.get("/workflows/tools")
+async def list_workflow_tools(request: Request) -> dict:
+    tools = _collect_tool_specs()
+    return {"tools": tools}
+
+
+def _collect_tool_specs() -> list[dict]:
+    from nexus.agent.llm import ToolSpec
+    from nexus.agent.loop import SKILL_MANAGE_TOOL
+
+    spec_groups: list[tuple[ToolSpec, ...]] = []
+
+    def _add(*specs: ToolSpec) -> None:
+        spec_groups.append(specs)
+
+    _add(SKILL_MANAGE_TOOL)
+
+    from nexus.tools.state_tool import STATE_TOOLS
+    _add(*STATE_TOOLS)
+
+    from nexus.tools.ontology_tool import ONTOLOGY_MANAGE_TOOL
+    _add(ONTOLOGY_MANAGE_TOOL)
+
+    from nexus.tools.http_call import HTTP_CALL_TOOL
+    _add(HTTP_CALL_TOOL)
+
+    from nexus.tools.acp_call import ACP_CALL_TOOL
+    if _acp_configured():
+        _add(ACP_CALL_TOOL)
+
+    from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL
+    _add(*VAULT_TOOLS)
+    _add(VAULT_SEMANTIC_SEARCH_TOOL)
+
+    from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL
+    _add(KANBAN_MANAGE_TOOL)
+
+    from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL
+    _add(KANBAN_QUERY_TOOL)
+
+    from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL
+    _add(CALENDAR_MANAGE_TOOL)
+
+    from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL
+    _add(DISPATCH_CARD_TOOL)
+
+    from nexus.tools.heartbeat_tool import HEARTBEAT_MANAGE_TOOL
+    _add(HEARTBEAT_MANAGE_TOOL)
+
+    from nexus.tools.datatable_tool import DATATABLE_MANAGE_TOOL
+    _add(DATATABLE_MANAGE_TOOL)
+
+    from nexus.tools.dashboard_tool import DASHBOARD_MANAGE_TOOL
+    _add(DASHBOARD_MANAGE_TOOL)
+
+    from nexus.tools.show_kanban_tool import SHOW_KANBAN_TOOL
+    _add(SHOW_KANBAN_TOOL)
+
+    from nexus.tools.show_dashboard_widget_tool import SHOW_DASHBOARD_WIDGET_TOOL
+    _add(SHOW_DASHBOARD_WIDGET_TOOL)
+
+    from nexus.tools.show_data_table_tool import SHOW_DATA_TABLE_TOOL
+    _add(SHOW_DATA_TABLE_TOOL)
+
+    from nexus.tools.csv_tool import CSV_TOOL
+    _add(CSV_TOOL)
+
+    from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL
+    _add(VISUALIZE_TABLE_TOOL)
+
+    from nexus.tools.ocr_tool import OCR_IMAGE_TOOL
+    _add(OCR_IMAGE_TOOL)
+
+    from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL
+    _add(MEMORY_READ_TOOL)
+    _add(MEMORY_WRITE_TOOL)
+
+    from nexus.tools.nexus_kb import NEXUS_KB_TOOL
+    _add(NEXUS_KB_TOOL)
+
+    from nexus.tools.context_tool import CONTEXT_STATUS_TOOL, FORK_SESSION_TOOL
+    _add(CONTEXT_STATUS_TOOL)
+    _add(FORK_SESSION_TOOL)
+
+    from nexus.agent.ask_user_tool import ASK_USER_TOOL
+    _add(ASK_USER_TOOL)
+
+    from loom.tools.terminal import TERMINAL_TOOL_SPEC
+    _add(TERMINAL_TOOL_SPEC)
+
+    from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
+    _add(NOTIFY_USER_TOOL)
+
+    from loom.tools.subagent import SPAWN_SUBAGENTS_TOOL_SPEC
+    _add(SPAWN_SUBAGENTS_TOOL_SPEC)
+
+    seen: set[str] = set()
+    result: list[dict] = []
+    for group in spec_groups:
+        for spec in group:
+            if spec.name in seen:
+                continue
+            seen.add(spec.name)
+            result.append({
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters,
+            })
+
+    result.sort(key=lambda t: t["name"])
+    return result
+
+
+def _acp_configured() -> bool:
+    try:
+        from nexus.tools.acp_call import acp_is_configured
+        return acp_is_configured()
+    except Exception:
+        return False
 
 
 @router.get("/workflows")
@@ -698,29 +820,53 @@ class GenerateScriptBody(BaseModel):
     trigger_keys: list[str] = []
 
 
+def _schema_only(value: Any, max_depth: int = 3) -> Any:
+    if isinstance(value, dict):
+        if max_depth <= 0:
+            return "{...}"
+        return {k: _schema_only(v, max_depth - 1) for k, v in value.items()}
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if max_depth <= 0:
+            return "[...]"
+        return [_schema_only(value[0], max_depth - 1)]
+    return json.dumps(value, default=str) if not isinstance(value, (int, float, bool)) and len(str(value)) > 120 else type(value).__name__
+
+
 @router.post("/workflows/{path:path}/generate-script")
 async def generate_script(path: str, body: GenerateScriptBody, request: Request) -> dict:
-    import json as _json
-
     engine = _get_engine(request)
 
     input_desc = ""
     if body.input_schema:
-        input_desc = f"\nAvailable step output data (in `data` dict, keyed by step slug):\n```json\n{_json.dumps(body.input_schema, indent=2, default=str)[:3000]}\n```\n"
+        schema_view = {slug: _schema_only(val) for slug, val in body.input_schema.items()}
+        input_desc = (
+            f"\nAvailable step output data (in `data` dict, keyed by step slug). "
+            f"Types/shapes shown, not actual values:\n```json\n"
+            f"{json.dumps(schema_view, indent=2, default=str)[:2000]}\n```\n"
+        )
     if body.trigger_keys:
         input_desc += f"\nTrigger payload keys: {', '.join(body.trigger_keys)} (accessible via data dict)\n"
 
     system_prompt = (
-        "You are a Python code generator. Generate a short Python script that transforms workflow data.\n"
+        "You are a Python code generator. Your ONLY job is to write Python code.\n"
+        "You MUST NOT perform the transformation yourself. Write Python code that performs it.\n\n"
         "Rules:\n"
         "- The script runs inside exec() with a sandboxed namespace.\n"
         "- Available variables: `data` (dict with all step outputs, keyed by slug), `json` module.\n"
         "- You MUST set the `result` variable to the output value.\n"
         "- No imports, no file I/O, no network access. Only pure Python + json module.\n"
-        "- Output ONLY the Python code. No markdown fences, no explanation.\n"
-        "- Keep it concise. Prefer one-liners when possible.\n"
+        "- Output ONLY the Python code. No markdown fences, no explanation, no output data.\n"
+        "- Keep it concise. Prefer one-liners when possible.\n\n"
+        "Example: user says 'convert to uppercase' → output: result = str(data['myStep']['text']).upper()\n"
+        "Example: user says 'extract names' → output: result = [item['name'] for item in data['myStep']['items']]\n"
     )
-    user_prompt = f"{body.description}{input_desc}\n\nGenerate the Python script:"
+    user_prompt = (
+        f"Write Python code that does the following:\n{body.description}\n"
+        f"{input_desc}\n"
+        f"Output ONLY the Python script (set `result = ...`):"
+    )
 
     try:
         code = await engine.single_shot_llm(

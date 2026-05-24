@@ -4,11 +4,18 @@ import type {
   WorkflowDef,
   WorkflowRun,
   RunDetail,
+  ToolInfo,
 } from "../types/workflow";
 
 async function _json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function listWorkflowTools(): Promise<ToolInfo[]> {
+  const res = await fetch(`${BASE}/workflows/tools`);
+  const data = await _json<{ tools: ToolInfo[] }>(res);
+  return data.tools;
 }
 
 export async function listWorkflows(): Promise<WorkflowSummary[]> {
