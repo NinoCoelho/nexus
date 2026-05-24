@@ -14,59 +14,17 @@ import yaml
 from .models import (
     WORKFLOW_PLUGIN_KEY,
     StepConfig,
-    StepType,
     TriggerConfig,
-    TriggerType,
     WorkflowDef,
 )
 
 
 def _build_trigger(raw: dict[str, Any]) -> TriggerConfig:
-    return TriggerConfig(
-        id=str(raw.get("id", "")),
-        type=TriggerType(raw.get("type", "manual")),
-        token=raw.get("token"),
-        secret=raw.get("secret"),
-        allowed_methods=raw.get("allowed_methods", ["POST"]),
-        path=raw.get("path"),
-        pattern=raw.get("pattern", "*"),
-        events=raw.get("events", ["created"]),
-        debounce_ms=raw.get("debounce_ms", 1000),
-        cron=raw.get("cron"),
-        event=raw.get("event"),
-        filter=raw.get("filter"),
-    )
+    return TriggerConfig.from_dict(raw)
 
 
 def _build_step(raw: dict[str, Any]) -> StepConfig:
-    return StepConfig(
-        id=str(raw.get("id", "")),
-        name=str(raw.get("name", "")),
-        type=StepType(raw.get("type", "tool_call")),
-        tool=raw.get("tool"),
-        input=raw.get("input"),
-        prompt=raw.get("prompt"),
-        model=raw.get("model"),
-        background=bool(raw.get("background", False)),
-        max_turns=int(raw.get("max_turns", 8)),
-        mcp_server=raw.get("mcp_server"),
-        mcp_tool=raw.get("mcp_tool"),
-        url=raw.get("url"),
-        method=str(raw.get("method", "GET")),
-        headers=raw.get("headers"),
-        body=raw.get("body"),
-        expression=raw.get("expression"),
-        then_step=raw.get("then_step"),
-        else_step=raw.get("else_step"),
-        template=raw.get("template"),
-        output_format=str(raw.get("output_format", "text")),
-        duration_seconds=int(raw.get("duration_seconds", 0)),
-        condition=raw.get("condition"),
-        on_error=str(raw.get("on_error", "stop")),
-        retry_count=int(raw.get("retry_count", 0)),
-        retry_delay_seconds=int(raw.get("retry_delay_seconds", 5)),
-        next_step=raw.get("next_step"),
-    )
+    return StepConfig.from_dict(raw)
 
 
 def parse(content: str) -> WorkflowDef:

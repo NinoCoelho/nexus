@@ -86,6 +86,20 @@ export default function WorkflowView({
     }, 500);
   }, [selectedPath]);
 
+  const flushSave = useCallback(async () => {
+    clearTimeout(saveTimerRef.current);
+    const d = latestWfRef.current;
+    if (d && selectedPath) {
+      await api.updateWorkflow(selectedPath, {
+        title: d.title,
+        enabled: d.enabled,
+        triggers: d.triggers.map((t) => ({ ...t, type: t.type })),
+        variables: d.variables,
+        steps: d.steps.map((s) => ({ ...s, type: s.type })),
+      });
+    }
+  }, [selectedPath]);
+
   const handleCreate = async (title: string) => {
     if (!title.trim()) return;
     setCreating(false);
@@ -188,7 +202,7 @@ export default function WorkflowView({
       </div>
 
       <div className="wf-flow-container">
-        <WorkflowFlow wf={wf} onSave={save} wfPath={selectedPath} />
+        <WorkflowFlow wf={wf} onSave={save} onFlushSave={flushSave} wfPath={selectedPath} />
       </div>
 
       {runs.length > 0 && (

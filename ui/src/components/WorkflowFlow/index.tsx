@@ -176,10 +176,12 @@ function moveAfter(steps: StepConfig[], afterId: string, targetId: string): Step
 function Canvas({
   wf,
   onSave,
+  onFlushSave,
   wfPath,
 }: {
   wf: WorkflowDef;
   onSave: (updated: WorkflowDef) => void;
+  onFlushSave?: () => Promise<void>;
   wfPath?: string;
 }) {
   const rfInstance = useReactFlow();
@@ -188,6 +190,8 @@ function Canvas({
   const migratedWf = useMemo(() => migrateWorkflow(wf), [wf]);
   const wfRef = useRef(migratedWf);
   wfRef.current = migratedWf;
+  const latestStepsRef = useRef(migratedWf.steps);
+  latestStepsRef.current = migratedWf.steps;
 
   const [undoStack, setUndoStack] = useState<WorkflowDef[]>([]);
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -213,6 +217,7 @@ function Canvas({
   const [showPayloadInput, setShowPayloadInput] = useState(false);
   const [payloadInputMode, setPayloadInputMode] = useState<"trigger" | "all">("trigger");
   const [payloadText, setPayloadText] = useState("{}");
+  const [payloadFormat, setPayloadFormat] = useState<"json" | "plain" | "xml">("json");
   const [execError, setExecError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -244,6 +249,7 @@ function Canvas({
 
   const saveWithUndo = useCallback((next: WorkflowDef) => {
     setUndoStack((prev) => [...prev.slice(-(MAX_UNDO - 1)), wfRef.current]);
+    latestStepsRef.current = next.steps;
     onSave(next);
   }, [onSave]);
 
@@ -372,12 +378,19 @@ function Canvas({
     async (mode: "trigger" | "all") => {
       if (!wfPath) return;
       setExecError(null);
+      if (onFlushSave) await onFlushSave();
       try {
         let payload = {};
-        try { payload = JSON.parse(payloadText); } catch {}
-        const result = await wfApi.startInteractiveRun(wfPath, payload, mode);
+        if (payloadFormat === "json") {
+          try { payload = JSON.parse(payloadText); } catch {}
+        }
+        const result = await wfApi.startInteractiveRun(
+          wfPath, payload, mode, false,
+          payloadFormat, payloadFormat !== "json" ? payloadText : "",
+        );
+        const resolvedPayload = payloadFormat !== "json" ? result.run?.trigger_payload || payload : payload;
         setInteractiveRunId(result.run.id);
-        setTriggerPayload(payload);
+        setTriggerPayload(resolvedPayload);
         setStepRunMap({});
         setCondBranches({});
         if (mode === "all") {
@@ -395,7 +408,7 @@ function Canvas({
         console.error("Failed to start interactive run:", e);
       }
     },
-    [wfPath, payloadText],
+    [wfPath, payloadText, payloadFormat, onFlushSave],
   );
 
   const handleTriggerRun = useCallback(() => {
@@ -437,26 +450,31 @@ function Canvas({
       setExecError(null);
       setExecutingStep(stepId);
       try {
+        if (onFlushSave) await onFlushSave();
+        const currentStep = latestStepsRef.current.find((s) => s.id === stepId);
+        const stepCfg = currentStep ? { ...currentStep } : undefined;
         let runId = interactiveRunId;
         if (!runId) {
           runId = (await startSeededRun()) || "";
         }
         let sr: StepRun;
         try {
-          sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId);
+          sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId, stepCfg);
         } catch (execErr: any) {
           const detail = execErr?.message || "";
           if (runId && (detail.includes("not found") || detail.includes("not reachable"))) {
             runId = (await startSeededRun()) || "";
             if (!runId) throw execErr;
-            sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId);
+            sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId, stepCfg);
           } else {
             throw execErr;
           }
         }
         setStepRunMap((prev) => ({ ...prev, [stepId]: sr }));
         const step = wfRef.current.steps.find((s) => s.id === stepId);
-        if (step?.type === "condition" && sr.status === "completed") {
+        if (sr.condition_branches && Object.keys(sr.condition_branches).length > 0) {
+          setCondBranches((prev) => ({ ...prev, ...sr.condition_branches }));
+        } else if (step?.type === "condition" && sr.status === "completed") {
           try {
             const state = await wfApi.getInteractiveState(wfPath, runId);
             setCondBranches(state.condition_branches || {});
@@ -470,7 +488,7 @@ function Canvas({
         setExecutingStep(null);
       }
     },
-    [wfPath, interactiveRunId, startSeededRun],
+    [wfPath, interactiveRunId, startSeededRun, onFlushSave],
   );
 
   const handleOpenInspector = useCallback((stepId: string) => {
@@ -956,6 +974,10 @@ function Canvas({
           onChangeTrigger={handleChangeTrigger}
           onDelete={selectedNode.id.startsWith("step-") ? handleDeleteStep : handleDeleteTrigger}
           onClose={() => setSelectedId(null)}
+          onOpenEditor={() => {
+            const stepId = selectedNode.id.replace("step-", "");
+            if (stepId) handleOpenInspector(stepId);
+          }}
           wfPath={wfPath}
         />
       )}
@@ -981,13 +1003,24 @@ function Canvas({
               <button className="wf-payload-close" onClick={() => setShowPayloadInput(false)}>✕</button>
             </div>
             <div className="wf-payload-body">
-              <label style={{ fontSize: 10, fontWeight: 600, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                Trigger Payload (JSON)
-              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <label style={{ fontSize: 10, fontWeight: 600, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Trigger Payload
+                </label>
+                <select
+                  value={payloadFormat}
+                  onChange={(e) => setPayloadFormat(e.target.value as "json" | "plain" | "xml")}
+                  style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)" }}
+                >
+                  <option value="json">JSON</option>
+                  <option value="plain">Plain Text</option>
+                  <option value="xml">XML</option>
+                </select>
+              </div>
               <textarea
                 value={payloadText}
                 onChange={(e) => setPayloadText(e.target.value)}
-                placeholder='{"key": "value"}'
+                placeholder={payloadFormat === "json" ? '{"key": "value"}' : payloadFormat === "xml" ? "<root><item>value</item></root>" : "Enter text..."}
               />
               <div className="wf-payload-actions">
                 <button className="wf-payload-btn wf-payload-btn-cancel" onClick={() => setShowPayloadInput(false)}>
@@ -1040,15 +1073,17 @@ function Canvas({
 export default function WorkflowFlow({
   wf,
   onSave,
+  onFlushSave,
   wfPath,
 }: {
   wf: WorkflowDef;
   onSave: (updated: WorkflowDef) => void;
+  onFlushSave?: () => Promise<void>;
   wfPath?: string;
 }) {
   return (
     <ReactFlowProvider>
-      <Canvas wf={wf} onSave={onSave} wfPath={wfPath} />
+      <Canvas wf={wf} onSave={onSave} onFlushSave={onFlushSave} wfPath={wfPath} />
     </ReactFlowProvider>
   );
 }

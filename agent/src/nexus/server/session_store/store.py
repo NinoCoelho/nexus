@@ -152,7 +152,7 @@ class SessionStore(PubSubMixin, QueryMixin):
         if row is None:
             return None
         msg_rows = self._loom._db.execute(
-            "SELECT role, content, tool_calls, tool_call_id, name, created_at "
+            "SELECT role, content, tool_calls, tool_call_id, name, created_at, reasoning_content "
             "FROM messages WHERE session_id = ? ORDER BY seq",
             (session_id,),
         ).fetchall()
@@ -199,7 +199,12 @@ class SessionStore(PubSubMixin, QueryMixin):
                 tool_call_id=r[3],
                 name=r[4],
             )
-            history.append(_from_loom_msg(loom_msg))
+            nexus_msg = _from_loom_msg(loom_msg)
+            # Re-attach reasoning_content from the Nexus-managed column.
+            rc_val = r[6] if len(r) > 6 else None
+            if rc_val and nexus_msg.role == Role.ASSISTANT:
+                nexus_msg = nexus_msg.model_copy(update={"reasoning_content": rc_val})
+            history.append(nexus_msg)
             timestamps.append(_ts_to_int(r[5]))
         sess = Session(id=row[0], title=row[1] or "New session", history=history, context=row[2])
         sess._message_timestamps = timestamps  # type: ignore[attr-defined]

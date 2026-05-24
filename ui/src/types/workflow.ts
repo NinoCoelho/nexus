@@ -75,6 +75,7 @@ export interface StepConfig {
   llm_instructions?: string;
   output_sample?: string;
   response_template?: string;
+  output_schema?: string;
   next_step?: string;
 }
 
@@ -117,6 +118,7 @@ export interface StepRun {
   error?: string;
   started_at?: string;
   finished_at?: string;
+  condition_branches?: Record<string, string>;
 }
 
 export interface RunDetail {

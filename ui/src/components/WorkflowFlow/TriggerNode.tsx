@@ -35,12 +35,11 @@ function TriggerNodeComp({ data, id }: NodeProps) {
   const onPlay = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (d.hasActiveRun) return;
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       setMenuPos({ x: rect.right, y: rect.bottom + 4 });
       setShowMenu((prev) => !prev);
     },
-    [d.hasActiveRun],
+    [],
   );
 
   const onSourcePointerDown = useCallback((e: React.PointerEvent) => {
@@ -95,7 +94,7 @@ function TriggerNodeComp({ data, id }: NodeProps) {
   );
 
   return (
-    <div className={`wf-node trigger-node${d.selected ? " selected" : ""}${d.hasActiveRun ? " trigger-active" : ""}`} style={{ position: "relative" }}>
+    <div className={`wf-node trigger-node${d.selected ? " selected" : ""}`} style={{ position: "relative" }}>
       <div className="wf-node-header">
         <span className="icon">{TRIGGER_ICONS[d.triggerType] || "⚡"}</span>
         <span className="label">Trigger</span>
@@ -106,9 +105,9 @@ function TriggerNodeComp({ data, id }: NodeProps) {
           ref={btnRef}
           className="wf-play-btn"
           onClick={onPlay}
-          title={d.hasActiveRun ? "Run active — use step buttons to continue" : "Run workflow"}
+          title="Run workflow"
         >
-          {d.hasActiveRun ? "⏸" : "▶"}
+          ▶
         </button>
       </div>
       {d.detail && (

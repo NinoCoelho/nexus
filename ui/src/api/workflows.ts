@@ -228,13 +228,21 @@ export async function startInteractiveRun(
   payload: Record<string, unknown> = {},
   mode: "trigger" | "all" = "trigger",
   seedFromSamples = false,
+  payloadFormat: string = "json",
+  payloadRaw: string = "",
 ): Promise<{ run: WorkflowRun; mode: string }> {
   const res = await fetch(
     `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ payload, mode, seed_from_samples: seedFromSamples }),
+      body: JSON.stringify({
+        payload,
+        mode,
+        seed_from_samples: seedFromSamples,
+        payload_format: payloadFormat,
+        payload_raw: payloadRaw,
+      }),
     },
   );
   return _json(res);
@@ -258,10 +266,15 @@ export async function interactiveExecuteStep(
   path: string,
   runId: string,
   stepId: string,
+  stepConfig?: Record<string, unknown>,
 ): Promise<import("../types/workflow").StepRun> {
   const res = await fetch(
     `${BASE}/workflows/${encodeURIComponent(path)}/interactive-run/${runId}/execute-step/${stepId}`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step_config: stepConfig || null }),
+    },
   );
   return _json(res);
 }

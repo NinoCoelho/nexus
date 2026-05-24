@@ -73,17 +73,20 @@ class _AttrDict(dict):
 
 
 def evaluate_condition(expression: str, context: dict[str, Any]) -> bool:
-    resolved = resolve_templates("{{" + expression + "}}", context)
-    if resolved == "{{" + expression + "}}":
+    resolved = resolve_templates(expression, context)
+    if resolved != expression:
         try:
-            namespace: dict[str, Any] = {}
-            for k, v in context.items():
-                namespace[k] = _AttrDict(v) if isinstance(v, dict) else v
-            namespace["true"] = True
-            namespace["false"] = False
-            namespace["none"] = None
-            namespace["null"] = None
-            return bool(eval(expression, {"__builtins__": {}}, namespace))
+            return bool(eval(str(resolved), {"__builtins__": {}}, {}))
         except Exception:
-            return False
-    return bool(resolved) and resolved not in ("False", "false", "0", "", "None", "none")
+            return bool(resolved) and str(resolved) not in ("False", "false", "0", "", "None", "none")
+    try:
+        namespace: dict[str, Any] = {}
+        for k, v in context.items():
+            namespace[k] = _AttrDict(v) if isinstance(v, dict) else v
+        namespace["true"] = True
+        namespace["false"] = False
+        namespace["none"] = None
+        namespace["null"] = None
+        return bool(eval(expression, {"__builtins__": {}}, namespace))
+    except Exception:
+        return False

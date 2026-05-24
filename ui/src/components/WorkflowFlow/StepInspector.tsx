@@ -3,6 +3,7 @@ import type { StepConfig, StepRun } from "../../types/workflow";
 import { resolveTemplate, getWorkflowSamples, generateScript } from "../../api/workflows";
 import { getSession } from "../../api/sessions";
 import TemplateInput from "./TemplateInput";
+import { slugify } from "./index";
 import "./WorkflowFlow.css";
 
 interface StepSample {
@@ -277,24 +278,22 @@ export default function StepInspector({
 
   const previousOutputs = useMemo(() => {
     const map: Record<string, unknown> = {};
+    const usedOutputs: Record<string, unknown> = {};
     for (const sr of allStepRuns) {
       if (sr.step_id === step.id) continue;
       if (sr.status === "completed" && sr.output !== undefined) {
         const cfg = allSteps.find((s) => s.id === sr.step_id);
-        const slug = cfg?.slug || sr.step_id;
-        map[slug] = sr.output;
-        map[sr.step_id] = sr.output;
+        const key = cfg?.slug || sr.step_id;
+        map[key] = sr.output;
+        usedOutputs[sr.step_id] = true;
       }
     }
-    if (Object.keys(map).length === 0) {
-      for (const [sid, sample] of Object.entries(samples)) {
-        if (sid === step.id) continue;
-        if (sample.output !== undefined) {
-          const cfg = allSteps.find((s) => s.id === sid);
-          const slug = cfg?.slug || sample.slug || sid;
-          map[slug] = sample.output;
-          map[sid] = sample.output;
-        }
+    for (const [sid, sample] of Object.entries(samples)) {
+      if (sid === step.id || usedOutputs[sid]) continue;
+      if (sample.output !== undefined) {
+        const cfg = allSteps.find((s) => s.id === sid);
+        const key = cfg?.slug || sample.slug || sid;
+        map[key] = sample.output;
       }
     }
     return map;
@@ -320,7 +319,7 @@ export default function StepInspector({
 
   const stepRefs = useMemo(() =>
     allSteps.map((s) => ({
-      slug: s.slug || s.id,
+      slug: s.slug || slugify(s.name),
       name: s.name,
       type: s.type,
     })),
@@ -409,22 +408,21 @@ export default function StepInspector({
 
   const allOutputsForPreview = useMemo(() => {
     const map: Record<string, unknown> = {};
+    const usedOutputs: Record<string, unknown> = {};
     for (const sr of allStepRuns) {
       if (sr.status === "completed" && sr.output !== undefined) {
         const cfg = allSteps.find((s) => s.id === sr.step_id);
-        const slug = cfg?.slug || sr.step_id;
-        map[slug] = sr.output;
-        map[sr.step_id] = sr.output;
+        const key = cfg?.slug || sr.step_id;
+        map[key] = sr.output;
+        usedOutputs[sr.step_id] = true;
       }
     }
-    if (Object.keys(map).length === 0) {
-      for (const [sid, sample] of Object.entries(samples)) {
-        if (sample.output !== undefined) {
-          const cfg = allSteps.find((s) => s.id === sid);
-          const slug = cfg?.slug || sample.slug || sid;
-          map[slug] = sample.output;
-          map[sid] = sample.output;
-        }
+    for (const [sid, sample] of Object.entries(samples)) {
+      if (usedOutputs[sid]) continue;
+      if (sample.output !== undefined) {
+        const cfg = allSteps.find((s) => s.id === sid);
+        const key = cfg?.slug || sample.slug || sid;
+        map[key] = sample.output;
       }
     }
     return map;
@@ -497,6 +495,29 @@ export default function StepInspector({
                 placeholder="Drag data from the left panel or type {{steps.myStep.result}}"
               />
             </div>
+            {step.type === "agent_session" && (
+              <div className="wf-inspector-format-row">
+                <select
+                  value={step.output_format || "text"}
+                  onChange={(e) => onStepPatch({ output_format: e.target.value })}
+                  className="wf-inspector-format-select"
+                >
+                  <option value="text">Text</option>
+                  <option value="json">JSON</option>
+                </select>
+                {step.output_format === "json" && (
+                  <textarea
+                    className="wf-inspector-schema-input"
+                    value={step.output_schema || ""}
+                    onChange={(e) => onStepPatch({ output_schema: e.target.value || undefined })}
+                    placeholder='Schema: {"key": "value"}'
+                    title="JSON schema template for expected output structure"
+                    rows={2}
+                    style={{ fontFamily: "monospace", fontSize: 12 }}
+                  />
+                )}
+              </div>
+            )}
             {step.type === "transform" && step.output_format === "script" && (
               <div className="wf-inspector-gen-bar">
                 <input

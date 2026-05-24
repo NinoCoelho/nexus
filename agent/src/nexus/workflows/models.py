@@ -69,6 +69,7 @@ class TriggerConfig:
     cron: str | None = None
     event: str | None = None
     filter: dict[str, Any] | None = None
+    payload_format: str = "json"  # "json" | "plain" | "xml"
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "type": self.type.value}
@@ -92,7 +93,27 @@ class TriggerConfig:
             out["event"] = self.event
         if self.filter is not None:
             out["filter"] = self.filter
+        if self.payload_format != "json":
+            out["payload_format"] = self.payload_format
         return out
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> TriggerConfig:
+        return cls(
+            id=str(d.get("id", "")),
+            type=TriggerType(d.get("type", "manual")),
+            token=d.get("token"),
+            secret=d.get("secret"),
+            allowed_methods=d.get("allowed_methods", ["POST"]),
+            path=d.get("path"),
+            pattern=d.get("pattern", "*"),
+            events=d.get("events", ["created"]),
+            debounce_ms=d.get("debounce_ms", 1000),
+            cron=d.get("cron"),
+            event=d.get("event"),
+            filter=d.get("filter"),
+            payload_format=d.get("payload_format", "json"),
+        )
 
 
 @dataclass
@@ -144,6 +165,7 @@ class StepConfig:
     llm_instructions: str | None = None
     output_sample: str | None = None
     response_template: str | None = None
+    output_schema: str | None = None
     next_step: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -236,9 +258,65 @@ class StepConfig:
             out["output_sample"] = self.output_sample
         if self.response_template is not None:
             out["response_template"] = self.response_template
+        if self.output_schema is not None:
+            out["output_schema"] = self.output_schema
         if self.next_step is not None:
             out["next_step"] = self.next_step
         return out
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> StepConfig:
+        return cls(
+            id=str(d.get("id", "")),
+            name=str(d.get("name", "")),
+            type=StepType(d.get("type", "tool_call")),
+            slug=d.get("slug"),
+            tool=d.get("tool"),
+            input=d.get("input"),
+            prompt=d.get("prompt"),
+            model=d.get("model"),
+            background=bool(d.get("background", False)),
+            max_turns=int(d.get("max_turns", 8)),
+            mcp_server=d.get("mcp_server"),
+            mcp_tool=d.get("mcp_tool"),
+            url=d.get("url"),
+            method=str(d.get("method", "GET")),
+            headers=d.get("headers"),
+            body=d.get("body"),
+            auth_type=str(d.get("auth_type", "none")),
+            auth_credential=d.get("auth_credential"),
+            auth_username=d.get("auth_username"),
+            auth_password_credential=d.get("auth_password_credential"),
+            auth_header_name=d.get("auth_header_name"),
+            auth_prefix=str(d.get("auth_prefix", "Bearer")),
+            auth_query_name=d.get("auth_query_name"),
+            auth_location=str(d.get("auth_location", "header")),
+            custom_headers=d.get("custom_headers"),
+            expression=d.get("expression"),
+            then_step=d.get("then_step"),
+            else_step=d.get("else_step"),
+            template=d.get("template"),
+            output_format=str(d.get("output_format", "text")),
+            duration_seconds=int(d.get("duration_seconds", 0)),
+            condition=d.get("condition"),
+            on_error=str(d.get("on_error", "stop")),
+            retry_count=int(d.get("retry_count", 0)),
+            retry_delay_seconds=int(d.get("retry_delay_seconds", 5)),
+            action=d.get("action"),
+            board_path=d.get("board_path"),
+            lane_id=d.get("lane_id"),
+            card_id=d.get("card_id"),
+            table_path=d.get("table_path"),
+            row_data=d.get("row_data"),
+            row_id=d.get("row_id"),
+            where=d.get("where"),
+            query_sql=d.get("query_sql"),
+            llm_instructions=d.get("llm_instructions"),
+            output_sample=d.get("output_sample"),
+            response_template=d.get("response_template"),
+            output_schema=d.get("output_schema"),
+            next_step=d.get("next_step"),
+        )
 
 
 @dataclass

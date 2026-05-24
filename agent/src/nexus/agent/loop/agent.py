@@ -604,6 +604,20 @@ class Agent:
         if had_sink_attr:
             adapter._thinking_sink = thinking_q.put_nowait  # type: ignore[attr-defined]
 
+        # Populate the adapter's reasoning_content_map so that assistant
+        # messages from history survive the loom round-trip. Without this,
+        # loom's ChatMessage (which has no reasoning_content field) strips it
+        # and DeepSeek-R1 rejects the request.
+        if adapter is not None and hasattr(adapter, "_reasoning_content_map"):
+            rc_map: dict[tuple, str] = {}
+            for m in stripped_history:
+                if m.role == Role.ASSISTANT and m.reasoning_content:
+                    content_str = m.content if isinstance(m.content, str) else str(m.content or "")
+                    tc_ids = tuple(tc.id for tc in (m.tool_calls or []))
+                    fp = ("assistant", content_str[:500], tc_ids)
+                    rc_map[fp] = m.reasoning_content
+            adapter._reasoning_content_map = rc_map
+
         # Trace what we're handing to loom — pinpoints "iters=0" cases
         # (loom never calls the LLM) versus genuine empty-content cases
         # (LLM was called but returned ""). model_id here is what the
@@ -1336,6 +1350,8 @@ class Agent:
             # never inherit a closure pointing at this turn's queue.
             if had_sink_attr:
                 adapter._thinking_sink = None  # type: ignore[attr-defined]
+            if adapter is not None and hasattr(adapter, "_reasoning_content_map"):
+                adapter._reasoning_content_map = {}
             for t in (loom_task, q_task):
                 if t is not None and not t.done():
                     t.cancel()

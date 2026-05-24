@@ -134,6 +134,7 @@ export default function ConfigPanel({
   onChangeTrigger,
   onDelete,
   onClose,
+  onOpenEditor,
   wfPath,
 }: {
   mode: "step" | "trigger";
@@ -144,6 +145,7 @@ export default function ConfigPanel({
   onChangeTrigger: (patch: Partial<TriggerConfig>) => void;
   onDelete: () => void;
   onClose: () => void;
+  onOpenEditor?: () => void;
   wfPath?: string;
 }) {
   const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
@@ -364,15 +366,13 @@ export default function ConfigPanel({
           {isCondition ? (
             <div className="wf-field">
               <label>Expression</label>
-              <TemplateInput
-                value={step.expression || ""}
-                onChange={(val) => onChangeStep({ expression: val })}
-                steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                multiline
-                minLines={3}
-                placeholder="trigger.amount > 0"
-              />
+              <button
+                className="wf-open-editor-btn"
+                onClick={onOpenEditor}
+                title="Open expression editor"
+              >
+                ✏️ {step.expression ? step.expression.slice(0, 40) + (step.expression.length > 40 ? "…" : "") : "Edit expression…"}
+              </button>
             </div>
           ) : (
             <>
@@ -421,15 +421,13 @@ export default function ConfigPanel({
                 <>
                   <div className="wf-field">
                     <label>Prompt</label>
-                    <TemplateInput
-                      value={step.prompt || ""}
-                      onChange={(val) => onChangeStep({ prompt: val })}
-                      steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                      multiline
-                      minLines={4}
-                      placeholder="Analyze: {{steps.prev.result}}"
-                    />
+                    <button
+                      className="wf-open-editor-btn"
+                      onClick={onOpenEditor}
+                      title="Open prompt editor"
+                    >
+                      ✏️ {step.prompt ? step.prompt.slice(0, 40) + (step.prompt.length > 40 ? "…" : "") : "Edit prompt…"}
+                    </button>
                   </div>
                   <div className="wf-field">
                     <label>Model</label>
@@ -443,6 +441,32 @@ export default function ConfigPanel({
                       ))}
                     </select>
                   </div>
+                  <div className="wf-field">
+                    <label>Response Format</label>
+                    <select
+                      value={step.output_format || "text"}
+                      onChange={(e) => onChangeStep({ output_format: e.target.value })}
+                    >
+                      <option value="text">Text (free-form)</option>
+                      <option value="json">JSON (structured)</option>
+                    </select>
+                  </div>
+                  {(step.output_format === "json") && (
+                    <div className="wf-field">
+                      <label>Output Schema</label>
+                      <textarea
+                        value={step.output_schema || ""}
+                        onChange={(e) => onChangeStep({ output_schema: e.target.value || undefined })}
+                        placeholder='{"key": "value", "count": 0}'
+                        rows={4}
+                        style={{ fontFamily: "monospace", fontSize: 12 }}
+                      />
+                      <span className="wf-field-hint">
+                        JSON example showing expected structure. LLM will match this shape.
+                        Use &#123;&#123;templates&#125;&#125; for dynamic values.
+                      </span>
+                    </div>
+                  )}
                 </>
               )}
 
@@ -480,15 +504,13 @@ export default function ConfigPanel({
                       </div>
                       <div className="wf-field">
                         <label>Template</label>
-                        <TemplateInput
-                          value={step.template || ""}
-                          onChange={(val) => onChangeStep({ template: val })}
-                          steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                          multiline
-                          minLines={3}
-                          placeholder={"{{steps.prev.result}} processed by {{vars.name}}"}
-                        />
+                        <button
+                          className="wf-open-editor-btn"
+                          onClick={onOpenEditor}
+                          title="Open template editor"
+                        >
+                          ✏️ {step.template ? step.template.slice(0, 40) + (step.template.length > 40 ? "…" : "") : "Edit template…"}
+                        </button>
                       </div>
                     </>
                   )}
@@ -506,15 +528,13 @@ export default function ConfigPanel({
                       </div>
                       <div className="wf-field">
                         <label>Input</label>
-                        <TemplateInput
-                          value={step.template || ""}
-                          onChange={(val) => onChangeStep({ template: val })}
-                        steps={stepRefs}
-                        stepSchemas={stepSchemas}
-                        multiline
-                        minLines={3}
-                        placeholder="{{steps.prev.result}}"
-                        />
+                        <button
+                          className="wf-open-editor-btn"
+                          onClick={onOpenEditor}
+                          title="Open input editor"
+                        >
+                          ✏️ {step.template ? step.template.slice(0, 40) + (step.template.length > 40 ? "…" : "") : "Edit input…"}
+                        </button>
                       </div>
                       <div className="wf-field">
                         <label>Output Sample (optional)</label>
@@ -544,12 +564,13 @@ export default function ConfigPanel({
                     <>
                       <div className="wf-field">
                         <label>Script (Python)</label>
-                        <textarea
-                          value={step.template || ""}
-                          onChange={(e) => onChangeStep({ template: e.target.value })}
-                          placeholder={"# input is in `data` variable\nresult = data.upper()"}
-                          style={{ fontFamily: "var(--font-mono)", fontSize: 11, minHeight: 80 }}
-                        />
+                        <button
+                          className="wf-open-editor-btn"
+                          onClick={onOpenEditor}
+                          title="Open script editor"
+                        >
+                          ✏️ {step.template ? step.template.slice(0, 40) + (step.template.length > 40 ? "…" : "") : "Edit script…"}
+                        </button>
                       </div>
                       <ScriptGenerator
                         wfPath={wfPath}

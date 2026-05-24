@@ -32,7 +32,7 @@ function ConditionNodeComp({ data, id }: NodeProps) {
     [d],
   );
 
-  const onDoubleClick = useCallback(
+  const onClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
       d.onOpenInspector?.();
@@ -111,7 +111,7 @@ function ConditionNodeComp({ data, id }: NodeProps) {
   const branchLabel = d.conditionBranch === "then" ? "T" : d.conditionBranch === "else" ? "F" : null;
 
   return (
-    <div className="wf-cond-wrap" onDoubleClick={onDoubleClick}>
+    <div className="wf-cond-wrap" onClick={onClick}>
       <Handle type="target" position={Position.Top} className="wf-handle" id="target" />
       <div className={`wf-cond-diamond${d.selected ? " selected" : ""}`}>
         <div className="wf-cond-name">{d.stepName || "Condition"}</div>

@@ -17,6 +17,15 @@ from .message import _loom_to_nexus_message, _nexus_stop_to_loom
 log = logging.getLogger(__name__)
 
 
+def _msg_fingerprint(msg: lt.ChatMessage) -> tuple | None:
+    """Build a stable fingerprint for an assistant message for reasoning_content lookup."""
+    if msg.role != lt.Role.ASSISTANT:
+        return None
+    content_str = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    tc_ids = tuple(tc.id for tc in (msg.tool_calls or []))
+    return ("assistant", content_str[:500], tc_ids)
+
+
 class LoomProviderAdapter(LoomLLMProvider):
     """Wraps a Nexus LLMProvider to satisfy loom.llm.base.LLMProvider.
 
@@ -38,19 +47,15 @@ class LoomProviderAdapter(LoomLLMProvider):
         self._nexus = provider
         self._registry = provider_registry
         self._default_model = default_model
-        # Resolves the per-call max_tokens (per-model > global default > 0).
-        # 0 means "don't pass max_tokens" — providers handle that as either
-        # omitting the field (OpenAI-compat) or a legacy fallback (Anthropic).
         self._max_tokens_for = max_tokens_for
-        # Optional side-channel for thinking-model chain-of-thought. The Nexus
-        # Agent sets this per-turn; the adapter funnels reasoning chunks here
-        # instead of yielding them to loom (loom's ContentDeltaEvent path
-        # appends to assistant content and would persist the CoT to history).
         self._thinking_sink: Callable[[str], None] | None = None
-        # Accumulated reasoning_content from the most recent provider call.
-        # Reset at the start of each chat/chat_stream. The agent loop reads
-        # this after each LLM iteration to stamp onto assistant messages.
         self._last_reasoning_content: str | None = None
+        # Side-channel for reasoning_content survival. The agent loop populates
+        # this with fingerprints of assistant messages that carry reasoning,
+        # and the adapter re-attaches it when converting loom→nexus so
+        # thinking-model APIs (DeepSeek-R1, etc.) see reasoning_content on
+        # every assistant turn in the message history.
+        self._reasoning_content_map: dict[tuple, str] = {}
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
         """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name).
@@ -83,6 +88,22 @@ class LoomProviderAdapter(LoomLLMProvider):
             resolved = getattr(self._nexus, "_model", None) or None
         return self._nexus, resolved
 
+    def _restore_reasoning(self, loom_msgs: list[lt.ChatMessage]) -> list:
+        from nexus.agent.llm import ChatMessage as NexusChatMessage
+        nexus_messages = [_loom_to_nexus_message(m) for m in loom_msgs]
+        if not self._reasoning_content_map:
+            return nexus_messages
+        out: list[NexusChatMessage] = []
+        for loom_m, nexus_m in zip(loom_msgs, nexus_messages):
+            fp = _msg_fingerprint(loom_m)
+            if fp and fp in self._reasoning_content_map:
+                out.append(nexus_m.model_copy(
+                    update={"reasoning_content": self._reasoning_content_map[fp]}
+                ))
+            else:
+                out.append(nexus_m)
+        return out
+
     async def chat(
         self,
         messages: list[lt.ChatMessage],
@@ -90,7 +111,7 @@ class LoomProviderAdapter(LoomLLMProvider):
         tools: list[lt.ToolSpec] | None = None,
         model: str | None = None,
     ) -> lt.ChatResponse:
-        nexus_messages = [_loom_to_nexus_message(m) for m in messages]
+        nexus_messages = self._restore_reasoning(messages)
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
         log.warning(
@@ -129,13 +150,13 @@ class LoomProviderAdapter(LoomLLMProvider):
         tools: list[lt.ToolSpec] | None = None,
         model: str | None = None,
     ) -> AsyncIterator[lt.StreamEvent]:
-        nexus_messages = [_loom_to_nexus_message(m) for m in messages]
-        # Nexus streaming yields dicts; we translate to loom Pydantic events.
+        nexus_messages = self._restore_reasoning(messages)
         # Collect tool call deltas so we can emit a stop event at the end.
         finish_reason: str = "stop"
         tool_parts: dict[str, dict[str, Any]] = {}
         self._last_reasoning_content = None
         _accumulated_reasoning: list[str] = []
+        _accumulated_content: list[str] = []
 
         provider, upstream = self._resolve(model)
         max_toks = self._max_tokens_for(model) if self._max_tokens_for else 0
@@ -173,7 +194,10 @@ class LoomProviderAdapter(LoomLLMProvider):
                 continue
 
             if etype == "delta":
-                yield lt.ContentDeltaEvent(delta=ev.get("text", ""))
+                _delta_text = ev.get("text", "")
+                if _delta_text:
+                    _accumulated_content.append(_delta_text)
+                yield lt.ContentDeltaEvent(delta=_delta_text)
 
             elif etype == "tool_call_start":
                 tc_id = ev.get("id", "")
@@ -260,6 +284,25 @@ class LoomProviderAdapter(LoomLLMProvider):
                 except ValueError:
                     loom_stop = lt.StopReason.UNKNOWN
                 yield lt.StopEvent(stop_reason=loom_stop)
+
+                # Self-register the fingerprint of the assistant message this
+                # call produced (content + tool_call IDs). When loom's iteration
+                # loop appends the assembled ChatMessage to all_messages and
+                # calls chat_stream again, the fingerprint will match and
+                # _restore_reasoning will re-attach reasoning_content.
+                if self._last_reasoning_content:
+                    _content_text = "".join(_accumulated_content) or None
+                    _tc_ids = tuple(
+                        tc_dict.get("id", f"tc_{i}")
+                        for i, tc_dict in enumerate(finish_tool_calls)
+                    )
+                    _fp = (
+                        "assistant",
+                        (_content_text or "")[:500],
+                        _tc_ids,
+                    )
+                    self._reasoning_content_map[_fp] = self._last_reasoning_content
+                _accumulated_content.clear()
 
         # Post-iteration summary — fires whether the provider yielded
         # one event or zero. A zero-event stream means the upstream
