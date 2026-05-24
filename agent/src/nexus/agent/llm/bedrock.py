@@ -73,11 +73,14 @@ def _encode_msg_bedrock(m: ChatMessage) -> dict[str, Any]:
 
 
 def _encode_tool_bedrock(t: ToolSpec) -> dict[str, Any]:
+    params = dict(t.parameters)
+    if params.get("type") == "object" and "additionalProperties" not in params:
+        params["additionalProperties"] = False
     return {
         "toolSpec": {
             "name": t.name,
             "description": t.description,
-            "inputSchema": {"json": t.parameters},
+            "inputSchema": {"json": params},
         }
     }
 

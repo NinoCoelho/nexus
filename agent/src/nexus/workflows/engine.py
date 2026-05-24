@@ -150,20 +150,26 @@ async def _single_shot_llm(
     store.mark_hidden(session.id)
     final_text = ""
     final_messages: list[Any] = []
-    async for event in agent.run_turn_stream(
-        prompt,
-        history=history,
-        session_id=session.id,
-        model_id=model_id,
-    ):
-        etype = event.get("type")
-        if etype == "delta":
-            final_text += event.get("text", "")
-        elif etype == "error":
-            raise RuntimeError(event.get("message", "LLM call failed"))
-        elif etype == "done":
-            raw_msgs = event.get("messages") or []
-            final_messages = raw_msgs
+
+    from ..agent.context import CURRENT_SESSION_ID
+    _sid_token = CURRENT_SESSION_ID.set(session.id)
+    try:
+        async for event in agent.run_turn_stream(
+            prompt,
+            history=history,
+            session_id=session.id,
+            model_id=model_id,
+        ):
+            etype = event.get("type")
+            if etype == "delta":
+                final_text += event.get("text", "")
+            elif etype == "error":
+                raise RuntimeError(event.get("message", "LLM call failed"))
+            elif etype == "done":
+                raw_msgs = event.get("messages") or []
+                final_messages = raw_msgs
+    finally:
+        CURRENT_SESSION_ID.reset(_sid_token)
 
     return final_text, final_messages
 
@@ -261,6 +267,7 @@ class WorkflowEngine:
         step_outputs: dict[str, Any] = {}
         steps_by_id = {s.id: s for s in wf.steps}
         step_order = [s.id for s in wf.steps]
+        slug_map = {s.slug: s.id for s in wf.steps if s.slug}
         idx = 0
 
         while idx < len(step_order):
@@ -270,7 +277,7 @@ class WorkflowEngine:
                 idx += 1
                 continue
 
-            ctx = build_context(run.trigger_payload, step_outputs, wf.variables)
+            ctx = build_context(run.trigger_payload, step_outputs, wf.variables, slug_map)
 
             if step.condition is not None:
                 if not evaluate_condition(step.condition, ctx):
@@ -451,6 +458,7 @@ class WorkflowEngine:
 
         data = ctx.get("steps", {})
         safe_builtins = {
+            "__import__": __import__,
             "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
             "enumerate": enumerate, "filter": filter, "float": float, "int": int,
             "isinstance": isinstance, "len": len, "list": list, "map": map,
@@ -458,9 +466,10 @@ class WorkflowEngine:
             "round": round, "set": set, "sorted": sorted, "str": str, "sum": sum,
             "tuple": tuple, "type": type, "zip": zip, "True": True, "False": False,
         }
-        local_vars: dict[str, Any] = {"data": data, "json": json, "result": None}
+        global_ns: dict[str, Any] = {"__builtins__": safe_builtins, "json": json, "re": re}
+        local_vars: dict[str, Any] = {"data": data, "result": None}
         try:
-            exec(template, {"__builtins__": safe_builtins}, local_vars)
+            exec(template, global_ns, local_vars)
             return {"result": local_vars.get("result")}
         except Exception as exc:
             raise ValueError(f"script error in step '{step.name}': {exc}") from exc
@@ -520,25 +529,37 @@ class WorkflowEngine:
             except Exception:
                 pass
 
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "workflow agent_session: step=%r model=%r session=%s",
+            step.name, resolved_model, session_id,
+        )
+
         final_text = ""
         final_messages: list[NxChatMessage] = []
-        async for event in agent.run_turn_stream(
-            agent_prompt,
-            history=[],
-            session_id=session_id,
-            model_id=resolved_model,
-        ):
-            etype = event.get("type")
-            if etype == "delta":
-                final_text += event.get("text", "")
-            elif etype == "error":
-                raise RuntimeError(event.get("message", "agent error"))
-            elif etype == "done":
-                raw_msgs = event.get("messages") or []
-                final_messages = [
-                    m if isinstance(m, NxChatMessage) else NxChatMessage(**m)
-                    for m in raw_msgs
-                ]
+
+        from ..agent.context import CURRENT_SESSION_ID
+        _sid_token = CURRENT_SESSION_ID.set(session_id)
+        try:
+            async for event in agent.run_turn_stream(
+                agent_prompt,
+                history=[],
+                session_id=session_id,
+                model_id=resolved_model,
+            ):
+                etype = event.get("type")
+                if etype == "delta":
+                    final_text += event.get("text", "")
+                elif etype == "error":
+                    raise RuntimeError(event.get("message", "agent error"))
+                elif etype == "done":
+                    raw_msgs = event.get("messages") or []
+                    final_messages = [
+                        m if isinstance(m, NxChatMessage) else NxChatMessage(**m)
+                        for m in raw_msgs
+                        ]
+        finally:
+            CURRENT_SESSION_ID.reset(_sid_token)
 
         if final_messages:
             store.replace_history(session_id, final_messages)
@@ -750,6 +771,7 @@ class WorkflowEngine:
         step_schemas: dict[str, dict] = {}
         steps_by_id = {s.id: s for s in wf.steps}
         step_order = [s.id for s in wf.steps]
+        slug_map = {s.slug: s.id for s in wf.steps if s.slug}
         idx = 0
 
         while idx < len(step_order):
@@ -759,7 +781,7 @@ class WorkflowEngine:
                 idx += 1
                 continue
 
-            ctx = build_context(run.trigger_payload, step_outputs, wf.variables)
+            ctx = build_context(run.trigger_payload, step_outputs, wf.variables, slug_map)
 
             _publish_debug(run.id, "step_starting", {
                 "step_id": step.id,
@@ -864,7 +886,8 @@ class WorkflowEngine:
             if sr.output is not None:
                 outputs[sr.step_id] = sr.output
 
-        ctx = build_context(run.trigger_payload, outputs, wf.variables)
+        slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+        ctx = build_context(run.trigger_payload, outputs, wf.variables, slug_map)
         step_run = await self._execute_step(step, ctx, run_id)
         self._store.create_step_run(step_run)
 
@@ -942,7 +965,8 @@ class WorkflowEngine:
         if step is None:
             raise ValueError(f"step {step_id} not found")
 
-        ctx = build_context(trigger_payload, step_outputs, wf_def.variables)
+        slug_map = {s.slug: s.id for s in wf_def.steps if s.slug}
+        ctx = build_context(trigger_payload, step_outputs, wf_def.variables, slug_map)
         step_run = await self._execute_step(step, ctx, "test")
 
         result: dict[str, Any] = {
@@ -1049,7 +1073,8 @@ class WorkflowEngine:
                 if sr.output is not None and sr.status == StepRunStatus.completed:
                     outputs[sr.step_id] = sr.output
 
-            ctx = build_context(run.trigger_payload, outputs, wf.variables)
+            slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+            ctx = build_context(run.trigger_payload, outputs, wf.variables, slug_map)
             step_run = await self._execute_step(step, ctx, run_id)
             self._store.create_step_run(step_run)
 
@@ -1097,10 +1122,12 @@ class WorkflowEngine:
         if not self._is_step_reachable(step_id, steps, cond_branches, outputs):
             return None, {}
 
+        slug_map = {s.slug: s.id for s in steps if s.slug}
         ctx = build_context(
             session["trigger_payload"],
             outputs,
             session.get("variables", {}),
+            slug_map,
         )
 
         _publish_interactive(run_id, "step_starting", {
@@ -1176,10 +1203,12 @@ class WorkflowEngine:
             if step_id in outputs:
                 continue
 
+            slug_map = {s.slug: s.id for s in wf.steps if s.slug}
             ctx = build_context(
                 session["trigger_payload"] if session else run.trigger_payload,
                 outputs,
                 session.get("variables", {}) if session else wf.variables,
+                slug_map,
             )
 
             if step.condition is not None:
@@ -1424,6 +1453,8 @@ class WorkflowEngine:
         if step_id == steps[0].id:
             return True
 
+        step_index = next((i for i, s in enumerate(steps) if s.id == step_id), -1)
+
         for s in steps:
             if s.next_step == step_id or s.then_step == step_id or s.else_step == step_id:
                 if s.type == StepType.condition:
@@ -1436,6 +1467,24 @@ class WorkflowEngine:
                         return False
                     continue
                 if s.id in outputs:
+                    return True
+
+        if step_index > 0:
+            prev = steps[step_index - 1]
+            if prev.id in outputs:
+                if prev.type == StepType.condition:
+                    branch = cond_branches.get(prev.id)
+                    if branch == "then":
+                        target = prev.then_step
+                    elif branch == "else":
+                        target = prev.else_step
+                    else:
+                        target = None
+                    if target and target != step_id:
+                        return False
+                    if target == step_id:
+                        return True
+                if not prev.next_step:
                     return True
 
         return False

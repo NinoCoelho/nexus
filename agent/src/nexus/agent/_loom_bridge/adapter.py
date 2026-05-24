@@ -153,7 +153,8 @@ class LoomProviderAdapter(LoomLLMProvider):
         nexus_messages = self._restore_reasoning(messages)
         # Collect tool call deltas so we can emit a stop event at the end.
         finish_reason: str = "stop"
-        tool_parts: dict[str, dict[str, Any]] = {}
+        tool_parts: dict[int, dict[str, Any]] = {}
+        idx_to_tc_id: dict[int, str] = {}
         self._last_reasoning_content = None
         _accumulated_reasoning: list[str] = []
         _accumulated_content: list[str] = []
@@ -202,9 +203,9 @@ class LoomProviderAdapter(LoomLLMProvider):
             elif etype == "tool_call_start":
                 tc_id = ev.get("id", "")
                 tc_name = ev.get("name", "")
-                tool_parts[tc_id] = {"name": tc_name, "args": ""}
-                # Emit a tool_call_delta with index so loom.Agent assembles it
-                idx = len(tool_parts) - 1
+                idx = len(tool_parts)
+                idx_to_tc_id[idx] = tc_id
+                tool_parts[idx] = {"name": tc_name, "args": ""}
                 yield lt.ToolCallDeltaEvent(
                     index=idx, id=tc_id, name=tc_name, arguments_delta=None
                 )
@@ -212,9 +213,18 @@ class LoomProviderAdapter(LoomLLMProvider):
             elif etype == "tool_call_delta":
                 tc_id = ev.get("id", "")
                 args_delta = ev.get("args_delta", "")
-                if tc_id in tool_parts:
-                    tool_parts[tc_id]["args"] += args_delta
-                    # Buffer raw deltas; validated complete args emitted at finish
+                # Find the index for this tc_id; providers that include the id
+                # on every delta can match directly, otherwise we fall back to
+                # the last-open tool part.
+                idx = None
+                for i, tid in idx_to_tc_id.items():
+                    if tid == tc_id:
+                        idx = i
+                        break
+                if idx is None and tool_parts:
+                    idx = max(tool_parts.keys())
+                if idx is not None and args_delta:
+                    tool_parts[idx]["args"] += args_delta
 
             elif etype == "tool_call_end":
                 pass  # loom assembles from deltas; no explicit end event in loom
@@ -245,22 +255,27 @@ class LoomProviderAdapter(LoomLLMProvider):
                         tc_args_str = json.dumps(tc_args)
                     else:
                         tc_args_str = str(tc_args)
-                    if tc_id not in tool_parts:
+                    # Find existing index by tc_id, or allocate new
+                    idx = None
+                    for i, tid in idx_to_tc_id.items():
+                        if tid == tc_id:
+                            idx = i
+                            break
+                    if idx is None:
                         idx = len(tool_parts)
+                        idx_to_tc_id[idx] = tc_id
                         yield lt.ToolCallDeltaEvent(
                             index=idx, id=tc_id, name=tc_name, arguments_delta=None
                         )
-                        tool_parts[tc_id] = {"name": tc_name, "args": tc_args_str}
-                    else:
-                        idx = list(tool_parts.keys()).index(tc_id)
+                        tool_parts[idx] = {"name": tc_name, "args": tc_args_str}
                     yield lt.ToolCallDeltaEvent(
                         index=idx, id=tc_id, name=None, arguments_delta=tc_args_str
                     )
                 # Handle tool calls that were streamed as deltas but absent
                 # from the finish event — validate raw accumulated args.
-                for tc_id, parts in tool_parts.items():
+                for idx, parts in tool_parts.items():
+                    tc_id = idx_to_tc_id.get(idx, f"tc_{idx}")
                     if tc_id not in finish_tc_ids:
-                        idx = list(tool_parts.keys()).index(tc_id)
                         raw = parts["args"]
                         try:
                             json.loads(raw)

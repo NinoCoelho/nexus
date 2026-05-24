@@ -133,9 +133,12 @@ def _encode_msg(m: ChatMessage) -> dict[str, Any]:
 
 
 def _encode_tool(t: ToolSpec) -> dict[str, Any]:
+    params = dict(t.parameters)
+    if params.get("type") == "object" and "additionalProperties" not in params:
+        params["additionalProperties"] = False
     return {
         "type": "function",
-        "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
+        "function": {"name": t.name, "description": t.description, "parameters": params},
     }
 
 
@@ -379,8 +382,10 @@ class OpenAIProvider(LLMProvider):
                 # Aggregated state for the finish event
                 full_text = ""
                 full_reasoning = ""
-                # id -> {name, args_buf}
-                tool_bufs: dict[str, dict[str, Any]] = {}
+                # index -> {name, args_buf}; keyed by index (not id) because
+                # some providers (DeepSeek) omit `id` on argument-only deltas.
+                tool_bufs: dict[int, dict[str, Any]] = {}
+                idx_to_id: dict[int, str] = {}
 
                 # Many OpenAI-compat providers emit the `usage` object only
                 # on the final SSE frame after all choice deltas — we stash
@@ -437,23 +442,28 @@ class OpenAIProvider(LLMProvider):
                     # Tool call deltas
                     for tc_delta in delta.get("tool_calls") or []:
                         idx = tc_delta.get("index", 0)
-                        tc_id = tc_delta.get("id", f"tc_{idx}")
                         fn = tc_delta.get("function", {})
                         tc_name = fn.get("name", "")
                         args_delta = fn.get("arguments", "")
 
-                        if tc_id not in tool_bufs and tc_name:
-                            tool_bufs[tc_id] = {"name": tc_name, "args_buf": ""}
+                        if idx not in tool_bufs and tc_name:
+                            tc_id = tc_delta.get("id", f"tc_{idx}")
+                            idx_to_id[idx] = tc_id
+                            tool_bufs[idx] = {"name": tc_name, "args_buf": ""}
                             yield {"type": "tool_call_start", "id": tc_id, "name": tc_name}
 
-                        if args_delta and tc_id in tool_bufs:
-                            tool_bufs[tc_id]["args_buf"] += args_delta
+                        if args_delta and idx in tool_bufs:
+                            tool_bufs[idx]["args_buf"] += args_delta
+                            tc_id = idx_to_id.get(idx, f"tc_{idx}")
                             yield {"type": "tool_call_delta", "id": tc_id, "args_delta": args_delta}
+                        elif tc_delta.get("id") and idx in tool_bufs:
+                            idx_to_id[idx] = tc_delta["id"]
 
                     if finish_reason is not None:
                         # Emit tool_call_end for each accumulated tool call
                         tool_calls: list[dict[str, Any]] = []
-                        for tc_id, buf in tool_bufs.items():
+                        for idx, buf in tool_bufs.items():
+                            tc_id = idx_to_id.get(idx, f"tc_{idx}")
                             yield {"type": "tool_call_end", "id": tc_id}
                             try:
                                 args = json.loads(buf["args_buf"] or "{}")

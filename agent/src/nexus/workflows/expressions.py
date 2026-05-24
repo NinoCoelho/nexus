@@ -53,10 +53,16 @@ def build_context(
     trigger_payload: dict[str, Any],
     step_outputs: dict[str, Any],
     variables: dict[str, str],
+    slug_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    steps = dict(step_outputs)
+    if slug_map:
+        for slug, step_id in slug_map.items():
+            if step_id in steps and slug not in steps:
+                steps[slug] = steps[step_id]
     return {
         "trigger": trigger_payload,
-        "steps": step_outputs,
+        "steps": steps,
         "vars": variables,
     }
 

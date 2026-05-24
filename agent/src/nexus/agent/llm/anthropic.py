@@ -91,7 +91,10 @@ def _encode_msg_anthropic(m: ChatMessage) -> dict[str, Any]:
 
 
 def _encode_tool_anthropic(t: ToolSpec) -> dict[str, Any]:
-    return {"name": t.name, "description": t.description, "input_schema": t.parameters}
+    params = dict(t.parameters)
+    if params.get("type") == "object" and "additionalProperties" not in params:
+        params["additionalProperties"] = False
+    return {"name": t.name, "description": t.description, "input_schema": params}
 
 
 def _decode_anthropic(resp: Any) -> ChatResponse:
