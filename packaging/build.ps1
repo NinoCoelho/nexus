@@ -65,8 +65,8 @@ if (-not (Test-Path $LoomDir)) {
 }
 
 # Demo-model triple must be all-or-nothing.
-$demoSet = @($DemoUrl, $DemoKey, $DemoModel) | Where-Object { $_ }
-if ($demoSet.Count -ne 0 -and $demoSet.Count -ne 3) {
+$demoSet = @($DemoUrl, $DemoKey, $DemoModel).Where({ $_ -ne '' })
+if ($demoSet.Count -gt 0 -and $demoSet.Count -ne 3) {
     throw '-DemoUrl, -DemoKey, -DemoModel must all be set together (or all unset)'
 }
 
