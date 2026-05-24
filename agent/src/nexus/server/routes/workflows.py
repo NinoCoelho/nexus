@@ -15,7 +15,6 @@ from ...workflows import parser
 from ...workflows.engine import WorkflowEngine
 from ...workflows.models import (
     StepConfig,
-    StepType,
     TriggerConfig,
     TriggerType,
     WorkflowDef,
@@ -197,6 +196,15 @@ async def get_workflow_samples(path: str) -> dict:
     }
 
 
+@router.get("/workflows/{path:path}/interactive-run/{run_id}")
+async def get_interactive_state(path: str, run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    state = engine.interactive_get_state(run_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="interactive run not found")
+    return state
+
+
 @router.get("/workflows/{path:path}")
 async def get_workflow(path: str, request: Request) -> dict:
     from ... import vault as _vault
@@ -253,76 +261,11 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
     if body.enabled is not None:
         wf.enabled = body.enabled
     if body.triggers is not None:
-        wf.triggers = [
-            TriggerConfig(
-                id=t.get("id", ""),
-                type=TriggerType(t.get("type", "manual")),
-                token=t.get("token"),
-                cron=t.get("cron"),
-                path=t.get("path"),
-                pattern=t.get("pattern", "*"),
-                events=t.get("events", ["created"]),
-                debounce_ms=t.get("debounce_ms", 1000),
-                event=t.get("event"),
-                filter=t.get("filter"),
-            )
-            for t in body.triggers
-        ]
+        wf.triggers = [TriggerConfig.from_dict(t) for t in body.triggers]
     if body.variables is not None:
         wf.variables = body.variables
     if body.steps is not None:
-        wf.steps = [
-            StepConfig(
-                id=s.get("id", ""),
-                name=s.get("name", ""),
-                type=StepType(s.get("type", "tool_call")),
-                tool=s.get("tool"),
-                input=s.get("input"),
-                prompt=s.get("prompt"),
-                model=s.get("model"),
-                background=s.get("background", False),
-                max_turns=s.get("max_turns", 8),
-                condition=s.get("condition"),
-                on_error=s.get("on_error", "stop"),
-                retry_count=s.get("retry_count", 0),
-                retry_delay_seconds=s.get("retry_delay_seconds", 5),
-                url=s.get("url"),
-                method=s.get("method", "GET"),
-                headers=s.get("headers"),
-                body=s.get("body"),
-                expression=s.get("expression"),
-                then_step=s.get("then_step"),
-                else_step=s.get("else_step"),
-                template=s.get("template"),
-                output_format=s.get("output_format", "text"),
-                duration_seconds=s.get("duration_seconds", 0),
-                mcp_server=s.get("mcp_server"),
-                mcp_tool=s.get("mcp_tool"),
-                action=s.get("action"),
-                board_path=s.get("board_path"),
-                lane_id=s.get("lane_id"),
-                card_id=s.get("card_id"),
-                table_path=s.get("table_path"),
-                row_data=s.get("row_data"),
-                row_id=s.get("row_id"),
-                where=s.get("where"),
-                query_sql=s.get("query_sql"),
-                llm_instructions=s.get("llm_instructions"),
-                output_sample=s.get("output_sample"),
-                response_template=s.get("response_template"),
-                auth_type=s.get("auth_type", "none"),
-                auth_credential=s.get("auth_credential"),
-                auth_username=s.get("auth_username"),
-                auth_password_credential=s.get("auth_password_credential"),
-                auth_header_name=s.get("auth_header_name"),
-                auth_prefix=s.get("auth_prefix", "Bearer"),
-                auth_query_name=s.get("auth_query_name"),
-                auth_location=s.get("auth_location", "header"),
-                custom_headers=s.get("custom_headers"),
-                next_step=s.get("next_step"),
-            )
-            for s in body.steps
-        ]
+        wf.steps = [StepConfig.from_dict(s) for s in body.steps]
 
     md = parser.serialize(wf, original_content=raw)
     _vault.write_file(path, md)
@@ -602,6 +545,8 @@ class InteractiveStartBody(BaseModel):
     payload: dict = {}
     mode: str = "trigger"  # "trigger" (execute trigger only) or "all" (execute all steps)
     seed_from_samples: bool = False
+    payload_format: str = "json"  # "json" | "plain" | "xml"
+    payload_raw: str = ""  # raw payload text when format is not json
 
 
 class InteractiveExecuteStepBody(BaseModel):
@@ -621,9 +566,16 @@ async def start_interactive_run(path: str, body: InteractiveStartBody, request: 
     wf = parser.parse(raw)
 
     engine = _get_engine(request)
+    from ...workflows.engine import _convert_trigger_payload
+
+    if body.payload_raw and body.payload_format != "json":
+        trigger_payload = _convert_trigger_payload(body.payload_raw, body.payload_format)
+    else:
+        trigger_payload = body.payload
+
     run = await engine.start_interactive(
         workflow_path=path,
-        trigger_payload=body.payload,
+        trigger_payload=trigger_payload,
         wf_def=wf,
         seed_from_samples=body.seed_from_samples,
     )
@@ -639,22 +591,31 @@ async def start_interactive_run(path: str, body: InteractiveStartBody, request: 
     }
 
 
-@router.get("/workflows/{path:path}/interactive-run/{run_id}")
-async def get_interactive_state(path: str, run_id: str, request: Request) -> dict:
-    engine = _get_engine(request)
-    state = engine.interactive_get_state(run_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="interactive run not found")
-    return state
+class ExecuteStepBody(BaseModel):
+    step_config: dict | None = None
 
 
 @router.post("/workflows/{path:path}/interactive-run/{run_id}/execute-step/{step_id}")
-async def interactive_execute_step(path: str, run_id: str, step_id: str, request: Request) -> dict:
+async def interactive_execute_step(
+    path: str, run_id: str, step_id: str, body: ExecuteStepBody, request: Request,
+) -> dict:
+    step_override = None
+    if body.step_config:
+        try:
+            step_override = StepConfig.from_dict(body.step_config)
+            step_override.id = step_id
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("step_override parse failed: %s", exc)
+            pass
     engine = _get_engine(request)
-    sr = await engine.interactive_execute_step(run_id, step_id)
+    sr, cond_branches = await engine.interactive_execute_step(run_id, step_id, step_override=step_override)
     if sr is None:
         raise HTTPException(status_code=404, detail="step not found or not reachable")
-    return sr.to_dict()
+    result = sr.to_dict()
+    if cond_branches:
+        result["condition_branches"] = cond_branches
+    return result
 
 
 @router.post("/workflows/{path:path}/interactive-run/{run_id}/execute-all")
@@ -740,22 +701,8 @@ class GenerateScriptBody(BaseModel):
 @router.post("/workflows/{path:path}/generate-script")
 async def generate_script(path: str, body: GenerateScriptBody, request: Request) -> dict:
     import json as _json
-    from ... import vault as _vault
-    from ...agent.llm import ChatMessage as LLMMsg, Role
-
-    try:
-        content = _vault.read_file(path)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="file not found")
 
     engine = _get_engine(request)
-    agent = getattr(engine, "_agent", None)
-    if agent is None:
-        raise HTTPException(status_code=503, detail="agent not available")
-
-    model_id = getattr(agent, "_chosen_model", None)
-    resolved_provider, upstream_model = agent._resolve_provider(model_id)
-    chat_model = upstream_model or model_id
 
     input_desc = ""
     if body.input_schema:
@@ -763,27 +710,22 @@ async def generate_script(path: str, body: GenerateScriptBody, request: Request)
     if body.trigger_keys:
         input_desc += f"\nTrigger payload keys: {', '.join(body.trigger_keys)} (accessible via data dict)\n"
 
-    system_msg = LLMMsg(
-        role=Role.SYSTEM,
-        content=(
-            "You are a Python code generator. Generate a short Python script that transforms workflow data.\n"
-            "Rules:\n"
-            "- The script runs inside exec() with a sandboxed namespace.\n"
-            "- Available variables: `data` (dict with all step outputs, keyed by slug), `json` module.\n"
-            "- You MUST set the `result` variable to the output value.\n"
-            "- No imports, no file I/O, no network access. Only pure Python + json module.\n"
-            "- Output ONLY the Python code. No markdown fences, no explanation.\n"
-            "- Keep it concise. Prefer one-liners when possible.\n"
-        ),
+    system_prompt = (
+        "You are a Python code generator. Generate a short Python script that transforms workflow data.\n"
+        "Rules:\n"
+        "- The script runs inside exec() with a sandboxed namespace.\n"
+        "- Available variables: `data` (dict with all step outputs, keyed by slug), `json` module.\n"
+        "- You MUST set the `result` variable to the output value.\n"
+        "- No imports, no file I/O, no network access. Only pure Python + json module.\n"
+        "- Output ONLY the Python code. No markdown fences, no explanation.\n"
+        "- Keep it concise. Prefer one-liners when possible.\n"
     )
-    user_msg = LLMMsg(
-        role=Role.USER,
-        content=f"{body.description}{input_desc}\n\nGenerate the Python script:",
-    )
+    user_prompt = f"{body.description}{input_desc}\n\nGenerate the Python script:"
 
     try:
-        resp = await resolved_provider.chat([system_msg, user_msg], model=chat_model, max_tokens=1024)
-        code = resp.content or ""
+        code = await engine.single_shot_llm(
+            user_prompt, system_prompt=system_prompt,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

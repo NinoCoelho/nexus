@@ -11,6 +11,7 @@ import asyncio
 import datetime
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -27,7 +28,7 @@ from .models import (
     WorkflowRun,
 )
 from .store import WorkflowStore
-from .schema import infer_schema, truncate_sample, save_schema, load_schema, save_step_sample, load_step_samples, save_trigger_sample, load_trigger_sample
+from .schema import infer_schema, truncate_sample, save_schema, save_step_sample, load_step_samples, save_trigger_sample
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,129 @@ def _publish_debug(run_id: str, kind: str, payload: dict[str, Any]) -> None:
         pass
 
 
+def _convert_trigger_payload(raw: str, fmt: str) -> dict[str, Any]:
+    if fmt == "json":
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {"data": parsed}
+        except (json.JSONDecodeError, ValueError):
+            return {"request": raw}
+    elif fmt == "xml":
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(raw)
+            def _xml_to_dict(el: ET.Element) -> dict[str, Any]:
+                d: dict[str, Any] = {}
+                for child in el:
+                    children = list(child)
+                    if children:
+                        d[child.tag] = _xml_to_dict(child)
+                    else:
+                        d[child.tag] = child.text or ""
+                return d
+            return {root.tag: _xml_to_dict(root)}
+        except ET.ParseError:
+            return {"request": raw}
+    else:  # plain
+        return {"request": raw}
+
+
+def _build_json_instruction(schema: str | None = None) -> str:
+    parts = [
+        "You MUST respond with ONLY valid JSON — no markdown fences, "
+        "no commentary, no explanation. Output a single JSON object "
+        "and nothing else.",
+    ]
+    if schema:
+        parts.append(
+            f"\nRespond with a JSON object matching this structure:\n"
+            f"{schema}\n"
+            f"Replace placeholder values with actual data."
+        )
+    return "".join(parts) + "\n\n"
+
+
+def _parse_llm_output(text: str, force_json: bool) -> Any:
+    stripped = text.strip()
+    fence_match = re.match(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", stripped, re.DOTALL)
+    if fence_match:
+        stripped = fence_match.group(1).strip()
+
+    if force_json:
+        try:
+            return json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            return stripped
+    else:
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                return json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return None
+
+
+async def _single_shot_llm(
+    engine: WorkflowEngine,
+    prompt: str,
+    *,
+    system_prompt: str | None = None,
+    model_id: str | None = None,
+) -> tuple[str, list[Any]]:
+    """Run a single-shot LLM call through the full agent → loom → provider chain.
+
+    Creates a hidden session, sends the prompt (with an optional system message
+    prepended as history), and collects the text response.  All model-quirk
+    handling (reasoning_content, Gemini strict-compat, anti-repeat guard,
+    overflow checks, error classification) applies because the request goes
+    through the same path as a regular chat turn.
+
+    Returns ``(text, messages)`` where *messages* is the full message history
+    from the ``done`` event (for callers that need to persist it).
+    """
+    from ..agent.loop.agent import Agent
+    from ..server.session_store.store import SessionStore
+    from ..agent.llm import ChatMessage, Role
+
+    agent: Agent | None = getattr(engine, "_agent", None)
+    store: SessionStore | None = getattr(engine, "_sessions", None)
+    if agent is None or store is None:
+        raise RuntimeError("agent not available")
+
+    if not model_id:
+        try:
+            from ..config_file import load as load_config
+            cfg = load_config()
+            model_id = getattr(cfg.agent, "default_model", None) or None
+        except Exception:
+            pass
+
+    history: list[ChatMessage] = []
+    if system_prompt:
+        history.append(ChatMessage(role=Role.SYSTEM, content=system_prompt))
+
+    session = store.create()
+    store.mark_hidden(session.id)
+    final_text = ""
+    final_messages: list[Any] = []
+    async for event in agent.run_turn_stream(
+        prompt,
+        history=history,
+        session_id=session.id,
+        model_id=model_id,
+    ):
+        etype = event.get("type")
+        if etype == "delta":
+            final_text += event.get("text", "")
+        elif etype == "error":
+            raise RuntimeError(event.get("message", "LLM call failed"))
+        elif etype == "done":
+            raw_msgs = event.get("messages") or []
+            final_messages = raw_msgs
+
+    return final_text, final_messages
+
+
 class WorkflowEngine:
     def __init__(self, store: WorkflowStore) -> None:
         self._store = store
@@ -52,6 +176,24 @@ class WorkflowEngine:
     @property
     def store(self) -> WorkflowStore:
         return self._store
+
+    async def single_shot_llm(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        model_id: str | None = None,
+    ) -> str:
+        """Public entry point for single-shot LLM calls.
+
+        Delegates to :func:`_single_shot_llm` which routes through the full
+        agent → loom → provider chain.  Used by the ``generate-script``
+        route and any other non-workflow callers that need an LLM response.
+        """
+        text, _ = await _single_shot_llm(
+            self, prompt, system_prompt=system_prompt, model_id=model_id,
+        )
+        return text
 
     async def run_workflow(
         self,
@@ -277,44 +419,48 @@ class WorkflowEngine:
             raise ValueError(f"unsupported step type: {step.type}")
 
     async def _execute_llm_transform(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        from ..agent.loop.agent import Agent
-        from ..server.session_store.store import SessionStore
-
         system_prompt = step.tool or "Transform the following input as instructed. Output only the result."
         user_input = resolve_templates(step.template or "", ctx)
         if not user_input:
             raise ValueError(f"step '{step.name}' missing input for LLM transform")
 
-        agent: Agent | None = getattr(self, "_agent", None)
-        store: SessionStore | None = getattr(self, "_sessions", None)
-        if agent is None or store is None:
+        if getattr(self, "_agent", None) is None or getattr(self, "_sessions", None) is None:
             return {"result": user_input, "_simulated": True}
 
-        session = store.create()
-        prompt = f"{system_prompt}\n\n{user_input}"
-        final_text = ""
-        async for event in agent.run_turn_stream(
-            prompt,
-            history=[],
-            session_id=session.id,
-            model_id=step.model or None,
-        ):
-            etype = event.get("type")
-            if etype == "delta":
-                final_text += event.get("text", "")
-            elif etype == "error":
-                raise RuntimeError(event.get("message", "LLM transform error"))
+        force_json = step.output_format == "json"
+        prompt = system_prompt + "\n\n" + user_input
+        if force_json:
+            schema_str = resolve_templates(step.output_schema, ctx) if step.output_schema else None
+            prompt = _build_json_instruction(schema_str) + prompt
+
+        final_text, _ = await _single_shot_llm(
+            self, prompt, model_id=step.model or None,
+        )
+
+        parsed = _parse_llm_output(final_text, force_json)
+        if isinstance(parsed, str):
+            return {"result": parsed}
+        if parsed is not None:
+            return parsed
         return {"result": final_text.strip()}
 
     async def _execute_script_transform(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
         template = resolve_templates(step.template or "", ctx)
         if not template:
-            raise ValueError(f"step '{step.name}' missing script")
+            raise ValueError(f"step '{step.name}': missing script")
 
         data = ctx.get("steps", {})
+        safe_builtins = {
+            "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
+            "enumerate": enumerate, "filter": filter, "float": float, "int": int,
+            "isinstance": isinstance, "len": len, "list": list, "map": map,
+            "max": max, "min": min, "None": None, "print": print, "range": range,
+            "round": round, "set": set, "sorted": sorted, "str": str, "sum": sum,
+            "tuple": tuple, "type": type, "zip": zip, "True": True, "False": False,
+        }
         local_vars: dict[str, Any] = {"data": data, "json": json, "result": None}
         try:
-            exec(template, {"__builtins__": {}}, local_vars)
+            exec(template, {"__builtins__": safe_builtins}, local_vars)
             return {"result": local_vars.get("result")}
         except Exception as exc:
             raise ValueError(f"script error in step '{step.name}': {exc}") from exc
@@ -356,15 +502,31 @@ class WorkflowEngine:
             return {"result": prompt, "_simulated": True}
 
         session = store.create()
+        store.mark_hidden(session.id)
         session_id = session.id
+
+        force_json = step.output_format == "json"
+        if force_json:
+            schema_str = resolve_templates(step.output_schema, ctx) if step.output_schema else None
+            agent_prompt = _build_json_instruction(schema_str) + prompt
+        else:
+            agent_prompt = prompt
+
+        resolved_model = step.model or None
+        if not resolved_model:
+            try:
+                from ..config_file import load as load_config
+                resolved_model = getattr(load_config().agent, "default_model", None) or None
+            except Exception:
+                pass
 
         final_text = ""
         final_messages: list[NxChatMessage] = []
         async for event in agent.run_turn_stream(
-            prompt,
+            agent_prompt,
             history=[],
             session_id=session_id,
-            model_id=step.model or None,
+            model_id=resolved_model,
         ):
             etype = event.get("type")
             if etype == "delta":
@@ -381,7 +543,17 @@ class WorkflowEngine:
         if final_messages:
             store.replace_history(session_id, final_messages)
 
-        return {"session_id": session_id, "result": final_text}
+        output: dict[str, Any] = {"session_id": session_id}
+        parsed = _parse_llm_output(final_text, force_json)
+
+        if isinstance(parsed, dict):
+            output.update(parsed)
+        elif parsed is not None:
+            output["result"] = parsed
+        else:
+            output["result"] = final_text.strip()
+
+        return output
 
     async def _execute_http_request(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
         import aiohttp
@@ -853,18 +1025,23 @@ class WorkflowEngine:
         self,
         run_id: str,
         step_id: str,
-    ) -> StepRun | None:
+        step_override: StepConfig | None = None,
+    ) -> tuple[StepRun | None, dict[str, str]]:
         run = self._store.get_run(run_id)
         if not run:
-            return None
+            return None, {}
 
         session = _INTERACTIVE_SESSIONS.get(run_id)
         if not session:
-            wf = self._load_workflow(run.workflow_path)
-            steps_by_id = {s.id: s for s in wf.steps}
-            step = steps_by_id.get(step_id)
-            if not step:
-                return None
+            if step_override:
+                step = step_override
+                wf = self._load_workflow(run.workflow_path)
+            else:
+                wf = self._load_workflow(run.workflow_path)
+                steps_by_id = {s.id: s for s in wf.steps}
+                step = steps_by_id.get(step_id)
+                if not step:
+                    return None, {}
 
             step_runs = self._store.list_step_runs(run_id)
             outputs: dict[str, Any] = {}
@@ -897,14 +1074,18 @@ class WorkflowEngine:
                     output=step_run.output,
                 )
 
-            return step_run
+            return step_run, {}
+
 
         steps_data = session.get("steps", [])
-        steps = [self._dict_to_step(s) for s in steps_data]
+        steps = [StepConfig.from_dict(s) for s in steps_data]
+        if step_override:
+            steps = [step_override if s.id == step_id else s for s in steps]
+            session["steps"] = [s.to_dict() for s in steps]
         steps_by_id = {s.id: s for s in steps}
         step = steps_by_id.get(step_id)
         if not step:
-            return None
+            return None, {}
 
         step_runs = self._store.list_step_runs(run_id)
         outputs: dict[str, Any] = {}
@@ -914,7 +1095,7 @@ class WorkflowEngine:
 
         cond_branches = session.get("condition_branches", {})
         if not self._is_step_reachable(step_id, steps, cond_branches, outputs):
-            return None
+            return None, {}
 
         ctx = build_context(
             session["trigger_payload"],
@@ -962,7 +1143,7 @@ class WorkflowEngine:
                 output=step_run.output,
             )
 
-        return step_run
+        return step_run, dict(cond_branches)
 
     async def interactive_execute_all(
         self,
@@ -1108,55 +1289,6 @@ class WorkflowEngine:
             _publish_interactive(run_id, "run_cancelled", {})
 
         return True
-
-    def _dict_to_step(self, d: dict[str, Any]) -> StepConfig:
-        return StepConfig(
-            id=d.get("id", ""),
-            name=d.get("name", ""),
-            type=StepType(d.get("type", "tool_call")),
-            slug=d.get("slug"),
-            tool=d.get("tool"),
-            input=d.get("input"),
-            prompt=d.get("prompt"),
-            model=d.get("model"),
-            url=d.get("url"),
-            method=d.get("method", "GET"),
-            headers=d.get("headers"),
-            body=d.get("body"),
-            auth_type=d.get("auth_type", "none"),
-            auth_credential=d.get("auth_credential"),
-            auth_username=d.get("auth_username"),
-            auth_password_credential=d.get("auth_password_credential"),
-            auth_header_name=d.get("auth_header_name"),
-            auth_prefix=d.get("auth_prefix", "Bearer"),
-            auth_query_name=d.get("auth_query_name"),
-            auth_location=d.get("auth_location", "header"),
-            custom_headers=d.get("custom_headers"),
-            expression=d.get("expression"),
-            then_step=d.get("then_step"),
-            else_step=d.get("else_step"),
-            template=d.get("template"),
-            output_format=d.get("output_format", "text"),
-            duration_seconds=d.get("duration_seconds", 0),
-            condition=d.get("condition"),
-            on_error=d.get("on_error", "stop"),
-            retry_count=d.get("retry_count", 0),
-            retry_delay_seconds=d.get("retry_delay_seconds", 5),
-            action=d.get("action"),
-            board_path=d.get("board_path"),
-            lane_id=d.get("lane_id"),
-            card_id=d.get("card_id"),
-            table_path=d.get("table_path"),
-            row_data=d.get("row_data"),
-            row_id=d.get("row_id"),
-            where=d.get("where"),
-            mcp_server=d.get("mcp_server"),
-            mcp_tool=d.get("mcp_tool"),
-            llm_instructions=d.get("llm_instructions"),
-            output_sample=d.get("output_sample"),
-            response_template=d.get("response_template"),
-            next_step=d.get("next_step"),
-        )
 
     def _wipe_downstream(self, run_id: str, step_id: str, wf: WorkflowDef) -> None:
         downstream = self._get_downstream_steps(step_id, wf)
