@@ -7,7 +7,7 @@ final class UpdateChecker: ObservableObject {
     @Published var latestVersion: String?
     @Published var currentVersion: String?
     @Published var updateAvailable: Bool = false
-    @Published var downloadState: String = "idle"  // idle, downloading, ready, error
+    @Published var downloadState: String = "idle"
     @Published var downloadProgress: Double = 0
     @Published var releaseNotes: String = ""
     @Published var htmlURL: String = ""
@@ -27,23 +27,18 @@ final class UpdateChecker: ObservableObject {
     func checkNow() {
         guard let port else { return }
         let url = URL(string: "http://127.0.0.1:\(port)/update/check")!
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
-            guard let self, let data, error == nil else { return }
-            do {
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                DispatchQueue.main.async {
-                    self.currentVersion = json?["current"] as? String
-                    self.latestVersion = json?["latest"] as? String
-                    self.updateAvailable = json?["update_available"] as? Bool ?? false
-                    self.releaseNotes = json?["body"] as? String ?? ""
-                    self.htmlURL = json?["html_url"] as? String ?? ""
-                    if self.updateAvailable {
-                        self.postNotification()
-                    }
-                }
-            } catch {}
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            self.currentVersion = json["current"] as? String
+            self.latestVersion = json["latest"] as? String
+            self.updateAvailable = json["update_available"] as? Bool ?? false
+            self.releaseNotes = json["body"] as? String ?? ""
+            self.htmlURL = json["html_url"] as? String ?? ""
+            if self.updateAvailable {
+                self.postNotification()
+            }
         }
-        task.resume()
     }
 
     func startDownload() {
@@ -52,40 +47,31 @@ final class UpdateChecker: ObservableObject {
         downloadProgress = 0
 
         guard let url = URL(string: "http://127.0.0.1:\(port)/update/download") else { return }
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                if error != nil {
-                    self.downloadState = "error"
-                    return
-                }
-                self.pollStatus(port: port)
+        Task {
+            let (_, response) = await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                self.downloadState = "error"
+                return
             }
+            self.pollStatus(port: port)
         }
-        task.resume()
     }
 
     private func pollStatus(port: Int) {
         let url = URL(string: "http://127.0.0.1:\(port)/update/status")!
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, let data else { return }
-            do {
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                let state = json?["state"] as? String ?? "idle"
-                DispatchQueue.main.async {
-                    self.downloadState = state
-                    if state == "downloading" {
-                        self.downloadProgress = json?["progress"] as? Double ?? 0
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                            self.pollStatus(port: port)
-                        }
-                    } else if state == "ready" {
-                        self.downloadProgress = 1.0
-                    }
-                }
-            } catch {}
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            let state = json["state"] as? String ?? "idle"
+            self.downloadState = state
+            if state == "downloading" {
+                self.downloadProgress = json["progress"] as? Double ?? 0
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self.pollStatus(port: port)
+            } else if state == "ready" {
+                self.downloadProgress = 1.0
+            }
         }
-        task.resume()
     }
 
     func installUpdate() {
@@ -102,12 +88,10 @@ final class UpdateChecker: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body = ["version": version]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                self.updateAvailable = false
-            }
-        }.resume()
+        Task {
+            _ = try? await URLSession.shared.data(for: request)
+            self.updateAvailable = false
+        }
     }
 
     func openReleasePage() {
@@ -116,13 +100,13 @@ final class UpdateChecker: ObservableObject {
     }
 
     private func postNotification() {
-        let content = UNUserNotificationCenter.current()
-        content.requestAuthorization(options: .alert) { _, _ in }
-        let req = UNMutableNotificationContent()
-        req.title = "Nexus Update Available"
-        req.body = "Version \(latestVersion ?? "") is ready to download."
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: .alert) { _, _ in }
+        let content = UNMutableNotificationContent()
+        content.title = "Nexus Update Available"
+        content.body = "Version \(latestVersion ?? "") is ready to download."
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let request = UNNotificationRequest(identifier: "nexus-update", content: req, trigger: trigger)
-        UNUserNotificationCenter.current().add(request)
+        let request = UNNotificationRequest(identifier: "nexus-update", content: content, trigger: trigger)
+        center.add(request)
     }
 }

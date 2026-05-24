@@ -106,6 +106,7 @@ jobs:
           files: |
             nexus/dist/Nexus-macos-arm64.zip
             nexus/dist/Nexus.pkg
+          fail_on_unmatched_files: true
 
   windows:
     name: Windows · Nexus.exe
