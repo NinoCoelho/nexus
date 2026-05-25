@@ -232,7 +232,7 @@ async def test_step_output_chaining(engine):
                 id="s2",
                 name="Step 2",
                 type=StepType.transform,
-                template="Got: {{steps.s1.result}}",
+                template="Got: {{steps.step1.result}}",
             ),
         ],
     )

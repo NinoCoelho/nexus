@@ -7,10 +7,21 @@ supports dotted path access into dicts — no arbitrary code execution.
 
 from __future__ import annotations
 
+import logging as _logging
 import re
 from typing import Any
 
 _EXPR_RE = re.compile(r"\{\{(.+?)\}\}")
+
+_log = _logging.getLogger(__name__)
+
+
+def slugify(name: str) -> str:
+    name = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
+    parts = [p for p in re.split(r"[\s_\-]+", name) if p]
+    if not parts:
+        return ""
+    return parts[0].lower() + "".join(p.capitalize() for p in parts[1:])
 
 
 def _resolve_path(obj: Any, path: str) -> Any:
@@ -34,18 +45,22 @@ def _resolve_path(obj: Any, path: str) -> Any:
 def resolve_templates(
     value: Any,
     context: dict[str, Any],
+    *,
+    _unresolved: list[str] | None = None,
 ) -> Any:
     if isinstance(value, str):
         def _replace(m: re.Match) -> str:
             resolved = _resolve_path(context, m.group(1))
             if resolved is None:
+                if _unresolved is not None:
+                    _unresolved.append(m.group(1).strip())
                 return m.group(0)
             return str(resolved)
         return _EXPR_RE.sub(_replace, value)
     if isinstance(value, dict):
-        return {k: resolve_templates(v, context) for k, v in value.items()}
+        return {k: resolve_templates(v, context, _unresolved=_unresolved) for k, v in value.items()}
     if isinstance(value, list):
-        return [resolve_templates(item, context) for item in value]
+        return [resolve_templates(item, context, _unresolved=_unresolved) for item in value]
     return value
 
 
@@ -55,11 +70,14 @@ def build_context(
     variables: dict[str, str],
     slug_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    steps = dict(step_outputs)
+    id_to_slug: dict[str, str] = {}
     if slug_map:
         for slug, step_id in slug_map.items():
-            if step_id in steps and slug not in steps:
-                steps[slug] = steps[step_id]
+            id_to_slug[step_id] = slug
+    steps: dict[str, Any] = {}
+    for step_id, val in step_outputs.items():
+        key = id_to_slug.get(step_id, step_id)
+        steps[key] = val
     return {
         "trigger": trigger_payload,
         "steps": steps,
@@ -82,9 +100,13 @@ def evaluate_condition(expression: str, context: dict[str, Any]) -> bool:
     resolved = resolve_templates(expression, context)
     if resolved != expression:
         try:
-            return bool(eval(str(resolved), {"__builtins__": {}}, {}))
-        except Exception:
-            return bool(resolved) and str(resolved) not in ("False", "false", "0", "", "None", "none")
+            result = bool(eval(str(resolved), {"__builtins__": {}}, {}))
+            _log.info("condition resolved: %r → %r = %s", expression, resolved, result)
+            return result
+        except Exception as exc:
+            fallback = bool(resolved) and str(resolved) not in ("False", "false", "0", "", "None", "none")
+            _log.warning("condition eval failed: %r → %r (%s), falling back to truthiness=%s", expression, resolved, exc, fallback)
+            return fallback
     try:
         namespace: dict[str, Any] = {}
         for k, v in context.items():
@@ -93,6 +115,9 @@ def evaluate_condition(expression: str, context: dict[str, Any]) -> bool:
         namespace["false"] = False
         namespace["none"] = None
         namespace["null"] = None
-        return bool(eval(expression, {"__builtins__": {}}, namespace))
-    except Exception:
+        result = bool(eval(expression, {"__builtins__": {}}, namespace))
+        _log.info("condition (no template vars): %r = %s", expression, result)
+        return result
+    except Exception as exc:
+        _log.warning("condition eval failed (no template vars): %r (%s), defaulting to False", expression, exc)
         return False

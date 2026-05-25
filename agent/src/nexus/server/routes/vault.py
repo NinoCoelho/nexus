@@ -15,6 +15,35 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/vault/folders")
+async def vault_folders() -> dict:
+    from ...vault import _vault_root
+
+    root = _vault_root()
+    folders: list[dict[str, str]] = []
+
+    def _walk(d: "os.PathLike[str] | str", depth: int) -> None:
+        if depth > 3:
+            return
+        try:
+            children = sorted(os.listdir(d))
+        except (PermissionError, OSError):
+            return
+        for name in children:
+            if name.startswith("."):
+                continue
+            if name in ("node_modules", "__pycache__"):
+                continue
+            child = os.path.join(d, name)
+            if os.path.isdir(child) and not os.path.islink(child):
+                rel = os.path.relpath(child, str(root))
+                folders.append({"path": rel, "name": name})
+                _walk(child, depth + 1)
+
+    _walk(str(root), 0)
+    return {"folders": folders}
+
+
 @router.get("/vault/tree")
 async def vault_tree(request: Request) -> list[dict]:
     from ...vault import list_tree

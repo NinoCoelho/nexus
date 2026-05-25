@@ -25,6 +25,9 @@ export interface StepNodeData extends Record<string, unknown> {
   execStatus?: StepRunStatus | null;
   canRun?: boolean;
   executing?: boolean;
+  historyStatus?: StepRunStatus | null;
+  historyOutput?: unknown;
+  monitorExecuted?: boolean | null;
   onRun?: () => void;
   onOpenInspector?: () => void;
   onAddFromHandle?: (nodeId: string, handleId: string, rect: DOMRect) => void;
@@ -104,22 +107,32 @@ function StepNodeComp({ data, id }: NodeProps) {
     [d, id],
   );
 
-  const statusClass = d.executing
-    ? "wf-node-executing"
-    : d.execStatus === "failed"
-      ? "wf-node-failed"
-      : d.execStatus === "completed"
-        ? "wf-node-completed"
-        : "";
+  const activeStatus = d.execStatus || d.historyStatus;
+  const monitorStatus = d.monitorExecuted === true
+    ? (d.historyStatus === "failed" ? "wf-node-exec-failed" : "wf-node-exec-completed")
+    : d.monitorExecuted === false
+      ? "wf-node-exec-dimmed"
+      : "";
+  const statusClass = d.monitorExecuted !== null && d.monitorExecuted !== undefined
+    ? monitorStatus
+    : d.executing
+      ? "wf-node-executing"
+      : activeStatus === "failed"
+        ? "wf-node-failed"
+        : activeStatus === "completed"
+          ? "wf-node-completed"
+          : d.historyStatus
+            ? "wf-node-history-dim"
+            : "";
 
-  const statusIcon = d.execStatus === "completed"
-    ? "✓"
-    : d.execStatus === "failed"
-      ? "✗"
-      : d.execStatus === "running"
-        ? "●"
-        : d.execStatus === "skipped"
-          ? "—"
+  const statusIcon = activeStatus === "completed"
+    ? "\u2713"
+    : activeStatus === "failed"
+      ? "\u2717"
+      : activeStatus === "running"
+        ? "\u25CF"
+        : activeStatus === "skipped"
+          ? "\u2014"
           : null;
 
   const hasData = d.execStatus === "completed";
@@ -133,7 +146,7 @@ function StepNodeComp({ data, id }: NodeProps) {
   );
 
   return (
-    <div className={`wf-node${d.selected ? " selected" : ""} ${statusClass}`} style={{ position: "relative" }} onDoubleClick={onDoubleClick}>
+    <div className={`wf-node${d.selected ? " selected" : ""} ${monitorStatus || statusClass}`} style={{ position: "relative" }} onDoubleClick={onDoubleClick}>
       <Handle type="target" position={Position.Top} className="wf-handle" id="target" />
       <div className="wf-node-header">
         <span className="icon">{STEP_ICONS[d.stepType] || "⚙️"}</span>
@@ -146,9 +159,9 @@ function StepNodeComp({ data, id }: NodeProps) {
         {d.summary && <span className="summary">{d.summary}</span>}
       </div>
 
-      {d.execStatus && statusIcon && (
+      {activeStatus && statusIcon && (
         <div
-          className={`wf-node-status wf-status-${d.execStatus}${hasData ? " wf-status-clickable" : ""}`}
+          className={`wf-node-status wf-status-${activeStatus}${hasData ? " wf-status-clickable" : ""}`}
           onClick={hasData ? onStatusClick : undefined}
         >
           {statusIcon}

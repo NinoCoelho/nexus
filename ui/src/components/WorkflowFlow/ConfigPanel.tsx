@@ -1,12 +1,12 @@
-import { useEffect, useState, useMemo } from "react";
-import type { StepConfig, StepType, TriggerConfig, TriggerType, ToolInfo } from "../../types/workflow";
+import { useEffect, useState, useMemo, useRef } from "react";
+import type { StepConfig, StepType, TriggerConfig, TriggerType, ToolInfo, EventType, VaultFolder } from "../../types/workflow";
 import type { StepSchema } from "../../types/workflow";
 import { listMcpServers, type McpServerStatus } from "../../api/mcp";
 import { listCredentials, type Credential } from "../../api/credentials";
 import { listKanbanBoards, getVaultKanban, type KanbanBoardSummary, type KanbanLane } from "../../api/kanban";
 import { listDatabases, listDatabaseTables, getVaultDataTable, type DatabaseSummary, type DatabaseTableSummary } from "../../api/datatable";
 import { getModels, type Model } from "../../api/models";
-import { getWorkflowSchema, generateScript, listWorkflowTools } from "../../api/workflows";
+import { getWorkflowSchema, generateScript, listWorkflowTools, listEventTypes, listVaultFolders } from "../../api/workflows";
 import TemplateInput from "./TemplateInput";
 
 function ScriptGenerator({ wfPath, onGenerated }: { wfPath?: string; onGenerated: (code: string) => void }) {
@@ -416,6 +416,12 @@ export default function ConfigPanel({
   const [stepSchemas, setStepSchemas] = useState<StepSchema[]>([]);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [workflowTools, setWorkflowTools] = useState<ToolInfo[]>([]);
+  const [eventTypes, setEventTypes] = useState<EventType[]>([]);
+  const [showEventDropdown, setShowEventDropdown] = useState(false);
+  const [vaultFolders, setVaultFolders] = useState<VaultFolder[]>([]);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const eventDropdownRef = useRef<HTMLDivElement>(null);
+  const folderPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (wfPath) {
@@ -435,6 +441,30 @@ export default function ConfigPanel({
   useEffect(() => {
     listWorkflowTools().then(setWorkflowTools).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    listEventTypes().then(setEventTypes).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (mode === "trigger" && trigger?.type === "fs_watch") {
+      listVaultFolders().then(setVaultFolders).catch(() => {});
+    }
+  }, [mode, trigger?.type]);
+
+  useEffect(() => {
+    if (!showEventDropdown || !showFolderPicker) return;
+    const handler = (e: MouseEvent) => {
+      if (showEventDropdown && eventDropdownRef.current && !eventDropdownRef.current.contains(e.target as Node)) {
+        setShowEventDropdown(false);
+      }
+      if (showFolderPicker && folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
+        setShowFolderPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showEventDropdown, showFolderPicker]);
 
   const stepRefs = (allSteps || []).map((s) => ({
     slug: s.slug || slugify(s.name),
@@ -556,11 +586,43 @@ export default function ConfigPanel({
             <>
               <div className="wf-field">
                 <label>Folder Path</label>
-                <input
-                  value={trigger.path || ""}
-                  onChange={(e) => onChangeTrigger({ path: e.target.value })}
-                  placeholder="~/Downloads"
-                />
+                <div style={{ position: "relative" }} ref={folderPickerRef}>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input
+                      value={trigger.path || ""}
+                      onChange={(e) => onChangeTrigger({ path: e.target.value })}
+                      placeholder="~/Downloads"
+                      style={{ flex: 1 }}
+                    />
+                    <span className="wf-path-valid">
+                      {trigger.path && (/^[/~]/.test(trigger.path)) ? "✓" : ""}
+                    </span>
+                    <button
+                      className="wf-dropdown-toggle"
+                      onClick={() => setShowFolderPicker((v) => !v)}
+                      title="Browse vault folders"
+                    >
+                      📂
+                    </button>
+                  </div>
+                  {showFolderPicker && vaultFolders.length > 0 && (
+                    <div className="wf-dropdown-list">
+                      {vaultFolders.map((f) => (
+                        <button
+                          key={f.path}
+                          className="wf-dropdown-item"
+                          onClick={() => {
+                            onChangeTrigger({ path: f.path });
+                            setShowFolderPicker(false);
+                          }}
+                        >
+                          {f.name}
+                          <span className="wf-dropdown-item-desc">{f.path}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="wf-field">
                 <label>Glob Pattern</label>
@@ -570,17 +632,89 @@ export default function ConfigPanel({
                   placeholder="*.pdf"
                 />
               </div>
+              <div className="wf-field">
+                <label>Events</label>
+                <div className="wf-toggle-group">
+                  {(["created", "modified", "deleted", "moved"] as const).map((evt) => {
+                    const active = (trigger.events || ["created"]).includes(evt);
+                    return (
+                      <button
+                        key={evt}
+                        className={`wf-toggle-chip${active ? " active" : ""}`}
+                        onClick={() => {
+                          const current = trigger.events || ["created"];
+                          const next = active
+                            ? current.filter((e) => e !== evt)
+                            : [...current, evt];
+                          onChangeTrigger({ events: next.length > 0 ? next : [evt] });
+                        }}
+                      >
+                        {evt}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="wf-field">
+                <label>Debounce (ms)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={trigger.debounce_ms ?? 0}
+                  onChange={(e) => onChangeTrigger({ debounce_ms: parseInt(e.target.value) || 0 })}
+                  placeholder="0"
+                />
+              </div>
             </>
           )}
 
           {trigger.type === "event" && (
             <div className="wf-field">
               <label>Event Pattern</label>
-              <input
-                value={trigger.event || ""}
-                onChange={(e) => onChangeTrigger({ event: e.target.value })}
-                placeholder="vault.*"
-              />
+              <div style={{ position: "relative" }} ref={eventDropdownRef}>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <input
+                    value={trigger.event || ""}
+                    onChange={(e) => onChangeTrigger({ event: e.target.value })}
+                    placeholder="vault.*"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    className="wf-dropdown-toggle"
+                    onClick={() => setShowEventDropdown((v) => !v)}
+                    title="Browse event types"
+                  >
+                    ▾
+                  </button>
+                </div>
+                {showEventDropdown && eventTypes.length > 0 && (
+                  <div className="wf-dropdown-list">
+                    {Object.entries(
+                      eventTypes.reduce<Record<string, EventType[]>>((acc, et) => {
+                        (acc[et.category] ??= []).push(et);
+                        return acc;
+                      }, {}),
+                    ).map(([category, items]) => (
+                      <div key={category}>
+                        <div className="wf-dropdown-group">{category}</div>
+                        {items.map((et) => (
+                          <button
+                            key={et.pattern}
+                            className="wf-dropdown-item"
+                            onClick={() => {
+                              onChangeTrigger({ event: et.pattern });
+                              setShowEventDropdown(false);
+                            }}
+                          >
+                            <span className="wf-dropdown-item-pattern">{et.pattern}</span>
+                            <span className="wf-dropdown-item-desc">{et.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

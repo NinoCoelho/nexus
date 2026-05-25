@@ -112,6 +112,9 @@ export interface WorkflowRun {
 export interface StepRun {
   run_id: string;
   step_id: string;
+  step_name: string;
+  step_slug: string;
+  step_type: string;
   status: StepRunStatus;
   input_resolved?: Record<string, unknown>;
   output?: unknown;
@@ -181,4 +184,25 @@ export interface InteractiveStepEvent {
   condition_result?: boolean;
   condition_branch?: string;
   trigger_payload?: Record<string, unknown>;
+}
+
+export interface EventType {
+  pattern: string;
+  description: string;
+  category: string;
+}
+
+export interface VaultFolder {
+  path: string;
+  name: string;
+}
+
+export type TestTriggerStatus = "listening" | "captured" | "timeout" | "error";
+
+export interface TestTriggerEvent {
+  type: "test.listening" | "test.captured" | "test.timeout" | "test.error";
+  test_id?: string;
+  payload?: Record<string, unknown>;
+  url?: string;
+  error?: string;
 }

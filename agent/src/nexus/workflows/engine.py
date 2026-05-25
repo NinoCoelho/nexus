@@ -16,7 +16,7 @@ import uuid
 from typing import Any
 
 from . import parser
-from .expressions import build_context, evaluate_condition, resolve_templates
+from .expressions import build_context, evaluate_condition, resolve_templates, slugify
 from .models import (
     RunStatus,
     StepConfig,
@@ -35,6 +35,17 @@ log = logging.getLogger(__name__)
 _DEBUG_SESSIONS: dict[str, dict[str, asyncio.Event]] = {}
 
 _INTERACTIVE_SESSIONS: dict[str, dict[str, Any]] = {}
+
+
+def _slug_map(steps: list[StepConfig]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for s in steps:
+        key = s.slug or slugify(s.name)
+        if key and s.id not in out.values():
+            out[key] = s.id
+        if not s.slug and key:
+            log.debug("step '%s' has no slug, using generated '%s'", s.name, key)
+    return out
 
 
 def _publish_debug(run_id: str, kind: str, payload: dict[str, Any]) -> None:
@@ -267,7 +278,8 @@ class WorkflowEngine:
         step_outputs: dict[str, Any] = {}
         steps_by_id = {s.id: s for s in wf.steps}
         step_order = [s.id for s in wf.steps]
-        slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+        slug_map = _slug_map(wf.steps)
+        self._current_wf_steps = wf.steps
         idx = 0
 
         while idx < len(step_order):
@@ -329,7 +341,13 @@ class WorkflowEngine:
 
             if step.type == StepType.condition and step.expression:
                 result = evaluate_condition(step.expression, ctx)
+                branch = "then" if result else "else"
                 target = step.then_step if result else step.else_step
+                target_name = steps_by_id[target].name if target and target in steps_by_id else target or "(none)"
+                log.info(
+                    "condition '%s' evaluated %s → %s branch → '%s' (%s)",
+                    step.name, step.expression, branch, target_name, target or "",
+                )
                 if target and target in steps_by_id:
                     idx = step_order.index(target)
                     continue
@@ -710,7 +728,31 @@ class WorkflowEngine:
 
     async def _execute_return_step(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
         template = step.response_template or ""
-        resolved = resolve_templates(template, ctx)
+        unresolved: list[str] = []
+        resolved = resolve_templates(template, ctx, _unresolved=unresolved)
+        if unresolved:
+            all_steps = getattr(self, "_current_wf_steps", []) or []
+            slug_by_id: dict[str, str] = {}
+            name_by_id: dict[str, str] = {}
+            for s in all_steps:
+                slug_by_id[s.id] = s.slug or slugify(s.name)
+                name_by_id[s.id] = s.name
+            executed_slugs = set(ctx.get("steps", {}).keys())
+            available_names = sorted(executed_slugs)
+            parts: list[str] = []
+            for var in unresolved:
+                ref_slug = var.split(".")[1] if var.startswith("steps.") and "." in var[6:] else None
+                ref_step = next((s for s in all_steps if (s.slug or slugify(s.name)) == ref_slug), None) if ref_slug else None
+                if ref_slug and ref_slug not in executed_slugs:
+                    display_name = name_by_id.get(ref_step.id, ref_slug) if ref_step else ref_slug
+                    parts.append(f"'{var}' — step '{display_name}' did not execute in this branch")
+                else:
+                    parts.append(f"'{var}'")
+            raise ValueError(
+                f"return step '{step.name}' has unresolved template variables: "
+                + "; ".join(parts)
+                + f". Available steps: {', '.join(available_names)}."
+            )
         return {"_return": True, "response": resolved}
 
     def _load_workflow(self, path: str) -> WorkflowDef:
@@ -771,7 +813,7 @@ class WorkflowEngine:
         step_schemas: dict[str, dict] = {}
         steps_by_id = {s.id: s for s in wf.steps}
         step_order = [s.id for s in wf.steps]
-        slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+        slug_map = _slug_map(wf.steps)
         idx = 0
 
         while idx < len(step_order):
@@ -809,6 +851,8 @@ class WorkflowEngine:
                     self._store.update_run(run)
                     _publish_debug(run.id, "step_failed", {
                         "step_id": step.id,
+                        "step_name": step.name,
+                        "step_slug": self._slug_map().get(step.id, step.id),
                         "error": step_run.error,
                     })
                     return
@@ -838,7 +882,13 @@ class WorkflowEngine:
 
             if step.type == StepType.condition and step.expression:
                 result = evaluate_condition(step.expression, ctx)
+                branch = "then" if result else "else"
                 target = step.then_step if result else step.else_step
+                target_name = steps_by_id[target].name if target and target in steps_by_id else target or "(none)"
+                log.info(
+                    "condition '%s' evaluated %s → %s branch → '%s' (%s)",
+                    step.name, step.expression, branch, target_name, target or "",
+                )
                 if target and target in steps_by_id:
                     idx = step_order.index(target)
                     continue
@@ -886,13 +936,15 @@ class WorkflowEngine:
             if sr.output is not None:
                 outputs[sr.step_id] = sr.output
 
-        slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+        slug_map = _slug_map(wf.steps)
         ctx = build_context(run.trigger_payload, outputs, wf.variables, slug_map)
         step_run = await self._execute_step(step, ctx, run_id)
         self._store.create_step_run(step_run)
 
         _publish_debug(run_id, "step_rerun", {
             "step_id": step.id,
+            "step_name": step.name,
+            "step_slug": self._slug_map().get(step.id, step.id),
             "status": step_run.status.value,
             "output": truncate_sample(step_run.output, 2000),
             "error": step_run.error,
@@ -965,7 +1017,7 @@ class WorkflowEngine:
         if step is None:
             raise ValueError(f"step {step_id} not found")
 
-        slug_map = {s.slug: s.id for s in wf_def.steps if s.slug}
+        slug_map = _slug_map(wf_def.steps)
         ctx = build_context(trigger_payload, step_outputs, wf_def.variables, slug_map)
         step_run = await self._execute_step(step, ctx, "test")
 
@@ -1045,6 +1097,57 @@ class WorkflowEngine:
 
         return run
 
+    async def seed_from_run(
+        self,
+        workflow_path: str,
+        source_run_id: str,
+    ) -> WorkflowRun | None:
+        source_run = self._store.get_run(source_run_id)
+        if source_run is None or source_run.workflow_path != workflow_path:
+            return None
+
+        wf_def = self._load_workflow(workflow_path)
+
+        now = datetime.datetime.utcnow().isoformat()
+        run = WorkflowRun(
+            id=str(uuid.uuid4()),
+            workflow_path=workflow_path,
+            trigger_id="interactive",
+            trigger_type=TriggerType.manual,
+            trigger_payload=dict(source_run.trigger_payload),
+            status=RunStatus.running,
+            started_at=now,
+        )
+        self._store.create_run(run)
+
+        _INTERACTIVE_SESSIONS[run.id] = {
+            "workflow_path": workflow_path,
+            "trigger_payload": dict(source_run.trigger_payload),
+            "variables": dict(wf_def.variables),
+            "steps": [s.to_dict() for s in wf_def.steps],
+            "condition_branches": {},
+        }
+
+        source_step_runs = self._store.list_step_runs(source_run_id)
+        for sr in source_step_runs:
+            if sr.status == StepRunStatus.completed:
+                new_sr = StepRun(
+                    run_id=run.id,
+                    step_id=sr.step_id,
+                    status=StepRunStatus.completed,
+                    input_resolved=sr.input_resolved,
+                    output=sr.output,
+                    started_at=now,
+                    finished_at=now,
+                )
+                self._store.create_step_run(new_sr)
+
+        _publish_interactive(run.id, "run_started", {
+            "trigger_payload": run.trigger_payload,
+        })
+
+        return run
+
     async def interactive_execute_step(
         self,
         run_id: str,
@@ -1073,7 +1176,7 @@ class WorkflowEngine:
                 if sr.output is not None and sr.status == StepRunStatus.completed:
                     outputs[sr.step_id] = sr.output
 
-            slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+            slug_map = _slug_map(wf.steps)
             ctx = build_context(run.trigger_payload, outputs, wf.variables, slug_map)
             step_run = await self._execute_step(step, ctx, run_id)
             self._store.create_step_run(step_run)
@@ -1122,7 +1225,7 @@ class WorkflowEngine:
         if not self._is_step_reachable(step_id, steps, cond_branches, outputs):
             return None, {}
 
-        slug_map = {s.slug: s.id for s in steps if s.slug}
+        slug_map = _slug_map(steps)
         ctx = build_context(
             session["trigger_payload"],
             outputs,
@@ -1203,7 +1306,7 @@ class WorkflowEngine:
             if step_id in outputs:
                 continue
 
-            slug_map = {s.slug: s.id for s in wf.steps if s.slug}
+            slug_map = _slug_map(wf.steps)
             ctx = build_context(
                 session["trigger_payload"] if session else run.trigger_payload,
                 outputs,

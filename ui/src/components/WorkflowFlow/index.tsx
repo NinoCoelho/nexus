@@ -23,6 +23,7 @@ import type {
   StepRun,
   StepRunStatus,
   TriggerConfig,
+  RunDetail,
 } from "../../types/workflow";
 import * as wfApi from "../../api/workflows";
 import { TriggerNode } from "./TriggerNode";
@@ -30,6 +31,8 @@ import { StepNode } from "./StepNode";
 import { ConditionNode } from "./ConditionNode";
 import ConfigPanel from "./ConfigPanel";
 import StepInspector from "./StepInspector";
+import MonitorTab from "./MonitorTab";
+import TriggerTestModal from "./TriggerTestModal";
 import Modal from "../Modal";
 import {
   migrateWorkflow,
@@ -219,6 +222,10 @@ function Canvas({
   const [payloadText, setPayloadText] = useState("{}");
   const [payloadFormat, setPayloadFormat] = useState<"json" | "plain" | "xml">("json");
   const [execError, setExecError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"design" | "monitor">("design");
+  const [monitorDetail, setMonitorDetail] = useState<RunDetail | null>(null);
+  const [monitorInspectStepId, setMonitorInspectStepId] = useState<string | null>(null);
+  const [showTriggerTest, setShowTriggerTest] = useState(false);
 
   useEffect(() => {
     if (!wfPath) return;
@@ -233,6 +240,9 @@ function Canvas({
           stepSampleMap[stepId] = {
             run_id: "__sample__",
             step_id: stepId,
+            step_name: sample.slug || stepId,
+            step_slug: sample.slug || "",
+            step_type: "",
             status: "completed",
             input_resolved: sample.input_resolved as Record<string, unknown> | undefined,
             output: sample.output,
@@ -412,14 +422,45 @@ function Canvas({
   );
 
   const handleTriggerRun = useCallback(() => {
-    setShowPayloadInput(true);
-    setPayloadInputMode("trigger");
-  }, []);
+    const trigger = migratedWf.triggers[0];
+    if (trigger && trigger.type !== "manual") {
+      setShowTriggerTest(true);
+    } else {
+      setShowPayloadInput(true);
+      setPayloadInputMode("trigger");
+    }
+  }, [migratedWf.triggers]);
 
   const handleRunAll = useCallback(() => {
     setShowPayloadInput(true);
     setPayloadInputMode("all");
   }, []);
+
+  const handleTriggerTestPayload = useCallback((payload: Record<string, unknown>) => {
+    setShowTriggerTest(false);
+    setPayloadText(JSON.stringify(payload, null, 2));
+    setTriggerPayload(payload);
+    if (!wfPath) return;
+    (async () => {
+      try {
+        if (onFlushSave) await onFlushSave();
+        const result = await wfApi.startInteractiveRun(wfPath, payload, "all", false, "json", "");
+        setInteractiveRunId(result.run.id);
+        setTriggerPayload(payload);
+        setStepRunMap({});
+        setCondBranches({});
+        const state = await wfApi.getInteractiveState(wfPath, result.run.id);
+        const newMap: Record<string, StepRun> = {};
+        for (const sr of state.steps) {
+          newMap[sr.step_id] = sr;
+        }
+        setStepRunMap(newMap);
+        setCondBranches(state.condition_branches || {});
+      } catch (e: any) {
+        setExecError(e?.message || String(e));
+      }
+    })();
+  }, [wfPath, onFlushSave]);
 
   const handlePayloadSubmit = useCallback(() => {
     setShowPayloadInput(false);
@@ -495,6 +536,24 @@ function Canvas({
     setInspectorStepId(stepId);
   }, []);
 
+  const handleSeedFromRun = useCallback(async (runId: string) => {
+    if (!wfPath) return;
+    try {
+      const state = await wfApi.seedFromRun(wfPath, runId);
+      setInteractiveRunId(state.run.id);
+      setTriggerPayload(state.run.trigger_payload || {});
+      const newMap: Record<string, StepRun> = {};
+      for (const sr of state.steps) {
+        newMap[sr.step_id] = sr;
+      }
+      setStepRunMap(newMap);
+      setCondBranches(state.condition_branches || {});
+      setActiveTab("design");
+    } catch (e: any) {
+      setExecError(e?.message || String(e));
+    }
+  }, [wfPath]);
+
   const getStepExecStatus = useCallback(
     (stepId: string): StepRunStatus | null => {
       if (executingStep === stepId) return "running";
@@ -547,6 +606,11 @@ function Canvas({
       const execStatus = getStepExecStatus(s.id);
       const canRun = !!interactiveRunId && !executingStep && hasCompletedPrerequisites(s.id);
       const branch = condBranches[s.id];
+      const histSr = (activeTab === "monitor" ? monitorDetail : null)?.steps.find((h) => h.step_id === s.id);
+      const historyStatus = histSr?.status || null;
+      const monitorExecuted = activeTab === "monitor" && monitorDetail
+        ? monitorDetail.steps.some((h) => h.step_id === s.id && (h.status === "completed" || h.status === "failed" || h.status === "running"))
+        : null;
 
       if (s.type === "condition") {
         nodes.push({
@@ -561,6 +625,9 @@ function Canvas({
             execStatus,
             conditionBranch: branch || null,
             canRun,
+            historyStatus,
+            historyOutput: histSr?.output,
+            monitorExecuted,
             onRun: () => executeStep(s.id),
             onOpenInspector: () => handleOpenInspector(s.id),
             onAddFromHandle,
@@ -580,6 +647,9 @@ function Canvas({
             execStatus,
             canRun,
             executing: executingStep === s.id,
+            historyStatus,
+            historyOutput: histSr?.output,
+            monitorExecuted,
             onRun: () => executeStep(s.id),
             onOpenInspector: () => handleOpenInspector(s.id),
             onAddFromHandle,
@@ -589,7 +659,7 @@ function Canvas({
     }
 
     return nodes;
-  }, [migratedWf, selectedId, fingerprint, interactiveRunId, stepRunMap, condBranches, executingStep, getStepExecStatus, hasCompletedPrerequisites, executeStep, handleTriggerRun, handleRunAll, handleOpenInspector, onAddFromHandle]);
+  }, [migratedWf, selectedId, fingerprint, interactiveRunId, stepRunMap, condBranches, executingStep, getStepExecStatus, hasCompletedPrerequisites, executeStep, handleTriggerRun, handleRunAll, handleOpenInspector, onAddFromHandle, activeTab, monitorDetail]);
 
   const [controlledNodes, setControlledNodes] = useState<Node[]>([]);
 
@@ -625,10 +695,6 @@ function Canvas({
     },
     [saveWithUndo],
   );
-
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    setSelectedId((prev) => (prev === node.id ? null : node.id));
-  }, []);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setControlledNodes((prev) => {
@@ -871,201 +937,298 @@ function Canvas({
     );
   }, [migratedWf]);
 
+  const isMonitor = activeTab === "monitor";
+
+  const handleMonitorNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    if (!isMonitor || !monitorDetail) return;
+    const stepId = node.id.startsWith("step-") ? node.id.replace("step-", "") : null;
+    setMonitorInspectStepId(stepId);
+  }, [isMonitor, monitorDetail]);
+
+  const onNodeClickHandler = useCallback((e: React.MouseEvent, node: Node) => {
+    if (isMonitor) {
+      handleMonitorNodeClick(e, node);
+    } else {
+      setSelectedId((prev) => (prev === node.id ? null : node.id));
+    }
+  }, [isMonitor, handleMonitorNodeClick]);
+
+  const monitorEdges = useMemo(() => {
+    if (!isMonitor || !monitorDetail) return edges;
+    const executedIds = new Set(
+      monitorDetail.steps
+        .filter((s) => s.status === "completed" || s.status === "failed" || s.status === "running")
+        .map((s) => `step-${s.step_id}`),
+    );
+    const executedSources = new Set(
+      monitorDetail.steps
+        .filter((s) => s.status === "completed" || s.status === "running")
+        .map((s) => s.step_id),
+    );
+    const triggerId = migratedWf.triggers[0]?.id;
+    if (triggerId && monitorDetail.steps.length > 0) {
+      executedIds.add(`trigger-${triggerId}`);
+    }
+    return edges.map((e) => {
+      const sourceExec = executedSources.has(e.source.replace("step-", "")) ||
+        (e.source.startsWith("trigger-") && executedIds.has(e.source));
+      const targetExec = executedIds.has(e.target);
+      if (sourceExec && targetExec) {
+        return { ...e, className: "wf-edge-exec-path", style: { stroke: "var(--success, #22c55e)", strokeWidth: 2 } };
+      }
+      return { ...e, className: "wf-edge-exec-dimmed", style: { stroke: "var(--text-muted, #333)", opacity: 0.2, strokeDasharray: "5 5" } };
+    });
+  }, [isMonitor, monitorDetail, edges, migratedWf.triggers]);
+
+  const activeEdges = isMonitor ? monitorEdges : edges;
+
+  const canvasEl = (
+    <div className="wf-flow-canvas" style={{ position: "relative" }}>
+      {migratedWf.triggers.length === 0 && !isMonitor && (
+        <button
+          className="wf-empty-add"
+          onClick={() => addStep("trigger")}
+        >
+          + Add Trigger
+        </button>
+      )}
+
+      {execError && (
+        <div className="wf-exec-error-toast" onClick={() => setExecError(null)}>
+          <span className="wf-exec-error-msg">{execError}</span>
+          <button className="wf-exec-error-close">✕</button>
+        </div>
+      )}
+      <ReactFlow
+        nodes={controlledNodes}
+        edges={activeEdges}
+        nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
+        onNodeClick={onNodeClickHandler}
+        onEdgeClick={isMonitor ? () => {} : onEdgeClick}
+        onPaneClick={() => {
+          if (isMonitor) {
+            setMonitorInspectStepId(null);
+          } else {
+            setSelectedId(null);
+            setHandlePicker(null);
+          }
+        }}
+        onNodesChange={isMonitor ? () => {} : onNodesChange}
+        onConnect={isMonitor ? () => {} : onConnect}
+        connectionMode={ConnectionMode.Loose}
+        fitView
+        fitViewOptions={{ padding: 0.3 }}
+        proOptions={{ hideAttribution: true }}
+        minZoom={0.3}
+        maxZoom={1.5}
+        defaultEdgeOptions={{ type: "deletable" }}
+        deleteKeyCode={null}
+        nodesDraggable={!isMonitor}
+        nodesConnectable={!isMonitor}
+        elementsSelectable={!isMonitor}
+      >
+        <Background gap={20} size={0.6} color="var(--border-soft)" />
+        <MiniMap
+          nodeColor={(n) => {
+            if (n.type === "trigger") return "#5b8def";
+            if (n.type === "condition") return "#e8a838";
+            return "#8899aa";
+          }}
+          nodeStrokeWidth={2}
+          nodeBorderRadius={4}
+          maskColor="rgba(0,0,0,0.2)"
+          style={{ background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 6 }}
+        />
+      </ReactFlow>
+
+      {!isMonitor && handlePicker && (
+        <div
+          className="wf-connect-picker"
+          style={{ left: handlePicker.x, top: handlePicker.y }}
+        >
+          {STEP_PALETTE.map((s) => (
+            <button
+              key={s.type}
+              className="wf-connect-picker-item"
+              onClick={() => handlePickerSelect(s.type)}
+              title={s.desc}
+            >
+              <span className="wf-cpi-icon">{s.icon}</span>
+              <span className="wf-cpi-label">{s.tip}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="wf-flow-wrap">
-      <div className="wf-mini-toolbar">
-        <button className="wf-tb-btn" title="Zoom in" onClick={() => rfInstance.zoomIn()}>＋</button>
-        <button className="wf-tb-btn" title="Zoom out" onClick={() => rfInstance.zoomOut()}>－</button>
-        <button className="wf-tb-btn" title="Fit view" onClick={() => rfInstance.fitView({ padding: 0.3 })}>⊞</button>
+      <div className="wf-tab-bar">
+        <button
+          className={`wf-tab-item${activeTab === "design" ? " active" : ""}`}
+          onClick={() => setActiveTab("design")}
+        >
+          Design
+        </button>
+        <button
+          className={`wf-tab-item${activeTab === "monitor" ? " active" : ""}`}
+          onClick={() => setActiveTab("monitor")}
+        >
+          Monitor
+        </button>
+        <div className="wf-tab-separator" />
+        <button className="wf-tab-btn" title="Zoom in" onClick={() => rfInstance.zoomIn()}>＋</button>
+        <button className="wf-tab-btn" title="Zoom out" onClick={() => rfInstance.zoomOut()}>－</button>
+        <button className="wf-tab-btn" title="Fit view" onClick={() => rfInstance.fitView({ padding: 0.3 })}>⊞</button>
         <div className="wf-tb-sep" />
-        <button className="wf-tb-btn" title="Auto-arrange layout" onClick={handleRearrange}>⇅</button>
-        {undoStack.length > 0 && (
+        <button className="wf-tab-btn" title="Auto-arrange layout" onClick={handleRearrange}>⇅</button>
+        {activeTab === "design" && undoStack.length > 0 && (
           <>
             <div className="wf-tb-sep" />
-            <button className="wf-tb-btn" title="Undo" onClick={handleUndo}>↩</button>
+            <button className="wf-tab-btn" title="Undo" onClick={handleUndo}>↩</button>
           </>
         )}
       </div>
 
-      <div className="wf-flow-canvas" style={{ position: "relative" }}>
-        {migratedWf.triggers.length === 0 && (
-          <button
-            className="wf-empty-add"
-            onClick={() => addStep("trigger")}
-          >
-            + Add Trigger
-          </button>
-        )}
-
-        {execError && (
-          <div className="wf-exec-error-toast" onClick={() => setExecError(null)}>
-            <span className="wf-exec-error-msg">{execError}</span>
-            <button className="wf-exec-error-close">✕</button>
-          </div>
-        )}
-        <ReactFlow
-          nodes={controlledNodes}
-          edges={edges}
-          nodeTypes={NODE_TYPES}
-          edgeTypes={EDGE_TYPES}
-          onNodeClick={onNodeClick}
-          onEdgeClick={onEdgeClick}
-          onPaneClick={() => { setSelectedId(null); setHandlePicker(null); }}
-          onNodesChange={onNodesChange}
-          onConnect={onConnect}
-          connectionMode={ConnectionMode.Loose}
-          fitView
-          fitViewOptions={{ padding: 0.3 }}
-          proOptions={{ hideAttribution: true }}
-          minZoom={0.3}
-          maxZoom={1.5}
-          defaultEdgeOptions={{ type: "deletable" }}
-          deleteKeyCode={null}
-        >
-          <Background gap={20} size={0.6} color="var(--border-soft)" />
-          <MiniMap
-            nodeColor={(n) => {
-              if (n.type === "trigger") return "#5b8def";
-              if (n.type === "condition") return "#e8a838";
-              return "#8899aa";
-            }}
-            nodeStrokeWidth={2}
-            nodeBorderRadius={4}
-            maskColor="rgba(0,0,0,0.2)"
-            style={{ background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 6 }}
-          />
-        </ReactFlow>
-
-        {handlePicker && (
-          <div
-            className="wf-connect-picker"
-            style={{ left: handlePicker.x, top: handlePicker.y }}
-          >
-            {STEP_PALETTE.map((s) => (
-              <button
-                key={s.type}
-                className="wf-connect-picker-item"
-                onClick={() => handlePickerSelect(s.type)}
-                title={s.desc}
-              >
-                <span className="wf-cpi-icon">{s.icon}</span>
-                <span className="wf-cpi-label">{s.tip}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {selectedNode && (
-        <ConfigPanel
-          mode={selectedNode.id.startsWith("trigger-") ? "trigger" : "step"}
-          step={
-            selectedNode.id.startsWith("step-")
-              ? migratedWf.steps.find((s) => s.id === selectedNode.id.replace("step-", ""))
-              : undefined
-          }
-          trigger={
-            selectedNode.id.startsWith("trigger-")
-              ? migratedWf.triggers.find((t) => t.id === selectedNode.id.replace("trigger-", ""))
-              : undefined
-          }
-          allSteps={migratedWf.steps}
-          onChangeStep={handleChangeStep}
-          onChangeTrigger={handleChangeTrigger}
-          onDelete={selectedNode.id.startsWith("step-") ? handleDeleteStep : handleDeleteTrigger}
-          onClose={() => setSelectedId(null)}
-          onOpenEditor={() => {
-            const stepId = selectedNode.id.replace("step-", "");
-            if (stepId) handleOpenInspector(stepId);
-          }}
-          wfPath={wfPath}
-        />
-      )}
-
-      {deleteConfirm && (
-        <Modal
-          kind="confirm"
-          danger
-          title={`Delete ${deleteConfirm.type === "step" ? "Step" : "Trigger"}`}
-          message={`Are you sure you want to delete this ${deleteConfirm.type}?`}
-          onSubmit={confirmDelete}
-          onCancel={() => setDeleteConfirm(null)}
-        />
-      )}
-
-      {showPayloadInput && (
-        <div className="wf-payload-overlay" onClick={() => setShowPayloadInput(false)}>
-          <div className="wf-payload-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="wf-payload-header">
-              <span className="wf-payload-title">
-                {payloadInputMode === "all" ? "Run All Steps" : "Run Trigger"}
-              </span>
-              <button className="wf-payload-close" onClick={() => setShowPayloadInput(false)}>✕</button>
-            </div>
-            <div className="wf-payload-body">
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <label style={{ fontSize: 10, fontWeight: 600, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  Trigger Payload
-                </label>
-                <select
-                  value={payloadFormat}
-                  onChange={(e) => setPayloadFormat(e.target.value as "json" | "plain" | "xml")}
-                  style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)" }}
-                >
-                  <option value="json">JSON</option>
-                  <option value="plain">Plain Text</option>
-                  <option value="xml">XML</option>
-                </select>
-              </div>
-              <textarea
-                value={payloadText}
-                onChange={(e) => setPayloadText(e.target.value)}
-                placeholder={payloadFormat === "json" ? '{"key": "value"}' : payloadFormat === "xml" ? "<root><item>value</item></root>" : "Enter text..."}
-              />
-              <div className="wf-payload-actions">
-                <button className="wf-payload-btn wf-payload-btn-cancel" onClick={() => setShowPayloadInput(false)}>
-                  Cancel
-                </button>
-                <button className="wf-payload-btn wf-payload-btn-run" onClick={handlePayloadSubmit}>
-                  {payloadInputMode === "all" ? "⏩ Run All" : "▶ Run Trigger"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {inspectorStepId && wfPath && (() => {
-        const step = migratedWf.steps.find((s) => s.id === inspectorStepId);
-        if (!step) return null;
-        const sr = stepRunMap[inspectorStepId] || null;
-        return (
-          <StepInspector
-            step={step}
-            stepRun={sr}
-            allStepRuns={Object.values(stepRunMap)}
-            allSteps={migratedWf.steps}
-            triggerPayload={triggerPayload}
-            variables={migratedWf.variables}
-            wfPath={wfPath}
-            onStepPatch={(patch) => {
-              if (!selectedId) {
-                const nodeId = `step-${inspectorStepId}`;
-                setSelectedId(nodeId);
+      {activeTab === "design" ? (
+        <div className="wf-design-row">
+          {canvasEl}
+          {selectedNode && (
+            <ConfigPanel
+              mode={selectedNode.id.startsWith("trigger-") ? "trigger" : "step"}
+              step={
+                selectedNode.id.startsWith("step-")
+                  ? migratedWf.steps.find((s) => s.id === selectedNode.id.replace("step-", ""))
+                  : undefined
               }
-              saveWithUndo({
-                ...wfRef.current,
-                steps: wfRef.current.steps.map((s) =>
-                  s.id === inspectorStepId ? { ...s, ...patch } : s
-                ),
-              });
-            }}
-            onExecute={() => executeStep(inspectorStepId)}
-            onClose={() => setInspectorStepId(null)}
-            executing={executingStep === inspectorStepId}
-          />
-        );
-      })()}
+              trigger={
+                selectedNode.id.startsWith("trigger-")
+                  ? migratedWf.triggers.find((t) => t.id === selectedNode.id.replace("trigger-", ""))
+                  : undefined
+              }
+              allSteps={migratedWf.steps}
+              onChangeStep={handleChangeStep}
+              onChangeTrigger={handleChangeTrigger}
+              onDelete={selectedNode.id.startsWith("step-") ? handleDeleteStep : handleDeleteTrigger}
+              onClose={() => setSelectedId(null)}
+              onOpenEditor={() => {
+                const stepId = selectedNode.id.replace("step-", "");
+                if (stepId) handleOpenInspector(stepId);
+              }}
+              wfPath={wfPath}
+            />
+          )}
+
+          {deleteConfirm && (
+            <Modal
+              kind="confirm"
+              danger
+              title={`Delete ${deleteConfirm.type === "step" ? "Step" : "Trigger"}`}
+              message={`Are you sure you want to delete this ${deleteConfirm.type}?`}
+              onSubmit={confirmDelete}
+              onCancel={() => setDeleteConfirm(null)}
+            />
+          )}
+
+          {showPayloadInput && (
+            <div className="wf-payload-overlay" onClick={() => setShowPayloadInput(false)}>
+              <div className="wf-payload-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="wf-payload-header">
+                  <span className="wf-payload-title">
+                    {payloadInputMode === "all" ? "Run All Steps" : "Run Trigger"}
+                  </span>
+                  <button className="wf-payload-close" onClick={() => setShowPayloadInput(false)}>✕</button>
+                </div>
+                <div className="wf-payload-body">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <label style={{ fontSize: 10, fontWeight: 600, color: "var(--fg-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Trigger Payload
+                    </label>
+                    <select
+                      value={payloadFormat}
+                      onChange={(e) => setPayloadFormat(e.target.value as "json" | "plain" | "xml")}
+                      style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)" }}
+                    >
+                      <option value="json">JSON</option>
+                      <option value="plain">Plain Text</option>
+                      <option value="xml">XML</option>
+                    </select>
+                  </div>
+                  <textarea
+                    value={payloadText}
+                    onChange={(e) => setPayloadText(e.target.value)}
+                    placeholder={payloadFormat === "json" ? '{"key": "value"}' : payloadFormat === "xml" ? "<root><item>value</item></root>" : "Enter text..."}
+                  />
+                  <div className="wf-payload-actions">
+                    <button className="wf-payload-btn wf-payload-btn-cancel" onClick={() => setShowPayloadInput(false)}>
+                      Cancel
+                    </button>
+                    <button className="wf-payload-btn wf-payload-btn-run" onClick={handlePayloadSubmit}>
+                      {payloadInputMode === "all" ? "⏩ Run All" : "▶ Run Trigger"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {inspectorStepId && wfPath && (() => {
+            const step = migratedWf.steps.find((s) => s.id === inspectorStepId);
+            if (!step) return null;
+            const sr = stepRunMap[inspectorStepId] || null;
+            return (
+              <StepInspector
+                step={step}
+                stepRun={sr}
+                allStepRuns={Object.values(stepRunMap)}
+                allSteps={migratedWf.steps}
+                triggerPayload={triggerPayload}
+                variables={migratedWf.variables}
+                wfPath={wfPath}
+                onStepPatch={(patch) => {
+                  if (!selectedId) {
+                    const nodeId = `step-${inspectorStepId}`;
+                    setSelectedId(nodeId);
+                  }
+                  saveWithUndo({
+                    ...wfRef.current,
+                    steps: wfRef.current.steps.map((s) =>
+                      s.id === inspectorStepId ? { ...s, ...patch } : s
+                    ),
+                  });
+                }}
+                onExecute={() => executeStep(inspectorStepId)}
+                onClose={() => setInspectorStepId(null)}
+                executing={executingStep === inspectorStepId}
+              />
+            );
+          })()}
+
+          {showTriggerTest && wfPath && migratedWf.triggers[0] && (
+            <TriggerTestModal
+              wfPath={wfPath}
+              triggerId={migratedWf.triggers[0].id}
+              triggerType={migratedWf.triggers[0].type}
+              triggerConfig={migratedWf.triggers[0]}
+              onClose={() => setShowTriggerTest(false)}
+              onRunWithPayload={handleTriggerTestPayload}
+            />
+          )}
+        </div>
+      ) : (
+        <MonitorTab
+          wfPath={wfPath || ""}
+          wf={migratedWf}
+          onExecutionLoad={setMonitorDetail}
+          onSeedFromRun={handleSeedFromRun}
+          monitorInspectStepId={monitorInspectStepId}
+          onMonitorInspectClose={() => setMonitorInspectStepId(null)}
+        >
+          {canvasEl}
+        </MonitorTab>
+      )}
     </div>
   );
 }

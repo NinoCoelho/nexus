@@ -12,6 +12,9 @@ export interface ConditionNodeData extends Record<string, unknown> {
   execStatus?: StepRunStatus | null;
   conditionBranch?: "then" | "else" | null;
   canRun?: boolean;
+  historyStatus?: StepRunStatus | null;
+  historyOutput?: unknown;
+  monitorExecuted?: boolean | null;
   onRun?: () => void;
   onOpenInspector?: () => void;
   onAddFromHandle?: (nodeId: string, handleId: string, rect: DOMRect) => void;
@@ -100,24 +103,30 @@ function ConditionNodeComp({ data, id }: NodeProps) {
   const thenHandlers = makeHandlers("then", pointerStartThen, dragForwardedThen);
   const elseHandlers = makeHandlers("else", pointerStartElse, dragForwardedElse);
 
-  const statusIcon = d.execStatus === "completed"
-    ? "✓"
-    : d.execStatus === "failed"
-      ? "✗"
-      : d.execStatus === "running"
-        ? "●"
+  const activeStatus = d.execStatus || d.historyStatus;
+  const monitorCls = d.monitorExecuted === true
+    ? (d.historyStatus === "failed" ? "wf-node-exec-failed" : "wf-node-exec-completed")
+    : d.monitorExecuted === false
+      ? "wf-node-exec-dimmed"
+      : "";
+  const statusIcon = activeStatus === "completed"
+    ? "\u2713"
+    : activeStatus === "failed"
+      ? "\u2717"
+      : activeStatus === "running"
+        ? "\u25CF"
         : null;
 
   const branchLabel = d.conditionBranch === "then" ? "T" : d.conditionBranch === "else" ? "F" : null;
 
   return (
-    <div className="wf-cond-wrap" onClick={onClick}>
+    <div className={`wf-cond-wrap${monitorCls ? ` ${monitorCls}` : ""}`} onClick={onClick}>
       <Handle type="target" position={Position.Top} className="wf-handle" id="target" />
       <div className={`wf-cond-diamond${d.selected ? " selected" : ""}`}>
         <div className="wf-cond-name">{d.stepName || "Condition"}</div>
         {d.expression && <div className="wf-cond-expr">{d.expression}</div>}
         {statusIcon && (
-          <div className={`wf-node-status wf-status-${d.execStatus}`} style={{ position: "absolute", top: -4, right: -4 }}>
+          <div className={`wf-node-status wf-status-${activeStatus}`} style={{ position: "absolute", top: -4, right: -4 }}>
             {statusIcon}
           </div>
         )}

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
+import uuid
 import datetime
 from typing import Any
 
@@ -16,12 +18,29 @@ from ...workflows import parser
 from ...workflows.engine import WorkflowEngine
 from ...workflows.models import (
     StepConfig,
+    StepRun,
+    StepRunStatus,
     TriggerConfig,
     TriggerType,
     WorkflowDef,
 )
 from ...workflows.cache import WorkflowListCache
 from ...workflows.store import WorkflowStore
+
+EVENT_TYPE_REGISTRY = [
+    {"pattern": "vault.indexed", "description": "Vault file indexed (FTS/metadata)", "category": "vault"},
+    {"pattern": "vault.created", "description": "Vault file created", "category": "vault"},
+    {"pattern": "vault.removed", "description": "Vault file removed", "category": "vault"},
+    {"pattern": "vault.*", "description": "Any vault event", "category": "vault"},
+    {"pattern": "graphrag.indexed", "description": "GraphRAG indexing completed", "category": "knowledge"},
+    {"pattern": "graphrag.index_failed", "description": "GraphRAG indexing failed", "category": "knowledge"},
+    {"pattern": "graphrag.removed", "description": "GraphRAG data removed", "category": "knowledge"},
+    {"pattern": "graphrag.*", "description": "Any GraphRAG event", "category": "knowledge"},
+    {"pattern": "dream.*", "description": "Any dream engine event", "category": "dream"},
+    {"pattern": "workflow.run_completed", "description": "Workflow run completed", "category": "workflow"},
+    {"pattern": "workflow.*", "description": "Any workflow event", "category": "workflow"},
+    {"pattern": "local_llm.*", "description": "Local LLM download/progress event", "category": "system"},
+]
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +49,32 @@ router = APIRouter()
 _STORE: WorkflowStore | None = None
 _ENGINE: WorkflowEngine | None = None
 _CACHE = WorkflowListCache()
+
+
+def _enrich_step_runs(step_runs: list, workflow_path: str) -> list[dict]:
+    from ... import vault as _vault
+    step_lookup: dict[str, dict] = {}
+    try:
+        content = _vault.read_file(workflow_path)
+        raw = content.get("content", "") if isinstance(content, dict) else str(content)
+        wf_def = parser.parse(raw)
+        for s in wf_def.steps:
+            step_lookup[s.id] = {"step_name": s.name, "step_slug": s.slug or "", "step_type": s.type.value}
+    except Exception:
+        pass
+    enriched: list[dict] = []
+    for sr in step_runs:
+        d = sr.to_dict()
+        cfg = step_lookup.get(sr.step_id, {})
+        d["step_name"] = cfg.get("step_name", "")
+        d["step_slug"] = cfg.get("step_slug", "")
+        d["step_type"] = cfg.get("step_type", "")
+        enriched.append(d)
+    return enriched
+
+
+def _enrich_single_step(sr, workflow_path: str) -> dict:
+    return _enrich_step_runs([sr], workflow_path)[0]
 
 
 def init(store: WorkflowStore, engine: WorkflowEngine) -> None:
@@ -217,6 +262,11 @@ def _acp_configured() -> bool:
         return False
 
 
+@router.get("/workflows/event-types")
+async def list_event_types() -> dict:
+    return {"event_types": EVENT_TYPE_REGISTRY}
+
+
 @router.get("/workflows")
 async def list_workflows(request: Request) -> dict:
     if _CACHE.is_warm:
@@ -247,7 +297,7 @@ async def get_run(path: str, run_id: str, request: Request) -> dict:
     if run is None or run.workflow_path != path:
         raise HTTPException(status_code=404, detail="run not found")
     step_runs = store.list_step_runs(run_id)
-    return {"run": run.to_dict(), "steps": [sr.to_dict() for sr in step_runs]}
+    return {"run": run.to_dict(), "steps": _enrich_step_runs(step_runs, path)}
 
 
 @router.get("/workflows/{path:path}/webhook-url")
@@ -324,6 +374,13 @@ async def get_interactive_state(path: str, run_id: str, request: Request) -> dic
     state = engine.interactive_get_state(run_id)
     if state is None:
         raise HTTPException(status_code=404, detail="interactive run not found")
+    from ...workflows.models import StepRun
+    step_runs = [StepRun(
+        run_id=s["run_id"], step_id=s["step_id"], status=s["status"],
+        input_resolved=s.get("input_resolved"), output=s.get("output"),
+        error=s.get("error"), started_at=s.get("started_at"), finished_at=s.get("finished_at"),
+    ) for s in state.get("steps", [])]
+    state["steps"] = _enrich_step_runs(step_runs, path)
     return state
 
 
@@ -505,6 +562,41 @@ async def manual_run(path: str, body: ManualRunBody, request: Request) -> dict:
 
 @router.api_route("/workflow/trigger/{token}", methods=["GET", "POST"])
 async def webhook_trigger(token: str, request: Request) -> Response:
+    if token.startswith("test_"):
+        from ...workflows.triggers.test_listener import _TEST_LISTENERS
+        test_info = None
+        for _tid, info in list(_TEST_LISTENERS.items()):
+            if info.get("test_token") == token:
+                test_info = info
+                break
+        if test_info is not None:
+            content_type = request.headers.get("content-type", "")
+            try:
+                if "application/json" in content_type:
+                    payload = await request.json()
+                elif "application/x-www-form-urlencoded" in content_type:
+                    form = await request.form()
+                    payload = dict(form)
+                else:
+                    raw_bytes = await request.body()
+                    payload = {"raw": raw_bytes.decode("utf-8", errors="replace")}
+            except Exception:
+                payload = {}
+            try:
+                test_info["queue"].put_nowait({
+                    "method": request.method,
+                    "headers": dict(request.headers),
+                    "body": payload,
+                    "query": dict(request.query_params),
+                })
+            except Exception:
+                pass
+            return Response(
+                content=json.dumps({"captured": True}),
+                status_code=status.HTTP_200_OK,
+                media_type="application/json",
+            )
+
     store = _get_store(request)
     result = store.lookup_webhook_token(token)
     if result is None:
@@ -553,6 +645,12 @@ async def webhook_trigger(token: str, request: Request) -> Response:
             trigger_payload=payload,
             wf_def=wf,
         )
+        if run.status.value == "failed":
+            return Response(
+                content=json.dumps({"error": run.error or "workflow run failed"}, default=str),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                media_type="application/json",
+            )
         return_val = run.trigger_payload.get("_return_value", {})
         resp = return_val.get("response", return_val) if isinstance(return_val, dict) else return_val
         return Response(
@@ -621,7 +719,7 @@ async def debug_rerun_step(path: str, run_id: str, step_id: str, request: Reques
     sr = await engine.debug_rerun_step(run_id, step_id)
     if sr is None:
         raise HTTPException(status_code=404, detail="debug session or step not found")
-    return sr.to_dict()
+    return _enrich_single_step(sr, path)
 
 
 @router.post("/workflows/{path:path}/debug/{run_id}/cancel")
@@ -655,6 +753,84 @@ async def test_trigger(path: str, body: TestTriggerBody, request: Request) -> di
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return result
+
+
+class TestTriggerListenBody(BaseModel):
+    trigger_id: str
+
+
+@router.post("/workflows/{path:path}/test-trigger/listen")
+async def test_trigger_listen(
+    path: str, body: TestTriggerListenBody, request: Request,
+) -> StreamingResponse:
+    import asyncio as _asyncio
+    from ... import vault as _vault
+    from ...workflows.triggers.test_listener import TestTriggerListener
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    trigger = next((t for t in wf.triggers if t.id == body.trigger_id), None)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+
+    store = _get_store(request)
+    engine = _get_engine(request)
+    test_id = str(uuid.uuid4())
+    base_url = str(request.base_url).rstrip("/")
+
+    trigger_config = {
+        "workflow_path": path,
+        "trigger_id": trigger.id,
+        "path": trigger.path,
+        "event": trigger.event,
+        "pattern": trigger.pattern,
+        "events": trigger.events,
+        "base_url": base_url,
+    }
+
+    listener = TestTriggerListener(
+        test_id=test_id,
+        trigger_type=trigger.type.value,
+        trigger_config=trigger_config,
+        store=store,
+        engine=engine,
+    )
+
+    async def stream():
+        try:
+            async for event_bytes in listener.start():
+                yield event_bytes
+        finally:
+            await listener.cleanup()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.delete("/workflows/{path:path}/test-trigger/{test_id}")
+async def cancel_test_listener(path: str, test_id: str) -> dict:
+    from ...workflows.triggers.test_listener import remove_test_listener
+    info = remove_test_listener(test_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="test listener not found")
+    for task_or_observer in info.get("cleanup_tasks", []):
+        try:
+            if isinstance(task_or_observer, asyncio.Task):
+                task_or_observer.cancel()
+            else:
+                task_or_observer.stop()
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 class TestStepBody(BaseModel):
@@ -713,6 +889,24 @@ async def start_interactive_run(path: str, body: InteractiveStartBody, request: 
     }
 
 
+class SeedFromRunBody(BaseModel):
+    pass
+
+
+@router.post("/workflows/{path:path}/seed-from-run/{run_id}")
+async def seed_from_run(path: str, run_id: str, request: Request) -> dict:
+    engine = _get_engine(request)
+    run = await engine.seed_from_run(path, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="source run not found")
+    step_runs = engine.store.list_step_runs(run.id)
+    return {
+        "run": run.to_dict(),
+        "steps": _enrich_step_runs(step_runs, path),
+        "condition_branches": {},
+    }
+
+
 class ExecuteStepBody(BaseModel):
     step_config: dict | None = None
 
@@ -734,7 +928,7 @@ async def interactive_execute_step(
     sr, cond_branches = await engine.interactive_execute_step(run_id, step_id, step_override=step_override)
     if sr is None:
         raise HTTPException(status_code=404, detail="step not found or not reachable")
-    result = sr.to_dict()
+    result = _enrich_single_step(sr, path)
     if cond_branches:
         result["condition_branches"] = cond_branches
     return result

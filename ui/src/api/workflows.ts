@@ -5,6 +5,8 @@ import type {
   WorkflowRun,
   RunDetail,
   ToolInfo,
+  EventType,
+  VaultFolder,
 } from "../types/workflow";
 
 async function _json<T>(res: Response): Promise<T> {
@@ -372,4 +374,42 @@ export async function resolveTemplate(
     }
     return current !== undefined ? JSON.stringify(current) : _match;
   });
+}
+
+export async function seedFromRun(
+  path: string,
+  runId: string,
+): Promise<import("../types/workflow").InteractiveRunState> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/seed-from-run/${runId}`,
+    { method: "POST" },
+  );
+  return _json(res);
+}
+
+export async function listEventTypes(): Promise<EventType[]> {
+  const res = await fetch(`${BASE}/workflows/event-types`);
+  const data = await _json<{ event_types: EventType[] }>(res);
+  return data.event_types;
+}
+
+export async function listVaultFolders(): Promise<VaultFolder[]> {
+  const res = await fetch(`${BASE}/vault/folders`);
+  const data = await _json<{ folders: VaultFolder[] }>(res);
+  return data.folders;
+}
+
+export function testTriggerListenUrl(path: string): string {
+  return `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/listen`;
+}
+
+export async function cancelTestListener(
+  path: string,
+  testId: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/${testId}`,
+    { method: "DELETE" },
+  );
+  return _json(res);
 }

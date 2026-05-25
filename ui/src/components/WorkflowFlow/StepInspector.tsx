@@ -283,7 +283,7 @@ export default function StepInspector({
       if (sr.step_id === step.id) continue;
       if (sr.status === "completed" && sr.output !== undefined) {
         const cfg = allSteps.find((s) => s.id === sr.step_id);
-        const key = cfg?.slug || sr.step_id;
+        const key = cfg?.slug || slugify(cfg?.name || "");
         map[key] = sr.output;
         usedOutputs[sr.step_id] = true;
       }
@@ -292,7 +292,7 @@ export default function StepInspector({
       if (sid === step.id || usedOutputs[sid]) continue;
       if (sample.output !== undefined) {
         const cfg = allSteps.find((s) => s.id === sid);
-        const key = cfg?.slug || sample.slug || sid;
+        const key = cfg?.slug || sample.slug || slugify(cfg?.name || "");
         map[key] = sample.output;
       }
     }
@@ -388,12 +388,12 @@ export default function StepInspector({
       const inputSchema: Record<string, unknown> = {};
       for (const [sid, sample] of Object.entries(samples)) {
         const cfg = allSteps.find((s) => s.id === sid);
-        inputSchema[cfg?.slug || sid] = sample.output || {};
+        inputSchema[cfg?.slug || slugify(cfg?.name || "")] = sample.output || {};
       }
       for (const sr of allStepRuns) {
         if (sr.status === "completed" && sr.output !== undefined) {
           const cfg = allSteps.find((s) => s.id === sr.step_id);
-          inputSchema[cfg?.slug || sr.step_id] = sr.output;
+          inputSchema[cfg?.slug || slugify(cfg?.name || "")] = sr.output;
         }
       }
       const { code } = await generateScript(wfPath, genDesc, inputSchema, Object.keys(triggerPayload));
@@ -412,7 +412,7 @@ export default function StepInspector({
     for (const sr of allStepRuns) {
       if (sr.status === "completed" && sr.output !== undefined) {
         const cfg = allSteps.find((s) => s.id === sr.step_id);
-        const key = cfg?.slug || sr.step_id;
+        const key = cfg?.slug || slugify(cfg?.name || "");
         map[key] = sr.output;
         usedOutputs[sr.step_id] = true;
       }
@@ -421,7 +421,7 @@ export default function StepInspector({
       if (usedOutputs[sid]) continue;
       if (sample.output !== undefined) {
         const cfg = allSteps.find((s) => s.id === sid);
-        const key = cfg?.slug || sample.slug || sid;
+        const key = cfg?.slug || sample.slug || slugify(cfg?.name || "");
         map[key] = sample.output;
       }
     }
@@ -570,8 +570,8 @@ export default function StepInspector({
               <div className="wf-inspector-data-section">
                 <DataTree
                   data={ownOutput}
-                  rootLabel={step.name || step.slug || step.id}
-                  rootPath={`steps.${step.slug || step.id}`}
+                  rootLabel={step.name || step.slug || slugify(step.name || "")}
+                  rootPath={`steps.${step.slug || slugify(step.name || "")}`}
                   draggable={false}
                 />
               </div>
