@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -188,42 +187,8 @@ async def _consolidate_chunk(
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    if not text:
-        return None
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        first_nl = candidate.find("\n")
-        if first_nl >= 0:
-            candidate = candidate[first_nl + 1:]
-        last_fence = candidate.rfind("```")
-        if last_fence > 0:
-            candidate = candidate[:last_fence]
-    candidate = candidate.strip()
-    if not candidate:
-        return None
-    brace = candidate.find("{")
-    bracket = candidate.find("[")
-    if brace >= 0 and (bracket < 0 or brace <= bracket):
-        candidate = candidate[brace:]
-    elif bracket >= 0:
-        candidate = candidate[bracket:]
-    try:
-        result = json.loads(candidate)
-        if isinstance(result, dict):
-            return result
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
-            return result[0]
-    except json.JSONDecodeError:
-        pass
-    try:
-        brace = candidate.rfind("}")
-        if brace >= 0:
-            result = json.loads(candidate[: brace + 1])
-            if isinstance(result, dict):
-                return result
-    except json.JSONDecodeError:
-        pass
-    return None
+    from ._shared import extract_json
+    return extract_json(text)
 
 
 def _execute_actions(

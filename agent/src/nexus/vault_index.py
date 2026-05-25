@@ -303,6 +303,12 @@ def is_empty() -> bool:
             con.close()
 
 
+def ensure_ready() -> None:
+    """Rebuild the index from disk if it is currently empty."""
+    if is_empty():
+        rebuild_from_disk()
+
+
 def rebuild_from_disk(full: bool = False) -> int:
     """Re-index .md/.mdx files under the vault root.
 

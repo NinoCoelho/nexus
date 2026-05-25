@@ -34,6 +34,7 @@ from ..schemas import (
     SkillInfo,
 )
 from ._sse import keepalive
+from ._streaming import TurnAccumulator, build_done_sse, build_error_sse
 from ...skills.types import Skill as _SkillModel
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
@@ -717,8 +718,6 @@ async def chat_hitl_answer(
 
     async def event_generator() -> AsyncIterator[str]:
         if already_answered:
-            # Idempotent duplicate — emit a synthetic done with the prior
-            # answer so the second caller can unwind its UI cleanly.
             payload = {
                 "session_id": session_id,
                 "reply": "",
@@ -732,10 +731,7 @@ async def chat_hitl_answer(
         current = asyncio.current_task()
         if current is not None:
             _inflight_turns[session_id] = current
-        accumulated_text = ""
-        accumulated_tools: list[dict[str, Any]] = []
-        final_messages = None
-        partial_status = "interrupted"
+        acc = TurnAccumulator()
         try:
             async for event in a.continue_after_hitl(
                 session_id=session_id,
@@ -743,46 +739,7 @@ async def chat_hitl_answer(
                 answer=decoded,
             ):
                 etype = event.get("type")
-                if etype == "delta":
-                    accumulated_text += event.get("text", "")
-                    yield (
-                        f"event: delta\ndata: "
-                        f"{json.dumps({'text': event['text']})}\n\n"
-                    )
-                elif etype == "thinking":
-                    yield (
-                        f"event: thinking\ndata: "
-                        f"{json.dumps({'text': event.get('text', '')})}\n\n"
-                    )
-                elif etype in ("tool_exec_start", "tool_exec_result"):
-                    payload = {"name": event.get("name", "")}
-                    if "args" in event:
-                        payload["args"] = event["args"]
-                    if "result_preview" in event:
-                        payload["result_preview"] = event["result_preview"]
-                    if etype == "tool_exec_start":
-                        accumulated_tools.append({
-                            "name": event.get("name", ""),
-                            "args": event.get("args"),
-                            "status": "pending",
-                        })
-                    else:
-                        for t in reversed(accumulated_tools):
-                            if (
-                                t.get("name") == event.get("name")
-                                and t.get("status") == "pending"
-                            ):
-                                t["status"] = "done"
-                                t["result_preview"] = event.get("result_preview")
-                                break
-                    yield f"event: tool\ndata: {json.dumps(payload)}\n\n"
-                elif etype == "limit_reached":
-                    yield (
-                        f"event: limit_reached\ndata: "
-                        f"{json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
-                    )
-                elif etype == "done":
-                    final_messages = event.get("messages")
+                if etype == "done":
                     usage = event.get("usage") or {}
                     try:
                         store.bump_usage(
@@ -804,65 +761,41 @@ async def chat_hitl_answer(
                         "model": usage.get("model"),
                     }
                     yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
-                elif etype == "error":
-                    err_payload = {
-                        "detail": event.get("detail", ""),
-                        "reason": event.get("reason"),
-                        "retryable": event.get("retryable"),
-                        "status_code": event.get("status_code"),
-                    }
-                    yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+                else:
+                    for frame in acc.process_event(event):
+                        yield frame
         except (LLMTransportError, MalformedOutputError) as exc:
-            partial_status = "llm_error"
-            yield (
-                f"event: error\ndata: "
-                f"{json.dumps({'detail': str(exc)})}\n\n"
-            )
+            acc.partial_status = "llm_error"
+            yield build_error_sse(detail=str(exc))
         except asyncio.CancelledError:
-            partial_status = "cancelled"
-            yield (
-                f"event: error\ndata: "
-                f"{json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
-            )
-            yield (
-                f"event: done\ndata: "
-                f"{json.dumps({'session_id': session_id, 'reply': ''})}\n\n"
-            )
+            acc.partial_status = "cancelled"
+            yield build_error_sse(detail="cancelled by user", reason="cancelled")
+            yield build_done_sse(session_id=session_id, reply="")
         except Exception as exc:  # noqa: BLE001
-            partial_status = "crashed"
+            acc.partial_status = "crashed"
             log.exception("hitl resume crashed")
-            yield (
-                f"event: error\ndata: "
-                f"{json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
-            )
-            yield (
-                f"event: done\ndata: "
-                f"{json.dumps({'session_id': session_id, 'reply': ''})}\n\n"
-            )
+            yield build_error_sse(detail=f"{type(exc).__name__}: {exc}")
+            yield build_done_sse(session_id=session_id, reply="")
         finally:
-            if final_messages is not None:
+            if acc.final_messages is not None:
                 try:
-                    store.replace_history(session_id, final_messages)
+                    store.replace_history(session_id, acc.final_messages)
                 except Exception:  # noqa: BLE001
                     log.exception("replace_history (resume) failed")
-            elif accumulated_text or accumulated_tools:
+            elif acc.accumulated_text or acc.accumulated_tools:
                 try:
                     sess = store.get(session_id)
                     base = list(sess.history) if sess else []
                     store.persist_partial_turn(
                         session_id,
                         base_history=base,
-                        user_message="",  # resumed turn has no fresh user msg
-                        assistant_text=accumulated_text,
-                        tool_calls=accumulated_tools,
-                        status_note=partial_status,
+                        user_message="",
+                        assistant_text=acc.accumulated_text,
+                        tool_calls=acc.accumulated_tools,
+                        status_note=acc.partial_status,
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("persist_partial_turn (resume) failed")
-            # When the SSE consumer disconnects mid-stream Starlette cancels
-            # the generator from a different async context; CURRENT_SESSION_ID
-            # then refuses the reset with a ValueError that masks the real
-            # cause and aborts the rest of cleanup. Best-effort here.
             try:
                 CURRENT_SESSION_ID.reset(token)
             except ValueError:

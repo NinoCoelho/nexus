@@ -70,6 +70,8 @@ class TriggerConfig:
     event: str | None = None
     filter: dict[str, Any] | None = None
     payload_format: str = "json"  # "json" | "plain" | "xml"
+    broker_id: str | None = None
+    broker_slug: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "type": self.type.value}
@@ -95,6 +97,10 @@ class TriggerConfig:
             out["filter"] = self.filter
         if self.payload_format != "json":
             out["payload_format"] = self.payload_format
+        if self.broker_id is not None:
+            out["broker_id"] = self.broker_id
+        if self.broker_slug is not None:
+            out["broker_slug"] = self.broker_slug
         return out
 
     @classmethod
@@ -113,6 +119,8 @@ class TriggerConfig:
             event=d.get("event"),
             filter=d.get("filter"),
             payload_format=d.get("payload_format", "json"),
+            broker_id=d.get("broker_id"),
+            broker_slug=d.get("broker_slug"),
         )
 
 

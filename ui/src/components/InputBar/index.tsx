@@ -17,6 +17,7 @@ import { transcribeVaultAudio, uploadVaultFiles, type SlashCommand } from "../..
 import { sounds } from "../../hooks/useSounds";
 import { looksLikeSpeech } from "../../lib/speechDetect";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
+import { unlockAudioForIOS } from "../../lib/iosAudioUnlock";
 import { useToast } from "../../toast/ToastProvider";
 import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
 import SecretPicker, { type SecretPickerHandle } from "../SecretPicker";
@@ -121,47 +122,6 @@ export default function InputBar({
   const transcribingRef = useRef(transcribing);
   transcribingRef.current = transcribing;
 
-  // iOS Safari refuses async `audio.play()` (e.g. from an SSE-driven
-  // voice ack) unless the page has a "consumed" user gesture. Pressing
-  // record IS such a gesture — but we need to actually *touch* the
-  // audio system inside the gesture for Safari to remember it. The
-  // Web Audio API trick is the most reliable: create an AudioContext,
-  // play a 1-sample buffer at zero volume, and Safari unlocks ALL
-  // subsequent audio for the page lifetime.
-  const audioUnlockedRef = useRef(false);
-  const unlockAudioForIOS = useCallback(() => {
-    if (audioUnlockedRef.current) return;
-    audioUnlockedRef.current = true;
-    if (typeof window === "undefined") return;
-    try {
-      // 1) Web Audio path — required for HTMLAudioElement playback on
-      //    iOS Safari to work from later async callbacks.
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (Ctx) {
-        const ctx = new Ctx();
-        // resume() is a no-op on browsers that don't suspend new contexts,
-        // but iOS suspends until user gesture; this is what unlocks it.
-        if (typeof ctx.resume === "function") void ctx.resume().catch(() => {});
-        const buffer = ctx.createBuffer(1, 1, 22050);
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
-        if (typeof source.start === "function") source.start(0);
-        // Don't close the context — keep it alive so subsequent plays inherit
-        // the unlock. Safari will GC it on tab close.
-      }
-      // 2) Belt-and-suspenders: also prime an HTMLAudioElement. Some iOS
-      //    versions need both paths primed.
-      const SILENT_WAV =
-        "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
-      const a = new Audio(SILENT_WAV);
-      a.muted = false;
-      a.volume = 0;
-      void a.play().then(() => a.pause()).catch(() => { /* ignore */ });
-    } catch {
-      // Not fatal — Web Speech fallback in the player still works.
-    }
-  }, []);
   const handleCancelRecording = useCallback(() => {
     cancelRecording();
     setConversationMode(false);

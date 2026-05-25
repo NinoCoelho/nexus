@@ -313,11 +313,21 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     wf = parser.parse(raw)
 
     base_url = str(request.base_url).rstrip("/")
+    from ...config_file import load as load_config
+    broker_base = load_config().broker.url.rstrip("/")
+
     hooks = []
     for t in wf.triggers:
         if t.type == TriggerType.webhook:
-            url = f"{base_url}/workflow/trigger/{t.token}" if t.token else None
-            hooks.append({"trigger_id": t.id, "token": t.token, "url": url})
+            local_url = f"{base_url}/workflow/trigger/{t.token}" if t.token else None
+            broker_url = f"{broker_base}/wh/{t.broker_slug}" if t.broker_slug else None
+            hooks.append({
+                "trigger_id": t.id,
+                "token": t.token,
+                "url": broker_url or local_url,
+                "localUrl": local_url,
+                "brokerUrl": broker_url,
+            })
 
     return {"webhooks": hooks}
 
@@ -456,6 +466,33 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
             t.token = secrets.token_hex(16)
             now = datetime.datetime.now(datetime.timezone.utc).isoformat()
             store.register_webhook_token(t.token, path, t.id, now)
+            md = parser.serialize(wf, original_content=raw)
+            _vault.write_file(path, md)
+
+    from ...broker.client import BrokerClient
+    from ...broker.provision import ensure_broker_endpoint as _ensure_broker
+    broker_client = BrokerClient()
+    if broker_client.available:
+        broker_changed = False
+        for t in wf.triggers:
+            if t.type == TriggerType.webhook and t.token:
+                try:
+                    bwh = await _ensure_broker(
+                        client=broker_client,
+                        endpoint_type="workflow",
+                        endpoint_key=f"{path}:{t.id}",
+                        name=f"Workflow: {wf.title}",
+                        existing_broker_id=t.broker_id,
+                        existing_broker_slug=t.broker_slug,
+                    )
+                    if bwh:
+                        if t.broker_id != bwh.id or t.broker_slug != bwh.slug:
+                            t.broker_id = bwh.id
+                            t.broker_slug = bwh.slug
+                            broker_changed = True
+                except Exception:
+                    log.exception("broker: failed to provision for workflow %s trigger %s", path, t.id)
+        if broker_changed:
             md = parser.serialize(wf, original_content=raw)
             _vault.write_file(path, md)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -180,40 +179,15 @@ def _load_existing_skills() -> list[dict[str, str]]:
 
 
 def _load_session_summaries(*, limit: int = 30) -> list[dict[str, str]]:
-    try:
-        import sqlite3
-        db_path = sessions_db()
-        if not db_path.exists():
-            return []
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(
-                "SELECT s.id, s.title, s.updated_at, "
-                "GROUP_CONCAT(m.content, ' ') AS messages "
-                "FROM sessions s "
-                "LEFT JOIN messages m ON m.session_id = s.id "
-                "AND m.role IN ('user', 'assistant') "
-                "AND LENGTH(m.content) < 2000 "
-                "WHERE COALESCE(s.hidden, 0) = 0 "
-                "GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-            summaries = []
-            for r in rows:
-                msgs = r["messages"] or ""
-                summaries.append({
-                    "session_id": r["id"][:8],
-                    "title": r["title"] or "Untitled",
-                    "preview": msgs[:400],
-                    "date": r["updated_at"][:10] if r["updated_at"] else "",
-                })
-            return summaries
-        finally:
-            conn.close()
-    except Exception:
-        log.exception("dream/skill_refine: session load failed")
-        return []
+    from ._shared import load_session_summaries
+    return load_session_summaries(
+        db_path=sessions_db(),
+        limit=limit,
+        roles=("user", "assistant"),
+        max_content_length=2000,
+        preview_len=400,
+        include_date=True,
+    )
 
 
 def _build_context(
@@ -264,39 +238,5 @@ def _hash_suggestion(name: str, description: str) -> str:
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    if not text:
-        return None
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        first_nl = candidate.find("\n")
-        if first_nl >= 0:
-            candidate = candidate[first_nl + 1:]
-        last_fence = candidate.rfind("```")
-        if last_fence > 0:
-            candidate = candidate[:last_fence]
-    candidate = candidate.strip()
-    if not candidate:
-        return None
-    brace = candidate.find("{")
-    bracket = candidate.find("[")
-    if brace >= 0 and (bracket < 0 or brace <= bracket):
-        candidate = candidate[brace:]
-    elif bracket >= 0:
-        candidate = candidate[bracket:]
-    try:
-        result = json.loads(candidate)
-        if isinstance(result, dict):
-            return result
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
-            return result[0]
-    except json.JSONDecodeError:
-        pass
-    try:
-        brace = candidate.rfind("}")
-        if brace >= 0:
-            result = json.loads(candidate[: brace + 1])
-            if isinstance(result, dict):
-                return result
-    except json.JSONDecodeError:
-        pass
-    return None
+    from ._shared import extract_json
+    return extract_json(text)

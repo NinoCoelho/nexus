@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 ACCOUNT_PATH = Path.home() / ".nexus" / "account.json"
 SECRET_NAME = "nexus_api_key"
+BROKER_SECRET_NAME = "broker_api_key"
 _REQUEST_TIMEOUT = 15.0
 
 
@@ -165,6 +166,11 @@ async def verify_id_token(id_token: str, *, base_url: str) -> dict[str, Any]:
         raise NexusAccountError("Nexus response missing apiKey")
 
     secrets.set(SECRET_NAME, api_key, kind="provider")
+
+    broker_api_key = payload.get("brokerApiKey")
+    if broker_api_key and isinstance(broker_api_key, str):
+        secrets.set(BROKER_SECRET_NAME, broker_api_key, kind="provider")
+        log.info("[nexus_account] broker API key stored")
 
     record = {
         "uid": user.get("uid", ""),
@@ -322,5 +328,12 @@ async def refresh_status(*, base_url: str) -> dict[str, Any]:
     if features_list is not None:
         from ..features import set_features
         set_features(set(features_list))
+
+    broker_api_key = payload.get("brokerApiKey")
+    if broker_api_key and isinstance(broker_api_key, str):
+        existing = secrets.get(BROKER_SECRET_NAME)
+        if existing != broker_api_key:
+            secrets.set(BROKER_SECRET_NAME, broker_api_key, kind="provider")
+            log.info("[nexus_account] broker API key updated from status poll")
 
     return payload

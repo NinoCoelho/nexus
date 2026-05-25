@@ -64,21 +64,8 @@ def _record_failed_attempt(key: str) -> None:
 
 
 def _request_is_proxied(request: Request) -> bool:
-    """Did this request hop through the public tunnel?
-
-    Mirror of ``server.app._is_proxied`` (kept inlined to avoid importing app.py
-    from a routes module). Used by ``/tunnel/auth-status`` to tell the SPA whether
-    it's running on the loopback owner's machine or on a remote redeemer's
-    device — the UI hides admin-only surfaces in the latter case.
-    """
-    h = request.headers
-    return bool(
-        h.get("x-forwarded-for")
-        or h.get("x-forwarded-host")
-        or h.get("cf-ray")
-        or h.get("cf-connecting-ip")
-        or h.get("ngrok-trace-id")
-    )
+    from ..middleware import _is_proxied
+    return _is_proxied(request)
 
 
 def _client_key(request: Request) -> str:

@@ -150,8 +150,7 @@ def scope_folder(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedG
 def scope_tag(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedGraphData:
     from nexus import vault_index
 
-    if vault_index.is_empty():
-        vault_index.rebuild_from_disk()
+    vault_index.ensure_ready()
     tag_files = set(vault_index.files_with_tag(seed))
 
     node_map = {n["path"]: n for n in full["nodes"]}

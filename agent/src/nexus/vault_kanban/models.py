@@ -56,6 +56,8 @@ class Lane:
     model: str | None = None
     webhook_token: str | None = None
     webhook_enabled: bool = False
+    broker_id: str | None = None
+    broker_slug: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "title": self.title, "cards": [c.to_dict() for c in self.cards]}

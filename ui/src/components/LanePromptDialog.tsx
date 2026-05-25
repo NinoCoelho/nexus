@@ -22,6 +22,8 @@ export default function LanePromptDialog({ lane, boardPath, onCancel, onSubmit }
   const [webhookOpen, setWebhookOpen] = useState(false);
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const [webhookLocalUrl, setWebhookLocalUrl] = useState<string | null>(null);
+  const [webhookBrokerUrl, setWebhookBrokerUrl] = useState<string | null>(null);
   const [webhookCopied, setWebhookCopied] = useState(false);
 
   useEffect(() => {
@@ -42,6 +44,8 @@ export default function LanePromptDialog({ lane, boardPath, onCancel, onSubmit }
         if (!cancelled) {
           setWebhookEnabled(info.enabled);
           setWebhookUrl(info.url);
+          setWebhookLocalUrl(info.localUrl ?? null);
+          setWebhookBrokerUrl(info.brokerUrl ?? null);
         }
       })
       .catch(() => {});
@@ -66,6 +70,8 @@ export default function LanePromptDialog({ lane, boardPath, onCancel, onSubmit }
       const info = await setLaneWebhook(boardPath, lane.id, { enabled });
       setWebhookEnabled(info.enabled);
       setWebhookUrl(info.url);
+      setWebhookLocalUrl(info.localUrl ?? null);
+      setWebhookBrokerUrl(info.brokerUrl ?? null);
     } catch {
       setWebhookEnabled(false);
       setWebhookUrl(null);
@@ -185,35 +191,85 @@ export default function LanePromptDialog({ lane, boardPath, onCancel, onSubmit }
               The payload is sanitised before processing to prevent prompt injection.
             </p>
             {webhookEnabled && webhookUrl && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <code style={{
-                  flex: 1,
-                  fontSize: 11,
-                  padding: "4px 8px",
-                  background: "var(--bg)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 4,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}>
-                  {webhookUrl}
-                </code>
-                <button
-                  type="button"
-                  onClick={handleCopyUrl}
-                  style={{
-                    background: "none",
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: webhookLocalUrl ? 6 : 0 }}>
+                  {webhookBrokerUrl && (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      color: "var(--ok, #4caf80)",
+                      background: "var(--bg)",
+                      border: "1px solid var(--ok, #4caf80)",
+                      borderRadius: 3,
+                      padding: "1px 4px",
+                      flexShrink: 0,
+                    }}>
+                      Relay
+                    </span>
+                  )}
+                  <code style={{
+                    flex: 1,
+                    fontSize: 11,
+                    padding: "4px 8px",
+                    background: "var(--bg)",
                     border: "1px solid var(--border)",
                     borderRadius: 4,
-                    padding: "4px 8px",
-                    fontSize: 11,
-                    cursor: "pointer",
-                    color: webhookCopied ? "var(--ok, #4caf80)" : "var(--fg-dim)",
-                  }}
-                >
-                  {webhookCopied ? "Copied" : "Copy"}
-                </button>
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}>
+                    {webhookUrl}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={handleCopyUrl}
+                    style={{
+                      background: "none",
+                      border: "1px solid var(--border)",
+                      borderRadius: 4,
+                      padding: "4px 8px",
+                      fontSize: 11,
+                      cursor: "pointer",
+                      color: webhookCopied ? "var(--ok, #4caf80)" : "var(--fg-dim)",
+                    }}
+                  >
+                    {webhookCopied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                {webhookLocalUrl && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      color: "var(--fg-dim)",
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 3,
+                      padding: "1px 4px",
+                      flexShrink: 0,
+                    }}>
+                      Local
+                    </span>
+                    <code style={{
+                      flex: 1,
+                      fontSize: 10,
+                      padding: "3px 6px",
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 4,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      color: "var(--fg-dim)",
+                    }}>
+                      {webhookLocalUrl}
+                    </code>
+                  </div>
+                )}
               </div>
             )}
           </div>

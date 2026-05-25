@@ -20,12 +20,8 @@ import type {
   WorkflowDef,
   StepConfig,
   StepType,
-  StepRun,
-  StepRunStatus,
   TriggerConfig,
-  RunDetail,
 } from "../../types/workflow";
-import * as wfApi from "../../api/workflows";
 import { TriggerNode } from "./TriggerNode";
 import { StepNode } from "./StepNode";
 import { ConditionNode } from "./ConditionNode";
@@ -40,7 +36,12 @@ import {
   buildEdges,
 } from "./workflow-layout";
 import type { PosMap } from "./workflow-layout";
+import { slugify, clearPredecessorTo, moveAfter } from "./workflow-utils";
+import { useInteractiveRun } from "./useInteractiveRun";
+import { useWorkflowCRUD } from "./useWorkflowCRUD";
 import "./WorkflowFlow.css";
+
+export { slugify } from "./workflow-utils";
 
 const NODE_TYPES = {
   trigger: TriggerNode,
@@ -105,18 +106,6 @@ export const TRIGGER_PALETTE: { type: TriggerConfig["type"]; icon: string; tip: 
   { type: "manual", icon: "👆", tip: "Manual" },
 ];
 
-function uid(): string {
-  return Math.random().toString(36).substring(2, 10);
-}
-
-export function slugify(name: string): string {
-  return name
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .split(/[\s_\-]+/)
-    .map((w, i) => i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join("");
-}
-
 function triggerSummary(t: TriggerConfig): string {
   switch (t.type) {
     case "webhook": return t.token ? `${t.token.slice(0, 8)}…` : "Pending";
@@ -143,39 +132,6 @@ function stepSummary(s: StepConfig): string {
   }
 }
 
-const MAX_UNDO = 5;
-
-function insertStepAfter(steps: StepConfig[], afterId: string, newStep: StepConfig): StepConfig[] {
-  const result = [...steps];
-  const idx = result.findIndex((s) => s.id === afterId);
-  if (idx === -1) {
-    result.push(newStep);
-    return result;
-  }
-  result.splice(idx + 1, 0, newStep);
-  return result;
-}
-
-function clearPredecessorTo(steps: StepConfig[], targetId: string): StepConfig[] {
-  return steps.map((s) => {
-    const patches: Partial<StepConfig> = {};
-    if (s.next_step === targetId) patches.next_step = undefined;
-    if (s.then_step === targetId) patches.then_step = undefined;
-    if (s.else_step === targetId) patches.else_step = undefined;
-    return Object.keys(patches).length > 0 ? { ...s, ...patches } : s;
-  });
-}
-
-function moveAfter(steps: StepConfig[], afterId: string, targetId: string): StepConfig[] {
-  const target = steps.find((s) => s.id === targetId);
-  if (!target) return steps;
-  const rest = steps.filter((s) => s.id !== targetId);
-  const idx = rest.findIndex((s) => s.id === afterId);
-  if (idx === -1) return [...rest, target];
-  rest.splice(idx + 1, 0, target);
-  return rest;
-}
-
 function Canvas({
   wf,
   onSave,
@@ -188,7 +144,6 @@ function Canvas({
   wfPath?: string;
 }) {
   const rfInstance = useReactFlow();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const migratedWf = useMemo(() => migrateWorkflow(wf), [wf]);
   const wfRef = useRef(migratedWf);
@@ -196,377 +151,27 @@ function Canvas({
   const latestStepsRef = useRef(migratedWf.steps);
   latestStepsRef.current = migratedWf.steps;
 
-  const [undoStack, setUndoStack] = useState<WorkflowDef[]>([]);
-  const [deleteConfirm, setDeleteConfirm] = useState<{
-    type: "step" | "trigger";
-    id: string;
-  } | null>(null);
-  const [handlePicker, setHandlePicker] = useState<{
-    sourceNodeId: string;
-    sourceHandle: string;
-    x: number;
-    y: number;
-  } | null>(null);
-
   const nodePosMap = useRef<PosMap>({});
   const prevFingerprint = useRef("");
 
-  const [interactiveRunId, setInteractiveRunId] = useState<string | null>(null);
-  const [stepRunMap, setStepRunMap] = useState<Record<string, StepRun>>({});
-  const [triggerPayload, setTriggerPayload] = useState<Record<string, unknown>>({});
-  const [condBranches, setCondBranches] = useState<Record<string, string>>({});
-  const [executingStep, setExecutingStep] = useState<string | null>(null);
-  const [inspectorStepId, setInspectorStepId] = useState<string | null>(null);
-  const [showPayloadInput, setShowPayloadInput] = useState(false);
-  const [payloadInputMode, setPayloadInputMode] = useState<"trigger" | "all">("trigger");
-  const [payloadText, setPayloadText] = useState("{}");
-  const [payloadFormat, setPayloadFormat] = useState<"json" | "plain" | "xml">("json");
-  const [execError, setExecError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"design" | "monitor">("design");
-  const [monitorDetail, setMonitorDetail] = useState<RunDetail | null>(null);
-  const [monitorInspectStepId, setMonitorInspectStepId] = useState<string | null>(null);
-  const [showTriggerTest, setShowTriggerTest] = useState(false);
+  const ir = useInteractiveRun({
+    wfPath,
+    onFlushSave,
+    wfRef,
+    latestStepsRef,
+    triggers: migratedWf.triggers,
+  });
 
-  useEffect(() => {
-    if (!wfPath) return;
-    wfApi.getWorkflowSamples(wfPath).then((s) => {
-      if (s.trigger_payload && Object.keys(s.trigger_payload).length > 0) {
-        setPayloadText(JSON.stringify(s.trigger_payload, null, 2));
-        setTriggerPayload(s.trigger_payload);
-      }
-      const stepSampleMap: Record<string, StepRun> = {};
-      for (const [stepId, sample] of Object.entries(s.steps || {})) {
-        if (sample.output !== undefined) {
-          stepSampleMap[stepId] = {
-            run_id: "__sample__",
-            step_id: stepId,
-            step_name: sample.slug || stepId,
-            step_slug: sample.slug || "",
-            step_type: "",
-            status: "completed",
-            input_resolved: sample.input_resolved as Record<string, unknown> | undefined,
-            output: sample.output,
-            started_at: "",
-            finished_at: "",
-          };
-        }
-      }
-      if (Object.keys(stepSampleMap).length > 0) {
-        setStepRunMap(stepSampleMap);
-      }
-    }).catch(() => {});
-  }, [wfPath]);
-
-  const saveWithUndo = useCallback((next: WorkflowDef) => {
-    setUndoStack((prev) => [...prev.slice(-(MAX_UNDO - 1)), wfRef.current]);
-    latestStepsRef.current = next.steps;
-    onSave(next);
-  }, [onSave]);
-
-  const handleUndo = useCallback(() => {
-    setUndoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const restored = prev[prev.length - 1];
-      onSave(restored);
-      return prev.slice(0, -1);
-    });
-  }, [onSave]);
-
-  const addStep = useCallback((type: StepType | "trigger", insertAfter?: { stepId: string; branch?: "then" | "else" }) => {
-    if (type === "trigger" || (typeof type === "string" && type.startsWith("trigger-"))) {
-      const trigType = type === "trigger" ? "manual" as TriggerConfig["type"] : (type.replace("trigger-", "") as TriggerConfig["type"]);
-      if (wfRef.current.triggers.length > 0) return;
-      saveWithUndo({ ...wfRef.current, triggers: [{ id: uid(), type: trigType }] });
-      return;
-    }
-
-    const stepType = type as StepType;
-    const newId = uid();
-    const name = `${stepType.replace(/_/g, " ")} ${wfRef.current.steps.length + 1}`;
-    const step: StepConfig = { id: newId, name, slug: slugify(name), type: stepType };
-
-    if (insertAfter?.branch) {
-      const condId = insertAfter.stepId;
-      const branch = insertAfter.branch;
-      const branchField = branch === "then" ? "then_step" : "else_step";
-
-      let steps = wfRef.current.steps.map((s) => ({ ...s }));
-      const condIdx = steps.findIndex((s) => s.id === condId);
-      if (condIdx === -1) return;
-
-      const cond = steps[condIdx];
-      const existingTarget = cond[branchField];
-      if (existingTarget) {
-        let chainEnd = existingTarget;
-        while (true) {
-          const chainStep = steps.find((s) => s.id === chainEnd);
-          if (!chainStep || !chainStep.next_step) break;
-          chainEnd = chainStep.next_step;
-        }
-        const chainEndStep = steps.find((s) => s.id === chainEnd);
-        if (chainEndStep) {
-          chainEndStep.next_step = newId;
-        }
-      } else {
-        (cond as Record<string, unknown>)[branchField] = newId;
-      }
-
-      let insertIdx = condIdx + 1;
-      const otherBranch = branch === "then" ? "else_step" : "then_step";
-      const otherTarget = cond[otherBranch as keyof StepConfig] as string | undefined;
-      if (otherTarget) {
-        const otherTargetIdx = steps.findIndex((s) => s.id === otherTarget);
-        if (otherTargetIdx !== -1 && otherTargetIdx > condIdx) {
-          insertIdx = condIdx + 1;
-        }
-      }
-
-      steps.splice(insertIdx, 0, step);
-      steps = steps.map((s) =>
-        s.id === condId ? { ...s, [branchField]: existingTarget || newId } : s
-      );
-
-      if (!existingTarget) {
-        steps = steps.map((s) =>
-          s.id === condId ? { ...s, [branchField]: newId } : s
-        );
-      }
-
-      saveWithUndo({ ...wfRef.current, steps });
-    } else if (insertAfter?.stepId) {
-      const afterId = insertAfter.stepId;
-      let steps = wfRef.current.steps.map((s) => ({ ...s }));
-      const afterStep = steps.find((s) => s.id === afterId);
-      if (!afterStep) return;
-
-      step.next_step = afterStep.next_step;
-      afterStep.next_step = newId;
-
-      steps = insertStepAfter(steps, afterId, step);
-      saveWithUndo({ ...wfRef.current, steps });
-    } else {
-      saveWithUndo({ ...wfRef.current, steps: [...wfRef.current.steps, step] });
-    }
-  }, [saveWithUndo]);
-
-  const onAddFromHandle = useCallback(
-    (nodeId: string, handleId: string, rect: DOMRect) => {
-      const containerRect = document.querySelector(".wf-flow-canvas")?.getBoundingClientRect();
-      const x = containerRect ? rect.left + rect.width / 2 - containerRect.left : rect.left;
-      const y = containerRect ? rect.bottom + 4 - containerRect.top : rect.bottom + 4;
-      setHandlePicker({ sourceNodeId: nodeId, sourceHandle: handleId, x, y });
-    },
-    [],
-  );
-
-  const hasCompletedPrerequisites = useCallback(
-    (stepId: string): boolean => {
-      if (!interactiveRunId) return false;
-      const steps = wfRef.current.steps;
-      if (steps.length > 0 && steps[0].id === stepId) return true;
-      for (const s of steps) {
-        if (s.next_step === stepId || s.then_step === stepId || s.else_step === stepId) {
-          if (s.type === "condition") {
-            const branch = condBranches[s.id];
-            if (branch === "then" && s.then_step === stepId) {
-              return !!stepRunMap[s.id] && stepRunMap[s.id].status === "completed";
-            }
-            if (branch === "else" && s.else_step === stepId) {
-              return !!stepRunMap[s.id] && stepRunMap[s.id].status === "completed";
-            }
-            return false;
-          }
-          return !!stepRunMap[s.id] && stepRunMap[s.id].status === "completed";
-        }
-      }
-      return false;
-    },
-    [interactiveRunId, stepRunMap, condBranches],
-  );
-
-  const startRun = useCallback(
-    async (mode: "trigger" | "all") => {
-      if (!wfPath) return;
-      setExecError(null);
-      if (onFlushSave) await onFlushSave();
-      try {
-        let payload = {};
-        if (payloadFormat === "json") {
-          try { payload = JSON.parse(payloadText); } catch {}
-        }
-        const result = await wfApi.startInteractiveRun(
-          wfPath, payload, mode, false,
-          payloadFormat, payloadFormat !== "json" ? payloadText : "",
-        );
-        const resolvedPayload = payloadFormat !== "json" ? result.run?.trigger_payload || payload : payload;
-        setInteractiveRunId(result.run.id);
-        setTriggerPayload(resolvedPayload);
-        setStepRunMap({});
-        setCondBranches({});
-        if (mode === "all") {
-          const state = await wfApi.getInteractiveState(wfPath, result.run.id);
-          const newMap: Record<string, StepRun> = {};
-          for (const sr of state.steps) {
-            newMap[sr.step_id] = sr;
-          }
-          setStepRunMap(newMap);
-          setCondBranches(state.condition_branches || {});
-        }
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        setExecError(msg);
-        console.error("Failed to start interactive run:", e);
-      }
-    },
-    [wfPath, payloadText, payloadFormat, onFlushSave],
-  );
-
-  const handleTriggerRun = useCallback(() => {
-    const trigger = migratedWf.triggers[0];
-    if (trigger && trigger.type !== "manual") {
-      setShowTriggerTest(true);
-    } else {
-      setShowPayloadInput(true);
-      setPayloadInputMode("trigger");
-    }
-  }, [migratedWf.triggers]);
-
-  const handleRunAll = useCallback(() => {
-    setShowPayloadInput(true);
-    setPayloadInputMode("all");
-  }, []);
-
-  const handleTriggerTestPayload = useCallback((payload: Record<string, unknown>) => {
-    setShowTriggerTest(false);
-    setPayloadText(JSON.stringify(payload, null, 2));
-    setTriggerPayload(payload);
-    if (!wfPath) return;
-    (async () => {
-      try {
-        if (onFlushSave) await onFlushSave();
-        const result = await wfApi.startInteractiveRun(wfPath, payload, "all", false, "json", "");
-        setInteractiveRunId(result.run.id);
-        setTriggerPayload(payload);
-        setStepRunMap({});
-        setCondBranches({});
-        const state = await wfApi.getInteractiveState(wfPath, result.run.id);
-        const newMap: Record<string, StepRun> = {};
-        for (const sr of state.steps) {
-          newMap[sr.step_id] = sr;
-        }
-        setStepRunMap(newMap);
-        setCondBranches(state.condition_branches || {});
-      } catch (e: any) {
-        setExecError(e?.message || String(e));
-      }
-    })();
-  }, [wfPath, onFlushSave]);
-
-  const handlePayloadSubmit = useCallback(() => {
-    setShowPayloadInput(false);
-    startRun(payloadInputMode);
-  }, [startRun, payloadInputMode]);
-
-  const startSeededRun = useCallback(async (): Promise<string | null> => {
-    if (!wfPath) return null;
-    let payload = {};
-    try { payload = JSON.parse(payloadText); } catch {}
-    const result = await wfApi.startInteractiveRun(wfPath, payload, "trigger", true);
-    const runId = result.run.id;
-    setInteractiveRunId(runId);
-    setTriggerPayload(payload);
-    const state = await wfApi.getInteractiveState(wfPath, runId);
-    const seededMap: Record<string, StepRun> = {};
-    for (const sr of state.steps) {
-      seededMap[sr.step_id] = sr;
-    }
-    setStepRunMap(seededMap);
-    setCondBranches(state.condition_branches || {});
-    return runId;
-  }, [wfPath, payloadText]);
-
-  const executeStep = useCallback(
-    async (stepId: string) => {
-      if (!wfPath) return;
-      setExecError(null);
-      setExecutingStep(stepId);
-      try {
-        if (onFlushSave) await onFlushSave();
-        const currentStep = latestStepsRef.current.find((s) => s.id === stepId);
-        const stepCfg = currentStep ? { ...currentStep } : undefined;
-        let runId = interactiveRunId;
-        if (!runId) {
-          runId = (await startSeededRun()) || "";
-        }
-        let sr: StepRun;
-        try {
-          sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId, stepCfg);
-        } catch (execErr: any) {
-          const detail = execErr?.message || "";
-          if (runId && (detail.includes("not found") || detail.includes("not reachable"))) {
-            runId = (await startSeededRun()) || "";
-            if (!runId) throw execErr;
-            sr = await wfApi.interactiveExecuteStep(wfPath, runId, stepId, stepCfg);
-          } else {
-            throw execErr;
-          }
-        }
-        setStepRunMap((prev) => ({ ...prev, [stepId]: sr }));
-        const step = wfRef.current.steps.find((s) => s.id === stepId);
-        if (sr.condition_branches && Object.keys(sr.condition_branches).length > 0) {
-          setCondBranches((prev) => ({ ...prev, ...sr.condition_branches }));
-        } else if (step?.type === "condition" && sr.status === "completed") {
-          try {
-            const state = await wfApi.getInteractiveState(wfPath, runId);
-            setCondBranches(state.condition_branches || {});
-          } catch {}
-        }
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        setExecError(msg);
-        console.error("Failed to execute step:", e);
-      } finally {
-        setExecutingStep(null);
-      }
-    },
-    [wfPath, interactiveRunId, startSeededRun, onFlushSave],
-  );
-
-  const handleOpenInspector = useCallback((stepId: string) => {
-    setInspectorStepId(stepId);
-  }, []);
-
-  const handleSeedFromRun = useCallback(async (runId: string) => {
-    if (!wfPath) return;
-    try {
-      const state = await wfApi.seedFromRun(wfPath, runId);
-      setInteractiveRunId(state.run.id);
-      setTriggerPayload(state.run.trigger_payload || {});
-      const newMap: Record<string, StepRun> = {};
-      for (const sr of state.steps) {
-        newMap[sr.step_id] = sr;
-      }
-      setStepRunMap(newMap);
-      setCondBranches(state.condition_branches || {});
-      setActiveTab("design");
-    } catch (e: any) {
-      setExecError(e?.message || String(e));
-    }
-  }, [wfPath]);
-
-  const getStepExecStatus = useCallback(
-    (stepId: string): StepRunStatus | null => {
-      if (executingStep === stepId) return "running";
-      const sr = stepRunMap[stepId];
-      return sr?.status || null;
-    },
-    [executingStep, stepRunMap],
-  );
+  const crud = useWorkflowCRUD({
+    wfRef,
+    latestStepsRef,
+    onSave,
+  });
 
   const fingerprint = `${migratedWf.triggers.map((t) => t.id).join(",")}|${migratedWf.steps.map((s) => `${s.id}:${s.next_step || ""}:${s.then_step || ""}:${s.else_step || ""}`).join(",")}`;
 
   if (fingerprint !== prevFingerprint.current) {
-    setInteractiveRunId(null);
+    ir.setInteractiveRunId(null);
     nodePosMap.current = computeLayout(migratedWf);
     prevFingerprint.current = fingerprint;
   }
@@ -586,11 +191,11 @@ function Canvas({
           triggerId: t.id,
           label: t.type,
           detail: triggerSummary(t),
-          selected: selectedId === id,
-          hasActiveRun: !!interactiveRunId,
-          onRunTrigger: handleTriggerRun,
-          onRunAll: handleRunAll,
-          onAddFromHandle,
+          selected: crud.selectedId === id,
+          hasActiveRun: !!ir.interactiveRunId,
+          onRunTrigger: ir.handleTriggerRun,
+          onRunAll: ir.handleRunAll,
+          onAddFromHandle: crud.onAddFromHandle,
         },
       });
     }
@@ -603,13 +208,13 @@ function Canvas({
         selectable: true,
         draggable: true,
       };
-      const execStatus = getStepExecStatus(s.id);
-      const canRun = !!interactiveRunId && !executingStep && hasCompletedPrerequisites(s.id);
-      const branch = condBranches[s.id];
-      const histSr = (activeTab === "monitor" ? monitorDetail : null)?.steps.find((h) => h.step_id === s.id);
+      const execStatus = ir.getStepExecStatus(s.id);
+      const canRun = !!ir.interactiveRunId && !ir.executingStep && ir.hasCompletedPrerequisites(s.id);
+      const branch = ir.condBranches[s.id];
+      const histSr = (ir.activeTab === "monitor" ? ir.monitorDetail : null)?.steps.find((h) => h.step_id === s.id);
       const historyStatus = histSr?.status || null;
-      const monitorExecuted = activeTab === "monitor" && monitorDetail
-        ? monitorDetail.steps.some((h) => h.step_id === s.id && (h.status === "completed" || h.status === "failed" || h.status === "running"))
+      const monitorExecuted = ir.activeTab === "monitor" && ir.monitorDetail
+        ? ir.monitorDetail.steps.some((h) => h.step_id === s.id && (h.status === "completed" || h.status === "failed" || h.status === "running"))
         : null;
 
       if (s.type === "condition") {
@@ -621,16 +226,16 @@ function Canvas({
             stepName: s.name,
             slug: s.slug || slugify(s.name),
             expression: s.expression || "",
-            selected: selectedId === id,
+            selected: crud.selectedId === id,
             execStatus,
             conditionBranch: branch || null,
             canRun,
             historyStatus,
             historyOutput: histSr?.output,
             monitorExecuted,
-            onRun: () => executeStep(s.id),
-            onOpenInspector: () => handleOpenInspector(s.id),
-            onAddFromHandle,
+            onRun: () => ir.executeStep(s.id),
+            onOpenInspector: () => ir.handleOpenInspector(s.id),
+            onAddFromHandle: crud.onAddFromHandle,
           },
         });
       } else {
@@ -643,23 +248,23 @@ function Canvas({
             slug: s.slug || slugify(s.name),
             stepType: s.type,
             summary: stepSummary(s),
-            selected: selectedId === id,
+            selected: crud.selectedId === id,
             execStatus,
             canRun,
-            executing: executingStep === s.id,
+            executing: ir.executingStep === s.id,
             historyStatus,
             historyOutput: histSr?.output,
             monitorExecuted,
-            onRun: () => executeStep(s.id),
-            onOpenInspector: () => handleOpenInspector(s.id),
-            onAddFromHandle,
+            onRun: () => ir.executeStep(s.id),
+            onOpenInspector: () => ir.handleOpenInspector(s.id),
+            onAddFromHandle: crud.onAddFromHandle,
           },
         });
       }
     }
 
     return nodes;
-  }, [migratedWf, selectedId, fingerprint, interactiveRunId, stepRunMap, condBranches, executingStep, getStepExecStatus, hasCompletedPrerequisites, executeStep, handleTriggerRun, handleRunAll, handleOpenInspector, onAddFromHandle, activeTab, monitorDetail]);
+  }, [migratedWf, crud.selectedId, fingerprint, ir.interactiveRunId, ir.stepRunMap, ir.condBranches, ir.executingStep, ir.getStepExecStatus, ir.hasCompletedPrerequisites, ir.executeStep, ir.handleTriggerRun, ir.handleRunAll, ir.handleOpenInspector, crud.onAddFromHandle, ir.activeTab, ir.monitorDetail]);
 
   const [controlledNodes, setControlledNodes] = useState<Node[]>([]);
 
@@ -677,7 +282,7 @@ function Canvas({
       if (edge.sourceHandle === "then" || edge.sourceHandle === "else") {
         const stepId = edge.source.replace("step-", "");
         const field = edge.sourceHandle === "then" ? "then_step" : "else_step";
-        saveWithUndo({
+        crud.saveWithUndo({
           ...wfRef.current,
           steps: wfRef.current.steps.map((s) =>
             s.id === stepId ? { ...s, [field]: undefined } : s,
@@ -685,7 +290,7 @@ function Canvas({
         });
       } else {
         const srcStepId = edge.source.replace("step-", "");
-        saveWithUndo({
+        crud.saveWithUndo({
           ...wfRef.current,
           steps: wfRef.current.steps.map((s) =>
             s.id === srcStepId ? { ...s, next_step: undefined } : s,
@@ -693,7 +298,7 @@ function Canvas({
         });
       }
     },
-    [saveWithUndo],
+    [crud.saveWithUndo],
   );
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -768,7 +373,7 @@ function Canvas({
       if (handle === "then" || handle === "else") {
         const stepId = connection.source.replace("step-", "");
         const patch = handle === "then" ? { then_step: targetId } : { else_step: targetId };
-        saveWithUndo({
+        crud.saveWithUndo({
           ...wfRef.current,
           steps: wfRef.current.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
         });
@@ -780,7 +385,7 @@ function Canvas({
         if (!targetStep) return;
         const steps = wfRef.current.steps.filter((s) => s.id !== targetId);
         steps.unshift(targetStep);
-        saveWithUndo({ ...wfRef.current, steps });
+        crud.saveWithUndo({ ...wfRef.current, steps });
         return;
       }
 
@@ -792,138 +397,9 @@ function Canvas({
       );
       steps = moveAfter(steps, srcStepId, targetId);
 
-      saveWithUndo({ ...wfRef.current, steps });
+      crud.saveWithUndo({ ...wfRef.current, steps });
     },
-    [saveWithUndo],
-  );
-
-  const handlePickerSelect = useCallback((type: StepType) => {
-    if (!handlePicker) return;
-    const { sourceNodeId, sourceHandle } = handlePicker;
-
-    const newId = uid();
-    const name = `${type.replace(/_/g, " ")} ${wfRef.current.steps.length + 1}`;
-    const step: StepConfig = { id: newId, name, slug: slugify(name), type };
-
-    if (sourceHandle === "then" || sourceHandle === "else") {
-      const condId = sourceNodeId.replace("step-", "");
-      const branchField = sourceHandle === "then" ? "then_step" : "else_step";
-
-      let steps = wfRef.current.steps.map((s) => ({ ...s }));
-      const condIdx = steps.findIndex((s) => s.id === condId);
-      if (condIdx === -1) return;
-
-      const cond = steps[condIdx];
-      const existingTarget = cond[branchField] as string | undefined;
-
-      if (existingTarget) {
-        let chainEnd = existingTarget;
-        while (true) {
-          const chainStep = steps.find((s) => s.id === chainEnd);
-          if (!chainStep || !chainStep.next_step) break;
-          chainEnd = chainStep.next_step;
-        }
-        const chainEndStep = steps.find((s) => s.id === chainEnd);
-        if (chainEndStep) {
-          chainEndStep.next_step = newId;
-        }
-      }
-
-      const branchPatch = existingTarget
-        ? {}
-        : { [branchField]: newId };
-
-      let insertIdx = condIdx + 1;
-      const otherField = sourceHandle === "then" ? "else_step" : "then_step";
-      const otherTarget = cond[otherField as keyof StepConfig] as string | undefined;
-      if (otherTarget) {
-        const otherTargetIdx = steps.findIndex((s) => s.id === otherTarget);
-        if (otherTargetIdx !== -1 && otherTargetIdx > condIdx) {
-          insertIdx = condIdx + 1;
-        }
-      }
-
-      steps.splice(insertIdx, 0, step);
-      steps = steps.map((s) =>
-        s.id === condId ? { ...s, ...branchPatch } : s
-      );
-
-      saveWithUndo({ ...wfRef.current, steps });
-    } else if (sourceNodeId.startsWith("trigger-")) {
-      if (wfRef.current.steps.length > 0) {
-        step.next_step = wfRef.current.steps[0].id;
-      }
-      saveWithUndo({ ...wfRef.current, steps: [step, ...wfRef.current.steps] });
-    } else {
-      const afterId = sourceNodeId.replace("step-", "");
-      let steps = wfRef.current.steps.map((s) => ({ ...s }));
-      const afterStep = steps.find((s) => s.id === afterId);
-      if (!afterStep) return;
-
-      step.next_step = afterStep.next_step;
-      afterStep.next_step = newId;
-      steps = insertStepAfter(steps, afterId, step);
-      saveWithUndo({ ...wfRef.current, steps });
-    }
-    setHandlePicker(null);
-  }, [handlePicker, saveWithUndo]);
-
-  const selectedNode = selectedId ? controlledNodes.find((n) => n.id === selectedId) : null;
-
-  const confirmDelete = useCallback(() => {
-    if (!deleteConfirm) return;
-    if (deleteConfirm.type === "step") {
-      const stepId = deleteConfirm.id;
-      saveWithUndo({
-        ...wfRef.current,
-        steps: wfRef.current.steps
-          .filter((s) => s.id !== stepId)
-          .map((s) => ({
-            ...s,
-            next_step: s.next_step === stepId ? undefined : s.next_step,
-            then_step: s.then_step === stepId ? undefined : s.then_step,
-            else_step: s.else_step === stepId ? undefined : s.else_step,
-          })),
-      });
-    } else {
-      saveWithUndo({ ...wfRef.current, triggers: [] });
-    }
-    setSelectedId(null);
-    setDeleteConfirm(null);
-  }, [deleteConfirm, saveWithUndo]);
-
-  const handleDeleteStep = useCallback(() => {
-    if (!selectedId?.startsWith("step-")) return;
-    setDeleteConfirm({ type: "step", id: selectedId.replace("step-", "") });
-  }, [selectedId]);
-
-  const handleDeleteTrigger = useCallback(() => {
-    if (!selectedId?.startsWith("trigger-")) return;
-    setDeleteConfirm({ type: "trigger", id: selectedId.replace("trigger-", "") });
-  }, [selectedId]);
-
-  const handleChangeStep = useCallback(
-    (patch: Partial<StepConfig>) => {
-      if (!selectedId?.startsWith("step-")) return;
-      const stepId = selectedId.replace("step-", "");
-      saveWithUndo({
-        ...wfRef.current,
-        steps: wfRef.current.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
-      });
-    },
-    [selectedId, saveWithUndo],
-  );
-
-  const handleChangeTrigger = useCallback(
-    (patch: Partial<TriggerConfig>) => {
-      if (!selectedId?.startsWith("trigger-")) return;
-      const triggerId = selectedId.replace("trigger-", "");
-      saveWithUndo({
-        ...wfRef.current,
-        triggers: wfRef.current.triggers.map((t) => (t.id === triggerId ? { ...t, ...patch } : t)),
-      });
-    },
-    [selectedId, saveWithUndo],
+    [crud.saveWithUndo],
   );
 
   const handleRearrange = useCallback(() => {
@@ -937,36 +413,36 @@ function Canvas({
     );
   }, [migratedWf]);
 
-  const isMonitor = activeTab === "monitor";
+  const isMonitor = ir.activeTab === "monitor";
 
   const handleMonitorNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    if (!isMonitor || !monitorDetail) return;
+    if (!isMonitor || !ir.monitorDetail) return;
     const stepId = node.id.startsWith("step-") ? node.id.replace("step-", "") : null;
-    setMonitorInspectStepId(stepId);
-  }, [isMonitor, monitorDetail]);
+    ir.setMonitorInspectStepId(stepId);
+  }, [isMonitor, ir.monitorDetail, ir.setMonitorInspectStepId]);
 
   const onNodeClickHandler = useCallback((e: React.MouseEvent, node: Node) => {
     if (isMonitor) {
       handleMonitorNodeClick(e, node);
     } else {
-      setSelectedId((prev) => (prev === node.id ? null : node.id));
+      crud.setSelectedId((prev) => (prev === node.id ? null : node.id));
     }
-  }, [isMonitor, handleMonitorNodeClick]);
+  }, [isMonitor, handleMonitorNodeClick, crud.setSelectedId]);
 
   const monitorEdges = useMemo(() => {
-    if (!isMonitor || !monitorDetail) return edges;
+    if (!isMonitor || !ir.monitorDetail) return edges;
     const executedIds = new Set(
-      monitorDetail.steps
+      ir.monitorDetail.steps
         .filter((s) => s.status === "completed" || s.status === "failed" || s.status === "running")
         .map((s) => `step-${s.step_id}`),
     );
     const executedSources = new Set(
-      monitorDetail.steps
+      ir.monitorDetail.steps
         .filter((s) => s.status === "completed" || s.status === "running")
         .map((s) => s.step_id),
     );
     const triggerId = migratedWf.triggers[0]?.id;
-    if (triggerId && monitorDetail.steps.length > 0) {
+    if (triggerId && ir.monitorDetail.steps.length > 0) {
       executedIds.add(`trigger-${triggerId}`);
     }
     return edges.map((e) => {
@@ -978,24 +454,26 @@ function Canvas({
       }
       return { ...e, className: "wf-edge-exec-dimmed", style: { stroke: "var(--text-muted, #333)", opacity: 0.2, strokeDasharray: "5 5" } };
     });
-  }, [isMonitor, monitorDetail, edges, migratedWf.triggers]);
+  }, [isMonitor, ir.monitorDetail, edges, migratedWf.triggers]);
 
   const activeEdges = isMonitor ? monitorEdges : edges;
+
+  const selectedNode = crud.selectedId ? controlledNodes.find((n) => n.id === crud.selectedId) : null;
 
   const canvasEl = (
     <div className="wf-flow-canvas" style={{ position: "relative" }}>
       {migratedWf.triggers.length === 0 && !isMonitor && (
         <button
           className="wf-empty-add"
-          onClick={() => addStep("trigger")}
+          onClick={() => crud.addStep("trigger")}
         >
           + Add Trigger
         </button>
       )}
 
-      {execError && (
-        <div className="wf-exec-error-toast" onClick={() => setExecError(null)}>
-          <span className="wf-exec-error-msg">{execError}</span>
+      {ir.execError && (
+        <div className="wf-exec-error-toast" onClick={() => ir.setExecError(null)}>
+          <span className="wf-exec-error-msg">{ir.execError}</span>
           <button className="wf-exec-error-close">✕</button>
         </div>
       )}
@@ -1008,10 +486,10 @@ function Canvas({
         onEdgeClick={isMonitor ? () => {} : onEdgeClick}
         onPaneClick={() => {
           if (isMonitor) {
-            setMonitorInspectStepId(null);
+            ir.setMonitorInspectStepId(null);
           } else {
-            setSelectedId(null);
-            setHandlePicker(null);
+            crud.setSelectedId(null);
+            crud.setHandlePicker(null);
           }
         }}
         onNodesChange={isMonitor ? () => {} : onNodesChange}
@@ -1042,16 +520,16 @@ function Canvas({
         />
       </ReactFlow>
 
-      {!isMonitor && handlePicker && (
+      {!isMonitor && crud.handlePicker && (
         <div
           className="wf-connect-picker"
-          style={{ left: handlePicker.x, top: handlePicker.y }}
+          style={{ left: crud.handlePicker.x, top: crud.handlePicker.y }}
         >
           {STEP_PALETTE.map((s) => (
             <button
               key={s.type}
               className="wf-connect-picker-item"
-              onClick={() => handlePickerSelect(s.type)}
+              onClick={() => crud.handlePickerSelect(s.type)}
               title={s.desc}
             >
               <span className="wf-cpi-icon">{s.icon}</span>
@@ -1067,14 +545,14 @@ function Canvas({
     <div className="wf-flow-wrap">
       <div className="wf-tab-bar">
         <button
-          className={`wf-tab-item${activeTab === "design" ? " active" : ""}`}
-          onClick={() => setActiveTab("design")}
+          className={`wf-tab-item${ir.activeTab === "design" ? " active" : ""}`}
+          onClick={() => ir.setActiveTab("design")}
         >
           Design
         </button>
         <button
-          className={`wf-tab-item${activeTab === "monitor" ? " active" : ""}`}
-          onClick={() => setActiveTab("monitor")}
+          className={`wf-tab-item${ir.activeTab === "monitor" ? " active" : ""}`}
+          onClick={() => ir.setActiveTab("monitor")}
         >
           Monitor
         </button>
@@ -1084,15 +562,15 @@ function Canvas({
         <button className="wf-tab-btn" title="Fit view" onClick={() => rfInstance.fitView({ padding: 0.3 })}>⊞</button>
         <div className="wf-tb-sep" />
         <button className="wf-tab-btn" title="Auto-arrange layout" onClick={handleRearrange}>⇅</button>
-        {activeTab === "design" && undoStack.length > 0 && (
+        {ir.activeTab === "design" && crud.undoStack.length > 0 && (
           <>
             <div className="wf-tb-sep" />
-            <button className="wf-tab-btn" title="Undo" onClick={handleUndo}>↩</button>
+            <button className="wf-tab-btn" title="Undo" onClick={crud.handleUndo}>↩</button>
           </>
         )}
       </div>
 
-      {activeTab === "design" ? (
+      {ir.activeTab === "design" ? (
         <div className="wf-design-row">
           {canvasEl}
           {selectedNode && (
@@ -1109,37 +587,37 @@ function Canvas({
                   : undefined
               }
               allSteps={migratedWf.steps}
-              onChangeStep={handleChangeStep}
-              onChangeTrigger={handleChangeTrigger}
-              onDelete={selectedNode.id.startsWith("step-") ? handleDeleteStep : handleDeleteTrigger}
-              onClose={() => setSelectedId(null)}
+              onChangeStep={crud.handleChangeStep}
+              onChangeTrigger={crud.handleChangeTrigger}
+              onDelete={selectedNode.id.startsWith("step-") ? crud.handleDeleteStep : crud.handleDeleteTrigger}
+              onClose={() => crud.setSelectedId(null)}
               onOpenEditor={() => {
                 const stepId = selectedNode.id.replace("step-", "");
-                if (stepId) handleOpenInspector(stepId);
+                if (stepId) ir.handleOpenInspector(stepId);
               }}
               wfPath={wfPath}
             />
           )}
 
-          {deleteConfirm && (
+          {crud.deleteConfirm && (
             <Modal
               kind="confirm"
               danger
-              title={`Delete ${deleteConfirm.type === "step" ? "Step" : "Trigger"}`}
-              message={`Are you sure you want to delete this ${deleteConfirm.type}?`}
-              onSubmit={confirmDelete}
-              onCancel={() => setDeleteConfirm(null)}
+              title={`Delete ${crud.deleteConfirm.type === "step" ? "Step" : "Trigger"}`}
+              message={`Are you sure you want to delete this ${crud.deleteConfirm.type}?`}
+              onSubmit={crud.confirmDelete}
+              onCancel={() => crud.setDeleteConfirm(null)}
             />
           )}
 
-          {showPayloadInput && (
-            <div className="wf-payload-overlay" onClick={() => setShowPayloadInput(false)}>
+          {ir.showPayloadInput && (
+            <div className="wf-payload-overlay" onClick={() => ir.setShowPayloadInput(false)}>
               <div className="wf-payload-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="wf-payload-header">
                   <span className="wf-payload-title">
-                    {payloadInputMode === "all" ? "Run All Steps" : "Run Trigger"}
+                    {ir.payloadInputMode === "all" ? "Run All Steps" : "Run Trigger"}
                   </span>
-                  <button className="wf-payload-close" onClick={() => setShowPayloadInput(false)}>✕</button>
+                  <button className="wf-payload-close" onClick={() => ir.setShowPayloadInput(false)}>✕</button>
                 </div>
                 <div className="wf-payload-body">
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -1147,8 +625,8 @@ function Canvas({
                       Trigger Payload
                     </label>
                     <select
-                      value={payloadFormat}
-                      onChange={(e) => setPayloadFormat(e.target.value as "json" | "plain" | "xml")}
+                      value={ir.payloadFormat}
+                      onChange={(e) => ir.setPayloadFormat(e.target.value as "json" | "plain" | "xml")}
                       style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)" }}
                     >
                       <option value="json">JSON</option>
@@ -1157,16 +635,16 @@ function Canvas({
                     </select>
                   </div>
                   <textarea
-                    value={payloadText}
-                    onChange={(e) => setPayloadText(e.target.value)}
-                    placeholder={payloadFormat === "json" ? '{"key": "value"}' : payloadFormat === "xml" ? "<root><item>value</item></root>" : "Enter text..."}
+                    value={ir.payloadText}
+                    onChange={(e) => ir.setPayloadText(e.target.value)}
+                    placeholder={ir.payloadFormat === "json" ? '{"key": "value"}' : ir.payloadFormat === "xml" ? "<root><item>value</item></root>" : "Enter text..."}
                   />
                   <div className="wf-payload-actions">
-                    <button className="wf-payload-btn wf-payload-btn-cancel" onClick={() => setShowPayloadInput(false)}>
+                    <button className="wf-payload-btn wf-payload-btn-cancel" onClick={() => ir.setShowPayloadInput(false)}>
                       Cancel
                     </button>
-                    <button className="wf-payload-btn wf-payload-btn-run" onClick={handlePayloadSubmit}>
-                      {payloadInputMode === "all" ? "⏩ Run All" : "▶ Run Trigger"}
+                    <button className="wf-payload-btn wf-payload-btn-run" onClick={ir.handlePayloadSubmit}>
+                      {ir.payloadInputMode === "all" ? "⏩ Run All" : "▶ Run Trigger"}
                     </button>
                   </div>
                 </div>
@@ -1174,46 +652,46 @@ function Canvas({
             </div>
           )}
 
-          {inspectorStepId && wfPath && (() => {
-            const step = migratedWf.steps.find((s) => s.id === inspectorStepId);
+          {ir.inspectorStepId && wfPath && (() => {
+            const step = migratedWf.steps.find((s) => s.id === ir.inspectorStepId);
             if (!step) return null;
-            const sr = stepRunMap[inspectorStepId] || null;
+            const sr = ir.stepRunMap[ir.inspectorStepId] || null;
             return (
               <StepInspector
                 step={step}
                 stepRun={sr}
-                allStepRuns={Object.values(stepRunMap)}
+                allStepRuns={Object.values(ir.stepRunMap)}
                 allSteps={migratedWf.steps}
-                triggerPayload={triggerPayload}
+                triggerPayload={ir.triggerPayload}
                 variables={migratedWf.variables}
                 wfPath={wfPath}
                 onStepPatch={(patch) => {
-                  if (!selectedId) {
-                    const nodeId = `step-${inspectorStepId}`;
-                    setSelectedId(nodeId);
+                  if (!crud.selectedId) {
+                    const nodeId = `step-${ir.inspectorStepId}`;
+                    crud.setSelectedId(nodeId);
                   }
-                  saveWithUndo({
+                  crud.saveWithUndo({
                     ...wfRef.current,
                     steps: wfRef.current.steps.map((s) =>
-                      s.id === inspectorStepId ? { ...s, ...patch } : s
+                      s.id === ir.inspectorStepId ? { ...s, ...patch } : s
                     ),
                   });
                 }}
-                onExecute={() => executeStep(inspectorStepId)}
-                onClose={() => setInspectorStepId(null)}
-                executing={executingStep === inspectorStepId}
+                onExecute={() => ir.executeStep(ir.inspectorStepId!)}
+                onClose={() => ir.setInspectorStepId(null)}
+                executing={ir.executingStep === ir.inspectorStepId}
               />
             );
           })()}
 
-          {showTriggerTest && wfPath && migratedWf.triggers[0] && (
+          {ir.showTriggerTest && wfPath && migratedWf.triggers[0] && (
             <TriggerTestModal
               wfPath={wfPath}
               triggerId={migratedWf.triggers[0].id}
               triggerType={migratedWf.triggers[0].type}
               triggerConfig={migratedWf.triggers[0]}
-              onClose={() => setShowTriggerTest(false)}
-              onRunWithPayload={handleTriggerTestPayload}
+              onClose={() => ir.setShowTriggerTest(false)}
+              onRunWithPayload={ir.handleTriggerTestPayload}
             />
           )}
         </div>
@@ -1221,10 +699,11 @@ function Canvas({
         <MonitorTab
           wfPath={wfPath || ""}
           wf={migratedWf}
-          onExecutionLoad={setMonitorDetail}
-          onSeedFromRun={handleSeedFromRun}
-          monitorInspectStepId={monitorInspectStepId}
-          onMonitorInspectClose={() => setMonitorInspectStepId(null)}
+          onExecutionLoad={ir.setMonitorDetail}
+          onSeedFromRun={ir.handleSeedFromRun}
+          monitorInspectStepId={ir.monitorInspectStepId}
+          onMonitorInspectStep={(id) => ir.setMonitorInspectStepId(id)}
+          onMonitorInspectClose={() => ir.setMonitorInspectStepId(null)}
         >
           {canvasEl}
         </MonitorTab>

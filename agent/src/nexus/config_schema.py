@@ -326,6 +326,11 @@ class ServerConfig(BaseModel):
     multi_user: bool = False
 
 
+class BrokerConfig(BaseModel):
+    url: str = "https://nexus-broker.dev"
+    poll_interval_seconds: int = 30
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -342,6 +347,7 @@ class NexusConfig(BaseModel):
     dream: DreamConfig = Field(default_factory=DreamConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    broker: BrokerConfig = Field(default_factory=BrokerConfig)
 
 
 # Fresh install starts with providers configured but NO models.

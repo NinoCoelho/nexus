@@ -281,6 +281,8 @@ export async function retryVaultKanbanCard(path: string, cardId: string): Promis
 export interface LaneWebhookInfo {
   enabled: boolean;
   url: string | null;
+  localUrl: string | null;
+  brokerUrl: string | null;
   token: string | null;
 }
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -153,50 +152,15 @@ async def run_insight_extraction(
 def _load_recent_sessions(
     *, since: datetime | None = None, limit: int = 20,
 ) -> list[dict[str, str]]:
-    try:
-        import sqlite3
-        db_path = sessions_db()
-        if not db_path.exists():
-            return []
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
-            query = """
-                SELECT s.id, s.title, s.updated_at,
-                       GROUP_CONCAT(m.content, ' ') AS messages
-                FROM sessions s
-                LEFT JOIN messages m ON m.session_id = s.id
-                    AND m.role IN ('user', 'assistant')
-                    AND LENGTH(m.content) < 2000
-                WHERE COALESCE(s.hidden, 0) = 0
-            """
-            params: list[Any] = []
-            if since:
-                query += " AND s.updated_at > ?"
-                params.append(since.strftime("%Y-%m-%dT%H:%M:%S"))
-            query += """
-                GROUP BY s.id
-                ORDER BY s.updated_at DESC
-                LIMIT ?
-            """
-            params.append(limit)
-            rows = conn.execute(query, params).fetchall()
-            summaries = []
-            for r in rows:
-                title = r["title"] or "Untitled"
-                msgs = r["messages"] or ""
-                text = msgs[:500]
-                summaries.append({
-                    "session_id": r["id"][:8],
-                    "title": title,
-                    "preview": text,
-                })
-            return summaries
-        finally:
-            conn.close()
-    except Exception:
-        log.exception("dream/insight: session load failed")
-        return []
+    from ._shared import load_session_summaries
+    return load_session_summaries(
+        db_path=sessions_db(),
+        limit=limit,
+        since=since,
+        roles=("user", "assistant"),
+        max_content_length=2000,
+        preview_len=500,
+    )
 
 
 def _load_memory_summaries(*, limit: int = 10) -> list[dict[str, str]]:
@@ -278,39 +242,5 @@ def _hash_insight(title: str, body: str) -> str:
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    if not text:
-        return None
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        first_nl = candidate.find("\n")
-        if first_nl >= 0:
-            candidate = candidate[first_nl + 1:]
-        last_fence = candidate.rfind("```")
-        if last_fence > 0:
-            candidate = candidate[:last_fence]
-    candidate = candidate.strip()
-    if not candidate:
-        return None
-    brace = candidate.find("{")
-    bracket = candidate.find("[")
-    if brace >= 0 and (bracket < 0 or brace <= bracket):
-        candidate = candidate[brace:]
-    elif bracket >= 0:
-        candidate = candidate[bracket:]
-    try:
-        result = json.loads(candidate)
-        if isinstance(result, dict):
-            return result
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
-            return result[0]
-    except json.JSONDecodeError:
-        pass
-    try:
-        brace = candidate.rfind("}")
-        if brace >= 0:
-            result = json.loads(candidate[: brace + 1])
-            if isinstance(result, dict):
-                return result
-    except json.JSONDecodeError:
-        pass
-    return None
+    from ._shared import extract_json
+    return extract_json(text)

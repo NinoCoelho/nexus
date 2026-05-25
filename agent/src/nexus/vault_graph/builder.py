@@ -59,8 +59,7 @@ def _build_full() -> GraphData:
 
     tag_map: dict[str, list[str]] = {}
     try:
-        if vault_index.is_empty():
-            vault_index.rebuild_from_disk()
+        vault_index.ensure_ready()
         for row in vault_index.list_tags():
             pass
         for p_str in path_set:

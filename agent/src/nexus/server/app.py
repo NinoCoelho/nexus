@@ -10,14 +10,28 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, RedirectResponse
+
+from ..agent.ask_user_tool import AskUserHandler
+from ..agent.context import CURRENT_SESSION_ID
+from ..agent.loop import Agent
+from ..skills.registry import SkillRegistry
+from .app_lifespan import create_lifespan
+from .app_subagents import create_subagent_runner
+from .auth import AuthManager
+from .deps import SessionStoreProxy
+from .events import SessionEvent
+from .job_tracker import JobTracker
+from .middleware import MultiUserAuthMiddleware
+from .session_store import SessionStore
+from .settings import SettingsStore
+from .user_store import UserStore
 
 
 _AUTH_FREE_PATHS = {"/health"}
@@ -50,21 +64,8 @@ TUNNEL_PROTECTED_PREFIXES = (
 
 
 def _is_proxied(request: Request) -> bool:
-    """Heuristic: the request hopped through a reverse proxy (i.e. came via the tunnel).
-
-    cloudflared, ngrok, and most edge proxies set ``x-forwarded-for`` and
-    ``x-forwarded-proto``. Direct loopback connections do not. This is what lets
-    us bypass auth for the bundled UI talking to its own server while still
-    enforcing it for the same loopback IP when the connection traversed a tunnel.
-    """
-    h = request.headers
-    return bool(
-        h.get("x-forwarded-for")
-        or h.get("x-forwarded-host")
-        or h.get("cf-ray")              # cloudflared / Cloudflare edge
-        or h.get("cf-connecting-ip")    # cloudflared / Cloudflare edge
-        or h.get("ngrok-trace-id")      # legacy: still safe to honor
-    )
+    from .middleware import _is_proxied as _check
+    return _check(request)
 
 
 def _tunnel_path_requires_auth(path: str) -> bool:
@@ -227,19 +228,6 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
             status_code=401,
             headers={"Cache-Control": "no-store"},
         )
-
-from ..agent.ask_user_tool import AskUserHandler
-from ..agent.context import CURRENT_SESSION_ID
-from ..agent.loop import Agent
-from ..skills.registry import SkillRegistry
-from .auth import AuthManager
-from .deps import SessionStoreProxy
-from .events import SessionEvent
-from .job_tracker import JobTracker
-from .middleware import MultiUserAuthMiddleware
-from .session_store import SessionStore
-from .settings import SettingsStore
-from .user_store import UserStore
 
 log = logging.getLogger(__name__)
 
@@ -424,494 +412,17 @@ def create_app(
             _trace(k, d)
         agent._trace = _compose
 
-    @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        log.info("Lifespan starting (graphrag_cfg=%s)", "present" if graphrag_cfg is not None else "None")
-        try:
-            import asyncio
-            from . import event_bus
-            event_bus.set_loop(asyncio.get_running_loop())
-        except Exception:
-            log.exception("event_bus setup failed")
-
-        # Reap orphaned cloudflared tunnels from a previous .app instance.
-        # Without this, the in-memory TunnelManager boots with active=False
-        # while a re-parented cloudflared keeps publishing the old URL — any
-        # phone hitting that URL then trips the no-active-tunnel 401 fallback,
-        # bypassing the redirect-to-/ branch.
-        try:
-            from ..tunnel import cloudflared_provider
-            killed = cloudflared_provider.cleanup_orphans()
-            if killed:
-                log.info("cleaned up %d orphan cloudflared process(es) on startup", killed)
-        except Exception:
-            log.exception("cloudflared orphan cleanup failed")
-        # ``NEXUS_SKIP_LOCAL_LLM_RESTART=1`` skips both the orphan reap and
-        # the model-restart path. Tests set it because:
-        #   - reap_orphans() walks the host process table and kills any
-        #     llama-server it finds whose parent isn't the test process —
-        #     which would terminate the real daemon's running models.
-        #   - restart_local_models() reads the user's real
-        #     ~/.nexus/config.toml, blocks for seconds spawning GGUFs the
-        #     test never asked for, and may rewrite the config when a GGUF
-        #     can't be found.
-        skip_local_llm = bool(os.environ.get("NEXUS_SKIP_LOCAL_LLM_RESTART"))
-
-        # Kill orphan llama-server processes from previous crashed runs
-        # BEFORE restarting models, so we don't accumulate duplicates.
-        if not skip_local_llm:
-            try:
-                from ..local_llm import manager as _local_mgr
-                reaped = await asyncio.to_thread(_local_mgr.reap_orphans)
-                if reaped:
-                    log.info("[local_llm] reaped %d orphan(s): %s", len(reaped), reaped)
-            except Exception:
-                log.exception("local_llm orphan reap failed")
-
-        # Non-blocking: pre-warm the latest llama.cpp release check so
-        # /local/binary/status responds instantly on first UI load.
-        if not skip_local_llm:
-            try:
-                from ..local_llm.binary_update import check_latest
-                await asyncio.to_thread(check_latest)
-            except Exception:
-                pass
-
-        # Restart any local-* models the user had enabled in a prior run.
-        # Each gets a fresh port; we refresh config and rebuild the registry
-        # so the agent sees the live URLs without the user opening Settings.
-        # Models whose GGUF is gone (or that fail to spawn) get pruned instead.
-        if not skip_local_llm:
-            try:
-                from ..local_llm import manager as _local_mgr
-
-                def _restart_blocking() -> int:
-                    return _local_mgr.restart_local_models()
-
-                started = await asyncio.to_thread(_restart_blocking)
-                if started > 0:
-                    from ..config_file import load as _load_cfg
-                    from .routes.config import _rebuild_registry
-                    _rebuild_registry(_load_cfg(), mutable_state, agent)
-                    log.info("[local_llm] restarted %d local model(s) at startup", started)
-                else:
-                    # No live entries to restart — strip any dangling local-*
-                    # entries left in config from an unclean shutdown.
-                    _local_mgr.cleanup_stale_config()
-            except Exception:
-                log.exception("local_llm restart failed")
-
-        # ── OCR model migration + startup ──────────────────────────────────
-        # Migrate chandra from models/llm/ to ocr-model/ if it was installed
-        # before this refactor, then start the dedicated OCR server.
-        try:
-            from ..ocr_server import (
-                migrate_from_local_llm,
-                cleanup_config_entries,
-                download_if_missing,
-                start as ocr_start,
-            )
-
-            def _ocr_bootstrap() -> None:
-                migrated = migrate_from_local_llm()
-                if migrated:
-                    cleanup_config_entries()
-                download_if_missing()
-                ocr_start()
-
-            await asyncio.to_thread(_ocr_bootstrap)
-        except Exception:
-            log.exception("[ocr_server] bootstrap failed")
-        # ── nexus status watcher ─────────────────────────────────────────────
-        # Polls https://www.nexus-model.us/api/status with the user's stored
-        # apiKey. On model-list changes we re-register provider models and
-        # auto-promote demo -> nexus when pro becomes available.
-        try:
-            from ..auth.status_watcher import StatusWatcher
-            from ..config_file import save as _save_cfg
-            from .routes.config import _rebuild_registry as _rebuild_reg
-
-            watcher = StatusWatcher(
-                mutable_state=mutable_state,
-                agent=agent,
-                sessions=sessions,
-                rebuild_registry=_rebuild_reg,
-                save_config=_save_cfg,
-            )
-            watcher.start()
-            app.state.nexus_status_watcher = watcher
-            log.info("[nexus] status watcher started")
-        except Exception:
-            log.exception("[nexus] status watcher start failed")
-            app.state.nexus_status_watcher = None
-
-        # ── parked HITL sweep (durable async ask_user) ──────────────────────
-        # Re-publish ``user_request`` for any rows that were left parked when
-        # the server stopped, so connected clients re-queue them in the bell.
-        # Also expire rows whose deadline_at has passed (rare — most parked
-        # requests are open-ended). Best-effort; failures don't block boot.
-        try:
-            from .events import SessionEvent as _SE
-            from datetime import datetime, timezone
-
-            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            re_published = 0
-
-            def _sweep_store(store: SessionStore) -> None:
-                nonlocal re_published
-                for row in store.list_all_pending():
-                    deadline = row.get("deadline_at")
-                    if deadline and deadline < now_iso:
-                        store.cancel_hitl_pending(
-                            row["request_id"], reason="expired",
-                        )
-                        store.publish(
-                            row["session_id"],
-                            _SE(
-                                kind="user_request_cancelled",
-                                data={
-                                    "request_id": row["request_id"],
-                                    "reason": "expired",
-                                },
-                            ),
-                        )
-                        continue
-                    ev_data: dict[str, Any] = {
-                        "request_id": row["request_id"],
-                        "prompt": row["prompt"],
-                        "kind": row["kind"],
-                        "choices": row.get("choices"),
-                        "default": row.get("default"),
-                        "timeout_seconds": row.get("timeout_seconds"),
-                    }
-                    if row.get("kind") == "form":
-                        ev_data["fields"] = row.get("fields")
-                        ev_data["form_title"] = row.get("form_title")
-                        ev_data["form_description"] = row.get("form_description")
-                    store.publish(
-                        row["session_id"], _SE(kind="user_request", data=ev_data),
-                    )
-                    re_published += 1
-                store.trim_hitl_pending(keep_days=30)
-
-            if multi_user and session_registry is not None:
-                for _uid, user_store_inst in session_registry.all_stores().items():
-                    _sweep_store(user_store_inst)
-            else:
-                _sweep_store(sessions)
-            if re_published:
-                log.info(
-                    "[hitl] re-published %d parked request(s) at startup",
-                    re_published,
-                )
-        except Exception:
-            log.exception("hitl parked sweep failed")
-
-        if graphrag_cfg is not None:
-            try:
-                from ..agent.graphrag_manager import initialize
-
-                log.info("Initializing GraphRAG engine...")
-                await initialize(nexus_cfg)
-                log.info("GraphRAG engine initialized")
-            except Exception:
-                log.exception("GraphRAG initialization failed")
-            # Warm the builtin embedder ONNX cache in the background so the
-            # first reindex doesn't block on a 24 MB download. Fire-and-forget;
-            # errors are non-fatal — the model will just download on demand.
-            async def _prefetch_builtin() -> None:
-                try:
-                    from ..agent.builtin_embedder import get_builtin_embedder
-                    await get_builtin_embedder().embed(["__warmup__"])
-                    log.info("[startup] builtin embedder cache warm")
-                except Exception:
-                    log.warning("[startup] builtin embedder prefetch failed", exc_info=True)
-            asyncio.create_task(_prefetch_builtin())
-
-            # Pre-download the default Piper voices in the background so
-            # the user never waits on a model fetch the first time they
-            # click Play or send a voice message. No-op on warm starts.
-            try:
-                from ..tts.voice_setup import bootstrap_default_voices
-                asyncio.create_task(bootstrap_default_voices())
-            except Exception:
-                log.warning("[startup] piper voice prefetch failed", exc_info=True)
-
-        # ── calendar bootstrap + heartbeat scheduler ─────────────────────────
-        scheduler = None
-        from ..features import is_enabled as _feat_enabled
-        if _feat_enabled("heartbeat"):
-            try:
-                from .. import vault_calendar
-                from ..calendar_runtime import (
-                    set_dispatcher as _set_cal_dispatcher,
-                    set_notifier as _set_cal_notifier,
-                    set_alarm_store as _set_cal_alarm_store,
-                )
-                from ..heartbeat_drivers import DRIVERS_DIR
-                from pathlib import Path
-                from loom.heartbeat import (
-                    HeartbeatRegistry,
-                    HeartbeatScheduler,
-                    HeartbeatStore,
-                )
-    
-                vault_calendar.ensure_default_calendar()
-                vault_calendar.sweep_missed(grace_minutes=5)
-    
-                # Hand the calendar driver a way to invoke vault dispatch. Bound
-                # here (not at module-load time) so it sees the live agent + store.
-                from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
-    
-                async def _calendar_dispatcher(
-                    *,
-                    path: str,
-                    event_id: str,
-                    mode: str = "background",
-                    occurrence_start: str | None = None,
-                ) -> dict:
-                    import time as _time
-                    from .. import vault_calendar as _vc
-                    event_title = ""
-                    try:
-                        _cal = _vc.read_calendar(path)
-                        _found = _vc.find_event(_cal, event_id)
-                        if _found:
-                            event_title = _found[0].title
-                    except Exception:
-                        pass
-                    _log_id = log_store.log_fire(
-                        heartbeat_id="calendar_trigger",
-                        event_id=event_id,
-                        event_title=event_title,
-                        calendar_path=path,
-                    )
-                    _t0 = _time.monotonic()
-                    _cal_job_id = job_tracker.start(
-                        type="calendar",
-                        label=event_title or "Calendar trigger",
-                        session_id=None,
-                        extra={"event_id": event_id, "calendar_path": path},
-                        publish_fn=_publish_job_event,
-                    )
-                    try:
-                        result = await _cal_dispatch(
-                            path=path, card_id=None, event_id=event_id,
-                            mode=mode, a=agent, store=sessions,
-                            occurrence_start=occurrence_start,
-                        )
-                        _sid = result.get("session_id")
-                        if _sid:
-                            log_store.update_session_id(_log_id, _sid)
-                        log_store.update_status(
-                            _log_id, status="done",
-                            duration_ms=int((_time.monotonic() - _t0) * 1000),
-                        )
-                        return result
-                    except Exception as _dispatch_err:
-                        log_store.update_status(
-                            _log_id, status="failed",
-                            error=str(_dispatch_err),
-                            duration_ms=int((_time.monotonic() - _t0) * 1000),
-                        )
-                        raise
-                    finally:
-                        job_tracker.done(_cal_job_id, publish_fn=_publish_job_event)
-                _set_cal_dispatcher(_calendar_dispatcher)
-    
-                # Notifier — fire-and-forget calendar_alert publishes onto the
-                # cross-session SSE channel. The UI's useCalendarAlerts hook
-                # subscribes to /notifications/events and surfaces a toast.
-                from .events import SessionEvent
-    
-                def _calendar_notifier(payload: dict) -> None:
-                    # Use a synthetic session id so the fanout works through the
-                    # store's per-session router; the UI ignores session_id for
-                    # calendar_alert events.
-                    if multi_user and session_registry is not None:
-                        for _uid, user_store_inst in session_registry.all_stores().items():
-                            user_store_inst.publish(
-                                "__calendar__",
-                                SessionEvent(kind="calendar_alert", data=payload),
-                            )
-                    else:
-                        sessions.publish(
-                            "__calendar__",
-                            SessionEvent(kind="calendar_alert", data=payload),
-                        )
-                _set_cal_notifier(_calendar_notifier)
-    
-                heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
-                heartbeats_dir.mkdir(parents=True, exist_ok=True)
-                db_path = Path("~/.nexus/heartbeat.db").expanduser()
-                registry = HeartbeatRegistry(
-                    heartbeats_dir=heartbeats_dir,
-                    additional_dirs=[DRIVERS_DIR],
-                )
-                registry.scan()
-                store = HeartbeatStore(db_path)
-    
-                from ..heartbeat_log import HeartbeatLogStore
-                log_store = HeartbeatLogStore(db_path)
-    
-                from ..alarm_store import AlarmStore
-                alarm_store = AlarmStore(db_path)
-                _set_cal_alarm_store(alarm_store)
-    
-                async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
-                    from loom.loop import AgentTurn
-                    return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
-    
-                scheduler = HeartbeatScheduler(
-                    registry, store, run_fn=_noop_run_fn, tick_interval=60.0,
-                )
-                scheduler.start()
-                app.state.heartbeat_scheduler = scheduler
-                app.state.heartbeat_registry = registry
-                app.state.heartbeat_store = store
-                app.state.heartbeat_log_store = log_store
-                app.state.alarm_store = alarm_store
-    
-                from loom.heartbeat import HeartbeatManager
-    
-                def _hb_manager_getter():
-                    return HeartbeatManager(registry=registry, store=store)
-    
-                agent._handlers.hb_manager_getter = _hb_manager_getter
-    
-                log.info("heartbeat scheduler started (calendar_trigger registered)")
-            except Exception:
-                log.exception("heartbeat / calendar bootstrap failed")
-
-        # ── workflow engine ─────────────────────────────────────────────────
-        if _feat_enabled("workflow"):
-            try:
-                from ..workflows.store import WorkflowStore
-                from ..workflows.engine import WorkflowEngine
-                from .. import home as _wf_home
-    
-                wf_db = str(_wf_home.workflow_runs_db())
-                wf_store = WorkflowStore(wf_db)
-                wf_engine = WorkflowEngine(wf_store)
-                app.state.workflow_store = wf_store
-                app.state.workflow_engine = wf_engine
-    
-                if agent is not None:
-                    wf_engine._agent = agent
-                if sessions is not None:
-                    wf_engine._sessions = sessions
-    
-                from .routes.workflows import init as _wf_init
-                _wf_init(wf_store, wf_engine)
-    
-                from ..workflows.triggers.webhook import WebhookTriggerDriver
-                from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
-                from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
-    
-                webhook_driver = WebhookTriggerDriver(wf_store)
-                event_listener = EventTriggerListener(wf_store)
-                fsw_driver = FsWatchTriggerDriver(wf_store)
-    
-                _set_evt_ref(wf_engine)
-                _set_fsw_ref(wf_engine)
-    
-                from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
-                _set_engine_evt(wf_engine)
-    
-                app.state.workflow_webhook_driver = webhook_driver
-                app.state.workflow_event_listener = event_listener
-                app.state.workflow_fsw_driver = fsw_driver
-    
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(event_listener.start())
-                except Exception:
-                    log.exception("workflow event listener start failed")
-    
-                log.info("workflow engine initialised")
-            except Exception:
-                log.exception("workflow engine bootstrap failed")
-
-        # ── MCP server connections ────────────────────────────────────────
-        mcp_manager = None
-        mcp_server_bridge = None
-        try:
-            from ..mcp_lifecycle import build_mcp_manager, start_mcp
-            mcp_mgr = build_mcp_manager(nexus_cfg)
-            if mcp_mgr is not None:
-                tool_reg = getattr(agent._loom, "_tools", None)
-                if tool_reg is not None:
-                    await start_mcp(mcp_mgr, tool_reg, agent=agent)
-                    mcp_manager = mcp_mgr
-                    app.state.mcp_manager = mcp_manager
-        except Exception:
-            log.exception("MCP bootstrap failed")
-
-        # ── MCP server mode (expose tools to external hosts) ─────────────
-        try:
-            from ..mcp_lifecycle import start_mcp_server
-            tool_reg = getattr(agent._loom, "_tools", None)
-            if tool_reg is not None:
-                mcp_server_bridge = start_mcp_server(nexus_cfg, tool_reg)
-        except Exception:
-            log.exception("MCP server mode failed")
-
-        try:
-            yield
-        finally:
-            watcher = getattr(app.state, "nexus_status_watcher", None)
-            if watcher is not None:
-                try:
-                    await watcher.stop()
-                except Exception:
-                    log.exception("[nexus] status watcher stop failed")
-            if scheduler is not None:
-                try:
-                    scheduler.stop()
-                except Exception:
-                    log.exception("heartbeat scheduler stop failed")
-            try:
-                from ..local_llm import manager as _local_mgr
-                _local_mgr.stop_all()
-            except Exception:
-                log.exception("local_llm stop_all failed")
-            try:
-                from ..ocr_server import stop as _ocr_stop
-                _ocr_stop()
-            except Exception:
-                log.exception("[ocr_server] stop failed")
-            from ..agent.memory import close_memory_store
-            close_memory_store()
-            try:
-                from ..dream.engine import close_store as _close_dream_store
-                _close_dream_store()
-            except Exception:
-                log.exception("dream store close failed")
-            try:
-                wf_store = getattr(app.state, "workflow_store", None)
-                if wf_store is not None:
-                    wf_store.close()
-            except Exception:
-                log.exception("workflow store close failed")
-            try:
-                fsw = getattr(app.state, "workflow_fsw_driver", None)
-                if fsw is not None:
-                    fsw.stop_all()
-            except Exception:
-                log.exception("workflow fs_watch stop failed")
-            try:
-                evt = getattr(app.state, "workflow_event_listener", None)
-                if evt is not None:
-                    await evt.stop()
-            except Exception:
-                log.exception("workflow event listener stop failed")
-            if mcp_manager is not None:
-                try:
-                    from ..mcp_lifecycle import stop_mcp
-                    await stop_mcp(mcp_manager)
-                except Exception:
-                    log.exception("MCP shutdown failed")
-            await agent.aclose()
+    lifespan = create_lifespan({
+        "graphrag_cfg": graphrag_cfg,
+        "nexus_cfg": nexus_cfg,
+        "mutable_state": mutable_state,
+        "agent": agent,
+        "sessions": sessions,
+        "multi_user": multi_user,
+        "session_registry": session_registry,
+        "job_tracker": job_tracker,
+        "publish_job_event": _publish_job_event,
+    })
 
     # Single-user app, not a third-party API — disable FastAPI's auto-generated
     # /docs, /redoc, /openapi.json. Otherwise anyone with the tunnel URL could
@@ -1068,151 +579,12 @@ def create_app(
     agent._dispatcher = _agent_dispatcher
 
     # ── wire the spawn_subagents agent tool ───────────────────────────────────
-    # The runner spins up a fresh Agent for each task with HITL handlers
-    # nulled out (no ask_user / terminal / dispatcher / subagent_runner).
-    # Tool calls and intermediate deltas of the sub-agent are consumed
-    # internally so the parent's context only sees the final assistant text.
-    from ..agent.context import SUBAGENT_DEPTH
-
-    def _truncate_preview(val: Any, limit: int = 200) -> str:
-        s = str(val) if val is not None else ""
-        return s[:limit] + ("\u2026" if len(s) > limit else "")
-
-    async def _run_one_subagent(
-        task: dict[str, Any],
-        *,
-        parent_session_id: str,
-        depth: int,
-        task_index: int,
-        total_tasks: int,
-    ) -> dict[str, Any]:
-        task_name = task.get("name") or f"Task {task_index + 1}"
-        prompt = task.get("prompt") or ""
-        model_id = task.get("model_id") or None
-        sub = Agent(
-            provider=agent._nexus_provider,
-            registry=agent._registry,
-            provider_registry=agent._provider_registry,
-            nexus_cfg=agent._nexus_cfg,
-            home=agent._home,
-            permissions=agent._permissions,
-        )
-        parent_store = store_proxy._resolve(parent_session_id)
-        sub._sessions = parent_store
-        child = parent_store.create_child(parent_session_id=parent_session_id, hidden=True)
-        child_id = child.id
-
-        job_id = job_tracker.start(
-            type="subagent",
-            label=task_name,
-            session_id=parent_session_id,
-            extra={"child_session_id": child_id, "index": task_index, "total": total_tasks},
-            publish_fn=_publish_job_event,
-        )
-
-        parent_store.publish(
-            parent_session_id,
-            SessionEvent(
-                kind="subagent_start",
-                data={"name": task_name, "index": task_index, "total": total_tasks, "child_session_id": child_id},
-            ),
-        )
-
-        depth_token = SUBAGENT_DEPTH.set(depth + 1)
-        sid_token = CURRENT_SESSION_ID.set(child_id)
-        final_text = ""
-        final_messages: Any = None
-        error: str | None = None
-        try:
-            try:
-                async for event in sub.run_turn_stream(
-                    prompt,
-                    history=[],
-                    session_id=child_id,
-                    model_id=model_id,
-                ):
-                    etype = event.get("type")
-                    if etype == "delta":
-                        chunk = event.get("text", "") or ""
-                        final_text += chunk
-                        parent_store.publish(
-                            parent_session_id,
-                            SessionEvent(
-                                kind="subagent_delta",
-                                data={"child_session_id": child_id, "text": chunk},
-                            ),
-                        )
-                    elif etype in ("tool_exec_start", "tool_exec_result"):
-                        tool_data: dict[str, Any] = {"child_session_id": child_id}
-                        if etype == "tool_exec_start":
-                            tool_data["name"] = event.get("name", "")
-                            tool_data["args_preview"] = _truncate_preview(event.get("args"))
-                            tool_data["status"] = "pending"
-                            if event.get("call_id"):
-                                tool_data["call_id"] = event["call_id"]
-                        else:
-                            tool_data["name"] = event.get("name", "")
-                            tool_data["result_preview"] = _truncate_preview(event.get("result_preview"))
-                            tool_data["status"] = "done"
-                        parent_store.publish(
-                            parent_session_id,
-                            SessionEvent(kind="subagent_tool", data=tool_data),
-                        )
-                        if etype == "done":
-                            final_messages = event.get("messages")
-                    elif etype == "done":
-                        final_messages = event.get("messages")
-                    elif etype == "error":
-                        error = str(event.get("message") or "subagent error")
-                        parent_store.publish(
-                            parent_session_id,
-                            SessionEvent(
-                                kind="subagent_done",
-                                data={"child_session_id": child_id, "error": error},
-                            ),
-                        )
-            except Exception as exc:
-                log.exception("subagent run crashed (child=%s)", child_id)
-                error = f"subagent crashed: {exc!r}"
-        finally:
-            CURRENT_SESSION_ID.reset(sid_token)
-            SUBAGENT_DEPTH.reset(depth_token)
-            if final_messages is not None:
-                try:
-                    parent_store.replace_history(child_id, final_messages)
-                except Exception:
-                    log.exception("subagent: persist final history failed (child=%s)", child_id)
-            job_tracker.done(job_id, publish_fn=_publish_job_event)
-            if error is None:
-                parent_store.publish(
-                    parent_session_id,
-                    SessionEvent(
-                        kind="subagent_done",
-                        data={"child_session_id": child_id, "result_preview": final_text[:200]},
-                    ),
-                )
-        return {"session_id": child_id, "result": final_text, "error": error}
-
-    async def _subagent_runner(
-        tasks: list[dict[str, Any]],
-        *,
-        parent_session_id: str,
-        depth: int,
-    ) -> list[dict[str, Any]]:
-        import asyncio as _asyncio
-        total = len(tasks)
-        return await _asyncio.gather(*[
-            _run_one_subagent(
-                t,
-                parent_session_id=parent_session_id,
-                depth=depth,
-                task_index=i,
-                total_tasks=total,
-            )
-            for i, t in enumerate(tasks)
-        ])
-
-    agent._handlers.subagent_runner = _subagent_runner
+    agent._handlers.subagent_runner = create_subagent_runner(
+        agent=agent,
+        store_proxy=store_proxy,
+        job_tracker=job_tracker,
+        publish_job_event=_publish_job_event,
+    )
 
     # Lane-change hook: any cross-lane move (UI drag-drop via PATCH, agent
     # tool via kanban_manage, external API client) auto-dispatches the

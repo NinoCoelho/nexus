@@ -18,6 +18,7 @@ from typing import Any
 
 from loom.types import Role, ToolSpec, Usage
 
+from ._payload import resolve_model
 from .types import (
     ChatMessage,
     ChatResponse,
@@ -158,23 +159,13 @@ class BedrockProvider(LLMProvider):
         self._model = model
         self._temperature = float(temperature or 0.0)
 
-    async def chat(
+    def _prepare_call(
         self,
         messages: list[ChatMessage],
-        *,
-        tools: list[ToolSpec] | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
-        extra_payload: dict[str, Any] | None = None,  # accepted for interface parity; unused
-    ) -> ChatResponse:
-        import asyncio
-        import botocore.exceptions  # type: ignore[import-not-found]
-        _ = extra_payload  # intentionally ignored (Bedrock has no thinking-toggle field)
-
-        resolved_model = model or self._model
-        if not resolved_model:
-            raise LLMError("No model specified: pass model= or set a default at construction")
-
+        resolved_model: str,
+        max_tokens: int | None,
+        tools: list[ToolSpec] | None,
+    ) -> dict[str, Any]:
         system: list[dict[str, Any]] = []
         filtered: list[dict[str, Any]] = []
         for m in messages:
@@ -196,6 +187,23 @@ class BedrockProvider(LLMProvider):
             kwargs["system"] = system
         if tools:
             kwargs["toolConfig"] = {"tools": [_encode_tool_bedrock(t) for t in tools]}
+        return kwargs
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,  # accepted for interface parity; unused
+    ) -> ChatResponse:
+        import asyncio
+        import botocore.exceptions  # type: ignore[import-not-found]
+        _ = extra_payload  # intentionally ignored (Bedrock has no thinking-toggle field)
+
+        resolved_model = resolve_model(model, self._model)
+        kwargs = self._prepare_call(messages, resolved_model, max_tokens, tools)
 
         try:
             # boto3's bedrock-runtime client is synchronous; offload to a
@@ -224,43 +232,11 @@ class BedrockProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        """Streaming via Bedrock's ConverseStream — boto3 yields events
-        synchronously, we re-yield as Nexus stream dicts.
-
-        Implementation note: we proxy by collecting in a thread queue
-        because boto3's response streams aren't async-iterable. For v1
-        we synthesize a single ``finish`` event at the end carrying the
-        accumulated content + tool_calls; mid-stream deltas are surfaced
-        per chunk to keep the UI lively.
-        """
         import asyncio
         import botocore.exceptions  # type: ignore[import-not-found]
 
-        resolved_model = model or self._model
-        if not resolved_model:
-            raise LLMError("No model specified: pass model= or set a default at construction")
-
-        system: list[dict[str, Any]] = []
-        filtered: list[dict[str, Any]] = []
-        for m in messages:
-            if m.role == Role.SYSTEM:
-                if m.content:
-                    system.append({"text": m.content})
-            else:
-                filtered.append(_encode_msg_bedrock(m))
-
-        kwargs: dict[str, Any] = {
-            "modelId": resolved_model,
-            "messages": filtered,
-            "inferenceConfig": {
-                "temperature": self._temperature,
-                "maxTokens": int(max_tokens) if max_tokens else 4096,
-            },
-        }
-        if system:
-            kwargs["system"] = system
-        if tools:
-            kwargs["toolConfig"] = {"tools": [_encode_tool_bedrock(t) for t in tools]}
+        resolved_model = resolve_model(model, self._model)
+        kwargs = self._prepare_call(messages, resolved_model, max_tokens, tools)
 
         try:
             resp = await asyncio.to_thread(self._client.converse_stream, **kwargs)

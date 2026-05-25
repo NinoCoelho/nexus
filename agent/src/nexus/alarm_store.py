@@ -6,10 +6,11 @@ alarms have been emitted, acknowledged, or snoozed.
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from .sqlite_base import SqliteStore
 
 
 @dataclass
@@ -22,23 +23,35 @@ class AlarmEntry:
     calendar_path: str | None = None
 
 
-class AlarmStore:
+_ALARM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS alarm_state (
+    event_id        TEXT NOT NULL,
+    occurrence_start TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'ringing',
+    snoozed_until   TEXT,
+    created_at      TEXT,
+    calendar_path   TEXT,
+    PRIMARY KEY (event_id, occurrence_start)
+);
+"""
+
+
+class AlarmStore(SqliteStore):
+    _SCHEMA = _ALARM_SCHEMA
+
     def __init__(self, db_path: Path) -> None:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("""
-            CREATE TABLE IF NOT EXISTS alarm_state (
-                event_id        TEXT NOT NULL,
-                occurrence_start TEXT NOT NULL,
-                status          TEXT NOT NULL DEFAULT 'ringing',
-                snoozed_until   TEXT,
-                created_at      TEXT,
-                calendar_path   TEXT,
-                PRIMARY KEY (event_id, occurrence_start)
-            )
-        """)
-        self._db.commit()
+        super().__init__(db_path)
+
+    @staticmethod
+    def _row_to_entry(row: tuple) -> AlarmEntry:
+        return AlarmEntry(
+            event_id=row[0],
+            occurrence_start=row[1],
+            status=row[2],
+            snoozed_until=row[3],
+            created_at=row[4],
+            calendar_path=row[5],
+        )
 
     def get(self, event_id: str, occurrence_start: str) -> AlarmEntry | None:
         row = self._db.execute(
@@ -48,14 +61,7 @@ class AlarmStore:
         ).fetchone()
         if not row:
             return None
-        return AlarmEntry(
-            event_id=row[0],
-            occurrence_start=row[1],
-            status=row[2],
-            snoozed_until=row[3],
-            created_at=row[4],
-            calendar_path=row[5],
-        )
+        return self._row_to_entry(row)
 
     def upsert(self, entry: AlarmEntry) -> None:
         if entry.created_at is None:
@@ -98,17 +104,7 @@ class AlarmStore:
             "SELECT event_id, occurrence_start, status, snoozed_until, created_at, calendar_path "
             "FROM alarm_state WHERE status='ringing'"
         ).fetchall()
-        return [
-            AlarmEntry(
-                event_id=r[0],
-                occurrence_start=r[1],
-                status=r[2],
-                snoozed_until=r[3],
-                created_at=r[4],
-                calendar_path=r[5],
-            )
-            for r in rows
-        ]
+        return [self._row_to_entry(r) for r in rows]
 
     def list_snoozed_ready(self, now_utc: str) -> list[AlarmEntry]:
         rows = self._db.execute(
@@ -116,17 +112,7 @@ class AlarmStore:
             "FROM alarm_state WHERE status='snoozed' AND snoozed_until <= ?",
             (now_utc,),
         ).fetchall()
-        return [
-            AlarmEntry(
-                event_id=r[0],
-                occurrence_start=r[1],
-                status=r[2],
-                snoozed_until=r[3],
-                created_at=r[4],
-                calendar_path=r[5],
-            )
-            for r in rows
-        ]
+        return [self._row_to_entry(r) for r in rows]
 
     def delete(self, event_id: str, occurrence_start: str) -> None:
         self._db.execute(
@@ -143,9 +129,3 @@ class AlarmStore:
         )
         self._db.commit()
         return cur.rowcount
-
-    def close(self) -> None:
-        try:
-            self._db.close()
-        except Exception:
-            pass

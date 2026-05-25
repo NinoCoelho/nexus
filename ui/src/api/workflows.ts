@@ -108,7 +108,7 @@ export async function getRun(
 
 export async function getWebhookUrl(
   path: string,
-): Promise<{ webhooks: { trigger_id: string; token: string; url: string }[] }> {
+): Promise<{ webhooks: { trigger_id: string; token: string; url: string; localUrl?: string; brokerUrl?: string }[] }> {
   const res = await fetch(
     `${BASE}/workflows/${encodeURIComponent(path)}/webhook-url`,
   );

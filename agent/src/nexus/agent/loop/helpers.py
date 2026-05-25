@@ -7,13 +7,13 @@ and ``_annotate_short_reply`` directly continue to work via the package
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import loom.types as lt
+from ..llm import ChatMessage, ContentPart, Role, ToolSpec
 
-from ..llm import ChatMessage, ContentPart, Role, ToolCall, ToolSpec
+if TYPE_CHECKING:
+    import loom.types as lt
 
 DEFAULT_MAX_TOOL_ITERATIONS = 32
 
@@ -123,53 +123,13 @@ def _annotate_short_reply(user_text: str, pending_question: str | None) -> str |
 
 
 def _content_to_loom(content: Any) -> Any:
-    if not isinstance(content, list):
-        return content
-    out: list[Any] = []
-    for p in content:
-        if not isinstance(p, ContentPart):
-            out.append(p)
-            continue
-        if p.kind == "text":
-            out.append(lt.TextPart(text=p.text or ""))
-        elif p.kind == "image":
-            out.append(
-                lt.ImagePart(
-                    source=p.vault_path or "", media_type=p.mime_type or ""
-                )
-            )
-        else:
-            out.append(
-                lt.FilePart(
-                    source=p.vault_path or "", media_type=p.mime_type or ""
-                )
-            )
-    return out
+    from .._loom_bridge.message import _content_to_loom as _impl
+    return _impl(content)
 
 
 def _content_from_loom(content: Any) -> Any:
-    if not isinstance(content, list):
-        return content
-    out: list[Any] = []
-    for p in content:
-        ptype = getattr(p, "type", None)
-        media = getattr(p, "media_type", "") or ""
-        source = getattr(p, "source", "") or ""
-        if ptype == "text":
-            out.append(ContentPart(kind="text", text=getattr(p, "text", "") or ""))
-        elif ptype == "image":
-            out.append(
-                ContentPart(kind="image", vault_path=source, mime_type=media or None)
-            )
-        elif media.startswith("audio/"):
-            out.append(
-                ContentPart(kind="audio", vault_path=source, mime_type=media)
-            )
-        else:
-            out.append(
-                ContentPart(kind="document", vault_path=source, mime_type=media or None)
-            )
-    return out
+    from .._loom_bridge.message import _content_from_loom as _impl
+    return _impl(content)
 
 
 def _build_user_message(
@@ -192,34 +152,10 @@ def _build_user_message(
 
 
 def _to_loom_message(msg: ChatMessage) -> lt.ChatMessage:
-    loom_tcs: list[lt.ToolCall] | None = None
-    if msg.tool_calls:
-        loom_tcs = [
-            lt.ToolCall(id=tc.id, name=tc.name, arguments=json.dumps(tc.arguments))
-            for tc in msg.tool_calls
-        ]
-    return lt.ChatMessage(
-        role=lt.Role(msg.role.value),
-        content=_content_to_loom(msg.content),
-        tool_calls=loom_tcs,
-        tool_call_id=msg.tool_call_id,
-        name=msg.name,
-    )
+    from .._loom_bridge.message import _nexus_to_loom_message
+    return _nexus_to_loom_message(msg)
 
 
 def _from_loom_message(msg: lt.ChatMessage) -> ChatMessage:
-    nexus_tcs: list[ToolCall] = []
-    if msg.tool_calls:
-        for tc in msg.tool_calls:
-            try:
-                args = json.loads(tc.arguments) if tc.arguments else {}
-            except json.JSONDecodeError:
-                args = {}
-            nexus_tcs.append(ToolCall(id=tc.id, name=tc.name, arguments=args))
-    return ChatMessage(
-        role=Role(msg.role.value),
-        content=_content_from_loom(msg.content),
-        tool_calls=nexus_tcs,
-        tool_call_id=msg.tool_call_id,
-        name=msg.name,
-    )
+    from .._loom_bridge.message import _loom_to_nexus_message
+    return _loom_to_nexus_message(msg)

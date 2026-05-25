@@ -16,14 +16,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from ...agent.context import CURRENT_SESSION_ID
-from ...agent.llm import ChatMessage, LLMProvider, Role
+from ...agent.llm import LLMProvider
 from ...agent.loop import Agent
 from ...config import SKILLS_DIR
 from ...skills.discovery import (
@@ -383,91 +381,12 @@ async def _run_build_turn(
     agent_: Agent,
     store: SessionStore,
 ) -> None:
-    """Run one agent turn to completion against the wizard build session.
+    from ..services.background_turn import run_background_turn
 
-    Persists pre-turn history (so the seed lands in the transcript), then
-    streams the turn, then either replaces history with the final messages
-    or saves a partial-turn record on crash. Mirrors the shape of
-    :func:`vault_dispatch_helpers.run_background_agent_turn` but without the
-    entity-status / lane follow-up logic — wizard builds have no on-disk
-    entity to flip.
-    """
-    token = CURRENT_SESSION_ID.set(session_id)
-    try:
-        session = store.get_or_create(session_id)
-        pre_turn = list(session.history)
-        try:
-            store.replace_history(
-                session_id,
-                pre_turn + [ChatMessage(role=Role.USER, content=seed_message)],
-            )
-        except Exception:
-            log.exception("wizard build: pre-turn persist failed")
-
-        final_messages = None
-        accumulated_text = ""
-        accumulated_tools: list[dict[str, Any]] = []
-        try:
-            async for event in agent_.run_turn_stream(
-                seed_message,
-                history=session.history,
-                context=session.context,
-                session_id=session_id,
-            ):
-                etype = event.get("type")
-                if etype == "delta":
-                    accumulated_text += event.get("text", "")
-                elif etype in ("tool_exec_start", "tool_exec_result"):
-                    if etype == "tool_exec_start":
-                        accumulated_tools.append({
-                            "name": event.get("name", ""),
-                            "args": event.get("args"),
-                            "status": "pending",
-                        })
-                    else:
-                        for t in reversed(accumulated_tools):
-                            if (
-                                t.get("name") == event.get("name")
-                                and t.get("status") == "pending"
-                            ):
-                                t["status"] = "done"
-                                t["result_preview"] = event.get("result_preview")
-                                break
-                elif etype == "done":
-                    final_messages = event.get("messages")
-                    usage = event.get("usage") or {}
-                    try:
-                        store.bump_usage(
-                            session_id,
-                            model=usage.get("model"),
-                            input_tokens=int(usage.get("input_tokens") or 0),
-                            output_tokens=int(usage.get("output_tokens") or 0),
-                            tool_calls=int(usage.get("tool_calls") or 0),
-                        )
-                    except Exception:
-                        log.exception("wizard build: bump_usage failed")
-        except Exception:
-            log.exception("wizard build: agent loop crashed")
-        finally:
-            if final_messages is not None:
-                try:
-                    store.replace_history(session_id, final_messages)
-                except Exception:
-                    log.exception("wizard build: final persist failed")
-            else:
-                try:
-                    store.persist_partial_turn(
-                        session_id,
-                        base_history=pre_turn,
-                        user_message=seed_message,
-                        assistant_text=accumulated_text,
-                        tool_calls=accumulated_tools,
-                        status_note="wizard_build_interrupted",
-                    )
-                except Exception:
-                    log.exception("wizard build: partial persist failed")
-    finally:
-        try:
-            CURRENT_SESSION_ID.reset(token)
-        except ValueError:
-            log.debug("CURRENT_SESSION_ID reset across contexts (wizard build)")
+    await run_background_turn(
+        session_id=session_id,
+        seed_message=seed_message,
+        agent_=agent_,
+        store=store,
+        partial_status_note="wizard_build_interrupted",
+    )

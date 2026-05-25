@@ -9,12 +9,12 @@ from typing import Any
 import httpx
 from loom.types import ToolSpec, Usage
 
+from ._payload import prepare_messages, resolve_model
 from .auth import AuthStrategy
 from .types import (
     ChatMessage,
     ChatResponse,
     ContentPart,
-    LLMError,
     LLMProvider,
     LLMTransportError,
     MalformedOutputError,
@@ -241,31 +241,23 @@ class OpenAIProvider(LLMProvider):
             timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=60.0, pool=10.0)
         )
 
-    async def chat(
+    def _build_payload(
         self,
-        messages: list[ChatMessage],
+        resolved_model: str,
+        prepared: list[ChatMessage],
+        max_tokens: int | None,
+        tools: list[ToolSpec] | None,
         *,
-        tools: list[ToolSpec] | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
+        stream: bool = False,
         extra_payload: dict[str, Any] | None = None,
-    ) -> ChatResponse:
-        resolved_model = model or self._model
-        if not resolved_model:
-            raise LLMError("No model specified: pass model= or set a default at construction")
-        from ...multimodal import materialize_messages
-        from ...providers.catalog import capabilities_for_model_name
-
-        caps = capabilities_for_model_name(resolved_model)
-        prepared = await materialize_messages(messages, caps)
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": [_encode_msg(m) for m in prepared],
             "temperature": self._temperature,
         }
-        # OpenAI-extensions: silently ignored by most compat providers
-        # but rejected outright by some (Gemini's strict proto-validated
-        # compat endpoint). _strict_compat omits them entirely.
+        if stream:
+            payload["stream"] = True
         if not self._strict_compat:
             if self._frequency_penalty:
                 payload["frequency_penalty"] = self._frequency_penalty
@@ -276,15 +268,26 @@ class OpenAIProvider(LLMProvider):
         if tools:
             payload["tools"] = [_encode_tool(t) for t in tools]
             payload["tool_choice"] = "auto"
-        # Pass-through for caller-supplied extras (e.g. voice_ack disables
-        # extended thinking via {"thinking": {"type": "disabled"}} so the
-        # ack call doesn't burn its token budget on internal reasoning).
-        # Most OpenAI-compat providers silently ignore unknown fields;
-        # the strict ones (Gemini compat) reject them, so we skip there.
         if extra_payload and not self._strict_compat:
             for k, v in extra_payload.items():
-                if k not in payload:  # never overwrite explicit fields
+                if k not in payload:
                     payload[k] = v
+        return payload
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        resolved_model = resolve_model(model, self._model)
+        prepared = await prepare_messages(resolved_model, messages)
+        payload = self._build_payload(
+            resolved_model, prepared, max_tokens, tools, extra_payload=extra_payload,
+        )
 
         try:
             resp = await self._client.post(
@@ -326,31 +329,11 @@ class OpenAIProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        resolved_model = model or self._model
-        if not resolved_model:
-            raise LLMError("No model specified: pass model= or set a default at construction")
-        from ...multimodal import materialize_messages
-        from ...providers.catalog import capabilities_for_model_name
-
-        caps = capabilities_for_model_name(resolved_model)
-        prepared = await materialize_messages(messages, caps)
-        payload: dict[str, Any] = {
-            "model": resolved_model,
-            "messages": [_encode_msg(m) for m in prepared],
-            "temperature": self._temperature,
-            "stream": True,
-        }
-        # See chat() — same strict-compat gate.
-        if not self._strict_compat:
-            if self._frequency_penalty:
-                payload["frequency_penalty"] = self._frequency_penalty
-            if self._presence_penalty:
-                payload["presence_penalty"] = self._presence_penalty
-        if max_tokens:
-            payload["max_tokens"] = int(max_tokens)
-        if tools:
-            payload["tools"] = [_encode_tool(t) for t in tools]
-            payload["tool_choice"] = "auto"
+        resolved_model = resolve_model(model, self._model)
+        prepared = await prepare_messages(resolved_model, messages)
+        payload = self._build_payload(
+            resolved_model, prepared, max_tokens, tools, stream=True,
+        )
 
         try:
             async with self._client.stream(

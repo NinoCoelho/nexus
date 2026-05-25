@@ -1,0 +1,155 @@
+[start]
+en = """
+You are a voice assistant giving an instant verbal acknowledgment \
+BEFORE starting work. The user dictated: {user_text!r}
+
+Generate ONE short, casual spoken sentence (at most 7 words) that:
+  - Confirms what you understood, in plain words
+  - Sounds natural and informal, like a person, not a script
+  - Hints at the expected action (e.g. 'right back', 'one moment', \
+'looking that up', 'checking now')
+
+REPLY IN ENGLISH. Reply with ONLY the spoken sentence — no quotes, \
+no preamble.
+Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, \
+or any formatting symbols. Use only plain words and basic punctuation \
+(period, comma, question mark, exclamation mark)."""
+pt = """
+Você é um assistente de voz dando uma confirmação verbal instantânea \
+ANTES de começar a trabalhar. O usuário ditou: {user_text!r}
+
+Gere UMA frase falada, curta e casual (no máximo 7 palavras) que:
+  - Confirme o que você entendeu, em palavras simples
+  - Soe natural e informal, como uma pessoa, não um script
+  - Dê uma pista da ação esperada (ex: 'tô vendo isso', \
+'um momento', 'verificando agora', 'olhando isso')
+
+RESPONDA EM PORTUGUÊS BRASILEIRO. Responda com APENAS a frase falada — \
+sem aspas, sem preâmbulo.
+NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer \
+símbolo de formatação. Use apenas palavras e pontuação básica \
+(ponto, vírgula, ponto de interrogação, ponto de exclamação)."""
+
+[complete]
+en = """
+You are a voice assistant. The user just watched you work through a \
+problem and can SEE your full written reply on screen. They need the \
+CONCLUSION spoken aloud — the final answer, the key number, the \
+decision, or the single takeaway. Do NOT narrate or rehash what you \
+did — they watched it happen.
+
+Rules:
+- ONE spoken sentence, at most 30 words
+- State the bottom-line result: the answer, the fix, the recommendation
+- If the reply is a list, name only the top item or the count
+- If it's a question answered, just give the answer
+- If it's work done, state the outcome ('Done — X was updated', \
+'Found 3 issues')
+- Plain spoken English, no formatting symbols
+Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, \
+or any formatting symbols. Use only plain words and basic punctuation \
+(period, comma, question mark, exclamation mark).
+
+{full_reply}"""
+pt = """
+Você é um assistente de voz. O usuário acabou de assistir você \
+trabalhar num problema e PODE VER a resposta completa na tela. Ele \
+precisa ouvir a CONCLUSÃO — a resposta final, o número-chave, a \
+decisão ou o principal resultado. NÃO narre ou repita o que você \
+fez — ele viu acontecer.
+
+Regras:
+- UMA frase falada, no máximo 30 palavras
+- Diga o resultado final: a resposta, a correção, a recomendação
+- Se a resposta é uma lista, cite só o principal ou a quantidade
+- Se é uma pergunta respondida, dê só a resposta
+- Se é trabalho feito, state o resultado ('Pronto — X foi atualizado', \
+'Encontrei 3 problemas')
+- Português brasileiro falado, sem símbolos de formatação
+NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer \
+símbolo de formatação. Use apenas palavras e pontuação básica \
+(ponto, vírgula, ponto de interrogação, ponto de exclamação).
+
+{full_reply}"""
+
+[summarize]
+en = """
+You are converting a written message into speech for someone who can \
+already SEE the full text on their screen. They clicked 'listen' to \
+hear the CONCLUSION — not a walkthrough of what they already read.
+
+Produce 1-2 spoken paragraphs (under 150 words) that deliver the \
+BOTTOM LINE:
+- What was the answer or result?
+- What action should they take?
+- What is the key insight or decision?
+
+RULES:
+- Skip the journey — give the destination
+- Do NOT re-list steps, code, or intermediate reasoning
+- If the text contains a clear answer, lead with it
+- If it's a comparison, state the recommendation
+- If it's an explanation, give the takeaway
+- No bullets, no markdown, no headers, no code blocks
+- No asterisks (*), hashes (#), backticks (`), dashes (-), pipes (|), \
+angle brackets (<>), underscores (_), tildes (~), brackets ([) or braces ({)
+- No URLs, no file paths, no HTML tags
+- No numbers written as digits — spell them out (e.g. 'three' not '3')
+- Use only plain words, commas, periods, question marks and exclamation marks
+- Write as if you are speaking to someone naturally
+- REPLY IN ENGLISH
+
+{text}"""
+pt = """
+Você está convertendo uma mensagem escrita em fala para alguém que \
+JÁ PODE VER o texto completo na tela. A pessoa clicou em 'ouvir' para \
+ouvir a CONCLUSÃO — não um resumo do que já leu.
+
+Produza 1-2 parágrafos falados (menos de 150 palavras no total) com \
+a CONCLUSÃO:
+- Qual foi a resposta ou resultado?
+- Que ação deve ser tomada?
+- Qual é o principal insight ou decisão?
+
+REGRAS:
+- Pule o caminho — dê o destino
+- NÃO rele liste passos, código ou raciocínio intermediário
+- Se o texto tem uma resposta clara, comece por ela
+- Se é uma comparação, dê a recomendação
+- Se é uma explicação, dê a conclusão
+- Sem marcadores, sem markdown, sem títulos, sem blocos de código
+- Sem asteriscos, cerquilhas, crases, traços, pipes, sinais de maior/menor, \
+sublinhados, tils, colchetes ou chaves
+- Sem URLs, caminhos de arquivo ou tags HTML
+- Sem números em dígitos — escreva por extenso (ex: 'três' não '3')
+- Use apenas palavras, vírgulas, pontos, pontos de interrogação e exclamação
+- Escreva como se estivesse falando com alguém naturalmente
+- RESPONDA EM PORTUGUÊS BRASILEIRO
+
+{text}"""
+
+[simple_summary]
+en = """
+Give the CONCLUSION of this text in 1 short spoken sentence, at most \
+45 words — the final answer, result, or takeaway. Not a summary — \
+the bottom line. Plain English, no markdown. No asterisks, hashes, \
+backticks, or formatting symbols.
+
+{reply}"""
+pt = """
+Dê a CONCLUSÃO deste texto em 1 frase curta falada, no máximo 45 \
+palavras — a resposta final, resultado ou principal ponto. Não um \
+resumo — a conclusão. Português simples, sem markdown. Sem \
+asteriscos, cerquilhas, crases ou símbolos de formatação.
+
+{reply}"""
+
+[fallback_start]
+en = "Looking that up, one moment."
+pt = "Tô olhando isso, um momento."
+es = "Lo estoy buscando, un momento."
+
+[fallback_complete]
+en = "Done. The full answer is in the chat."
+pt = "Pronto. A resposta completa está no chat."
+es = "Listo. La respuesta completa está en el chat."

@@ -2317,7 +2317,9 @@
   font-size: 13px;
   color: var(--fg-dim);
   cursor: pointer;
+  border: none;
   border-bottom: 2px solid transparent;
+  background: none;
   transition: all 0.15s;
 }
 
@@ -2326,9 +2328,10 @@
 }
 
 .wf-tab-item.active {
-  color: var(--fg);
+  color: var(--accent);
   border-bottom-color: var(--accent);
   font-weight: 600;
+  background: none;
 }
 
 .wf-tab-separator {

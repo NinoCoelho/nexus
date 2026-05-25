@@ -35,6 +35,7 @@ import {
 } from "../../api";
 import type { CardSession } from "../../api/dispatch";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
+import { usePollWhileRunning } from "../../hooks/usePollWhileRunning";
 import "../KanbanBoard.css";
 import KanbanLaneColumn from "./KanbanLaneColumn";
 import KanbanFilterBar from "./KanbanFilterBar";
@@ -102,11 +103,7 @@ export default function KanbanBoard({ path, onOpenInChat, onNavigateToSession, o
   // need polling fresh enough to catch lane changes — not just the final
   // status flip.
   const hasRunning = board?.lanes.some((l) => l.cards.some((c) => c.status === "running")) ?? false;
-  useEffect(() => {
-    if (!hasRunning) return;
-    const t = setInterval(() => reload(), 1500);
-    return () => clearInterval(t);
-  }, [hasRunning, reload]);
+  usePollWhileRunning(hasRunning, reload);
 
   // When a turn finishes (running → done/failed) the final tool calls may
   // have written to the board file fractionally before the status flip.

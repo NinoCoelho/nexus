@@ -25,6 +25,8 @@ export interface TriggerConfig {
   debounce_ms?: number;
   event?: string;
   filter?: Record<string, unknown>;
+  broker_id?: string;
+  broker_slug?: string;
 }
 
 export interface StepConfig {

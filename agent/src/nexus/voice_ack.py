@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import base64
 import logging
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config_file import NexusConfig, load as load_config
@@ -33,162 +35,27 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-
-# Prompts are kept per language because local models follow language cues
-# in the *instructions* far more reliably than the "match the user's
-# language" directive in an English prompt. We pick the template by the
-# detected language of the user's request (or text being summarized).
-
-_START_PROMPT_EN = (
-    "You are a voice assistant giving an instant verbal acknowledgment "
-    "BEFORE starting work. The user dictated: {user_text!r}\n\n"
-    "Generate ONE short, casual spoken sentence (at most 7 words) that:\n"
-    "  - Confirms what you understood, in plain words\n"
-    "  - Sounds natural and informal, like a person, not a script\n"
-    "  - Hints at the expected action (e.g. 'right back', 'one moment', "
-    "'looking that up', 'checking now')\n\n"
-    "REPLY IN ENGLISH. Reply with ONLY the spoken sentence — no quotes, "
-    "no preamble.\n"
-    "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
-    "or any formatting symbols. Use only plain words and basic punctuation "
-    "(period, comma, question mark, exclamation mark)."
-)
-
-_START_PROMPT_PT = (
-    "Você é um assistente de voz dando uma confirmação verbal instantânea "
-    "ANTES de começar a trabalhar. O usuário ditou: {user_text!r}\n\n"
-    "Gere UMA frase falada, curta e casual (no máximo 7 palavras) que:\n"
-    "  - Confirme o que você entendeu, em palavras simples\n"
-    "  - Soe natural e informal, como uma pessoa, não um script\n"
-    "  - Dê uma pista da ação esperada (ex: 'tô vendo isso', "
-    "'um momento', 'verificando agora', 'olhando isso')\n\n"
-    "RESPONDA EM PORTUGUÊS BRASILEIRO. Responda com APENAS a frase falada — "
-    "sem aspas, sem preâmbulo.\n"
-    "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
-    "símbolo de formatação. Use apenas palavras e pontuação básica "
-    "(ponto, vírgula, ponto de interrogação, ponto de exclamação)."
-)
-
-_COMPLETE_PROMPT_EN = (
-    "You are a voice assistant. The user just watched you work through a "
-    "problem and can SEE your full written reply on screen. They need the "
-    "CONCLUSION spoken aloud — the final answer, the key number, the "
-    "decision, or the single takeaway. Do NOT narrate or rehash what you "
-    "did — they watched it happen.\n\n"
-    "Rules:\n"
-    "- ONE spoken sentence, at most 30 words\n"
-    "- State the bottom-line result: the answer, the fix, the recommendation\n"
-    "- If the reply is a list, name only the top item or the count\n"
-    "- If it's a question answered, just give the answer\n"
-    "- If it's work done, state the outcome ('Done — X was updated', 'Found 3 issues')\n"
-    "- Plain spoken English, no formatting symbols\n"
-    "Do NOT use asterisks, hashes, backticks, dashes, pipes, angle brackets, "
-    "or any formatting symbols. Use only plain words and basic punctuation "
-    "(period, comma, question mark, exclamation mark).\n\n{full_reply}"
-)
-
-_COMPLETE_PROMPT_PT = (
-    "Você é um assistente de voz. O usuário acabou de assistir você "
-    "trabalhar num problema e PODE VER a resposta completa na tela. Ele "
-    "precisa ouvir a CONCLUSÃO — a resposta final, o número-chave, a "
-    "decisão ou o principal resultado. NÃO narre ou repita o que você "
-    "fez — ele viu acontecer.\n\n"
-    "Regras:\n"
-    "- UMA frase falada, no máximo 30 palavras\n"
-    "- Diga o resultado final: a resposta, a correção, a recomendação\n"
-    "- Se a resposta é uma lista, cite só o principal ou a quantidade\n"
-    "- Se é uma pergunta respondida, dê só a resposta\n"
-    "- Se é trabalho feito, state o resultado ('Pronto — X foi atualizado', 'Encontrei 3 problemas')\n"
-    "- Português brasileiro falado, sem símbolos de formatação\n"
-    "NÃO use asteriscos, cerquilhas, crases, traços, pipes ou qualquer "
-    "símbolo de formatação. Use apenas palavras e pontuação básica "
-    "(ponto, vírgula, ponto de interrogação, ponto de exclamação).\n\n{full_reply}"
-)
-
-_SUMMARIZE_PROMPT_EN = (
-    "You are converting a written message into speech for someone who can "
-    "already SEE the full text on their screen. They clicked 'listen' to "
-    "hear the CONCLUSION — not a walkthrough of what they already read.\n\n"
-    "Produce 1-2 spoken paragraphs (under 150 words) that deliver the "
-    "BOTTOM LINE:\n"
-    "- What was the answer or result?\n"
-    "- What action should they take?\n"
-    "- What is the key insight or decision?\n\n"
-    "RULES:\n"
-    "- Skip the journey — give the destination\n"
-    "- Do NOT re-list steps, code, or intermediate reasoning\n"
-    "- If the text contains a clear answer, lead with it\n"
-    "- If it's a comparison, state the recommendation\n"
-    "- If it's an explanation, give the takeaway\n"
-    "- No bullets, no markdown, no headers, no code blocks\n"
-    "- No asterisks (*), hashes (#), backticks (`), dashes (-), pipes (|), "
-    "angle brackets (<>), underscores (_), tildes (~), brackets ([) or braces ({)\n"
-    "- No URLs, no file paths, no HTML tags\n"
-    "- No numbers written as digits — spell them out (e.g. 'three' not '3')\n"
-    "- Use only plain words, commas, periods, question marks and exclamation marks\n"
-    "- Write as if you are speaking to someone naturally\n"
-    "- REPLY IN ENGLISH\n\n{text}"
-)
-
-_SUMMARIZE_PROMPT_PT = (
-    "Você está convertendo uma mensagem escrita em fala para alguém que "
-    "JÁ PODE VER o texto completo na tela. A pessoa clicou em 'ouvir' para "
-    "ouvir a CONCLUSÃO — não um resumo do que já leu.\n\n"
-    "Produza 1-2 parágrafos falados (menos de 150 palavras no total) com "
-    "a CONCLUSÃO:\n"
-    "- Qual foi a resposta ou resultado?\n"
-    "- Que ação deve ser tomada?\n"
-    "- Qual é o principal insight ou decisão?\n\n"
-    "REGRAS:\n"
-    "- Pule o caminho — dê o destino\n"
-    "- NÃO rele liste passos, código ou raciocínio intermediário\n"
-    "- Se o texto tem uma resposta clara, comece por ela\n"
-    "- Se é uma comparação, dê a recomendação\n"
-    "- Se é uma explicação, dê a conclusão\n"
-    "- Sem marcadores, sem markdown, sem títulos, sem blocos de código\n"
-    "- Sem asteriscos, cerquilhas, crases, traços, pipes, sinais de maior/menor, "
-    "sublinhados, tils, colchetes ou chaves\n"
-    "- Sem URLs, caminhos de arquivo ou tags HTML\n"
-    "- Sem números em dígitos — escreva por extenso (ex: 'três' não '3')\n"
-    "- Use apenas palavras, vírgulas, pontos, pontos de interrogação e exclamação\n"
-    "- Escreva como se estivesse falando com alguém naturalmente\n"
-    "- RESPONDA EM PORTUGUÊS BRASILEIRO\n\n{text}"
-)
-
-# Last-ditch retry prompts when the structured complete-ack prompt comes
-# back empty. Plain "give the conclusion" works on weaker local models that
-# choke on multi-section instructions.
-_SIMPLE_SUMMARY_PROMPT_EN = (
-    "Give the CONCLUSION of this text in 1 short spoken sentence, at most "
-    "45 words — the final answer, result, or takeaway. Not a summary — "
-    "the bottom line. Plain English, no markdown. No asterisks, hashes, "
-    "backticks, or formatting symbols.\n\n{reply}"
-)
-_SIMPLE_SUMMARY_PROMPT_PT = (
-    "Dê a CONCLUSÃO deste texto em 1 frase curta falada, no máximo 45 "
-    "palavras — a resposta final, resultado ou principal ponto. Não um "
-    "resumo — a conclusão. Português simples, sem markdown. Sem "
-    "asteriscos, cerquilhas, crases ou símbolos de formatação.\n\n{reply}"
-)
+_PROMPTS: dict = {}
+with (Path(__file__).parent / "tts" / "ack_prompts.toml").open("rb") as _f:
+    _PROMPTS = tomllib.load(_f)
 
 
 def _start_prompt(lang: str, user_text: str) -> str:
-    template = _START_PROMPT_PT if lang == "pt" else _START_PROMPT_EN
+    section = _PROMPTS["start"]
+    template = section.get(lang, section["en"])
     return template.format(user_text=user_text)
 
 
 def _complete_prompt(lang: str, user_text: str, full_reply: str) -> str:
-    """Build the completion-summary prompt. ``user_text`` is accepted for
-    historical-API compat (callers still pass it) but the new minimal
-    prompts only need the agent's reply text — the user's original
-    request is implicit in the reply context."""
-    _ = user_text  # intentionally unused
-    template = _COMPLETE_PROMPT_PT if lang == "pt" else _COMPLETE_PROMPT_EN
+    _ = user_text
+    section = _PROMPTS["complete"]
+    template = section.get(lang, section["en"])
     return template.format(full_reply=full_reply)
 
 
 def _summarize_prompt(lang: str, text: str) -> str:
-    template = _SUMMARIZE_PROMPT_PT if lang == "pt" else _SUMMARIZE_PROMPT_EN
+    section = _PROMPTS["summarize"]
+    template = section.get(lang, section["en"])
     return template.format(text=text)
 
 
@@ -241,19 +108,8 @@ def _ack_lang(trigger: "_AckTrigger", cfg: NexusConfig) -> str:
     return _detect_lang_short(trigger.full_reply or "", fallback=ui_lang)
 
 
-# Fallback text used when the LLM returns empty — the user dictated and
-# expects to hear SOMETHING. Keys are 2-letter ISO codes (with "en" the
-# universal fallback).
-_FALLBACK_START = {
-    "en": "Looking that up, one moment.",
-    "pt": "Tô olhando isso, um momento.",
-    "es": "Lo estoy buscando, un momento.",
-}
-_FALLBACK_COMPLETE_GENERIC = {
-    "en": "Done. The full answer is in the chat.",
-    "pt": "Pronto. A resposta completa está no chat.",
-    "es": "Listo. La respuesta completa está en el chat.",
-}
+_FALLBACK_START = _PROMPTS["fallback_start"]
+_FALLBACK_COMPLETE_GENERIC = _PROMPTS["fallback_complete"]
 
 
 def _truncate_for_speech(text: str, *, max_words: int = 15) -> str:
@@ -450,7 +306,8 @@ async def emit_completion_ack(
     text = await _generate_text(agent, cfg, prompt, max_tokens=120)
     if not text:
         log.info("[voice_ack/complete] structured prompt empty — retrying simpler")
-        simple = _SIMPLE_SUMMARY_PROMPT_PT if lang == "pt" else _SIMPLE_SUMMARY_PROMPT_EN
+        simple_section = _PROMPTS["simple_summary"]
+        simple = simple_section.get(lang, simple_section["en"])
         text = await _generate_text(
             agent, cfg, simple.format(reply=trigger.full_reply[:1200]),
             max_tokens=120,

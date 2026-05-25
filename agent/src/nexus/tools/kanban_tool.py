@@ -9,7 +9,7 @@ action="create_board" to scaffold one.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from ..agent.llm import ToolSpec
 
@@ -121,6 +121,159 @@ KANBAN_MANAGE_TOOL = ToolSpec(
     },
 )
 
+_REGISTRY: dict[str, Callable[[dict[str, Any]], str]] = {}
+
+
+def _create_board(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    board = vault_kanban.create_empty(
+        path,
+        title=args.get("title"),
+        columns=args.get("columns"),
+    )
+    return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
+
+
+def _view(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    board = vault_kanban.read_board(path)
+    return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
+
+
+def _update_board(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    updates: dict[str, Any] = {}
+    if "title" in args:
+        updates["title"] = args["title"]
+    if "board_prompt" in args:
+        bp = args["board_prompt"]
+        updates["board_prompt"] = bp if bp else None
+    if not updates:
+        return json.dumps({"ok": False, "error": "no fields to update (title/board_prompt)"})
+    board = vault_kanban.update_board(path, updates)
+    return json.dumps({"ok": True, "board": board.to_dict()})
+
+
+def _add_card(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    lane = args.get("lane", "")
+    title = args.get("title", "")
+    if not lane or not title:
+        return json.dumps({"ok": False, "error": "`lane` and `title` are required"})
+    card = vault_kanban.add_card(path, lane, title, args.get("body", ""))
+    return json.dumps({"ok": True, "card": card.to_dict()})
+
+
+def _move_card(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    card_id = args.get("card_id", "")
+    lane = args.get("lane", "")
+    if not card_id or not lane:
+        return json.dumps({"ok": False, "error": "`card_id` and `lane` are required"})
+    card = vault_kanban.move_card(path, card_id, lane, args.get("position"))
+    return json.dumps({"ok": True, "card": card.to_dict()})
+
+
+def _update_card(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    card_id = args.get("card_id", "")
+    if not card_id:
+        return json.dumps({"ok": False, "error": "`card_id` is required"})
+    updates: dict[str, Any] = {}
+    for key in ("title", "body", "due", "priority", "labels", "assignees", "status"):
+        if key in args:
+            updates[key] = args[key]
+    card = vault_kanban.update_card(path, card_id, updates)
+    return json.dumps({"ok": True, "card": card.to_dict()})
+
+
+def _delete_card(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    card_id = args.get("card_id", "")
+    if not card_id:
+        return json.dumps({"ok": False, "error": "`card_id` is required"})
+    vault_kanban.delete_card(path, card_id)
+    return json.dumps({"ok": True})
+
+
+def _add_lane(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    title = args.get("title", "")
+    if not title:
+        return json.dumps({"ok": False, "error": "`title` is required"})
+    lane = vault_kanban.add_lane(path, title)
+    return json.dumps({"ok": True, "lane": lane.to_dict()})
+
+
+def _update_lane(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    lane_id = args.get("lane", "")
+    if not lane_id:
+        return json.dumps({"ok": False, "error": "`lane` (id) is required"})
+    updates: dict[str, Any] = {}
+    for key in ("title", "prompt", "model"):
+        if key in args:
+            updates[key] = args[key]
+    if not updates:
+        return json.dumps({"ok": False, "error": "no fields to update (title/prompt/model)"})
+    lane = vault_kanban.update_lane(path, lane_id, updates)
+    return json.dumps({"ok": True, "lane": lane.to_dict()})
+
+
+def _move_lane(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    lane_id = args.get("lane", "")
+    if not lane_id:
+        return json.dumps({"ok": False, "error": "`lane` (id) is required"})
+    lane = vault_kanban.move_lane(path, lane_id, args.get("position"))
+    return json.dumps({"ok": True, "lane": lane.to_dict()})
+
+
+def _delete_lane(args: dict[str, Any]) -> str:
+    from .. import vault_kanban
+
+    path = args.get("path", "")
+    lane_id = args.get("lane", "")
+    if not lane_id:
+        return json.dumps({"ok": False, "error": "`lane` is required"})
+    vault_kanban.delete_lane(path, lane_id)
+    return json.dumps({"ok": True})
+
+
+_REGISTRY.update({
+    "create_board": _create_board,
+    "view": _view,
+    "update_board": _update_board,
+    "add_card": _add_card,
+    "move_card": _move_card,
+    "update_card": _update_card,
+    "delete_card": _delete_card,
+    "add_lane": _add_lane,
+    "update_lane": _update_lane,
+    "move_lane": _move_lane,
+    "delete_lane": _delete_lane,
+})
+
 
 def handle_kanban_tool(args: dict[str, Any]) -> str:
     """Dispatch the requested kanban action and return serialized JSON.
@@ -133,107 +286,14 @@ def handle_kanban_tool(args: dict[str, Any]) -> str:
         JSON with ``{"ok": true, ...}`` on success or ``{"ok": false, "error": ...}``
         for invalid arguments, missing files, or I/O errors.
     """
-    from .. import vault_kanban
-
     action = args.get("action", "")
     path = args.get("path", "")
     if not path:
         return json.dumps({"ok": False, "error": "`path` is required"})
-
-    try:
-        if action == "create_board":
-            board = vault_kanban.create_empty(
-                path,
-                title=args.get("title"),
-                columns=args.get("columns"),
-            )
-            return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
-
-        if action == "view":
-            board = vault_kanban.read_board(path)
-            return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
-
-        if action == "update_board":
-            updates: dict[str, Any] = {}
-            if "title" in args:
-                updates["title"] = args["title"]
-            if "board_prompt" in args:
-                bp = args["board_prompt"]
-                updates["board_prompt"] = bp if bp else None
-            if not updates:
-                return json.dumps({"ok": False, "error": "no fields to update (title/board_prompt)"})
-            board = vault_kanban.update_board(path, updates)
-            return json.dumps({"ok": True, "board": board.to_dict()})
-
-        if action == "add_card":
-            lane = args.get("lane", "")
-            title = args.get("title", "")
-            if not lane or not title:
-                return json.dumps({"ok": False, "error": "`lane` and `title` are required"})
-            card = vault_kanban.add_card(path, lane, title, args.get("body", ""))
-            return json.dumps({"ok": True, "card": card.to_dict()})
-
-        if action == "move_card":
-            card_id = args.get("card_id", "")
-            lane = args.get("lane", "")
-            if not card_id or not lane:
-                return json.dumps({"ok": False, "error": "`card_id` and `lane` are required"})
-            card = vault_kanban.move_card(path, card_id, lane, args.get("position"))
-            return json.dumps({"ok": True, "card": card.to_dict()})
-
-        if action == "update_card":
-            card_id = args.get("card_id", "")
-            if not card_id:
-                return json.dumps({"ok": False, "error": "`card_id` is required"})
-            updates: dict[str, Any] = {}
-            for key in ("title", "body", "due", "priority", "labels", "assignees", "status"):
-                if key in args:
-                    updates[key] = args[key]
-            card = vault_kanban.update_card(path, card_id, updates)
-            return json.dumps({"ok": True, "card": card.to_dict()})
-
-        if action == "delete_card":
-            card_id = args.get("card_id", "")
-            if not card_id:
-                return json.dumps({"ok": False, "error": "`card_id` is required"})
-            vault_kanban.delete_card(path, card_id)
-            return json.dumps({"ok": True})
-
-        if action == "add_lane":
-            title = args.get("title", "")
-            if not title:
-                return json.dumps({"ok": False, "error": "`title` is required"})
-            lane = vault_kanban.add_lane(path, title)
-            return json.dumps({"ok": True, "lane": lane.to_dict()})
-
-        if action == "update_lane":
-            lane_id = args.get("lane", "")
-            if not lane_id:
-                return json.dumps({"ok": False, "error": "`lane` (id) is required"})
-            updates: dict[str, Any] = {}
-            for key in ("title", "prompt", "model"):
-                if key in args:
-                    updates[key] = args[key]
-            if not updates:
-                return json.dumps({"ok": False, "error": "no fields to update (title/prompt/model)"})
-            lane = vault_kanban.update_lane(path, lane_id, updates)
-            return json.dumps({"ok": True, "lane": lane.to_dict()})
-
-        if action == "move_lane":
-            lane_id = args.get("lane", "")
-            if not lane_id:
-                return json.dumps({"ok": False, "error": "`lane` (id) is required"})
-            lane = vault_kanban.move_lane(path, lane_id, args.get("position"))
-            return json.dumps({"ok": True, "lane": lane.to_dict()})
-
-        if action == "delete_lane":
-            lane_id = args.get("lane", "")
-            if not lane_id:
-                return json.dumps({"ok": False, "error": "`lane` is required"})
-            vault_kanban.delete_lane(path, lane_id)
-            return json.dumps({"ok": True})
-
+    handler = _REGISTRY.get(action)
+    if not handler:
         return json.dumps({"ok": False, "error": f"unknown action: {action!r}"})
-
+    try:
+        return handler(args)
     except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return json.dumps({"ok": False, "error": str(exc)})

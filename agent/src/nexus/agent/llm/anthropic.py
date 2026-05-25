@@ -9,18 +9,18 @@ from typing import Any
 
 from loom.types import Role, ToolSpec, Usage
 
-log = logging.getLogger(__name__)
-
+from ._payload import prepare_messages, resolve_model
 from .types import (
     ChatMessage,
     ChatResponse,
     ContentPart,
-    LLMError,
     LLMProvider,
     StopReason,
     StreamEvent,
     ToolCall,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _encode_part_anthropic(part: ContentPart) -> dict[str, Any]:
@@ -200,23 +200,14 @@ class AnthropicProvider(LLMProvider):
         self._model = model
         self._temperature = float(temperature or 0.0)
 
-    async def chat(
+    def _prepare_call(
         self,
-        messages: list[ChatMessage],
-        *,
-        tools: list[ToolSpec] | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
+        resolved_model: str,
+        prepared: list[ChatMessage],
+        max_tokens: int | None,
+        tools: list[ToolSpec] | None,
         extra_payload: dict[str, Any] | None = None,
-    ) -> ChatResponse:
-        resolved_model = model or self._model
-        if not resolved_model:
-            raise LLMError("No model specified: pass model= or set a default at construction")
-        from ...multimodal import materialize_messages
-        from ...providers.catalog import capabilities_for_model_name
-
-        caps = capabilities_for_model_name(resolved_model)
-        prepared = await materialize_messages(messages, caps)
+    ) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
         system: Any = ""
         filtered: list[dict[str, Any]] = []
         for m in prepared:
@@ -231,10 +222,6 @@ class AnthropicProvider(LLMProvider):
             "messages": filtered,
             "temperature": self._temperature,
         }
-        # Caller-supplied extras (e.g. voice_ack disables extended thinking
-        # via {"thinking": {"type": "disabled"}}). Anthropic accepts a
-        # `thinking` field natively. Other extras are passed through; the
-        # SDK will reject anything it doesn't recognize.
         if extra_payload:
             for k, v in extra_payload.items():
                 if k not in kwargs:
@@ -243,6 +230,20 @@ class AnthropicProvider(LLMProvider):
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = [_encode_tool_anthropic(t) for t in tools]
+        return system, filtered, kwargs
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        extra_payload: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        resolved_model = resolve_model(model, self._model)
+        prepared = await prepare_messages(resolved_model, messages)
+        _, _, kwargs = self._prepare_call(resolved_model, prepared, max_tokens, tools, extra_payload)
 
         resp = await self._client.messages.create(**kwargs)
         return _decode_anthropic(resp)
@@ -255,32 +256,9 @@ class AnthropicProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        resolved_model = model or self._model
-        if not resolved_model:
-            raise LLMError("No model specified: pass model= or set a default at construction")
-        from ...multimodal import materialize_messages
-        from ...providers.catalog import capabilities_for_model_name
-
-        caps = capabilities_for_model_name(resolved_model)
-        prepared = await materialize_messages(messages, caps)
-        system: Any = ""
-        filtered: list[dict[str, Any]] = []
-        for m in prepared:
-            if m.role == Role.SYSTEM:
-                system = m.content if isinstance(m.content, str) else (m.content or "")
-            else:
-                filtered.append(_encode_msg_anthropic(m))
-
-        kwargs: dict[str, Any] = {
-            "model": resolved_model,
-            "max_tokens": int(max_tokens) if max_tokens else 4096,
-            "messages": filtered,
-            "temperature": self._temperature,
-        }
-        if system:
-            kwargs["system"] = system
-        if tools:
-            kwargs["tools"] = [_encode_tool_anthropic(t) for t in tools]
+        resolved_model = resolve_model(model, self._model)
+        prepared = await prepare_messages(resolved_model, messages)
+        _, filtered, kwargs = self._prepare_call(resolved_model, prepared, max_tokens, tools)
 
         full_text = ""
         tool_bufs: dict[str, dict[str, Any]] = {}  # id -> {name, args_buf}

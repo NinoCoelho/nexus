@@ -259,7 +259,10 @@ export default function MarkdownView({
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
+      rehypePlugins={[[
+        rehypeKatex,
+        { strict: { mathVsTextAccents: false } } as Record<string, unknown>,
+      ]]}
       urlTransform={urlTransform ?? vaultUrlTransform}
       components={mdComponents}
     >

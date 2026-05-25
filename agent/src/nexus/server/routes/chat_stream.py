@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from ..deps import get_agent, get_sessions, get_job_tracker
 from ..schemas import ChatRequest
 from ._sse import keepalive
+from ._streaming import TurnAccumulator, build_done_sse, build_error_sse
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
@@ -105,14 +106,11 @@ async def chat_stream_route(
     resolved_model_id = req.model if req.model and req.model != "auto" else ""
 
     async def event_generator() -> AsyncIterator[str]:
-        final_messages = None
         # Snapshot the pre-turn history so partial-persistence on
         # abnormal exit can rebuild "history + user + partial assistant"
         # without double-appending.
         pre_turn_history = list(session.history)
-        accumulated_text = ""
-        accumulated_tools: list[dict[str, Any]] = []
-        partial_status = "interrupted"
+        acc = TurnAccumulator()
         # Bind session context for the duration of the stream so
         # any ask_user call inside the turn knows which session to
         # publish on. The contextvar is local to this coroutine
@@ -391,16 +389,13 @@ async def chat_stream_route(
                 etype = event.get("type")
 
                 if etype == "delta":
-                    accumulated_text += event.get("text", "")
-                    # Speculative summary kickoff (see comment above).
+                    acc.accumulated_text += event.get("text", "")
                     if (
                         ack_active
                         and completion_task is None
-                        and len(accumulated_text.split()) >= SPECULATIVE_WORD_THRESHOLD
+                        and len(acc.accumulated_text.split()) >= SPECULATIVE_WORD_THRESHOLD
                     ):
-                        # Snapshot accumulated_text now (str is immutable;
-                        # later appends won't mutate the captured value).
-                        snapshot = accumulated_text
+                        snapshot = acc.accumulated_text
                         log.warning(
                             "[chat_stream] kicking off speculative completion ack at %d words",
                             len(snapshot.split()),
@@ -414,64 +409,11 @@ async def chat_stream_route(
                             ),
                             cfg=load_config(),
                         ))
-                    yield f"event: delta\ndata: {json.dumps({'text': event['text']})}\n\n"
-
-                elif etype == "thinking":
-                    # Chain-of-thought from reasoning models (Ollama GLM,
-                    # DeepSeek-R1, …). Forwarded as its own SSE channel so
-                    # the UI can render it collapsed without it polluting
-                    # the assistant message body.
-                    yield f"event: thinking\ndata: {json.dumps({'text': event.get('text', '')})}\n\n"
-
-                elif etype == "limit_reached":
-                    partial_status = "iteration_limit"
-                    yield f"event: limit_reached\ndata: {json.dumps({'iterations': event.get('iterations', 0)})}\n\n"
-
-                elif etype == "reconnecting":
-                    yield (
-                        f"event: reconnecting\ndata: "
-                        f"{json.dumps({'attempt': event.get('attempt', 1), 'max_attempts': event.get('max_attempts', 1), 'delay_seconds': event.get('delay_seconds', 0), 'reason': event.get('reason', '')})}"
-                        f"\n\n"
-                    )
-
-                elif etype == "paused_for_cooldown":
-                    yield (
-                        f"event: paused_for_cooldown\ndata: "
-                        f"{json.dumps({'retry_after': event.get('retry_after', ''), 'estimated_seconds': event.get('estimated_seconds', 60), 'reason': event.get('reason', '')})}"
-                        f"\n\n"
-                    )
-
-                elif etype in ("tool_exec_start", "tool_exec_result"):
-                    payload: dict[str, Any] = {"name": event.get("name", "")}
-                    if "args" in event:
-                        payload["args"] = event["args"]
-                    if "result_preview" in event:
-                        payload["result_preview"] = event["result_preview"]
-                    if "call_id" in event:
-                        payload["call_id"] = event["call_id"]
-                    # Keep a running tool trace so a mid-turn abort still
-                    # leaves badges in persisted history.
-                    if etype == "tool_exec_start":
-                        accumulated_tools.append({
-                            "name": event.get("name", ""),
-                            "args": event.get("args"),
-                            "status": "pending",
-                        })
-                    else:
-                        for t in reversed(accumulated_tools):
-                            if t.get("name") == event.get("name") and t.get("status") == "pending":
-                                t["status"] = "done"
-                                t["result_preview"] = event.get("result_preview")
-                                break
-                    yield f"event: tool\ndata: {json.dumps(payload)}\n\n"
+                    for frame in acc.process_event(event):
+                        yield frame
 
                 elif etype == "done":
-                    final_messages = event.get("messages")
                     usage = event.get("usage") or {}
-                    # Persist the turn's usage onto the session so
-                    # it can be rolled up later. Done here (not
-                    # in `finally`) because the done event is only
-                    # emitted on successful completion of the turn.
                     try:
                         store.bump_usage(
                             session.id,
@@ -509,11 +451,6 @@ async def chat_stream_route(
                     }
                     yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
-                    # Voice ack: fire completion ack as a fire-and-forget
-                    # task — but ONLY if the speculative kickoff above
-                    # didn't already fire. When it did, we'd be
-                    # double-publishing two completion summaries that
-                    # the UI player would race against each other.
                     if ack_active and completion_task is None:
                         asyncio.create_task(emit_completion_ack(
                             agent=a, store=store,
@@ -534,25 +471,9 @@ async def chat_stream_route(
                         )
 
                 elif etype == "error":
-                    # Mid-stream structured error from the agent loop
-                    # (e.g. an upstream failure after content was already
-                    # streamed, so retry was impossible, or a truncation /
-                    # empty-response signal emitted by loop.py before the
-                    # done terminator). Forward the classifier's fields so
-                    # the UI can show a richer message without re-parsing
-                    # the detail string — and stamp partial_status so the
-                    # persisted assistant prefix matches the banner.
                     reason = event.get("reason")
-                    # Keep partial_status in sync with classified reasons
-                    # so the persisted assistant prefix reflects the real
-                    # failure (was previously a tight allowlist that let
-                    # rate_limit / auth_error / transport / bad_request
-                    # fall through as "no status" — and the UI's done
-                    # handler then dropped the banner entirely).
                     if reason and reason not in ("interrupted", "cancelled"):
-                        partial_status = reason
-                    # Log the forwarded payload so daemon-side debugging
-                    # has the exact text the UI's banner is rendering.
+                        acc.partial_status = reason
                     log.warning(
                         "chat_stream forwarding error to UI: reason=%r status=%r detail=%r",
                         reason,
@@ -565,15 +486,17 @@ async def chat_stream_route(
                         "retryable": event.get("retryable"),
                         "status_code": event.get("status_code"),
                     }
-                    # Forward overflow-specific fields so the UI can offer a
-                    # "Compact history" button instead of a bare "Retry".
                     for k in ("likely_cause", "estimated_input_tokens",
                               "context_window", "actions"):
                         if k in event:
                             err_payload[k] = event[k]
                     yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
+
+                else:
+                    for frame in acc.process_event(event):
+                        yield frame
         except (LLMTransportError, MalformedOutputError) as exc:
-            partial_status = "llm_error"
+            acc.partial_status = "llm_error"
             detail = str(exc)
             reason = None
             retryable = None
@@ -581,7 +504,7 @@ async def chat_stream_route(
             try:
                 from ...error_classifier import classify_api_error, is_budget_exceeded, budget_exceeded_detail
                 if is_budget_exceeded(exc):
-                    partial_status = "budget_exceeded"
+                    acc.partial_status = "budget_exceeded"
                     reason = "budget_exceeded"
                     retryable = False
                     bd = budget_exceeded_detail(exc)
@@ -590,7 +513,7 @@ async def chat_stream_route(
                 else:
                     _reason = classify_api_error(exc).reason.value
                     if _reason == "timeout":
-                        partial_status = "upstream_timeout"
+                        acc.partial_status = "upstream_timeout"
             except Exception:  # noqa: BLE001
                 pass
             log.warning(
@@ -620,55 +543,31 @@ async def chat_stream_route(
                 )
             except Exception:  # noqa: BLE001
                 pass
-            err_payload = {
-                "detail": detail,
-                "reason": reason,
-                "retryable": retryable,
-                "status_code": status_code,
-            }
-            yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
-            # Critical: emit a terminator `done` so the UI marks the turn
-            # as finished. Without this the SSE stream just closes, the
-            # client treats it as "interrupted", and its recovery path
-            # reloads session history from the DB — wiping the partial
-            # banner we just rendered. The cancelled / catch-all branches
-            # below already do this; this branch was missing it.
-            yield (
-                f"event: done\ndata: "
-                f"{json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}"
-                f"\n\n"
-            )
+            yield build_error_sse(detail=detail, reason=reason, retryable=retryable, status_code=status_code)
+            yield build_done_sse(session_id=session.id)
         except asyncio.CancelledError:
-            partial_status = "cancelled" if session.id in _user_cancelled else "interrupted"
+            acc.partial_status = "cancelled" if session.id in _user_cancelled else "interrupted"
             _user_cancelled.discard(session.id)
-            yield f"event: error\ndata: {json.dumps({'detail': 'cancelled by user', 'reason': 'cancelled'})}\n\n"
-            yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
+            yield build_error_sse(detail="cancelled by user", reason="cancelled")
+            yield build_done_sse(session_id=session.id)
         except Exception as exc:
-            partial_status = "crashed"
-            # Catch-all so an unexpected error never leaves the client
-            # with ERR_INCOMPLETE_CHUNKED_ENCODING. Emit a proper
-            # error frame then a terminator done so the client can
-            # unwind its UI (flip thinking off, show the error).
+            acc.partial_status = "crashed"
             log.exception("chat_stream crashed")
-            yield f"event: error\ndata: {json.dumps({'detail': f'{type(exc).__name__}: {exc}'})}\n\n"
-            yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'reply': '', 'trace': [], 'skills_touched': [], 'iterations': 0})}\n\n"
+            yield build_error_sse(detail=f"{type(exc).__name__}: {exc}")
+            yield build_done_sse(session_id=session.id)
         finally:
             from .chat_stream_helpers import persist_stream_turn
             persist_stream_turn(
                 store=store,
                 session_id=session.id,
-                final_messages=final_messages,
+                final_messages=acc.final_messages,
                 pre_turn_history=pre_turn_history,
                 user_message=req.message,
-                accumulated_text=accumulated_text,
-                accumulated_tools=accumulated_tools,
-                partial_status=partial_status,
+                accumulated_text=acc.accumulated_text,
+                accumulated_tools=acc.accumulated_tools,
+                partial_status=acc.partial_status,
             )
             tracker.done(turn_job_id, publish_fn=_publish_job_event)
-            # SSE consumer disconnects mid-stream cancel the generator
-            # from a different async context; CURRENT_SESSION_ID then
-            # refuses the reset with a ValueError that aborts the rest
-            # of cleanup. Best-effort here.
             try:
                 CURRENT_SESSION_ID.reset(token)
                 ALLOWED_TOOLS.reset(_allowed_token)

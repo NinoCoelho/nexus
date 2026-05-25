@@ -11,7 +11,6 @@ import asyncio
 import datetime
 import json
 import logging
-import re
 import uuid
 from typing import Any
 
@@ -27,6 +26,7 @@ from .models import (
     WorkflowDef,
     WorkflowRun,
 )
+from .steps import STEP_REGISTRY
 from .store import WorkflowStore
 from .schema import infer_schema, truncate_sample, save_schema, save_step_sample, load_step_samples, save_trigger_sample
 
@@ -81,41 +81,6 @@ def _convert_trigger_payload(raw: str, fmt: str) -> dict[str, Any]:
             return {"request": raw}
     else:  # plain
         return {"request": raw}
-
-
-def _build_json_instruction(schema: str | None = None) -> str:
-    parts = [
-        "You MUST respond with ONLY valid JSON — no markdown fences, "
-        "no commentary, no explanation. Output a single JSON object "
-        "and nothing else.",
-    ]
-    if schema:
-        parts.append(
-            f"\nRespond with a JSON object matching this structure:\n"
-            f"{schema}\n"
-            f"Replace placeholder values with actual data."
-        )
-    return "".join(parts) + "\n\n"
-
-
-def _parse_llm_output(text: str, force_json: bool) -> Any:
-    stripped = text.strip()
-    fence_match = re.match(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", stripped, re.DOTALL)
-    if fence_match:
-        stripped = fence_match.group(1).strip()
-
-    if force_json:
-        try:
-            return json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
-            return stripped
-    else:
-        if stripped.startswith("{") or stripped.startswith("["):
-            try:
-                return json.loads(stripped)
-            except (json.JSONDecodeError, ValueError):
-                pass
-        return None
 
 
 async def _single_shot_llm(
@@ -408,33 +373,10 @@ class WorkflowEngine:
         ctx: dict[str, Any],
         resolved_input: dict[str, Any] | None,
     ) -> Any:
-        if step.type == StepType.tool_call:
-            return await self._execute_tool_call(step, resolved_input)
-        elif step.type == StepType.agent_session:
-            return await self._execute_agent_session(step, ctx)
-        elif step.type == StepType.condition:
-            return {"result": evaluate_condition(step.expression or "", ctx)}
-        elif step.type == StepType.delay:
-            await asyncio.sleep(step.duration_seconds)
-            return {"waited_seconds": step.duration_seconds}
-        elif step.type == StepType.transform:
-            if step.output_format == "llm":
-                return await self._execute_llm_transform(step, ctx)
-            elif step.output_format == "script":
-                return await self._execute_script_transform(step, ctx)
-            else:
-                template = resolve_templates(step.template or "", ctx)
-                if step.output_format == "json":
-                    try:
-                        return json.loads(template)
-                    except json.JSONDecodeError:
-                        return {"raw": template}
-                return {"result": template}
-        elif step.type == StepType.http_request:
-            return await self._execute_http_request(step, ctx)
-        elif step.type == StepType.mcp_call:
-            return await self._execute_mcp_call(step, ctx)
-        elif step.type == StepType.kanban_action:
+        handler = STEP_REGISTRY.get(step.type)
+        if handler is not None:
+            return await handler(self, step, ctx, resolved_input)
+        if step.type == StepType.kanban_action:
             return await self._execute_kanban_action(step, ctx)
         elif step.type == StepType.table_action:
             return await self._execute_table_action(step, ctx)
@@ -442,232 +384,6 @@ class WorkflowEngine:
             return await self._execute_return_step(step, ctx)
         else:
             raise ValueError(f"unsupported step type: {step.type}")
-
-    async def _execute_llm_transform(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        system_prompt = step.tool or "Transform the following input as instructed. Output only the result."
-        user_input = resolve_templates(step.template or "", ctx)
-        if not user_input:
-            raise ValueError(f"step '{step.name}' missing input for LLM transform")
-
-        if getattr(self, "_agent", None) is None or getattr(self, "_sessions", None) is None:
-            return {"result": user_input, "_simulated": True}
-
-        force_json = step.output_format == "json"
-        prompt = system_prompt + "\n\n" + user_input
-        if force_json:
-            schema_str = resolve_templates(step.output_schema, ctx) if step.output_schema else None
-            prompt = _build_json_instruction(schema_str) + prompt
-
-        final_text, _ = await _single_shot_llm(
-            self, prompt, model_id=step.model or None,
-        )
-
-        parsed = _parse_llm_output(final_text, force_json)
-        if isinstance(parsed, str):
-            return {"result": parsed}
-        if parsed is not None:
-            return parsed
-        return {"result": final_text.strip()}
-
-    async def _execute_script_transform(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        template = resolve_templates(step.template or "", ctx)
-        if not template:
-            raise ValueError(f"step '{step.name}': missing script")
-
-        data = ctx.get("steps", {})
-        safe_builtins = {
-            "__import__": __import__,
-            "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
-            "enumerate": enumerate, "filter": filter, "float": float, "int": int,
-            "isinstance": isinstance, "len": len, "list": list, "map": map,
-            "max": max, "min": min, "None": None, "print": print, "range": range,
-            "round": round, "set": set, "sorted": sorted, "str": str, "sum": sum,
-            "tuple": tuple, "type": type, "zip": zip, "True": True, "False": False,
-        }
-        global_ns: dict[str, Any] = {"__builtins__": safe_builtins, "json": json, "re": re}
-        local_vars: dict[str, Any] = {"data": data, "result": None}
-        try:
-            exec(template, global_ns, local_vars)
-            return {"result": local_vars.get("result")}
-        except Exception as exc:
-            raise ValueError(f"script error in step '{step.name}': {exc}") from exc
-
-    async def _execute_tool_call(self, step: StepConfig, resolved_input: dict[str, Any] | None) -> Any:
-        from ..agent._loom_bridge.registry import build_tool_registry
-
-        tool_name = step.tool
-        if not tool_name:
-            raise ValueError(f"step '{step.name}' missing tool name")
-
-        registry = build_tool_registry()
-        handler = registry.get(tool_name)
-        if handler is None:
-            raise ValueError(f"unknown tool: {tool_name}")
-
-        args = resolved_input or {}
-        if asyncio.iscoroutinefunction(handler):
-            result = await handler(**args)
-        else:
-            result = handler(**args)
-        if isinstance(result, dict):
-            return result
-        return {"result": result}
-
-    async def _execute_agent_session(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        from ..agent.loop.agent import Agent
-        from ..server.session_store.store import SessionStore
-        from ..agent.llm import ChatMessage as NxChatMessage
-
-        prompt = resolve_templates(step.prompt or "", ctx)
-        if not prompt:
-            raise ValueError(f"step '{step.name}' missing prompt for agent session")
-
-        agent: Agent | None = getattr(self, "_agent", None)
-        store: SessionStore | None = getattr(self, "_sessions", None)
-
-        if agent is None or store is None:
-            return {"result": prompt, "_simulated": True}
-
-        session = store.create()
-        store.mark_hidden(session.id)
-        session_id = session.id
-
-        force_json = step.output_format == "json"
-        if force_json:
-            schema_str = resolve_templates(step.output_schema, ctx) if step.output_schema else None
-            agent_prompt = _build_json_instruction(schema_str) + prompt
-        else:
-            agent_prompt = prompt
-
-        resolved_model = step.model or None
-        if not resolved_model:
-            try:
-                from ..config_file import load as load_config
-                resolved_model = getattr(load_config().agent, "default_model", None) or None
-            except Exception:
-                pass
-
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "workflow agent_session: step=%r model=%r session=%s",
-            step.name, resolved_model, session_id,
-        )
-
-        final_text = ""
-        final_messages: list[NxChatMessage] = []
-
-        from ..agent.context import CURRENT_SESSION_ID
-        _sid_token = CURRENT_SESSION_ID.set(session_id)
-        try:
-            async for event in agent.run_turn_stream(
-                agent_prompt,
-                history=[],
-                session_id=session_id,
-                model_id=resolved_model,
-            ):
-                etype = event.get("type")
-                if etype == "delta":
-                    final_text += event.get("text", "")
-                elif etype == "error":
-                    raise RuntimeError(event.get("message", "agent error"))
-                elif etype == "done":
-                    raw_msgs = event.get("messages") or []
-                    final_messages = [
-                        m if isinstance(m, NxChatMessage) else NxChatMessage(**m)
-                        for m in raw_msgs
-                        ]
-        finally:
-            CURRENT_SESSION_ID.reset(_sid_token)
-
-        if final_messages:
-            store.replace_history(session_id, final_messages)
-
-        output: dict[str, Any] = {"session_id": session_id}
-        parsed = _parse_llm_output(final_text, force_json)
-
-        if isinstance(parsed, dict):
-            output.update(parsed)
-        elif parsed is not None:
-            output["result"] = parsed
-        else:
-            output["result"] = final_text.strip()
-
-        return output
-
-    async def _execute_http_request(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        import aiohttp
-        from ..secrets import resolve as resolve_secret
-
-        url = resolve_templates(step.url or "", ctx)
-        method = step.method.upper()
-        headers = resolve_templates(step.headers or {}, ctx)
-        body = resolve_templates(step.body, ctx) if step.body else None
-
-        if step.custom_headers:
-            resolved_custom = resolve_templates(step.custom_headers, ctx)
-            headers.update(resolved_custom)
-
-        if step.auth_type == "basic":
-            user = resolve_templates(step.auth_username or "", ctx)
-            pwd_name = step.auth_password_credential
-            pwd = resolve_secret(pwd_name) if pwd_name else ""
-            import base64
-            token = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-            headers["Authorization"] = f"Basic {token}"
-
-        elif step.auth_type == "apikey":
-            key_val = resolve_secret(step.auth_credential) if step.auth_credential else ""
-            prefix = step.auth_prefix or "Bearer"
-            if step.auth_location == "query":
-                sep = "&" if "?" in url else "?"
-                url = f"{url}{sep}{step.auth_query_name or 'api_key'}={key_val}"
-            elif step.auth_location == "header" and step.auth_header_name:
-                headers[step.auth_header_name] = f"{prefix} {key_val}" if prefix else key_val
-            else:
-                headers["Authorization"] = f"{prefix} {key_val}"
-
-        elif step.auth_type == "oauth":
-            token_val = resolve_secret(step.auth_credential) if step.auth_credential else ""
-            headers["Authorization"] = f"Bearer {token_val}"
-
-        async with aiohttp.ClientSession() as session:
-            kwargs: dict[str, Any] = {"headers": headers}
-            if body is not None and method in ("POST", "PUT", "PATCH"):
-                if isinstance(body, (dict, list)):
-                    kwargs["json"] = body
-                else:
-                    kwargs["data"] = str(body)
-            async with session.request(method, url, **kwargs) as resp:
-                text = await resp.text()
-                return {
-                    "status": resp.status,
-                    "body": text[:10000],
-                    "headers": dict(resp.headers),
-                }
-
-    async def _execute_mcp_call(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
-        server_name = step.mcp_server
-        tool_name = step.mcp_tool
-        if not server_name or not tool_name:
-            raise ValueError(f"step '{step.name}' missing mcp_server or mcp_tool")
-
-        mgr = getattr(self, "_mcp_manager", None)
-        if mgr is None:
-            try:
-                from ..server.app import app
-                mgr = getattr(app.state, "mcp_manager", None)
-            except Exception:
-                pass
-        if mgr is None:
-            raise RuntimeError("MCP manager not available")
-
-        client = mgr._clients.get(server_name)
-        if client is None:
-            raise ValueError(f"MCP server '{server_name}' not connected")
-
-        resolved_input = resolve_templates(step.input or {}, ctx)
-        result = await client.call_tool(tool_name, resolved_input)
-        return result
 
     async def _execute_kanban_action(self, step: StepConfig, ctx: dict[str, Any]) -> Any:
         from ..vault_kanban import add_card, move_card, update_card

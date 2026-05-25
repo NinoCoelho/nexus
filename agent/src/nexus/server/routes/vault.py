@@ -82,8 +82,7 @@ async def vault_list_tags() -> list[dict]:
     from ... import vault_index
 
     def _work():
-        if vault_index.is_empty():
-            vault_index.rebuild_from_disk()
+        vault_index.ensure_ready()
         return vault_index.list_tags()
 
     return await asyncio.to_thread(_work)
@@ -94,8 +93,7 @@ async def vault_files_for_tag(tag: str) -> dict:
     from ... import vault_index
 
     def _work():
-        if vault_index.is_empty():
-            vault_index.rebuild_from_disk()
+        vault_index.ensure_ready()
         return vault_index.files_with_tag(tag)
 
     return {"tag": tag, "files": await asyncio.to_thread(_work)}
@@ -106,8 +104,7 @@ async def vault_backlinks_endpoint(path: str) -> dict:
     from ... import vault_index
 
     def _work():
-        if vault_index.is_empty():
-            vault_index.rebuild_from_disk()
+        vault_index.ensure_ready()
         return vault_index.backlinks(path)
 
     return {"path": path, "backlinks": await asyncio.to_thread(_work)}
@@ -118,8 +115,7 @@ async def vault_forward_links_endpoint(path: str) -> dict:
     from ... import vault_index
 
     def _work():
-        if vault_index.is_empty():
-            vault_index.rebuild_from_disk()
+        vault_index.ensure_ready()
         return vault_index.forward_links(path)
 
     return {"path": path, "forward_links": await asyncio.to_thread(_work)}
@@ -226,8 +222,7 @@ async def vault_read_file(path: str, request: Request) -> dict:
     try:
 
         def _attach_meta():
-            if vault_index.is_empty():
-                vault_index.rebuild_from_disk()
+            vault_index.ensure_ready()
             return vault_index.tags_for_file(path), vault_index.backlinks(path)
 
         tags, backlinks = await asyncio.to_thread(_attach_meta)

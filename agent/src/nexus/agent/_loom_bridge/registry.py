@@ -32,6 +32,7 @@ class _SimpleToolHandler(ToolHandler):
 
     async def invoke(self, args: dict) -> ToolResult:
         import inspect
+
         result = self._fn(args)
         if inspect.isawaitable(result):
             result = await result
@@ -90,30 +91,42 @@ def build_tool_registry(
     late-binding by the server (setting ``handlers.ask_user`` after
     registry construction) takes effect on the next tool call.
     """
+    from nexus.agent.ask_user_tool import ASK_USER_TOOL, parse_parked_sentinel
     from nexus.agent.loop import SKILL_MANAGE_TOOL
+    from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
     from nexus.skills.manager import SkillManager
-    from nexus.tools.acp_call import ACP_CALL_TOOL, acp_call
-    from nexus.tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
+    from nexus.tools.acp_call import ACP_CALL_TOOL, acp_call, acp_is_configured
+    from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
+    from nexus.tools.context_tool import (
+        CONTEXT_STATUS_TOOL,
+        FORK_SESSION_TOOL,
+        handle_context_status,
+        handle_fork_session,
+    )
     from nexus.tools.csv_tool import CSV_TOOL, handle_csv_tool
     from nexus.tools.dashboard_tool import DASHBOARD_MANAGE_TOOL, handle_dashboard_tool
     from nexus.tools.datatable_tool import DATATABLE_MANAGE_TOOL, handle_datatable_tool
-    from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
-    from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
-    from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
-    from nexus.tools.show_kanban_tool import SHOW_KANBAN_TOOL, handle_show_kanban
-    from nexus.tools.show_dashboard_widget_tool import SHOW_DASHBOARD_WIDGET_TOOL, handle_show_dashboard_widget
-    from nexus.tools.show_data_table_tool import SHOW_DATA_TABLE_TOOL, handle_show_data_table
+    from nexus.tools.heartbeat_tool import HEARTBEAT_MANAGE_TOOL, handle_heartbeat_manage_tool
+    from nexus.tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
+    from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
+    from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
     from nexus.tools.nexus_kb import NEXUS_KB_TOOL, handle_nexus_kb_search
     from nexus.tools.ocr_tool import OCR_IMAGE_TOOL, handle_ocr_image_tool
-    from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
-    from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
-    from nexus.tools.vault_tool import VAULT_TOOLS, VAULT_SEMANTIC_SEARCH_TOOL, handle_vault_tool
     from nexus.tools.ontology_tool import ONTOLOGY_MANAGE_TOOL, make_ontology_handler
+    from nexus.tools.show_dashboard_widget_tool import (
+        SHOW_DASHBOARD_WIDGET_TOOL,
+        handle_show_dashboard_widget,
+    )
+    from nexus.tools.show_data_table_tool import SHOW_DATA_TABLE_TOOL, handle_show_data_table
+    from nexus.tools.show_kanban_tool import SHOW_KANBAN_TOOL, handle_show_kanban
+    from nexus.tools.state_tool import STATE_TOOLS, StateToolHandler
+    from nexus.tools.vault_tool import VAULT_SEMANTIC_SEARCH_TOOL, VAULT_TOOLS, handle_vault_tool
+    from nexus.tools.visualize_tool import VISUALIZE_TABLE_TOOL, handle_visualize_tool
+
     from loom.tools.subagent import SpawnSubagentsTool
     from loom.tools.terminal import TERMINAL_TOOL_SPEC
-    from nexus.agent.ask_user_tool import ASK_USER_TOOL, parse_parked_sentinel
 
     registry = ToolRegistry()
     state = StateToolHandler(skill_registry)
@@ -135,7 +148,6 @@ def build_tool_registry(
 
         registry.register(_SimpleToolHandler(_spec, _state_invoke))
 
-    # skill_manage
     async def _skill_manage(args: dict) -> str:
         action = args.get("action", "")
         result = manager.invoke(action, args)
@@ -160,6 +172,7 @@ def build_tool_registry(
 
     def _load_cfg() -> Any:
         from nexus.config_file import load as load_config
+
         return load_config()
 
     _ontology_handler = make_ontology_handler(
@@ -173,26 +186,17 @@ def build_tool_registry(
     if _should_register("ontology_manage", features):
         registry.register(_SimpleToolHandler(ONTOLOGY_MANAGE_TOOL, _ontology_manage))
 
-    # http_call
-    async def _http_call(args: dict) -> str:
-        res = await http.invoke(args)
-        return res.to_text()
-
-    registry.register(_SimpleToolHandler(HTTP_CALL_TOOL, _http_call))
-
     # acp_call — only advertise when an ACP gateway is actually configured.
     # When env vars are missing, hiding the tool keeps it out of the system
     # prompt so the agent doesn't try to call something that will only ever
     # answer "not configured".
-    from nexus.tools.acp_call import acp_is_configured
-
     if acp_is_configured():
+
         async def _acp_call(args: dict) -> str:
             return await acp_call(args.get("agent_id", ""), args.get("message", ""))
 
         registry.register(_SimpleToolHandler(ACP_CALL_TOOL, _acp_call))
 
-    # vault tools
     for spec in VAULT_TOOLS:
         _spec = spec
 
@@ -200,54 +204,6 @@ def build_tool_registry(
             return handle_vault_tool(_spec.name, args)
 
         registry.register(_SimpleToolHandler(_spec, _vault))
-
-    # vault_semantic_search (async handler)
-    async def _vault_semantic_search(args: dict) -> str:
-        return await handle_vault_tool("vault_semantic_search", args)
-
-    if _should_register("vault_semantic_search", features):
-        registry.register(_SimpleToolHandler(VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search))
-
-    # kanban_manage
-    async def _kanban(args: dict) -> str:
-        return handle_kanban_tool(args)
-
-    if _should_register("kanban_manage", features):
-        registry.register(_SimpleToolHandler(KANBAN_MANAGE_TOOL, _kanban))
-
-    # kanban_query — cross-board search
-    async def _kanban_query(args: dict) -> str:
-        return handle_kanban_query_tool(args)
-
-    if _should_register("kanban_query", features):
-        registry.register(_SimpleToolHandler(KANBAN_QUERY_TOOL, _kanban_query))
-
-    # calendar_manage
-    async def _calendar(args: dict) -> str:
-        return handle_calendar_tool(args)
-
-    if _should_register("calendar_manage", features):
-        registry.register(_SimpleToolHandler(CALENDAR_MANAGE_TOOL, _calendar))
-
-    # dispatch_card — spawn a chat session seeded from a card or vault file
-    async def _dispatch_card(args: dict) -> str:
-        return await handle_dispatch_card_tool(args, handlers.dispatcher)
-
-    if _should_register("dispatch_card", features):
-        registry.register(_SimpleToolHandler(DISPATCH_CARD_TOOL, _dispatch_card))
-
-    # manage_heartbeat — CRUD for heartbeat drivers. The manager getter is
-    # resolved lazily via handlers.hb_manager_getter because the
-    # HeartbeatRegistry / Store are created inside the lifespan.
-    from nexus.tools.heartbeat_tool import (
-        HEARTBEAT_MANAGE_TOOL, handle_heartbeat_manage_tool,
-    )
-
-    async def _manage_heartbeat(args: dict) -> str:
-        return await handle_heartbeat_manage_tool(args, handlers.hb_manager_getter)
-
-    if _should_register("manage_heartbeat", features):
-        registry.register(_SimpleToolHandler(HEARTBEAT_MANAGE_TOOL, _manage_heartbeat))
 
     # spawn_subagents — run N agent loops in parallel with fresh contexts.
     # Loom's SpawnSubagentsTool reads CURRENT_SESSION_ID and SUBAGENT_DEPTH
@@ -258,68 +214,6 @@ def build_tool_registry(
     registry.register(
         SpawnSubagentsTool(runner_getter=lambda: handlers.subagent_runner)
     )
-
-    # datatable_manage
-    async def _datatable(args: dict) -> str:
-        return handle_datatable_tool(args)
-
-    if _should_register("datatable_manage", features):
-        registry.register(_SimpleToolHandler(DATATABLE_MANAGE_TOOL, _datatable))
-
-    # dashboard_manage — per-database `_data.md` operations + chat session id.
-    async def _dashboard(args: dict) -> str:
-        result = handle_dashboard_tool(args)
-        if args.get("action") == "delete_database" and '"ok": true' in result:
-            skill_registry.reload()
-        return result
-
-    if _should_register("dashboard_manage", features):
-        registry.register(_SimpleToolHandler(DASHBOARD_MANAGE_TOOL, _dashboard))
-
-    # show_kanban — render kanban board as inline MCP App
-    async def _show_kanban(args: dict) -> str:
-        return await handle_show_kanban(args)
-
-    if _should_register("show_kanban", features):
-        registry.register(_SimpleToolHandler(SHOW_KANBAN_TOOL, _show_kanban))
-
-    # show_dashboard_widget — render chart widget as inline MCP App
-    async def _show_dashboard_widget(args: dict) -> str:
-        return await handle_show_dashboard_widget(args)
-
-    if _should_register("show_dashboard_widget", features):
-        registry.register(_SimpleToolHandler(SHOW_DASHBOARD_WIDGET_TOOL, _show_dashboard_widget))
-
-    # show_data_table — render data table as inline MCP App
-    async def _show_data_table(args: dict) -> str:
-        return await handle_show_data_table(args)
-
-    if _should_register("show_data_table", features):
-        registry.register(_SimpleToolHandler(SHOW_DATA_TABLE_TOOL, _show_data_table))
-
-    # vault_csv — DuckDB analytics over CSV/TSV files
-    async def _csv(args: dict) -> str:
-        return handle_csv_tool(args)
-
-    if _should_register("vault_csv", features):
-        registry.register(_SimpleToolHandler(CSV_TOOL, _csv))
-
-    # visualize_table
-    async def _visualize(args: dict) -> str:
-        return handle_visualize_tool(args)
-
-    if _should_register("visualize_table", features):
-        registry.register(_SimpleToolHandler(VISUALIZE_TABLE_TOOL, _visualize))
-
-    # ocr_image — extract text from a vault image / scanned PDF using the
-    # engine declared under [ocr] in config.toml. Always advertised so
-    # the agent can surface a useful "configure OCR first" error when
-    # the user hasn't set [ocr] yet, rather than pretending the
-    # capability doesn't exist.
-    async def _ocr_image(args: dict) -> str:
-        return await handle_ocr_image_tool(args)
-
-    registry.register(_SimpleToolHandler(OCR_IMAGE_TOOL, _ocr_image))
 
     _mem_handler = MemoryHandler()
 
@@ -335,30 +229,6 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(MEMORY_READ_TOOL, _mem_read))
     registry.register(_SimpleToolHandler(MEMORY_WRITE_TOOL, _mem_write))
-
-    # nexus_kb_search — BM25 retrieval over the bundled `nexus` skill's
-    # knowledge.md. The `nexus` skill calls this to answer meta-questions
-    # about Nexus configuration without paying for the full KB in the
-    # system prompt.
-    async def _nexus_kb_search(args: dict) -> str:
-        return json.dumps(handle_nexus_kb_search(args))
-
-    registry.register(_SimpleToolHandler(NEXUS_KB_TOOL, _nexus_kb_search))
-
-    from nexus.tools.context_tool import (
-        CONTEXT_STATUS_TOOL, handle_context_status,
-        FORK_SESSION_TOOL, handle_fork_session,
-    )
-
-    async def _context_status(args: dict) -> str:
-        return handle_context_status(args)
-
-    registry.register(_SimpleToolHandler(CONTEXT_STATUS_TOOL, _context_status))
-
-    async def _fork_session(args: dict) -> str:
-        return handle_fork_session(args)
-
-    registry.register(_SimpleToolHandler(FORK_SESSION_TOOL, _fork_session))
 
     # HITL tools — always registered; handlers resolved at dispatch time.
     # This lets app.py late-bind handlers without rebuilding the registry.
@@ -389,10 +259,6 @@ def build_tool_registry(
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))
     registry.register(_SimpleToolHandler(TERMINAL_TOOL_SPEC, _terminal))
 
-    # notify_user — fire-and-forget status pings (TTS when input was
-    # voice, toast always). Read at dispatch time via ``handlers``.
-    from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
-
     async def _notify_user(args: dict) -> str:
         h = handlers.notify_user
         if h is None:
@@ -408,7 +274,6 @@ def build_tool_registry(
 
         registry.register(EditIdentityTool(home, permissions))
 
-    # Web search — enabled by default via search.enabled (default: True).
     if search_cfg and getattr(search_cfg, "enabled", False):
         import os
 
@@ -443,8 +308,6 @@ def build_tool_registry(
                 strategy = SearchStrategy.CONCURRENT
             registry.register(WebSearchTool.from_config(providers, strategy=strategy))
 
-    # Web scrape — enabled by default via scrape.enabled (default: True).
-    # Cookie store persists at ~/.nexus/cookies/ for cross-session auth.
     if scrape_cfg and getattr(scrape_cfg, "enabled", False):
         from pathlib import Path
 
@@ -462,6 +325,54 @@ def build_tool_registry(
                 max_content_bytes=getattr(scrape_cfg, "max_content_bytes", 102400),
             )
         )
+
+    async def _http_call(args: dict) -> str:
+        res = await http.invoke(args)
+        return res.to_text()
+
+    async def _vault_semantic_search(args: dict) -> str:
+        return await handle_vault_tool("vault_semantic_search", args)
+
+    async def _dispatch_card(args: dict) -> str:
+        return await handle_dispatch_card_tool(args, handlers.dispatcher)
+
+    async def _manage_heartbeat(args: dict) -> str:
+        return await handle_heartbeat_manage_tool(args, handlers.hb_manager_getter)
+
+    async def _dashboard(args: dict) -> str:
+        result = handle_dashboard_tool(args)
+        if args.get("action") == "delete_database" and '"ok": true' in result:
+            skill_registry.reload()
+        return result
+
+    async def _nexus_kb_search(args: dict) -> str:
+        return json.dumps(handle_nexus_kb_search(args))
+
+    _TOOL_TABLE: list[tuple[Any, Any, str | None]] = [
+        (HTTP_CALL_TOOL, _http_call, None),
+        (VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search, "knowledge"),
+        (KANBAN_MANAGE_TOOL, handle_kanban_tool, "kanban"),
+        (KANBAN_QUERY_TOOL, handle_kanban_query_tool, "kanban"),
+        (CALENDAR_MANAGE_TOOL, handle_calendar_tool, "calendar"),
+        (DISPATCH_CARD_TOOL, _dispatch_card, "heartbeat"),
+        (HEARTBEAT_MANAGE_TOOL, _manage_heartbeat, "heartbeat"),
+        (DATATABLE_MANAGE_TOOL, handle_datatable_tool, "database"),
+        (DASHBOARD_MANAGE_TOOL, _dashboard, "database"),
+        (SHOW_KANBAN_TOOL, handle_show_kanban, "kanban"),
+        (SHOW_DASHBOARD_WIDGET_TOOL, handle_show_dashboard_widget, "database"),
+        (SHOW_DATA_TABLE_TOOL, handle_show_data_table, "database"),
+        (CSV_TOOL, handle_csv_tool, "database"),
+        (VISUALIZE_TABLE_TOOL, handle_visualize_tool, "database"),
+        (OCR_IMAGE_TOOL, handle_ocr_image_tool, None),
+        (NEXUS_KB_TOOL, _nexus_kb_search, None),
+        (CONTEXT_STATUS_TOOL, handle_context_status, None),
+        (FORK_SESSION_TOOL, handle_fork_session, None),
+    ]
+
+    for spec, fn, gate in _TOOL_TABLE:
+        if gate is not None and features is not None and gate not in features:
+            continue
+        registry.register(_SimpleToolHandler(spec, fn))
 
     _install_skill_redirect(registry, skill_registry)
     _install_unknown_tool_helper(registry)
@@ -488,7 +399,8 @@ def _install_skill_redirect(registry: ToolRegistry, skill_registry: Any) -> None
                 if candidate in skill_registry:
                     log.info(
                         "skill-name tool call %r redirected to skill_view(%r)",
-                        name, candidate,
+                        name,
+                        candidate,
                     )
                     return await original_dispatch("skill_view", {"name": candidate})
         return await original_dispatch(name, args)

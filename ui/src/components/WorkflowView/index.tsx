@@ -2,28 +2,11 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import type {
   WorkflowDef,
   WorkflowSummary,
-  WorkflowRun,
 } from "../../types/workflow";
 import * as api from "../../api/workflows";
 import Modal from "../Modal";
 import WorkflowFlow from "../WorkflowFlow";
 import "./WorkflowView.css";
-
-function formatTime(iso: string) {
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    return d.toLocaleDateString();
-  } catch {
-    return iso;
-  }
-}
 
 export default function WorkflowView({
   selectedPath,
@@ -34,7 +17,6 @@ export default function WorkflowView({
 }) {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [wf, setWf] = useState<WorkflowDef | null>(null);
-  const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -50,7 +32,6 @@ export default function WorkflowView({
     try {
       const data = await api.getWorkflow(path);
       setWf(data.definition);
-      setRuns(data.runs);
     } catch {}
   }, []);
 
@@ -204,24 +185,6 @@ export default function WorkflowView({
       <div className="wf-flow-container">
         <WorkflowFlow wf={wf} onSave={save} onFlushSave={flushSave} wfPath={selectedPath} />
       </div>
-
-      {runs.length > 0 && (
-        <div className="wf-run-drawer">
-          <div className="wf-run-drawer-header">Run History ({runs.length})</div>
-          {runs.slice(0, 5).map((run) => (
-            <div key={run.id} className="wf-run-item">
-              <span className="status-icon">
-                {run.status === "completed" ? "✅" : run.status === "failed" ? "❌" : run.status === "running" ? "⏳" : "⏸️"}
-              </span>
-              <span className="run-time">{formatTime(run.started_at)}</span>
-              <span className="run-detail">
-                {run.status}
-                {run.error ? ` — ${run.error.slice(0, 60)}` : ""}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -25,15 +25,14 @@ import { useTranslation } from "react-i18next";
 import {
   buildSkill,
   discoverSkills,
-  listCredentials,
   setCredential,
-  type Credential,
   type SkillCandidate,
   type SkillCandidateKey,
 } from "../../api";
 import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
 import { trackBackgroundBuild } from "../../hooks/useBackgroundSkillBuilds";
+import { useCredentials } from "../../hooks/useCredentials";
 import {
   subscribeBuildStream,
   type BuildStreamHandle,
@@ -461,26 +460,10 @@ function KeysStep({
 }) {
   const { t } = useTranslation("skillWizard");
   const toast = useToast();
-  const [credentials, setCredentials] = useState<Credential[] | null>(null);
+  const { credentials, reload: refreshCreds } = useCredentials();
   const [editingKey, setEditingKey] = useState<SkillCandidateKey | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const list = await listCredentials();
-      setCredentials(list);
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : String(e);
-      toast.error(t("errors.credsLoadFailed", { detail }));
-      setCredentials([]);
-    }
-  }, [t, toast]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
   const presentKeys = useMemo(() => {
-    if (credentials === null) return new Set<string>();
     return new Set(credentials.map((c) => c.name));
   }, [credentials]);
 
@@ -499,14 +482,14 @@ function KeysStep({
         await setCredential(name, trimmed, { kind: "skill" });
         toast.success(t("keys.toast.saved", { name }));
         setEditingKey(null);
-        await refresh();
+        await refreshCreds();
       } catch (e) {
         toast.error(t("keys.toast.saveFailed", { name }), {
           detail: e instanceof Error ? e.message : undefined,
         });
       }
     },
-    [refresh, t, toast],
+    [refreshCreds, t, toast],
   );
 
   if (candidate.requires_keys.length === 0) {

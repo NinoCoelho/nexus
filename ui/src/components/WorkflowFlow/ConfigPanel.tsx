@@ -1,386 +1,19 @@
-import { useEffect, useState, useMemo, useRef } from "react";
-import type { StepConfig, StepType, TriggerConfig, TriggerType, ToolInfo, EventType, VaultFolder } from "../../types/workflow";
-import type { StepSchema } from "../../types/workflow";
-import { listMcpServers, type McpServerStatus } from "../../api/mcp";
-import { listCredentials, type Credential } from "../../api/credentials";
-import { listKanbanBoards, getVaultKanban, type KanbanBoardSummary, type KanbanLane } from "../../api/kanban";
-import { listDatabases, listDatabaseTables, getVaultDataTable, type DatabaseSummary, type DatabaseTableSummary } from "../../api/datatable";
-import { getModels, type Model } from "../../api/models";
-import { getWorkflowSchema, generateScript, listWorkflowTools, listEventTypes, listVaultFolders } from "../../api/workflows";
+import { useEffect, useState } from "react";
+import type { StepConfig, StepType, TriggerConfig, ToolInfo, StepSchema } from "../../types/workflow";
+import type { Model } from "../../api/models";
+import { getWorkflowSchema, listWorkflowTools } from "../../api/workflows";
+import { getModels } from "../../api/models";
+import { slugify } from "./workflow-utils";
 import TemplateInput from "./TemplateInput";
-
-function ScriptGenerator({ wfPath, onGenerated }: { wfPath?: string; onGenerated: (code: string) => void }) {
-  const [desc, setDesc] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const generate = async () => {
-    if (!wfPath || !desc.trim()) return;
-    setLoading(true);
-    try {
-      const { code } = await generateScript(wfPath, desc);
-      onGenerated(code);
-      setDesc("");
-    } catch (e) {
-      console.error("Script generation failed:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="wf-inspector-gen-bar" style={{ padding: 0 }}>
-      <input
-        className="wf-inspector-gen-input"
-        value={desc}
-        onChange={(e) => setDesc(e.target.value)}
-        placeholder="Describe what the script should do..."
-        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(); } }}
-      />
-      <button
-        className="wf-inspector-gen-btn"
-        onClick={generate}
-        disabled={loading || !desc.trim()}
-      >
-        {loading ? "⏳" : "✨ Generate"}
-      </button>
-    </div>
-  );
-}
-import { slugify } from "./index";
-
-function ToolCallFields({
-  step,
-  tools,
-  stepRefs,
-  stepSchemas,
-  onChangeStep,
-}: {
-  step: StepConfig;
-  tools: ToolInfo[];
-  stepRefs: { slug: string; name: string; type: string }[];
-  stepSchemas: StepSchema[];
-  onChangeStep: (patch: Partial<StepConfig>) => void;
-}) {
-  const selectedTool = useMemo(
-    () => tools.find((t) => t.name === step.tool),
-    [tools, step.tool],
-  );
-
-  const properties = useMemo(() => {
-    if (!selectedTool?.parameters?.properties) return {};
-    return selectedTool.parameters.properties;
-  }, [selectedTool]);
-
-  const requiredSet = useMemo(() => {
-    if (!selectedTool?.parameters?.required) return new Set<string>();
-    return new Set(selectedTool.parameters.required);
-  }, [selectedTool]);
-
-  const handleToolSelect = (name: string) => {
-    const tool = tools.find((t) => t.name === name);
-    if (!tool) {
-      onChangeStep({ tool: name, input: undefined });
-      return;
-    }
-    const props = tool.parameters?.properties;
-    const hasStructuredSchema = props && Object.keys(props).length > 0;
-    if (hasStructuredSchema) {
-      const input: Record<string, unknown> = {};
-      for (const [key, schema] of Object.entries(props)) {
-        if (step.input && key in step.input) {
-          input[key] = step.input[key];
-        } else if (schema.default !== undefined) {
-          input[key] = schema.default;
-        } else {
-          input[key] = "";
-        }
-      }
-      onChangeStep({ tool: name, input });
-    } else {
-      onChangeStep({ tool: name, input: step.input || {} });
-    }
-  };
-
-  const handleFieldChange = (key: string, value: unknown) => {
-    const current = step.input || {};
-    onChangeStep({ input: { ...current, [key]: value } });
-  };
-
-  const propEntries = useMemo(
-    () => Object.entries(properties) as [string, NonNullable<NonNullable<ToolInfo["parameters"]>["properties"]>[string]][],
-    [properties],
-  );
-
-  return (
-    <>
-      <div className="wf-field">
-        <label>Tool</label>
-        <select
-          value={step.tool || ""}
-          onChange={(e) => handleToolSelect(e.target.value)}
-        >
-          <option value="">— select tool —</option>
-          {tools.map((t) => (
-            <option key={t.name} value={t.name}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-        {selectedTool && (
-          <span className="wf-field-hint">{selectedTool.description}</span>
-        )}
-      </div>
-
-      {selectedTool && propEntries.length > 0 && (
-        <>
-          <div className="wf-section-label">Parameters</div>
-          {propEntries.map(([key, schema]) => (
-            <ToolParamField
-              key={key}
-              name={key}
-              schema={schema}
-              required={requiredSet.has(key)}
-              value={(step.input as Record<string, unknown>)?.[key]}
-              stepRefs={stepRefs}
-              stepSchemas={stepSchemas}
-              onChange={(v) => handleFieldChange(key, v)}
-            />
-          ))}
-        </>
-      )}
-
-      {selectedTool && propEntries.length === 0 && (
-        <div className="wf-field">
-          <label>Input (JSON)</label>
-          <TemplateInput
-            value={step.input ? JSON.stringify(step.input, null, 2) : ""}
-            onChange={(val) => {
-              try { onChangeStep({ input: JSON.parse(val) }); } catch {}
-            }}
-            steps={stepRefs}
-            stepSchemas={stepSchemas}
-            multiline
-            minLines={3}
-            placeholder='{"key": "{{steps.prev.result}}"}'
-          />
-        </div>
-      )}
-    </>
-  );
-}
-
-function ToolParamField({
-  name,
-  schema,
-  required,
-  value,
-  stepRefs,
-  stepSchemas,
-  onChange,
-}: {
-  name: string;
-  schema: { type?: string; description?: string; enum?: string[]; items?: { type?: string }; default?: unknown };
-  required: boolean;
-  value: unknown;
-  stepRefs: { slug: string; name: string; type: string }[];
-  stepSchemas: StepSchema[];
-  onChange: (value: unknown) => void;
-}) {
-  const label = (
-    <>
-      {name}
-      {required && <span style={{ color: "var(--accent, #f90)", marginLeft: 2 }}>*</span>}
-    </>
-  );
-
-  const enumOptions = schema.enum;
-  const paramType = schema.type;
-
-  if (enumOptions && enumOptions.length > 0) {
-    return (
-      <div className="wf-field">
-        <label>{label}</label>
-        <select
-          value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">— select —</option>
-          {enumOptions.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
-        {schema.description && <span className="wf-field-hint">{schema.description}</span>}
-      </div>
-    );
-  }
-
-  if (paramType === "boolean") {
-    return (
-      <div className="wf-field">
-        <label>{label}</label>
-        <select
-          value={value === true ? "true" : value === false ? "false" : ""}
-          onChange={(e) => {
-            if (e.target.value === "") onChange("");
-            else onChange(e.target.value === "true");
-          }}
-        >
-          <option value="">—</option>
-          <option value="true">true</option>
-          <option value="false">false</option>
-        </select>
-        {schema.description && <span className="wf-field-hint">{schema.description}</span>}
-      </div>
-    );
-  }
-
-  if (paramType === "number" || paramType === "integer") {
-    return (
-      <div className="wf-field">
-        <label>{label}</label>
-        <TemplateInput
-          value={typeof value === "number" ? String(value) : typeof value === "string" ? value : ""}
-          onChange={(v) => {
-            if (v === "" || v.startsWith("{{")) onChange(v);
-            else {
-              const n = Number(v);
-              onChange(isNaN(n) ? v : n);
-            }
-          }}
-          steps={stepRefs}
-          stepSchemas={stepSchemas}
-          placeholder="0"
-        />
-        {schema.description && <span className="wf-field-hint">{schema.description}</span>}
-      </div>
-    );
-  }
-
-  if (paramType === "array" || paramType === "object") {
-    return (
-      <div className="wf-field">
-        <label>{label}</label>
-        <TemplateInput
-          value={
-            value !== undefined && value !== ""
-              ? typeof value === "string" && !value.startsWith("{") && !value.startsWith("[")
-                ? value
-                : JSON.stringify(value, null, 2)
-              : ""
-          }
-          onChange={(v) => {
-            if (v.startsWith("{{")) {
-              onChange(v);
-              return;
-            }
-            try { onChange(JSON.parse(v)); } catch { onChange(v); }
-          }}
-          steps={stepRefs}
-          stepSchemas={stepSchemas}
-          multiline
-          minLines={2}
-          placeholder={
-            paramType === "array"
-              ? '["item1", "item2"]'
-              : '{"key": "value"}'
-          }
-        />
-        {schema.description && <span className="wf-field-hint">{schema.description}</span>}
-      </div>
-    );
-  }
-
-  return (
-    <div className="wf-field">
-      <label>{label}</label>
-      <TemplateInput
-        value={typeof value === "string" ? value : value !== undefined ? JSON.stringify(value) : ""}
-        onChange={(v) => onChange(v)}
-        steps={stepRefs}
-        stepSchemas={stepSchemas}
-        placeholder={schema.description || name}
-      />
-      {schema.description && <span className="wf-field-hint">{schema.description}</span>}
-    </div>
-  );
-}
-
-const STEP_TYPES: { value: StepType; label: string }[] = [
-  { value: "tool_call", label: "Tool Call" },
-  { value: "agent_session", label: "Agent Session" },
-  { value: "transform", label: "Transform" },
-  { value: "delay", label: "Delay" },
-  { value: "http_request", label: "HTTP Request" },
-  { value: "mcp_call", label: "MCP Call" },
-  { value: "kanban_action", label: "Kanban Action" },
-  { value: "table_action", label: "App Table Action" },
-  { value: "return_step", label: "Return" },
-];
-
-const TRIGGER_TYPES: { value: TriggerType; label: string }[] = [
-  { value: "manual", label: "Manual" },
-  { value: "webhook", label: "Webhook" },
-  { value: "schedule", label: "Schedule" },
-  { value: "fs_watch", label: "File Watch" },
-  { value: "event", label: "Event" },
-];
-
-const STEP_ICONS: Record<string, string> = {
-  tool_call: "🔧", agent_session: "🤖", mcp_call: "🔌",
-  http_request: "🌐", transform: "🔄", delay: "⏱️", condition: "◇",
-  kanban_action: "📋", table_action: "📊",
-};
-
-const TRIGGER_ICONS: Record<string, string> = {
-  webhook: "🔗", fs_watch: "📁", schedule: "📅", manual: "👆", event: "📡",
-};
-
-const AUTH_TYPES = [
-  { value: "none", label: "None" },
-  { value: "apikey", label: "API Key" },
-  { value: "basic", label: "Basic Auth" },
-  { value: "oauth", label: "OAuth 2.0 Bearer" },
-];
-
-const API_KEY_LOCATIONS = [
-  { value: "header", label: "Header" },
-  { value: "query", label: "Query String" },
-];
-
-const TRANSFORM_MODES = [
-  { value: "template", label: "Template", desc: "Resolve {{...}} expressions into a string or JSON object" },
-  { value: "llm", label: "LLM Transform", desc: "Send resolved input to an LLM for extraction, summarization, or reformatting" },
-  { value: "script", label: "Script (Python)", desc: "Run a Python script with access to `data` (step outputs). Set `result` to return." },
-];
-
-const KANBAN_ACTIONS = [
-  { value: "add_card", label: "Add Card" },
-  { value: "move_card", label: "Move Card" },
-  { value: "update_card", label: "Update Card" },
-];
-
-const TABLE_ACTIONS = [
-  { value: "add_row", label: "Add Row" },
-  { value: "update_row", label: "Update Row" },
-  { value: "find_rows", label: "Find Rows" },
-];
-
-function CopyBtn({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="wf-copy-btn"
-      onClick={() => {
-        navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-    >
-      {copied ? "Copied" : "Copy"}
-    </button>
-  );
-}
+import { STEP_TYPES, STEP_ICONS } from "./steps/constants";
+import { ToolCallFields, type StepFormProps } from "./steps/shared";
+import TriggerConfigForm from "./steps/TriggerConfigForm";
+import AgentSessionForm from "./steps/AgentSessionForm";
+import TransformForm from "./steps/TransformForm";
+import HttpRequestForm from "./steps/HttpRequestForm";
+import McpCallForm from "./steps/McpCallForm";
+import KanbanActionForm from "./steps/KanbanActionForm";
+import TableActionForm from "./steps/TableActionForm";
 
 export default function ConfigPanel({
   mode,
@@ -405,32 +38,20 @@ export default function ConfigPanel({
   onOpenEditor?: () => void;
   wfPath?: string;
 }) {
-  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
-  const [mcpTools, setMcpTools] = useState<string[]>([]);
-  const [credentials, setCredentials] = useState<Credential[]>([]);
-  const [kanbanBoards, setKanbanBoards] = useState<KanbanBoardSummary[]>([]);
-  const [kanbanLanes, setKanbanLanes] = useState<KanbanLane[]>([]);
-  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>([]);
-  const [appTables, setAppTables] = useState<DatabaseTableSummary[]>([]);
-  const [tableFields, setTableFields] = useState<{ name: string; kind: string }[]>([]);
   const [stepSchemas, setStepSchemas] = useState<StepSchema[]>([]);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [workflowTools, setWorkflowTools] = useState<ToolInfo[]>([]);
-  const [eventTypes, setEventTypes] = useState<EventType[]>([]);
-  const [showEventDropdown, setShowEventDropdown] = useState(false);
-  const [vaultFolders, setVaultFolders] = useState<VaultFolder[]>([]);
-  const [showFolderPicker, setShowFolderPicker] = useState(false);
-  const eventDropdownRef = useRef<HTMLDivElement>(null);
-  const folderPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (wfPath) {
-      getWorkflowSchema(wfPath).then((data: any) => {
-        const steps = data?.steps;
-        if (steps && typeof steps === "object") {
-          setStepSchemas(Object.values(steps) as StepSchema[]);
-        }
-      }).catch(() => {});
+      getWorkflowSchema(wfPath)
+        .then((data: any) => {
+          const steps = data?.steps;
+          if (steps && typeof steps === "object") {
+            setStepSchemas(Object.values(steps) as StepSchema[]);
+          }
+        })
+        .catch(() => {});
     }
   }, [wfPath]);
 
@@ -442,300 +63,43 @@ export default function ConfigPanel({
     listWorkflowTools().then(setWorkflowTools).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    listEventTypes().then(setEventTypes).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (mode === "trigger" && trigger?.type === "fs_watch") {
-      listVaultFolders().then(setVaultFolders).catch(() => {});
-    }
-  }, [mode, trigger?.type]);
-
-  useEffect(() => {
-    if (!showEventDropdown || !showFolderPicker) return;
-    const handler = (e: MouseEvent) => {
-      if (showEventDropdown && eventDropdownRef.current && !eventDropdownRef.current.contains(e.target as Node)) {
-        setShowEventDropdown(false);
-      }
-      if (showFolderPicker && folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
-        setShowFolderPicker(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showEventDropdown, showFolderPicker]);
-
   const stepRefs = (allSteps || []).map((s) => ({
     slug: s.slug || slugify(s.name),
     name: s.name,
     type: s.type,
   }));
 
-  useEffect(() => {
-    if (mode === "step" && step?.type === "mcp_call") {
-      listMcpServers().then((servers) => {
-        setMcpServers(servers);
-        const selected = servers.find((s) => s.name === step.mcp_server);
-        if (selected?.tools) setMcpTools(selected.tools);
-      }).catch(() => {});
-    }
-  }, [mode, step?.type, step?.mcp_server]);
-
-  useEffect(() => {
-    if (mode === "step" && step?.type === "http_request") {
-      listCredentials().then(setCredentials).catch(() => {});
-    }
-  }, [mode, step?.type]);
-
-  useEffect(() => {
-    if (mode === "step" && step?.type === "kanban_action") {
-      listKanbanBoards().then((res) => setKanbanBoards(res.boards)).catch(() => {});
-    }
-  }, [mode, step?.type]);
-
-  useEffect(() => {
-    if (mode === "step" && step?.type === "kanban_action" && step.board_path) {
-      getVaultKanban(step.board_path).then((board) => setKanbanLanes(board.lanes)).catch(() => setKanbanLanes([]));
-    }
-  }, [mode, step?.type, step?.board_path]);
-
-  useEffect(() => {
-    if (mode === "step" && step?.type === "table_action") {
-      listDatabases().then((res) => setAppDatabases(res.databases)).catch(() => {});
-    }
-  }, [mode, step?.type]);
-
-  useEffect(() => {
-    if (mode === "step" && step?.type === "table_action" && step.table_path) {
-      getVaultDataTable(step.table_path).then((t) => {
-        setTableFields((t.schema?.fields || []).map((f: any) => ({ name: f.name, kind: f.kind })));
-      }).catch(() => setTableFields([]));
-    }
-  }, [mode, step?.type, step?.table_path]);
-
-  const handleMcpServerChange = (name: string) => {
-    const server = mcpServers.find((s) => s.name === name);
-    setMcpTools(server?.tools || []);
-    onChangeStep({ mcp_server: name, mcp_tool: "" });
-  };
-
-  const handleDatabaseSelect = (folder: string) => {
-    listDatabaseTables(folder).then((res) => setAppTables(res.tables)).catch(() => setAppTables([]));
+  const sharedProps: StepFormProps = {
+    step: step!,
+    onChangeStep,
+    stepRefs,
+    stepSchemas,
+    onOpenEditor,
+    wfPath,
   };
 
   if (mode === "trigger" && trigger) {
-    const webhookUrl = trigger.token
-      ? `${window.location.origin}/workflow/trigger/${trigger.token}`
-      : null;
-
     return (
-      <div className="wf-config-panel">
-        <div className="wf-config-panel-header">
-          <span className="icon">{TRIGGER_ICONS[trigger.type] || "⚡"}</span>
-          <span className="title">Trigger Config</span>
-          <button className="close-btn" onClick={onClose}>✕</button>
-        </div>
-        <div className="wf-config-panel-body">
-          <div className="wf-field">
-            <label>Type</label>
-            <select
-              value={trigger.type}
-              onChange={(e) => onChangeTrigger({ type: e.target.value as TriggerType })}
-            >
-              {TRIGGER_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {trigger.type === "webhook" && (
-            <>
-              <div className="wf-field">
-                <label>Webhook Token</label>
-                <input
-                  value={trigger.token || ""}
-                  readOnly
-                  placeholder="Generated on save"
-                />
-              </div>
-              {webhookUrl && (
-                <div className="wf-field">
-                  <label>Webhook URL</label>
-                  <div className="wf-webhook-url-row">
-                    <code className="wf-webhook-url">{webhookUrl}</code>
-                    <CopyBtn text={webhookUrl} />
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
-          {trigger.type === "schedule" && (
-            <div className="wf-field">
-              <label>Cron Expression</label>
-              <input
-                value={trigger.cron || ""}
-                onChange={(e) => onChangeTrigger({ cron: e.target.value })}
-                placeholder="0 9 * * 1-5"
-              />
-            </div>
-          )}
-
-          {trigger.type === "fs_watch" && (
-            <>
-              <div className="wf-field">
-                <label>Folder Path</label>
-                <div style={{ position: "relative" }} ref={folderPickerRef}>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <input
-                      value={trigger.path || ""}
-                      onChange={(e) => onChangeTrigger({ path: e.target.value })}
-                      placeholder="~/Downloads"
-                      style={{ flex: 1 }}
-                    />
-                    <span className="wf-path-valid">
-                      {trigger.path && (/^[/~]/.test(trigger.path)) ? "✓" : ""}
-                    </span>
-                    <button
-                      className="wf-dropdown-toggle"
-                      onClick={() => setShowFolderPicker((v) => !v)}
-                      title="Browse vault folders"
-                    >
-                      📂
-                    </button>
-                  </div>
-                  {showFolderPicker && vaultFolders.length > 0 && (
-                    <div className="wf-dropdown-list">
-                      {vaultFolders.map((f) => (
-                        <button
-                          key={f.path}
-                          className="wf-dropdown-item"
-                          onClick={() => {
-                            onChangeTrigger({ path: f.path });
-                            setShowFolderPicker(false);
-                          }}
-                        >
-                          {f.name}
-                          <span className="wf-dropdown-item-desc">{f.path}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="wf-field">
-                <label>Glob Pattern</label>
-                <input
-                  value={trigger.pattern || "*"}
-                  onChange={(e) => onChangeTrigger({ pattern: e.target.value })}
-                  placeholder="*.pdf"
-                />
-              </div>
-              <div className="wf-field">
-                <label>Events</label>
-                <div className="wf-toggle-group">
-                  {(["created", "modified", "deleted", "moved"] as const).map((evt) => {
-                    const active = (trigger.events || ["created"]).includes(evt);
-                    return (
-                      <button
-                        key={evt}
-                        className={`wf-toggle-chip${active ? " active" : ""}`}
-                        onClick={() => {
-                          const current = trigger.events || ["created"];
-                          const next = active
-                            ? current.filter((e) => e !== evt)
-                            : [...current, evt];
-                          onChangeTrigger({ events: next.length > 0 ? next : [evt] });
-                        }}
-                      >
-                        {evt}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="wf-field">
-                <label>Debounce (ms)</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={trigger.debounce_ms ?? 0}
-                  onChange={(e) => onChangeTrigger({ debounce_ms: parseInt(e.target.value) || 0 })}
-                  placeholder="0"
-                />
-              </div>
-            </>
-          )}
-
-          {trigger.type === "event" && (
-            <div className="wf-field">
-              <label>Event Pattern</label>
-              <div style={{ position: "relative" }} ref={eventDropdownRef}>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <input
-                    value={trigger.event || ""}
-                    onChange={(e) => onChangeTrigger({ event: e.target.value })}
-                    placeholder="vault.*"
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    className="wf-dropdown-toggle"
-                    onClick={() => setShowEventDropdown((v) => !v)}
-                    title="Browse event types"
-                  >
-                    ▾
-                  </button>
-                </div>
-                {showEventDropdown && eventTypes.length > 0 && (
-                  <div className="wf-dropdown-list">
-                    {Object.entries(
-                      eventTypes.reduce<Record<string, EventType[]>>((acc, et) => {
-                        (acc[et.category] ??= []).push(et);
-                        return acc;
-                      }, {}),
-                    ).map(([category, items]) => (
-                      <div key={category}>
-                        <div className="wf-dropdown-group">{category}</div>
-                        {items.map((et) => (
-                          <button
-                            key={et.pattern}
-                            className="wf-dropdown-item"
-                            onClick={() => {
-                              onChangeTrigger({ event: et.pattern });
-                              setShowEventDropdown(false);
-                            }}
-                          >
-                            <span className="wf-dropdown-item-pattern">{et.pattern}</span>
-                            <span className="wf-dropdown-item-desc">{et.description}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <button className="wf-delete-btn" onClick={onDelete}>Remove Trigger</button>
-        </div>
-      </div>
+      <TriggerConfigForm
+        trigger={trigger}
+        onChangeTrigger={onChangeTrigger}
+        onDelete={onDelete}
+        onClose={onClose}
+      />
     );
   }
 
   if (mode === "step" && step) {
     const isCondition = step.type === "condition";
-    const transformMode = step.output_format === "llm" ? "llm"
-      : step.output_format === "script" ? "script"
-      : "template";
 
     return (
       <div className="wf-config-panel">
         <div className="wf-config-panel-header">
           <span className="icon">{STEP_ICONS[step.type] || "⚙️"}</span>
           <span className="title">{step.name || "Step"}</span>
-          <button className="close-btn" onClick={onClose}>✕</button>
+          <button className="close-btn" onClick={onClose}>
+            ✕
+          </button>
         </div>
         <div className="wf-config-panel-body">
           <div className="wf-field">
@@ -767,7 +131,11 @@ export default function ConfigPanel({
                 onClick={onOpenEditor}
                 title="Open expression editor"
               >
-                ✏️ {step.expression ? step.expression.slice(0, 40) + (step.expression.length > 40 ? "…" : "") : "Edit expression…"}
+                ✏️{" "}
+                {step.expression
+                  ? step.expression.slice(0, 40) +
+                    (step.expression.length > 40 ? "…" : "")
+                  : "Edit expression…"}
               </button>
             </div>
           ) : (
@@ -776,10 +144,14 @@ export default function ConfigPanel({
                 <label>Type</label>
                 <select
                   value={step.type}
-                  onChange={(e) => onChangeStep({ type: e.target.value as StepType })}
+                  onChange={(e) =>
+                    onChangeStep({ type: e.target.value as StepType })
+                  }
                 >
                   {STEP_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -797,174 +169,17 @@ export default function ConfigPanel({
               )}
 
               {step.type === "agent_session" && (
-                <>
-                  <div className="wf-field">
-                    <label>Prompt</label>
-                    <button
-                      className="wf-open-editor-btn"
-                      onClick={onOpenEditor}
-                      title="Open prompt editor"
-                    >
-                      ✏️ {step.prompt ? step.prompt.slice(0, 40) + (step.prompt.length > 40 ? "…" : "") : "Edit prompt…"}
-                    </button>
-                  </div>
-                  <div className="wf-field">
-                    <label>Model</label>
-                    <select
-                      value={step.model || ""}
-                      onChange={(e) => onChangeStep({ model: e.target.value || undefined })}
-                    >
-                      <option value="">Default</option>
-                      {availableModels.map((m) => (
-                        <option key={m.id} value={m.id}>{m.model_name} ({m.tier})</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="wf-field">
-                    <label>Response Format</label>
-                    <select
-                      value={step.output_format || "text"}
-                      onChange={(e) => onChangeStep({ output_format: e.target.value })}
-                    >
-                      <option value="text">Text (free-form)</option>
-                      <option value="json">JSON (structured)</option>
-                    </select>
-                  </div>
-                  {(step.output_format === "json") && (
-                    <div className="wf-field">
-                      <label>Output Schema</label>
-                      <TemplateInput
-                        value={step.output_schema || ""}
-                        onChange={(val) => onChangeStep({ output_schema: val || undefined })}
-                        steps={stepRefs}
-                        stepSchemas={stepSchemas}
-                        multiline
-                        minLines={4}
-                        placeholder='{"key": "value", "count": 0}'
-                      />
-                      <span className="wf-field-hint">
-                        JSON example showing expected structure. LLM will match this shape.
-                      </span>
-                    </div>
-                  )}
-                </>
+                <AgentSessionForm
+                  {...sharedProps}
+                  availableModels={availableModels}
+                />
               )}
 
               {step.type === "transform" && (
-                 <>
-                   <div className="wf-field">
-                     <label>Mode</label>
-                     <select
-                       value={transformMode}
-                       onChange={(e) => {
-                         const v = e.target.value;
-                         onChangeStep({ output_format: v });
-                       }}
-                     >
-                       {TRANSFORM_MODES.map((m) => (
-                         <option key={m.value} value={m.value}>{m.label}</option>
-                       ))}
-                     </select>
-                     <span className="wf-field-hint">
-                       {TRANSFORM_MODES.find((m) => m.value === transformMode)?.desc}
-                     </span>
-                   </div>
-
-                  {transformMode === "template" && (
-                    <>
-                      <div className="wf-field">
-                        <label>Output Format</label>
-                        <select
-                          value={step.output_format === "json" ? "json" : "text"}
-                          onChange={(e) => onChangeStep({ output_format: e.target.value === "json" ? "json" : undefined })}
-                        >
-                          <option value="text">Plain text</option>
-                          <option value="json">JSON (parses result as JSON)</option>
-                        </select>
-                      </div>
-                      <div className="wf-field">
-                        <label>Template</label>
-                        <button
-                          className="wf-open-editor-btn"
-                          onClick={onOpenEditor}
-                          title="Open template editor"
-                        >
-                          ✏️ {step.template ? step.template.slice(0, 40) + (step.template.length > 40 ? "…" : "") : "Edit template…"}
-                        </button>
-                      </div>
-                    </>
-                  )}
-
-                  {transformMode === "llm" && (
-                    <>
-                      <div className="wf-field">
-                        <label>Instructions</label>
-                         <TemplateInput
-                           value={step.llm_instructions || ""}
-                           onChange={(val) => onChangeStep({ llm_instructions: val || undefined })}
-                           steps={stepRefs}
-                           stepSchemas={stepSchemas}
-                           multiline
-                           minLines={3}
-                           placeholder="Extract the name and email from the input. Return as JSON."
-                         />
-                      </div>
-                      <div className="wf-field">
-                        <label>Input</label>
-                        <button
-                          className="wf-open-editor-btn"
-                          onClick={onOpenEditor}
-                          title="Open input editor"
-                        >
-                          ✏️ {step.template ? step.template.slice(0, 40) + (step.template.length > 40 ? "…" : "") : "Edit input…"}
-                        </button>
-                      </div>
-                      <div className="wf-field">
-                        <label>Output Sample (optional)</label>
-                         <TemplateInput
-                           value={step.output_sample || ""}
-                           onChange={(val) => onChangeStep({ output_sample: val || undefined })}
-                           steps={stepRefs}
-                           stepSchemas={stepSchemas}
-                           multiline
-                           minLines={2}
-                           placeholder='{"name": "John", "email": "john@example.com"}'
-                         />
-                      </div>
-                      <div className="wf-field">
-                        <label>Model</label>
-                        <select
-                          value={step.model || ""}
-                          onChange={(e) => onChangeStep({ model: e.target.value || undefined })}
-                        >
-                          <option value="">Default</option>
-                          {availableModels.map((m) => (
-                            <option key={m.id} value={m.id}>{m.model_name} ({m.tier})</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
-
-                  {transformMode === "script" && (
-                    <>
-                      <div className="wf-field">
-                        <label>Script (Python)</label>
-                        <button
-                          className="wf-open-editor-btn"
-                          onClick={onOpenEditor}
-                          title="Open script editor"
-                        >
-                          ✏️ {step.template ? step.template.slice(0, 40) + (step.template.length > 40 ? "…" : "") : "Edit script…"}
-                        </button>
-                      </div>
-                      <ScriptGenerator
-                        wfPath={wfPath}
-                        onGenerated={(code) => onChangeStep({ template: code })}
-                      />
-                    </>
-                  )}
-                </>
+                <TransformForm
+                  {...sharedProps}
+                  availableModels={availableModels}
+                />
               )}
 
               {step.type === "delay" && (
@@ -974,447 +189,25 @@ export default function ConfigPanel({
                     type="number"
                     value={step.duration_seconds || 0}
                     min={0}
-                    onChange={(e) => onChangeStep({ duration_seconds: parseInt(e.target.value) || 0 })}
+                    onChange={(e) =>
+                      onChangeStep({
+                        duration_seconds: parseInt(e.target.value) || 0,
+                      })
+                    }
                   />
                 </div>
               )}
 
-              {step.type === "http_request" && (
-                <>
-                  <div className="wf-field-row">
-                    <div className="wf-field">
-                      <label>Method</label>
-                      <select value={step.method || "GET"} onChange={(e) => onChangeStep({ method: e.target.value })}>
-                        {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
-                          <option key={m}>{m}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="wf-field">
-                    <label>URL</label>
-                    <TemplateInput
-                      value={step.url || ""}
-                      onChange={(val) => onChangeStep({ url: val })}
-                      steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                      placeholder="https://api.example.com/data"
-                    />
-                  </div>
+              {step.type === "http_request" && <HttpRequestForm {...sharedProps} />}
 
-                  <div className="wf-section-label">Authentication</div>
-
-                  <div className="wf-field">
-                    <label>Type</label>
-                    <select
-                      value={step.auth_type || "none"}
-                      onChange={(e) => onChangeStep({ auth_type: e.target.value })}
-                    >
-                      {AUTH_TYPES.map((a) => (
-                        <option key={a.value} value={a.value}>{a.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {step.auth_type === "apikey" && (
-                    <>
-                      <div className="wf-field">
-                        <label>Credential</label>
-                        <select
-                          value={step.auth_credential || ""}
-                          onChange={(e) => onChangeStep({ auth_credential: e.target.value })}
-                        >
-                          <option value="">— select credential —</option>
-                          {credentials.map((c) => (
-                            <option key={c.name} value={c.name}>{c.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="wf-field">
-                        <label>Location</label>
-                        <select
-                          value={step.auth_location || "header"}
-                          onChange={(e) => onChangeStep({ auth_location: e.target.value })}
-                        >
-                          {API_KEY_LOCATIONS.map((l) => (
-                            <option key={l.value} value={l.value}>{l.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                      {(step.auth_location || "header") === "header" && (
-                        <>
-                          <div className="wf-field">
-                            <label>Header Name</label>
-                            <input
-                              value={step.auth_header_name || ""}
-                              onChange={(e) => onChangeStep({ auth_header_name: e.target.value })}
-                              placeholder="Authorization"
-                            />
-                          </div>
-                          <div className="wf-field">
-                            <label>Prefix</label>
-                            <input
-                              value={step.auth_prefix || ""}
-                              onChange={(e) => onChangeStep({ auth_prefix: e.target.value })}
-                              placeholder="Bearer"
-                            />
-                          </div>
-                        </>
-                      )}
-                      {(step.auth_location || "header") === "query" && (
-                        <div className="wf-field">
-                          <label>Query Param</label>
-                          <input
-                            value={step.auth_query_name || ""}
-                            onChange={(e) => onChangeStep({ auth_query_name: e.target.value })}
-                            placeholder="api_key"
-                          />
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {step.auth_type === "basic" && (
-                    <>
-                      <div className="wf-field">
-                        <label>Username</label>
-                        <input
-                          value={step.auth_username || ""}
-                          onChange={(e) => onChangeStep({ auth_username: e.target.value })}
-                          placeholder="user"
-                        />
-                      </div>
-                      <div className="wf-field">
-                        <label>Password Credential</label>
-                        <select
-                          value={step.auth_password_credential || ""}
-                          onChange={(e) => onChangeStep({ auth_password_credential: e.target.value })}
-                        >
-                          <option value="">— select credential —</option>
-                          {credentials.map((c) => (
-                            <option key={c.name} value={c.name}>{c.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
-
-                  {step.auth_type === "oauth" && (
-                    <div className="wf-field">
-                      <label>Token Credential</label>
-                      <select
-                        value={step.auth_credential || ""}
-                        onChange={(e) => onChangeStep({ auth_credential: e.target.value })}
-                      >
-                        <option value="">— select credential —</option>
-                        {credentials.map((c) => (
-                          <option key={c.name} value={c.name}>{c.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="wf-section-label">Custom Headers</div>
-                  <div className="wf-field">
-                    <label>Headers (JSON)</label>
-                    <TemplateInput
-                      value={step.custom_headers ? JSON.stringify(step.custom_headers, null, 2) : ""}
-                      onChange={(val) => {
-                        try { onChangeStep({ custom_headers: JSON.parse(val) }); } catch {}
-                      }}
-                      steps={stepRefs}
-                      stepSchemas={stepSchemas}
-                      multiline
-                      minLines={2}
-                      placeholder='{"X-Custom": "value"}'
-                    />
-                  </div>
-
-                  <div className="wf-section-label">Body</div>
-                  <div className="wf-field">
-                    <label>Body (JSON)</label>
-                    <TemplateInput
-                      value={step.body ? JSON.stringify(step.body, null, 2) : ""}
-                      onChange={(val) => {
-                        try { onChangeStep({ body: JSON.parse(val) }); } catch {}
-                      }}
-                      steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                      multiline
-                      minLines={3}
-                      placeholder='{"key": "value"}'
-                    />
-                  </div>
-                </>
-              )}
-
-              {step.type === "mcp_call" && (
-                <>
-                  <div className="wf-field">
-                    <label>MCP Server</label>
-                    <select
-                      value={step.mcp_server || ""}
-                      onChange={(e) => handleMcpServerChange(e.target.value)}
-                    >
-                      <option value="">— select server —</option>
-                      {mcpServers.map((s) => (
-                        <option key={s.name} value={s.name}>
-                          {s.name} {s.connected ? "●" : "○"}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {step.mcp_server && (
-                    <div className="wf-field">
-                      <label>MCP Tool</label>
-                      {mcpTools.length > 0 ? (
-                        <select
-                          value={step.mcp_tool || ""}
-                          onChange={(e) => onChangeStep({ mcp_tool: e.target.value })}
-                        >
-                          <option value="">— select tool —</option>
-                          {mcpTools.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          value={step.mcp_tool || ""}
-                          onChange={(e) => onChangeStep({ mcp_tool: e.target.value })}
-                          placeholder="tool_name"
-                        />
-                      )}
-                    </div>
-                  )}
-                  {step.mcp_server && step.mcp_tool && (
-                    <div className="wf-field">
-                      <label>Input (JSON)</label>
-                      <TemplateInput
-                        value={step.input ? JSON.stringify(step.input, null, 2) : ""}
-                        onChange={(val) => {
-                          try { onChangeStep({ input: JSON.parse(val) }); } catch {}
-                        }}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        multiline
-                        minLines={3}
-                        placeholder='{"arg": "value"}'
-                      />
-                    </div>
-                  )}
-                </>
-              )}
+              {step.type === "mcp_call" && <McpCallForm {...sharedProps} />}
 
               {step.type === "kanban_action" && (
-                <>
-                  <div className="wf-field">
-                    <label>Action</label>
-                    <select
-                      value={step.action || ""}
-                      onChange={(e) => onChangeStep({ action: e.target.value })}
-                    >
-                      <option value="">— select action —</option>
-                      {KANBAN_ACTIONS.map((a) => (
-                        <option key={a.value} value={a.value}>{a.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="wf-field">
-                    <label>Board</label>
-                    <select
-                      value={step.board_path || ""}
-                      onChange={(e) => onChangeStep({ board_path: e.target.value })}
-                    >
-                      <option value="">— select board —</option>
-                      {kanbanBoards.map((b) => (
-                        <option key={b.path} value={b.path}>{b.title || b.path}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {step.board_path && step.action !== "add_card" && (
-                    <div className="wf-field">
-                      <label>Card ID</label>
-                      <TemplateInput
-                        value={step.card_id || ""}
-                        onChange={(val) => onChangeStep({ card_id: val })}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        placeholder="{{steps.prev.output.card_id}}"
-                      />
-                    </div>
-                  )}
-
-                  {step.board_path && (step.action === "add_card" || step.action === "move_card") && (
-                    <div className="wf-field">
-                      <label>Column</label>
-                      <select
-                        value={step.lane_id || ""}
-                        onChange={(e) => onChangeStep({ lane_id: e.target.value })}
-                      >
-                        <option value="">— select column —</option>
-                        {kanbanLanes.map((l) => (
-                          <option key={l.id} value={l.id}>{l.title}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {step.board_path && step.action === "add_card" && (
-                    <>
-                      <div className="wf-field">
-                        <label>Title</label>
-                        <TemplateInput
-                          value={step.template || ""}
-                          onChange={(val) => onChangeStep({ template: val })}
-                          steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                          placeholder="{{trigger.body.title}}"
-                        />
-                      </div>
-                      <div className="wf-field">
-                        <label>Body (optional)</label>
-                        <TemplateInput
-                          value={step.input ? JSON.stringify(step.input, null, 2) : ""}
-                          onChange={(val) => {
-                            try { onChangeStep({ input: JSON.parse(val) }); } catch {}
-                          }}
-                          steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                          multiline
-                          minLines={2}
-                          placeholder="{{trigger.body.description}}"
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  {step.board_path && step.action === "update_card" && step.row_data === undefined && (
-                    <div className="wf-field">
-                      <label>Updates (JSON)</label>
-                      <TemplateInput
-                        value="{}"
-                        onChange={(val) => {
-                          try { onChangeStep({ row_data: JSON.parse(val) }); } catch {}
-                        }}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        multiline
-                        minLines={3}
-                        placeholder='{"priority": "high", "labels": ["urgent"]}'
-                      />
-                    </div>
-                  )}
-                  {step.board_path && step.action === "update_card" && step.row_data !== undefined && (
-                    <div className="wf-field">
-                      <label>Updates (JSON)</label>
-                      <TemplateInput
-                        value={JSON.stringify(step.row_data, null, 2)}
-                        onChange={(val) => {
-                          try { onChangeStep({ row_data: JSON.parse(val) }); } catch {}
-                        }}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        multiline
-                        minLines={3}
-                        placeholder='{"priority": "high", "labels": ["urgent"]}'
-                      />
-                    </div>
-                  )}
-                </>
+                <KanbanActionForm {...sharedProps} />
               )}
 
               {step.type === "table_action" && (
-                <>
-                  <div className="wf-field">
-                    <label>Action</label>
-                    <select
-                      value={step.action || ""}
-                      onChange={(e) => onChangeStep({ action: e.target.value })}
-                    >
-                      <option value="">— select action —</option>
-                      {TABLE_ACTIONS.map((a) => (
-                        <option key={a.value} value={a.value}>{a.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="wf-field">
-                    <label>App</label>
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) handleDatabaseSelect(e.target.value);
-                      }}
-                    >
-                      <option value="">— select app —</option>
-                      {appDatabases.map((d) => (
-                        <option key={d.folder} value={d.folder}>{d.title || d.folder}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="wf-field">
-                    <label>Table</label>
-                    <select
-                      value={step.table_path || ""}
-                      onChange={(e) => onChangeStep({ table_path: e.target.value })}
-                    >
-                      <option value="">— select table —</option>
-                      {appTables.map((t) => (
-                        <option key={t.path} value={t.path}>{t.title || t.path}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {step.table_path && (step.action === "add_row" || step.action === "update_row") && tableFields.length > 0 && (
-                    <div className="wf-field">
-                      <label>Row Data</label>
-                      <TemplateInput
-                        value={step.row_data ? JSON.stringify(step.row_data, null, 2) : JSON.stringify(Object.fromEntries(tableFields.map((f) => [f.name, ""])), null, 2)}
-                        onChange={(val) => {
-                          try { onChangeStep({ row_data: JSON.parse(val) }); } catch {}
-                        }}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        multiline
-                        minLines={4}
-                        placeholder='{"field": "{{steps.prev.result}}"}'
-                      />
-                    </div>
-                  )}
-
-                  {step.table_path && step.action === "update_row" && (
-                    <div className="wf-field">
-                      <label>Row ID</label>
-                      <TemplateInput
-                        value={step.row_id || ""}
-                        onChange={(val) => onChangeStep({ row_id: val })}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        placeholder="{{steps.prev.output._id}}"
-                      />
-                    </div>
-                  )}
-
-                  {step.table_path && step.action === "find_rows" && (
-                    <div className="wf-field">
-                      <label>Where (JSON)</label>
-                      <TemplateInput
-                        value={step.where ? JSON.stringify(step.where, null, 2) : "{}"}
-                        onChange={(val) => {
-                          try { onChangeStep({ where: JSON.parse(val) }); } catch {}
-                        }}
-                        steps={stepRefs}
-                  stepSchemas={stepSchemas}
-                        multiline
-                        minLines={3}
-                        placeholder='{"status": "open"}'
-                      />
-                    </div>
-                  )}
-                </>
+                <TableActionForm {...sharedProps} />
               )}
 
               {step.type === "return_step" && (
@@ -1424,18 +217,23 @@ export default function ConfigPanel({
                     <label>Response Template</label>
                     <TemplateInput
                       value={step.response_template || ""}
-                      onChange={(v) => onChangeStep({ response_template: v })}
+                      onChange={(v) =>
+                        onChangeStep({ response_template: v })
+                      }
                       steps={stepRefs}
                       stepSchemas={stepSchemas}
-                      placeholder='{{trigger.body}}'
+                      placeholder="{{trigger.body}}"
                     />
                   </div>
                   <div className="wf-field">
                     <label>Note</label>
-                    <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>
-                      Only available for webhook triggers. The caller receives the resolved
-                      template as the HTTP response. Without this step, webhook callers
-                      get an instant 202 acknowledgement.
+                    <span
+                      style={{ fontSize: 10, color: "var(--fg-dim)" }}
+                    >
+                      Only available for webhook triggers. The caller
+                      receives the resolved template as the HTTP response.
+                      Without this step, webhook callers get an instant 202
+                      acknowledgement.
                     </span>
                   </div>
                 </>
@@ -1447,7 +245,9 @@ export default function ConfigPanel({
                 <label>On Error</label>
                 <select
                   value={step.on_error || "stop"}
-                  onChange={(e) => onChangeStep({ on_error: e.target.value })}
+                  onChange={(e) =>
+                    onChangeStep({ on_error: e.target.value })
+                  }
                 >
                   <option value="stop">Stop</option>
                   <option value="continue">Continue</option>
@@ -1461,7 +261,11 @@ export default function ConfigPanel({
                     type="number"
                     min={0}
                     value={step.retry_count || 0}
-                    onChange={(e) => onChangeStep({ retry_count: parseInt(e.target.value) || 0 })}
+                    onChange={(e) =>
+                      onChangeStep({
+                        retry_count: parseInt(e.target.value) || 0,
+                      })
+                    }
                   />
                 </div>
               </div>

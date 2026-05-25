@@ -193,9 +193,8 @@ async def _kick_chat_operation(
 ) -> dict:
     """Shared body for direct-run, plan-only, and execute-after-approval."""
     from ... import vault_dashboard
-    from ..events import SessionEvent
+    from ..services.background_turn import publish_terminal_event, run_background_turn
     from .vault_dispatch import _resolve_dispatch_model
-    from .vault_dispatch_helpers import run_background_agent_turn
 
     if not isinstance(folder, str) or not isinstance(op_id, str) or not op_id:
         raise HTTPException(
@@ -229,8 +228,6 @@ async def _kick_chat_operation(
         approved_plan=approved_plan,
     )
 
-    # Plan and execute use distinct context prefixes so run-history doesn't
-    # mistake a planning session for a real run when rehydrating chip state.
     prefix = (
         f"Dashboard plan: {folder}#" if plan_only else _context_prefix_for(folder)
     )
@@ -248,53 +245,18 @@ async def _kick_chat_operation(
     resolved_model = _resolve_dispatch_model(None, a)
 
     async def _run_with_terminal_event() -> None:
-        """Wrap the background turn so the chip can detect success/failure.
-
-        ``run_background_agent_turn`` swallows its own exceptions and persists
-        a partial history on crash. To give the chip a single, reliable
-        terminal signal, we inspect the persisted history after the turn
-        and publish a synthetic ``op_done`` event over the session bus.
-        """
-        outcome = "done"
-        error_msg: str | None = None
-        try:
-            await run_background_agent_turn(
-                session_id=session.id,
-                seed_message=seed_message,
-                card_path="",
-                card_id="",
-                agent_=a,
-                store=store,
-                model_id=resolved_model,
-                entity_kind="none",
-            )
-        except Exception as exc:
-            outcome = "failed"
-            error_msg = str(exc)
-        else:
-            try:
-                final = store.get_or_create(session.id)
-                history = list(final.history)
-                last = history[-1] if history else None
-                content = (getattr(last, "content", "") or "") if last is not None else ""
-                # Helper persists ``[background_interrupted]`` / ``[crashed]``
-                # / ``[llm_error]`` etc. on partial runs — treat any of those
-                # as a failure so the chip flags it for the user.
-                if last is None or content.startswith("["):
-                    outcome = "failed"
-                    error_msg = content[:200] or "Action did not complete."
-            except Exception:
-                log.exception("run-operation: outcome inspection failed")
-        try:
-            store.publish(
-                session.id,
-                SessionEvent(
-                    kind="op_done",
-                    data={"status": outcome, "error": error_msg},
-                ),
-            )
-        except Exception:
-            log.exception("run-operation: terminal event publish failed")
+        result = await run_background_turn(
+            session_id=session.id,
+            seed_message=seed_message,
+            agent_=a,
+            store=store,
+            model_id=resolved_model,
+        )
+        await publish_terminal_event(
+            session_id=session.id,
+            result=result,
+            store=store,
+        )
 
     asyncio.create_task(_run_with_terminal_event())
 
@@ -697,9 +659,8 @@ async def vault_dashboard_design_widget(
     Returns ``{session_id}`` so the UI can stream the LLM's reply and
     subscribe to ``op_done``.
     """
+    from ..services.background_turn import publish_terminal_event, run_background_turn
     from .vault_dispatch import HIDDEN_SEED_MARKER, _resolve_dispatch_model
-    from .vault_dispatch_helpers import run_background_agent_turn
-    from ..events import SessionEvent
 
     folder = body.get("folder", "")
     goal = (body.get("goal") or "").strip()
@@ -743,32 +704,18 @@ async def vault_dashboard_design_widget(
     resolved_model = _resolve_dispatch_model(None, a)
 
     async def _run_design() -> None:
-        outcome = "done"
-        error_msg: str | None = None
-        try:
-            await run_background_agent_turn(
-                session_id=session.id,
-                seed_message=seed_message,
-                card_path="",
-                card_id="",
-                agent_=a,
-                store=store,
-                model_id=resolved_model,
-                entity_kind="none",
-            )
-        except Exception as exc:
-            outcome = "failed"
-            error_msg = str(exc)
-        try:
-            store.publish(
-                session.id,
-                SessionEvent(
-                    kind="op_done",
-                    data={"status": outcome, "error": error_msg},
-                ),
-            )
-        except Exception:
-            log.exception("widget design: terminal event publish failed")
+        result = await run_background_turn(
+            session_id=session.id,
+            seed_message=seed_message,
+            agent_=a,
+            store=store,
+            model_id=resolved_model,
+        )
+        await publish_terminal_event(
+            session_id=session.id,
+            result=result,
+            store=store,
+        )
 
     asyncio.create_task(_run_design())
 
@@ -891,9 +838,8 @@ async def vault_dashboard_wizard_start(
     Returns ``{session_id}`` so the UI can subscribe to events and stream
     the wizard's reply.
     """
+    from ..services.background_turn import publish_terminal_event, run_background_turn
     from .vault_dispatch import HIDDEN_SEED_MARKER, _resolve_dispatch_model
-    from .vault_dispatch_helpers import run_background_agent_turn
-    from ..events import SessionEvent
 
     folder = body.get("folder", "")
     kind = body.get("kind")
@@ -937,32 +883,18 @@ async def vault_dashboard_wizard_start(
     resolved_model = _resolve_dispatch_model(None, a)
 
     async def _run_first_turn() -> None:
-        outcome = "done"
-        error_msg: str | None = None
-        try:
-            await run_background_agent_turn(
-                session_id=session.id,
-                seed_message=seed_message,
-                card_path="",
-                card_id="",
-                agent_=a,
-                store=store,
-                model_id=resolved_model,
-                entity_kind="none",
-            )
-        except Exception as exc:
-            outcome = "failed"
-            error_msg = str(exc)
-        try:
-            store.publish(
-                session.id,
-                SessionEvent(
-                    kind="op_done",
-                    data={"status": outcome, "error": error_msg},
-                ),
-            )
-        except Exception:
-            log.exception("wizard start: terminal event publish failed")
+        result = await run_background_turn(
+            session_id=session.id,
+            seed_message=seed_message,
+            agent_=a,
+            store=store,
+            model_id=resolved_model,
+        )
+        await publish_terminal_event(
+            session_id=session.id,
+            result=result,
+            store=store,
+        )
 
     asyncio.create_task(_run_first_turn())
 

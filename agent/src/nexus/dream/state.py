@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from ..sqlite_base import SqliteStore
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%S.%f"
 
@@ -77,17 +78,17 @@ CREATE TABLE IF NOT EXISTS dream_explored_territory (
 """
 
 
-class DreamStateStore:
+_DREAM_SCHEMA = (
+    _CREATE_RUNS + _CREATE_RUNS_IDX + ";" + _CREATE_BUDGET + ";" + _CREATE_TERRITORY
+)
+
+
+class DreamStateStore(SqliteStore):
+    _SCHEMA = _DREAM_SCHEMA
+
     def __init__(self, db_path: Path) -> None:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
+        super().__init__(db_path)
         self._closed = False
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute(_CREATE_RUNS)
-        self._db.execute(_CREATE_RUNS_IDX)
-        self._db.execute(_CREATE_BUDGET)
-        self._db.execute(_CREATE_TERRITORY)
-        self._db.commit()
 
     def start_run(self, *, depth: str = "light", phases: str = "") -> int:
         now = _to_ts(datetime.now(UTC))

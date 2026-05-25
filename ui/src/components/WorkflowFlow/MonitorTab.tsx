@@ -10,6 +10,7 @@ interface Props {
   onExecutionLoad: (detail: RunDetail | null) => void;
   onSeedFromRun: (runId: string) => void;
   monitorInspectStepId: string | null;
+  onMonitorInspectStep: (stepId: string | null) => void;
   onMonitorInspectClose: () => void;
 }
 
@@ -69,6 +70,7 @@ export default function MonitorTab({
   onExecutionLoad,
   onSeedFromRun,
   monitorInspectStepId,
+  onMonitorInspectStep,
   onMonitorInspectClose,
 }: Props) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
@@ -95,19 +97,23 @@ export default function MonitorTab({
 
   const selectRun = useCallback(
     async (runId: string) => {
-      if (selectedRunId === runId) return;
       setSelectedRunId(runId);
       try {
         const detail = await wfApi.getRun(wfPath, runId);
         setSelectedDetail(detail);
         onExecutionLoad(detail);
+        if (detail.steps.length > 0) {
+          const failed = detail.steps.find((s) => s.status === "failed");
+          onMonitorInspectStep((failed ?? detail.steps[0]).step_id);
+        }
       } catch {
         console.error("Failed to load run detail");
         setSelectedDetail(null);
         onExecutionLoad(null);
+        onMonitorInspectStep(null);
       }
     },
-    [wfPath, selectedRunId, onExecutionLoad],
+    [wfPath, onExecutionLoad, onMonitorInspectStep],
   );
 
   const groups = useMemo(() => groupByDate(runs), [runs]);

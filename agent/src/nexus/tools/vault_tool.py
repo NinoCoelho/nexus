@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from ..agent.llm import ToolSpec
 
@@ -45,6 +45,11 @@ def _resolve_read_path(path: str) -> str:
         except (FileNotFoundError, ValueError):
             pass
     return path
+
+
+def _dumps(obj: dict) -> str:
+    return json.dumps(obj, default=str)
+
 
 VAULT_LIST_TOOL = ToolSpec(
     name="vault_list",
@@ -192,6 +197,130 @@ VAULT_SEMANTIC_SEARCH_TOOL = ToolSpec(
     },
 )
 
+_REGISTRY: dict[str, Callable[[dict[str, Any]], str]] = {}
+
+
+def _tool_vault_list(args: dict[str, Any]) -> str:
+    from .. import vault
+
+    path = args.get("path", "")
+    entries = vault.list_tree()
+    sid = _current_session_id()
+    if sid:
+        scoped_prefix = f"{_SESSION_PREFIX}{sid}/"
+        seen = set()
+        merged: list[dict] = []
+        for e in entries:
+            p = e.path
+            if p.startswith(scoped_prefix):
+                stripped = p[len(scoped_prefix):]
+                if not path or stripped.startswith(path.rstrip("/") + "/") or stripped == path:
+                    seen.add(stripped)
+                    merged.append({"path": stripped, "type": e.type, "size": e.size})
+                    continue
+            if not path or p.startswith(path.rstrip("/") + "/") or p == path:
+                if p not in seen:
+                    merged.append({"path": p, "type": e.type, "size": e.size})
+        return _dumps({"ok": True, "entries": merged})
+    if path:
+        entries = [e for e in entries if e.path.startswith(path.rstrip("/") + "/") or e.path == path]
+    return _dumps({"ok": True, "entries": [{"path": e.path, "type": e.type, "size": e.size} for e in entries]})
+
+
+def _tool_vault_read(args: dict[str, Any]) -> str:
+    from .. import vault
+
+    path = args.get("path", "")
+    if not path:
+        return _dumps({"ok": False, "error": "`path` is required"})
+    resolved = _resolve_read_path(path)
+    head = args.get("head")
+    tail = args.get("tail")
+    offset = int(args.get("offset", 0) or 0)
+    limit = args.get("limit")
+    DEFAULT_BYTE_CAP = 64 * 1024
+    if head is None and tail is None and limit is None and offset == 0:
+        limit = DEFAULT_BYTE_CAP
+    result = vault.read_file(
+        resolved,
+        offset=offset,
+        limit=int(limit) if limit is not None else None,
+        head=int(head) if head is not None else None,
+        tail=int(tail) if tail is not None else None,
+    )
+    result["path"] = path
+    if result.get("truncated"):
+        result["hint"] = (
+            "Output truncated. Use `head=N`/`tail=N` for line slices, "
+            "or `offset`/`limit` (bytes) to page. Field `slice.next_offset` "
+            "indicates where to resume."
+        )
+    return _dumps({"ok": True, **result})
+
+
+def _tool_vault_write(args: dict[str, Any]) -> str:
+    from .. import vault
+
+    path = args.get("path", "")
+    content = args.get("content", "")
+    if not path:
+        return _dumps({"ok": False, "error": "`path` is required"})
+    scoped = _scope_write_path(path)
+    vault.write_file(scoped, content)
+    _trigger_graphrag_index(scoped, content)
+    return _dumps({"ok": True, "path": scoped})
+
+
+def _tool_vault_search(args: dict[str, Any]) -> str:
+    from .. import vault_search
+
+    query = args.get("query", "")
+    limit = int(args.get("limit", 10))
+    if not query:
+        return _dumps({"ok": False, "error": "`query` is required"})
+    if vault_search.is_empty():
+        vault_search.rebuild_from_disk()
+    results = vault_search.search(query, limit=limit)
+    return _dumps({"ok": True, "results": results})
+
+
+def _tool_vault_tags(args: dict[str, Any]) -> str:
+    from .. import vault_index
+
+    tag = args.get("tag", "")
+    vault_index.ensure_ready()
+    if tag:
+        files = vault_index.files_with_tag(tag)
+        return _dumps({"ok": True, "tag": tag, "files": files})
+    tags = vault_index.list_tags()
+    return _dumps({"ok": True, "tags": tags})
+
+
+def _tool_vault_backlinks(args: dict[str, Any]) -> str:
+    from .. import vault_index
+
+    path = args.get("path", "")
+    if not path:
+        return _dumps({"ok": False, "error": "`path` is required"})
+    vault_index.ensure_ready()
+    links = vault_index.backlinks(path)
+    return _dumps({"ok": True, "path": path, "backlinks": links})
+
+
+def _tool_vault_semantic_search(args: dict[str, Any]) -> str:
+    return _handle_semantic_search(args)
+
+
+_REGISTRY.update({
+    "vault_list": _tool_vault_list,
+    "vault_read": _tool_vault_read,
+    "vault_write": _tool_vault_write,
+    "vault_search": _tool_vault_search,
+    "vault_tags": _tool_vault_tags,
+    "vault_backlinks": _tool_vault_backlinks,
+    "vault_semantic_search": _tool_vault_semantic_search,
+})
+
 
 def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
     """Dispatch a vault tool by name and return serialized JSON.
@@ -208,116 +337,11 @@ def handle_vault_tool(name: str, args: dict[str, Any]) -> str:
         are stringified via ``default=str`` to avoid crashing the SSE stream
         with a serialization exception.
     """
-    from .. import vault
-
-    # json.dumps can't handle datetime.date / datetime.datetime (YAML
-    # frontmatter auto-coerces ISO-like values). default=str stringifies
-    # them instead of raising — crashes here previously killed the SSE
-    # stream mid-flight and surfaced as ERR_INCOMPLETE_CHUNKED_ENCODING
-    # on the client.
-    def _dumps(obj: dict) -> str:
-        return json.dumps(obj, default=str)
-
-    try:
-        if name == "vault_list":
-            path = args.get("path", "")
-            entries = vault.list_tree()
-            sid = _current_session_id()
-            if sid:
-                scoped_prefix = f"{_SESSION_PREFIX}{sid}/"
-                seen = set()
-                merged: list[dict] = []
-                for e in entries:
-                    p = e.path
-                    if p.startswith(scoped_prefix):
-                        stripped = p[len(scoped_prefix):]
-                        if not path or stripped.startswith(path.rstrip("/") + "/") or stripped == path:
-                            seen.add(stripped)
-                            merged.append({"path": stripped, "type": e.type, "size": e.size})
-                            continue
-                    if not path or p.startswith(path.rstrip("/") + "/") or p == path:
-                        if p not in seen:
-                            merged.append({"path": p, "type": e.type, "size": e.size})
-                return _dumps({"ok": True, "entries": merged})
-            if path:
-                entries = [e for e in entries if e.path.startswith(path.rstrip("/") + "/") or e.path == path]
-            return _dumps({"ok": True, "entries": [{"path": e.path, "type": e.type, "size": e.size} for e in entries]})
-
-        if name == "vault_read":
-            path = args.get("path", "")
-            if not path:
-                return _dumps({"ok": False, "error": "`path` is required"})
-            resolved = _resolve_read_path(path)
-            head = args.get("head")
-            tail = args.get("tail")
-            offset = int(args.get("offset", 0) or 0)
-            limit = args.get("limit")
-            DEFAULT_BYTE_CAP = 64 * 1024
-            if head is None and tail is None and limit is None and offset == 0:
-                limit = DEFAULT_BYTE_CAP
-            result = vault.read_file(
-                resolved,
-                offset=offset,
-                limit=int(limit) if limit is not None else None,
-                head=int(head) if head is not None else None,
-                tail=int(tail) if tail is not None else None,
-            )
-            result["path"] = path
-            if result.get("truncated"):
-                result["hint"] = (
-                    "Output truncated. Use `head=N`/`tail=N` for line slices, "
-                    "or `offset`/`limit` (bytes) to page. Field `slice.next_offset` "
-                    "indicates where to resume."
-                )
-            return _dumps({"ok": True, **result})
-
-        if name == "vault_write":
-            path = args.get("path", "")
-            content = args.get("content", "")
-            if not path:
-                return _dumps({"ok": False, "error": "`path` is required"})
-            scoped = _scope_write_path(path)
-            vault.write_file(scoped, content)
-            _trigger_graphrag_index(scoped, content)
-            return _dumps({"ok": True, "path": scoped})
-
-        if name == "vault_search":
-            from .. import vault_search
-            query = args.get("query", "")
-            limit = int(args.get("limit", 10))
-            if not query:
-                return _dumps({"ok": False, "error": "`query` is required"})
-            if vault_search.is_empty():
-                vault_search.rebuild_from_disk()
-            results = vault_search.search(query, limit=limit)
-            return _dumps({"ok": True, "results": results})
-
-        if name == "vault_tags":
-            from .. import vault_index
-            tag = args.get("tag", "")
-            if vault_index.is_empty():
-                vault_index.rebuild_from_disk()
-            if tag:
-                files = vault_index.files_with_tag(tag)
-                return _dumps({"ok": True, "tag": tag, "files": files})
-            tags = vault_index.list_tags()
-            return _dumps({"ok": True, "tags": tags})
-
-        if name == "vault_backlinks":
-            from .. import vault_index
-            path = args.get("path", "")
-            if not path:
-                return _dumps({"ok": False, "error": "`path` is required"})
-            if vault_index.is_empty():
-                vault_index.rebuild_from_disk()
-            links = vault_index.backlinks(path)
-            return _dumps({"ok": True, "path": path, "backlinks": links})
-
-        if name == "vault_semantic_search":
-            return _handle_semantic_search(args, _dumps)
-
+    handler = _REGISTRY.get(name)
+    if not handler:
         return _dumps({"ok": False, "error": f"unknown vault tool: {name!r}"})
-
+    try:
+        return handler(args)
     except (ValueError, FileNotFoundError, OSError) as exc:
         return _dumps({"ok": False, "error": str(exc)})
 
@@ -327,7 +351,7 @@ def _get_graphrag_engine() -> Any:
     return get_engine()
 
 
-async def _handle_semantic_search(args: dict[str, Any], _dumps: Any) -> str:
+async def _handle_semantic_search(args: dict[str, Any]) -> str:
     query = args.get("query", "")
     limit = int(args.get("limit", 10))
     if not query:
@@ -338,11 +362,6 @@ async def _handle_semantic_search(args: dict[str, Any], _dumps: Any) -> str:
     try:
         results = await engine.retrieve(query, top_k=limit)
     except ValueError as exc:
-        # Loom's _batch_cosine calls np.array(vectors, ...) which raises
-        # "inhomogeneous shape" when stored embeddings have mixed
-        # dimensions — caused by switching embedding models without
-        # re-indexing. Surface an actionable error instead of the raw
-        # numpy traceback so the agent stops retrying blindly.
         msg = str(exc)
         if "inhomogeneous" in msg or "setting an array element with a sequence" in msg:
             return _dumps({

@@ -7,7 +7,7 @@ Single tool with an ``action`` discriminator so the LLM picks the operation
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from ..agent.llm import ToolSpec
 
@@ -112,25 +112,92 @@ CSV_TOOL = ToolSpec(
 )
 
 
+def _dumps(obj: dict) -> str:
+    return json.dumps(obj, default=str)
+
+
+_REGISTRY: dict[str, Callable[[dict[str, Any]], str]] = {}
+
+
+def _schema(args: dict[str, Any]) -> str:
+    from .. import vault_csv
+
+    path = args.get("path", "")
+    return _dumps({"ok": True, **vault_csv.csv_schema(path)})
+
+
+def _sample(args: dict[str, Any]) -> str:
+    from .. import vault_csv
+
+    path = args.get("path", "")
+    mode = args.get("mode", "head")
+    n = int(args.get("n", 20))
+    return _dumps({"ok": True, **vault_csv.csv_sample(path, mode=mode, n=n)})
+
+
+def _describe(args: dict[str, Any]) -> str:
+    from .. import vault_csv
+
+    path = args.get("path", "")
+    cols = args.get("columns")
+    return _dumps({"ok": True, **vault_csv.csv_describe(path, columns=cols)})
+
+
+def _query(args: dict[str, Any]) -> str:
+    from .. import vault_csv
+
+    path = args.get("path", "")
+    sql = args.get("sql", "")
+    if not sql:
+        return _dumps({"ok": False, "error": "`sql` is required for action=query"})
+    limit = int(args.get("limit", 50))
+    fmt = args.get("format", "columns")
+    summarize_raw = args.get("summarize")
+    summarize = None if summarize_raw is None else bool(summarize_raw)
+    return _dumps({"ok": True, **vault_csv.csv_query(path, sql, limit=limit, fmt=fmt, summarize=summarize)})
+
+
+def _analyze(args: dict[str, Any]) -> str:
+    from .. import vault_csv
+
+    path = args.get("path", "")
+    script = args.get("script", "")
+    if not script:
+        return _dumps({"ok": False, "error": "`script` is required for action=analyze"})
+    return _dumps({"ok": True, **vault_csv.csv_analyze(path, script)})
+
+
+def _relationships(args: dict[str, Any]) -> str:
+    from .. import vault_csv
+
+    path = args.get("path", "")
+    cands = args.get("candidates")
+    return _dumps({"ok": True, **vault_csv.csv_relationships(path, candidates=cands)})
+
+
+_REGISTRY.update({
+    "schema": _schema,
+    "sample": _sample,
+    "describe": _describe,
+    "query": _query,
+    "analyze": _analyze,
+    "relationships": _relationships,
+})
+
+
 def handle_csv_tool(args: dict[str, Any]) -> str:
-    from .. import vault, vault_csv, vault_datatable
-
-    def _dumps(obj: dict) -> str:
-        return json.dumps(obj, default=str)
-
+    action = args.get("action")
+    path = args.get("path", "")
+    if not action:
+        return _dumps({"ok": False, "error": "`action` is required"})
+    if not path:
+        return _dumps({"ok": False, "error": "`path` is required"})
+    handler = _REGISTRY.get(action)
+    if not handler:
+        return _dumps({"ok": False, "error": f"unknown action: {action!r}"})
     try:
-        action = args.get("action")
-        path = args.get("path", "")
-        if not action:
-            return _dumps({"ok": False, "error": "`action` is required"})
-        if not path:
-            return _dumps({"ok": False, "error": "`path` is required"})
-
-        # Redirect datatable .md files to datatable_manage. The agent has been
-        # observed calling vault_csv on `data-table-plugin: basic` files and
-        # giving up on the resulting "not a CSV/TSV file" error — give it a
-        # structured next step instead of a flat failure.
         if path.lower().endswith(".md"):
+            from .. import vault, vault_datatable
             try:
                 file = vault.read_file(path)
             except (FileNotFoundError, OSError):
@@ -145,34 +212,6 @@ def handle_csv_tool(args: dict[str, Any]) -> str:
                         "path": path,
                     },
                 })
-
-        if action == "schema":
-            return _dumps({"ok": True, **vault_csv.csv_schema(path)})
-        if action == "sample":
-            mode = args.get("mode", "head")
-            n = int(args.get("n", 20))
-            return _dumps({"ok": True, **vault_csv.csv_sample(path, mode=mode, n=n)})
-        if action == "describe":
-            cols = args.get("columns")
-            return _dumps({"ok": True, **vault_csv.csv_describe(path, columns=cols)})
-        if action == "query":
-            sql = args.get("sql", "")
-            if not sql:
-                return _dumps({"ok": False, "error": "`sql` is required for action=query"})
-            limit = int(args.get("limit", 50))
-            fmt = args.get("format", "columns")
-            summarize_raw = args.get("summarize")
-            summarize = None if summarize_raw is None else bool(summarize_raw)
-            return _dumps({"ok": True, **vault_csv.csv_query(path, sql, limit=limit, fmt=fmt, summarize=summarize)})
-        if action == "analyze":
-            script = args.get("script", "")
-            if not script:
-                return _dumps({"ok": False, "error": "`script` is required for action=analyze"})
-            return _dumps({"ok": True, **vault_csv.csv_analyze(path, script)})
-        if action == "relationships":
-            cands = args.get("candidates")
-            return _dumps({"ok": True, **vault_csv.csv_relationships(path, candidates=cands)})
-
-        return _dumps({"ok": False, "error": f"unknown action: {action!r}"})
+        return handler(args)
     except (ValueError, FileNotFoundError, OSError) as exc:
         return _dumps({"ok": False, "error": str(exc)})

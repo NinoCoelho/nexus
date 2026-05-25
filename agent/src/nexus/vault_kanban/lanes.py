@@ -56,6 +56,12 @@ def update_lane(path: str, lane_id: str, updates: dict[str, Any]) -> Lane:
         lane.webhook_token = str(raw).strip() if raw else None
     if "webhook_enabled" in updates:
         lane.webhook_enabled = bool(updates["webhook_enabled"])
+    if "broker_id" in updates:
+        raw = updates["broker_id"]
+        lane.broker_id = str(raw).strip() if raw else None
+    if "broker_slug" in updates:
+        raw = updates["broker_slug"]
+        lane.broker_slug = str(raw).strip() if raw else None
     write_board(path, board)
     return lane
 

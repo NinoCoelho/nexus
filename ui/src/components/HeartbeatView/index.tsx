@@ -13,6 +13,7 @@ import {
 import { fireVaultCalendarEvent } from "../../api/calendar";
 import CardActivityModal from "../CardActivityModal";
 import type { KanbanCardStatus } from "../../api";
+import { usePollWhileRunning } from "../../hooks/usePollWhileRunning";
 import "./HeartbeatView.css";
 
 type Tab = "events" | "log";
@@ -403,15 +404,11 @@ export default function HeartbeatView({
     load();
   }, [load]);
 
+  usePollWhileRunning(hasRunning, load);
+
   useEffect(() => {
     if (tab === "log") loadLog();
   }, [tab, loadLog]);
-
-  useEffect(() => {
-    if (!hasRunning) return;
-    const id = setInterval(load, 1500);
-    return () => clearInterval(id);
-  }, [hasRunning, load]);
 
   const handleToggle = async (id: string, enabled: boolean) => {
     try {

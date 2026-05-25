@@ -9,7 +9,7 @@ action="create_calendar" to scaffold one.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from ..agent.llm import ToolSpec
 
@@ -137,109 +137,159 @@ CALENDAR_MANAGE_TOOL = ToolSpec(
     },
 )
 
+_REGISTRY: dict[str, Callable[[dict[str, Any]], str]] = {}
+_PATH_OPTIONAL = {"list_calendars"}
+
+
+def _list_calendars(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    _ = args
+    items = [s.to_dict() for s in vault_calendar.list_calendars()]
+    return json.dumps({"ok": True, "calendars": items, "count": len(items)})
+
+
+def _create_calendar(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    cal = vault_calendar.create_empty(
+        path,
+        title=args.get("title"),
+        timezone=args.get("timezone"),
+        prompt=args.get("prompt"),
+    )
+    return json.dumps({"ok": True, "path": path, "calendar": cal.to_dict()})
+
+
+def _view(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    cal = vault_calendar.read_calendar(path)
+    return json.dumps({"ok": True, "path": path, "calendar": cal.to_dict()})
+
+
+def _update_calendar(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    updates: dict[str, Any] = {}
+    for key in ("title", "prompt", "timezone", "auto_trigger", "default_duration_min", "default_model"):
+        if key in args:
+            updates[key] = args[key]
+    if not updates:
+        return json.dumps({"ok": False, "error": "no fields to update"})
+    cal = vault_calendar.update_calendar(path, updates)
+    return json.dumps({"ok": True, "path": path, "calendar": cal.to_dict()})
+
+
+def _list_events(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    hits = vault_calendar.query_events(
+        from_utc=args.get("from"),
+        to_utc=args.get("to"),
+        status=args.get("status") or None,
+        calendar_path=path,
+    )
+    return json.dumps({"ok": True, "events": hits, "count": len(hits)})
+
+
+def _add_event(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    title = args.get("title", "")
+    start = args.get("start", "")
+    if not title or not start:
+        return json.dumps({"ok": False, "error": "`title` and `start` are required"})
+    fire_every = args.get("fire_every_min")
+    ev = vault_calendar.add_event(
+        path,
+        title=title,
+        start=start,
+        end=args.get("end"),
+        body=args.get("body", ""),
+        trigger=args.get("trigger") or None,
+        rrule=args.get("rrule") or None,
+        all_day=bool(args.get("all_day", False)),
+        status=args.get("status") or "scheduled",
+        fire_from=args.get("fire_from") or None,
+        fire_to=args.get("fire_to") or None,
+        fire_every_min=int(fire_every) if fire_every else None,
+        model=args.get("model") or None,
+        assignee=args.get("assignee") or None,
+    )
+    return json.dumps({"ok": True, "event": ev.to_dict()})
+
+
+def _update_event(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    event_id = args.get("event_id", "")
+    if not event_id:
+        return json.dumps({"ok": False, "error": "`event_id` is required"})
+    updates = {}
+    for key in (
+        "title", "body", "start", "end", "status", "trigger", "rrule",
+        "all_day", "session_id", "fire_from", "fire_to", "fire_every_min",
+        "model", "assignee",
+    ):
+        if key in args:
+            updates[key] = args[key]
+    ev = vault_calendar.update_event(path, event_id, updates)
+    return json.dumps({"ok": True, "event": ev.to_dict()})
+
+
+def _move_event(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    event_id = args.get("event_id", "")
+    new_start = args.get("start", "")
+    if not event_id or not new_start:
+        return json.dumps({"ok": False, "error": "`event_id` and `start` are required"})
+    ev = vault_calendar.move_event(path, event_id, new_start, args.get("end"))
+    return json.dumps({"ok": True, "event": ev.to_dict()})
+
+
+def _delete_event(args: dict[str, Any]) -> str:
+    from .. import vault_calendar
+
+    path = args.get("path", "")
+    event_id = args.get("event_id", "")
+    if not event_id:
+        return json.dumps({"ok": False, "error": "`event_id` is required"})
+    vault_calendar.delete_event(path, event_id)
+    return json.dumps({"ok": True})
+
+
+_REGISTRY.update({
+    "list_calendars": _list_calendars,
+    "create_calendar": _create_calendar,
+    "view": _view,
+    "update_calendar": _update_calendar,
+    "list_events": _list_events,
+    "add_event": _add_event,
+    "update_event": _update_event,
+    "move_event": _move_event,
+    "delete_event": _delete_event,
+})
+
 
 def handle_calendar_tool(args: dict[str, Any]) -> str:
     """Dispatch the requested calendar action and return serialized JSON."""
-    from .. import vault_calendar
-
     action = args.get("action", "")
     path = args.get("path", "")
-
-    try:
-        if action == "list_calendars":
-            items = [s.to_dict() for s in vault_calendar.list_calendars()]
-            return json.dumps({"ok": True, "calendars": items, "count": len(items)})
-
-        if not path:
-            return json.dumps({"ok": False, "error": "`path` is required"})
-
-        if action == "create_calendar":
-            cal = vault_calendar.create_empty(
-                path,
-                title=args.get("title"),
-                timezone=args.get("timezone"),
-                prompt=args.get("prompt"),
-            )
-            return json.dumps({"ok": True, "path": path, "calendar": cal.to_dict()})
-
-        if action == "view":
-            cal = vault_calendar.read_calendar(path)
-            return json.dumps({"ok": True, "path": path, "calendar": cal.to_dict()})
-
-        if action == "update_calendar":
-            updates: dict[str, Any] = {}
-            for key in ("title", "prompt", "timezone", "auto_trigger", "default_duration_min", "default_model"):
-                if key in args:
-                    updates[key] = args[key]
-            if not updates:
-                return json.dumps({"ok": False, "error": "no fields to update"})
-            cal = vault_calendar.update_calendar(path, updates)
-            return json.dumps({"ok": True, "path": path, "calendar": cal.to_dict()})
-
-        if action == "list_events":
-            hits = vault_calendar.query_events(
-                from_utc=args.get("from"),
-                to_utc=args.get("to"),
-                status=args.get("status") or None,
-                calendar_path=path,
-            )
-            return json.dumps({"ok": True, "events": hits, "count": len(hits)})
-
-        if action == "add_event":
-            title = args.get("title", "")
-            start = args.get("start", "")
-            if not title or not start:
-                return json.dumps({"ok": False, "error": "`title` and `start` are required"})
-            fire_every = args.get("fire_every_min")
-            ev = vault_calendar.add_event(
-                path,
-                title=title,
-                start=start,
-                end=args.get("end"),
-                body=args.get("body", ""),
-                trigger=args.get("trigger") or None,
-                rrule=args.get("rrule") or None,
-                all_day=bool(args.get("all_day", False)),
-                status=args.get("status") or "scheduled",
-                fire_from=args.get("fire_from") or None,
-                fire_to=args.get("fire_to") or None,
-                fire_every_min=int(fire_every) if fire_every else None,
-                model=args.get("model") or None,
-                assignee=args.get("assignee") or None,
-            )
-            return json.dumps({"ok": True, "event": ev.to_dict()})
-
-        if action == "update_event":
-            event_id = args.get("event_id", "")
-            if not event_id:
-                return json.dumps({"ok": False, "error": "`event_id` is required"})
-            updates = {}
-            for key in (
-                "title", "body", "start", "end", "status", "trigger", "rrule",
-                "all_day", "session_id", "fire_from", "fire_to", "fire_every_min",
-                "model", "assignee",
-            ):
-                if key in args:
-                    updates[key] = args[key]
-            ev = vault_calendar.update_event(path, event_id, updates)
-            return json.dumps({"ok": True, "event": ev.to_dict()})
-
-        if action == "move_event":
-            event_id = args.get("event_id", "")
-            new_start = args.get("start", "")
-            if not event_id or not new_start:
-                return json.dumps({"ok": False, "error": "`event_id` and `start` are required"})
-            ev = vault_calendar.move_event(path, event_id, new_start, args.get("end"))
-            return json.dumps({"ok": True, "event": ev.to_dict()})
-
-        if action == "delete_event":
-            event_id = args.get("event_id", "")
-            if not event_id:
-                return json.dumps({"ok": False, "error": "`event_id` is required"})
-            vault_calendar.delete_event(path, event_id)
-            return json.dumps({"ok": True})
-
+    handler = _REGISTRY.get(action)
+    if not handler:
         return json.dumps({"ok": False, "error": f"unknown action: {action!r}"})
-
+    if action not in _PATH_OPTIONAL and not path:
+        return json.dumps({"ok": False, "error": "`path` is required"})
+    try:
+        return handler(args)
     except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return json.dumps({"ok": False, "error": str(exc)})

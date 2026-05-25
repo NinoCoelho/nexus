@@ -222,6 +222,8 @@ def parse(content: str) -> Board:
         if wh and isinstance(wh, dict):
             ln.webhook_token = str(wh.get("token", "")) or None
             ln.webhook_enabled = bool(wh.get("enabled", False))
+            ln.broker_id = str(wh.get("broker_id", "")) or None
+            ln.broker_slug = str(wh.get("broker_slug", "")) or None
 
     return board
 
@@ -259,7 +261,15 @@ def serialize(board: Board) -> str:
         fm["lane_models"] = lm
     else:
         fm.pop("lane_models", None)
-    wh = {ln.id: {"token": ln.webhook_token, "enabled": ln.webhook_enabled} for ln in board.lanes if ln.webhook_token}
+    wh: dict[str, dict[str, Any]] = {}
+    for ln in board.lanes:
+        if ln.webhook_token:
+            entry: dict[str, Any] = {"token": ln.webhook_token, "enabled": ln.webhook_enabled}
+            if ln.broker_id:
+                entry["broker_id"] = ln.broker_id
+            if ln.broker_slug:
+                entry["broker_slug"] = ln.broker_slug
+            wh[ln.id] = entry
     if wh:
         fm["lane_webhooks"] = wh
     else:

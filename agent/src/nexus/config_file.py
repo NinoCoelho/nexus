@@ -40,6 +40,7 @@ from .config_schema import (  # noqa: F401
     McpServerEntry,
     McpConfig,
     ServerConfig,
+    BrokerConfig,
     NexusConfig,
     default_config,
 )
@@ -373,12 +374,13 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         mcp_servers[sname] = McpServerEntry(**sdata)
     mcp = McpConfig(servers=mcp_servers)
     server = ServerConfig(**dict(raw.get("server", {})))
+    broker = BrokerConfig(**dict(raw.get("broker", {})))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
         nexus_account=nexus_account, location=location, dream=dream,
-        mcp=mcp, server=server,
+        mcp=mcp, server=server, broker=broker,
     )
 
 

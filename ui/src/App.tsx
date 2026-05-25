@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import "./tokens.css";
 import "./App.css";
@@ -24,13 +24,9 @@ import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
 import {
   cancelGraphragIndexFile,
   cancelHitlRequest,
-  getConfig,
-  getGraphragIndexStatus,
   graphragIndexFile,
-  pingHealth,
   respondToUserRequest,
 } from "./api";
-import i18n, { normalizeLanguage } from "./i18n";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
 import { listDatabases, type DatabaseSummary } from "./api/datatable";
@@ -44,15 +40,15 @@ import AlarmNotification from "./components/AlarmNotification";
 import "./components/AlarmNotification.css";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
 import { useVoiceAckPlayer } from "./hooks/useVoiceAckPlayer";
-import { subscribeGlobalNotifications } from "./api/chat";
 import { usePushSubscription } from "./hooks/usePushSubscription";
 import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
+import { useGlobalSubscriptions } from "./hooks/useGlobalSubscriptions";
 import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
 import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useSession } from "./components/SessionProvider";
-import { adminAllPending, adminAnswerHitl, adminCancelHitl } from "./api/auth";
+import { adminAnswerHitl, adminCancelHitl } from "./api/auth";
 import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useActiveDownloads } from "./hooks/useActiveDownloads";
 import { useSessionUsage } from "./hooks/useSessionUsage";
@@ -108,16 +104,6 @@ export default function App() {
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
-  // Backend-reachability pill. Polls /health every 15s; shows when the
-  // server is unreachable so the user can tell "server is down" apart
-  // from "model is still thinking". Starts as null (unknown) — never
-  // shows the banner on first load before the first ping resolves.
-  // Requires BACKEND_DOWN_THRESHOLD consecutive failures before showing
-  // the red banner, so brief blocking spikes during indexing etc. don't
-  // flash a false alarm.
-  const BACKEND_DOWN_THRESHOLD = 3;
-  const [backendUp, setBackendUp] = useState<boolean | null>(null);
-  const consecutiveDownRef = useRef(0);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
@@ -176,50 +162,6 @@ export default function App() {
     setOpenSkill(null);
     setMobileDrawerOpen(false);
   }, [view]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () =>
-      void pingHealth().then((ok) => {
-        if (cancelled) return;
-        if (ok) {
-          consecutiveDownRef.current = 0;
-          setBackendUp(true);
-        } else {
-          consecutiveDownRef.current += 1;
-          if (consecutiveDownRef.current >= BACKEND_DOWN_THRESHOLD) {
-            setBackendUp(false);
-          }
-        }
-      });
-    tick();
-    const id = setInterval(tick, 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
-  // Sync UI language from `~/.nexus/config.toml` once on mount. The fetch
-  // interceptor in api/base.ts also reads `localStorage["nexus-language"]` (and
-  // `window.__nexusLanguage`) so X-Locale stays in sync without each call site
-  // knowing about it. Settings drawer's language picker calls i18n.changeLanguage
-  // directly when the user toggles, so this effect doesn't need to refetch.
-  useEffect(() => {
-    let cancelled = false;
-    getConfig()
-      .then((cfg) => {
-        if (cancelled) return;
-        const lang = normalizeLanguage(cfg.ui?.language);
-        (window as any).__nexusLanguage = lang;
-        if (i18n.language !== lang) void i18n.changeLanguage(lang);
-      })
-      .catch(() => {
-        // /config can fail before AuthGate completes; the browser-detector
-        // fallback already gave us a reasonable default, so we just bail.
-      });
-    return () => { cancelled = true; };
-  }, []);
 
   const settings = useSettings();
   const { hasModel, availableModels, lastUsedModel, defaultModel, yoloMode, bumpSettingsRevision, persistUsedModel } = settings;
@@ -316,34 +258,6 @@ export default function App() {
   const notificationCenter = useNotificationCenter();
   const { user: sessionUser } = useSession();
   const isAdmin = sessionUser?.role === "admin";
-  const [teamPending, setTeamPending] = useState<import("./api/auth").AdminPendingItem[]>([]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const items = await adminAllPending();
-        if (!cancelled) {
-          const ownItems = items.filter(
-            (i) => i.user_id && i.user_id !== sessionUser?.user_id,
-          );
-          setTeamPending(ownItems);
-        }
-      } catch { /* ignore */ }
-    };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [isAdmin, sessionUser?.user_id]);
-  // When the SW relays a click on an OS notification (or a deep link
-  // ?respond=<rid>), hop the approval queue to that specific request.
-  useEffect(() => {
-    const rid = notificationCenter.pendingFocusRequestId;
-    if (!rid) return;
-    focusRequest(rid);
-    notificationCenter.clearPendingFocus();
-  }, [notificationCenter.pendingFocusRequestId, focusRequest, notificationCenter]);
 
   const handleSessionSelect = useCallback((id: string) => {
     // The optimistic placeholder shown while the first turn is in flight
@@ -437,29 +351,22 @@ export default function App() {
     },
   });
   const { t: tSettings } = useTranslation("settings");
-  useEffect(() => {
-    const sub = subscribeGlobalNotifications((sessionId, event) => {
-      if (event.kind === "voice_ack") {
-        ackPlayer.handle(sessionId, event.data);
-      } else if (event.kind === "nexus_tier_changed") {
-        const upgraded =
-          !event.data.from_models.includes("nexus")
-          && event.data.to_models.includes("nexus");
-        const downgraded =
-          event.data.from_models.includes("nexus")
-          && !event.data.to_models.includes("nexus");
-        if (upgraded) {
-          toast.success(tSettings("settings:nexus.tierChanged.upgraded"));
-        } else if (downgraded) {
-          toast.info(tSettings("settings:nexus.tierChanged.downgraded"));
-        }
-        bumpSettingsRevision();
-      } else if (event.kind === "features_changed") {
-        bumpSettingsRevision();
-      }
-    });
-    return () => sub.close();
-  }, [ackPlayer, toast, tSettings, bumpSettingsRevision]);
+
+  const { backendUp, teamPending, setTeamPending } = useGlobalSubscriptions({
+    isAdmin,
+    userId: sessionUser?.user_id,
+    focusRequest,
+    pendingFocusRequestId: notificationCenter.pendingFocusRequestId,
+    clearPendingFocus: notificationCenter.clearPendingFocus,
+    ackPlayer,
+    toast,
+    tSettings,
+    bumpSettingsRevision,
+    pendingGraphIndex,
+    setPendingGraphIndex,
+    handleViewEntityGraph,
+    indexingToastIdRef,
+  });
 
   const handleOpenInChat = useCallback((sessionId: string, seedMessage: string, title: string, model?: string) => {
     setChatStates((prev) => {
@@ -483,50 +390,15 @@ export default function App() {
     setView("chat");
   }, [_handleSessionSelect]);
 
-  // Poll for GraphRAG single-file indexing status. Fires when a file is
-  // submitted for indexing via KnowledgeView; survives navigation because
-  // the effect and state live here in App.
-  useEffect(() => {
-    if (!pendingGraphIndex) return;
-    let active = true;
-    const capturedPath = pendingGraphIndex;
-    const interval = setInterval(() => {
-      getGraphragIndexStatus(capturedPath)
-        .then((res) => {
-          if (!active) return;
-          const name = capturedPath.split("/").pop() ?? capturedPath;
-          if (res.status === "indexing") {
-            const total = res.total_chunks ?? 0;
-            const done = res.processed_chunks ?? 0;
-            const pct = total > 0 ? Math.round((done / total) * 100) : null;
-            const detail = total > 0
-              ? `${done} / ${total} chunks${pct !== null ? ` (${pct}%)` : ""}`
-              : "Chunking…";
-            if (indexingToastIdRef.current) {
-              toast.update(indexingToastIdRef.current, { detail });
-            }
-          } else if (res.status === "done") {
-            const n = res.node_count ?? res.nodes?.length ?? 0;
-            if (indexingToastIdRef.current) { toast.dismiss(indexingToastIdRef.current); indexingToastIdRef.current = null; }
-            setPendingGraphIndex(null);
-            toast.success(`Indexing complete — ${n} entit${n === 1 ? "y" : "ies"} found for ${name}`, {
-              duration: 8000,
-              action: { label: "View graph", onClick: () => handleViewEntityGraph("file", capturedPath) },
-            });
-          } else if (res.status === "cancelled") {
-            if (indexingToastIdRef.current) { toast.dismiss(indexingToastIdRef.current); indexingToastIdRef.current = null; }
-            setPendingGraphIndex(null);
-            toast.info(`Indexing cancelled for ${name}`);
-          } else if (res.status === "error") {
-            if (indexingToastIdRef.current) { toast.dismiss(indexingToastIdRef.current); indexingToastIdRef.current = null; }
-            setPendingGraphIndex(null);
-            toast.error("Indexing failed", { detail: res.detail });
-          }
-        })
-        .catch(() => {});
-    }, 3000);
-    return () => { active = false; clearInterval(interval); };
-  }, [pendingGraphIndex, handleViewEntityGraph, toast]);
+  const vaultViewCommon = useMemo(() => ({
+    onDispatchToChat: handleDispatchToChat,
+    onOpenInChat: handleOpenInChat,
+    onNavigateToSession: handleNavigateToSession,
+    onViewEntityGraph: (p: string) => handleViewEntityGraph("file", p),
+    onOpenCalendar: handleOpenCalendar,
+    onOpenInVault: handleOpenInVault,
+    onOpenWorkflow: (p: string) => { setVaultSelectedPath(p); setView("workflows"); },
+  }), [handleDispatchToChat, handleOpenInChat, handleNavigateToSession, handleViewEntityGraph, handleOpenCalendar, handleOpenInVault]);
 
   useShortcuts({
     onShowHelp: useCallback(() => setShortcutsOpen((v) => !v), []),
@@ -782,29 +654,11 @@ export default function App() {
             />
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
-            <VaultView
-              selectedPath={vaultSelectedPath}
-              onDispatchToChat={handleDispatchToChat}
-              onOpenInChat={handleOpenInChat}
-              onNavigateToSession={handleNavigateToSession}
-              onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
-              onOpenCalendar={handleOpenCalendar}
-              onOpenInVault={handleOpenInVault}
-              onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
-            />
+            <VaultView selectedPath={vaultSelectedPath} {...vaultViewCommon} />
           </div>
           <div className="view-pane" style={{ display: view === "kanban" && isViewVisible("kanban") ? "flex" : "none" }}>
             {kanbanSelectedPath ? (
-              <VaultView
-                selectedPath={kanbanSelectedPath}
-                onDispatchToChat={handleDispatchToChat}
-                onOpenInChat={handleOpenInChat}
-                onNavigateToSession={handleNavigateToSession}
-                onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
-                onOpenCalendar={handleOpenCalendar}
-                onOpenInVault={handleOpenInVault}
-                onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
-              />
+              <VaultView selectedPath={kanbanSelectedPath} {...vaultViewCommon} />
             ) : (
               <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
                 Pick a board on the left.
@@ -832,18 +686,13 @@ export default function App() {
                 )}
                 <VaultView
                   selectedPath={dataSelectedPath}
-                  onDispatchToChat={handleDispatchToChat}
-                  onOpenInChat={handleOpenInChat}
-                  onNavigateToSession={handleNavigateToSession}
-                  onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
-                  onOpenCalendar={handleOpenCalendar}
+                  {...vaultViewCommon}
                   onOpenTable={(p) => {
                     setDataSelectedPath(p);
                     setDataDiagramFolder(null);
                     const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
                     setDataSelectedDatabase(parent);
                   }}
-                  onOpenWorkflow={(p) => { setVaultSelectedPath(p); setView("workflows"); }}
                 />
               </div>
             ) : dataSelectedDatabase !== null ? (

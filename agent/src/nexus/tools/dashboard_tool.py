@@ -8,7 +8,7 @@ inference — the agent itself reasons about *which* operations to seed
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from ..agent.llm import ToolSpec
 
@@ -206,149 +206,235 @@ def _execute_widget_sql(folder: str, widget: dict[str, Any]) -> dict[str, Any] |
     return execute_widget_query(folder, query, query_tables=widget.get("query_tables"))
 
 
-def handle_dashboard_tool(args: dict[str, Any]) -> str:
-    """Dispatch the requested dashboard action and return serialized JSON."""
+_REGISTRY: dict[str, Callable[[dict[str, Any]], str]] = {}
+
+
+def _view(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    return json.dumps({"ok": True, "dashboard": vault_dashboard.read_dashboard(folder)})
+
+
+def _set_operations(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    ops = args.get("operations")
+    if not isinstance(ops, list):
+        return json.dumps({"ok": False, "error": "`operations` (list) required"})
+    patched = vault_dashboard.patch_dashboard(folder, {"operations": ops})
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _add_operation(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    op = args.get("operation")
+    if not isinstance(op, dict):
+        return json.dumps({"ok": False, "error": "`operation` (object) required"})
+    patched = vault_dashboard.upsert_operation(folder, op)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _remove_operation(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    op_id = args.get("op_id", "")
+    if not op_id:
+        return json.dumps({"ok": False, "error": "`op_id` required"})
+    patched = vault_dashboard.delete_operation(folder, op_id)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _set_widgets(args: dict[str, Any]) -> str:
     from .. import vault_dashboard, vault_widgets
 
+    folder = args.get("folder", "")
+    widgets = args.get("widgets")
+    if not isinstance(widgets, list):
+        return json.dumps({"ok": False, "error": "`widgets` (list) required"})
+    patched = vault_dashboard.patch_dashboard(folder, {"widgets": widgets})
+    errors = {}
+    for w in widgets:
+        if not isinstance(w, dict):
+            continue
+        result = _execute_widget_sql(folder, w)
+        if result and result.get("error"):
+            errors[w.get("id", "?")] = result["error"]
+        elif result:
+            wid = w.get("id", "")
+            if wid:
+                vault_widgets.write_widget_result(folder, wid, json.dumps(result))
+    resp: dict[str, Any] = {"ok": True, "dashboard": patched}
+    if errors:
+        resp["sql_errors"] = errors
+    return json.dumps(resp)
+
+
+def _add_widget(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard, vault_widgets
+
+    folder = args.get("folder", "")
+    widget = args.get("widget")
+    if not isinstance(widget, dict):
+        return json.dumps({"ok": False, "error": "`widget` (object) required"})
+    patched = vault_dashboard.upsert_widget(folder, widget)
+    result = _execute_widget_sql(folder, widget)
+    resp: dict[str, Any] = {"ok": True, "dashboard": patched}
+    if result and result.get("error"):
+        resp["sql_error"] = result["error"]
+    elif result:
+        wid = widget.get("id", "")
+        if wid:
+            vault_widgets.write_widget_result(folder, wid, json.dumps(result))
+        resp["execution_preview"] = {
+            "row_count": result.get("row_count", 0),
+            "columns": result.get("columns", []),
+        }
+    return json.dumps(resp)
+
+
+def _remove_widget(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    widget_id = args.get("widget_id", "")
+    if not widget_id:
+        return json.dumps({"ok": False, "error": "`widget_id` required"})
+    patched = vault_dashboard.delete_widget(folder, widget_id)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _set_chat_session(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    sid = args.get("session_id")
+    patched = vault_dashboard.set_chat_session(folder, sid if isinstance(sid, str) else None)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _set_title(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    title = args.get("title", "")
+    if not title:
+        return json.dumps({"ok": False, "error": "`title` required"})
+    patched = vault_dashboard.patch_dashboard(folder, {"title": title})
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _delete_database(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    confirm = args.get("confirm", "")
+    res = vault_dashboard.delete_database(folder, confirm=confirm)
+    return json.dumps({"ok": True, **res})
+
+
+def _add_screen(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    screen = args.get("screen")
+    if not isinstance(screen, dict):
+        return json.dumps({"ok": False, "error": "`screen` (object) required"})
+    patched = vault_dashboard.upsert_screen(folder, screen)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _remove_screen(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    screen_id = args.get("screen_id", "")
+    if not screen_id:
+        return json.dumps({"ok": False, "error": "`screen_id` required"})
+    patched = vault_dashboard.remove_screen(folder, screen_id)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _add_flow(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    flow = args.get("flow")
+    if not isinstance(flow, dict):
+        return json.dumps({"ok": False, "error": "`flow` (object) required"})
+    patched = vault_dashboard.upsert_flow(folder, flow)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _remove_flow(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    flow_id = args.get("flow_id", "")
+    if not flow_id:
+        return json.dumps({"ok": False, "error": "`flow_id` required"})
+    patched = vault_dashboard.remove_flow(folder, flow_id)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _add_link(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    link_kind = args.get("link_kind", "")
+    link_path = args.get("link_path", "")
+    if not link_kind or not link_path:
+        return json.dumps({"ok": False, "error": "`link_kind` and `link_path` required"})
+    patched = vault_dashboard.add_link(folder, link_kind, link_path)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+def _remove_link(args: dict[str, Any]) -> str:
+    from .. import vault_dashboard
+
+    folder = args.get("folder", "")
+    link_kind = args.get("link_kind", "")
+    link_path = args.get("link_path", "")
+    if not link_kind or not link_path:
+        return json.dumps({"ok": False, "error": "`link_kind` and `link_path` required"})
+    patched = vault_dashboard.remove_link(folder, link_kind, link_path)
+    return json.dumps({"ok": True, "dashboard": patched})
+
+
+_REGISTRY.update({
+    "view": _view,
+    "set_operations": _set_operations,
+    "add_operation": _add_operation,
+    "remove_operation": _remove_operation,
+    "set_widgets": _set_widgets,
+    "add_widget": _add_widget,
+    "remove_widget": _remove_widget,
+    "set_chat_session": _set_chat_session,
+    "set_title": _set_title,
+    "delete_database": _delete_database,
+    "add_screen": _add_screen,
+    "remove_screen": _remove_screen,
+    "add_flow": _add_flow,
+    "remove_flow": _remove_flow,
+    "add_link": _add_link,
+    "remove_link": _remove_link,
+})
+
+
+def handle_dashboard_tool(args: dict[str, Any]) -> str:
+    """Dispatch the requested dashboard action and return serialized JSON."""
     action = args.get("action", "")
     folder = args.get("folder", "")
     if not isinstance(folder, str):
         return json.dumps({"ok": False, "error": "`folder` must be a string"})
-
-    try:
-        if action == "view":
-            return json.dumps({"ok": True, "dashboard": vault_dashboard.read_dashboard(folder)})
-
-        if action == "set_operations":
-            ops = args.get("operations")
-            if not isinstance(ops, list):
-                return json.dumps({"ok": False, "error": "`operations` (list) required"})
-            patched = vault_dashboard.patch_dashboard(folder, {"operations": ops})
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "add_operation":
-            op = args.get("operation")
-            if not isinstance(op, dict):
-                return json.dumps({"ok": False, "error": "`operation` (object) required"})
-            patched = vault_dashboard.upsert_operation(folder, op)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "remove_operation":
-            op_id = args.get("op_id", "")
-            if not op_id:
-                return json.dumps({"ok": False, "error": "`op_id` required"})
-            patched = vault_dashboard.delete_operation(folder, op_id)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "set_widgets":
-            widgets = args.get("widgets")
-            if not isinstance(widgets, list):
-                return json.dumps({"ok": False, "error": "`widgets` (list) required"})
-            patched = vault_dashboard.patch_dashboard(folder, {"widgets": widgets})
-            errors = {}
-            for w in widgets:
-                if not isinstance(w, dict):
-                    continue
-                result = _execute_widget_sql(folder, w)
-                if result and result.get("error"):
-                    errors[w.get("id", "?")] = result["error"]
-                elif result:
-                    wid = w.get("id", "")
-                    if wid:
-                        vault_widgets.write_widget_result(folder, wid, json.dumps(result))
-            resp: dict[str, Any] = {"ok": True, "dashboard": patched}
-            if errors:
-                resp["sql_errors"] = errors
-            return json.dumps(resp)
-
-        if action == "add_widget":
-            widget = args.get("widget")
-            if not isinstance(widget, dict):
-                return json.dumps({"ok": False, "error": "`widget` (object) required"})
-            patched = vault_dashboard.upsert_widget(folder, widget)
-            result = _execute_widget_sql(folder, widget)
-            resp = {"ok": True, "dashboard": patched}
-            if result and result.get("error"):
-                resp["sql_error"] = result["error"]
-            elif result:
-                wid = widget.get("id", "")
-                if wid:
-                    vault_widgets.write_widget_result(folder, wid, json.dumps(result))
-                resp["execution_preview"] = {
-                    "row_count": result.get("row_count", 0),
-                    "columns": result.get("columns", []),
-                }
-            return json.dumps(resp)
-
-        if action == "remove_widget":
-            widget_id = args.get("widget_id", "")
-            if not widget_id:
-                return json.dumps({"ok": False, "error": "`widget_id` required"})
-            patched = vault_dashboard.delete_widget(folder, widget_id)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "set_chat_session":
-            sid = args.get("session_id")
-            patched = vault_dashboard.set_chat_session(folder, sid if isinstance(sid, str) else None)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "set_title":
-            title = args.get("title", "")
-            if not title:
-                return json.dumps({"ok": False, "error": "`title` required"})
-            patched = vault_dashboard.patch_dashboard(folder, {"title": title})
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "delete_database":
-            confirm = args.get("confirm", "")
-            res = vault_dashboard.delete_database(folder, confirm=confirm)
-            return json.dumps({"ok": True, **res})
-
-        if action == "add_screen":
-            screen = args.get("screen")
-            if not isinstance(screen, dict):
-                return json.dumps({"ok": False, "error": "`screen` (object) required"})
-            patched = vault_dashboard.upsert_screen(folder, screen)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "remove_screen":
-            screen_id = args.get("screen_id", "")
-            if not screen_id:
-                return json.dumps({"ok": False, "error": "`screen_id` required"})
-            patched = vault_dashboard.remove_screen(folder, screen_id)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "add_flow":
-            flow = args.get("flow")
-            if not isinstance(flow, dict):
-                return json.dumps({"ok": False, "error": "`flow` (object) required"})
-            patched = vault_dashboard.upsert_flow(folder, flow)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "remove_flow":
-            flow_id = args.get("flow_id", "")
-            if not flow_id:
-                return json.dumps({"ok": False, "error": "`flow_id` required"})
-            patched = vault_dashboard.remove_flow(folder, flow_id)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "add_link":
-            link_kind = args.get("link_kind", "")
-            link_path = args.get("link_path", "")
-            if not link_kind or not link_path:
-                return json.dumps({"ok": False, "error": "`link_kind` and `link_path` required"})
-            patched = vault_dashboard.add_link(folder, link_kind, link_path)
-            return json.dumps({"ok": True, "dashboard": patched})
-
-        if action == "remove_link":
-            link_kind = args.get("link_kind", "")
-            link_path = args.get("link_path", "")
-            if not link_kind or not link_path:
-                return json.dumps({"ok": False, "error": "`link_kind` and `link_path` required"})
-            patched = vault_dashboard.remove_link(folder, link_kind, link_path)
-            return json.dumps({"ok": True, "dashboard": patched})
-
+    handler = _REGISTRY.get(action)
+    if not handler:
         return json.dumps({"ok": False, "error": f"unknown action: {action!r}"})
-
+    try:
+        return handler(args)
     except (KeyError, ValueError, FileNotFoundError, OSError) as exc:
         return json.dumps({"ok": False, "error": str(exc)})
