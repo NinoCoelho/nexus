@@ -12,8 +12,15 @@ log = logging.getLogger(__name__)
 
 
 class BrokerPoller:
-    def __init__(self, client: BrokerClient) -> None:
+    def __init__(
+        self,
+        client: BrokerClient,
+        agent: Any = None,
+        workflow_engine: Any = None,
+    ) -> None:
         self._client = client
+        self._agent = agent
+        self._workflow_engine = workflow_engine
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
 
@@ -128,14 +135,7 @@ class BrokerPoller:
             return
 
         board_path, lane_id, _ = found
-
-        try:
-            from .. import main as _main
-            agent = getattr(_main, "_agent_instance", None)
-        except Exception:
-            agent = None
-
-        card_title, card_body = await _sanitise_payload(plaintext, agent)
+        card_title, card_body = await _sanitise_payload(plaintext, self._agent)
 
         from .. import vault_kanban
         vault_kanban.add_card(board_path, lane_id, card_title, card_body)
@@ -143,28 +143,35 @@ class BrokerPoller:
 
     async def _dispatch_workflow(self, ep: dict[str, Any], plaintext: str) -> None:
         try:
-            json.loads(plaintext)
             payload: dict[str, Any] = json.loads(plaintext)
         except Exception:
             payload = {"raw": plaintext}
 
         token = ep["local_token"]
+
+        engine = self._workflow_engine
+        if engine is None:
+            log.warning("broker: no workflow engine available, skipping")
+            return
+
         try:
-            from ..workflows.store import WorkflowStore
-            from ..workflows import parser
-            from ..workflows.engine import WorkflowEngine
-            from ..workflows.models import TriggerType
+            store = engine._store
+        except AttributeError:
+            log.error("broker: workflow engine has no _store")
+            return
+
+        result = store.lookup_webhook_token(token)
+        if result is None:
+            log.warning("broker: workflow token %s not found", token)
+            return
+
+        workflow_path, trigger_id = result
+
+        try:
             from .. import vault as _vault
-            from .. import home as _home
+            from ..workflows import parser
+            from ..workflows.models import TriggerType
 
-            wf_db = str(_home.workflow_runs_db())
-            store = WorkflowStore(wf_db)
-            result = store.lookup_webhook_token(token)
-            if result is None:
-                log.warning("broker: workflow token %s not found", token)
-                return
-
-            workflow_path, trigger_id = result
             content = _vault.read_file(workflow_path)
             raw = content.get("content", "") if isinstance(content, dict) else str(content)
             wf = parser.parse(raw)
@@ -173,7 +180,6 @@ class BrokerPoller:
                 log.warning("broker: workflow %s is disabled", workflow_path)
                 return
 
-            engine = WorkflowEngine(store)
             await engine.run_workflow(
                 workflow_path=workflow_path,
                 trigger_id=trigger_id,
@@ -204,14 +210,14 @@ class BrokerPoller:
                     if (
                         lane.webhook_enabled
                         and lane.webhook_token
-                        and getattr(lane, "broker_id", None)
+                        and lane.broker_id
                     ):
                         out.append({
                             "type": "kanban",
                             "key": f"{bp['path']}:{lane.id}",
                             "local_token": lane.webhook_token,
                             "broker_id": lane.broker_id,
-                            "broker_slug": getattr(lane, "broker_slug", None),
+                            "broker_slug": lane.broker_slug,
                         })
         except Exception:
             log.exception("broker: kanban endpoint discovery failed")
@@ -243,14 +249,14 @@ class BrokerPoller:
                         if (
                             trigger.type == TriggerType.webhook
                             and trigger.token
-                            and getattr(trigger, "broker_id", None)
+                            and trigger.broker_id
                         ):
                             out.append({
                                 "type": "workflow",
                                 "key": f"{fpath}:{trigger.id}",
                                 "local_token": trigger.token,
                                 "broker_id": trigger.broker_id,
-                                "broker_slug": getattr(trigger, "broker_slug", None),
+                                "broker_slug": trigger.broker_slug,
                             })
         except Exception:
             log.exception("broker: workflow endpoint discovery failed")

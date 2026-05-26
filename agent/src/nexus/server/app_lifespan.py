@@ -408,7 +408,12 @@ def create_lifespan(state: dict[str, Any]):
             from ..broker.poller import BrokerPoller
             broker_client = BrokerClient()
             if broker_client.available:
-                poller = BrokerPoller(broker_client)
+                wf_engine = getattr(app.state, "workflow_engine", None)
+                poller = BrokerPoller(
+                    broker_client,
+                    agent=agent,
+                    workflow_engine=wf_engine,
+                )
                 poller.start()
                 app.state.broker_poller = poller
                 log.info("broker poller started")

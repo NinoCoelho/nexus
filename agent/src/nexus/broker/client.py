@@ -72,7 +72,8 @@ class BrokerClient:
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            data = resp.json()
+            outer = resp.json()
+            data = outer.get("webhook") or outer
             return BrokerWebhook(
                 id=data["id"],
                 name=data["name"],
@@ -90,17 +91,19 @@ class BrokerClient:
             )
             return resp.status_code in (200, 204)
 
-    async def dequeue(self, webhook_id: str, consumer_id: str = "nexus") -> BrokerMessage | None:
+    async def dequeue(self, webhook_id: str) -> BrokerMessage | None:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
                 f"{self._base_url}/api/webhooks/{webhook_id}/dequeue",
                 headers=self._headers(),
-                json={"consumerId": consumer_id},
             )
             if resp.status_code == 204:
                 return None
             resp.raise_for_status()
-            data = resp.json()
+            outer = resp.json()
+            data = outer.get("message") or outer
+            if data is None:
+                return None
             return BrokerMessage(
                 id=data["id"],
                 webhook_id=data["webhookId"],
