@@ -130,16 +130,25 @@ class DaemonManager(DaemonDisplayMixin):
         all clients that connect *to* the loopback bind, so they don't need a
         non-loopback listener either.
         """
-        host = "127.0.0.1"
         if self.is_running():
             self.console.print("[red]Daemon is already running.[/red]")
             return False
+
+        orphan = self._untracked_listener_pid(port)
+        if orphan is not None:
+            self.console.print(
+                f"[yellow]Killing orphan process on port {port} (PID: {orphan})[/yellow]"
+            )
+            self._kill_pid(orphan)
+            time.sleep(1)
 
         cmd = [sys.executable, "-c", f"""
 import sys
 import os
 import time
 from pathlib import Path
+
+os.environ["NEXUS_PORT"] = "{port}"
 
 log_file = Path("{self.log_file}")
 log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -256,6 +265,12 @@ finally:
         """Stop the daemon process."""
         self._stop_process(self.ui_pid_file, "Frontend")
         result = self._stop_process(self.pid_file, "Backend")
+        orphan = self._untracked_listener_pid()
+        if orphan is not None:
+            self.console.print(
+                f"[yellow]Killing orphan listener on port {PORT} (PID: {orphan})[/yellow]"
+            )
+            self._kill_pid(orphan)
         return result
 
     def _stop_process(self, pid_file: Path, label: str) -> bool:
@@ -276,11 +291,37 @@ finally:
 
         try:
             process = psutil.Process(pid)
+            try:
+                children = process.children(recursive=True)
+                for child in children:
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                for child in children:
+                    try:
+                        child.wait(timeout=3)
+                    except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                        pass
+                for child in children:
+                    try:
+                        if child.is_running():
+                            child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+            except psutil.NoSuchProcess:
+                pass
+
             process.terminate()
             try:
                 process.wait(timeout=5)
             except psutil.TimeoutExpired:
                 self.console.print(f"[yellow]{label} graceful shutdown failed, forcing…[/yellow]")
+                try:
+                    for child in process.children(recursive=True):
+                        child.kill()
+                except psutil.NoSuchProcess:
+                    pass
                 process.kill()
                 process.wait()
 
@@ -298,6 +339,30 @@ finally:
     def restart(self, port: int = PORT) -> bool:
         """Restart the daemon process. Always binds to 127.0.0.1."""
         self.stop()
-        time.sleep(1)  # Give it a moment to stop
+        orphan = self._untracked_listener_pid(port)
+        if orphan is not None:
+            self.console.print(
+                f"[yellow]Killing orphan on port {port} (PID: {orphan})[/yellow]"
+            )
+            self._kill_pid(orphan)
+        time.sleep(1)
         return self.start(port=port)
+
+    def _kill_pid(self, pid: int) -> None:
+        try:
+            process = psutil.Process(pid)
+            try:
+                for child in process.children(recursive=True):
+                    try:
+                        child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+            except psutil.NoSuchProcess:
+                pass
+            process.kill()
+            process.wait(timeout=5)
+        except psutil.NoSuchProcess:
+            pass
+        except Exception:
+            pass
 

@@ -273,8 +273,8 @@ export default function App() {
     setView("chat");
   }, [_handleSessionSelect, pendingNewSession]);
 
-  const handleNewChat = useCallback(() => {
-    _handleNewChat();
+  const handleNewChat = useCallback((projectId?: string | null) => {
+    _handleNewChat(projectId);
     clearPendingRequest();
     setView("chat");
   }, [_handleNewChat, clearPendingRequest]);

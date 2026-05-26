@@ -59,7 +59,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
     "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
-    "/dream", "/mcp", "/jobs", "/update", "/workflows",
+    "/dream", "/mcp", "/jobs", "/update", "/workflows", "/projects",
 )
 
 
@@ -508,6 +508,7 @@ def create_app(
     from .routes.tts import router as tts_router
     from .routes.nexus_account import router as nexus_account_router
     from .routes.webhook import router as webhook_router
+    from .routes.broker import router as broker_router
     from .routes.heartbeat import router as heartbeat_router
     from .routes.cookies import router as cookies_router
     from .routes.dream import router as dream_router
@@ -516,6 +517,7 @@ def create_app(
     from .routes.vault_import import router as vault_import_router
     from .routes.update import router as update_router
     from .routes.workflows import router as workflows_router
+    from .routes.projects import router as projects_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -560,6 +562,7 @@ def create_app(
     app.include_router(tts_router)
     app.include_router(nexus_account_router)
     app.include_router(webhook_router)
+    app.include_router(broker_router)
     app.include_router(heartbeat_router)
     app.include_router(cookies_router)
     app.include_router(dream_router)
@@ -567,6 +570,7 @@ def create_app(
     app.include_router(jobs_router)
     app.include_router(update_router)
     app.include_router(workflows_router)
+    app.include_router(projects_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

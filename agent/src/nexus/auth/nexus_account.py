@@ -335,5 +335,30 @@ async def refresh_status(*, base_url: str) -> dict[str, Any]:
         if existing != broker_api_key:
             secrets.set(BROKER_SECRET_NAME, broker_api_key, kind="provider")
             log.info("[nexus_account] broker API key updated from status poll")
+            _notify_broker_key_change()
 
     return payload
+
+
+def _notify_broker_key_change() -> None:
+    try:
+        from ..server.event_bus import get_loop
+        loop = get_loop()
+        if loop is None:
+            return
+    except Exception:
+        return
+
+    try:
+        from ..broker.client import BrokerClient
+        from ..broker.sync import sync_broker_endpoints
+        import asyncio
+
+        async def _do_sync() -> None:
+            client = BrokerClient()
+            if client.available:
+                await sync_broker_endpoints(client)
+
+        asyncio.ensure_future(_do_sync(), loop=loop)
+    except Exception:
+        log.exception("[nexus_account] broker sync trigger failed")

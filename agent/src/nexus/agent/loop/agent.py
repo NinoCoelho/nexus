@@ -79,6 +79,58 @@ def _strip_dead_placeholders(history: list[ChatMessage]) -> list[ChatMessage]:
     return out
 
 
+def _sanitize_tool_pairs(history: list[ChatMessage]) -> list[ChatMessage]:
+    """Ensure every assistant(tool_calls) is immediately followed by tool results.
+
+    For each assistant message with tool_calls, checks that the very next
+    messages in the list are tool results covering every tool_call_id.
+    Inserts synthetic results for any missing ones.  Also drops tool messages
+    that appear without a preceding assistant that owns their tool_call_id.
+    """
+    out: list[ChatMessage] = []
+    needs_repair = False
+    for i, m in enumerate(history):
+        if m.role == Role.ASSISTANT and m.tool_calls:
+            pending = {tc.id for tc in m.tool_calls if tc.id}
+            if not pending:
+                out.append(m)
+                continue
+            answered_here: set[str] = set()
+            j = i + 1
+            while j < len(history) and history[j].role == Role.TOOL:
+                answered_here.add(history[j].tool_call_id or "")
+                j += 1
+            unanswered = pending - answered_here
+            if unanswered:
+                needs_repair = True
+            out.append(m)
+            for tc in m.tool_calls:
+                if tc.id in unanswered:
+                    out.append(ChatMessage(
+                        role=Role.TOOL,
+                        content="[Tool result unavailable — interrupted before execution]",
+                        tool_call_id=tc.id,
+                        name=tc.name or "tool",
+                    ))
+        elif m.role == Role.TOOL and m.tool_call_id:
+            has_parent = False
+            for prev in reversed(out):
+                if prev.role == Role.ASSISTANT and prev.tool_calls:
+                    if any(tc.id == m.tool_call_id for tc in prev.tool_calls):
+                        has_parent = True
+                    break
+                if prev.role not in (Role.TOOL,):
+                    break
+            if not has_parent:
+                needs_repair = True
+                continue
+            out.append(m)
+        else:
+            out.append(m)
+
+    return out if needs_repair else history
+
+
 class Agent:
     """Nexus façade over loom.Agent.
 
@@ -284,7 +336,7 @@ class Agent:
         loom_messages: list[lt.ChatMessage] = []
         stripped_history: list[ChatMessage] = []
         if history:
-            stripped_history = _strip_dead_placeholders(history)
+            stripped_history = _sanitize_tool_pairs(_strip_dead_placeholders(history))
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         effective_window = ctx_window if ctx_window > 0 else _DEFAULT_FALLBACK_WINDOW
@@ -674,6 +726,19 @@ class Agent:
                     except Exception:  # noqa: BLE001
                         pass
                     tr.materialise_assistant_if_needed()
+                    last_asst = tr.working_messages[-1] if tr.working_messages else None
+                    if (
+                        last_asst
+                        and last_asst.role == lt.Role.ASSISTANT
+                        and last_asst.tool_calls
+                    ):
+                        for _tc in last_asst.tool_calls:
+                            tr.working_messages.append(lt.ChatMessage(
+                                role=lt.Role.TOOL,
+                                content=f"[Connection interrupted before {_tc.name} could execute]",
+                                tool_call_id=_tc.id,
+                                name=_tc.name,
+                            ))
                     tr.working_messages.append(lt.ChatMessage(
                         role=lt.Role.USER,
                         content="[Connection was interrupted. Continue your response from where you left off.]",

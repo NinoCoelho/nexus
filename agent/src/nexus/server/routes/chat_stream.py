@@ -75,7 +75,7 @@ async def chat_stream_route(
             )
             req.message = redacted
 
-    session = store.get_or_create(req.session_id, context=req.context)
+    session = store.get_or_create(req.session_id, context=req.context, project_id=req.project_id)
 
     if getattr(request.app.state, "multi_user", False):
         user_id = getattr(request.state, "user_id", None)
@@ -106,6 +106,17 @@ async def chat_stream_route(
     resolved_model_id = req.model if req.model and req.model != "auto" else ""
 
     async def event_generator() -> AsyncIterator[str]:
+        # If the user is retrying (hidden-seed marker), roll back the last
+        # failed assistant turn from the loaded history so the retry starts
+        # from a clean state instead of replaying broken tool_calls.
+        _HIDDEN_SEED = "<!-- nx:hidden-seed -->"
+        if req.message.startswith(_HIDDEN_SEED) and session.history:
+            from ...agent.llm import Role as _R
+            while session.history and session.history[-1].role == _R.TOOL:
+                session.history.pop()
+            if session.history and session.history[-1].role == _R.ASSISTANT:
+                session.history.pop()
+
         # Snapshot the pre-turn history so partial-persistence on
         # abnormal exit can rebuild "history + user + partial assistant"
         # without double-appending.

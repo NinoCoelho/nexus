@@ -74,9 +74,8 @@ export async function chatStream(
   options?: {
     bypassSecretGuard?: boolean;
     attachments?: ChatAttachment[];
-    /** "voice" when the user dictated; the backend uses this to decide
-     * whether to fire spoken acknowledgments. Defaults to "text". */
     inputMode?: "voice" | "text";
+    projectId?: string | null;
   },
 ): Promise<void> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -89,6 +88,9 @@ export async function chatStream(
   }
   if (options?.inputMode) {
     body.input_mode = options.inputMode;
+  }
+  if (options?.projectId) {
+    body.project_id = options.projectId;
   }
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",

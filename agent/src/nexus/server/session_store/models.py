@@ -30,6 +30,7 @@ class Session:
     title: str
     history: list[ChatMessage] = field(default_factory=list)
     context: str | None = None
+    project_id: str | None = None
 
 
 @dataclass
@@ -39,6 +40,7 @@ class SessionSummary:
     created_at: int
     updated_at: int
     message_count: int
+    project_id: str | None = None
 
 
 # ── Type conversion helpers ───────────────────────────────────────────────────

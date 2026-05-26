@@ -1,12 +1,14 @@
 // Sidebar — floating position:fixed context menu for session actions.
 
 import type { SessionSummary } from "../../api";
+import type { ProjectSummary } from "../../api/projects";
 
 interface Props {
   session: SessionSummary;
   anchorX: number;
   anchorY: number;
   toVaultBusy: Set<string>;
+  projects: ProjectSummary[];
   onRename: () => void;
   onExport: () => void;
   onToVaultRaw: () => void;
@@ -14,6 +16,8 @@ interface Props {
   onShare: () => void;
   onDelete: () => void;
   onClick: (e: React.MouseEvent) => void;
+  onMoveToProject?: (projectId: string) => void;
+  onRemoveFromProject?: () => void;
 }
 
 export default function SessionContextMenu({
@@ -21,6 +25,7 @@ export default function SessionContextMenu({
   anchorX,
   anchorY,
   toVaultBusy,
+  projects,
   onRename,
   onExport,
   onToVaultRaw,
@@ -28,6 +33,8 @@ export default function SessionContextMenu({
   onShare,
   onDelete,
   onClick,
+  onMoveToProject,
+  onRemoveFromProject,
 }: Props) {
   const menuWidth = 200;
   // Keep the menu on-screen: if the anchor is too close to the right edge,
@@ -72,6 +79,33 @@ export default function SessionContextMenu({
         Send to vault (summary)
       </button>
       <div className="sidebar-ctx-divider" />
+      {session.project_id && onRemoveFromProject && (
+        <button className="sidebar-ctx-item" onClick={onRemoveFromProject}>
+          Remove from project
+        </button>
+      )}
+      {onMoveToProject && projects.length > 0 && (
+        <div className="sidebar-ctx-submenu">
+          <div className="sidebar-ctx-item sidebar-ctx-item--disabled">Move to project</div>
+          {projects
+            .filter((p) => p.id !== session.project_id)
+            .map((p) => (
+              <button
+                key={p.id}
+                className="sidebar-ctx-item sidebar-ctx-item--indent"
+                onClick={() => onMoveToProject(p.id)}
+              >
+                {p.color && (
+                  <span className="sidebar-ctx-dot" style={{ background: p.color }} />
+                )}
+                {p.name}
+              </button>
+            ))}
+        </div>
+      )}
+      {(session.project_id && onRemoveFromProject) || (onMoveToProject && projects.length > 0) ? (
+        <div className="sidebar-ctx-divider" />
+      ) : null}
       <button className="sidebar-ctx-item sidebar-ctx-item--danger" onClick={onDelete}>
         Delete
       </button>

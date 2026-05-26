@@ -64,6 +64,29 @@ def _extract_existing_summary(messages: list[ChatMessage]) -> str | None:
     return None
 
 
+def _adjust_split_for_tool_pairs(messages: list[ChatMessage], split_idx: int) -> int:
+    n = len(messages)
+    if split_idx <= 0 or split_idx >= n:
+        return split_idx
+
+    changed = True
+    while changed:
+        changed = False
+
+        if messages[split_idx].role == Role.TOOL and split_idx > 0:
+            split_idx -= 1
+            changed = True
+            continue
+
+        if (split_idx > 0
+                and messages[split_idx - 1].role == Role.ASSISTANT
+                and messages[split_idx - 1].tool_calls):
+            split_idx -= 1
+            changed = True
+
+    return split_idx
+
+
 async def summarize_older_turns(
     messages: list[ChatMessage],
     provider: LLMProvider,
@@ -77,8 +100,12 @@ async def summarize_older_turns(
     if len(messages) <= effective_keep:
         return "", list(messages)
 
-    old_messages = messages[:-effective_keep]
-    recent_messages = messages[-effective_keep:]
+    split_idx = _adjust_split_for_tool_pairs(messages, len(messages) - effective_keep)
+    old_messages = messages[:split_idx]
+    recent_messages = messages[split_idx:]
+
+    if not old_messages:
+        return "", list(messages)
 
     existing_summary = _extract_existing_summary(messages)
     conversation_text = _format_for_summarization(old_messages)

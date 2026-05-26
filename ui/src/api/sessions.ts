@@ -9,6 +9,7 @@ export interface SessionSummary {
   created_at: number | string;
   updated_at: number | string;
   message_count: number;
+  project_id?: string | null;
 }
 
 export interface SessionMessage {

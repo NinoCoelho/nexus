@@ -22,6 +22,7 @@ ALL_FEATURES = frozenset({
     "heartbeat",
     "multi_user",
     "database",
+    "projects",
 })
 
 FEATURE_TOOLS: dict[str, list[str]] = {
@@ -41,6 +42,7 @@ FEATURE_ROUTES: dict[str, list[str]] = {
     "heartbeat": ["/heartbeat"],
     "multi_user": ["/auth/setup", "/auth/register", "/auth/invites", "/admin", "/share"],
     "database": ["/vault/datatable", "/vault/dashboard"],
+    "projects": ["/projects"],
 }
 
 _cache_lock = threading.Lock()
@@ -102,15 +104,19 @@ def _clear_cache() -> None:
 
 def set_features(features: set[str] | None) -> bool:
     global _cached_features
+    import logging as _log
+    _logger = _log.getLogger(__name__)
     with _cache_lock:
         if features is None:
             changed = _cached_features is not None
             _cached_features = None
             _clear_cache()
+            _logger.info("[features] cleared")
             return changed
         changed = _cached_features != features
         _cached_features = features
         _save_cache(features)
+        _logger.info("[features] set: %s (changed=%s)", sorted(features), changed)
         return changed
 
 

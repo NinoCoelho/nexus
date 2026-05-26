@@ -344,7 +344,7 @@ async def chat(
     store: SessionStore = Depends(get_sessions),
     app_state: dict[str, Any] = Depends(get_app_state),
 ) -> ChatReply:
-    session = store.get_or_create(req.session_id, context=req.context)
+    session = store.get_or_create(req.session_id, context=req.context, project_id=req.project_id)
     # Bind the session to this request context. Tools that need to
     # address the session (ask_user, trace publish) read it from
     # the ContextVar. Reset on exit so follow-up code — and

@@ -10,6 +10,7 @@ import {
   type SessionSearchResult, type SessionSummary,
 } from "../../api";
 import { listDatabases, type DatabaseSummary } from "../../api/datatable";
+import { listProjects, type ProjectSummary } from "../../api/projects";
 import { useToast } from "../../toast/ToastProvider";
 import { checkUpdate as apiCheckUpdate, type UpdateCheckResult } from "../../api/update";
 import { useVaultEvents } from "../../hooks/useVaultEvents";
@@ -20,6 +21,9 @@ import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconWorkflow,
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
+import ProjectCreateModal from "./ProjectCreateModal";
+import ProjectEditModal from "./ProjectEditModal";
+import ProjectContextMenu from "./ProjectContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
@@ -33,7 +37,7 @@ interface Props {
   onViewChange: (v: View) => void;
   activeSessionId: string | null;
   onSessionSelect: (id: string) => void;
-  onNewChat: () => void;
+  onNewChat: (projectId?: string | null) => void;
   onOpenSettings: () => void;
   sessionsRevision: number;
   onSessionsRevisionBump: () => void;
@@ -174,6 +178,19 @@ export default function Sidebar({
   const [toVaultBusy, setToVaultBusy] = useState<Set<string>>(new Set());
   const importInputRef = useRef<HTMLInputElement>(null);
 
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [editProjectId, setEditProjectId] = useState<string | null>(null);
+  const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  const refreshProjects = () => {
+    listProjects().then(setProjects).catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshProjects();
+  }, [sessionsRevision]);
+
   useEffect(() => {
     setSessionsError(false);
     getSessions(20)
@@ -204,6 +221,14 @@ export default function Sidebar({
     document.addEventListener("click", handler);
     return () => document.removeEventListener("click", handler);
   }, [menuId]);
+
+  // Close project context menu on outside click
+  useEffect(() => {
+    if (!projectMenu) return;
+    const handler = () => setProjectMenu(null);
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [projectMenu]);
 
   const sessionActions = useSessionActions({
     sessions,
@@ -260,7 +285,7 @@ export default function Sidebar({
       {/* New chat + Import */}
       <div className="sidebar-section">
         <div className={collapsed ? undefined : "sidebar-new-chat-row"}>
-          <button className="sidebar-new-chat" onClick={onNewChat}>
+          <button className="sidebar-new-chat" onClick={() => onNewChat()}>
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <line x1="10" y1="4" x2="10" y2="16" />
               <line x1="4" y1="10" x2="16" y2="10" />
@@ -351,6 +376,7 @@ export default function Sidebar({
       {view === "chat" && !collapsed && (
         <SessionsPanel
           sessions={displaySessions}
+          projects={projects}
           sessionsError={sessionsError}
           activeSessionId={activeSessionId}
           searchQuery={searchQuery}
@@ -358,7 +384,7 @@ export default function Sidebar({
           renamingId={renamingId}
           renameValue={renameValue}
           toVaultBusy={toVaultBusy}
-          menuId={menuId}
+          canCreateProject={isViewVisible("projects")}
           onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
           onSessionSelect={onSessionSelect}
           onContextMenu={(e, id) => { e.preventDefault(); setMenu({ id, x: e.clientX, y: e.clientY }); }}
@@ -371,6 +397,12 @@ export default function Sidebar({
           onRenameChange={setRenameValue}
           onRenameCommit={(id) => void sessionActions.handleRename(id)}
           onRenameCancel={() => setRenamingId(null)}
+          onNewProject={() => setShowCreateProject(true)}
+          onProjectContextMenu={(e, projectId) => {
+            e.preventDefault();
+            setProjectMenu({ id: projectId, x: e.clientX, y: e.clientY });
+          }}
+          onNewChatInProject={(projectId) => onNewChat(projectId)}
         />
       )}
 
@@ -448,6 +480,7 @@ export default function Sidebar({
             anchorX={menu.x}
             anchorY={menu.y}
             toVaultBusy={toVaultBusy}
+            projects={projects}
             onRename={() => { setRenamingId(s.id); setRenameValue(s.title); setMenu(null); }}
             onExport={() => void sessionActions.handleExport(s.id)}
             onToVaultRaw={() => void sessionActions.handleToVault(s.id, "raw")}
@@ -455,9 +488,60 @@ export default function Sidebar({
             onShare={() => void sessionActions.handleShare(s.id)}
             onDelete={() => void sessionActions.handleDelete(s.id)}
             onClick={(e) => e.stopPropagation()}
+            onMoveToProject={async (projectId) => {
+              setMenu(null);
+              try {
+                const { moveSessionToProject } = await import("../../api/projects");
+                await moveSessionToProject(projectId, s.id);
+                onSessionsRevisionBump();
+              } catch {}
+            }}
+            onRemoveFromProject={s.project_id ? async () => {
+              setMenu(null);
+              try {
+                const { removeSessionFromProject } = await import("../../api/projects");
+                await removeSessionFromProject(s.project_id!, s.id);
+                onSessionsRevisionBump();
+              } catch {}
+            } : undefined}
           />
         );
       })()}
+
+      {projectMenu && (() => {
+        const p = projects.find((x) => x.id === projectMenu.id);
+        if (!p) return null;
+        return (
+          <ProjectContextMenu
+            project={p}
+            anchorX={projectMenu.x}
+            anchorY={projectMenu.y}
+            onEdit={() => { setEditProjectId(p.id); setProjectMenu(null); }}
+            onDelete={async () => {
+              const { deleteProject } = await import("../../api/projects");
+              deleteProject(p.id).then(() => {
+                refreshProjects();
+                onSessionsRevisionBump();
+              }).catch(() => {});
+              setProjectMenu(null);
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        );
+      })()}
+
+      <ProjectCreateModal
+        open={showCreateProject}
+        onClose={() => setShowCreateProject(false)}
+        onCreated={() => { refreshProjects(); onSessionsRevisionBump(); }}
+      />
+
+      <ProjectEditModal
+        open={editProjectId !== null}
+        projectId={editProjectId}
+        onClose={() => setEditProjectId(null)}
+        onSaved={() => { refreshProjects(); onSessionsRevisionBump(); }}
+      />
 
       {!collapsed && (
         <div

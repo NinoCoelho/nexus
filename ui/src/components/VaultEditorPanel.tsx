@@ -129,6 +129,13 @@ export default function VaultEditorPanel({ selectedPath, onOpenInChat, onNavigat
 
   const loadFile = useCallback(() => {
     if (!selectedPath) return;
+    if (!selectedPath.includes(".") || selectedPath.endsWith("/")) {
+      setContent("");
+      setFileSize(undefined);
+      setIsBinary(false);
+      setFileError(null);
+      return;
+    }
     getVaultFile(selectedPath)
       .then((f) => {
         setContent(f.content ?? "");

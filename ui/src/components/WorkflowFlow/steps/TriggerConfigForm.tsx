@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { TriggerConfig, TriggerType, EventType, VaultFolder } from "../../../types/workflow";
 import { listEventTypes, listVaultFolders, getWebhookUrl } from "../../../api/workflows";
+import WebhookManager from "../../WebhookManager";
 import { TRIGGER_TYPES, TRIGGER_ICONS } from "./constants";
 import { CopyBtn } from "./shared";
 
@@ -22,6 +23,12 @@ export default function TriggerConfigForm({
   const [vaultFolders, setVaultFolders] = useState<VaultFolder[]>([]);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const [hasBroker, setHasBroker] = useState(false);
+  const [brokerConnected, setBrokerConnected] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmTypeChange, setConfirmTypeChange] = useState<TriggerType | null>(null);
+  const [webhookManagerOpen, setWebhookManagerOpen] = useState(false);
   const eventDropdownRef = useRef<HTMLDivElement>(null);
   const folderPickerRef = useRef<HTMLDivElement>(null);
 
@@ -60,6 +67,7 @@ export default function TriggerConfigForm({
   useEffect(() => {
     if (trigger.type !== "webhook" || !trigger.token || !wfPath) {
       setWebhookUrl(null);
+      setHasBroker(false);
       return;
     }
     let cancelled = false;
@@ -68,12 +76,41 @@ export default function TriggerConfigForm({
         if (cancelled) return;
         const hook = res.webhooks.find((w) => w.trigger_id === trigger.id);
         setWebhookUrl(hook?.url ?? null);
+        setHasBroker(hook?.has_broker ?? false);
+        setBrokerConnected(res.broker_connected ?? false);
+        setSignedIn(res.signed_in ?? false);
       })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [trigger.type, trigger.token, trigger.id, wfPath]);
 
+  const hadWebhookBroker = trigger.type === "webhook" && hasBroker;
+
+  function handleTypeChange(newType: TriggerType) {
+    if (hadWebhookBroker && newType !== "webhook") {
+      setConfirmTypeChange(newType);
+      return;
+    }
+    onChangeTrigger({ type: newType });
+  }
+
+  function confirmTypeChangeConfirm() {
+    if (confirmTypeChange) {
+      onChangeTrigger({ type: confirmTypeChange, broker_id: undefined, broker_slug: undefined });
+    }
+    setConfirmTypeChange(null);
+  }
+
+  function handleDeleteClick() {
+    if (hadWebhookBroker) {
+      setConfirmDelete(true);
+      return;
+    }
+    onDelete();
+  }
+
   return (
+    <>
     <div className="wf-config-panel">
       <div className="wf-config-panel-header">
         <span className="icon">{TRIGGER_ICONS[trigger.type] || "⚡"}</span>
@@ -87,9 +124,7 @@ export default function TriggerConfigForm({
           <label>Type</label>
           <select
             value={trigger.type}
-            onChange={(e) =>
-              onChangeTrigger({ type: e.target.value as TriggerType })
-            }
+            onChange={(e) => handleTypeChange(e.target.value as TriggerType)}
           >
             {TRIGGER_TYPES.map((t) => (
               <option key={t.value} value={t.value}>
@@ -99,11 +134,76 @@ export default function TriggerConfigForm({
           </select>
         </div>
 
+        {confirmTypeChange !== null && (
+          <div style={{
+            padding: "8px 10px",
+            border: "1px solid var(--danger, #e53935)",
+            borderRadius: 4,
+            background: "rgba(229,57,53,0.06)",
+            marginBottom: 8,
+          }}>
+            <div style={{ fontSize: 11, color: "var(--danger, #e53935)", marginBottom: 8 }}>
+              This webhook relay will be permanently deleted along with all queued messages.
+              External services using this URL will stop working. This cannot be undone.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={confirmTypeChangeConfirm}
+                style={{
+                  background: "var(--danger, #e53935)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  cursor: "pointer",
+                }}
+              >
+                Yes, Change
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmTypeChange(null)}
+                style={{
+                  background: "none",
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  color: "var(--fg-dim)",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {trigger.type === "webhook" && (
           <>
             {trigger.token && (
               <div className="wf-field">
-                <label>Webhook URL</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <label style={{ flex: 1 }}>Webhook URL</label>
+                  <button
+                    type="button"
+                    onClick={() => setWebhookManagerOpen(true)}
+                    title="Manage webhooks"
+                    style={{
+                      background: "none",
+                      border: "1px solid var(--border)",
+                      borderRadius: 4,
+                      padding: "2px 6px",
+                      fontSize: 12,
+                      cursor: "pointer",
+                      color: "var(--fg-dim)",
+                    }}
+                  >
+                    ...
+                  </button>
+                </div>
                 {webhookUrl ? (
                   <div className="wf-webhook-url-row">
                     <code className="wf-webhook-url">{webhookUrl}</code>
@@ -111,7 +211,11 @@ export default function TriggerConfigForm({
                   </div>
                 ) : (
                   <div style={{ fontSize: 11, color: "var(--fg-dim)", padding: "4px 0" }}>
-                    URL will appear after broker connection is established.
+                    {!signedIn
+                      ? "Sign in to your Nexus account to activate webhooks."
+                      : !brokerConnected
+                        ? "Webhook relay is being provisioned. The URL will appear here shortly."
+                        : "Connecting to broker..."}
                   </div>
                 )}
               </div>
@@ -281,10 +385,74 @@ export default function TriggerConfigForm({
           </div>
         )}
 
-        <button className="wf-delete-btn" onClick={onDelete}>
-          Remove Trigger
-        </button>
+        {confirmDelete ? (
+          <div style={{
+            padding: "8px 10px",
+            border: "1px solid var(--danger, #e53935)",
+            borderRadius: 4,
+            background: "rgba(229,57,53,0.06)",
+          }}>
+            <div style={{ fontSize: 11, color: "var(--danger, #e53935)", marginBottom: 8 }}>
+              This webhook relay will be permanently deleted along with all queued messages.
+              External services using this URL will stop working. This cannot be undone.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => { setConfirmDelete(false); onDelete(); }}
+                style={{
+                  background: "var(--danger, #e53935)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  cursor: "pointer",
+                }}
+              >
+                Yes, Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                style={{
+                  background: "none",
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  color: "var(--fg-dim)",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button className="wf-delete-btn" onClick={handleDeleteClick}>
+            Remove Trigger
+          </button>
+        )}
       </div>
-    </div>
+      </div>
+      {webhookManagerOpen && wfPath && (
+        <WebhookManager
+          onClose={() => setWebhookManagerOpen(false)}
+          selectMode={trigger.token ? undefined : { type: "workflow", path: wfPath, trigger_id: trigger.id }}
+          onSelect={(result) => {
+            setWebhookUrl(result.url);
+            setHasBroker(true);
+            setBrokerConnected(true);
+            onChangeTrigger({
+              token: result.token,
+              broker_id: result.broker_id,
+              broker_slug: result.broker_slug,
+            });
+            setWebhookManagerOpen(false);
+          }}
+        />
+      )}
+    </>
   );
 }

@@ -74,14 +74,29 @@ class BrokerClient:
             resp.raise_for_status()
             outer = resp.json()
             data = outer.get("webhook") or outer
-            return BrokerWebhook(
-                id=data["id"],
-                name=data["name"],
-                slug=data["slug"],
-                url=data.get("url", f"{self._base_url}/wh/{data['slug']}"),
-                key_type=data.get("keyType", "rsa-2048"),
-                is_active=data.get("isActive", True),
+            return self._parse_webhook(data)
+
+    async def list_webhooks(self) -> list[BrokerWebhook]:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                f"{self._base_url}/api/webhooks",
+                headers=self._headers(),
             )
+            resp.raise_for_status()
+            body = resp.json()
+            items = body.get("webhooks") or body if isinstance(body, list) else []
+            return [self._parse_webhook(w) for w in items]
+
+    def _parse_webhook(self, data: dict) -> BrokerWebhook:
+        return BrokerWebhook(
+            id=data["id"],
+            name=data["name"],
+            slug=data["slug"],
+            url=data.get("url", f"{self._base_url}/wh/{data['slug']}"),
+            key_type=data.get("keyType", "rsa-2048"),
+            is_active=data.get("isActive", True),
+            message_count=data.get("messageCount", 0),
+        )
 
     async def delete_webhook(self, webhook_id: str) -> bool:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

@@ -74,10 +74,16 @@ class SessionStore(PubSubMixin, QueryMixin):
 
     # ── persistence — delegate to loom ───────────────────────────────────────
 
-    def create(self, context: str | None = None) -> Session:
+    def create(self, context: str | None = None, project_id: str | None = None) -> Session:
         sid = uuid.uuid4().hex
         d = self._loom.get_or_create(sid, title="New session", context=context)
-        return Session(id=d["id"], title=d["title"] or "New session", context=context)
+        if project_id:
+            self._loom._db.execute(
+                "UPDATE sessions SET project_id = ? WHERE id = ?",
+                (project_id, sid),
+            )
+            self._loom._db.commit()
+        return Session(id=d["id"], title=d["title"] or "New session", context=context, project_id=project_id)
 
     def mark_hidden(self, session_id: str, hidden: bool = True) -> None:
         """Toggle the ``hidden`` flag on a session.
@@ -114,14 +120,37 @@ class SessionStore(PubSubMixin, QueryMixin):
         self._loom._db.commit()
         return Session(id=d["id"], title=d["title"] or "Sub-agent", context=None)
 
-    def get_or_create(self, session_id: str | None, context: str | None = None) -> Session:
+    def get_or_create(self, session_id: str | None, context: str | None = None, project_id: str | None = None) -> Session:
         if session_id is None:
-            return self.create(context=context)
+            return self.create(context=context, project_id=project_id)
         d = self._loom.get_or_create(session_id, title="New session", context=context)
         # If context wasn't set but we have one now, propagate it.
         if d.get("context") is None and context is not None:
             self._loom.set_context(session_id, context)
             d["context"] = context
+        if project_id:
+            row_pid = self._loom._db.execute(
+                "SELECT project_id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if row_pid and row_pid[0] != project_id:
+                self._loom._db.execute(
+                    "UPDATE sessions SET project_id = ? WHERE id = ?",
+                    (project_id, session_id),
+                )
+                self._loom._db.commit()
+                d["project_id"] = project_id
+            elif not row_pid or not row_pid[0]:
+                self._loom._db.execute(
+                    "UPDATE sessions SET project_id = ? WHERE id = ?",
+                    (project_id, session_id),
+                )
+                self._loom._db.commit()
+                d["project_id"] = project_id
+        if "project_id" not in d:
+            row_pid = self._loom._db.execute(
+                "SELECT project_id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            d["project_id"] = row_pid[0] if row_pid else None
         history = [_from_loom_msg(m) for m in self._loom.get_history(session_id)]
         # Re-attach reasoning_content from the Nexus-managed column.
         rc_rows = self._loom._db.execute(
@@ -142,12 +171,13 @@ class SessionStore(PubSubMixin, QueryMixin):
             title=d["title"] or "New session",
             history=history,
             context=d.get("context") or context,
+            project_id=d.get("project_id"),
         )
 
     def get(self, session_id: str) -> Session | None:
         # Use raw DB to avoid creating the session if it doesn't exist.
         row = self._loom._db.execute(
-            "SELECT id, title, context FROM sessions WHERE id = ?", (session_id,)
+            "SELECT id, title, context, project_id FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
         if row is None:
             return None
@@ -206,18 +236,28 @@ class SessionStore(PubSubMixin, QueryMixin):
                 nexus_msg = nexus_msg.model_copy(update={"reasoning_content": rc_val})
             history.append(nexus_msg)
             timestamps.append(_ts_to_int(r[5]))
-        sess = Session(id=row[0], title=row[1] or "New session", history=history, context=row[2])
+        sess = Session(id=row[0], title=row[1] or "New session", history=history, context=row[2], project_id=row[3])
         sess._message_timestamps = timestamps  # type: ignore[attr-defined]
         return sess
 
-    def list(self, limit: int = 50, *, include_hidden: bool = False) -> list[SessionSummary]:
+    def list(self, limit: int = 50, *, include_hidden: bool = False, project_id: str | None = None) -> list[SessionSummary]:
         # ``hidden`` exists from the spawn_subagents migration; filter out
         # child sessions by default so the sidebar doesn't surface them.
-        where = "" if include_hidden else "WHERE COALESCE(s.hidden, 0) = 0"
+        clauses = []
+        params: list[Any] = []
+        if not include_hidden:
+            clauses.append("COALESCE(s.hidden, 0) = 0")
+        if project_id is not None:
+            clauses.append("s.project_id = ?" if project_id else "s.project_id IS NULL")
+            params.append(project_id)
+        where = ""
+        if clauses:
+            where = "WHERE " + " AND ".join(clauses)
         rows = self._loom._db.execute(
             f"""
             SELECT s.id, s.title, s.created_at, s.updated_at,
-                   COUNT(m.seq) AS message_count
+                   COUNT(m.seq) AS message_count,
+                   s.project_id
             FROM sessions s
             LEFT JOIN messages m ON m.session_id = s.id
             {where}
@@ -225,7 +265,7 @@ class SessionStore(PubSubMixin, QueryMixin):
             ORDER BY s.updated_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (*params, limit),
         ).fetchall()
         return [
             SessionSummary(
@@ -234,6 +274,7 @@ class SessionStore(PubSubMixin, QueryMixin):
                 created_at=_ts_to_int(r[2]),
                 updated_at=_ts_to_int(r[3]),
                 message_count=r[4] or 0,
+                project_id=r[5],
             )
             for r in rows
         ]
@@ -323,6 +364,13 @@ class SessionStore(PubSubMixin, QueryMixin):
         history = list(base_history)
         history.append(ChatMessage(role=Role.USER, content=user_message))
         history.append(assistant)
+        for tc in tcs:
+            history.append(ChatMessage(
+                role=Role.TOOL,
+                content=f"[Turn was interrupted before {tc.name} could execute]",
+                tool_call_id=tc.id,
+                name=tc.name,
+            ))
         self.replace_history(session_id, history)
 
     def replace_history(self, session_id: str, history: list[ChatMessage]) -> None:

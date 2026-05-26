@@ -170,6 +170,21 @@ CREATE TABLE IF NOT EXISTS paused_turns (
 );
 """
 
+_PROJECTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS projects (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    instructions  TEXT NOT NULL DEFAULT '',
+    vault_path    TEXT NOT NULL,
+    color         TEXT NOT NULL DEFAULT '',
+    icon          TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS projects_updated_idx ON projects(updated_at DESC);
+"""
+
 
 def _ensure_feedback_pinned_column(db) -> None:
     """Migrate older databases that pre-date the ``pinned`` column."""
@@ -196,6 +211,15 @@ def _ensure_subagent_columns(db) -> None:
     if "hidden" not in cols:
         db.execute("ALTER TABLE sessions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
     db.commit()
+
+
+def _ensure_project_column(db) -> None:
+    cols = {r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()}
+    if not cols:
+        return
+    if "project_id" not in cols:
+        db.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
+        db.commit()
 
 
 def _ensure_reasoning_content_column(db) -> None:
@@ -226,8 +250,10 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_PUSH_SUBS_SCHEMA)
     db.executescript(_LLM_ERRORS_SCHEMA)
     db.executescript(_PAUSED_TURNS_SCHEMA)
+    db.executescript(_PROJECTS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
+    _ensure_project_column(db)
     _ensure_reasoning_content_column(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:

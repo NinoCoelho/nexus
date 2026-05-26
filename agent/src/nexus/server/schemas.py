@@ -27,6 +27,7 @@ class ChatRequest(BaseModel):
     attachments: list[Attachment] = Field(default_factory=list)
     context: str | None = None
     model: str | None = None
+    project_id: str | None = None
     # "voice" when the user dictated; "text" when typed. Threaded through to
     # the voice-ack pipeline so spoken acknowledgments only fire for voice
     # turns. Defaults to "text" so existing callers (CLI, scripts) stay quiet.

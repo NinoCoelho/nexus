@@ -11,6 +11,7 @@ const FEATURE_VIEW_MAP: Record<string, string> = {
   dream: "dream",
   heartbeat: "heartbeat",
   database: "data",
+  projects: "projects",
 };
 
 const NORMAL_HIDDEN = new Set(["graph", "heartbeat", "dream"]);

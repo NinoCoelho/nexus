@@ -91,9 +91,13 @@ def serve(
             frontend_proc.append(fp)
 
     backend_done = threading.Event()
+    uvicorn_server: list[uvicorn.Server] = []
 
     def run_backend() -> None:
-        uvicorn.run("nexus.main:app", host=host, port=port, reload=False)
+        config = uvicorn.Config("nexus.main:app", host=host, port=port, reload=False)
+        server = uvicorn.Server(config)
+        uvicorn_server.append(server)
+        server.run()
         backend_done.set()
 
     backend_thread = threading.Thread(target=run_backend, daemon=True)
@@ -106,6 +110,8 @@ def serve(
         shutting_down = True
         if frontend_proc:
             frontend_proc[0].terminate()
+        if uvicorn_server:
+            uvicorn_server[0].should_exit = True
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)

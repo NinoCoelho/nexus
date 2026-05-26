@@ -125,6 +125,7 @@ async def list_sessions(
             "created_at": s.created_at,
             "updated_at": s.updated_at,
             "message_count": s.message_count,
+            "project_id": s.project_id,
         }
         for s in summaries
     ]
@@ -171,6 +172,7 @@ async def get_session(
         "id": session.id,
         "title": session.title,
         "context": session.context,
+        "project_id": session.project_id,
         "messages": [
             {
                 "seq": i,

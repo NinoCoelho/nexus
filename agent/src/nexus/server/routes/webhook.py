@@ -100,6 +100,16 @@ def _generate_token() -> str:
     return secrets.token_hex(16)
 
 
+def _broker_connected() -> bool:
+    from ... import secrets as _secrets
+    return bool(_secrets.get("broker_api_key"))
+
+
+def _is_signed_in() -> bool:
+    from ... import secrets as _secrets
+    return bool(_secrets.get("nexus_api_key"))
+
+
 @router.post("/webhook/{token}")
 async def webhook_receive(token: str, request: Request) -> Response:
     found = _find_lane_by_token(token)
@@ -157,14 +167,15 @@ async def lane_webhook_get(lane_id: str, path: str, request: Request) -> dict:
 
     token = lane.webhook_token
     enabled = lane.webhook_enabled
+    has_broker = bool(lane.broker_slug)
 
     url = None
-    if lane.broker_slug and enabled:
+    if lane.broker_slug:
         from ...config_file import load as load_config
         broker_base = load_config().broker.url.rstrip("/")
         url = f"{broker_base}/wh/{lane.broker_slug}"
 
-    return {"enabled": enabled, "url": url, "token": token}
+    return {"enabled": enabled, "url": url, "token": token, "has_broker": has_broker, "broker_connected": _broker_connected(), "signed_in": _is_signed_in()}
 
 
 @router.post("/vault/kanban/lanes/{lane_id}/webhook")
@@ -189,9 +200,10 @@ async def lane_webhook_set(lane_id: str, path: str, request: Request) -> dict:
     lane = vault_kanban.update_lane(path, lane_id, updates)
 
     url = None
-    if enabled and lane.webhook_token:
+    if lane.webhook_token and not lane.broker_id:
         from ...broker.client import BrokerClient
         from ...broker.provision import ensure_broker_endpoint
+        from ...broker.registry import get_registry
         client = BrokerClient()
         if client.available:
             try:
@@ -212,7 +224,55 @@ async def lane_webhook_set(lane_id: str, path: str, request: Request) -> dict:
                     if lane_updates:
                         lane = vault_kanban.update_lane(path, lane_id, lane_updates)
                     url = broker_wh.url
+                    get_registry().register(
+                        broker_id=broker_wh.id,
+                        broker_slug=broker_wh.slug,
+                        endpoint_type="kanban",
+                        endpoint_key=f"{path}:{lane_id}",
+                        name=f"Kanban: {lane.title}",
+                        local_token=lane.webhook_token,
+                        vault_path=path,
+                    )
             except Exception:
                 log.exception("broker: failed to provision endpoint for kanban lane %s", lane_id)
 
-    return {"enabled": enabled, "url": url, "token": lane.webhook_token}
+    if lane.broker_slug:
+        from ...config_file import load as load_config
+        broker_base = load_config().broker.url.rstrip("/")
+        url = f"{broker_base}/wh/{lane.broker_slug}"
+
+    return {"enabled": enabled, "url": url, "token": lane.webhook_token, "broker_connected": _broker_connected(), "signed_in": _is_signed_in()}
+
+
+@router.delete("/vault/kanban/lanes/{lane_id}/webhook")
+async def lane_webhook_delete(lane_id: str, path: str, request: Request) -> dict:
+    from ... import vault_kanban
+    try:
+        board = vault_kanban.read_board(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found")
+    from ...vault_kanban.lanes import _find_lane
+    lane = _find_lane(board, lane_id)
+    if lane is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="lane not found")
+
+    broker_id = lane.broker_id
+
+    vault_kanban.update_lane(path, lane_id, {
+        "webhook_token": None,
+        "webhook_enabled": False,
+        "broker_id": None,
+        "broker_slug": None,
+    })
+
+    if broker_id:
+        from ...broker.client import BrokerClient
+        from ...broker.sync import delete_broker_endpoint
+        client = BrokerClient()
+        if client.available:
+            try:
+                await delete_broker_endpoint(client, broker_id)
+            except Exception:
+                log.exception("broker: failed to delete endpoint %s for lane %s", broker_id, lane_id)
+
+    return {"ok": True}

@@ -96,9 +96,9 @@ export function useChatSession(
     if (!chatStates.has(id) || !chatStates.get(id)!.historyLoaded) void loadSessionHistory(id);
   }, [chatStates, loadSessionHistory]);
 
-  const handleNewChat = useCallback(() => {
+  const handleNewChat = useCallback((projectId?: string | null) => {
     setActiveSession(null);
-    setChatStates((prev) => { const next = new Map(prev); next.set(NEW_KEY, { ...emptyState(), selectedModel: computeSeedModel() }); return next; });
+    setChatStates((prev) => { const next = new Map(prev); next.set(NEW_KEY, { ...emptyState(), selectedModel: computeSeedModel(), projectId: projectId ?? null }); return next; });
     setPendingSessionId(freshSessionId());
     setPendingNewSession(null);
   }, [computeSeedModel, freshSessionId]);
@@ -237,6 +237,7 @@ export function useChatSession(
         created_at: nowSec,
         updated_at: nowSec,
         message_count: 1,
+        project_id: state.projectId ?? null,
       });
     }
 
@@ -266,7 +267,7 @@ export function useChatSession(
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
         }
-      }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode });
+      }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode, projectId: state.projectId });
 
       if (!sawDone && !abortController.signal.aborted) {
         // Server closed the stream without a terminal `done`. Pull persisted

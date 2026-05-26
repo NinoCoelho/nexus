@@ -52,6 +52,12 @@ class BrokerPoller:
         except asyncio.TimeoutError:
             pass
 
+        try:
+            from .sync import sync_broker_endpoints
+            await sync_broker_endpoints(self._client)
+        except Exception:
+            log.exception("broker: initial sync failed")
+
         while not self._stop_event.is_set():
             try:
                 await self._poll_all()

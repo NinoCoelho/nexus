@@ -12,6 +12,7 @@ class BrokerWebhook:
     key_type: str = "rsa-2048"
     is_active: bool = True
     description: str | None = None
+    message_count: int = 0
 
 
 @dataclass

@@ -313,7 +313,10 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     wf = parser.parse(raw)
 
     from ...config_file import load as load_config
+    from ... import secrets as _secrets
     broker_base = load_config().broker.url.rstrip("/")
+    broker_connected = bool(_secrets.get("broker_api_key"))
+    signed_in = bool(_secrets.get("nexus_api_key"))
 
     hooks = []
     for t in wf.triggers:
@@ -323,9 +326,10 @@ async def get_webhook_url(path: str, request: Request) -> dict:
                 "trigger_id": t.id,
                 "token": t.token,
                 "url": url,
+                "has_broker": bool(t.broker_slug),
             })
 
-    return {"webhooks": hooks}
+    return {"webhooks": hooks, "broker_connected": broker_connected, "signed_in": signed_in}
 
 
 @router.get("/workflows/{path:path}/debug/{run_id}/events")
@@ -446,7 +450,47 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
     if body.enabled is not None:
         wf.enabled = body.enabled
     if body.triggers is not None:
+        old_webhook_ids: dict[str, str] = {}
+        for t in wf.triggers:
+            if t.type == TriggerType.webhook and t.broker_id:
+                old_webhook_ids[t.id] = t.broker_id
+
+        new_trigger_ids: set[str] = set()
         wf.triggers = [TriggerConfig.from_dict(t) for t in body.triggers]
+        for t in wf.triggers:
+            new_trigger_ids.add(t.id)
+
+        removed_webhook_ids = {
+            tid: bid for tid, bid in old_webhook_ids.items()
+            if tid not in new_trigger_ids
+        }
+        changed_type_ids: set[str] = set()
+        new_triggers_by_id = {t.id: t for t in wf.triggers}
+        for old_tid, old_bid in old_webhook_ids.items():
+            if old_tid in new_triggers_by_id:
+                nt = new_triggers_by_id[old_tid]
+                if nt.type != TriggerType.webhook:
+                    changed_type_ids.add(old_tid)
+
+        all_ids_to_remove = set(removed_webhook_ids.keys()) | changed_type_ids
+        if all_ids_to_remove:
+            from ...broker.client import BrokerClient
+            from ...broker.sync import delete_broker_endpoint
+            broker_client = BrokerClient()
+            if broker_client.available:
+                for tid in all_ids_to_remove:
+                    bid = old_webhook_ids.get(tid)
+                    if bid:
+                        try:
+                            await delete_broker_endpoint(broker_client, bid)
+                        except Exception:
+                            log.exception("broker: failed to cleanup removed trigger %s", tid)
+
+        for t in wf.triggers:
+            if t.id in changed_type_ids:
+                t.broker_id = None
+                t.broker_slug = None
+
     if body.variables is not None:
         wf.variables = body.variables
     if body.steps is not None:
@@ -467,6 +511,7 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
 
     from ...broker.client import BrokerClient
     from ...broker.provision import ensure_broker_endpoint as _ensure_broker
+    from ...broker.registry import get_registry as _get_broker_registry
     broker_client = BrokerClient()
     if broker_client.available:
         broker_changed = False
@@ -486,6 +531,15 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
                             t.broker_id = bwh.id
                             t.broker_slug = bwh.slug
                             broker_changed = True
+                        _get_broker_registry().register(
+                            broker_id=bwh.id,
+                            broker_slug=bwh.slug,
+                            endpoint_type="workflow",
+                            endpoint_key=f"{path}:{t.id}",
+                            name=f"Workflow: {wf.title}",
+                            local_token=t.token,
+                            vault_path=path,
+                        )
                 except Exception:
                     log.exception("broker: failed to provision for workflow %s trigger %s", path, t.id)
         if broker_changed:
@@ -554,6 +608,16 @@ async def delete_workflow(path: str, request: Request) -> dict:
         wf = parser.parse(raw)
     except Exception:
         pass
+
+    if wf:
+        try:
+            from ...broker.client import BrokerClient
+            from ...broker.sync import cleanup_workflow
+            broker_client = BrokerClient()
+            if broker_client.available:
+                await cleanup_workflow(broker_client, path)
+        except Exception:
+            log.exception("broker: failed to cleanup webhooks for deleted workflow %s", path)
 
     try:
         _vault.delete(path)

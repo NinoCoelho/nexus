@@ -150,6 +150,11 @@ class StatusWatcher:
         self._last_models = new_models
         self._last_features = new_features
 
+        log.info(
+            "[nexus_watcher] status applied: tier=%s models=%s features=%s",
+            payload.get("tier"), list(new_models), sorted(new_features),
+        )
+
         if new_features != prev_features:
             from ..features import set_features
             set_features(set(new_features))

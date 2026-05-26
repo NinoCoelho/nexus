@@ -18,6 +18,8 @@ from ..home import vault_root
 if TYPE_CHECKING:
     from loom.home import AgentHome
 
+    from ..server.project_store import Project
+
 _MEMORY_MAX_TOTAL = 1500
 _MEMORY_PREVIEW_BYTES = 500
 _MEMORY_TOP_N = 5
@@ -383,6 +385,7 @@ def build_system_prompt(
     context: str | None = None,
     home: "AgentHome | None" = None,
     language: str | None = None,
+    project: "Project | None" = None,
 ) -> str:
     _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
@@ -404,6 +407,24 @@ def build_system_prompt(
     if context:
         parts.append(f"## Session context\n\n{context}")
         parts.append("")
+
+    if project:
+        p_lines = [f"## Project: {project.name}", ""]
+        if project.description:
+            p_lines.append(f"{project.description}")
+            p_lines.append("")
+        if project.instructions:
+            p_lines.append("### Instructions")
+            p_lines.append("")
+            p_lines.append(project.instructions)
+            p_lines.append("")
+        p_lines.append(
+            f"This session is part of the **{project.name}** project. "
+            f"The project vault folder is at `~/.nexus/vault/{project.vault_path}/`. "
+            f"When writing notes, memory, or project files, prefer this folder over the global vault."
+        )
+        p_lines.append("")
+        parts.append("\n".join(p_lines))
 
     creds_block = _credentials_block()
     if creds_block:

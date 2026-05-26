@@ -104,7 +104,18 @@ def build_loom_agent(
         on_trace_event("iter", {"n": _iter_counter[0]})
         nexus_cfg = get_nexus_cfg()
         language = getattr(getattr(nexus_cfg, "ui", None), "language", None) if nexus_cfg else None
-        sys_prompt = build_system_prompt(registry, home=home, language=language)
+        project = None
+        try:
+            from ..context import CURRENT_SESSION_ID
+            from ...server.project_store import ProjectStore
+            from ...home import sessions_db
+            session_id = CURRENT_SESSION_ID.get()
+            if session_id:
+                ps = ProjectStore(sessions_db())
+                project = ps.get_project_for_session(session_id)
+        except Exception:
+            pass
+        sys_prompt = build_system_prompt(registry, home=home, language=language, project=project)
         from ..context import TOOL_BUDGET_EXCEEDED
         from .budget import BUDGET_EXCEEDED_HINT
         if TOOL_BUDGET_EXCEEDED.get(False):

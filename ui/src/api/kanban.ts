@@ -282,6 +282,9 @@ export interface LaneWebhookInfo {
   enabled: boolean;
   url: string | null;
   token: string | null;
+  has_broker: boolean;
+  broker_connected: boolean;
+  signed_in: boolean;
 }
 
 export async function getLaneWebhook(path: string, laneId: string): Promise<LaneWebhookInfo> {
@@ -306,6 +309,18 @@ export async function setLaneWebhook(
     },
   );
   if (!res.ok) throw new Error(`Lane webhook set error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteLaneWebhook(
+  path: string,
+  laneId: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(
+    `${BASE}/vault/kanban/lanes/${encodeURIComponent(laneId)}/webhook?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(`Lane webhook delete error: ${res.status}`);
   return res.json();
 }
 

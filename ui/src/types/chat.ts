@@ -18,6 +18,7 @@ export interface ChatState {
   historyLoaded: boolean;
   attachments: { name: string; vaultPath: string }[];
   selectedModel?: string;
+  projectId?: string | null;
 }
 
 export const NEW_KEY = "__new__";
@@ -247,7 +248,7 @@ export interface UseChatSessionResult {
   handleAttachmentsChange: (files: { name: string; vaultPath: string }[]) => void;
   handleModelChange: (model: string) => void;
   handleSessionSelect: (id: string) => void;
-  handleNewChat: () => void;
+  handleNewChat: (projectId?: string | null) => void;
   loadSessionHistory: (id: string) => Promise<void>;
   patchState: (key: string, patch: Partial<ChatState>) => void;
   computeSeedModel: (preferred?: string) => string;

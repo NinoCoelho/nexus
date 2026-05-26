@@ -169,6 +169,21 @@ async def vault_kanban_patch_lane(lane_id: str, body: dict, path: str) -> dict:
 @router.delete("/vault/kanban/lanes/{lane_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def vault_kanban_delete_lane(lane_id: str, path: str) -> None:
     from ... import vault_kanban
+    try:
+        board = vault_kanban.read_board(path)
+        for lane in board.lanes:
+            if lane.id == lane_id and lane.broker_id:
+                try:
+                    from ...broker.client import BrokerClient
+                    from ...broker.sync import delete_broker_endpoint
+                    client = BrokerClient()
+                    if client.available:
+                        await delete_broker_endpoint(client, lane.broker_id)
+                except Exception:
+                    log.exception("broker: failed to cleanup webhook for deleted lane %s", lane_id)
+                break
+    except Exception:
+        pass
     vault_kanban.delete_lane(path, lane_id)
 
 
