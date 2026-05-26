@@ -172,15 +172,6 @@ async def lane_webhook_set(lane_id: str, path: str, request: Request) -> dict:
     body = await request.json()
     enabled = body.get("enabled", False)
 
-    from ...broker.client import BrokerClient
-    client = BrokerClient()
-
-    if enabled and not client.available:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Sign in to enable webhooks",
-        )
-
     from ... import vault_kanban
     try:
         board = vault_kanban.read_board(path)
@@ -199,26 +190,29 @@ async def lane_webhook_set(lane_id: str, path: str, request: Request) -> dict:
 
     url = None
     if enabled and lane.webhook_token:
+        from ...broker.client import BrokerClient
         from ...broker.provision import ensure_broker_endpoint
-        try:
-            broker_wh = await ensure_broker_endpoint(
-                client=client,
-                endpoint_type="kanban",
-                endpoint_key=f"{path}:{lane_id}",
-                name=f"Kanban: {lane.title}",
-                existing_broker_id=lane.broker_id,
-                existing_broker_slug=lane.broker_slug,
-            )
-            if broker_wh:
-                lane_updates: dict = {}
-                if lane.broker_id != broker_wh.id:
-                    lane_updates["broker_id"] = broker_wh.id
-                if lane.broker_slug != broker_wh.slug:
-                    lane_updates["broker_slug"] = broker_wh.slug
-                if lane_updates:
-                    lane = vault_kanban.update_lane(path, lane_id, lane_updates)
-                url = broker_wh.url
-        except Exception:
-            log.exception("broker: failed to provision endpoint for kanban lane %s", lane_id)
+        client = BrokerClient()
+        if client.available:
+            try:
+                broker_wh = await ensure_broker_endpoint(
+                    client=client,
+                    endpoint_type="kanban",
+                    endpoint_key=f"{path}:{lane_id}",
+                    name=f"Kanban: {lane.title}",
+                    existing_broker_id=lane.broker_id,
+                    existing_broker_slug=lane.broker_slug,
+                )
+                if broker_wh:
+                    lane_updates: dict = {}
+                    if lane.broker_id != broker_wh.id:
+                        lane_updates["broker_id"] = broker_wh.id
+                    if lane.broker_slug != broker_wh.slug:
+                        lane_updates["broker_slug"] = broker_wh.slug
+                    if lane_updates:
+                        lane = vault_kanban.update_lane(path, lane_id, lane_updates)
+                    url = broker_wh.url
+            except Exception:
+                log.exception("broker: failed to provision endpoint for kanban lane %s", lane_id)
 
     return {"enabled": enabled, "url": url, "token": lane.webhook_token}

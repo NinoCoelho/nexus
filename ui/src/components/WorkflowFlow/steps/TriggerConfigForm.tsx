@@ -101,21 +101,19 @@ export default function TriggerConfigForm({
 
         {trigger.type === "webhook" && (
           <>
-            <div className="wf-field">
-              <label>Webhook Token</label>
-              <input
-                value={trigger.token || ""}
-                readOnly
-                placeholder="Generated on save"
-              />
-            </div>
-            {webhookUrl && (
+            {trigger.token && (
               <div className="wf-field">
                 <label>Webhook URL</label>
-                <div className="wf-webhook-url-row">
-                  <code className="wf-webhook-url">{webhookUrl}</code>
-                  <CopyBtn text={webhookUrl} />
-                </div>
+                {webhookUrl ? (
+                  <div className="wf-webhook-url-row">
+                    <code className="wf-webhook-url">{webhookUrl}</code>
+                    <CopyBtn text={webhookUrl} />
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: "var(--fg-dim)", padding: "4px 0" }}>
+                    URL will appear after broker connection is established.
+                  </div>
+                )}
               </div>
             )}
           </>

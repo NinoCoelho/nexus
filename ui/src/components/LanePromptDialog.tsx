@@ -216,6 +216,11 @@ export default function LanePromptDialog({ lane, boardPath, onCancel, onSubmit }
                 </button>
               </div>
             )}
+            {webhookEnabled && !webhookUrl && (
+              <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+                URL will appear after broker connection is established.
+              </div>
+            )}
           </div>
         )}
 
