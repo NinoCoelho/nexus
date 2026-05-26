@@ -54,15 +54,9 @@ export default function TriggerConfigForm({
     return () => document.removeEventListener("mousedown", handler);
   }, [showEventDropdown, showFolderPicker]);
 
-  const localWebhookUrl = trigger.token
-    ? `${window.location.origin}/workflow/trigger/${trigger.token}`
-    : null;
-
-  const brokerWebhookUrl = trigger.broker_slug
+  const webhookUrl = trigger.broker_slug
     ? `https://nexus-broker.dev/wh/${trigger.broker_slug}`
     : null;
-
-  const webhookUrl = brokerWebhookUrl || localWebhookUrl;
 
   return (
     <div className="wf-config-panel">
@@ -103,27 +97,10 @@ export default function TriggerConfigForm({
             {webhookUrl && (
               <div className="wf-field">
                 <label>Webhook URL</label>
-                {brokerWebhookUrl && (
-                  <div style={{ marginBottom: 4 }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--ok, #4caf80)", marginRight: 4 }}>
-                      Relay
-                    </span>
-                  </div>
-                )}
                 <div className="wf-webhook-url-row">
                   <code className="wf-webhook-url">{webhookUrl}</code>
                   <CopyBtn text={webhookUrl} />
                 </div>
-                {brokerWebhookUrl && localWebhookUrl && (
-                  <div style={{ marginTop: 4 }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--fg-dim)", marginRight: 4 }}>
-                      Local
-                    </span>
-                    <code style={{ fontSize: 10, color: "var(--fg-dim)" }}>
-                      {localWebhookUrl}
-                    </code>
-                  </div>
-                )}
               </div>
             )}
           </>

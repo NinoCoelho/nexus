@@ -312,21 +312,17 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     raw = content.get("content", "") if isinstance(content, dict) else str(content)
     wf = parser.parse(raw)
 
-    base_url = str(request.base_url).rstrip("/")
     from ...config_file import load as load_config
     broker_base = load_config().broker.url.rstrip("/")
 
     hooks = []
     for t in wf.triggers:
         if t.type == TriggerType.webhook:
-            local_url = f"{base_url}/workflow/trigger/{t.token}" if t.token else None
-            broker_url = f"{broker_base}/wh/{t.broker_slug}" if t.broker_slug else None
+            url = f"{broker_base}/wh/{t.broker_slug}" if t.broker_slug else None
             hooks.append({
                 "trigger_id": t.id,
                 "token": t.token,
-                "url": broker_url or local_url,
-                "localUrl": local_url,
-                "brokerUrl": broker_url,
+                "url": url,
             })
 
     return {"webhooks": hooks}
