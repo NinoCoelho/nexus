@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { TriggerConfig, TriggerType, EventType, VaultFolder } from "../../../types/workflow";
-import { listEventTypes, listVaultFolders } from "../../../api/workflows";
+import { listEventTypes, listVaultFolders, getWebhookUrl } from "../../../api/workflows";
 import { TRIGGER_TYPES, TRIGGER_ICONS } from "./constants";
 import { CopyBtn } from "./shared";
 
@@ -9,16 +9,19 @@ export default function TriggerConfigForm({
   onChangeTrigger,
   onDelete,
   onClose,
+  wfPath,
 }: {
   trigger: TriggerConfig;
   onChangeTrigger: (patch: Partial<TriggerConfig>) => void;
   onDelete: () => void;
   onClose: () => void;
+  wfPath?: string;
 }) {
   const [eventTypes, setEventTypes] = useState<EventType[]>([]);
   const [showEventDropdown, setShowEventDropdown] = useState(false);
   const [vaultFolders, setVaultFolders] = useState<VaultFolder[]>([]);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
   const eventDropdownRef = useRef<HTMLDivElement>(null);
   const folderPickerRef = useRef<HTMLDivElement>(null);
 
@@ -54,9 +57,21 @@ export default function TriggerConfigForm({
     return () => document.removeEventListener("mousedown", handler);
   }, [showEventDropdown, showFolderPicker]);
 
-  const webhookUrl = trigger.broker_slug
-    ? `https://nexus-broker.dev/wh/${trigger.broker_slug}`
-    : null;
+  useEffect(() => {
+    if (trigger.type !== "webhook" || !trigger.token || !wfPath) {
+      setWebhookUrl(null);
+      return;
+    }
+    let cancelled = false;
+    getWebhookUrl(wfPath)
+      .then((res) => {
+        if (cancelled) return;
+        const hook = res.webhooks.find((w) => w.trigger_id === trigger.id);
+        setWebhookUrl(hook?.url ?? null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [trigger.type, trigger.token, trigger.id, wfPath]);
 
   return (
     <div className="wf-config-panel">

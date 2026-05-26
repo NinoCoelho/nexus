@@ -85,6 +85,7 @@ export default function ConfigPanel({
         onChangeTrigger={onChangeTrigger}
         onDelete={onDelete}
         onClose={onClose}
+        wfPath={wfPath}
       />
     );
   }
