@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listBrokerWebhooks,
   createBrokerWebhook,
@@ -31,17 +31,34 @@ export default function WebhookManager({ onClose, onSelect, selectMode }: Props)
   const [assigning, setAssigning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  function refresh() {
+  const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
     listBrokerWebhooks()
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }
+  }, []);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    const isProvisioning = (data?.signed_in ?? false) && !(data?.connected ?? false);
+    if (isProvisioning && !pollRef.current) {
+      pollRef.current = setInterval(refresh, 5000);
+    } else if (!isProvisioning && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [data?.signed_in, data?.connected, refresh]);
 
   async function handleCreate() {
     setCreating(true);
@@ -164,9 +181,9 @@ export default function WebhookManager({ onClose, onSelect, selectMode }: Props)
             <p style={{ fontSize: 13, color: "var(--fg-dim)", margin: "0 0 12px" }}>
               Webhook relay is being provisioned. This happens automatically after sign-in.
             </p>
-            <button className="modal-btn" onClick={refresh} disabled={loading}>
-              {loading ? "Checking..." : "Retry"}
-            </button>
+            <p style={{ fontSize: 11, color: "var(--fg-dim)", margin: "0 0 8px" }}>
+              Checking automatically...
+            </p>
           </div>
         )}
 
