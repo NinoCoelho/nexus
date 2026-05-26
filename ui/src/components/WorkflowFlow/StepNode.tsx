@@ -27,7 +27,8 @@ export interface StepNodeData extends Record<string, unknown> {
   executing?: boolean;
   historyStatus?: StepRunStatus | null;
   historyOutput?: unknown;
-  monitorExecuted?: boolean | null;
+  monitorExecuted?: boolean;
+  monitorDimmed?: boolean;
   onRun?: () => void;
   onOpenInspector?: () => void;
   onAddFromHandle?: (nodeId: string, handleId: string, rect: DOMRect) => void;
@@ -108,12 +109,12 @@ function StepNodeComp({ data, id }: NodeProps) {
   );
 
   const activeStatus = d.execStatus || d.historyStatus;
-  const monitorStatus = d.monitorExecuted === true
+  const monitorStatus = d.monitorExecuted
     ? (d.historyStatus === "failed" ? "wf-node-exec-failed" : "wf-node-exec-completed")
-    : d.monitorExecuted === false
+    : d.monitorDimmed
       ? "wf-node-exec-dimmed"
       : "";
-  const statusClass = d.monitorExecuted !== null && d.monitorExecuted !== undefined
+  const statusClass = d.monitorDimmed !== undefined
     ? monitorStatus
     : d.executing
       ? "wf-node-executing"

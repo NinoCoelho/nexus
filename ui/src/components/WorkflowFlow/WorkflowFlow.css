@@ -2419,6 +2419,9 @@
 .wf-monitor-canvas {
   flex: 1;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 /* ── Execution List Items ───────────────────────────────────────────────── */
@@ -2554,11 +2557,41 @@
   margin-bottom: 12px;
   font-size: 12px;
   color: var(--fg-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wf-exec-inspector-meta .wf-exec-inspector-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.wf-exec-inspector-badge.badge-completed {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.wf-exec-inspector-badge.badge-failed {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--bad);
+}
+
+.wf-exec-inspector-badge.badge-running {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.wf-exec-inspector-badge.badge-skipped {
+  background: var(--bg-hover);
+  color: var(--fg-dim);
 }
 
 .wf-exec-inspector-meta span {
-  display: block;
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 
 .wf-exec-inspector-section {
@@ -2577,6 +2610,11 @@
   text-transform: uppercase;
   letter-spacing: 0.03em;
   transition: color 0.1s;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
 }
 
 .wf-exec-inspector-section-header:hover {
@@ -2619,19 +2657,22 @@
 
 .wf-exec-inspector-debug-btn {
   width: 100%;
-  padding: 10px;
-  background: var(--accent);
-  color: white;
-  border: none;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  color: var(--fg);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s;
+  font-family: inherit;
+  transition: background 0.1s, border-color 0.1s;
 }
 
 .wf-exec-inspector-debug-btn:hover {
-  opacity: 0.9;
+  background: var(--bg-inset);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ── Execution Node Highlighting (monitor mode) ─────────────────────────── */

@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { WorkflowDef, WorkflowRun, RunDetail, StepRun, StepConfig } from "../../types/workflow";
+import type { WorkflowRun, RunDetail } from "../../types/workflow";
 import * as wfApi from "../../api/workflows";
-import ExecutionInspector from "./ExecutionInspector";
 
 interface Props {
   wfPath: string;
-  wf: WorkflowDef;
   children: React.ReactNode;
   onExecutionLoad: (detail: RunDetail | null) => void;
-  onSeedFromRun: (runId: string) => void;
-  monitorInspectStepId: string | null;
-  onMonitorInspectStep: (stepId: string | null) => void;
-  onMonitorInspectClose: () => void;
+  inspectorSlot: React.ReactNode;
+  hasMonitorDetail: boolean;
 }
 
 function statusIcon(status: string): { icon: string; cls: string } {
@@ -65,18 +61,14 @@ function groupByDate(runs: WorkflowRun[]): { label: string; runs: WorkflowRun[] 
 
 export default function MonitorTab({
   wfPath,
-  wf,
   children,
   onExecutionLoad,
-  onSeedFromRun,
-  monitorInspectStepId,
-  onMonitorInspectStep,
-  onMonitorInspectClose,
+  inspectorSlot,
+  hasMonitorDetail,
 }: Props) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [selectedDetail, setSelectedDetail] = useState<RunDetail | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -100,33 +92,16 @@ export default function MonitorTab({
       setSelectedRunId(runId);
       try {
         const detail = await wfApi.getRun(wfPath, runId);
-        setSelectedDetail(detail);
         onExecutionLoad(detail);
-        if (detail.steps.length > 0) {
-          const failed = detail.steps.find((s) => s.status === "failed");
-          onMonitorInspectStep((failed ?? detail.steps[0]).step_id);
-        }
       } catch {
         console.error("Failed to load run detail");
-        setSelectedDetail(null);
         onExecutionLoad(null);
-        onMonitorInspectStep(null);
       }
     },
-    [wfPath, onExecutionLoad, onMonitorInspectStep],
+    [wfPath, onExecutionLoad],
   );
 
   const groups = useMemo(() => groupByDate(runs), [runs]);
-
-  const inspectorStepRun = useMemo<StepRun | null>(() => {
-    if (!monitorInspectStepId || !selectedDetail) return null;
-    return selectedDetail.steps.find((s) => s.step_id === monitorInspectStepId) ?? null;
-  }, [monitorInspectStepId, selectedDetail]);
-
-  const inspectorStepConfig = useMemo<StepConfig | undefined>(() => {
-    if (!monitorInspectStepId) return undefined;
-    return wf.steps.find((s) => s.id === monitorInspectStepId);
-  }, [monitorInspectStepId, wf.steps]);
 
   return (
     <div className="wf-monitor">
@@ -177,15 +152,16 @@ export default function MonitorTab({
         </div>
       </div>
       <div className="wf-monitor-canvas">{children}</div>
-      {inspectorStepRun && (
-        <ExecutionInspector
-          stepRun={inspectorStepRun}
-          stepConfig={inspectorStepConfig}
-          onClose={onMonitorInspectClose}
-          onCopyToEditor={() => {
-            if (selectedRunId) onSeedFromRun(selectedRunId);
-          }}
-        />
+      {inspectorSlot}
+      {hasMonitorDetail && !inspectorSlot && (
+        <div className="wf-exec-inspector">
+          <div className="wf-exec-inspector-header">
+            <span className="wf-exec-inspector-name">No step data</span>
+          </div>
+          <div className="wf-exec-inspector-body" style={{ padding: 16, color: "var(--fg-dim)", fontSize: 13 }}>
+            This run has no recorded step executions.
+          </div>
+        </div>
       )}
     </div>
   );

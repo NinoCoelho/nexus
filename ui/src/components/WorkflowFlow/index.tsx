@@ -19,6 +19,7 @@ import {
 import type {
   WorkflowDef,
   StepConfig,
+  StepRun,
   StepType,
   TriggerConfig,
 } from "../../types/workflow";
@@ -28,6 +29,7 @@ import { ConditionNode } from "./ConditionNode";
 import ConfigPanel from "./ConfigPanel";
 import StepInspector from "./StepInspector";
 import MonitorTab from "./MonitorTab";
+import ExecutionInspector from "./ExecutionInspector";
 import TriggerTestModal from "./TriggerTestModal";
 import Modal from "../Modal";
 import {
@@ -182,6 +184,9 @@ function Canvas({
 
     for (const t of migratedWf.triggers) {
       const id = `trigger-${t.id}`;
+      const triggerExecuted = ir.activeTab === "monitor" && ir.monitorDetail
+        ? ir.monitorDetail.steps.length > 0
+        : false;
       nodes.push({
         id,
         type: "trigger",
@@ -193,6 +198,7 @@ function Canvas({
           detail: triggerSummary(t),
           selected: crud.selectedId === id,
           hasActiveRun: !!ir.interactiveRunId,
+          monitorDimmed: ir.activeTab === "monitor" && !triggerExecuted,
           onRunTrigger: ir.handleTriggerRun,
           onRunAll: ir.handleRunAll,
           onAddFromHandle: crud.onAddFromHandle,
@@ -215,7 +221,8 @@ function Canvas({
       const historyStatus = histSr?.status || null;
       const monitorExecuted = ir.activeTab === "monitor" && ir.monitorDetail
         ? ir.monitorDetail.steps.some((h) => h.step_id === s.id && (h.status === "completed" || h.status === "failed" || h.status === "running"))
-        : null;
+        : false;
+      const monitorDimmed = ir.activeTab === "monitor" && !monitorExecuted;
 
       if (s.type === "condition") {
         nodes.push({
@@ -233,6 +240,7 @@ function Canvas({
             historyStatus,
             historyOutput: histSr?.output,
             monitorExecuted,
+            monitorDimmed,
             onRun: () => ir.executeStep(s.id),
             onOpenInspector: () => ir.handleOpenInspector(s.id),
             onAddFromHandle: crud.onAddFromHandle,
@@ -255,6 +263,7 @@ function Canvas({
             historyStatus,
             historyOutput: histSr?.output,
             monitorExecuted,
+            monitorDimmed,
             onRun: () => ir.executeStep(s.id),
             onOpenInspector: () => ir.handleOpenInspector(s.id),
             onAddFromHandle: crud.onAddFromHandle,
@@ -415,6 +424,39 @@ function Canvas({
 
   const isMonitor = ir.activeTab === "monitor";
 
+  useEffect(() => {
+    if (!ir.monitorDetail || ir.monitorDetail.steps.length === 0) {
+      ir.setMonitorInspectStepId(null);
+      return;
+    }
+    const failed = ir.monitorDetail.steps.find((s) => s.status === "failed");
+    ir.setMonitorInspectStepId((failed ?? ir.monitorDetail.steps[0]).step_id);
+  }, [ir.monitorDetail]);
+
+  const monitorInspectorStepRun = useMemo<StepRun | null>(() => {
+    if (!ir.monitorInspectStepId || !ir.monitorDetail) return null;
+    return ir.monitorDetail.steps.find((s) => s.step_id === ir.monitorInspectStepId) ?? null;
+  }, [ir.monitorInspectStepId, ir.monitorDetail]);
+
+  const monitorInspectorStepConfig = useMemo<StepConfig | undefined>(() => {
+    if (!ir.monitorInspectStepId) return undefined;
+    return migratedWf.steps.find((s) => s.id === ir.monitorInspectStepId);
+  }, [ir.monitorInspectStepId, migratedWf.steps]);
+
+  const monitorInspectorSlot = useMemo(() => {
+    if (!monitorInspectorStepRun) return null;
+    return (
+      <ExecutionInspector
+        stepRun={monitorInspectorStepRun}
+        stepConfig={monitorInspectorStepConfig}
+        onClose={() => ir.setMonitorInspectStepId(null)}
+        onCopyToEditor={() => {
+          if (ir.monitorDetail) ir.handleSeedFromRun(ir.monitorDetail.run.id);
+        }}
+      />
+    );
+  }, [monitorInspectorStepRun, monitorInspectorStepConfig, ir.setMonitorInspectStepId, ir.monitorDetail]);
+
   const handleMonitorNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     if (!isMonitor || !ir.monitorDetail) return;
     const stepId = node.id.startsWith("step-") ? node.id.replace("step-", "") : null;
@@ -430,7 +472,14 @@ function Canvas({
   }, [isMonitor, handleMonitorNodeClick, crud.setSelectedId]);
 
   const monitorEdges = useMemo(() => {
-    if (!isMonitor || !ir.monitorDetail) return edges;
+    if (!isMonitor) return edges;
+    if (!ir.monitorDetail || ir.monitorDetail.steps.length === 0) {
+      return edges.map((e) => ({
+        ...e,
+        className: "wf-edge-exec-dimmed",
+        style: { stroke: "var(--text-muted, #333)", opacity: 0.2, strokeDasharray: "5 5" },
+      }));
+    }
     const executedIds = new Set(
       ir.monitorDetail.steps
         .filter((s) => s.status === "completed" || s.status === "failed" || s.status === "running")
@@ -442,7 +491,7 @@ function Canvas({
         .map((s) => s.step_id),
     );
     const triggerId = migratedWf.triggers[0]?.id;
-    if (triggerId && ir.monitorDetail.steps.length > 0) {
+    if (triggerId) {
       executedIds.add(`trigger-${triggerId}`);
     }
     return edges.map((e) => {
@@ -698,12 +747,9 @@ function Canvas({
       ) : (
         <MonitorTab
           wfPath={wfPath || ""}
-          wf={migratedWf}
           onExecutionLoad={ir.setMonitorDetail}
-          onSeedFromRun={ir.handleSeedFromRun}
-          monitorInspectStepId={ir.monitorInspectStepId}
-          onMonitorInspectStep={(id) => ir.setMonitorInspectStepId(id)}
-          onMonitorInspectClose={() => ir.setMonitorInspectStepId(null)}
+          inspectorSlot={monitorInspectorSlot}
+          hasMonitorDetail={!!ir.monitorDetail}
         >
           {canvasEl}
         </MonitorTab>

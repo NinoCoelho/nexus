@@ -14,7 +14,8 @@ export interface ConditionNodeData extends Record<string, unknown> {
   canRun?: boolean;
   historyStatus?: StepRunStatus | null;
   historyOutput?: unknown;
-  monitorExecuted?: boolean | null;
+  monitorExecuted?: boolean;
+  monitorDimmed?: boolean;
   onRun?: () => void;
   onOpenInspector?: () => void;
   onAddFromHandle?: (nodeId: string, handleId: string, rect: DOMRect) => void;
@@ -104,9 +105,9 @@ function ConditionNodeComp({ data, id }: NodeProps) {
   const elseHandlers = makeHandlers("else", pointerStartElse, dragForwardedElse);
 
   const activeStatus = d.execStatus || d.historyStatus;
-  const monitorCls = d.monitorExecuted === true
+  const monitorCls = d.monitorExecuted
     ? (d.historyStatus === "failed" ? "wf-node-exec-failed" : "wf-node-exec-completed")
-    : d.monitorExecuted === false
+    : d.monitorDimmed
       ? "wf-node-exec-dimmed"
       : "";
   const statusIcon = activeStatus === "completed"

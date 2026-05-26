@@ -261,7 +261,7 @@ export default function MarkdownView({
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[[
         rehypeKatex,
-        { strict: { mathVsTextAccents: false } } as Record<string, unknown>,
+        { strict: (code: string) => code === "mathVsTextAccents" ? "ignore" : "warn" },
       ]]}
       urlTransform={urlTransform ?? vaultUrlTransform}
       components={mdComponents}

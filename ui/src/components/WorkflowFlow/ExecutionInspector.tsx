@@ -11,15 +11,15 @@ interface Props {
 function statusBadge(status: string): { label: string; cls: string } {
   switch (status) {
     case "completed":
-      return { label: "Completed", cls: "wf-exec-status wf-exec-ok" };
+      return { label: "Completed", cls: "wf-exec-inspector-badge badge-completed" };
     case "failed":
-      return { label: "Failed", cls: "wf-exec-status wf-exec-err" };
+      return { label: "Failed", cls: "wf-exec-inspector-badge badge-failed" };
     case "running":
-      return { label: "Running", cls: "wf-exec-status wf-exec-run" };
+      return { label: "Running", cls: "wf-exec-inspector-badge badge-running" };
     case "skipped":
-      return { label: "Skipped", cls: "wf-exec-status" };
+      return { label: "Skipped", cls: "wf-exec-inspector-badge badge-skipped" };
     default:
-      return { label: status, cls: "wf-exec-status" };
+      return { label: status, cls: "wf-exec-inspector-badge badge-skipped" };
   }
 }
 

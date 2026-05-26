@@ -19,6 +19,7 @@ export interface TriggerNodeData extends Record<string, unknown> {
   detail: string;
   selected?: boolean;
   hasActiveRun?: boolean;
+  monitorDimmed?: boolean;
   onRunTrigger?: () => void;
   onRunAll?: () => void;
   onAddFromHandle?: (nodeId: string, handleId: string, rect: DOMRect) => void;
@@ -94,7 +95,7 @@ function TriggerNodeComp({ data, id }: NodeProps) {
   );
 
   return (
-    <div className={`wf-node trigger-node${d.selected ? " selected" : ""}`} style={{ position: "relative" }}>
+    <div className={`wf-node trigger-node${d.selected ? " selected" : ""}${d.monitorDimmed ? " wf-node-exec-dimmed" : ""}`} style={{ position: "relative" }}>
       <div className="wf-node-header">
         <span className="icon">{TRIGGER_ICONS[d.triggerType] || "⚡"}</span>
         <span className="label">Trigger</span>
