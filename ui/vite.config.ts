@@ -10,7 +10,7 @@ const API_PREFIXES = [
   "/share", "/local", "/notifications", "/push", "/transcribe", "/audio",
   "/health", "/heartbeat", "/cookies", "/dream", "/mcp", "/jobs",
   "/update", "/workflows", "/projects", "/tunnel", "/broker", "/webhook",
-  "/settings",
+  "/settings", "/credentials",
 ];
 
 function stripProxyHeaders(

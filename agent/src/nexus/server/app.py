@@ -60,6 +60,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/share", "/local", "/notifications", "/push",
     "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
     "/dream", "/mcp", "/jobs", "/update", "/workflows", "/projects",
+    "/credentials",
 )
 
 
