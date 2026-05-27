@@ -20,6 +20,7 @@ _SESSION_COOKIE = "nexus_session"
 
 _PUBLIC_PATHS = frozenset({
     "/auth/setup",
+    "/auth/generate-bootstrap-token",
     "/auth/invite",
     "/auth/register",
     "/auth/login",

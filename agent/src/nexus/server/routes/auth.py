@@ -136,6 +136,18 @@ def setup(request: Request, body: SetupRequest) -> Any:
     return response
 
 
+@router.post("/generate-bootstrap-token")
+def generate_bootstrap_token_endpoint(request: Request) -> Any:
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Loopback only")
+    store = request.app.state.user_store
+    if store.has_any_users():
+        raise HTTPException(status_code=400, detail="Users already exist")
+    token = generate_bootstrap_token()
+    return {"token": token}
+
+
 @router.get("/invite/{code}", response_model=InviteInfoResponse)
 def get_invite_info(code: str, request: Request) -> Any:
     store = request.app.state.user_store
