@@ -504,19 +504,16 @@ def _credentials_block() -> str:
         "These credentials are stored at `~/.nexus/secrets.toml` (file mode "
         "0600). Reference them as `$NAME` placeholders in `http_call` args "
         "(headers, body, or URL) — the server substitutes the real value at "
-        "the tool boundary, just before the request goes out. The raw value "
-        "is never sent to you."
+        "the tool boundary, just before the request goes out. They also work "
+        "in `terminal` commands — `$NAME` is injected as an environment "
+        "variable before execution so the shell expands it naturally. The raw "
+        "value is never sent to you."
     )
     lines.append("")
     lines.append("**Hard rules:**")
     lines.append(
         "- Do NOT ask the user for a value listed here — it is already "
         "stored. Just use the placeholder."
-    )
-    lines.append(
-        "- Do NOT run `echo $NAME` / `printenv` via `terminal` to check a "
-        "stored credential. The shell does not see secrets-store values; it "
-        "will report the var as empty even when the credential is present."
     )
     lines.append(
         "- Do NOT include the literal value of any credential in your "

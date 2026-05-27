@@ -102,13 +102,16 @@ class StateToolHandler:
                 "available": [req.name for req in skill.requires_keys],
                 "usage": (
                     "These credentials are stored. Use them as `$NAME` "
-                    "placeholders directly in `http_call` args (headers, body, "
-                    "or URL) — the server substitutes the real value at the "
-                    "tool boundary. The LLM never sees the raw value; that is "
-                    "by design. Do NOT ask the user for the key, do NOT try "
-                    "to read it via `terminal` (echo/printenv won't see it), "
-                    "and do NOT include the literal value anywhere in your "
-                    "messages. Just write `$NAME` in the tool args."
+                    "placeholders in `http_call` args (headers, body, "
+                    "or URL) — the server substitutes the real value at "
+                    "the tool boundary. They also work in `terminal` "
+                    "commands — `$NAME` is injected as an environment "
+                    "variable before execution so the shell expands it "
+                    "naturally. The LLM never sees the raw value; that "
+                    "is by design. Do NOT ask the user for the key and "
+                    "do NOT include the literal value anywhere in your "
+                    "messages. Just write `$NAME` in the tool args or "
+                    "command string."
                 ),
             }
         if skill.has_requirements:

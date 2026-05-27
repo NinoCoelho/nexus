@@ -251,9 +251,22 @@ def build_tool_registry(
         h = handlers.terminal
         if h is None:
             return '{"ok": false, "error": "terminal unavailable: handler not wired"}'
+
+        from nexus.secrets_substitute import _PLACEHOLDER_RE
+        from nexus import secrets as _secrets
+
+        command = args.get("command", "")
+        if isinstance(command, str):
+            resolved_env: dict[str, str] = args.get("env") or {}
+            for m in _PLACEHOLDER_RE.finditer(command):
+                name = m.group(1)
+                val = _secrets.resolve(name)
+                if val is not None:
+                    resolved_env[name] = val
+            if resolved_env:
+                args = {**args, "env": resolved_env}
+
         result = await h.invoke(args)
-        # ``h`` is loom.tools.terminal.TerminalTool which returns a loom
-        # ``ToolResult`` whose ``.text`` is already the canonical JSON envelope.
         return result.text
 
     registry.register(_SimpleToolHandler(ASK_USER_TOOL, _ask_user))

@@ -7,14 +7,20 @@ fallback). The LLM never sees the resolved value — substitution is a
 last-mile transform applied to the args of outbound tool calls
 (``http_call``, ``acp_call``).
 
+For ``terminal`` commands, ``$NAME`` placeholders are NOT substituted in
+the command string (to avoid leaking secrets in the HITL approval
+dialog). Instead, the ``_terminal`` wrapper in ``registry.py`` scans
+the command for ``$NAME`` patterns, resolves them via
+:func:`nexus.secrets.resolve`, and injects the values as environment
+variables into the subprocess. The shell then expands ``$NAME``
+naturally — the command string itself is never modified.
+
 What is *not* substituted, by design:
 
-* The ``terminal`` tool's ``command`` string. The user sees the command
-  in the HITL approval dialog before it runs; baking a resolved secret
-  into the displayed command would leak it. Skill authors who need a
-  credential in a shell command should export the value as an
-  environment variable so the spawned shell expands it itself — the
-  pre-existing env-var path covers that case.
+* The ``terminal`` tool's ``command`` string (string substitution).
+  Credential values are instead injected as subprocess env vars so the
+  shell expands them. The command shown in the HITL approval dialog
+  always contains the literal ``$NAME`` placeholder, never the value.
 * Anything outside ``[A-Z][A-Z0-9_]*``. Lower-case shell variables and
   partial matches are left alone so ``"/path/$thing"`` keeps working.
 """

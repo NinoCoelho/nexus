@@ -94,7 +94,10 @@ straight into a friendly UI.
 - Never reply with the synthesized SKILL.md as plain text — only
   `skill_manage("create", …)` makes the skill real.
 - Never copy `requires_keys` from upstream that don't apply to the user's
-  stated ask.
+  stated ask. When the skill needs API credentials, declare them in
+  `requires_keys` and use `$NAME` placeholders in both `http_call` args
+  and `terminal` commands — the server handles substitution (http_call)
+  or env var injection (terminal) automatically.
 - If `skill_manage` returns an error, reply `Failed: <error message>` and
   stop. Do not retry with a different name unless the error is a slug
   collision; in that case append `-2`, `-3`, … and retry once.
