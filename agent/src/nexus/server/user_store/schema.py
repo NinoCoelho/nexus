@@ -60,6 +60,7 @@ def init_schema(db: sqlite3.Connection) -> None:
 def _migrate_nexus_uid(db: sqlite3.Connection) -> None:
     cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
     if "nexus_uid" not in cols:
-        db.execute("ALTER TABLE users ADD COLUMN nexus_uid TEXT UNIQUE")
+        db.execute("ALTER TABLE users ADD COLUMN nexus_uid TEXT")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_nexus_uid ON users(nexus_uid)")
     if "password_hash" in cols:
         db.execute("ALTER TABLE users DROP COLUMN password_hash")

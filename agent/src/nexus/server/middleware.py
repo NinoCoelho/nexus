@@ -62,8 +62,8 @@ def _is_api_path(path: str) -> bool:
         "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
         "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
         "/share", "/local", "/notifications", "/push",
-        "/transcribe", "/audio", "/heartbeat", "/cookies",
-        "/dream", "/mcp", "/jobs", "/admin",
+        "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
+        "/dream", "/mcp", "/jobs", "/admin", "/workflows",
     )
     if path.startswith("/tunnel/"):
         return True

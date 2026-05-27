@@ -124,3 +124,4 @@ class SettingsPayload(BaseModel):
     merges against the current state."""
 
     yolo_mode: bool | None = None
+    auto_accept_members: bool | None = None

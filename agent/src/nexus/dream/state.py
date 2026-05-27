@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS dream_explored_territory (
 
 
 _DREAM_SCHEMA = (
-    _CREATE_RUNS + _CREATE_RUNS_IDX + ";" + _CREATE_BUDGET + ";" + _CREATE_TERRITORY
+    _CREATE_RUNS + ";" + _CREATE_RUNS_IDX + ";" + _CREATE_BUDGET + ";" + _CREATE_TERRITORY
 )
 
 

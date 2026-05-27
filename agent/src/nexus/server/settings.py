@@ -44,6 +44,15 @@ class Settings(BaseModel):
         ),
     )
 
+    auto_accept_members: bool = Field(
+        default=False,
+        description=(
+            "When True, users who register without an invite code are "
+            "automatically activated as members instead of remaining in "
+            "pending status. Has no effect when multi-user mode is off."
+        ),
+    )
+
 
 class SettingsStore:
     """Read/write ``settings.json`` with in-process caching.

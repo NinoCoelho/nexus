@@ -112,6 +112,71 @@ def clear_account() -> None:
             log.exception("[nexus_account] failed to remove account.json")
 
 
+def _ensure_nexus_in_config(tier: str) -> None:
+    """Add the Nexus provider and canonical model to ``config.toml``.
+
+    Called from :func:`verify_id_token` so the Nexus model is available
+    the instant the user signs in, without waiting for the background
+    status-watcher's first poll cycle.
+
+    Logic mirrors :meth:`StatusWatcher._reconcile_models` — single-model-
+    per-tier policy: paid/pro tiers get the ``nexus`` model, free/trial
+    get ``demo``.
+    """
+    from .. import config_file
+    from ..config_schema import ModelEntry, ProviderConfig
+
+    cfg = config_file.load()
+
+    nexus_provider_names = {
+        name for name, p in cfg.providers.items()
+        if getattr(p, "runtime_kind", "") == "nexus"
+    }
+
+    if not nexus_provider_names:
+        cfg.providers["nexus"] = ProviderConfig(
+            base_url="https://llm.nexus-model.us/v1",
+            credential_ref="nexus_api_key",
+            type="openai_compat",
+            catalog_id="nexus",
+            runtime_kind="nexus",
+        )
+        nexus_provider_names = {"nexus"}
+
+    primary = "nexus" if "nexus" in nexus_provider_names else sorted(nexus_provider_names)[0]
+
+    # Any non-free tier is considered paid → gets the "nexus" model.
+    is_paid = bool(tier) and tier.strip().lower() not in ("free", "")
+    canonical = "nexus" if is_paid else "demo"
+
+    existing_nexus_ids = {
+        m.id for m in cfg.models if m.provider in nexus_provider_names
+    }
+    if existing_nexus_ids == {canonical}:
+        return
+
+    # Drop any stale nexus models and add the canonical one.
+    cfg.models = [m for m in cfg.models if m.provider not in nexus_provider_names]
+    cfg.models.append(
+        ModelEntry(
+            id=canonical,
+            provider=primary,
+            model_name=canonical,
+            tier="heavy" if canonical == "nexus" else "balanced",
+            tags=["nexus", "hosted", "pro" if canonical == "nexus" else "free"],
+        ),
+    )
+
+    if not cfg.agent.default_model:
+        cfg.agent.default_model = canonical
+
+    config_file.save(cfg)
+    log.info(
+        "[nexus_account] ensured nexus model in config: %s (tier=%s)",
+        canonical, tier,
+    )
+
+
 def is_signed_in() -> bool:
     return bool(secrets.get(SECRET_NAME))
 
@@ -186,6 +251,11 @@ async def verify_id_token(id_token: str, *, base_url: str, store_key: bool = Tru
             log.info("[nexus_account] broker API key stored")
 
         save_account(record)
+
+        # Make the Nexus model available immediately — no need to wait
+        # for the background status-watcher's first poll cycle.
+        user_tier = record.get("tier", "free")
+        _ensure_nexus_in_config(user_tier)
 
         try:
             confirmed = await confirm_key(id_token, base_url=base_url)

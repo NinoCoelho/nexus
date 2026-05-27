@@ -22,6 +22,7 @@ def create_lifespan(state: dict[str, Any]):
         sessions = state["sessions"]
         multi_user = state["multi_user"]
         session_registry = state["session_registry"]
+        store_proxy = state.get("store_proxy")
         job_tracker = state["job_tracker"]
         publish_job_event = state["publish_job_event"]
 
@@ -363,7 +364,7 @@ def create_lifespan(state: dict[str, Any]):
                 if agent is not None:
                     wf_engine._agent = agent
                 if sessions is not None:
-                    wf_engine._sessions = sessions
+                    wf_engine._sessions = store_proxy or sessions
 
                 from .routes.workflows import init as _wf_init
                 _wf_init(wf_store, wf_engine)

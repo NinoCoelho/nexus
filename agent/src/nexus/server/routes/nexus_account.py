@@ -252,16 +252,28 @@ async def auth_nexus_verify(
         mgr.set_session_cookie(response, jwt_token)
         return response
 
-    user = store.create_user(email=email, display_name=display_name or email, role="member", status="pending", nexus_uid=nexus_uid)
-    mgr = _get_auth_manager(request)
-    jwt_token = mgr.create_token(user.id, user.role, "pending")
-    store.touch_login(user.id)
-    from ...server.event_bus import publish as _publish
-    _publish({"type": "pending_users_changed"})
-    resp_body = {**record, "multi_user": True, "user_id": user.id, "role": user.role, "status": "pending"}
-    response = _Response(content=_json.dumps(resp_body), media_type="application/json")
-    mgr.set_session_cookie(response, jwt_token)
-    return response
+    settings = request.app.state.settings_store.get()
+    auto_accept = settings.auto_accept_members
+    if auto_accept:
+        user = store.create_user(email=email, display_name=display_name or email, role="member", nexus_uid=nexus_uid)
+        mgr = _get_auth_manager(request)
+        jwt_token = mgr.create_token(user.id, user.role, user.status)
+        store.touch_login(user.id)
+        resp_body = {**record, "multi_user": True, "user_id": user.id, "role": user.role, "status": "active"}
+        response = _Response(content=_json.dumps(resp_body), media_type="application/json")
+        mgr.set_session_cookie(response, jwt_token)
+        return response
+    else:
+        user = store.create_user(email=email, display_name=display_name or email, role="member", status="pending", nexus_uid=nexus_uid)
+        mgr = _get_auth_manager(request)
+        jwt_token = mgr.create_token(user.id, user.role, "pending")
+        store.touch_login(user.id)
+        from ...server.event_bus import publish as _publish
+        _publish({"type": "pending_users_changed"})
+        resp_body = {**record, "multi_user": True, "user_id": user.id, "role": user.role, "status": "pending"}
+        response = _Response(content=_json.dumps(resp_body), media_type="application/json")
+        mgr.set_session_cookie(response, jwt_token)
+        return response
 
 
 @router.get("/auth/nexus/status")

@@ -14,7 +14,7 @@ router = APIRouter()
 @router.get("/settings", response_model=SettingsPayload)
 async def get_settings(store: SettingsStore = Depends(get_settings_store)) -> SettingsPayload:
     s = store.get()
-    return SettingsPayload(yolo_mode=s.yolo_mode)
+    return SettingsPayload(yolo_mode=s.yolo_mode, auto_accept_members=s.auto_accept_members)
 
 
 @router.post("/settings", response_model=SettingsPayload)
@@ -36,4 +36,4 @@ async def update_settings(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
-    return SettingsPayload(yolo_mode=updated.yolo_mode)
+    return SettingsPayload(yolo_mode=updated.yolo_mode, auto_accept_members=updated.auto_accept_members)

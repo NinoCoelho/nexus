@@ -285,10 +285,17 @@ def create_app(
     store_proxy = SessionStoreProxy(sessions, _app_state_ns)
 
     def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
-        sessions.publish(
-            "__jobs__",
-            SessionEvent(kind=kind, data=data),
-        )
+        if multi_user and session_registry is not None:
+            for _uid, user_store_inst in session_registry.all_stores().items():
+                user_store_inst.publish(
+                    "__jobs__",
+                    SessionEvent(kind=kind, data=data),
+                )
+        else:
+            sessions.publish(
+                "__jobs__",
+                SessionEvent(kind=kind, data=data),
+            )
 
     # Mutable dict passed by reference into all route handlers that need to
     # read or update cfg/prov_reg (config, providers, models, routing).
@@ -420,6 +427,7 @@ def create_app(
         "sessions": sessions,
         "multi_user": multi_user,
         "session_registry": session_registry,
+        "store_proxy": store_proxy,
         "job_tracker": job_tracker,
         "publish_job_event": _publish_job_event,
     })
