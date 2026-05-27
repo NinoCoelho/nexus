@@ -439,7 +439,7 @@ export default function TriggerConfigForm({
       {webhookManagerOpen && wfPath && (
         <WebhookManager
           onClose={() => setWebhookManagerOpen(false)}
-          selectMode={trigger.token ? undefined : { type: "workflow", path: wfPath, trigger_id: trigger.id }}
+          selectMode={trigger.broker_id ? undefined : { type: "workflow", path: wfPath, trigger_id: trigger.id }}
           onSelect={(result) => {
             setWebhookUrl(result.url);
             setHasBroker(true);
