@@ -90,13 +90,15 @@ class StreamTranslator:
                 )
             )
         content = "".join(self.pending_content_chunks) or None
-        self.working_messages.append(
-            lt.ChatMessage(
-                role=lt.Role.ASSISTANT,
-                content=content,
-                tool_calls=tcs or None,
-            )
+        assistant_msg = lt.ChatMessage(
+            role=lt.Role.ASSISTANT,
+            content=content,
+            tool_calls=tcs or None,
         )
+        rc = getattr(self._adapter, "_last_reasoning_content", None) if self._adapter else None
+        if rc:
+            assistant_msg._reasoning_content = rc  # type: ignore[attr-defined]
+        self.working_messages.append(assistant_msg)
         self.materialised_for_iter = True
         self._reasoning.capture(self._adapter)
 

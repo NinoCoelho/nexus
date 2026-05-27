@@ -331,6 +331,25 @@ class Agent:
                 pass
         return self._nexus_provider, None
 
+    @staticmethod
+    def _rebuild_loom_messages(
+        nexus_msgs: list[ChatMessage],
+        orig_loom_msgs: list[lt.ChatMessage],
+    ) -> list[lt.ChatMessage]:
+        from .._loom_bridge.message import _nexus_to_loom_message
+        out: list[lt.ChatMessage] = []
+        for nm, orig_lm in zip(nexus_msgs, orig_loom_msgs):
+            lm = _nexus_to_loom_message(nm)
+            rc = getattr(orig_lm, '_reasoning_content', None)
+            if rc:
+                lm._reasoning_content = rc  # type: ignore[attr-defined]
+            out.append(lm)
+        if len(nexus_msgs) > len(orig_loom_msgs):
+            from .._loom_bridge.message import _nexus_to_loom_message as _conv
+            for nm in nexus_msgs[len(orig_loom_msgs):]:
+                out.append(_conv(nm))
+        return out
+
     async def run_turn(
         self,
         user_message: str,
@@ -345,10 +364,13 @@ class Agent:
         self._chosen_model = model_id
 
         loom_messages: list[lt.ChatMessage] = []
+        stripped: list[ChatMessage] = []
         if history:
-            loom_messages = [
-                _to_loom_message(m) for m in _strip_dead_placeholders(history)
-            ]
+            stripped = _strip_dead_placeholders(history)
+            loom_messages = [_to_loom_message(m) for m in stripped]
+            for nm, lm in zip(stripped, loom_messages):
+                if nm.role == Role.ASSISTANT and nm.reasoning_content:
+                    lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
 
         pending = self._loom._pending_question
         annotated = _annotate_short_reply(user_message, pending)
@@ -394,6 +416,9 @@ class Agent:
         effective_window = ctx_window if ctx_window > 0 else _DEFAULT_FALLBACK_WINDOW
 
         loom_messages = [_to_loom_message(m) for m in stripped_history]
+        for nm, lm in zip(stripped_history, loom_messages):
+            if nm.role == Role.ASSISTANT and nm.reasoning_content:
+                lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
 
         from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW, TOOL_BUDGET_EXCEEDED
         CURRENT_HISTORY.set(stripped_history)
@@ -447,6 +472,9 @@ class Agent:
                     stripped_history = compacted
                     _auto_compacted_history = compacted
                     loom_messages = [_to_loom_message(m) for m in compacted]
+                    for nm, lm in zip(compacted, loom_messages):
+                        if nm.role == Role.ASSISTANT and nm.reasoning_content:
+                            lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
                     loom_messages.append(_to_loom_message(user_msg))
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
@@ -462,6 +490,9 @@ class Agent:
             compacted_stripped, compact_report = auto_compact(stripped_history)
             if compact_report.compacted > 0:
                 loom_messages = [_to_loom_message(m) for m in compacted_stripped]
+                for nm, lm in zip(compacted_stripped, loom_messages):
+                    if nm.role == Role.ASSISTANT and nm.reasoning_content:
+                        lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
                 loom_messages.append(_to_loom_message(user_msg))
                 check = check_overflow(loom_messages, context_window=ctx_window)
                 if not check.overflowed:
@@ -678,21 +709,28 @@ class Agent:
                     _zone = classify_zone(_est_tok, ctx_window, tools_overhead=_TOOLS_AND_SYSTEM_OVERHEAD)
                     _need_loom_restart = False
                     if _zone in ("yellow", "orange", "red"):
-                        tr.working_messages, _n_cleaned = compact_failed_scrapes(tr.working_messages)
+                        from .._loom_bridge.message import _loom_to_nexus_message
+                        _nexus_wm = [_loom_to_nexus_message(m) for m in tr.working_messages]
+                        _nexus_wm, _n_cleaned = compact_failed_scrapes(_nexus_wm)
                         if _n_cleaned > 0:
                             log.info(
                                 "Mid-turn: cleaned %d failed scrape results (zone=%s, %dK tokens)",
                                 _n_cleaned, _zone, _est_tok // 1024,
                             )
                             _need_loom_restart = True
+                            tr.working_messages = self._rebuild_loom_messages(_nexus_wm, tr.working_messages)
                     if _zone in ("orange", "red"):
-                        tr.working_messages, _mid_report = auto_compact(tr.working_messages)
+                        if not _need_loom_restart:
+                            from .._loom_bridge.message import _loom_to_nexus_message
+                            _nexus_wm = [_loom_to_nexus_message(m) for m in tr.working_messages]
+                        _nexus_wm, _mid_report = auto_compact(_nexus_wm)
                         if _mid_report.compacted > 0:
                             log.info(
                                 "Mid-turn: auto_compact compacted=%d saved=%d bytes (zone=%s)",
                                 _mid_report.compacted, _mid_report.saved_bytes, _zone,
                             )
                             _need_loom_restart = True
+                            tr.working_messages = self._rebuild_loom_messages(_nexus_wm, tr.working_messages)
                     if _need_loom_restart:
                         tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
                         tr.reset_iteration()
@@ -825,8 +863,10 @@ class Agent:
 
                 if retry_mgr.should_post_retry_compaction(ev):
                     from .compact import auto_compact
+                    from .._loom_bridge.message import _loom_to_nexus_message
 
-                    compacted_wm, compact_report = auto_compact(tr.working_messages)
+                    _nexus_wm = [_loom_to_nexus_message(m) for m in tr.working_messages]
+                    compacted_wm, compact_report = auto_compact(_nexus_wm)
                     if compact_report.compacted > 0:
                         try:
                             await loom_task
@@ -850,7 +890,9 @@ class Agent:
                         }
                         await asyncio.sleep(2.0)
                         retry_mgr.reset_all()
-                        tr.working_messages = _sanitize_loom_tool_pairs(compacted_wm)
+                        tr.working_messages = _sanitize_loom_tool_pairs(
+                            self._rebuild_loom_messages(compacted_wm, tr.working_messages)
+                        )
                         tr.reset_iteration()
                         retry_mgr.delta_emitted = False
                         loom_iter = self._loom.run_turn_stream(

@@ -91,17 +91,27 @@ class LoomProviderAdapter(LoomLLMProvider):
     def _restore_reasoning(self, loom_msgs: list[lt.ChatMessage]) -> list:
         from nexus.agent.llm import ChatMessage as NexusChatMessage
         nexus_messages = [_loom_to_nexus_message(m) for m in loom_msgs]
-        if not self._reasoning_content_map:
-            return nexus_messages
+        has_map = bool(self._reasoning_content_map)
+        if not has_map:
+            has_attr = any(getattr(m, '_reasoning_content', None) for m in loom_msgs)
+            if not has_attr:
+                return nexus_messages
         out: list[NexusChatMessage] = []
         for loom_m, nexus_m in zip(loom_msgs, nexus_messages):
-            fp = _msg_fingerprint(loom_m)
-            if fp and fp in self._reasoning_content_map:
+            rc = getattr(loom_m, '_reasoning_content', None)
+            if rc:
                 out.append(nexus_m.model_copy(
-                    update={"reasoning_content": self._reasoning_content_map[fp]}
+                    update={"reasoning_content": rc}
                 ))
-            else:
-                out.append(nexus_m)
+                continue
+            if has_map:
+                fp = _msg_fingerprint(loom_m)
+                if fp and fp in self._reasoning_content_map:
+                    out.append(nexus_m.model_copy(
+                        update={"reasoning_content": self._reasoning_content_map[fp]}
+                    ))
+                    continue
+            out.append(nexus_m)
         return out
 
     async def chat(
