@@ -402,6 +402,7 @@ class Agent:
         session_id: str | None = None,
         model_id: str | None = None,
         attachments: list[ContentPart] | None = None,
+        resume_working_messages: list[lt.ChatMessage] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         self._turn_trace = []
         self._skills_touched = []
@@ -409,7 +410,10 @@ class Agent:
 
         loom_messages: list[lt.ChatMessage] = []
         stripped_history: list[ChatMessage] = []
-        if history:
+        if resume_working_messages is not None:
+            loom_messages = list(resume_working_messages)
+            stripped_history = [_from_loom_message(m) for m in resume_working_messages]
+        elif history:
             stripped_history = _sanitize_tool_pairs(_strip_dead_placeholders(history))
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
@@ -441,7 +445,8 @@ class Agent:
         user_msg_text = annotated or user_message
         user_msg = _build_user_message(user_msg_text, attachments)
         user_msg_content = user_msg.content
-        loom_messages.append(_to_loom_message(user_msg))
+        if resume_working_messages is None:
+            loom_messages.append(_to_loom_message(user_msg))
 
         _auto_compacted_history: list[ChatMessage] | None = None
         if _session_tool_budget > 0 and stripped_history:

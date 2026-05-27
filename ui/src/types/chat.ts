@@ -254,4 +254,5 @@ export interface UseChatSessionResult {
   computeSeedModel: (preferred?: string) => string;
   handleCompact: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<import("../api/sessions").CompactResult | undefined>;
   handleRemoveLast: () => Promise<void>;
+  handleResumePaused: () => Promise<void>;
 }

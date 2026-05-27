@@ -76,6 +76,7 @@ export async function chatStream(
     attachments?: ChatAttachment[];
     inputMode?: "voice" | "text";
     projectId?: string | null;
+    resumeWorkingMessagesJson?: string;
   },
 ): Promise<void> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -91,6 +92,9 @@ export async function chatStream(
   }
   if (options?.projectId) {
     body.project_id = options.projectId;
+  }
+  if (options?.resumeWorkingMessagesJson) {
+    body.resume_working_messages_json = options.resumeWorkingMessagesJson;
   }
   const res = await fetch(`${BASE}/chat/stream`, {
     method: "POST",

@@ -188,6 +188,7 @@ export default function App() {
     handleSessionSelect: _handleSessionSelect,
     handleNewChat: _handleNewChat,
     handleCompact: _handleCompact, handleRemoveLast,
+    handleResumePaused,
   } = chatSession;
 
   const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
@@ -655,6 +656,7 @@ export default function App() {
               onCompact={handleCompact}
               onNewSession={_handleNewChat}
               onRemoveLast={handleRemoveLast}
+              onResumePaused={handleResumePaused}
               models={availableModels}
               selectedModel={activeState.selectedModel}
               onModelChange={handleModelChange}

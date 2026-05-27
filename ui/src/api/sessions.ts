@@ -308,3 +308,37 @@ export async function importSession(markdown: string): Promise<{ id: string; tit
   if (!res.ok) throw new Error(`Import error: ${res.status}`);
   return res.json();
 }
+
+export interface PausedTurnInfo {
+  ok: boolean;
+  paused: boolean;
+  retry_after: string;
+  remaining_seconds: number;
+  error_detail?: string;
+  model_id?: string;
+  resume_count: number;
+}
+
+export async function getPausedTurn(sessionId: string): Promise<PausedTurnInfo> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/paused`);
+  if (!res.ok) throw new Error(`Paused turn error: ${res.status}`);
+  return res.json();
+}
+
+export interface ResumedTurnData {
+  ok: boolean;
+  working_messages_json: string;
+  user_message: string;
+  model_id?: string;
+}
+
+export async function resumePausedTurn(sessionId: string): Promise<ResumedTurnData> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/resume-paused`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { detail?: string }).detail ?? `Resume error: ${res.status}`);
+  }
+  return res.json();
+}

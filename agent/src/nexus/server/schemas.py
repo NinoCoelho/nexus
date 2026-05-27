@@ -28,10 +28,8 @@ class ChatRequest(BaseModel):
     context: str | None = None
     model: str | None = None
     project_id: str | None = None
-    # "voice" when the user dictated; "text" when typed. Threaded through to
-    # the voice-ack pipeline so spoken acknowledgments only fire for voice
-    # turns. Defaults to "text" so existing callers (CLI, scripts) stay quiet.
     input_mode: str = "text"
+    resume_working_messages_json: str | None = None
 
 
 class ChatReply(BaseModel):

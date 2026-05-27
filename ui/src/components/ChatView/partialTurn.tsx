@@ -1,6 +1,6 @@
 // Partial-turn action banner for ChatView.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Message } from "./index";
 
@@ -43,6 +43,8 @@ export function PartialTurnActions({
   onCompact,
   onNewSession,
   onRemoveLast,
+  onResumePaused,
+  partial,
 }: {
   status: NonNullable<Message["partial"]>["status"];
   onRetry?: () => void;
@@ -50,16 +52,78 @@ export function PartialTurnActions({
   onCompact?: () => Promise<unknown>;
   onNewSession?: () => void;
   onRemoveLast?: () => void;
+  onResumePaused?: () => void;
+  partial?: Message["partial"];
 }) {
   const { t } = useTranslation("chat");
   const [compacting, setCompacting] = useState(false);
+  const [remaining, setRemaining] = useState<number | null>(null);
   const showContinue = PARTIAL_CAN_CONTINUE[status] && !!onContinue;
   const isContextIssue = status === "context_overflow" || status === "message_too_large";
+  const isRateLimited = status === "rate_limited" && partial?.retryAfter;
+
+  useEffect(() => {
+    if (!isRateLimited || !partial?.retryAfter) return;
+    const target = new Date(partial.retryAfter).getTime();
+    if (isNaN(target)) return;
+    const update = () => {
+      const left = Math.max(0, Math.ceil((target - Date.now()) / 1000));
+      setRemaining(left);
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [isRateLimited, partial?.retryAfter]);
+
   const doCompact = useCallback(() => {
     if (compacting || !onCompact) return;
     setCompacting(true);
     onCompact().finally(() => setCompacting(false));
   }, [compacting, onCompact]);
+
+  const fmtCountdown = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  if (isRateLimited) {
+    const countdownDone = remaining !== null && remaining <= 0;
+    return (
+      <div className="limit-banner" style={{ marginTop: 4 }}>
+        <div className="limit-banner-text">
+          {t("chat:partial.rateLimited")}
+          {remaining !== null && remaining > 0 && (
+            <span className="rate-limit-countdown" style={{ marginLeft: 8, fontFamily: "monospace" }}>
+              {fmtCountdown(remaining)}
+            </span>
+          )}
+        </div>
+        <div className="limit-banner-actions">
+          {onResumePaused && (
+            <button
+              className="limit-banner-btn limit-banner-btn-primary"
+              onClick={onResumePaused}
+              disabled={!countdownDone}
+              type="button"
+            >
+              {t("chat:partial.resume")}
+            </button>
+          )}
+          {onNewSession && (
+            <button
+              className="limit-banner-btn"
+              onClick={onNewSession}
+              type="button"
+            >
+              {t("chat:partial.newSession")}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="limit-banner" style={{ marginTop: 4 }}>
       <div className="limit-banner-text">{t(PARTIAL_KEY[status])} {t("chat:partial.proceed")}</div>

@@ -11,9 +11,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, compactSession, rollbackLastMessage, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyReconnectingEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -262,8 +262,7 @@ export function useChatSession(
             reason: event.reason,
           });
         } else if (event.type === "paused_for_cooldown") {
-          applyErrorEvent(setChatStates, key, "rate_limited",
-            `Rate limit hit. You can continue this task after the cooldown. Estimated wait: ${event.estimated_seconds}s.`);
+          applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
         } else if (event.type === "error") {
           applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
         }
@@ -411,6 +410,76 @@ export function useChatSession(
     }
   }, [activeSession, activeKey, chatStates, setChatStates, computeSeedModel, patchState]);
 
+  const handleResumePaused = useCallback(async () => {
+    const sid = activeSession;
+    if (!sid) return;
+    const state = chatStates.get(activeKey) ?? emptyState();
+    if (state.thinking) return;
+    try {
+      const data = await resumePausedTurn(sid);
+      const lastIdx = state.messages.length - 1;
+      patchState(activeKey, {
+        messages: state.messages.map((m, i) =>
+          i === lastIdx && m.role === "assistant"
+            ? { ...m, partial: undefined, streaming: true }
+            : m,
+        ),
+        thinking: true,
+      });
+      const abortController = new AbortController();
+      abortControllersRef.current.set(activeKey, abortController);
+      const sendModel = state.selectedModel && state.selectedModel !== "auto" ? state.selectedModel : "";
+      let sawDone = false;
+      try {
+        await chatStream(
+          data.user_message || "resume",
+          sid,
+          (event) => {
+            if (event.type === "delta") {
+              applyDeltaEvent(setChatStates, activeKey, event.text);
+            } else if (event.type === "thinking") {
+              applyThinkingEvent(setChatStates, activeKey, event.text);
+            } else if (event.type === "tool") {
+              applyToolEvent(setChatStates, activeKey, { name: event.name, args: event.args, result_preview: event.result_preview });
+            } else if (event.type === "done") {
+              sawDone = true;
+              applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, activeKey, sid, state.selectedModel, event);
+            } else if (event.type === "limit_reached") {
+              applyLimitReachedEvent(setChatStates, activeKey, event.iterations);
+            } else if (event.type === "reconnecting") {
+              applyReconnectingEvent(setChatStates, activeKey, {
+                attempt: event.attempt,
+                maxAttempts: event.maxAttempts,
+                delaySeconds: event.delaySeconds,
+                reason: event.reason,
+              });
+            } else if (event.type === "paused_for_cooldown") {
+              applyPausedForCooldownEvent(setChatStates, activeKey, event.retry_after, event.estimated_seconds);
+            } else if (event.type === "error") {
+              applyErrorEvent(setChatStates, activeKey, event.reason, event.detail, event.actions);
+            }
+          },
+          abortController.signal,
+          sendModel,
+          { bypassSecretGuard: false, attachments: undefined, resumeWorkingMessagesJson: data.working_messages_json },
+        );
+        if (!sawDone && !abortController.signal.aborted) {
+          setChatStates((prev) => { const next = new Map(prev); const cur = next.get(activeKey) ?? emptyState(); next.set(activeKey, { ...cur, historyLoaded: false, thinking: false }); return next; });
+          void loadSessionHistory(sid);
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          const recovered = await tryRecoverSession(sid, activeKey, sid, setChatStates, setActiveSession, loadSessionHistory);
+          if (!recovered) appendConnectionErrorBanner(err, activeKey, setChatStates);
+        }
+      } finally {
+        if (abortControllersRef.current.get(activeKey) === abortController) abortControllersRef.current.delete(activeKey);
+      }
+    } catch {
+      /* resume-paused endpoint returned error (e.g. cooldown not elapsed) */
+    }
+  }, [activeSession, activeKey, chatStates, patchState, setChatStates, setActiveSession, setSessionsRevision, persistUsedModel, loadSessionHistory, computeSeedModel]);
+
   return {
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,
     pendingSessionId, setPendingSessionId, sessionsRevision, setSessionsRevision,
@@ -419,6 +488,6 @@ export function useChatSession(
     handleContinuePartial, handleRetryPartial, handleInputChange,
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
     handleNewChat, loadSessionHistory, patchState, computeSeedModel,
-    handleCompact, handleRemoveLast,
+    handleCompact, handleRemoveLast, handleResumePaused,
   };
 }

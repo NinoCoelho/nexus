@@ -105,6 +105,23 @@ async def chat_stream_route(
     # ``model: "auto"`` are coerced to "use the configured default".
     resolved_model_id = req.model if req.model and req.model != "auto" else ""
 
+    _resume_loom_msgs: list | None = None
+    if req.resume_working_messages_json:
+        from ...agent.llm import ChatMessage as _LCM, Role as _LR
+        _resume_loom_msgs = []
+        for _rm in json.loads(req.resume_working_messages_json):
+            _tcs = None
+            if _rm.get("tool_calls"):
+                from loom.types import ToolCall as _TC
+                _tcs = [_TC(id=tc["id"], name=tc["name"], arguments=tc["arguments"]) for tc in _rm["tool_calls"]]
+            _resume_loom_msgs.append(_LCM(
+                role=_LR(_rm["role"]),
+                content=_rm["content"],
+                tool_calls=_tcs,
+                tool_call_id=_rm.get("tool_call_id"),
+                name=_rm.get("name"),
+            ))
+
     async def event_generator() -> AsyncIterator[str]:
         # If the user is retrying (hidden-seed marker), roll back the last
         # failed assistant turn from the loaded history so the retry starts
@@ -391,6 +408,7 @@ async def chat_stream_route(
                     session_id=session.id,
                     model_id=resolved_model_id,
                     attachments=attachment_parts or None,
+                    resume_working_messages=_resume_loom_msgs,
                 ),
                 interval=15.0,
             ):

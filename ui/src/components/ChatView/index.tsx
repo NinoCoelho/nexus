@@ -86,6 +86,8 @@ export interface Message {
       | "budget_exceeded";
     detail?: string;
     actions?: string[];
+    retryAfter?: string;
+    estimatedSeconds?: number;
   };
   /** Transient hint while the agent backs off after a retryable mid-stream
    * error. Cleared on the next delta/tool event (recovery succeeded) or
@@ -143,6 +145,7 @@ interface Props {
   onCompact?: () => Promise<unknown>;
   onNewSession?: () => void;
   onRemoveLast?: () => void;
+  onResumePaused?: () => void;
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
@@ -175,6 +178,7 @@ export default function ChatView({
   onCompact,
   onNewSession,
   onRemoveLast,
+  onResumePaused,
   models,
   selectedModel,
   onModelChange,
@@ -286,6 +290,8 @@ export default function ChatView({
                   onContinue={onContinuePartial ? () => onContinuePartial(idx) : undefined}
                   onCompact={onCompact}
                   onNewSession={onNewSession}
+                  onResumePaused={onResumePaused}
+                  partial={msg.partial}
                   onRemoveLast={
                     onRemoveLast
                       ? () =>

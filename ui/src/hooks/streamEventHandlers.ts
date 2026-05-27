@@ -269,3 +269,30 @@ export function applyErrorEvent(
     return next;
   });
 }
+
+export function applyPausedForCooldownEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  retryAfter: string,
+  estimatedSeconds: number,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const msgs = [...cur.messages];
+    const lastIdx = msgs.length - 1;
+    const partial: NonNullable<Message["partial"]> = {
+      status: "rate_limited",
+      detail: "Rate limit hit — the turn has been paused. Resume after the cooldown.",
+      retryAfter,
+      estimatedSeconds,
+    };
+    if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+      msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, reconnecting: undefined, partial };
+    } else {
+      msgs.push({ role: "assistant", content: "", timestamp: new Date(), partial });
+    }
+    next.set(key, { ...cur, messages: msgs, thinking: false });
+    return next;
+  });
+}
