@@ -55,10 +55,19 @@ def _account_view(*, watcher: StatusWatcher | None) -> dict[str, Any]:
     record = nexus_account.load_account()
     signed_in = nexus_account.is_signed_in()
     last_status = watcher.last_status if watcher is not None else None
+    # Prefer the live planId/tier from the watcher's last /api/status
+    # response over the cached account.json record — the cached record
+    # may be stale (e.g. recorded as "free" before an upgrade).
+    cached_tier = (record or {}).get("tier", "free") if signed_in else "free"
+    live_tier = None
+    if last_status:
+        live_tier = last_status.get("planId") or last_status.get("tier")
+    effective_tier = live_tier or cached_tier
+
     out: dict[str, Any] = {
         "signedIn": signed_in,
         "email": (record or {}).get("email", "") if signed_in else "",
-        "tier": (record or {}).get("tier", "free") if signed_in else "free",
+        "tier": effective_tier,
         "cancelsAt": (record or {}).get("cancelsAt") or None,
         "trialEnd": (record or {}).get("trialEnd") or None,
         # The desktop has "connected" the apiKey when /api/keys/confirm

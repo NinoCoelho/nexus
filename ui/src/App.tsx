@@ -58,6 +58,7 @@ import AgentStatusBar from "./components/AgentStatusBar";
 import SharedSessionView from "./components/SharedSessionView";
 import UpdateModal from "./components/UpdateModal";
 import { type UpdateCheckResult } from "./api/update";
+import NexusLoginScreen from "./components/onboarding/NexusLoginScreen";
 
 export default function App() {
   const toast = useToast();
@@ -478,6 +479,19 @@ export default function App() {
     return <SharedSessionView token={shareToken} />;
   }
 
+  // Before rendering the main app, gate on Nexus account sign-in. Even in
+  // non-multi-user mode, cloud providers in the model selector shouldn't
+  // appear before the user has authenticated — we don't know their tier or
+  // which features are available yet.
+  if (nexusAccount.status && !nexusAccount.status.signedIn) {
+    return (
+      <NexusLoginScreen
+        websiteUrl={window.__NEXUS_WEBSITE_URL__ || "https://www.nexus-model.us"}
+        onSignedIn={() => nexusAccount.reload()}
+      />
+    );
+  }
+
   return (
     <div className="app app--layout">
       <Sidebar
@@ -754,7 +768,7 @@ export default function App() {
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false); bumpSettingsRevision(); }}
       />
-      {hasModel === false && (
+      {hasModel === false && (nexusAccount.status?.signedIn ?? false) === false && (
         <WizardModal
           mode="first-run"
           configuredNames={[]}

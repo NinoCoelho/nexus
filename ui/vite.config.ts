@@ -1,3 +1,5 @@
+import type { ServerOptions } from "vite";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -11,9 +13,11 @@ const API_PREFIXES = [
   "/settings",
 ];
 
-function stripProxyHeaders(proxyReq: {
-  removeHeader(name: string): void;
-}) {
+function stripProxyHeaders(
+  proxyReq: { removeHeader(name: string): void },
+  _req: IncomingMessage,
+  _res: ServerResponse,
+) {
   proxyReq.removeHeader("x-forwarded-for");
   proxyReq.removeHeader("x-forwarded-host");
   proxyReq.removeHeader("cf-ray");
@@ -21,16 +25,26 @@ function stripProxyHeaders(proxyReq: {
   proxyReq.removeHeader("ngrok-trace-id");
 }
 
+function proxyTarget(): ServerOptions["proxy"] {
+  return Object.fromEntries(
+    API_PREFIXES.map(p => [
+      p,
+      {
+        target: API_TARGET,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", stripProxyHeaders);
+        },
+      },
+    ])
+  );
+}
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 1890,
     allowedHosts: [".nexus-model.us", ".trycloudflare.com"],
-    proxy: Object.fromEntries(
-      API_PREFIXES.map(p => [
-        p,
-        { target: API_TARGET, changeOrigin: true, onProxyReq: stripProxyHeaders },
-      ])
-    ),
+    proxy: proxyTarget(),
   },
 });

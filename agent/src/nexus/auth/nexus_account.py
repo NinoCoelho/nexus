@@ -301,7 +301,7 @@ async def refresh_status(*, base_url: str) -> dict[str, Any]:
     payload = await fetch_status(base_url=base_url, api_key=api_key)
 
     record = load_account() or {}
-    record["tier"] = payload.get("tier") or record.get("tier") or "free"
+    record["tier"] = payload.get("tier") or payload.get("planId") or record.get("tier") or "free"
     record["cancelsAt"] = payload.get("cancelsAt") or None
     record["trialEnd"] = payload.get("trialEnd") or None
     record["models"] = payload.get("models") or []
