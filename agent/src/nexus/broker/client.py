@@ -84,7 +84,7 @@ class BrokerClient:
             )
             resp.raise_for_status()
             body = resp.json()
-            items = body.get("webhooks") or body if isinstance(body, list) else []
+            items = body.get("webhooks") if isinstance(body, dict) and body.get("webhooks") else (body if isinstance(body, list) else [])
             return [self._parse_webhook(w) for w in items]
 
     def _parse_webhook(self, data: dict) -> BrokerWebhook:
@@ -116,7 +116,8 @@ class BrokerClient:
                 return None
             resp.raise_for_status()
             outer = resp.json()
-            data = outer.get("message") or outer
+            msg = outer.get("message")
+            data = msg if msg is not None else outer
             if data is None:
                 return None
             return BrokerMessage(

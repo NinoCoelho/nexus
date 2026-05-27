@@ -187,7 +187,7 @@ def _discover_needed_endpoints() -> list[dict[str, Any]]:
         from .. import home as _home
         import os
 
-        vault_path = _home.vault_dir()
+        vault_path = _home.vault_root()
         if vault_path:
             for root, _dirs, files in os.walk(vault_path):
                 for fname in files:

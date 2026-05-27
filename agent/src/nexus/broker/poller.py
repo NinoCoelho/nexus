@@ -235,7 +235,7 @@ class BrokerPoller:
             from .. import vault as _vault
             from .. import home as _home
 
-            vault_path = _home.vault_dir()
+            vault_path = _home.vault_root()
             if not vault_path:
                 return
 
