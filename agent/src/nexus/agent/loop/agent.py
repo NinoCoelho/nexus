@@ -131,6 +131,58 @@ def _sanitize_tool_pairs(history: list[ChatMessage]) -> list[ChatMessage]:
     return out if needs_repair else history
 
 
+def _sanitize_loom_tool_pairs(msgs: list[lt.ChatMessage]) -> list[lt.ChatMessage]:
+    """Loom-message variant of _sanitize_tool_pairs.
+
+    Ensures every assistant(tool_calls) in *msgs* is followed by matching
+    tool responses before the list is sent to a new loom iteration or retry.
+    Inserts synthetic tool results for unanswered tool_call_ids and drops
+    orphaned tool messages.  Returns the original list when no repair is
+    needed, otherwise returns a repaired copy.
+    """
+    out: list[lt.ChatMessage] = []
+    needs_repair = False
+    for i, m in enumerate(msgs):
+        if m.role == lt.Role.ASSISTANT and m.tool_calls:
+            pending = {tc.id for tc in m.tool_calls if tc.id}
+            if not pending:
+                out.append(m)
+                continue
+            answered: set[str] = set()
+            j = i + 1
+            while j < len(msgs) and msgs[j].role == lt.Role.TOOL:
+                answered.add(msgs[j].tool_call_id or "")
+                j += 1
+            unanswered = pending - answered
+            if unanswered:
+                needs_repair = True
+            out.append(m)
+            for tc in m.tool_calls:
+                if tc.id in unanswered:
+                    out.append(lt.ChatMessage(
+                        role=lt.Role.TOOL,
+                        content="[Tool result unavailable — interrupted before execution]",
+                        tool_call_id=tc.id,
+                        name=tc.name or "tool",
+                    ))
+        elif m.role == lt.Role.TOOL and m.tool_call_id:
+            has_parent = False
+            for prev in reversed(out):
+                if prev.role == lt.Role.ASSISTANT and prev.tool_calls:
+                    if any(tc.id == m.tool_call_id for tc in prev.tool_calls):
+                        has_parent = True
+                    break
+                if prev.role != lt.Role.TOOL:
+                    break
+            if not has_parent:
+                needs_repair = True
+                continue
+            out.append(m)
+        else:
+            out.append(m)
+    return out if needs_repair else msgs
+
+
 class Agent:
     """Nexus façade over loom.Agent.
 
@@ -642,6 +694,7 @@ class Agent:
                             )
                             _need_loom_restart = True
                     if _need_loom_restart:
+                        tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
                         tr.reset_iteration()
                         loom_iter = self._loom.run_turn_stream(
                             tr.working_messages, model_id=model_id
@@ -710,6 +763,7 @@ class Agent:
                     }
                     await asyncio.sleep(delay)
                     retry_mgr.increment()
+                    tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
                     tr.reset_iteration()
                     retry_mgr.delta_emitted = False
                     loom_iter = self._loom.run_turn_stream(
@@ -760,6 +814,7 @@ class Agent:
                     }
                     await asyncio.sleep(delay)
                     retry_mgr.increment()
+                    tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
                     tr.reset_iteration()
                     retry_mgr.delta_emitted = False
                     loom_iter = self._loom.run_turn_stream(
@@ -795,7 +850,7 @@ class Agent:
                         }
                         await asyncio.sleep(2.0)
                         retry_mgr.reset_all()
-                        tr.working_messages = compacted_wm
+                        tr.working_messages = _sanitize_loom_tool_pairs(compacted_wm)
                         tr.reset_iteration()
                         retry_mgr.delta_emitted = False
                         loom_iter = self._loom.run_turn_stream(
