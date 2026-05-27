@@ -19,12 +19,10 @@ log = logging.getLogger(__name__)
 _SESSION_COOKIE = "nexus_session"
 
 _PUBLIC_PATHS = frozenset({
-    "/auth/setup",
-    "/auth/generate-bootstrap-token",
     "/auth/invite",
     "/auth/register",
-    "/auth/login",
     "/auth/status",
+    "/auth/nexus/verify",
     "/tunnel/redeem",
     "/tunnel/auth-status",
     "/webhook",

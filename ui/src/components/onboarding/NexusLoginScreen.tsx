@@ -19,9 +19,9 @@ import { useTranslation } from "react-i18next";
 import { verifyNexusIdToken } from "../../api";
 
 interface Props {
-  /** Website base URL — e.g. https://www.nexus-model.us. From cfg.nexus_account. */
   websiteUrl: string;
-  /** Called after the backend confirms the apiKey is stored. */
+  inviteCode?: string;
+  inviteRole?: string;
   onSignedIn: (payload: { tier: string; apiKey: string }) => void;
 }
 
@@ -44,7 +44,7 @@ function trustedOriginFor(websiteUrl: string): string {
   }
 }
 
-export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
+export default function NexusLoginScreen({ websiteUrl, inviteCode, inviteRole, onSignedIn }: Props) {
   const { t } = useTranslation("settings");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<"idle" | "opening" | "verifying">("idle");
@@ -79,7 +79,7 @@ export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
       setStatus("verifying");
       setError(null);
       try {
-        const res = await verifyNexusIdToken(idToken);
+        const res = await verifyNexusIdToken(idToken, inviteCode);
         onSignedIn({ tier: res.tier, apiKey: res.apiKey });
       } catch (err) {
         setStatus("idle");
@@ -87,7 +87,7 @@ export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
         setError(err instanceof Error ? err.message : t("settings:nexus.signIn.verifyFailed"));
       }
     },
-    [closePopup, onSignedIn, t, trustedOrigin],
+    [closePopup, inviteCode, onSignedIn, t, trustedOrigin],
   );
 
   useEffect(() => {
@@ -122,8 +122,6 @@ export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
       // some browsers throw when a same-origin popup wasn't strictly opened
     }
 
-    // Detect popup close: if the user dismisses without completing, drop
-    // back to idle. Polled because there's no cross-origin "closed" event.
     const interval = window.setInterval(() => {
       if (!popupRef.current || popupRef.current.closed) {
         window.clearInterval(interval);
@@ -146,6 +144,10 @@ export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
         ? t("settings:nexus.signIn.verifying")
         : t("settings:nexus.signIn.primary");
 
+  const subtitle = inviteCode
+    ? `Sign in with your Nexus account to join (role: ${inviteRole || "member"})`
+    : t("settings:nexus.signIn.subtitle");
+
   return (
     <div className="nexus-login-overlay" role="dialog" aria-modal="true">
       <div className="nexus-login-panel">
@@ -153,7 +155,7 @@ export default function NexusLoginScreen({ websiteUrl, onSignedIn }: Props) {
           <div className="nexus-login-mark">N</div>
           <div className="nexus-login-titles">
             <h1>{t("settings:nexus.signIn.title")}</h1>
-            <p>{t("settings:nexus.signIn.subtitle")}</p>
+            <p>{subtitle}</p>
           </div>
         </div>
 

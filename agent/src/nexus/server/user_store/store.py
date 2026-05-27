@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import logging
-import os
 import secrets
 import sqlite3
 import time
@@ -15,41 +13,6 @@ from .schema import init_schema
 log = logging.getLogger(__name__)
 
 _DB_PATH = Path.home() / ".nexus" / "server.sqlite"
-
-
-def _hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    h = hashlib.scrypt(
-        password.encode("utf-8"),
-        salt=salt,
-        n=16384,
-        r=8,
-        p=1,
-        dklen=32,
-    )
-    return f"scrypt${salt.hex()}${h.hex()}"
-
-
-def _verify_password(password: str, stored: str) -> bool:
-    if not stored:
-        return False
-    parts = stored.split("$", 2)
-    if len(parts) != 3 or parts[0] != "scrypt":
-        return False
-    try:
-        salt = bytes.fromhex(parts[1])
-        expected = bytes.fromhex(parts[2])
-        h = hashlib.scrypt(
-            password.encode("utf-8"),
-            salt=salt,
-            n=16384,
-            r=8,
-            p=1,
-            dklen=32,
-        )
-        return secrets.compare_digest(h, expected)
-    except (ValueError, TypeError):
-        return False
 
 
 class UserStore:
@@ -73,7 +36,7 @@ class UserStore:
             created_at=row["created_at"],
             last_login=row["last_login"],
             created_by=row["created_by"],
-            password_hash=row["password_hash"] if "password_hash" in row.keys() else None,
+            nexus_uid=row["nexus_uid"] if "nexus_uid" in row.keys() else None,
         )
 
     def _row_to_invite(self, row: sqlite3.Row) -> Invite:
@@ -100,15 +63,14 @@ class UserStore:
         role: Role = "member",
         status: UserStatus = "active",
         created_by: str | None = None,
-        password: str | None = None,
+        nexus_uid: str | None = None,
     ) -> User:
         user_id = secrets.token_urlsafe(16)
         now = time.time()
-        pw_hash = _hash_password(password) if password else None
         self._db.execute(
-            "INSERT INTO users (id, email, display_name, role, status, password_hash, created_at, created_by) "
+            "INSERT INTO users (id, email, display_name, role, status, nexus_uid, created_at, created_by) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, email, display_name, role, status, pw_hash, now, created_by),
+            (user_id, email, display_name, role, status, nexus_uid, now, created_by),
         )
         self._db.commit()
         return User(
@@ -119,7 +81,7 @@ class UserStore:
             status=status,
             created_at=now,
             created_by=created_by,
-            password_hash=pw_hash,
+            nexus_uid=nexus_uid,
         )
 
     def get_user(self, user_id: str) -> User | None:
@@ -131,6 +93,12 @@ class UserStore:
     def get_user_by_email(self, email: str) -> User | None:
         row = self._db.execute(
             "SELECT * FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        return self._row_to_user(row) if row else None
+
+    def get_user_by_nexus_uid(self, nexus_uid: str) -> User | None:
+        row = self._db.execute(
+            "SELECT * FROM users WHERE nexus_uid = ?", (nexus_uid,)
         ).fetchone()
         return self._row_to_user(row) if row else None
 
@@ -150,27 +118,6 @@ class UserStore:
         self._db.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
         self._db.commit()
         return self.get_user(user_id)
-
-    def set_password(self, user_id: str, password: str) -> User | None:
-        pw_hash = _hash_password(password)
-        self._db.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
-            (pw_hash, user_id),
-        )
-        self._db.commit()
-        return self.get_user(user_id)
-
-    def authenticate(self, email: str, password: str) -> User | None:
-        row = self._db.execute(
-            "SELECT * FROM users WHERE email = ? AND status = 'active'",
-            (email,),
-        ).fetchone()
-        if not row:
-            return None
-        stored_hash = row["password_hash"] if "password_hash" in row.keys() else None
-        if not stored_hash or not _verify_password(password, stored_hash):
-            return None
-        return self._row_to_user(row)
 
     def touch_login(self, user_id: str) -> None:
         self._db.execute(
@@ -223,7 +170,7 @@ class UserStore:
         return True, ""
 
     def redeem_invite(
-        self, code: str, email: str, display_name: str, password: str | None = None
+        self, code: str, email: str, display_name: str, *, nexus_uid: str | None = None,
     ) -> User:
         valid, err = self.validate_invite(code)
         if not valid:
@@ -237,7 +184,7 @@ class UserStore:
             display_name=display_name,
             role=invite.role,
             created_by=invite.created_by,
-            password=password,
+            nexus_uid=nexus_uid,
         )
         self._db.execute(
             "UPDATE invites SET use_count = use_count + 1 WHERE code = ?",

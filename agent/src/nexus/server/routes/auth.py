@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 import time
 from typing import Any
 
@@ -19,17 +18,6 @@ _VALID_ROLES = {"admin", "member", "viewer"}
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-class SetupRequest(BaseModel):
-    token: str
-    email: str
-    display_name: str
-
-
-class SetupResponse(BaseModel):
-    user_id: str
-    session_token: str
-
-
 class InviteInfoResponse(BaseModel):
     code: str
     email: str | None = None
@@ -40,7 +28,6 @@ class RegisterRequest(BaseModel):
     code: str
     email: str
     display_name: str
-    password: str | None = None
 
 
 class RegisterResponse(BaseModel):
@@ -48,21 +35,11 @@ class RegisterResponse(BaseModel):
     session_token: str
 
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class SetPasswordRequest(BaseModel):
-    password: str
-
-
 class SessionResponse(BaseModel):
     user_id: str
     email: str
     display_name: str
     role: str
-    has_password: bool = False
 
 
 class CreateInviteRequest(BaseModel):
@@ -81,73 +58,6 @@ class InviteResponse(BaseModel):
     expires_at: float | None = None
 
 
-_bootstrap_token: str | None = None
-
-
-def generate_bootstrap_token() -> str:
-    global _bootstrap_token
-    _bootstrap_token = secrets.token_urlsafe(32)
-    return _bootstrap_token
-
-
-def get_bootstrap_token() -> str | None:
-    return _bootstrap_token
-
-
-def _consume_bootstrap_token(candidate: str) -> bool:
-    global _bootstrap_token
-    if _bootstrap_token is None or candidate != _bootstrap_token:
-        return False
-    _bootstrap_token = None
-    return True
-
-
-@router.post("/setup", response_model=SetupResponse)
-def setup(request: Request, body: SetupRequest) -> Any:
-    store = request.app.state.user_store
-    if store.has_any_users():
-        raise HTTPException(status_code=400, detail="Setup already completed")
-
-    client_host = request.client.host if request.client else ""
-    is_loopback = client_host in ("127.0.0.1", "::1", "localhost")
-    from ..middleware import _is_proxied as _proxied
-    proxied = _proxied(request)
-
-    if is_loopback and not proxied:
-        pass
-    elif not _consume_bootstrap_token(body.token):
-        raise HTTPException(status_code=401, detail="Invalid setup token")
-
-    user = store.create_user(
-        email=body.email,
-        display_name=body.display_name,
-        role="admin",
-    )
-    mgr = _get_auth_manager(request)
-    token = mgr.create_token(user.id, user.role)
-    resp = SetupResponse(user_id=user.id, session_token=token)
-    response = Response(
-        content=resp.model_dump_json(),
-        media_type="application/json",
-        status_code=200,
-    )
-    mgr.set_session_cookie(response, token)
-    store.touch_login(user.id)
-    return response
-
-
-@router.post("/generate-bootstrap-token")
-def generate_bootstrap_token_endpoint(request: Request) -> Any:
-    client_host = request.client.host if request.client else ""
-    if client_host not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(status_code=403, detail="Loopback only")
-    store = request.app.state.user_store
-    if store.has_any_users():
-        raise HTTPException(status_code=400, detail="Users already exist")
-    token = generate_bootstrap_token()
-    return {"token": token}
-
-
 @router.get("/invite/{code}", response_model=InviteInfoResponse)
 def get_invite_info(code: str, request: Request) -> Any:
     store = request.app.state.user_store
@@ -162,7 +72,7 @@ def get_invite_info(code: str, request: Request) -> Any:
 def register(request: Request, body: RegisterRequest) -> Any:
     store = request.app.state.user_store
     try:
-        user = store.redeem_invite(body.code, body.email, body.display_name, body.password)
+        user = store.redeem_invite(body.code, body.email, body.display_name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     mgr = _get_auth_manager(request)
@@ -178,52 +88,6 @@ def register(request: Request, body: RegisterRequest) -> Any:
     return response
 
 
-@router.post("/login", response_model=SessionResponse)
-def login(request: Request, body: LoginRequest) -> Any:
-    store = request.app.state.user_store
-    user = store.authenticate(body.email, body.password)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    mgr = _get_auth_manager(request)
-    token = mgr.create_token(user.id, user.role)
-    resp = SessionResponse(
-        user_id=user.id,
-        email=user.email,
-        display_name=user.display_name,
-        role=user.role,
-        has_password=user.has_password,
-    )
-    response = Response(
-        content=resp.model_dump_json(),
-        media_type="application/json",
-        status_code=200,
-    )
-    mgr.set_session_cookie(response, token)
-    store.touch_login(user.id)
-    return response
-
-
-@router.post("/set-password", response_model=SessionResponse)
-def set_password(
-    request: Request,
-    body: SetPasswordRequest,
-    user: User | None = Depends(current_user),
-) -> Any:
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    if len(body.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    store = request.app.state.user_store
-    updated = store.set_password(user.id, body.password)
-    return SessionResponse(
-        user_id=updated.id,
-        email=updated.email,
-        display_name=updated.display_name,
-        role=updated.role,
-        has_password=True,
-    )
-
-
 @router.get("/session", response_model=SessionResponse)
 def get_session(user: User | None = Depends(current_user)) -> Any:
     if user is None:
@@ -233,7 +97,6 @@ def get_session(user: User | None = Depends(current_user)) -> Any:
         email=user.email,
         display_name=user.display_name,
         role=user.role,
-        has_password=user.has_password,
     )
 
 
@@ -442,15 +305,7 @@ def auth_status(request: Request) -> Any:
     store = request.app.state.user_store
     has_users = store.has_any_users()
     if not has_users:
-        client_host = request.client.host if request.client else ""
-        is_loopback = client_host in ("127.0.0.1", "::1", "localhost")
-        from ..middleware import _is_proxied as _proxied
-        token_required = not (is_loopback and not _proxied(request))
-        return {
-            "multi_user": True,
-            "needs_setup": True,
-            "setup_token_required": token_required,
-        }
+        return {"multi_user": True, "needs_setup": True, "authenticated": False}
     mgr = _get_auth_manager(request)
     token_str = mgr.extract_token(request)
     if token_str:
@@ -466,6 +321,5 @@ def auth_status(request: Request) -> Any:
                     "email": user.email,
                     "display_name": user.display_name,
                     "role": user.role,
-                    "has_password": user.has_password,
                 }
     return {"multi_user": True, "needs_setup": False, "authenticated": False}

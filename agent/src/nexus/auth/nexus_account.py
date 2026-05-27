@@ -120,12 +120,14 @@ def get_api_key() -> str | None:
     return secrets.get(SECRET_NAME)
 
 
-async def verify_id_token(id_token: str, *, base_url: str) -> dict[str, Any]:
+async def verify_id_token(id_token: str, *, base_url: str, store_key: bool = True) -> dict[str, Any]:
     """Exchange a Firebase ID token for a Nexus LiteLLM apiKey.
 
-    On success: stores ``apiKey`` in secrets, mirrors the user record to
-    ``account.json``, and returns the merged ``{user, tier, isNew}``
-    payload (without the apiKey — the caller never needs it).
+    On success: when *store_key* is True (default), stores ``apiKey`` in
+    secrets, mirrors the user record to ``account.json``, and confirms the
+    key with the website.  When False the token is validated and user info
+    is returned but nothing is persisted — used for multi-user secondary
+    accounts that only need identity verification.
     """
     if not id_token or not isinstance(id_token, str):
         raise NexusAccountError("idToken is required", status=400)
@@ -144,10 +146,6 @@ async def verify_id_token(id_token: str, *, base_url: str) -> dict[str, Any]:
             "[nexus_account] /api/auth/verify failed status=%d detail=%r",
             resp.status_code, detail,
         )
-        # The website's catch-all returns 401 for *any* server-side
-        # exception (Firebase admin not initialized, signature mismatch,
-        # token expired, etc.) — surface its message verbatim so the UI
-        # and daemon log show what to fix.
         message = (
             f"Nexus auth/verify rejected the token: {detail}"
             if detail else f"Nexus auth/verify returned {resp.status_code}"
@@ -165,13 +163,6 @@ async def verify_id_token(id_token: str, *, base_url: str) -> dict[str, Any]:
     if not api_key or not isinstance(api_key, str):
         raise NexusAccountError("Nexus response missing apiKey")
 
-    secrets.set(SECRET_NAME, api_key, kind="provider")
-
-    broker_api_key = payload.get("brokerApiKey")
-    if broker_api_key and isinstance(broker_api_key, str):
-        secrets.set(BROKER_SECRET_NAME, broker_api_key, kind="provider")
-        log.info("[nexus_account] broker API key stored")
-
     record = {
         "uid": user.get("uid", ""),
         "email": user.get("email", ""),
@@ -185,28 +176,29 @@ async def verify_id_token(id_token: str, *, base_url: str) -> dict[str, Any]:
         "createdAt": user.get("createdAt") or "",
         "refreshedAt": datetime.now(timezone.utc).isoformat(),
     }
-    save_account(record)
 
-    # Tell the website the desktop client successfully claimed the key.
-    # This flips connected=true in Firestore so the account page stops
-    # showing the "Connect" CTA. Best-effort: a transient failure here
-    # does NOT invalidate the local apiKey — the user can re-confirm
-    # later via the website's Connect button if needed.
-    try:
-        confirmed = await confirm_key(id_token, base_url=base_url)
-        if confirmed:
-            # Mirror the just-flipped Firestore flag into account.json so
-            # the local UI stays in sync without a follow-up roundtrip.
-            record["connected"] = True
-            save_account(record)
-    except NexusAccountError as exc:
-        log.warning("[nexus_account] /api/keys/confirm failed: %s", exc)
+    if store_key:
+        secrets.set(SECRET_NAME, api_key, kind="provider")
+
+        broker_api_key = payload.get("brokerApiKey")
+        if broker_api_key and isinstance(broker_api_key, str):
+            secrets.set(BROKER_SECRET_NAME, broker_api_key, kind="provider")
+            log.info("[nexus_account] broker API key stored")
+
+        save_account(record)
+
+        try:
+            confirmed = await confirm_key(id_token, base_url=base_url)
+            if confirmed:
+                record["connected"] = True
+                save_account(record)
+        except NexusAccountError as exc:
+            log.warning("[nexus_account] /api/keys/confirm failed: %s", exc)
 
     log.info(
-        "[nexus_account] signed in (email=%s tier=%s isNew=%s)",
-        record["email"], record["tier"], payload.get("isNew"),
+        "[nexus_account] signed in (email=%s tier=%s isNew=%s store_key=%s)",
+        record["email"], record["tier"], payload.get("isNew"), store_key,
     )
-    # Caller-friendly view — includes the key for the UI callback, plus the isNew flag for UX.
     return {**record, "apiKey": api_key, "isNew": bool(payload.get("isNew"))}
 
 

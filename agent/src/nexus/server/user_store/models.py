@@ -17,11 +17,7 @@ class User:
     created_at: float
     last_login: float | None = None
     created_by: str | None = None
-    password_hash: str | None = None
-
-    @property
-    def has_password(self) -> bool:
-        return bool(self.password_hash)
+    nexus_uid: str | None = None
 
 
 @dataclass

@@ -3,13 +3,11 @@ import { BASE } from "./base";
 export interface AuthStatus {
   multi_user: boolean;
   needs_setup?: boolean;
-  setup_token_required?: boolean;
   authenticated?: boolean;
   user_id?: string;
   email?: string;
   display_name?: string;
   role?: string;
-  has_password?: boolean;
 }
 
 export interface SessionInfo {
@@ -17,7 +15,6 @@ export interface SessionInfo {
   email: string;
   display_name: string;
   role: string;
-  has_password?: boolean;
 }
 
 export async function probeAuthStatus(): Promise<AuthStatus> {
@@ -31,31 +28,6 @@ export async function probeAuthStatus(): Promise<AuthStatus> {
   } catch {
     return { multi_user: false };
   }
-}
-
-export async function setupAccount(
-  token: string,
-  email: string,
-  displayName: string,
-): Promise<SessionInfo> {
-  const res = await fetch(`${BASE}/auth/setup`, {
-    method: "POST",
-    credentials: "include",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, email, display_name: displayName }),
-  });
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({})))?.detail || "Setup failed";
-    throw new Error(detail);
-  }
-  const data = await res.json();
-  return {
-    user_id: data.user_id,
-    email: data.email ?? email,
-    display_name: data.display_name ?? displayName,
-    role: data.role ?? "admin",
-  };
 }
 
 export async function getInviteInfo(code: string): Promise<{
@@ -72,72 +44,6 @@ export async function getInviteInfo(code: string): Promise<{
     throw new Error(detail);
   }
   return res.json();
-}
-
-export async function registerWithInvite(
-  code: string,
-  email: string,
-  displayName: string,
-  password?: string,
-): Promise<SessionInfo> {
-  const body: Record<string, string> = { code, email, display_name: displayName };
-  if (password) body.password = password;
-  const res = await fetch(`${BASE}/auth/register`, {
-    method: "POST",
-    credentials: "include",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({})))?.detail || "Registration failed";
-    throw new Error(detail);
-  }
-  const data = await res.json();
-  return {
-    user_id: data.user_id,
-    email: data.email ?? email,
-    display_name: data.display_name ?? displayName,
-    role: data.role ?? "member",
-  };
-}
-
-export async function loginWithEmail(
-  email: string,
-  password: string,
-): Promise<SessionInfo> {
-  const res = await fetch(`${BASE}/auth/login`, {
-    method: "POST",
-    credentials: "include",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({})))?.detail || "Login failed";
-    throw new Error(detail);
-  }
-  const data = await res.json();
-  return {
-    user_id: data.user_id,
-    email: data.email,
-    display_name: data.display_name,
-    role: data.role,
-  };
-}
-
-export async function setPassword(password: string): Promise<void> {
-  const res = await fetch(`${BASE}/auth/set-password`, {
-    method: "POST",
-    credentials: "include",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({})))?.detail || "Failed to set password";
-    throw new Error(detail);
-  }
 }
 
 export async function getSession(): Promise<SessionInfo> {

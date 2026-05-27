@@ -55,12 +55,14 @@ async function _json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function verifyNexusIdToken(idToken: string): Promise<NexusVerifyResponse> {
+export async function verifyNexusIdToken(idToken: string, inviteCode?: string): Promise<NexusVerifyResponse> {
+  const body: Record<string, string> = { idToken };
+  if (inviteCode) body.inviteCode = inviteCode;
   return _json(
     await fetch(`${BASE}/auth/nexus/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken }),
+      body: JSON.stringify(body),
     }),
   );
 }

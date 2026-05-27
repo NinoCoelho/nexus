@@ -157,20 +157,3 @@ def _resolve_store_for_session(request: Request, session_id: str) -> SessionStor
     if user_id:
         return registry.get(user_id)
     return request.app.state.sessions
-
-
-@router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
-async def admin_reset_password(
-    user_id: str,
-    request: Request,
-    _admin: User = Depends(_require_admin),
-) -> None:
-    body = await request.json()
-    password = body.get("password", "")
-    if not password or len(password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    user_store = request.app.state.user_store
-    user = user_store.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    user_store.set_password(user_id, password)

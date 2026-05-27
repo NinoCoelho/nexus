@@ -526,16 +526,14 @@ def create_app(
     app.include_router(sessions_router)
 
     if multi_user:
-        from .routes.auth import router as auth_router, generate_bootstrap_token
+        from .routes.auth import router as auth_router
         from .routes.admin import router as admin_router
         from .routes.vault_share import router as vault_share_router
         app.include_router(auth_router)
         app.include_router(admin_router)
         app.include_router(vault_share_router)
         if user_store and not user_store.has_any_users():
-            setup_token = generate_bootstrap_token()
-            log.info("Multi-user mode: no users found. Setup URL: http://localhost:%d/auth/setup (token: %s)",
-                     int(os.environ.get("NEXUS_PORT", "18989")), setup_token)
+            log.info("Multi-user mode: no users found. Sign in with a Nexus account to create the admin.")
     app.include_router(sessions_vault_router)
     app.include_router(graph_router)
     app.include_router(vault_router)

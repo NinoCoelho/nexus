@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name  TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'member',
     status        TEXT NOT NULL DEFAULT 'active',
-    password_hash TEXT,
+    nexus_uid     TEXT UNIQUE,
     created_at    REAL NOT NULL,
     last_login    REAL,
     created_by    TEXT
@@ -54,10 +54,12 @@ CREATE TABLE IF NOT EXISTS resource_acl (
 
 def init_schema(db: sqlite3.Connection) -> None:
     db.executescript(_SCHEMA)
-    _migrate_password_hash(db)
+    _migrate_nexus_uid(db)
 
 
-def _migrate_password_hash(db: sqlite3.Connection) -> None:
+def _migrate_nexus_uid(db: sqlite3.Connection) -> None:
     cols = [r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()]
-    if "password_hash" not in cols:
-        db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    if "nexus_uid" not in cols:
+        db.execute("ALTER TABLE users ADD COLUMN nexus_uid TEXT UNIQUE")
+    if "password_hash" in cols:
+        db.execute("ALTER TABLE users DROP COLUMN password_hash")

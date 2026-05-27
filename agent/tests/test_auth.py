@@ -45,6 +45,15 @@ class TestUserStore:
         assert found is not None
         assert found.display_name == "A"
 
+    async def test_get_user_by_nexus_uid(self, user_store: UserStore):
+        user_store.create_user(email="a@b.com", display_name="A", nexus_uid="firebase123")
+        found = user_store.get_user_by_nexus_uid("firebase123")
+        assert found is not None
+        assert found.email == "a@b.com"
+        assert found.nexus_uid == "firebase123"
+
+        assert user_store.get_user_by_nexus_uid("nonexistent") is None
+
     async def test_update_user(self, user_store: UserStore):
         user = user_store.create_user(email="a@b.com", display_name="A")
         updated = user_store.update_user(user.id, display_name="B", role="admin")
@@ -83,6 +92,12 @@ class TestInviteFlow:
         assert user.email == "member@test.com"
         assert user.role == "member"
         assert user.created_by == admin.id
+
+    async def test_redeem_invite_with_nexus_uid(self, user_store: UserStore):
+        admin = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
+        invite = user_store.create_invite(created_by=admin.id)
+        user = user_store.redeem_invite(invite.code, "member@test.com", "Member", nexus_uid="fb456")
+        assert user.nexus_uid == "fb456"
 
     async def test_redeem_expired_invite_fails(self, user_store: UserStore):
         admin = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
@@ -152,57 +167,27 @@ class TestAuthRoutes:
             data = r.json()
             assert data["multi_user"] is True
             assert data["needs_setup"] is True
+            assert data["authenticated"] is False
 
-    async def test_setup_flow(self, app, user_store: UserStore):
-        from nexus.server.routes.auth import generate_bootstrap_token
-        token = generate_bootstrap_token()
+    async def test_auth_status_with_user(self, app, user_store: UserStore, auth_manager: AuthManager):
+        user = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
+        token = auth_manager.create_token(user.id, user.role)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": token,
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
+            r = await c.get("/auth/status", headers={"Authorization": f"Bearer {token}"})
             assert r.status_code == 200
             data = r.json()
-            assert data["user_id"]
-            assert data["session_token"]
+            assert data["multi_user"] is True
+            assert data["authenticated"] is True
+            assert data["email"] == "admin@test.com"
+            assert data["role"] == "admin"
 
-            user = user_store.get_user(data["user_id"])
-            assert user is not None
-            assert user.role == "admin"
-
-    async def test_setup_rejected_with_bad_token(self, app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": "bad-token",
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
-            assert r.status_code == 200
-
-    async def test_setup_from_loopback_succeeds_without_token(self, app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": "",
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
-            assert r.status_code == 200
-
-    async def test_invite_register_flow(self, app, user_store: UserStore):
-        from nexus.server.routes.auth import generate_bootstrap_token
-        token = generate_bootstrap_token()
+    async def test_invite_register_flow(self, app, user_store: UserStore, auth_manager: AuthManager):
+        admin = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
+        admin_token = auth_manager.create_token(admin.id, admin.role)
+        headers = {"Authorization": f"Bearer {admin_token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": token,
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
-            admin_token = r.json()["session_token"]
-            headers = {"Authorization": f"Bearer {admin_token}"}
-
             r = await c.post("/auth/invites", json={"role": "member"}, headers=headers)
             assert r.status_code == 200
             invite_code = r.json()["code"]
@@ -233,32 +218,20 @@ class TestAuthRoutes:
             r = await c.get("/auth/session")
             assert r.status_code == 401
 
-    async def test_logout_clears_cookie(self, app):
-        from nexus.server.routes.auth import generate_bootstrap_token
-        token = generate_bootstrap_token()
+    async def test_logout(self, app, user_store: UserStore, auth_manager: AuthManager):
+        user = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
+        token = auth_manager.create_token(user.id, user.role)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": token,
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
-            r = await c.post("/auth/logout")
+            r = await c.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
             assert r.status_code == 200
 
-    async def test_member_cannot_create_invites(self, app):
-        from nexus.server.routes.auth import generate_bootstrap_token
-        token = generate_bootstrap_token()
+    async def test_member_cannot_create_invites(self, app, user_store: UserStore, auth_manager: AuthManager):
+        admin = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
+        admin_token = auth_manager.create_token(admin.id, admin.role)
+        headers = {"Authorization": f"Bearer {admin_token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": token,
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
-            admin_token = r.json()["session_token"]
-            headers = {"Authorization": f"Bearer {admin_token}"}
-
             r = await c.post("/auth/invites", json={"role": "member"}, headers=headers)
             invite_code = r.json()["code"]
 
@@ -273,19 +246,12 @@ class TestAuthRoutes:
             r = await c.post("/auth/invites", json={"role": "member"}, headers=member_headers)
             assert r.status_code == 403
 
-    async def test_change_name(self, app):
-        from nexus.server.routes.auth import generate_bootstrap_token
-        token = generate_bootstrap_token()
+    async def test_change_name(self, app, user_store: UserStore, auth_manager: AuthManager):
+        user = user_store.create_user(email="admin@test.com", display_name="Admin", role="admin")
+        token = auth_manager.create_token(user.id, user.role)
+        headers = {"Authorization": f"Bearer {token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.post("/auth/setup", json={
-                "token": token,
-                "email": "admin@test.com",
-                "display_name": "Admin",
-            })
-            admin_token = r.json()["session_token"]
-            headers = {"Authorization": f"Bearer {admin_token}"}
-
             r = await c.post("/auth/change-name", json={"display_name": "New Name"}, headers=headers)
             assert r.status_code == 200
             assert r.json()["display_name"] == "New Name"

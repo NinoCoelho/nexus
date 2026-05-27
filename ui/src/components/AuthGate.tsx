@@ -8,7 +8,7 @@ import {
 import { AUTH_401_EVENT, probeTunnelAuth } from "../api/base";
 import { getInviteInfo } from "../api/auth";
 import TunnelLoginScreen from "./TunnelLoginScreen";
-import LoginScreen from "./LoginScreen";
+import NexusLoginScreen from "./onboarding/NexusLoginScreen";
 import { SessionProvider, useSession } from "./SessionProvider";
 
 interface Props {
@@ -89,46 +89,29 @@ function InnerAuthGate({ children }: Props) {
     );
   }
 
-  if (authStatus?.multi_user) {
-    if (authStatus.needs_setup) {
-      return (
-        <LoginScreen
-          mode="setup"
-          tokenRequired={authStatus.setup_token_required}
-          onSuccess={() => {
-            refresh();
-          }}
-        />
-      );
-    }
-    if (!authStatus.authenticated && !user) {
-      if (inviteCode) {
-        return (
-          <LoginScreen
-            mode="invite"
-            inviteCode={inviteCode}
-            inviteRole={inviteRole}
-            onSuccess={() => {
-              setInviteCode(null);
-              refresh();
-            }}
-          />
-        );
-      }
-      return (
-        <LoginScreen
-          mode="login"
-          onSuccess={() => {
-            refresh();
-          }}
-        />
-      );
-    }
+  if (authStatus?.multi_user && (!authStatus.authenticated || !user)) {
+    return (
+      <NexusLoginScreen
+        websiteUrl={window.__NEXUS_WEBSITE_URL__ || "https://www.nexus-model.us"}
+        inviteCode={inviteCode || undefined}
+        inviteRole={inviteCode ? inviteRole : undefined}
+        onSignedIn={() => {
+          setInviteCode(null);
+          refresh();
+        }}
+      />
+    );
   }
 
   return (
     <AuthContext.Provider value={{ proxied }}>{children}</AuthContext.Provider>
   );
+}
+
+declare global {
+  interface Window {
+    __NEXUS_WEBSITE_URL__?: string;
+  }
 }
 
 export default function AuthGate({ children }: Props) {
