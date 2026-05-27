@@ -2940,3 +2940,60 @@
 .wf-test-spin {
   animation: wf-test-spin 1s linear infinite;
 }
+
+.wf-test-file-picker {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.wf-test-file-picker label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.wf-test-file-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wf-test-file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg);
+  text-align: left;
+  width: 100%;
+}
+
+.wf-test-file-item:hover {
+  border-color: var(--accent);
+  background: var(--bg-tertiary);
+}
+
+.wf-test-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.wf-test-file-size {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}

@@ -119,12 +119,26 @@ def test_trigger_config_to_dict():
     assert d["id"] == "wh1"
     assert d["type"] == "webhook"
     assert d["token"] == "abc"
-    assert d["path"] == "~/Downloads"
-    assert d["pattern"] == "*.pdf"
-    assert d["events"] == ["created", "modified"]
-    assert d["cron"] == "0 9 * * 1-5"
-    assert d["event"] == "vault.updated"
-    assert d["filter"] == {"path": "invoices/**"}
+    assert "path" not in d
+    assert "pattern" not in d
+    assert "events" not in d
+    assert "cron" not in d
+    assert "event" not in d
+    assert "filter" not in d
+
+    fsw = TriggerConfig(
+        id="fs1",
+        type=TriggerType.fs_watch,
+        path="~/Downloads",
+        pattern="*.pdf",
+        events=["created", "modified"],
+    )
+    fd = fsw.to_dict()
+    assert fd["path"] == "~/Downloads"
+    assert fd["pattern"] == "*.pdf"
+    assert fd["events"] == ["created", "modified"]
+    assert "cron" not in fd
+    assert "token" not in fd
 
 
 def test_trigger_config_defaults():

@@ -206,6 +206,12 @@ class WorkflowEngine:
 
         try:
             await self._execute_steps(run, wf_def)
+        except asyncio.CancelledError:
+            run.status = RunStatus.cancelled
+            run.finished_at = datetime.datetime.utcnow().isoformat()
+            self._store.update_run(run)
+            log.warning("workflow %s run %s cancelled", workflow_path, run.id)
+            raise
         except Exception as exc:
             run.status = RunStatus.failed
             run.error = str(exc)

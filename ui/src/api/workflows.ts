@@ -106,6 +106,18 @@ export async function getRun(
   return _json(res);
 }
 
+export async function clearRuns(
+  path: string,
+  statuses?: string[],
+): Promise<{ deleted: number }> {
+  const params = statuses ? `?statuses=${statuses.join(",")}` : "";
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/runs${params}`,
+    { method: "DELETE" },
+  );
+  return _json(res);
+}
+
 export async function getWebhookUrl(
   path: string,
 ): Promise<{ webhooks: { trigger_id: string; token: string; url: string | null; has_broker?: boolean }[]; broker_connected: boolean; signed_in: boolean }> {
@@ -410,6 +422,45 @@ export async function cancelTestListener(
   const res = await fetch(
     `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/${testId}`,
     { method: "DELETE" },
+  );
+  return _json(res);
+}
+
+export interface FsWatchFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+}
+
+export async function listFsWatchFiles(
+  path: string,
+  triggerId: string,
+): Promise<{ files: FsWatchFile[]; watch_path: string }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/fs-watch-list`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger_id: triggerId }),
+    },
+  );
+  return _json(res);
+}
+
+export async function pickFsTestFile(
+  path: string,
+  triggerId: string,
+  filePath: string,
+  testId?: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/fs-watch-pick`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger_id: triggerId, file_path: filePath, test_id: testId }),
+    },
   );
   return _json(res);
 }

@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS webhook_tokens (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS fs_watch_seen (
+    trigger_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, file_path, event_type)
+);
+
 CREATE INDEX IF NOT EXISTS idx_runs_workflow ON workflow_runs(workflow_path);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
 """
@@ -181,6 +189,71 @@ class WorkflowStore:
                     "DELETE FROM webhook_tokens WHERE workflow_path=?",
                     (workflow_path,),
                 )
+
+    def reconcile_stale_runs(self) -> int:
+        import datetime
+        now = datetime.datetime.utcnow().isoformat()
+        with _lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "UPDATE workflow_runs SET status='failed', error='server restarted', finished_at=? "
+                    "WHERE status='running'",
+                    (now,),
+                )
+                updated = cur.rowcount
+                cur2 = self._conn.execute(
+                    "DELETE FROM workflow_runs WHERE status='pending'"
+                )
+                orphaned = cur2.rowcount
+                self._conn.execute(
+                    "DELETE FROM step_runs WHERE run_id NOT IN (SELECT id FROM workflow_runs)"
+                )
+        return updated + orphaned
+
+    def is_fs_seen(self, trigger_id: str, file_path: str, event_type: str) -> bool:
+        with _lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM fs_watch_seen WHERE trigger_id=? AND file_path=? AND event_type=?",
+                (trigger_id, file_path, event_type),
+            ).fetchone()
+        return row is not None
+
+    def mark_fs_seen(self, trigger_id: str, file_path: str, event_type: str) -> None:
+        import datetime
+        with _lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO fs_watch_seen (trigger_id, file_path, event_type, seen_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (trigger_id, file_path, event_type, datetime.datetime.utcnow().isoformat()),
+                )
+
+    def clear_fs_seen(self, trigger_id: str) -> int:
+        with _lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM fs_watch_seen WHERE trigger_id=?", (trigger_id,)
+                )
+        return cur.rowcount
+
+    def delete_runs_for_workflow(self, workflow_path: str, statuses: list[str] | None = None) -> int:
+        with _lock:
+            with self._conn:
+                if statuses:
+                    placeholders = ",".join("?" for _ in statuses)
+                    cur = self._conn.execute(
+                        f"DELETE FROM workflow_runs WHERE workflow_path=? AND status IN ({placeholders})",
+                        (workflow_path, *statuses),
+                    )
+                else:
+                    cur = self._conn.execute(
+                        "DELETE FROM workflow_runs WHERE workflow_path=?", (workflow_path,)
+                    )
+                deleted = cur.rowcount
+                self._conn.execute(
+                    "DELETE FROM step_runs WHERE run_id NOT IN (SELECT id FROM workflow_runs)"
+                )
+        return deleted
 
     def cleanup_old_runs(self, days: int = 30) -> int:
         import datetime

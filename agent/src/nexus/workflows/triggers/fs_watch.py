@@ -75,15 +75,17 @@ class _WorkflowEventHandler(FileSystemEventHandler):
 
     def _fire(self, file_path: str, event_type: str) -> None:
         import time
-        import uuid
-        import datetime as _dt
 
         now = time.monotonic()
-        key = f"{self.workflow_path}:{self.trigger_id}:{file_path}"
+        key = f"{self.workflow_path}:{self.trigger_id}:{file_path}:{event_type}"
         last = self._pending.get(key, 0)
         if now - last < self.debounce_ms / 1000.0:
             return
         self._pending[key] = now
+
+        if self._store.is_fs_seen(self.trigger_id, file_path, event_type):
+            return
+        self._store.mark_fs_seen(self.trigger_id, file_path, event_type)
 
         payload = {
             "file_path": file_path,
@@ -96,18 +98,6 @@ class _WorkflowEventHandler(FileSystemEventHandler):
             engine = _get_engine()
             if engine is None:
                 return
-            run_id = str(uuid.uuid4())
-            from ..models import WorkflowRun, RunStatus
-            run = WorkflowRun(
-                id=run_id,
-                workflow_path=self.workflow_path,
-                trigger_id=self.trigger_id,
-                trigger_type=TriggerType.fs_watch,
-                trigger_payload=payload,
-                status=RunStatus.pending,
-                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
-            )
-            self._store.create_run(run)
             asyncio.create_task(engine.run_workflow(
                 workflow_path=self.workflow_path,
                 trigger_id=self.trigger_id,

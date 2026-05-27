@@ -92,30 +92,45 @@ class BrokerPoller:
         if not broker_id:
             return
 
-        msg = await self._client.dequeue(broker_id)
-        if msg is None:
-            return
+        while True:
+            msg = await self._client.dequeue(broker_id)
+            if msg is None:
+                break
 
-        try:
-            if msg.encrypted_key and msg.encryption_tag:
-                plaintext = rsa_decrypt(
-                    priv_pem,
-                    msg.encrypted_key,
-                    msg.encrypted_body,
-                    msg.encryption_iv,
-                    msg.encryption_tag,
-                )
-            else:
-                log.error("broker: message %s missing RSA fields", msg.id)
-                await self._client.error(broker_id, msg.id, "missing encryption fields")
-                return
+            dispatched = False
+            try:
+                if msg.encrypted_key and msg.encryption_tag:
+                    plaintext = rsa_decrypt(
+                        priv_pem,
+                        msg.encrypted_key,
+                        msg.encrypted_body,
+                        msg.encryption_iv,
+                        msg.encryption_tag,
+                    )
+                else:
+                    log.error("broker: message %s missing RSA fields", msg.id)
+                    try:
+                        await self._client.error(broker_id, msg.id, "missing encryption fields")
+                    except Exception:
+                        log.exception("broker: failed to error message %s", msg.id)
+                    continue
 
-            await self._dispatch(ep, plaintext)
-            await self._client.commit(broker_id, msg.id)
-            log.debug("broker: committed message %s from %s", msg.id, broker_id)
-        except Exception as exc:
-            log.exception("broker: failed to process message %s", msg.id)
-            await self._client.error(broker_id, msg.id, str(exc)[:1000])
+                await self._dispatch(ep, plaintext)
+                dispatched = True
+                try:
+                    await self._client.commit(broker_id, msg.id)
+                except Exception:
+                    log.exception("broker: failed to commit message %s", msg.id)
+                    try:
+                        await self._client.error(broker_id, msg.id, "commit failed")
+                    except Exception:
+                        log.exception("broker: failed to error message %s after commit failure", msg.id)
+            except Exception as exc:
+                log.exception("broker: failed to process message %s (dispatched=%s)", msg.id, dispatched)
+                try:
+                    await self._client.error(broker_id, msg.id, str(exc)[:1000])
+                except Exception:
+                    log.exception("broker: failed to error message %s", msg.id)
 
     async def _dispatch(self, ep: dict[str, Any], plaintext: str) -> None:
         ep_type = ep["type"]
@@ -157,18 +172,15 @@ class BrokerPoller:
 
         engine = self._workflow_engine
         if engine is None:
-            log.warning("broker: no workflow engine available, skipping")
             return
 
         try:
             store = engine._store
         except AttributeError:
-            log.error("broker: workflow engine has no _store")
             return
 
         result = store.lookup_webhook_token(token)
         if result is None:
-            log.warning("broker: workflow token %s not found", token)
             return
 
         workflow_path, trigger_id = result
@@ -183,7 +195,6 @@ class BrokerPoller:
             wf = parser.parse(raw)
 
             if not wf.enabled:
-                log.warning("broker: workflow %s is disabled", workflow_path)
                 return
 
             await engine.run_workflow(
@@ -193,9 +204,8 @@ class BrokerPoller:
                 trigger_payload=payload,
                 wf_def=wf,
             )
-            log.info("broker: triggered workflow %s", workflow_path)
-        except Exception:
-            log.exception("broker: workflow dispatch failed for token %s", token)
+        except Exception as exc:
+            log.exception("broker: workflow dispatch failed for %s", workflow_path)
 
     def _discover_endpoints(self) -> list[dict[str, Any]]:
         endpoints: list[dict[str, Any]] = []

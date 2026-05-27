@@ -400,7 +400,6 @@ async def chat_stream_route(
                 etype = event.get("type")
 
                 if etype == "delta":
-                    acc.accumulated_text += event.get("text", "")
                     if (
                         ack_active
                         and completion_task is None
@@ -424,6 +423,7 @@ async def chat_stream_route(
                         yield frame
 
                 elif etype == "done":
+                    acc.final_messages = event.get("messages")
                     usage = event.get("usage") or {}
                     try:
                         store.bump_usage(

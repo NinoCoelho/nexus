@@ -26,6 +26,13 @@ def create_lifespan(state: dict[str, Any]):
         publish_job_event = state["publish_job_event"]
 
         log.info("Lifespan starting (graphrag_cfg=%s)", "present" if graphrag_cfg is not None else "None")
+
+        _nexus_logger = logging.getLogger("nexus")
+        if not _nexus_logger.handlers:
+            _handler = logging.StreamHandler()
+            _handler.setLevel(logging.INFO)
+            _nexus_logger.addHandler(_handler)
+        _nexus_logger.setLevel(logging.INFO)
         try:
             from . import event_bus
             event_bus.set_loop(asyncio.get_running_loop())
@@ -346,6 +353,13 @@ def create_lifespan(state: dict[str, Any]):
                 app.state.workflow_store = wf_store
                 app.state.workflow_engine = wf_engine
 
+                reconciled = wf_store.reconcile_stale_runs()
+                if reconciled:
+                    log.info("reconciled %d stale workflow runs", reconciled)
+                cleaned = wf_store.cleanup_old_runs(30)
+                if cleaned:
+                    log.info("cleaned up %d old workflow runs (>30d)", cleaned)
+
                 if agent is not None:
                     wf_engine._agent = agent
                 if sessions is not None:
@@ -419,6 +433,8 @@ def create_lifespan(state: dict[str, Any]):
                 poller.start()
                 app.state.broker_poller = poller
                 log.info("broker poller started")
+            else:
+                log.info("broker poller skipped: no broker_api_key configured")
         except Exception:
             log.exception("broker poller start failed")
 

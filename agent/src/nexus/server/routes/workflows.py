@@ -300,6 +300,14 @@ async def get_run(path: str, run_id: str, request: Request) -> dict:
     return {"run": run.to_dict(), "steps": _enrich_step_runs(step_runs, path)}
 
 
+@router.delete("/workflows/{path:path}/runs")
+async def clear_runs(path: str, request: Request, statuses: str | None = None) -> dict:
+    store = _get_store(request)
+    status_list = statuses.split(",") if statuses else None
+    deleted = store.delete_runs_for_workflow(path, status_list)
+    return {"deleted": deleted}
+
+
 @router.get("/workflows/{path:path}/webhook-url")
 async def get_webhook_url(path: str, request: Request) -> dict:
     from ... import vault as _vault
@@ -444,6 +452,7 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
 
     raw = content.get("content", "") if isinstance(content, dict) else str(content)
     wf = parser.parse(raw)
+    old_wf = parser.parse(raw)
 
     if body.title is not None:
         wf.title = body.title
@@ -546,6 +555,7 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request)
             md = parser.serialize(wf, original_content=raw)
             _vault.write_file(path, md)
 
+    _unregister_triggers(path, old_wf, request)
     _register_triggers(path, wf, request)
 
     _CACHE.update(path, {
@@ -578,12 +588,14 @@ def _register_triggers(path: str, wf: WorkflowDef, request: Request) -> None:
 
 
 def _unregister_triggers(path: str, wf: WorkflowDef | None, request: Request) -> None:
+    store = _get_store(request)
     try:
         fsw = getattr(request.app.state, "workflow_fsw_driver", None)
         if fsw and wf:
             import asyncio
             for t in wf.triggers:
                 if t.type == TriggerType.fs_watch:
+                    store.clear_fs_seen(t.id)
                     asyncio.create_task(fsw.stop(path, t.id))
     except Exception:
         pass
@@ -701,20 +713,6 @@ async def webhook_trigger(token: str, request: Request) -> Response:
 
     workflow_path, trigger_id = result
 
-    content_type = request.headers.get("content-type", "")
-    try:
-        if "application/json" in content_type:
-            payload = await request.json()
-        elif "application/x-www-form-urlencoded" in content_type:
-            form = await request.form()
-            payload = dict(form)
-        else:
-            raw_bytes = await request.body()
-            raw_str = raw_bytes.decode("utf-8", errors="replace")
-            payload = {"raw": raw_str}
-    except Exception:
-        payload = {}
-
     from ... import vault as _vault
 
     try:
@@ -727,6 +725,60 @@ async def webhook_trigger(token: str, request: Request) -> Response:
 
     if not wf.enabled:
         raise HTTPException(status_code=400, detail="workflow is disabled")
+
+    trigger = next((t for t in wf.triggers if t.id == trigger_id), None)
+    if trigger is not None and trigger.allowed_methods:
+        if request.method not in trigger.allowed_methods:
+            raise HTTPException(
+                status_code=405,
+                detail=f"method {request.method} not allowed; expected {trigger.allowed_methods}",
+            )
+
+    if trigger is not None and trigger.secret:
+        import hashlib
+        import hmac as _hmac
+        raw_body = await request.body()
+        request._body = raw_body
+        signature = request.headers.get("x-signature") or request.headers.get("x-hub-signature-256")
+        if signature:
+            if signature.startswith("sha256="):
+                signature = signature[7:]
+            expected = _hmac.new(
+                trigger.secret.encode(), raw_body, hashlib.sha256
+            ).hexdigest()
+            if not _hmac.compare_digest(expected, signature):
+                raise HTTPException(status_code=403, detail="invalid signature")
+
+    content_type = request.headers.get("content-type", "")
+    raw_body_bytes: bytes | None = None
+
+    if trigger is not None and trigger.payload_format not in ("json",):
+        raw_body_bytes = raw_body_bytes or await request.body()
+        from ...workflows.engine import _convert_trigger_payload
+        payload = _convert_trigger_payload(
+            raw_body_bytes.decode("utf-8", errors="replace"),
+            trigger.payload_format,
+        )
+    else:
+        try:
+            if "application/json" in content_type:
+                payload = await request.json()
+            elif "application/x-www-form-urlencoded" in content_type:
+                form = await request.form()
+                payload = dict(form)
+            else:
+                raw_body_bytes = raw_body_bytes or await request.body()
+                raw_str = raw_body_bytes.decode("utf-8", errors="replace")
+                payload = {"raw": raw_str}
+        except Exception:
+            payload = {}
+
+    payload = {
+        "method": request.method,
+        "headers": dict(request.headers),
+        "body": payload,
+        "query": dict(request.query_params),
+    }
 
     engine = _get_engine(request)
 
@@ -928,6 +980,79 @@ async def cancel_test_listener(path: str, test_id: str) -> dict:
         except Exception:
             pass
     return {"ok": True}
+
+
+class FsWatchPickBody(BaseModel):
+    trigger_id: str
+    file_path: str
+    test_id: str | None = None
+
+
+@router.post("/workflows/{path:path}/test-trigger/fs-watch-list")
+async def fs_watch_list_files(path: str, body: TestTriggerListenBody, request: Request) -> dict:
+    import os
+    from fnmatch import fnmatch
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    trigger = next((t for t in wf.triggers if t.id == body.trigger_id), None)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+
+    watch_path = trigger.path or ""
+    expanded = os.path.expanduser(watch_path)
+    if not expanded or not os.path.isdir(expanded):
+        return {"files": [], "watch_path": watch_path}
+
+    pattern = trigger.pattern or "*"
+    files = []
+    try:
+        for entry in sorted(os.scandir(expanded), key=lambda e: e.stat(follow_symlinks=False).st_mtime, reverse=True):
+            if entry.is_dir(follow_symlinks=False):
+                continue
+            if not fnmatch(entry.name, pattern):
+                continue
+            try:
+                st = entry.stat(follow_symlinks=False)
+                files.append({
+                    "name": entry.name,
+                    "path": entry.path,
+                    "size": st.st_size,
+                    "modified": __import__("datetime").datetime.fromtimestamp(st.st_mtime).isoformat(),
+                })
+            except OSError:
+                continue
+            if len(files) >= 50:
+                break
+    except OSError:
+        pass
+
+    return {"files": files, "watch_path": watch_path}
+
+
+@router.post("/workflows/{path:path}/test-trigger/fs-watch-pick")
+async def fs_watch_pick_file(path: str, body: FsWatchPickBody, request: Request) -> dict:
+    from ...workflows.triggers.test_listener import get_test_listener
+
+    payload = {
+        "src_path": body.file_path,
+        "event_type": "created",
+        "is_directory": False,
+    }
+
+    if body.test_id:
+        info = get_test_listener(body.test_id)
+        if info and info.get("queue"):
+            info["queue"].put_nowait(payload)
+
+    return payload
 
 
 class TestStepBody(BaseModel):

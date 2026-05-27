@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { WorkflowRun, RunDetail } from "../../types/workflow";
 import * as wfApi from "../../api/workflows";
+import Modal from "../Modal";
 
 interface Props {
   wfPath: string;
@@ -69,6 +70,7 @@ export default function MonitorTab({
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -103,14 +105,31 @@ export default function MonitorTab({
 
   const groups = useMemo(() => groupByDate(runs), [runs]);
 
+  const handleClearRuns = useCallback(async () => {
+    try {
+      await wfApi.clearRuns(wfPath, ["completed", "failed", "cancelled"]);
+    } catch {
+      console.error("Failed to clear runs");
+    }
+    setShowClearConfirm(false);
+    refresh();
+  }, [wfPath, refresh]);
+
   return (
     <div className="wf-monitor">
       <div className="wf-monitor-sidebar">
         <div className="wf-monitor-sidebar-header">
           <span>Executions</span>
-          <button onClick={refresh} title="Refresh">
-            ↻
-          </button>
+          <div style={{ display: "flex", gap: 4 }}>
+            {runs.length > 0 && (
+              <button onClick={() => setShowClearConfirm(true)} title="Clear old runs">
+                🗑
+              </button>
+            )}
+            <button onClick={refresh} title="Refresh">
+              ↻
+            </button>
+          </div>
         </div>
         <div className="wf-monitor-list">
           {loading && (
@@ -162,6 +181,16 @@ export default function MonitorTab({
             This run has no recorded step executions.
           </div>
         </div>
+      )}
+      {showClearConfirm && (
+        <Modal
+          kind="confirm"
+          title="Clear old runs"
+          message="Delete all completed, failed, and cancelled runs for this workflow?"
+          danger
+          onSubmit={handleClearRuns}
+          onCancel={() => setShowClearConfirm(false)}
+        />
       )}
     </div>
   );

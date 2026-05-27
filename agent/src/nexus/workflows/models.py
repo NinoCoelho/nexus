@@ -73,39 +73,102 @@ class TriggerConfig:
     broker_id: str | None = None
     broker_slug: str | None = None
 
+    def sanitize(self) -> None:
+        if self.type == TriggerType.webhook:
+            self.path = None
+            self.pattern = "*"
+            self.events = ["created"]
+            self.debounce_ms = 1000
+            self.cron = None
+            self.event = None
+            self.filter = None
+        elif self.type == TriggerType.fs_watch:
+            self.token = None
+            self.secret = None
+            self.allowed_methods = ["POST"]
+            self.cron = None
+            self.event = None
+            self.filter = None
+            self.broker_id = None
+            self.broker_slug = None
+            self.payload_format = "json"
+        elif self.type == TriggerType.schedule:
+            self.token = None
+            self.secret = None
+            self.allowed_methods = ["POST"]
+            self.path = None
+            self.pattern = "*"
+            self.events = ["created"]
+            self.debounce_ms = 1000
+            self.event = None
+            self.filter = None
+            self.broker_id = None
+            self.broker_slug = None
+            self.payload_format = "json"
+        elif self.type == TriggerType.event:
+            self.token = None
+            self.secret = None
+            self.allowed_methods = ["POST"]
+            self.path = None
+            self.pattern = "*"
+            self.events = ["created"]
+            self.debounce_ms = 1000
+            self.cron = None
+            self.broker_id = None
+            self.broker_slug = None
+            self.payload_format = "json"
+        elif self.type == TriggerType.manual:
+            self.token = None
+            self.secret = None
+            self.allowed_methods = ["POST"]
+            self.path = None
+            self.pattern = "*"
+            self.events = ["created"]
+            self.debounce_ms = 1000
+            self.cron = None
+            self.event = None
+            self.filter = None
+            self.broker_id = None
+            self.broker_slug = None
+            self.payload_format = "json"
+
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "type": self.type.value}
-        if self.token is not None:
-            out["token"] = self.token
-        if self.secret is not None:
-            out["secret"] = self.secret
-        if self.allowed_methods != ["POST"]:
-            out["allowed_methods"] = list(self.allowed_methods)
-        if self.path is not None:
-            out["path"] = self.path
-        if self.pattern != "*":
-            out["pattern"] = self.pattern
-        if self.events != ["created"]:
-            out["events"] = list(self.events)
-        if self.debounce_ms != 1000:
-            out["debounce_ms"] = self.debounce_ms
-        if self.cron is not None:
-            out["cron"] = self.cron
-        if self.event is not None:
-            out["event"] = self.event
-        if self.filter is not None:
-            out["filter"] = self.filter
-        if self.payload_format != "json":
-            out["payload_format"] = self.payload_format
-        if self.broker_id is not None:
-            out["broker_id"] = self.broker_id
-        if self.broker_slug is not None:
-            out["broker_slug"] = self.broker_slug
+        if self.type == TriggerType.webhook:
+            if self.token is not None:
+                out["token"] = self.token
+            if self.secret is not None:
+                out["secret"] = self.secret
+            if self.allowed_methods != ["POST"]:
+                out["allowed_methods"] = list(self.allowed_methods)
+            if self.payload_format != "json":
+                out["payload_format"] = self.payload_format
+            if self.broker_id is not None:
+                out["broker_id"] = self.broker_id
+            if self.broker_slug is not None:
+                out["broker_slug"] = self.broker_slug
+        elif self.type == TriggerType.fs_watch:
+            if self.path is not None:
+                out["path"] = self.path
+            if self.pattern != "*":
+                out["pattern"] = self.pattern
+            if self.events != ["created"]:
+                out["events"] = list(self.events)
+            if self.debounce_ms != 1000:
+                out["debounce_ms"] = self.debounce_ms
+        elif self.type == TriggerType.schedule:
+            if self.cron is not None:
+                out["cron"] = self.cron
+        elif self.type == TriggerType.event:
+            if self.event is not None:
+                out["event"] = self.event
+            if self.filter is not None:
+                out["filter"] = self.filter
         return out
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TriggerConfig:
-        return cls(
+        tc = cls(
             id=str(d.get("id", "")),
             type=TriggerType(d.get("type", "manual")),
             token=d.get("token"),
@@ -122,6 +185,8 @@ class TriggerConfig:
             broker_id=d.get("broker_id"),
             broker_slug=d.get("broker_slug"),
         )
+        tc.sanitize()
+        return tc
 
 
 @dataclass

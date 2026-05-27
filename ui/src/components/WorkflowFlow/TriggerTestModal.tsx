@@ -3,8 +3,11 @@ import {
   testTriggerListenUrl,
   cancelTestListener,
   testTrigger,
+  listFsWatchFiles,
+  pickFsTestFile,
 } from "../../api/workflows";
 import type { TriggerType, TriggerConfig } from "../../types/workflow";
+import type { FsWatchFile } from "../../api/workflows";
 
 type ModalState =
   | "connecting"
@@ -56,6 +59,12 @@ async function* readSSEResponse(
   }
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function TriggerTestModal({
   wfPath,
   triggerId,
@@ -69,7 +78,7 @@ export default function TriggerTestModal({
   );
   const [capturedPayload, setCapturedPayload] = useState<
     Record<string, unknown> | null
-  >(triggerType === "schedule" ? null : null);
+  >(null);
   const [listenInfo, setListenInfo] = useState<{
     url?: string;
     path?: string;
@@ -77,6 +86,8 @@ export default function TriggerTestModal({
   }>({});
   const [error, setError] = useState("");
   const [seconds, setSeconds] = useState(60);
+  const [fsFiles, setFsFiles] = useState<FsWatchFile[]>([]);
+  const [fsLoading, setFsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const testIdRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -166,6 +177,21 @@ export default function TriggerTestModal({
     return cleanup;
   }, [triggerType, wfPath, triggerId, cleanup]);
 
+  useEffect(() => {
+    if (triggerType !== "fs_watch" || state !== "listening") return;
+    let cancelled = false;
+    setFsLoading(true);
+    listFsWatchFiles(wfPath, triggerId)
+      .then((result) => {
+        if (!cancelled) setFsFiles(result.files);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setFsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [triggerType, wfPath, triggerId, state]);
+
   const handleRunSchedule = async () => {
     try {
       const result = await testTrigger(wfPath, triggerId);
@@ -176,6 +202,18 @@ export default function TriggerTestModal({
       setState("error");
     }
   };
+
+  const handlePickFile = useCallback(async (file: FsWatchFile) => {
+    try {
+      const payload = await pickFsTestFile(wfPath, triggerId, file.path, testIdRef.current || undefined);
+      setCapturedPayload(payload);
+      setState("captured");
+      if (timerRef.current) clearInterval(timerRef.current);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+      setState("error");
+    }
+  }, [wfPath, triggerId]);
 
   const handleCancel = () => {
     cleanup();
@@ -224,6 +262,49 @@ export default function TriggerTestModal({
     }
   }
 
+  let fsFilePicker: React.ReactNode = null;
+  if (triggerType === "fs_watch" && state === "listening") {
+    if (fsLoading) {
+      fsFilePicker = (
+        <div className="wf-test-file-picker">
+          <label>Or select a file to test with</label>
+          <div style={{ color: "var(--text-muted)", fontSize: 12, padding: "8px 0" }}>
+            Loading files...
+          </div>
+        </div>
+      );
+    } else if (fsFiles.length > 0) {
+      fsFilePicker = (
+        <div className="wf-test-file-picker">
+          <label>Or select a file to test with</label>
+          <div className="wf-test-file-list">
+            {fsFiles.map((f) => (
+              <button
+                key={f.path}
+                className="wf-test-file-item"
+                onClick={() => handlePickFile(f)}
+                title={f.path}
+              >
+                <span className="wf-test-file-name">{f.name}</span>
+                <span className="wf-test-file-size">{formatFileSize(f.size)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    } else if (listenInfo.path) {
+      fsFilePicker = (
+        <div className="wf-test-file-picker">
+          <label>No matching files found</label>
+          <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+            Add or update a file in <code>{listenInfo.path}</code> to trigger,
+            or wait for a live event above.
+          </div>
+        </div>
+      );
+    }
+  }
+
   if (triggerType === "schedule") {
     return (
       <div className="wf-test-overlay">
@@ -231,7 +312,7 @@ export default function TriggerTestModal({
           <div className="wf-test-header">
             <h3>Test Trigger: {TRIGGER_TYPE_LABELS[triggerType]}</h3>
             <button className="wf-test-close" onClick={onClose}>
-              \u2715
+              {"\u2715"}
             </button>
           </div>
           <div className="wf-test-body">
@@ -283,6 +364,7 @@ export default function TriggerTestModal({
           </div>
 
           {triggerInfo}
+          {fsFilePicker}
 
           {state === "captured" && capturedPayload && (
             <>
