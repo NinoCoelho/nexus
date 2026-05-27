@@ -25,6 +25,7 @@ class SqliteStore:
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         if self._SCHEMA:
             self._db.executescript(self._SCHEMA)

@@ -190,7 +190,7 @@ _registry: WebhookRegistry | None = None
 def get_registry() -> WebhookRegistry:
     global _registry
     if _registry is None:
-        from ..home import nexus_dir
-        db_path = nexus_dir() / "broker_webhooks.db"
+        from ..home import root
+        db_path = root() / "broker_webhooks.db"
         _registry = WebhookRegistry(db_path)
     return _registry
