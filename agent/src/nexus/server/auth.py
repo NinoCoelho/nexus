@@ -38,12 +38,14 @@ class AuthManager:
         self,
         user_id: str,
         role: str,
+        status: str = "active",
         expires_in: int = _DEFAULT_EXPIRY_SECONDS,
     ) -> str:
         now = time.time()
         payload = {
             "sub": user_id,
             "role": role,
+            "status": status,
             "iat": int(now),
             "exp": int(now + expires_in),
         }
@@ -128,6 +130,8 @@ class CurrentUser:
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
+        if user.status == "pending":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account_pending")
         if user.status != "active":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
 
@@ -167,6 +171,8 @@ class RequireRole:
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
+        if user.status == "pending":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account_pending")
         if user.status != "active":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
 

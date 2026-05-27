@@ -297,6 +297,81 @@ def admin_delete_user(
     return {"ok": True}
 
 
+class ApproveUserRequest(BaseModel):
+    role: str = "member"
+
+
+@router.get("/admin/pending-users")
+def admin_pending_users(
+    request: Request,
+    user: User | None = Depends(require_admin),
+) -> Any:
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    store = request.app.state.user_store
+    return [
+        UserResponse(
+            user_id=u.id,
+            email=u.email,
+            display_name=u.display_name,
+            role=u.role,
+            status=u.status,
+            created_at=u.created_at,
+            last_login=u.last_login,
+        )
+        for u in store.get_pending_users()
+    ]
+
+
+@router.post("/admin/users/{user_id}/approve", response_model=UserResponse)
+def admin_approve_user(
+    user_id: str,
+    body: ApproveUserRequest,
+    request: Request,
+    user: User | None = Depends(require_admin),
+) -> Any:
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot approve your own account")
+    if body.role not in _VALID_ROLES:
+        raise HTTPException(status_code=422, detail=f"Invalid role: {body.role!r}")
+    store = request.app.state.user_store
+    updated = store.approve_user(user_id, body.role)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Pending user not found")
+    from ...server.event_bus import publish as _publish
+    _publish({"type": "pending_users_changed"})
+    return UserResponse(
+        user_id=updated.id,
+        email=updated.email,
+        display_name=updated.display_name,
+        role=updated.role,
+        status=updated.status,
+        created_at=updated.created_at,
+        last_login=updated.last_login,
+    )
+
+
+@router.post("/admin/users/{user_id}/reject")
+def admin_reject_user(
+    user_id: str,
+    request: Request,
+    user: User | None = Depends(require_admin),
+) -> Any:
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot reject your own account")
+    store = request.app.state.user_store
+    deleted = store.delete_user(user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Pending user not found")
+    from ...server.event_bus import publish as _publish
+    _publish({"type": "pending_users_changed"})
+    return {"ok": True}
+
+
 @router.get("/status")
 def auth_status(request: Request) -> Any:
     multi_user = getattr(request.app.state, "multi_user", False)
@@ -312,14 +387,47 @@ def auth_status(request: Request) -> Any:
         payload = mgr.verify_token(token_str)
         if payload:
             user = store.get_user(payload["sub"])
-            if user and user.status == "active":
+            if user:
+                if user.status == "active":
+                    return {
+                        "multi_user": True,
+                        "needs_setup": False,
+                        "authenticated": True,
+                        "user_id": user.id,
+                        "email": user.email,
+                        "display_name": user.display_name,
+                        "role": user.role,
+                    }
+                if user.status == "pending":
+                    return {
+                        "multi_user": True,
+                        "needs_setup": False,
+                        "authenticated": False,
+                        "status": "pending",
+                        "user_id": user.id,
+                        "email": user.email,
+                        "display_name": user.display_name,
+                    }
+    return {"multi_user": True, "needs_setup": False, "authenticated": False}
+
+
+@router.get("/pending-status")
+def pending_status(request: Request) -> Any:
+    multi_user = getattr(request.app.state, "multi_user", False)
+    if not multi_user:
+        return {"multi_user": False}
+    mgr = _get_auth_manager(request)
+    token_str = mgr.extract_token(request)
+    if token_str:
+        payload = mgr.verify_token(token_str)
+        if payload and payload.get("status") == "pending":
+            store = request.app.state.user_store
+            user = store.get_user(payload["sub"])
+            if user and user.status == "pending":
                 return {
-                    "multi_user": True,
-                    "needs_setup": False,
-                    "authenticated": True,
+                    "status": "pending",
                     "user_id": user.id,
                     "email": user.email,
                     "display_name": user.display_name,
-                    "role": user.role,
                 }
-    return {"multi_user": True, "needs_setup": False, "authenticated": False}
+    return {"status": "unknown"}

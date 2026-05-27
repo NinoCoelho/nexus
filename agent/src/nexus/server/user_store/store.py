@@ -210,6 +210,20 @@ class UserStore:
         self._db.commit()
         return cursor.rowcount > 0
 
+    def get_pending_users(self) -> list[User]:
+        rows = self._db.execute(
+            "SELECT * FROM users WHERE status = 'pending' ORDER BY created_at ASC"
+        ).fetchall()
+        return [self._row_to_user(r) for r in rows]
+
+    def approve_user(self, user_id: str, role: Role = "member") -> User | None:
+        self._db.execute(
+            "UPDATE users SET status = 'active', role = ? WHERE id = ? AND status = 'pending'",
+            (role, user_id),
+        )
+        self._db.commit()
+        return self.get_user(user_id)
+
     def delete_user(self, user_id: str) -> bool:
         cursor = self._db.execute("DELETE FROM users WHERE id = ?", (user_id,))
         self._db.commit()

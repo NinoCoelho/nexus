@@ -18,10 +18,16 @@ log = logging.getLogger(__name__)
 
 _SESSION_COOKIE = "nexus_session"
 
+_PENDING_ALLOWED = frozenset({
+    "/auth/status",
+    "/auth/pending-status",
+})
+
 _PUBLIC_PATHS = frozenset({
     "/auth/invite",
     "/auth/register",
     "/auth/status",
+    "/auth/pending-status",
     "/auth/nexus/verify",
     "/tunnel/redeem",
     "/tunnel/auth-status",
@@ -100,6 +106,14 @@ class MultiUserAuthMiddleware(BaseHTTPMiddleware):
             request.state.user_id = None
             request.state.user_role = None
             set_user_home(None)
+
+        user_status = payload.get("status") if payload else None
+        if user_status == "pending" and path not in _PENDING_ALLOWED and not _is_public_auth_path(path):
+            return JSONResponse(
+                {"detail": "account_pending"},
+                status_code=403,
+                headers={"Cache-Control": "no-store"},
+            )
 
         if _is_public_auth_path(path):
             return await call_next(request)

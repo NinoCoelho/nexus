@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ...auth import nexus_account
 from ...auth.status_watcher import StatusWatcher
+from ...config_schema import ModelEntry, ProviderConfig
 from ..deps import get_app_state
 
 router = APIRouter()
@@ -43,6 +44,55 @@ def _require_loopback(request: Request) -> None:
 
 def _watcher(request: Request) -> StatusWatcher | None:
     return getattr(request.app.state, "nexus_status_watcher", None)
+
+
+def _ensure_nexus_in_memory(cfg: Any, tier: str) -> None:
+    """Add the Nexus provider + canonical model to the in-memory config.
+    
+    Mirrors :func:`nexus_account._ensure_nexus_in_config` but operates on
+    a live ``cfg`` object rather than loading/saving from disk. Called
+    eagerly after login so the model slot is populated before the first
+    background status poll.
+    """
+    nexus_provider_names = {
+        name for name, p in cfg.providers.items()
+        if getattr(p, "runtime_kind", "") == "nexus"
+    }
+
+    if not nexus_provider_names:
+        cfg.providers["nexus"] = ProviderConfig(
+            base_url="https://llm.nexus-model.us/v1",
+            credential_ref="nexus_api_key",
+            type="openai_compat",
+            catalog_id="nexus",
+            runtime_kind="nexus",
+        )
+        nexus_provider_names = {"nexus"}
+
+    primary = "nexus" if "nexus" in nexus_provider_names else sorted(nexus_provider_names)[0]
+
+    is_paid = bool(tier) and tier.strip().lower() not in ("free", "")
+    canonical = "nexus" if is_paid else "demo"
+
+    existing_nexus_ids = {
+        m.id for m in cfg.models if m.provider in nexus_provider_names
+    }
+    if existing_nexus_ids == {canonical}:
+        return
+
+    cfg.models = [m for m in cfg.models if m.provider not in nexus_provider_names]
+    cfg.models.append(
+        ModelEntry(
+            id=canonical,
+            provider=primary,
+            model_name=canonical,
+            tier="heavy" if canonical == "nexus" else "balanced",
+            tags=["nexus", "hosted", "pro" if canonical == "nexus" else "free"],
+        ),
+    )
+
+    if not cfg.agent.default_model:
+        cfg.agent.default_model = canonical
 
 
 def _account_view(*, watcher: StatusWatcher | None) -> dict[str, Any]:
@@ -112,12 +162,34 @@ async def auth_nexus_verify(
         except nexus_account.NexusAccountError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
+        # Eagerly ensure the nexus provider + model exist in the in-memory
+        # config so they're available right away, even if the background
+        # status poll hasn't run yet or fails.
+        _ensure_nexus_in_memory(cfg, record.get("tier", "free"))
+
         watcher = _watcher(request)
         if watcher is not None:
             try:
                 await watcher.tick_once()
             except nexus_account.NexusAccountError:
                 log.warning("[nexus_account] post-verify status fetch failed")
+                # tick_once also reconciles models + rebuilds the registry.
+                # When it fails we still need to persist + rebuild so the
+                # in-memory state matches what _ensure_nexus_in_memory and
+                # verify_id_token wrote to disk.
+                from ...config_file import save as _save_config
+                from .config import _rebuild_registry
+                app_state = get_app_state(request)
+                _agent = getattr(request.app.state, "agent", None)
+                if _agent is not None:
+                    try:
+                        _save_config(cfg)
+                    except Exception:
+                        log.exception("[nexus_account] save config fallback failed")
+                    try:
+                        _rebuild_registry(cfg, app_state, _agent)
+                    except Exception:
+                        log.exception("[nexus_account] registry rebuild fallback failed")
         return record
 
     from ..auth import _get_auth_manager
@@ -142,7 +214,7 @@ async def auth_nexus_verify(
                 _sec.set(nexus_account.SECRET_NAME, api_key, kind="provider")
                 nexus_account.save_account({k: v for k, v in record.items() if k != "apiKey"})
         mgr = _get_auth_manager(request)
-        jwt_token = mgr.create_token(existing.id, existing.role)
+        jwt_token = mgr.create_token(existing.id, existing.role, existing.status)
         store.touch_login(existing.id)
         resp_body = {**record, "multi_user": True, "user_id": existing.id, "role": existing.role}
         response = _Response(content=_json.dumps(resp_body), media_type="application/json")
@@ -157,7 +229,7 @@ async def auth_nexus_verify(
             nexus_account.save_account({k: v for k, v in record.items() if k != "apiKey"})
         user = store.create_user(email=email, display_name=display_name or email, role="admin", nexus_uid=nexus_uid)
         mgr = _get_auth_manager(request)
-        jwt_token = mgr.create_token(user.id, user.role)
+        jwt_token = mgr.create_token(user.id, user.role, user.status)
         store.touch_login(user.id)
         resp_body = {**record, "multi_user": True, "user_id": user.id, "role": "admin"}
         response = _Response(content=_json.dumps(resp_body), media_type="application/json")
@@ -173,14 +245,23 @@ async def auth_nexus_verify(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         mgr = _get_auth_manager(request)
-        jwt_token = mgr.create_token(user.id, user.role)
+        jwt_token = mgr.create_token(user.id, user.role, user.status)
         store.touch_login(user.id)
         resp_body = {**record, "multi_user": True, "user_id": user.id, "role": user.role}
         response = _Response(content=_json.dumps(resp_body), media_type="application/json")
         mgr.set_session_cookie(response, jwt_token)
         return response
 
-    raise HTTPException(status_code=403, detail="Not invited — ask an admin for an invite code")
+    user = store.create_user(email=email, display_name=display_name or email, role="member", status="pending", nexus_uid=nexus_uid)
+    mgr = _get_auth_manager(request)
+    jwt_token = mgr.create_token(user.id, user.role, "pending")
+    store.touch_login(user.id)
+    from ...server.event_bus import publish as _publish
+    _publish({"type": "pending_users_changed"})
+    resp_body = {**record, "multi_user": True, "user_id": user.id, "role": user.role, "status": "pending"}
+    response = _Response(content=_json.dumps(resp_body), media_type="application/json")
+    mgr.set_session_cookie(response, jwt_token)
+    return response
 
 
 @router.get("/auth/nexus/status")
