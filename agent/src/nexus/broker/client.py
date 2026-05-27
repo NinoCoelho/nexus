@@ -116,10 +116,9 @@ class BrokerClient:
                 return None
             resp.raise_for_status()
             outer = resp.json()
-            msg = outer.get("message")
-            data = msg if msg is not None else outer
-            if data is None:
+            if "message" in outer:
                 return None
+            data = outer
             return BrokerMessage(
                 id=data["id"],
                 webhook_id=data["webhookId"],
