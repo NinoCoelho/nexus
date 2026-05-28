@@ -22,6 +22,25 @@ from .types import (
 
 log = logging.getLogger(__name__)
 
+_REPEAT_MAX_PATTERN = 8
+
+
+def _is_repeating_tail(text: str, threshold: int) -> bool:
+    if threshold <= 0 or len(text) < threshold:
+        return False
+    tail = text[-threshold:]
+    for k in range(1, _REPEAT_MAX_PATTERN + 1):
+        if threshold % k:
+            continue
+        pat = tail[:k]
+        if k == 1:
+            if tail.count(pat) == threshold:
+                return True
+            continue
+        if pat * (threshold // k) == tail:
+            return True
+    return False
+
 
 def _encode_part_anthropic(part: ContentPart) -> dict[str, Any]:
     """Translate one ``ContentPart`` into Anthropic native block shape.
@@ -181,6 +200,7 @@ class AnthropicProvider(LLMProvider):
         model: str = "",
         temperature: float = 0.0,
         impersonate_claude_code: bool = False,
+        anti_repeat_threshold: int = 0,
     ) -> None:
         import anthropic  # type: ignore[import]
 
@@ -199,6 +219,7 @@ class AnthropicProvider(LLMProvider):
             self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
         self._temperature = float(temperature or 0.0)
+        self._anti_repeat_threshold = int(anti_repeat_threshold or 0)
 
     def _prepare_call(
         self,
@@ -263,6 +284,8 @@ class AnthropicProvider(LLMProvider):
         full_text = ""
         tool_bufs: dict[str, dict[str, Any]] = {}  # id -> {name, args_buf}
         sdk_event_count = 0
+        aborted_repeat = False
+        repeat_threshold = self._anti_repeat_threshold
 
         log.warning(
             "AnthropicProvider.chat_stream → model=%s msgs=%d tools=%d max_toks=%s",
@@ -289,6 +312,9 @@ class AnthropicProvider(LLMProvider):
                     if delta.type == "text_delta":
                         full_text += delta.text
                         yield {"type": "delta", "text": delta.text}
+                        if repeat_threshold and _is_repeating_tail(full_text, repeat_threshold):
+                            aborted_repeat = True
+                            break
                     elif delta.type == "input_json_delta":
                         # Find the block being built — Anthropic gives us index
                         block_id = None
@@ -338,6 +364,15 @@ class AnthropicProvider(LLMProvider):
                         "tool_calls": tool_calls,
                         "usage": _usage_from_anthropic(getattr(msg, "usage", None)).model_dump(),
                     }
+        if aborted_repeat:
+            yield {
+                "type": "finish",
+                "finish_reason": StopReason.STOP.value,
+                "content": full_text,
+                "tool_calls": [],
+                "usage": Usage().model_dump(),
+                "abort_reason": "repetition",
+            }
         log.warning(
             "AnthropicProvider.chat_stream finished — sdk_events=%d",
             sdk_event_count,

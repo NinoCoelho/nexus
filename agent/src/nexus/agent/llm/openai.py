@@ -412,6 +412,9 @@ class OpenAIProvider(LLMProvider):
                     if reasoning_piece:
                         full_reasoning += reasoning_piece
                         yield {"type": "thinking_delta", "text": reasoning_piece}
+                        if repeat_threshold and _is_repeating_tail(full_reasoning, repeat_threshold):
+                            aborted_repeat = True
+                            break
 
                     # Text delta
                     text_piece = delta.get("content")

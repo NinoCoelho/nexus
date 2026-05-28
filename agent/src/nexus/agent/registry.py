@@ -196,6 +196,7 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
                 model="",
                 temperature=cfg.agent.temperature,
                 impersonate_claude_code=impersonate,
+                anti_repeat_threshold=cfg.agent.anti_repeat_threshold,
             )
             reg.register_provider(name, provider)
             log.info(
@@ -276,7 +277,8 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
 
         if provider_type == "anthropic":
             provider = AnthropicProvider(
-                api_key=api_key, model="", temperature=cfg.agent.temperature
+                api_key=api_key, model="", temperature=cfg.agent.temperature,
+                anti_repeat_threshold=cfg.agent.anti_repeat_threshold,
             )
         elif pcfg.base_url:
             provider = OpenAIProvider(
