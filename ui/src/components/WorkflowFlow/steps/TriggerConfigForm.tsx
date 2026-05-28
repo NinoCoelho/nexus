@@ -26,6 +26,7 @@ export default function TriggerConfigForm({
   const [hasBroker, setHasBroker] = useState(false);
   const [brokerConnected, setBrokerConnected] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [brokerError, setBrokerError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmTypeChange, setConfirmTypeChange] = useState<TriggerType | null>(null);
   const [webhookManagerOpen, setWebhookManagerOpen] = useState(false);
@@ -79,6 +80,7 @@ export default function TriggerConfigForm({
         setHasBroker(hook?.has_broker ?? false);
         setBrokerConnected(res.broker_connected ?? false);
         setSignedIn(res.signed_in ?? false);
+        setBrokerError(res.broker_error ?? null);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -210,12 +212,16 @@ export default function TriggerConfigForm({
                     <CopyBtn text={webhookUrl} />
                   </div>
                 ) : (
-                  <div style={{ fontSize: 11, color: "var(--fg-dim)", padding: "4px 0" }}>
+                  <div style={{ fontSize: 11, padding: "4px 0", ...(brokerError === "auth_failed" ? { color: "var(--danger, #e53935)" } : { color: "var(--fg-dim)" }) }}>
                     {!signedIn
                       ? "Sign in to your Nexus account to activate webhooks."
-                      : !brokerConnected
-                        ? "Webhook relay is being provisioned. The URL will appear here shortly."
-                        : "Connecting to broker..."}
+                      : brokerError === "auth_failed"
+                        ? "Broker authentication failed. Try signing out and back in to refresh your credentials."
+                        : brokerError === "unreachable"
+                          ? "Broker is unreachable. Check your network connection."
+                          : !brokerConnected
+                            ? "Webhook relay is being provisioned. The URL will appear here shortly."
+                            : "Connecting to broker..."}
                   </div>
                 )}
               </div>

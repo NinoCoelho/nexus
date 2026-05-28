@@ -310,6 +310,37 @@ async def clear_runs(path: str, request: Request, _admin: None = Depends(require
     return {"deleted": deleted}
 
 
+_broker_health_cache: tuple[bool, str | None, float] = (False, None, 0.0)
+_BROKER_HEALTH_TTL = 60.0
+
+
+async def _check_broker_health() -> tuple[bool, str | None]:
+    global _broker_health_cache
+    from ... import secrets as _secrets
+    import time
+
+    api_key = _secrets.get("broker_api_key")
+    if not api_key:
+        return False, None
+
+    now = time.monotonic()
+    ok, err, ts = _broker_health_cache
+    if now - ts < _BROKER_HEALTH_TTL:
+        return ok, err
+
+    from ...broker.client import BrokerClient
+    client = BrokerClient(api_key=api_key)
+    try:
+        await client.list_webhooks()
+        _broker_health_cache = (True, None, now)
+        return True, None
+    except Exception as exc:
+        detail = "auth_failed" if "401" in str(exc) else "unreachable"
+        _broker_health_cache = (False, detail, now)
+        log.warning("broker health check failed: %s", exc)
+        return False, detail
+
+
 @router.get("/workflows/{path:path}/webhook-url")
 async def get_webhook_url(path: str, request: Request) -> dict:
     from ... import vault as _vault
@@ -328,6 +359,11 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     broker_connected = bool(_secrets.get("broker_api_key"))
     signed_in = bool(_secrets.get("nexus_api_key"))
 
+    broker_ok: bool | None = None
+    broker_error: str | None = None
+    if broker_connected and signed_in:
+        broker_ok, broker_error = await _check_broker_health()
+
     hooks = []
     for t in wf.triggers:
         if t.type == TriggerType.webhook:
@@ -339,7 +375,13 @@ async def get_webhook_url(path: str, request: Request) -> dict:
                 "has_broker": bool(t.broker_slug),
             })
 
-    return {"webhooks": hooks, "broker_connected": broker_connected, "signed_in": signed_in}
+    return {
+        "webhooks": hooks,
+        "broker_connected": broker_connected,
+        "signed_in": signed_in,
+        "broker_ok": broker_ok,
+        "broker_error": broker_error,
+    }
 
 
 @router.get("/workflows/{path:path}/debug/{run_id}/events")

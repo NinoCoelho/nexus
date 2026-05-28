@@ -118,9 +118,15 @@ export async function clearRuns(
   return _json(res);
 }
 
-export async function getWebhookUrl(
-  path: string,
-): Promise<{ webhooks: { trigger_id: string; token: string; url: string | null; has_broker?: boolean }[]; broker_connected: boolean; signed_in: boolean }> {
+export interface WebhookUrlResponse {
+  webhooks: { trigger_id: string; token: string; url: string | null; has_broker?: boolean }[];
+  broker_connected: boolean;
+  signed_in: boolean;
+  broker_ok: boolean | null;
+  broker_error: string | null;
+}
+
+export async function getWebhookUrl(path: string): Promise<WebhookUrlResponse> {
   const res = await fetch(
     `${BASE}/workflows/${encodeURIComponent(path)}/webhook-url`,
   );
