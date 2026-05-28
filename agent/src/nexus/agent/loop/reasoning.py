@@ -78,19 +78,14 @@ class ReasoningTracker:
     def hydrate_adapter_map(
         self, adapter: Any, history: list[ChatMessage]
     ) -> None:
-        if adapter is None or not hasattr(adapter, "_reasoning_content_map"):
+        if adapter is None or not hasattr(adapter, "_reasoning_content_list"):
             return
-        rc_map: dict[tuple, str] = {}
+        rc_list: list[str] = []
         for m in history:
             if m.role == Role.ASSISTANT and m.reasoning_content:
-                content_str = (
-                    m.content if isinstance(m.content, str) else str(m.content or "")
-                )
-                tc_ids = tuple(tc.id for tc in (m.tool_calls or []))
-                fp = ("assistant", content_str[:500], tc_ids)
-                rc_map[fp] = m.reasoning_content
-        adapter._reasoning_content_map = rc_map
+                rc_list.append(m.reasoning_content)
+        adapter._reasoning_content_list = rc_list
 
     def clear_adapter_map(self, adapter: Any) -> None:
-        if adapter is not None and hasattr(adapter, "_reasoning_content_map"):
-            adapter._reasoning_content_map = {}
+        if adapter is not None and hasattr(adapter, "_reasoning_content_list"):
+            adapter._reasoning_content_list = []

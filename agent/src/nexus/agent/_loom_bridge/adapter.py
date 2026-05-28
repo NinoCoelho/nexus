@@ -11,19 +11,11 @@ import loom.types as lt
 from loom.llm.base import LLMProvider as LoomLLMProvider
 
 from nexus.agent.llm import LLMProvider as NexusLLMProvider
+from nexus.agent.llm.types import Role
 
 from .message import _loom_to_nexus_message, _nexus_stop_to_loom
 
 log = logging.getLogger(__name__)
-
-
-def _msg_fingerprint(msg: lt.ChatMessage) -> tuple | None:
-    """Build a stable fingerprint for an assistant message for reasoning_content lookup."""
-    if msg.role != lt.Role.ASSISTANT:
-        return None
-    content_str = msg.content if isinstance(msg.content, str) else str(msg.content or "")
-    tc_ids = tuple(tc.id for tc in (msg.tool_calls or []))
-    return ("assistant", content_str[:500], tc_ids)
 
 
 class LoomProviderAdapter(LoomLLMProvider):
@@ -50,12 +42,11 @@ class LoomProviderAdapter(LoomLLMProvider):
         self._max_tokens_for = max_tokens_for
         self._thinking_sink: Callable[[str], None] | None = None
         self._last_reasoning_content: str | None = None
-        # Side-channel for reasoning_content survival. The agent loop populates
-        # this with fingerprints of assistant messages that carry reasoning,
-        # and the adapter re-attaches it when converting loom→nexus so
-        # thinking-model APIs (DeepSeek-R1, etc.) see reasoning_content on
-        # every assistant turn in the message history.
-        self._reasoning_content_map: dict[tuple, str] = {}
+        # Ordered list of reasoning_content strings, one per assistant message
+        # in conversation order. Positional lookup replaces the old
+        # fingerprint-based dict to eliminate fragile content matching that
+        # caused DeepSeek 400 errors when reasoning_content was lost.
+        self._reasoning_content_list: list[str] = []
 
     def _resolve(self, model_id: str | None) -> tuple[NexusLLMProvider, str | None]:
         """Map a Nexus model id like ``zai/glm-4.6`` to (provider, upstream_name).
@@ -91,27 +82,27 @@ class LoomProviderAdapter(LoomLLMProvider):
     def _restore_reasoning(self, loom_msgs: list[lt.ChatMessage]) -> list:
         from nexus.agent.llm import ChatMessage as NexusChatMessage
         nexus_messages = [_loom_to_nexus_message(m) for m in loom_msgs]
-        has_map = bool(self._reasoning_content_map)
-        if not has_map:
+        rc_list = self._reasoning_content_list
+        if not rc_list:
             has_attr = any(getattr(m, '_reasoning_content', None) for m in loom_msgs)
             if not has_attr:
                 return nexus_messages
         out: list[NexusChatMessage] = []
+        _asst_idx = 0
         for loom_m, nexus_m in zip(loom_msgs, nexus_messages):
             rc = getattr(loom_m, '_reasoning_content', None)
             if rc:
                 out.append(nexus_m.model_copy(
                     update={"reasoning_content": rc}
                 ))
-                continue
-            if has_map:
-                fp = _msg_fingerprint(loom_m)
-                if fp and fp in self._reasoning_content_map:
-                    out.append(nexus_m.model_copy(
-                        update={"reasoning_content": self._reasoning_content_map[fp]}
-                    ))
-                    continue
-            out.append(nexus_m)
+            elif nexus_m.role == Role.ASSISTANT and _asst_idx < len(rc_list):
+                out.append(nexus_m.model_copy(
+                    update={"reasoning_content": rc_list[_asst_idx]}
+                ))
+            else:
+                out.append(nexus_m)
+            if nexus_m.role == Role.ASSISTANT:
+                _asst_idx += 1
         return out
 
     async def chat(
@@ -310,23 +301,11 @@ class LoomProviderAdapter(LoomLLMProvider):
                     loom_stop = lt.StopReason.UNKNOWN
                 yield lt.StopEvent(stop_reason=loom_stop)
 
-                # Self-register the fingerprint of the assistant message this
-                # call produced (content + tool_call IDs). When loom's iteration
-                # loop appends the assembled ChatMessage to all_messages and
-                # calls chat_stream again, the fingerprint will match and
-                # _restore_reasoning will re-attach reasoning_content.
+                # Self-register reasoning_content for this iteration.
+                # Positional lookup means we just append — no fragile
+                # fingerprint matching needed.
                 if self._last_reasoning_content:
-                    _content_text = "".join(_accumulated_content) or None
-                    _tc_ids = tuple(
-                        tc_dict.get("id", f"tc_{i}")
-                        for i, tc_dict in enumerate(finish_tool_calls)
-                    )
-                    _fp = (
-                        "assistant",
-                        (_content_text or "")[:500],
-                        _tc_ids,
-                    )
-                    self._reasoning_content_map[_fp] = self._last_reasoning_content
+                    self._reasoning_content_list.append(self._last_reasoning_content)
                 _accumulated_content.clear()
 
         # Post-iteration summary — fires whether the provider yielded
