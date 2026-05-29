@@ -297,6 +297,9 @@ _FAMILY_PATTERNS: list[tuple[re.Pattern[str], set[str]]] = [
     # Grok 4 supports vision.
     (re.compile(r"grok-4", re.I),
      {"chat", "tools", "vision", "reasoning"}),
+    # Nexus vision model.
+    (re.compile(r"nexus-vision", re.I),
+     {"chat", "tools", "vision"}),
 ]
 
 

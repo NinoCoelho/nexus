@@ -113,15 +113,15 @@ def clear_account() -> None:
 
 
 def _ensure_nexus_in_config(tier: str) -> None:
-    """Add the Nexus provider and canonical model to ``config.toml``.
+    """Add the Nexus provider and ``nexus`` model to ``config.toml``.
 
     Called from :func:`verify_id_token` so the Nexus model is available
     the instant the user signs in, without waiting for the background
     status-watcher's first poll cycle.
 
-    Logic mirrors :meth:`StatusWatcher._reconcile_models` — single-model-
-    per-tier policy: paid/pro tiers get the ``nexus`` model, free/trial
-    get ``demo``.
+    Registers the ``nexus`` chat model. The status watcher's
+    ``_reconcile_models`` will add ``nexus-vision`` when the first
+    poll confirms it is available.
     """
     from .. import config_file
     from ..config_schema import ModelEntry, ProviderConfig
@@ -145,35 +145,30 @@ def _ensure_nexus_in_config(tier: str) -> None:
 
     primary = "nexus" if "nexus" in nexus_provider_names else sorted(nexus_provider_names)[0]
 
-    # Any non-free tier is considered paid → gets the "nexus" model.
-    is_paid = bool(tier) and tier.strip().lower() not in ("free", "")
-    canonical = "nexus" if is_paid else "demo"
-
     existing_nexus_ids = {
         m.id for m in cfg.models if m.provider in nexus_provider_names
     }
-    if existing_nexus_ids == {canonical}:
+    if existing_nexus_ids == {"nexus"}:
         return
 
-    # Drop any stale nexus models and add the canonical one.
     cfg.models = [m for m in cfg.models if m.provider not in nexus_provider_names]
     cfg.models.append(
         ModelEntry(
-            id=canonical,
+            id="nexus",
             provider=primary,
-            model_name=canonical,
-            tier="heavy" if canonical == "nexus" else "balanced",
-            tags=["nexus", "hosted", "pro" if canonical == "nexus" else "free"],
+            model_name="nexus",
+            tier="heavy",
+            tags=["nexus", "hosted", "pro"],
         ),
     )
 
     if not cfg.agent.default_model:
-        cfg.agent.default_model = canonical
+        cfg.agent.default_model = "nexus"
 
     config_file.save(cfg)
     log.info(
-        "[nexus_account] ensured nexus model in config: %s (tier=%s)",
-        canonical, tier,
+        "[nexus_account] ensured nexus model in config: nexus (tier=%s)",
+        tier,
     )
 
 

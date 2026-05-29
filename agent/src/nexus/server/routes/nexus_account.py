@@ -47,12 +47,13 @@ def _watcher(request: Request) -> StatusWatcher | None:
 
 
 def _ensure_nexus_in_memory(cfg: Any, tier: str) -> None:
-    """Add the Nexus provider + canonical model to the in-memory config.
+    """Add the Nexus provider + ``nexus`` model to the in-memory config.
     
     Mirrors :func:`nexus_account._ensure_nexus_in_config` but operates on
     a live ``cfg`` object rather than loading/saving from disk. Called
     eagerly after login so the model slot is populated before the first
-    background status poll.
+    background status poll. The status watcher will add ``nexus-vision``
+    on its first tick.
     """
     nexus_provider_names = {
         name for name, p in cfg.providers.items()
@@ -71,28 +72,25 @@ def _ensure_nexus_in_memory(cfg: Any, tier: str) -> None:
 
     primary = "nexus" if "nexus" in nexus_provider_names else sorted(nexus_provider_names)[0]
 
-    is_paid = bool(tier) and tier.strip().lower() not in ("free", "")
-    canonical = "nexus" if is_paid else "demo"
-
     existing_nexus_ids = {
         m.id for m in cfg.models if m.provider in nexus_provider_names
     }
-    if existing_nexus_ids == {canonical}:
+    if existing_nexus_ids == {"nexus"}:
         return
 
     cfg.models = [m for m in cfg.models if m.provider not in nexus_provider_names]
     cfg.models.append(
         ModelEntry(
-            id=canonical,
+            id="nexus",
             provider=primary,
-            model_name=canonical,
-            tier="heavy" if canonical == "nexus" else "balanced",
-            tags=["nexus", "hosted", "pro" if canonical == "nexus" else "free"],
+            model_name="nexus",
+            tier="heavy",
+            tags=["nexus", "hosted", "pro"],
         ),
     )
 
     if not cfg.agent.default_model:
-        cfg.agent.default_model = canonical
+        cfg.agent.default_model = "nexus"
 
 
 def _account_view(*, watcher: StatusWatcher | None) -> dict[str, Any]:

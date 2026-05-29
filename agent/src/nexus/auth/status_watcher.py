@@ -5,9 +5,9 @@ Every ``poll_seconds`` seconds the watcher:
   2. Compares the returned ``models`` array against the last snapshot.
   3. On change, edits the in-memory provider registry so the new set of
      Nexus-tier model ids is exactly what the gateway will accept.
-  4. Auto-promotes the agent's default model from ``demo`` to ``nexus``
-     when the user upgrades to pro (and falls back the other direction
-     when pro is cancelled).
+  4. Registers ``nexus`` (chat) and ``nexus-vision`` (vision/OCR) models
+     when the status API lists them; auto-assigns ``nexus-vision`` as the
+     vision role if no vision model is configured.
   5. Emits a ``nexus_tier_changed`` event onto the synthetic
      ``__nexus__`` session channel; the UI subscribes to the cross-session
      stream and uses the event to refresh gauges + show a toast.
@@ -177,6 +177,17 @@ class StatusWatcher:
                     log.exception("[nexus_watcher] features_changed publish failed")
 
         if new_models == prev_models:
+            # Models unchanged — still force nexus-vision as the vision
+            # role whenever it is available.
+            if "nexus-vision" in new_models:
+                cfg = self._cfg()
+                if cfg.agent.vision_model != "nexus-vision":
+                    cfg.agent.vision_model = "nexus-vision"
+                    try:
+                        self._save_config(cfg)
+                    except Exception:
+                        log.exception("[nexus_watcher] save_config failed")
+                    log.info("[nexus_watcher] auto-assigned vision role to nexus-vision")
             return
 
         cfg = self._cfg()
@@ -229,17 +240,18 @@ class StatusWatcher:
                 log.exception("[nexus_watcher] SSE publish failed")
 
     def _reconcile_models(self, cfg: Any, available: tuple[str, ...]) -> bool:
-        """Enforce the single-model-per-tier policy on Nexus providers.
+        """Reconcile Nexus provider models against the status API response.
 
-        Mapping (driven by the website's ``/api/status.models`` array):
+        Driven by the ``/api/status.models`` array:
 
-          * ``"nexus"`` listed  → register only ``nexus`` (pro tier)
-          * else ``"demo"`` listed → register only ``demo`` (free tier)
-          * else nothing listed → drop both (key revoked / unreachable)
+          * ``"nexus"`` in available → register the ``nexus`` chat model
+          * ``"nexus-vision"`` in available → register the ``nexus-vision``
+            vision model and auto-assign it as the vision role
+          * If neither is listed → drop all Nexus models (key revoked)
 
         Only model entries belonging to a provider with ``runtime_kind ==
         "nexus"`` are touched; BYO models stay untouched. Returns True
-        when the list changed so the caller persists.
+        when the list or vision role changed so the caller persists.
         """
         from ..config_schema import ModelEntry
 
@@ -250,44 +262,52 @@ class StatusWatcher:
         if not nexus_provider_names:
             return False
 
-        # Pick a stable "primary" provider to attach the canonical model
-        # entry to. Defaults to ``"nexus"`` (the catalog id) when present.
         primary = "nexus" if "nexus" in nexus_provider_names else sorted(
             nexus_provider_names,
         )[0]
 
-        # Pro tier > free tier. If neither is listed, the user has no
-        # working Nexus model at all and we drop everything.
-        canonical: str | None = None
+        desired: list[ModelEntry] = []
         if "nexus" in available:
-            canonical = "nexus"
-        elif "demo" in available:
-            canonical = "demo"
-
-        existing_nexus_ids = {
-            m.id for m in cfg.models if m.provider in nexus_provider_names
-        }
-        desired_ids: set[str] = {canonical} if canonical else set()
-
-        if existing_nexus_ids == desired_ids:
-            return False
-
-        # Drop everything Nexus-tier and rewrite to the canonical entry.
-        cfg.models = [m for m in cfg.models if m.provider not in nexus_provider_names]
-        if canonical:
-            cfg.models.append(
+            desired.append(
                 ModelEntry(
-                    id=canonical,
+                    id="nexus",
                     provider=primary,
-                    model_name=canonical,
-                    tier="heavy" if canonical == "nexus" else "balanced",
-                    tags=["nexus", "hosted", "pro" if canonical == "nexus" else "free"],
+                    model_name="nexus",
+                    tier="heavy",
+                    tags=["nexus", "hosted", "pro"],
+                ),
+            )
+        if "nexus-vision" in available:
+            desired.append(
+                ModelEntry(
+                    id="nexus-vision",
+                    provider=primary,
+                    model_name="nexus-vision",
+                    tier="balanced",
+                    tags=["nexus", "hosted", "vision"],
                 ),
             )
 
+        desired_ids = {m.id for m in desired}
+        existing_nexus_ids = {
+            m.id for m in cfg.models if m.provider in nexus_provider_names
+        }
+
+        needs_vision = "nexus-vision" in desired_ids
+
+        if existing_nexus_ids == desired_ids and not needs_vision:
+            return False
+
+        if existing_nexus_ids != desired_ids:
+            cfg.models = [m for m in cfg.models if m.provider not in nexus_provider_names]
+            cfg.models.extend(desired)
+
+        if needs_vision:
+            cfg.agent.vision_model = "nexus-vision"
+
         log.info(
-            "[nexus_watcher] reconciled nexus models: %s -> %s (canonical=%r)",
-            sorted(existing_nexus_ids), sorted(desired_ids), canonical,
+            "[nexus_watcher] reconciled nexus models: %s -> %s",
+            sorted(existing_nexus_ids), sorted(desired_ids),
         )
         return True
 
@@ -297,24 +317,18 @@ class StatusWatcher:
         new_models: tuple[str, ...],
         cfg: Any,
     ) -> str:
-        """Pick the default model after a tier change.
+        """Pick the default model after a model change.
 
-        Single-model-per-tier policy: if the previous default was a
-        Nexus model, switch to whichever Nexus model is now canonical
-        for the live tier (pro → ``nexus``, free → ``demo``). BYO
+        If the previous default was a Nexus model (``nexus``, ``demo``,
+        or ``nexus-vision``), switch to ``nexus`` if available. BYO
         defaults are never touched.
         """
-        nexus_tier_models = {"nexus", "demo"}
-        was_on_nexus = prev_default in nexus_tier_models
+        nexus_model_ids = {"nexus", "demo", "nexus-vision"}
+        was_on_nexus = prev_default in nexus_model_ids
 
-        # Preserve BYO defaults.
         if not was_on_nexus and prev_default:
             return prev_default
 
-        # Pick canonical for the live tier — same priority as
-        # ``_reconcile_models``.
         if "nexus" in new_models:
             return "nexus"
-        if "demo" in new_models:
-            return "demo"
         return prev_default

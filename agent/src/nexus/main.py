@@ -72,10 +72,10 @@ def build_app():
         exclude = {vision_id} if vision_id else None
         available = provider_registry.available_model_ids(exclude=exclude)
         if available:
-            # Prefer Nexus-tier models when present (nexus > demo), since
-            # signed-in users always have one of those registered. Falls
-            # through to the first BYO-model otherwise.
-            preference = ("nexus", "demo")
+            # Prefer the nexus model when present, since signed-in users
+            # always have it registered. Falls through to the first BYO
+            # model otherwise.
+            preference = ("nexus",)
             fallback_id = next(
                 (mid for mid in preference if mid in available),
                 available[0],
