@@ -48,7 +48,10 @@ final class UpdateChecker: ObservableObject {
 
         guard let url = URL(string: "http://127.0.0.1:\(port)/update/download") else { return }
         Task {
-            let (_, response) = await URLSession.shared.data(from: url)
+            guard let (_, response) = try? await URLSession.shared.data(from: url) else {
+                self.downloadState = "error"
+                return
+            }
             if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
                 self.downloadState = "error"
                 return
