@@ -240,14 +240,24 @@ class SessionStore(PubSubMixin, QueryMixin):
         sess._message_timestamps = timestamps  # type: ignore[attr-defined]
         return sess
 
-    def list(self, limit: int = 50, *, include_hidden: bool = False, project_id: str | None = None) -> list[SessionSummary]:
-        # ``hidden`` exists from the spawn_subagents migration; filter out
-        # child sessions by default so the sidebar doesn't surface them.
+    def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        include_hidden: bool = False,
+        project_id: str | None = None,
+        has_project: bool | None = None,
+    ) -> list[SessionSummary]:
         clauses = []
         params: list[Any] = []
         if not include_hidden:
             clauses.append("COALESCE(s.hidden, 0) = 0")
-        if project_id is not None:
+        if has_project is True:
+            clauses.append("s.project_id IS NOT NULL")
+        elif has_project is False:
+            clauses.append("s.project_id IS NULL")
+        elif project_id is not None:
             clauses.append("s.project_id = ?" if project_id else "s.project_id IS NULL")
             params.append(project_id)
         where = ""
@@ -263,9 +273,9 @@ class SessionStore(PubSubMixin, QueryMixin):
             {where}
             GROUP BY s.id
             ORDER BY s.updated_at DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (*params, limit),
+            (*params, limit, offset),
         ).fetchall()
         return [
             SessionSummary(
@@ -278,6 +288,29 @@ class SessionStore(PubSubMixin, QueryMixin):
             )
             for r in rows
         ]
+
+    def count(
+        self,
+        *,
+        include_hidden: bool = False,
+        has_project: bool | None = None,
+    ) -> int:
+        clauses = []
+        params: list[Any] = []
+        if not include_hidden:
+            clauses.append("COALESCE(hidden, 0) = 0")
+        if has_project is True:
+            clauses.append("project_id IS NOT NULL")
+        elif has_project is False:
+            clauses.append("project_id IS NULL")
+        where = ""
+        if clauses:
+            where = "WHERE " + " AND ".join(clauses)
+        row = self._loom._db.execute(
+            f"SELECT COUNT(*) FROM sessions {where}",
+            params,
+        ).fetchone()
+        return row[0] if row else 0
 
     def list_hidden_by_context_prefix(
         self, prefix: str, *, limit: int = 200,

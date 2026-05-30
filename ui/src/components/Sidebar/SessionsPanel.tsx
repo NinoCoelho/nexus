@@ -14,6 +14,7 @@ interface Props {
   renameValue: string;
   toVaultBusy: Set<string>;
   canCreateProject: boolean;
+  hasMore: boolean;
   onSearchChange: (q: string) => void;
   onSessionSelect: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
@@ -25,15 +26,16 @@ interface Props {
   onNewProject: () => void;
   onProjectContextMenu?: (e: React.MouseEvent, projectId: string) => void;
   onNewChatInProject?: (projectId: string) => void;
+  onLoadMore: () => void;
 }
 
 export default function SessionsPanel({
   sessions, projects, sessionsError, activeSessionId, searchQuery, searchResults,
-  renamingId, renameValue, toVaultBusy, canCreateProject,
+  renamingId, renameValue, toVaultBusy, canCreateProject, hasMore,
   onSearchChange, onSessionSelect,
   onContextMenu, onMenuBtnClick, onTitleDoubleClick, onRenameChange,
   onRenameCommit, onRenameCancel, onNewProject, onProjectContextMenu,
-  onNewChatInProject,
+  onNewChatInProject, onLoadMore,
 }: Props) {
   const projectMap = new Map<string, SessionSummary[]>();
   const ungrouped: SessionSummary[] = [];
@@ -166,6 +168,11 @@ export default function SessionsPanel({
         ))}
         {!hasProjects && sessions.length === 0 && !sessionsError && (
           <div className="sidebar-sessions-empty">No sessions yet</div>
+        )}
+        {hasMore && (
+          <button className="sidebar-load-more-btn" onClick={onLoadMore}>
+            Load more
+          </button>
         )}
       </div>
     </div>

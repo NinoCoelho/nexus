@@ -112,12 +112,29 @@ def _session_markdown(session: Any, sessions: SessionStore, include_frontmatter:
 @router.get("/sessions")
 async def list_sessions(
     limit: int = 50,
+    offset: int = 0,
     include_hidden: bool = False,
     store: SessionStore = Depends(get_sessions),
     response: Response = None,
 ) -> list[dict]:
     response.headers["Cache-Control"] = "no-cache"
-    summaries = await asyncio.to_thread(store.list, limit, include_hidden=include_hidden)
+    project_sessions = await asyncio.to_thread(
+        store.list, 9999, 0, include_hidden=include_hidden, has_project=True
+    )
+    ungrouped_sessions = await asyncio.to_thread(
+        store.list, limit, offset, include_hidden=include_hidden, has_project=False
+    )
+    total_ungrouped = await asyncio.to_thread(
+        store.count, include_hidden=include_hidden, has_project=False
+    )
+    response.headers["X-Total-Count"] = str(total_ungrouped)
+    seen: set[str] = set()
+    merged: list[Any] = []
+    for s in project_sessions + ungrouped_sessions:
+        if s.id not in seen:
+            seen.add(s.id)
+            merged.append(s)
+    merged.sort(key=lambda s: s.updated_at, reverse=True)
     return [
         {
             "id": s.id,
@@ -127,7 +144,7 @@ async def list_sessions(
             "message_count": s.message_count,
             "project_id": s.project_id,
         }
-        for s in summaries
+        for s in merged
     ]
 
 

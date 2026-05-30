@@ -136,10 +136,17 @@ export async function getHealth(): Promise<{ ok: boolean }> {
   return res.json();
 }
 
-export async function getSessions(limit = 50): Promise<SessionSummary[]> {
-  const res = await fetch(`${BASE}/sessions?limit=${limit}`, { cache: "no-store" });
+export interface SessionsResponse {
+  sessions: SessionSummary[];
+  total: number;
+}
+
+export async function getSessions(limit = 50, offset = 0): Promise<SessionsResponse> {
+  const res = await fetch(`${BASE}/sessions?limit=${limit}&offset=${offset}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Sessions error: ${res.status}`);
-  return res.json();
+  const sessions: SessionSummary[] = await res.json();
+  const total = parseInt(res.headers.get("X-Total-Count") ?? "0", 10);
+  return { sessions, total };
 }
 
 export async function searchSessions(

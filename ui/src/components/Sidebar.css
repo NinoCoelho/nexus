@@ -312,6 +312,24 @@
   font-style: italic;
 }
 
+.sidebar-load-more-btn {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 11px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: center;
+  width: 100%;
+  font-family: inherit;
+  border-radius: var(--radius);
+  transition: color 120ms ease, background 120ms ease;
+}
+.sidebar-load-more-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
 .sidebar-error {
   font-size: 11px;
   color: var(--warn);

@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import {
   getSessions, searchSessions,
   type SessionSearchResult, type SessionSummary,
+  type SessionsResponse,
 } from "../../api";
 import { listDatabases, type DatabaseSummary } from "../../api/datatable";
 import { listProjects, type ProjectSummary } from "../../api/projects";
@@ -164,6 +165,8 @@ export default function Sidebar({
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
+  const [sessionsOffset, setSessionsOffset] = useState(0);
+  const [sessionsTotal, setSessionsTotal] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SessionSearchResult[]>([]);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -191,18 +194,43 @@ export default function Sidebar({
     refreshProjects();
   }, [sessionsRevision]);
 
+  const SESSIONS_PAGE = 20;
+
   useEffect(() => {
     setSessionsError(false);
-    getSessions(20)
-      .then((s) => setSessions(s.sort((a, b) => {
-        // updated_at is unix seconds (int) from the backend. Backend already
-        // orders by updated_at DESC but we sort again defensively.
-        const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
-        const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
-        return bv - av;
-      })))
+    getSessions(SESSIONS_PAGE, 0)
+      .then(({ sessions: s, total }: SessionsResponse) => {
+        setSessions(s.sort((a, b) => {
+          const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
+          const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
+          return bv - av;
+        }));
+        setSessionsOffset(SESSIONS_PAGE);
+        setSessionsTotal(total);
+      })
       .catch(() => setSessionsError(true));
   }, [sessionsRevision]);
+
+  const ungroupedLoaded = sessions.filter((s) => !s.project_id).length;
+  const hasMoreSessions = ungroupedLoaded < sessionsTotal;
+
+  const handleLoadMoreSessions = () => {
+    getSessions(SESSIONS_PAGE, sessionsOffset)
+      .then(({ sessions: newBatch, total }: SessionsResponse) => {
+        setSessions((prev) => {
+          const existing = new Set(prev.map((s) => s.id));
+          const added = newBatch.filter((s) => !existing.has(s.id));
+          return [...prev, ...added].sort((a, b) => {
+            const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
+            const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
+            return bv - av;
+          });
+        });
+        setSessionsOffset((o) => o + SESSIONS_PAGE);
+        setSessionsTotal(total);
+      })
+      .catch(() => {});
+  };
 
   // Debounced search
   useEffect(() => {
@@ -385,6 +413,7 @@ export default function Sidebar({
           renameValue={renameValue}
           toVaultBusy={toVaultBusy}
           canCreateProject={isViewVisible("projects")}
+          hasMore={hasMoreSessions}
           onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
           onSessionSelect={onSessionSelect}
           onContextMenu={(e, id) => { e.preventDefault(); setMenu({ id, x: e.clientX, y: e.clientY }); }}
@@ -403,6 +432,7 @@ export default function Sidebar({
             setProjectMenu({ id: projectId, x: e.clientX, y: e.clientY });
           }}
           onNewChatInProject={(projectId) => onNewChat(projectId)}
+          onLoadMore={handleLoadMoreSessions}
         />
       )}
 
