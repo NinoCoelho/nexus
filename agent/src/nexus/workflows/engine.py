@@ -188,6 +188,9 @@ class WorkflowEngine:
         if wf_def is None:
             wf_def = self._load_workflow(workflow_path)
 
+        if not wf_def.enabled:
+            raise RuntimeError(f"workflow {workflow_path} is disabled")
+
         now = datetime.datetime.utcnow().isoformat()
         run = WorkflowRun(
             id=str(uuid.uuid4()),
@@ -674,6 +677,45 @@ class WorkflowEngine:
 
         return step_run
 
+    async def _fetch_rss_sample(self, trigger: Any) -> dict[str, Any]:
+        url = getattr(trigger, "rss_url", None)
+        if url:
+            try:
+                import feedparser
+                loop = asyncio.get_running_loop()
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
+                if feed.entries:
+                    entry = feed.entries[0]
+                    title = entry.get("title", "")
+                    description = entry.get("summary", "") or entry.get("description", "")
+                    content_parts: list[str] = []
+                    if hasattr(entry, "content") and entry.content:
+                        for c in entry.content:
+                            content_parts.append(c.get("value", ""))
+                    content = "\n".join(content_parts) if content_parts else description
+                    return {
+                        "title": title,
+                        "link": entry.get("link", ""),
+                        "description": description,
+                        "content": content,
+                        "author": entry.get("author", ""),
+                        "published": entry.get("published", ""),
+                        "id": entry.get("id") or entry.get("link") or "",
+                        "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    }
+            except Exception:
+                log.exception("failed to fetch RSS sample from %s", url)
+        return {
+            "title": "Sample RSS Item",
+            "link": "https://example.com/item/1",
+            "description": "A sample RSS feed entry for testing.",
+            "content": "<p>Full content of the RSS item.</p>",
+            "author": "Example Author",
+            "published": datetime.datetime.utcnow().isoformat(),
+            "id": "https://example.com/item/1",
+            "fetched_at": datetime.datetime.utcnow().isoformat(),
+        }
+
     async def test_trigger(
         self,
         workflow_path: str,
@@ -715,16 +757,7 @@ class WorkflowEngine:
         elif trigger.type == TriggerType.manual:
             payload = {"manual": True, "triggered_at": datetime.datetime.utcnow().isoformat()}
         elif trigger.type == TriggerType.rss:
-            payload = {
-                "title": "Sample RSS Item",
-                "link": "https://example.com/item/1",
-                "description": "A sample RSS feed entry for testing.",
-                "content": "<p>Full content of the RSS item.</p>",
-                "author": "Example Author",
-                "published": datetime.datetime.utcnow().isoformat(),
-                "id": "https://example.com/item/1",
-                "fetched_at": datetime.datetime.utcnow().isoformat(),
-            }
+            payload = await self._fetch_rss_sample(trigger)
 
         schema = infer_schema(payload)
         sample = truncate_sample(payload)

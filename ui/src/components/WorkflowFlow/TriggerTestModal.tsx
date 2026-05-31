@@ -82,7 +82,9 @@ export default function TriggerTestModal({
 }: Props) {
   const brokerMode = isBrokerWebhook(triggerType, triggerConfig);
   const [state, setState] = useState<ModalState>(
-    triggerType === "schedule" || brokerMode ? "captured" : "connecting",
+    triggerType === "schedule" || triggerType === "rss" || brokerMode
+      ? "captured"
+      : "connecting",
   );
   const [capturedPayload, setCapturedPayload] = useState<
     Record<string, unknown> | null
@@ -140,7 +142,7 @@ export default function TriggerTestModal({
   }, [brokerMode, wfPath, triggerId]);
 
   useEffect(() => {
-    if (triggerType === "schedule" || brokerMode) return;
+    if (triggerType === "schedule" || triggerType === "rss" || brokerMode) return;
 
     const ac = new AbortController();
     abortRef.current = ac;
@@ -362,7 +364,8 @@ export default function TriggerTestModal({
     }
   }
 
-  if (triggerType === "schedule") {
+  if (triggerType === "schedule" || triggerType === "rss") {
+    const isSchedule = triggerType === "schedule";
     return (
       <div className="wf-test-overlay">
         <div className="wf-test-modal">
@@ -376,7 +379,8 @@ export default function TriggerTestModal({
             <div className="wf-test-status">
               <span className="wf-test-status-icon">{"\u2705"}</span>
               <span className="wf-test-status-text">
-                Ready to run with generated schedule payload
+                Ready to run with generated{" "}
+                {isSchedule ? "schedule" : "RSS feed"} payload
               </span>
             </div>
           </div>

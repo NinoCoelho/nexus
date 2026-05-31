@@ -614,6 +614,8 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request,
 
 
 def _register_triggers(path: str, wf: WorkflowDef, request: Request) -> None:
+    if not wf.enabled:
+        return
     try:
         fsw = getattr(request.app.state, "workflow_fsw_driver", None)
         if fsw:

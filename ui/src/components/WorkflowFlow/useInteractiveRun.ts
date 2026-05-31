@@ -130,7 +130,7 @@ export function useInteractiveRun({
     (async () => {
       try {
         if (onFlushSave) await onFlushSave();
-        const result = await wfApi.startInteractiveRun(wfPath, payload, "all", false, "json", "");
+        const result = await wfApi.startInteractiveRun(wfPath, payload, "trigger", false, "json", "");
         setInteractiveRunId(result.run.id);
         setTriggerPayload(payload);
         setStepRunMap({});

@@ -91,7 +91,8 @@ class RssTriggerDriver:
         max_items: int,
         filter_re: re.Pattern | None,
     ) -> None:
-        feed = feedparser.parse(url)
+        loop = asyncio.get_running_loop()
+        feed = await loop.run_in_executor(None, feedparser.parse, url)
         if feed.bozo and not feed.entries:
             log.warning("rss trigger %s: failed to parse %s: %s", trigger.id, url, feed.bozo_exception)
             return
