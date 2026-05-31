@@ -46,12 +46,14 @@ async def sync_broker_endpoints(client: BrokerClient) -> dict[str, list[str]]:
                 log.warning("broker sync: verify failed for %s", existing["broker_id"])
             registry.mark_gone(existing["broker_id"])
 
+        is_new = not ep.get("broker_id")
         broker_wh = await ensure_broker_endpoint(
             client=client,
             endpoint_type=ep["endpoint_type"],
             endpoint_key=ep["endpoint_key"],
             name=ep["name"],
-            existing_broker_id=None,
+            existing_broker_id=ep.get("broker_id"),
+            existing_broker_slug=ep.get("broker_slug"),
         )
         if broker_wh:
             registry.register(
@@ -63,10 +65,17 @@ async def sync_broker_endpoints(client: BrokerClient) -> dict[str, list[str]]:
                 local_token=ep.get("local_token"),
                 vault_path=ep.get("vault_path", ""),
             )
-            _write_broker_fields(ep, broker_wh)
-            result["created"].append(broker_wh.id)
+            if is_new:
+                _write_broker_fields(ep, broker_wh)
+                result["created"].append(broker_wh.id)
+            else:
+                result["verified"].append(broker_wh.id)
         else:
-            result["failed"].append(ep["endpoint_key"])
+            if is_new:
+                result["failed"].append(ep["endpoint_key"])
+            else:
+                log.warning("broker sync: existing webhook %s unreachable for %s %s",
+                            ep.get("broker_id"), ep["endpoint_type"], ep["endpoint_key"])
 
     stale = _find_stale_endpoints(registry, needed)
     for row in stale:
@@ -85,7 +94,28 @@ async def sync_broker_endpoints(client: BrokerClient) -> dict[str, list[str]]:
             len(result["created"]), len(result["verified"]),
             len(result["failed"]), len(result["evicted"]),
         )
+
+    await _cleanup_orphans(client, needed)
+
     return result
+
+
+async def _cleanup_orphans(client: BrokerClient, needed: list[dict[str, Any]]) -> None:
+    needed_broker_ids = {ep.get("broker_id") for ep in needed if ep.get("broker_id")}
+    try:
+        remote = await client.list_webhooks()
+    except Exception:
+        return
+    registry = get_registry()
+    registered_ids = {row["broker_id"] for row in registry.list_all()}
+    for wh in remote:
+        if wh.id in needed_broker_ids or wh.id in registered_ids:
+            continue
+        try:
+            await client.delete_webhook(wh.id)
+            log.info("broker sync: deleted orphan webhook %s (slug=%s)", wh.id, wh.slug)
+        except Exception:
+            log.exception("broker sync: failed to delete orphan %s", wh.id)
 
 
 async def delete_broker_endpoint(client: BrokerClient, broker_id: str) -> bool:

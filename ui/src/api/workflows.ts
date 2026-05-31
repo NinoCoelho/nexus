@@ -470,3 +470,18 @@ export async function pickFsTestFile(
   );
   return _json(res);
 }
+
+export async function brokerDequeue(
+  path: string,
+  triggerId: string,
+): Promise<{ payload: Record<string, unknown> | null; message_id?: string; message?: string }> {
+  const res = await fetch(
+    `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/broker-dequeue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger_id: triggerId }),
+    },
+  );
+  return _json(res);
+}

@@ -58,6 +58,8 @@ class BrokerPoller:
         except Exception:
             log.exception("broker: initial sync failed")
 
+        self._ensure_webhook_tokens()
+
         while not self._stop_event.is_set():
             try:
                 await self._poll_all()
@@ -74,6 +76,34 @@ class BrokerPoller:
             except asyncio.TimeoutError:
                 pass
 
+    def _ensure_webhook_tokens(self) -> None:
+        if self._workflow_engine is None:
+            return
+        try:
+            store = self._workflow_engine._store
+        except AttributeError:
+            return
+        import datetime
+        endpoints = self._discover_endpoints()
+        for ep in endpoints:
+            if ep["type"] != "workflow":
+                continue
+            token = ep.get("local_token")
+            if not token:
+                continue
+            existing = store.lookup_webhook_token(token)
+            if existing is not None:
+                continue
+            workflow_path = ep.get("workflow_path", ep.get("vault_path", ""))
+            trigger_id = ep.get("trigger_id", "")
+            if not workflow_path or not trigger_id:
+                key = ep.get("key", "")
+                if ":" in key:
+                    workflow_path, trigger_id = key.rsplit(":", 1)
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            store.register_webhook_token(token, workflow_path, trigger_id, now)
+            log.info("broker: re-registered webhook token for %s", workflow_path)
+
     async def _poll_all(self) -> None:
         if not self._client.available:
             return
@@ -82,10 +112,27 @@ class BrokerPoller:
         _, priv_pem = load_or_generate_private_key()
 
         for ep in endpoints:
+            if ep["type"] == "workflow" and not self._is_workflow_enabled(ep):
+                log.info("broker: skipping disabled workflow %s", ep.get("workflow_path", ep.get("key", "")))
+                continue
             try:
                 await self._poll_endpoint(ep, priv_pem)
             except Exception:
                 log.exception("broker: error polling %s %s", ep["type"], ep["key"])
+
+    def _is_workflow_enabled(self, ep: dict[str, Any]) -> bool:
+        fpath = ep.get("workflow_path", "")
+        if not fpath:
+            return True
+        try:
+            from ..workflows import parser
+            from .. import vault as _vault
+            content = _vault.read_file(fpath)
+            raw = content.get("content", "") if isinstance(content, dict) else str(content)
+            wf = parser.parse(raw)
+            return wf.enabled
+        except Exception:
+            return True
 
     async def _poll_endpoint(self, ep: dict[str, Any], priv_pem: str) -> None:
         broker_id = ep.get("broker_id")
@@ -181,6 +228,7 @@ class BrokerPoller:
 
         result = store.lookup_webhook_token(token)
         if result is None:
+            log.warning("broker: webhook token %s not found in store for workflow dispatch", token)
             return
 
         workflow_path, trigger_id = result
@@ -204,7 +252,7 @@ class BrokerPoller:
                 trigger_payload=payload,
                 wf_def=wf,
             )
-        except Exception as exc:
+        except Exception:
             log.exception("broker: workflow dispatch failed for %s", workflow_path)
 
     def _discover_endpoints(self) -> list[dict[str, Any]]:
@@ -273,6 +321,8 @@ class BrokerPoller:
                                 "local_token": trigger.token,
                                 "broker_id": trigger.broker_id,
                                 "broker_slug": trigger.broker_slug,
+                                "workflow_path": fpath,
+                                "trigger_id": trigger.id,
                             })
         except Exception:
             log.exception("broker: workflow endpoint discovery failed")

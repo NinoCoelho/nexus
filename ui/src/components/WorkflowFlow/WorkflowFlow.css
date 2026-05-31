@@ -2903,6 +2903,56 @@
   overflow-y: auto;
 }
 
+.wf-broker-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin: 0 -20px 12px;
+  padding: 0 20px;
+}
+
+.wf-broker-tab {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.wf-broker-tab:hover {
+  color: var(--fg);
+}
+
+.wf-broker-tab.active {
+  color: var(--accent, #4f8af7);
+  border-bottom-color: var(--accent, #4f8af7);
+}
+
+.wf-broker-panel {
+  min-height: 80px;
+}
+
+.wf-test-payload-input {
+  width: 100%;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  resize: vertical;
+  min-height: 120px;
+  box-sizing: border-box;
+}
+.wf-test-payload-input:focus {
+  outline: none;
+  border-color: var(--accent, #4f8af7);
+}
+
 .wf-test-footer {
   padding: 16px 20px;
   border-top: 1px solid var(--border);

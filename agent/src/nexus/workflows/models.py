@@ -395,7 +395,7 @@ class StepConfig:
 @dataclass
 class WorkflowDef:
     title: str = "Untitled Workflow"
-    enabled: bool = True
+    enabled: bool = False
     triggers: list[TriggerConfig] = field(default_factory=list)
     variables: dict[str, str] = field(default_factory=dict)
     steps: list[StepConfig] = field(default_factory=list)

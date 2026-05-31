@@ -128,7 +128,7 @@ class WorkflowCreateBody(BaseModel):
     path: str
     title: str = "Untitled Workflow"
     description: str = ""
-    enabled: bool = True
+    enabled: bool = False
 
 
 class WorkflowUpdateBody(BaseModel):
@@ -1098,6 +1098,76 @@ async def fs_watch_pick_file(path: str, body: FsWatchPickBody, request: Request,
             info["queue"].put_nowait(payload)
 
     return payload
+
+
+@router.post("/workflows/{path:path}/test-trigger/broker-dequeue")
+async def test_trigger_broker_dequeue(path: str, body: TestTriggerListenBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    from ... import vault as _vault
+
+    try:
+        content = _vault.read_file(path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+    wf = parser.parse(raw)
+
+    trigger = next((t for t in wf.triggers if t.id == body.trigger_id), None)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="trigger not found")
+    if not trigger.broker_id:
+        raise HTTPException(status_code=400, detail="trigger has no broker endpoint")
+
+    from ...broker.client import BrokerClient
+    from ...broker.crypto import load_or_generate_private_key, rsa_decrypt
+
+    client = BrokerClient()
+    if not client.available:
+        raise HTTPException(status_code=502, detail="broker not connected")
+
+    _log.info("test-trigger/broker-dequeue: trigger=%s broker_id=%s", trigger.id, trigger.broker_id)
+    msg = await client.dequeue(trigger.broker_id)
+    if msg is None:
+        _log.info("test-trigger/broker-dequeue: no messages for broker_id=%s", trigger.broker_id)
+        return {"payload": None, "message": "no messages in queue"}
+
+    if not msg.encrypted_key or not msg.encryption_tag:
+        try:
+            await client.error(trigger.broker_id, msg.id, "missing encryption fields")
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail="message missing encryption fields")
+
+    _, priv_pem = load_or_generate_private_key()
+    try:
+        plaintext = rsa_decrypt(
+            priv_pem,
+            msg.encrypted_key,
+            msg.encrypted_body,
+            msg.encryption_iv,
+            msg.encryption_tag,
+        )
+    except Exception:
+        try:
+            await client.error(trigger.broker_id, msg.id, "decryption failed")
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail="failed to decrypt message")
+
+    try:
+        await client.commit(trigger.broker_id, msg.id)
+    except Exception:
+        pass
+
+    import json as _json
+    try:
+        payload = _json.loads(plaintext)
+    except Exception:
+        payload = {"raw": plaintext}
+
+    return {"payload": payload, "message_id": msg.id}
 
 
 class TestStepBody(BaseModel):

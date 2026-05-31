@@ -31,13 +31,23 @@ async def ensure_broker_endpoint(
             wh = await client.get_webhook(existing_broker_id)
             if wh and wh.is_active:
                 _cache[cache_key] = wh
+                log.info(
+                    "broker: verified existing webhook %s (slug=%s) for %s %s",
+                    wh.id, wh.slug, endpoint_type, endpoint_key,
+                )
                 return wh
+            log.warning(
+                "broker: webhook %s no longer active on broker for %s %s — refusing to replace",
+                existing_broker_id, endpoint_type, endpoint_key,
+            )
+            return None
         except Exception:
             log.warning(
-                "broker: failed to verify existing webhook %s, recreating",
-                existing_broker_id,
+                "broker: failed to verify webhook %s for %s %s — refusing to replace",
+                existing_broker_id, endpoint_type, endpoint_key,
                 exc_info=True,
             )
+            return None
 
     try:
         pub_pem, _ = load_or_generate_private_key()

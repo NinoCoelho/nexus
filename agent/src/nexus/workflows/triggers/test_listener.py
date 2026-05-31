@@ -62,17 +62,17 @@ class TestTriggerListener:
             )
             _TEST_LISTENERS[self.test_id]["test_token"] = token
             webhook_url = self.config.get("base_url", "") + f"/workflow/trigger/{token}"
-            yield _sse_event("test.listening", {"webhook_url": webhook_url, "token": token})
+            yield _sse_event("test.listening", {"webhook_url": webhook_url, "token": token, "test_id": self.test_id})
 
         elif self.trigger_type == "fs_watch":
             watch_path = self.config.get("path", "")
-            yield _sse_event("test.listening", {"watch_path": watch_path})
+            yield _sse_event("test.listening", {"watch_path": watch_path, "test_id": self.test_id})
             task = asyncio.create_task(self._watch_fs(watch_path))
             self._cleanup_tasks.append(task)
 
         elif self.trigger_type == "event":
             event_pattern = self.config.get("event", "*")
-            yield _sse_event("test.listening", {"event_pattern": event_pattern})
+            yield _sse_event("test.listening", {"event_pattern": event_pattern, "test_id": self.test_id})
             task = asyncio.create_task(self._subscribe_event(event_pattern))
             self._cleanup_tasks.append(task)
 

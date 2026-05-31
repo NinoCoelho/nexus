@@ -116,12 +116,13 @@ class BrokerClient:
                 return None
             resp.raise_for_status()
             outer = resp.json()
-            if "message" in outer:
+            if "message" in outer and isinstance(outer["message"], dict):
+                data = outer["message"]
+            else:
                 return None
-            data = outer
             return BrokerMessage(
                 id=data["id"],
-                webhook_id=data["webhookId"],
+                webhook_id=data.get("webhookId", webhook_id),
                 sequence_num=data["sequenceNum"],
                 encrypted_body=data["encryptedBody"],
                 encryption_iv=data["encryptionIv"],

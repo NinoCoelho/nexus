@@ -5,6 +5,8 @@ import {
   testTrigger,
   listFsWatchFiles,
   pickFsTestFile,
+  getWebhookUrl,
+  brokerDequeue,
 } from "../../api/workflows";
 import type { TriggerType, TriggerConfig } from "../../types/workflow";
 import type { FsWatchFile } from "../../api/workflows";
@@ -31,6 +33,10 @@ interface Props {
   triggerConfig: TriggerConfig;
   onClose: () => void;
   onRunWithPayload: (payload: Record<string, unknown>) => void;
+}
+
+function isBrokerWebhook(triggerType: TriggerType, config: TriggerConfig): boolean {
+  return triggerType === "webhook" && !!config.broker_id;
 }
 
 async function* readSSEResponse(
@@ -69,16 +75,25 @@ export default function TriggerTestModal({
   wfPath,
   triggerId,
   triggerType,
-  triggerConfig: _triggerConfig,
+  triggerConfig,
   onClose,
   onRunWithPayload,
 }: Props) {
+  const brokerMode = isBrokerWebhook(triggerType, triggerConfig);
   const [state, setState] = useState<ModalState>(
-    triggerType === "schedule" ? "captured" : "connecting",
+    triggerType === "schedule" || brokerMode ? "captured" : "connecting",
   );
   const [capturedPayload, setCapturedPayload] = useState<
     Record<string, unknown> | null
   >(null);
+  const [manualPayload, setManualPayload] = useState("{}");
+  const [manualError, setManualError] = useState("");
+  const [brokerTab, setBrokerTab] = useState<"consume" | "manual">("consume");
+  const [dequeueLoading, setDequeueLoading] = useState(false);
+  const [dequeueResult, setDequeueResult] = useState<{
+    payload: Record<string, unknown> | null;
+    message?: string;
+  } | null>(null);
   const [listenInfo, setListenInfo] = useState<{
     url?: string;
     path?: string;
@@ -108,7 +123,23 @@ export default function TriggerTestModal({
   }, [wfPath]);
 
   useEffect(() => {
-    if (triggerType === "schedule") return;
+    if (!brokerMode) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await getWebhookUrl(wfPath);
+        if (cancelled) return;
+        const hook = info.webhooks.find((w) => w.trigger_id === triggerId);
+        if (hook?.url) {
+          setListenInfo({ url: hook.url });
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [brokerMode, wfPath, triggerId]);
+
+  useEffect(() => {
+    if (triggerType === "schedule" || brokerMode) return;
 
     const ac = new AbortController();
     abortRef.current = ac;
@@ -201,6 +232,31 @@ export default function TriggerTestModal({
       setError(err instanceof Error ? err.message : String(err));
       setState("error");
     }
+  };
+
+  const handleBrokerRun = () => {
+    try {
+      const parsed = JSON.parse(manualPayload);
+      onRunWithPayload(parsed);
+    } catch {
+      setManualError("Invalid JSON payload");
+    }
+  };
+
+  const handleDequeue = async () => {
+    setDequeueLoading(true);
+    setDequeueResult(null);
+    try {
+      const result = await brokerDequeue(wfPath, triggerId);
+      setDequeueResult(result);
+      if (result.payload) {
+        setCapturedPayload(result.payload);
+        setState("captured");
+      }
+    } catch (err: unknown) {
+      setDequeueResult({ payload: null, message: err instanceof Error ? err.message : String(err) });
+    }
+    setDequeueLoading(false);
   };
 
   const handlePickFile = useCallback(async (file: FsWatchFile) => {
@@ -333,6 +389,120 @@ export default function TriggerTestModal({
             >
               Run Now
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (brokerMode) {
+    return (
+      <div className="wf-test-overlay">
+        <div className="wf-test-modal">
+          <div className="wf-test-header">
+            <h3>Test Trigger: {TRIGGER_TYPE_LABELS[triggerType]}</h3>
+            <button className="wf-test-close" onClick={onClose}>
+              {"\u2715"}
+            </button>
+          </div>
+          <div className="wf-test-body">
+            {listenInfo.url && (
+              <div className="wf-test-trigger-info">
+                <label>Broker Webhook URL</label>
+                <code>{listenInfo.url}</code>
+              </div>
+            )}
+
+            <div className="wf-broker-tabs">
+              <button
+                className={`wf-broker-tab${brokerTab === "consume" ? " active" : ""}`}
+                onClick={() => setBrokerTab("consume")}
+              >
+                Consume from Queue
+              </button>
+              <button
+                className={`wf-broker-tab${brokerTab === "manual" ? " active" : ""}`}
+                onClick={() => setBrokerTab("manual")}
+              >
+                Enter Payload
+              </button>
+            </div>
+
+            {brokerTab === "consume" && (
+              <div className="wf-broker-panel">
+                <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 10 }}>
+                  Dequeue the next pending message from the broker and use it as the trigger payload.
+                  The message will be consumed (removed from the queue).
+                </div>
+                <button
+                  className="wf-test-btn primary"
+                  onClick={handleDequeue}
+                  disabled={dequeueLoading}
+                  style={{ marginBottom: 10 }}
+                >
+                  {dequeueLoading ? "Dequeueing…" : "Dequeue Next Message"}
+                </button>
+                {dequeueResult && !dequeueResult.payload && (
+                  <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                    {dequeueResult.message || "No messages in queue."}
+                  </div>
+                )}
+                {state === "captured" && capturedPayload && (
+                  <>
+                    <div className="wf-test-payload-label">Dequeued Payload</div>
+                    <pre className="wf-test-payload">
+                      {JSON.stringify(capturedPayload, null, 2)}
+                    </pre>
+                  </>
+                )}
+              </div>
+            )}
+
+            {brokerTab === "manual" && (
+              <div className="wf-broker-panel">
+                <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 10 }}>
+                  Paste or compose a JSON payload to simulate a webhook delivery.
+                </div>
+                <div className="wf-test-payload-label">Payload (JSON)</div>
+                <textarea
+                  className="wf-test-payload-input"
+                  value={manualPayload}
+                  onChange={(e) => {
+                    setManualPayload(e.target.value);
+                    setManualError("");
+                  }}
+                  rows={8}
+                  spellCheck={false}
+                  placeholder='{"key": "value"}'
+                />
+                {manualError && (
+                  <div style={{ color: "var(--danger, #e53935)", fontSize: 12, marginTop: 4 }}>
+                    {manualError}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="wf-test-footer">
+            <button className="wf-test-btn" onClick={onClose}>
+              Cancel
+            </button>
+            {brokerTab === "consume" && state === "captured" && capturedPayload && (
+              <button
+                className="wf-test-btn primary"
+                onClick={() => onRunWithPayload(capturedPayload!)}
+              >
+                Run with Payload
+              </button>
+            )}
+            {brokerTab === "manual" && (
+              <button
+                className="wf-test-btn primary"
+                onClick={handleBrokerRun}
+              >
+                Run with Payload
+              </button>
+            )}
           </div>
         </div>
       </div>
