@@ -10,6 +10,8 @@ export const STEP_TYPES: { value: StepType; label: string }[] = [
   { value: "kanban_action", label: "Kanban Action" },
   { value: "table_action", label: "App Table Action" },
   { value: "return_step", label: "Return" },
+  { value: "file_read", label: "File Read" },
+  { value: "file_save", label: "File Save" },
 ];
 
 export const TRIGGER_TYPES: { value: TriggerType; label: string }[] = [
@@ -18,6 +20,7 @@ export const TRIGGER_TYPES: { value: TriggerType; label: string }[] = [
   { value: "schedule", label: "Schedule" },
   { value: "fs_watch", label: "File Watch" },
   { value: "event", label: "Event" },
+  { value: "rss", label: "RSS Feed" },
 ];
 
 export const STEP_ICONS: Record<string, string> = {
@@ -30,6 +33,8 @@ export const STEP_ICONS: Record<string, string> = {
   condition: "◇",
   kanban_action: "📋",
   table_action: "📊",
+  file_read: "📖",
+  file_save: "💾",
 };
 
 export const TRIGGER_ICONS: Record<string, string> = {
@@ -38,6 +43,7 @@ export const TRIGGER_ICONS: Record<string, string> = {
   schedule: "📅",
   manual: "👆",
   event: "📡",
+  rss: "📰",
 };
 
 export const AUTH_TYPES = [

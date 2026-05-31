@@ -93,6 +93,8 @@ export const STEP_PALETTE: { type: StepType; icon: string; tip: string; desc: st
   { type: "condition", icon: "◇", tip: "Condition", desc: "Branch" },
   { type: "transform", icon: "🔄", tip: "Transform", desc: "Map data" },
   { type: "http_request", icon: "🌐", tip: "HTTP", desc: "Call API" },
+  { type: "file_read", icon: "📖", tip: "File Read", desc: "Read file" },
+  { type: "file_save", icon: "💾", tip: "File Save", desc: "Write file" },
   { type: "kanban_action", icon: "📋", tip: "Kanban", desc: "Board action" },
   { type: "table_action", icon: "📊", tip: "App Table", desc: "Table action" },
   { type: "mcp_call", icon: "🔌", tip: "MCP", desc: "MCP server" },
@@ -104,6 +106,7 @@ export const TRIGGER_PALETTE: { type: TriggerConfig["type"]; icon: string; tip: 
   { type: "webhook", icon: "🔗", tip: "Webhook" },
   { type: "schedule", icon: "📅", tip: "Schedule" },
   { type: "fs_watch", icon: "📁", tip: "File Watch" },
+  { type: "rss", icon: "📰", tip: "RSS Feed" },
   { type: "event", icon: "📡", tip: "Event" },
   { type: "manual", icon: "👆", tip: "Manual" },
 ];
@@ -114,6 +117,7 @@ function triggerSummary(t: TriggerConfig): string {
     case "schedule": return t.cron || "—";
     case "fs_watch": return `${t.path || "?"}/${t.pattern || "*"}`;
     case "event": return t.event || "—";
+    case "rss": return t.rss_url ? new URL(t.rss_url).hostname : "—";
     default: return "Manual";
   }
 }
@@ -130,6 +134,8 @@ function stepSummary(s: StepConfig): string {
     case "kanban_action": return `${s.action || "—"} ${s.board_path || ""}`;
     case "table_action": return `${s.action || "—"} ${s.table_path || ""}`;
     case "return_step": return (s.response_template || "response").slice(0, 40);
+    case "file_read": return (s.file_read_path || "—").slice(0, 40);
+    case "file_save": return (s.file_save_path || "—").slice(0, 40);
     default: return "";
   }
 }

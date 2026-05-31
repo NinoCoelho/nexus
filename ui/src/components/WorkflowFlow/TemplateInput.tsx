@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback } from "react";
 
 interface StepRef {
   slug: string;
@@ -32,6 +32,17 @@ interface CompletionItem {
   insert: string;
 }
 
+const RUNTIME_VARS: CompletionItem[] = [
+  { label: "now", detail: "ISO timestamp (2026-05-31T12:00:00+00:00)", insert: "now}}" },
+  { label: "date", detail: "Current date (2026-05-31)", insert: "date}}" },
+  { label: "time", detail: "Current time (12-00-00)", insert: "time}}" },
+  { label: "uuid", detail: "Random UUID", insert: "uuid}}" },
+  { label: "timestamp", detail: "Unix timestamp (1748689200)", insert: "timestamp}}" },
+  { label: "trigger.", detail: "Trigger payload", insert: "trigger." },
+  { label: "steps.", detail: "Step outputs", insert: "steps." },
+  { label: "vars.", detail: "Workflow variables", insert: "vars." },
+];
+
 function getCompletions(
   partial: string,
   prefix: string,
@@ -40,6 +51,21 @@ function getCompletions(
   triggerKeys?: string[],
   varNames?: string[],
 ): CompletionItem[] {
+  if (prefix === "") {
+    const lower = partial.toLowerCase();
+    const matchingRuntime = RUNTIME_VARS.filter(
+      (v) => v.label.toLowerCase().startsWith(lower),
+    );
+    const matchingSteps = steps
+      .filter((s) => s.slug.toLowerCase().startsWith(lower) && lower.length > 0)
+      .map((s) => ({
+        label: s.slug,
+        detail: s.name,
+        insert: s.slug + ".",
+      }));
+    return [...matchingRuntime, ...matchingSteps];
+  }
+
   if (prefix === "trigger") {
     if (!triggerKeys || triggerKeys.length === 0) {
       return [{ label: "(payload)", detail: "trigger payload object", insert: partial + "}}" }];
@@ -124,6 +150,7 @@ function getCompletions(
 
 export default function TemplateInput({ value, onChange, steps, stepSchemas, triggerKeys, varNames, placeholder, multiline, minLines, className, style }: Props) {
   const ref = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
+  const cursorRef = useRef(0);
   const [items, setItems] = useState<CompletionItem[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [triggerInfo, setTriggerInfo] = useState<{ start: number; partial: string; prefix: string } | null>(null);
@@ -131,13 +158,21 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, tri
   const findTrigger = useCallback((text: string, cursor: number): { start: number; partial: string; prefix: string } | null => {
     const before = text.slice(0, cursor);
     const match = before.match(/\{\{((?:trigger|steps|vars)\.([a-zA-Z0-9_.]*))$/);
-    if (!match) return null;
-    const fullPartial = match[1];
-    const prefix = fullPartial.split(".")[0];
-    return { start: cursor - fullPartial.length, partial: fullPartial.slice(prefix.length + 1), prefix };
+    if (match) {
+      const fullPartial = match[1];
+      const prefix = fullPartial.split(".")[0];
+      return { start: cursor - fullPartial.length, partial: fullPartial.slice(prefix.length + 1), prefix };
+    }
+    const bareMatch = before.match(/\{\{([a-zA-Z0-9_]*)$/);
+    if (bareMatch) {
+      const partial = bareMatch[1];
+      return { start: cursor - partial.length, partial, prefix: "" };
+    }
+    return null;
   }, []);
 
   const updateCompletions = useCallback((text: string, cursor: number) => {
+    cursorRef.current = cursor;
     const trigger = findTrigger(text, cursor);
     if (!trigger) {
       setItems([]);
@@ -152,35 +187,26 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, tri
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) {
     const val = e.target.value;
-    onChange(val);
     const cursor = (e.target as HTMLTextAreaElement).selectionStart ?? val.length;
+    onChange(val);
     updateCompletions(val, cursor);
   }
 
   function applyItem(item: CompletionItem) {
-    const el = ref.current;
-    if (!el || !triggerInfo) return;
-    const cursor = el.selectionStart ?? value.length;
-    const before = value.slice(0, cursor);
+    console.log("[ac] applyItem", { item, triggerInfo, cursorRef: cursorRef.current, value });
+    if (!triggerInfo) return;
+    const cursor = cursorRef.current;
     const after = value.slice(cursor);
-    const partial = triggerInfo.partial;
-    const lastDot = partial.lastIndexOf(".");
-    const prefix = lastDot >= 0 ? partial.slice(0, lastDot + 1) : "";
-    const newVal = before + item.insert.slice(prefix.length + (partial.length - prefix.length)) + after;
-
-    if (newVal === value && item.insert.endsWith("}}")) {
-      const fullPrefix = triggerInfo.prefix;
-      const fixed = before.slice(0, before.length - partial.length) + fullPrefix + "." + item.insert + after;
-      onChange(fixed);
-    } else {
-      onChange(newVal);
-    }
-
+    const partialStart = cursor - triggerInfo.partial.length;
+    const next = value.slice(0, partialStart) + item.insert + after;
+    console.log("[ac] next value:", next);
+    onChange(next);
     setItems([]);
     setTriggerInfo(null);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
+    console.log("[ac] keydown", e.key, { itemsLen: items.length, selectedIdx });
     if (items.length === 0) return;
 
     if (e.key === "ArrowDown") {
@@ -206,22 +232,29 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, tri
     }
   }
 
-  useEffect(() => {
-    if (ref.current) {
-      const cursor = ref.current.selectionStart ?? value.length;
-      const trigger = findTrigger(value, cursor);
-      if (!trigger) {
-        setItems([]);
-        setTriggerInfo(null);
-      }
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    const text = e.dataTransfer.getData("text/plain");
+    if (!text) return;
+    const el = ref.current;
+    if (!el) {
+      onChange(value + text);
+      return;
     }
-  }, [value, findTrigger]);
+    const cursor = el.selectionStart ?? value.length;
+    onChange(value.slice(0, cursor) + text + value.slice(cursor));
+    setItems([]);
+    setTriggerInfo(null);
+  }
 
   const shared = {
     ref: ref as React.RefObject<HTMLInputElement & HTMLTextAreaElement>,
     value,
     onChange: handleChange,
     onKeyDown: handleKeyDown,
+    onBlur: () => { setItems([]); setTriggerInfo(null); },
+    onDragOver: (e: React.DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).focus(); },
+    onDrop: handleDrop,
     placeholder,
     className: className || "wf-template-input",
     autoComplete: "off" as const,

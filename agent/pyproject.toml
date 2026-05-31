@@ -61,6 +61,9 @@ dependencies = [
     # Filesystem watcher for workflow fs_watch triggers. Cross-platform,
     # efficient OS-native polling (inotify / FSEvents / ReadDirectoryChangesW).
     "watchdog>=4.0",
+    # RSS/Atom feed parser for workflow rss triggers. Handles RSS 1.0/2.0,
+    # Atom, and tolerates malformed feeds.
+    "feedparser>=6.0",
 ]
 
 [tool.uv.sources]

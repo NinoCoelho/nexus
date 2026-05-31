@@ -372,13 +372,16 @@ def create_lifespan(state: dict[str, Any]):
                 from ..workflows.triggers.webhook import WebhookTriggerDriver
                 from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
                 from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
+                from ..workflows.triggers.rss import RssTriggerDriver, set_engine_ref as _set_rss_ref
 
                 webhook_driver = WebhookTriggerDriver(wf_store)
                 event_listener = EventTriggerListener(wf_store)
                 fsw_driver = FsWatchTriggerDriver(wf_store)
+                rss_driver = RssTriggerDriver(wf_store)
 
                 _set_evt_ref(wf_engine)
                 _set_fsw_ref(wf_engine)
+                _set_rss_ref(wf_engine)
 
                 from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
                 _set_engine_evt(wf_engine)
@@ -386,6 +389,7 @@ def create_lifespan(state: dict[str, Any]):
                 app.state.workflow_webhook_driver = webhook_driver
                 app.state.workflow_event_listener = event_listener
                 app.state.workflow_fsw_driver = fsw_driver
+                app.state.workflow_rss_driver = rss_driver
 
                 try:
                     loop = asyncio.get_running_loop()
@@ -488,6 +492,12 @@ def create_lifespan(state: dict[str, Any]):
                     await evt.stop()
             except Exception:
                 log.exception("workflow event listener stop failed")
+            try:
+                rss = getattr(app.state, "workflow_rss_driver", None)
+                if rss is not None:
+                    await rss.stop_all()
+            except Exception:
+                log.exception("workflow rss driver stop failed")
             if mcp_manager is not None:
                 try:
                     from ..mcp_lifecycle import stop_mcp

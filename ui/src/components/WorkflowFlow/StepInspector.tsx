@@ -370,6 +370,18 @@ export default function StepInspector({
           onChange: (v) => onStepPatch({ response_template: v }),
           label: "Response Template",
         };
+      case "file_save":
+        return {
+          value: step.file_save_content || "",
+          onChange: (v) => onStepPatch({ file_save_content: v }),
+          label: "Content",
+        };
+      case "file_read":
+        return {
+          value: step.file_read_path || "",
+          onChange: (v) => onStepPatch({ file_read_path: v }),
+          label: "File Path",
+        };
       default:
         return {
           value: step.input ? JSON.stringify(step.input, null, 2) : "",

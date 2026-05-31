@@ -13,6 +13,8 @@ const STEP_ICONS: Record<string, string> = {
   kanban_action: "📋",
   table_action: "📊",
   return_step: "↩",
+  file_read: "📖",
+  file_save: "💾",
 };
 
 export interface StepNodeData extends Record<string, unknown> {

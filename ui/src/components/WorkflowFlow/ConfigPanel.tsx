@@ -14,6 +14,8 @@ import HttpRequestForm from "./steps/HttpRequestForm";
 import McpCallForm from "./steps/McpCallForm";
 import KanbanActionForm from "./steps/KanbanActionForm";
 import TableActionForm from "./steps/TableActionForm";
+import FileReadForm from "./steps/FileReadForm";
+import FileSaveForm from "./steps/FileSaveForm";
 
 export default function ConfigPanel({
   mode,
@@ -209,6 +211,14 @@ export default function ConfigPanel({
 
               {step.type === "table_action" && (
                 <TableActionForm {...sharedProps} />
+              )}
+
+              {step.type === "file_read" && (
+                <FileReadForm {...sharedProps} />
+              )}
+
+              {step.type === "file_save" && (
+                <FileSaveForm {...sharedProps} />
               )}
 
               {step.type === "return_step" && (

@@ -1,14 +1,17 @@
 """Template expression resolution for workflow steps.
 
-Resolves ``{{trigger.x}}``, ``{{steps.id.output}}``, ``{{vars.x}}``
+Resolves ``{{trigger.x}}``, ``{{steps.id.output}}``, ``{{vars.x}}``,
+``{{now}}``, ``{{date}}``, ``{{uuid}}``, ``{{timestamp}}``
 expressions in step configurations. Uses a safe recursive resolver that
 supports dotted path access into dicts — no arbitrary code execution.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging as _logging
 import re
+import uuid as _uuid
 from typing import Any
 
 _EXPR_RE = re.compile(r"\{\{(.+?)\}\}")
@@ -78,10 +81,16 @@ def build_context(
     for step_id, val in step_outputs.items():
         key = id_to_slug.get(step_id, step_id)
         steps[key] = val
+    now = _dt.datetime.now(_dt.timezone.utc)
     return {
         "trigger": trigger_payload,
         "steps": steps,
         "vars": variables,
+        "now": now.isoformat(),
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H-%M-%S"),
+        "uuid": str(_uuid.uuid4()),
+        "timestamp": str(int(now.timestamp())),
     }
 
 

@@ -714,6 +714,17 @@ class WorkflowEngine:
             }
         elif trigger.type == TriggerType.manual:
             payload = {"manual": True, "triggered_at": datetime.datetime.utcnow().isoformat()}
+        elif trigger.type == TriggerType.rss:
+            payload = {
+                "title": "Sample RSS Item",
+                "link": "https://example.com/item/1",
+                "description": "A sample RSS feed entry for testing.",
+                "content": "<p>Full content of the RSS item.</p>",
+                "author": "Example Author",
+                "published": datetime.datetime.utcnow().isoformat(),
+                "id": "https://example.com/item/1",
+                "fetched_at": datetime.datetime.utcnow().isoformat(),
+            }
 
         schema = infer_schema(payload)
         sample = truncate_sample(payload)

@@ -1,4 +1,4 @@
-export type TriggerType = "webhook" | "fs_watch" | "schedule" | "manual" | "event";
+export type TriggerType = "webhook" | "fs_watch" | "schedule" | "manual" | "event" | "rss";
 export type StepType =
   | "tool_call"
   | "agent_session"
@@ -9,7 +9,9 @@ export type StepType =
   | "delay"
   | "kanban_action"
   | "table_action"
-  | "return_step";
+  | "return_step"
+  | "file_read"
+  | "file_save";
 
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type StepRunStatus = "pending" | "running" | "completed" | "failed" | "skipped";
@@ -27,6 +29,10 @@ export interface TriggerConfig {
   filter?: Record<string, unknown>;
   broker_id?: string;
   broker_slug?: string;
+  rss_url?: string;
+  rss_poll_minutes?: number;
+  rss_max_items?: number;
+  rss_filter?: string;
 }
 
 export interface StepConfig {
@@ -79,6 +85,10 @@ export interface StepConfig {
   response_template?: string;
   output_schema?: string;
   next_step?: string;
+  file_read_path?: string;
+  file_save_path?: string;
+  file_save_content?: string;
+  file_save_mode?: string;
 }
 
 export interface WorkflowDef {

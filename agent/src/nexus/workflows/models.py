@@ -17,6 +17,7 @@ class TriggerType(str, Enum):
     schedule = "schedule"
     manual = "manual"
     event = "event"
+    rss = "rss"
 
 
 class StepType(str, Enum):
@@ -30,6 +31,8 @@ class StepType(str, Enum):
     kanban_action = "kanban_action"
     table_action = "table_action"
     return_step = "return_step"
+    file_read = "file_read"
+    file_save = "file_save"
 
 
 class AuthType(str, Enum):
@@ -72,6 +75,10 @@ class TriggerConfig:
     payload_format: str = "json"  # "json" | "plain" | "xml"
     broker_id: str | None = None
     broker_slug: str | None = None
+    rss_url: str | None = None
+    rss_poll_minutes: int = 15
+    rss_max_items: int = 10
+    rss_filter: str | None = None
 
     def sanitize(self) -> None:
         if self.type == TriggerType.webhook:
@@ -131,6 +138,24 @@ class TriggerConfig:
             self.broker_id = None
             self.broker_slug = None
             self.payload_format = "json"
+            self.rss_url = None
+            self.rss_poll_minutes = 15
+            self.rss_max_items = 10
+            self.rss_filter = None
+        elif self.type == TriggerType.rss:
+            self.token = None
+            self.secret = None
+            self.allowed_methods = ["POST"]
+            self.path = None
+            self.pattern = "*"
+            self.events = ["created"]
+            self.debounce_ms = 1000
+            self.cron = None
+            self.event = None
+            self.filter = None
+            self.broker_id = None
+            self.broker_slug = None
+            self.payload_format = "json"
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "type": self.type.value}
@@ -164,6 +189,15 @@ class TriggerConfig:
                 out["event"] = self.event
             if self.filter is not None:
                 out["filter"] = self.filter
+        elif self.type == TriggerType.rss:
+            if self.rss_url is not None:
+                out["rss_url"] = self.rss_url
+            if self.rss_poll_minutes != 15:
+                out["rss_poll_minutes"] = self.rss_poll_minutes
+            if self.rss_max_items != 10:
+                out["rss_max_items"] = self.rss_max_items
+            if self.rss_filter is not None:
+                out["rss_filter"] = self.rss_filter
         return out
 
     @classmethod
@@ -184,6 +218,10 @@ class TriggerConfig:
             payload_format=d.get("payload_format", "json"),
             broker_id=d.get("broker_id"),
             broker_slug=d.get("broker_slug"),
+            rss_url=d.get("rss_url"),
+            rss_poll_minutes=int(d.get("rss_poll_minutes", 15)),
+            rss_max_items=int(d.get("rss_max_items", 10)),
+            rss_filter=d.get("rss_filter"),
         )
         tc.sanitize()
         return tc
@@ -240,6 +278,10 @@ class StepConfig:
     response_template: str | None = None
     output_schema: str | None = None
     next_step: str | None = None
+    file_read_path: str | None = None
+    file_save_path: str | None = None
+    file_save_content: str | None = None
+    file_save_mode: str = "overwrite"
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"id": self.id, "name": self.name, "type": self.type.value}
@@ -335,6 +377,14 @@ class StepConfig:
             out["output_schema"] = self.output_schema
         if self.next_step is not None:
             out["next_step"] = self.next_step
+        if self.file_read_path is not None:
+            out["file_read_path"] = self.file_read_path
+        if self.file_save_path is not None:
+            out["file_save_path"] = self.file_save_path
+        if self.file_save_content is not None:
+            out["file_save_content"] = self.file_save_content
+        if self.file_save_mode != "overwrite":
+            out["file_save_mode"] = self.file_save_mode
         return out
 
     @classmethod
@@ -389,6 +439,10 @@ class StepConfig:
             response_template=d.get("response_template"),
             output_schema=d.get("output_schema"),
             next_step=d.get("next_step"),
+            file_read_path=d.get("file_read_path"),
+            file_save_path=d.get("file_save_path"),
+            file_save_content=d.get("file_save_content"),
+            file_save_mode=str(d.get("file_save_mode", "overwrite")),
         )
 
 

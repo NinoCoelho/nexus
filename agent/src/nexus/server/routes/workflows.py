@@ -629,6 +629,13 @@ def _register_triggers(path: str, wf: WorkflowDef, request: Request) -> None:
                     evt.register(path, t.id, t.event, t.filter)
     except Exception:
         pass
+    try:
+        rss = getattr(request.app.state, "workflow_rss_driver", None)
+        if rss:
+            import asyncio
+            asyncio.create_task(rss.start(path, wf))
+    except Exception:
+        pass
 
 
 def _unregister_triggers(path: str, wf: WorkflowDef | None, request: Request) -> None:
@@ -649,6 +656,16 @@ def _unregister_triggers(path: str, wf: WorkflowDef | None, request: Request) ->
             for t in wf.triggers:
                 if t.type == TriggerType.event:
                     evt.unregister(path, t.id)
+    except Exception:
+        pass
+    try:
+        rss = getattr(request.app.state, "workflow_rss_driver", None)
+        if rss and wf:
+            import asyncio
+            for t in wf.triggers:
+                if t.type == TriggerType.rss:
+                    store.clear_rss_seen(t.id)
+                    asyncio.create_task(rss.stop(path, t.id))
     except Exception:
         pass
 

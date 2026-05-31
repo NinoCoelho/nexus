@@ -10,6 +10,7 @@ const TRIGGER_ICONS: Record<string, string> = {
   schedule: "📅",
   manual: "👆",
   event: "📡",
+  rss: "📰",
 };
 
 export interface TriggerNodeData extends Record<string, unknown> {
@@ -100,7 +101,7 @@ function TriggerNodeComp({ data, id }: NodeProps) {
         <span className="icon">{TRIGGER_ICONS[d.triggerType] || "⚡"}</span>
         <span className="label">Trigger</span>
         <span className="type-badge">
-          {d.triggerType === "fs_watch" ? "File Watch" : d.triggerType}
+          {d.triggerType === "fs_watch" ? "File Watch" : d.triggerType === "rss" ? "RSS Feed" : d.triggerType}
         </span>
         <button
           ref={btnRef}

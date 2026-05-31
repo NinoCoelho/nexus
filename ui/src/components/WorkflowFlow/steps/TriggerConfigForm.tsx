@@ -391,6 +391,54 @@ export default function TriggerConfigForm({
           </div>
         )}
 
+        {trigger.type === "rss" && (
+          <>
+            <div className="wf-field">
+              <label>Feed URL</label>
+              <input
+                value={trigger.rss_url || ""}
+                onChange={(e) => onChangeTrigger({ rss_url: e.target.value })}
+                placeholder="https://example.com/feed.xml"
+              />
+            </div>
+            <div className="wf-field-row">
+              <div className="wf-field">
+                <label>Poll Interval (min)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={trigger.rss_poll_minutes ?? 15}
+                  onChange={(e) =>
+                    onChangeTrigger({ rss_poll_minutes: parseInt(e.target.value) || 15 })
+                  }
+                />
+              </div>
+              <div className="wf-field">
+                <label>Max Items / Poll</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={trigger.rss_max_items ?? 10}
+                  onChange={(e) =>
+                    onChangeTrigger({ rss_max_items: parseInt(e.target.value) || 10 })
+                  }
+                />
+              </div>
+            </div>
+            <div className="wf-field">
+              <label>Filter (regex)</label>
+              <input
+                value={trigger.rss_filter || ""}
+                onChange={(e) => onChangeTrigger({ rss_filter: e.target.value })}
+                placeholder="optional: match title or description"
+              />
+              <span className="wf-field-hint">
+                Only items whose title or description match this regex will trigger a run. Leave empty for all items.
+              </span>
+            </div>
+          </>
+        )}
+
         {confirmDelete ? (
           <div style={{
             padding: "8px 10px",

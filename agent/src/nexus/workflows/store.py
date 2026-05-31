@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS fs_watch_seen (
 
 CREATE INDEX IF NOT EXISTS idx_runs_workflow ON workflow_runs(workflow_path);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON workflow_runs(status);
+
+CREATE TABLE IF NOT EXISTS rss_seen (
+    trigger_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, item_id)
+);
 """
 
 _lock = threading.Lock()
@@ -233,6 +240,32 @@ class WorkflowStore:
             with self._conn:
                 cur = self._conn.execute(
                     "DELETE FROM fs_watch_seen WHERE trigger_id=?", (trigger_id,)
+                )
+        return cur.rowcount
+
+    def is_rss_seen(self, trigger_id: str, item_id: str) -> bool:
+        with _lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM rss_seen WHERE trigger_id=? AND item_id=?",
+                (trigger_id, item_id),
+            ).fetchone()
+        return row is not None
+
+    def mark_rss_seen(self, trigger_id: str, item_id: str) -> None:
+        import datetime
+        with _lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO rss_seen (trigger_id, item_id, seen_at) "
+                    "VALUES (?, ?, ?)",
+                    (trigger_id, item_id, datetime.datetime.utcnow().isoformat()),
+                )
+
+    def clear_rss_seen(self, trigger_id: str) -> int:
+        with _lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM rss_seen WHERE trigger_id=?", (trigger_id,)
                 )
         return cur.rowcount
 

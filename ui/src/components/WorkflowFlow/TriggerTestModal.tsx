@@ -24,6 +24,7 @@ const TRIGGER_TYPE_LABELS: Record<TriggerType, string> = {
   schedule: "Schedule",
   manual: "Manual",
   event: "Event",
+  rss: "RSS Feed",
 };
 
 interface Props {
