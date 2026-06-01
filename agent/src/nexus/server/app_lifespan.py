@@ -40,6 +40,30 @@ def create_lifespan(state: dict[str, Any]):
         except Exception:
             log.exception("event_bus setup failed")
 
+        async def _vault_cache_listener() -> None:
+            from . import event_bus as _eb
+            from ..vault_datatable_index import invalidate_cache as _inv_dt
+            q = _eb.subscribe()
+            try:
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(q.get(), timeout=30.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if ev.get("type") in ("vault.indexed", "vault.removed"):
+                        _inv_dt()
+                        try:
+                            from ..server.routes.workflows import _CACHE as _wf_cache
+                            _wf_cache.clear()
+                        except Exception:
+                            pass
+            except asyncio.CancelledError:
+                pass
+            finally:
+                _eb.unsubscribe(q)
+
+        _vault_cache_task = asyncio.create_task(_vault_cache_listener())
+
         try:
             from ..tunnel import cloudflared_provider
             killed = cloudflared_provider.cleanup_orphans()
@@ -204,6 +228,24 @@ def create_lifespan(state: dict[str, Any]):
                 asyncio.create_task(bootstrap_default_voices())
             except Exception:
                 log.warning("[startup] piper voice prefetch failed", exc_info=True)
+
+            def _warm_list_caches() -> None:
+                try:
+                    from ..vault_datatable_index import warm_cache as _warm_dt
+                    _warm_dt()
+                except Exception:
+                    log.debug("[startup] datatable cache warm failed", exc_info=True)
+                try:
+                    from ..server.routes.workflows import _CACHE as _wf_cache
+                    _wf_cache.get_all()
+                except Exception:
+                    log.debug("[startup] workflow cache warm failed", exc_info=True)
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, _warm_list_caches)
+            except Exception:
+                pass
 
         scheduler = None
         from ..features import is_enabled as _feat_enabled
@@ -446,6 +488,7 @@ def create_lifespan(state: dict[str, Any]):
         try:
             yield
         finally:
+            _vault_cache_task.cancel()
             watcher = getattr(app.state, "nexus_status_watcher", None)
             if watcher is not None:
                 try:

@@ -530,6 +530,7 @@ export default function App() {
           setUpdateModalOpen(true);
         }}
         isViewVisible={isViewVisible}
+        appDatabases={appDatabases}
       />
 
       <div className="app-main">

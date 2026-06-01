@@ -123,3 +123,4 @@ class SettingsPayload(BaseModel):
 
     yolo_mode: bool | None = None
     auto_accept_members: bool | None = None
+    ui_mode: str | None = None

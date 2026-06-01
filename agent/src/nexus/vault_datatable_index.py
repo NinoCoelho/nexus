@@ -1,21 +1,27 @@
 """Discovery layer for vault data-tables grouped into "databases."
 
 A folder containing ≥1 file with ``data-table-plugin: basic`` frontmatter is
-treated as a database. The walk is one-shot and not cached: at typical vault
-sizes (≤10k files) the cost is ~50 ms; profile and add a SQLite-backed index
-only if it overshoots.
+treated as a database. Results are cached in-process and persisted to disk,
+invalidated on vault file changes.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import posixpath
+import threading
+from pathlib import Path
 from typing import Any
 
 from . import vault, vault_datatable
 
+log = logging.getLogger(__name__)
+
+_CACHE_PATH = Path.home() / ".nexus" / ".datatable_cache.json"
+
 
 def _table_title(schema: dict[str, Any], path: str) -> str:
-    """Title from schema → filename stem fallback."""
     title = schema.get("title") if isinstance(schema, dict) else None
     if isinstance(title, str) and title.strip():
         return title.strip()
@@ -31,7 +37,6 @@ def _database_title(folder: str) -> str:
 
 
 def _walk_tables() -> list[dict[str, Any]]:
-    """Return [{path, folder, title, row_count}] for every data-table file."""
     out: list[dict[str, Any]] = []
     for entry in vault.list_tree():
         if entry.type != "file":
@@ -60,15 +65,10 @@ def _walk_tables() -> list[dict[str, Any]]:
     return out
 
 
-def list_databases() -> list[dict[str, Any]]:
-    """Return ``[{folder, title, icon, table_count}]`` for every database in the vault.
-
-    A database is a folder (including the root, ``""``) that contains ≥1
-    data-table file. Sorted by lower-cased title for stable rendering.
-    """
+def _scan_databases(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from . import vault_dashboard
     by_folder: dict[str, int] = {}
-    for tbl in _walk_tables():
+    for tbl in tables:
         by_folder[tbl["folder"]] = by_folder.get(tbl["folder"], 0) + 1
     out: list[dict[str, Any]] = []
     for folder, count in by_folder.items():
@@ -83,12 +83,100 @@ def list_databases() -> list[dict[str, Any]]:
     return out
 
 
-def list_tables_in_folder(folder: str) -> list[dict[str, Any]]:
-    """Return ``[{path, title, row_count, field_count}]`` for tables in ``folder``.
+class _DatabaseCache:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._databases: list[dict[str, Any]] | None = None
+        self._tables: list[dict[str, Any]] | None = None
 
-    ``folder`` is matched exactly (no recursion into subfolders). Use ``""`` for
-    the vault root. Sorted by lower-cased title.
-    """
+    def invalidate(self) -> None:
+        with self._lock:
+            self._databases = None
+            self._tables = None
+        try:
+            if _CACHE_PATH.exists():
+                _CACHE_PATH.unlink()
+        except Exception:
+            pass
+
+    def get_databases(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._databases is not None:
+                return list(self._databases)
+            self._load_disk_locked()
+            if self._databases is not None:
+                return list(self._databases)
+            self._scan_locked()
+            return list(self._databases) if self._databases else []
+
+    def get_tables(self, folder: str) -> list[dict[str, Any]]:
+        folder = folder.strip("/")
+        with self._lock:
+            if self._tables is not None:
+                return [t for t in self._tables if t["folder"] == folder]
+            self._load_disk_locked()
+            if self._tables is not None:
+                return [t for t in self._tables if t["folder"] == folder]
+            self._scan_locked()
+            return [t for t in (self._tables or []) if t["folder"] == folder]
+
+    def _scan_locked(self) -> None:
+        tables = _walk_tables()
+        databases = _scan_databases(tables)
+        self._tables = tables
+        self._databases = databases
+        self._persist_locked()
+
+    def _load_disk_locked(self) -> None:
+        try:
+            if not _CACHE_PATH.exists():
+                return
+            raw = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+            tables = raw.get("tables")
+            databases = raw.get("databases")
+            if isinstance(tables, list) and isinstance(databases, list):
+                self._tables = tables
+                self._databases = databases
+        except Exception:
+            log.debug("datatable cache: disk load failed", exc_info=True)
+
+    def _persist_locked(self) -> None:
+        try:
+            _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _CACHE_PATH.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps({"tables": self._tables, "databases": self._databases}),
+                encoding="utf-8",
+            )
+            tmp.replace(_CACHE_PATH)
+        except Exception:
+            log.debug("datatable cache: disk persist failed", exc_info=True)
+
+    def warm(self) -> None:
+        with self._lock:
+            if self._databases is not None:
+                return
+            self._load_disk_locked()
+            if self._databases is None:
+                self._scan_locked()
+
+
+_cache = _DatabaseCache()
+
+
+def invalidate_cache() -> None:
+    _cache.invalidate()
+
+
+def warm_cache() -> None:
+    _cache.warm()
+
+
+def list_databases() -> list[dict[str, Any]]:
+    return _cache.get_databases()
+
+
+def list_tables_in_folder(folder: str) -> list[dict[str, Any]]:
     folder = folder.strip("/")
     out = [
         {
@@ -97,8 +185,7 @@ def list_tables_in_folder(folder: str) -> list[dict[str, Any]]:
             "row_count": tbl["row_count"],
             "field_count": tbl["field_count"],
         }
-        for tbl in _walk_tables()
-        if tbl["folder"] == folder
+        for tbl in _cache.get_tables(folder)
     ]
     out.sort(key=lambda t: t["title"].lower())
     return out
@@ -106,14 +193,11 @@ def list_tables_in_folder(folder: str) -> list[dict[str, Any]]:
 
 # ── ER diagram ───────────────────────────────────────────────────────────────
 
-
 _ER_NAME_SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
-
 _MERMAID_BLOCK_KEYWORDS = frozenset({"pk", "fk", "uk"})
 
 
 def _erd_node_name(path: str) -> str:
-    """Mermaid erDiagram entity names must be alphanumeric/underscore."""
     stem = path.rsplit("/", 1)[-1].removesuffix(".md")
     cleaned = "".join(c if c in _ER_NAME_SAFE else "_" for c in stem)
     return cleaned or "table"
@@ -124,24 +208,11 @@ def _ref_field_target(host_path: str, field: dict[str, Any]) -> str:
 
 
 def er_diagram(folder: str) -> str:
-    """Generate mermaid ``erDiagram`` source for every table in ``folder``.
-
-    Cardinality mapping:
-      * ``cardinality: one``  → ``}o--||`` (zero-or-many to exactly-one).
-      * Junction with two refs and no payload → collapse to a single
-        ``}o--o{`` line between the two referenced tables.
-      * Junction with extra payload columns → keep the junction as a node
-        with two ``}o--||`` lines into the referenced tables.
-
-    Tables outside ``folder`` referenced by a ref still appear as nodes so
-    the cross-database relationship is visible.
-    """
     folder = folder.strip("/")
     in_folder = [tbl for tbl in _walk_tables() if tbl["folder"] == folder]
     if not in_folder:
         return "erDiagram"
 
-    # Collect schemas keyed by path.
     schemas: dict[str, dict[str, Any]] = {}
     for tbl in in_folder:
         try:
@@ -150,13 +221,12 @@ def er_diagram(folder: str) -> str:
             continue
         schemas[tbl["path"]] = full["schema"]
 
-    nodes: dict[str, str] = {}  # path → ER node name
+    nodes: dict[str, str] = {}
     edges: list[str] = []
 
     def node(path: str) -> str:
         if path not in nodes:
             base = _erd_node_name(path)
-            # Disambiguate collisions across folders.
             existing = set(nodes.values())
             name = base
             i = 2
@@ -173,16 +243,11 @@ def er_diagram(folder: str) -> str:
                 a_target = _ref_field_target(path, refs[0])
                 b_target = _ref_field_target(path, refs[1])
                 if a_target and b_target:
-                    # Pure 2-ref junction → collapse to a single edge between
-                    # the referenced tables. Don't register the junction as a
-                    # node; otherwise we'd render a redundant tile on top of
-                    # the collapsed edge.
                     a_name = node(a_target)
                     b_name = node(b_target)
                     label = path.rsplit("/", 1)[-1].removesuffix(".md")
                     edges.append(f"    {a_name} }}o--o{{ {b_name} : \"{label}\"")
                     continue
-            # Fall through: junction with non-standard shape → render as node.
         host_node = node(path)
         for f in schema.get("fields", []):
             if not isinstance(f, dict) or f.get("kind") != "ref":
@@ -198,7 +263,6 @@ def er_diagram(folder: str) -> str:
             else:
                 edges.append(f"    {host_node} }}o--|| {target_name} : \"{field_label}\"")
 
-    # Emit entities with their fields.
     body: list[str] = ["erDiagram"]
     seen_entities: set[str] = set()
     for path, name in nodes.items():

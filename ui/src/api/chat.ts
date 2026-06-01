@@ -324,6 +324,7 @@ export type SessionEvent =
       };
     }
   | { kind: "features_changed"; data: { from: string[]; to: string[] } }
+  | { kind: "settings_changed"; data: { yolo_mode?: boolean; auto_accept_members?: boolean; ui_mode?: string } }
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */

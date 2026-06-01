@@ -53,6 +53,14 @@ class Settings(BaseModel):
         ),
     )
 
+    ui_mode: str = Field(
+        default="normal",
+        description=(
+            "UI display mode. 'normal' hides power-user views; "
+            "'advanced' shows all views."
+        ),
+    )
+
 
 class SettingsStore:
     """Read/write ``settings.json`` with in-process caching.

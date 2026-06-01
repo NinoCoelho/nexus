@@ -65,7 +65,7 @@ def parse(content: str) -> WorkflowDef:
 
     wf = WorkflowDef(
         title=title or "Untitled Workflow",
-        enabled=bool(frontmatter.get("enabled", False)),
+        enabled=bool(frontmatter.get("enabled", True)),
         triggers=triggers,
         variables={str(k): str(v) for k, v in variables.items()},
         steps=steps,

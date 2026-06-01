@@ -188,9 +188,6 @@ class WorkflowEngine:
         if wf_def is None:
             wf_def = self._load_workflow(workflow_path)
 
-        if not wf_def.enabled:
-            raise RuntimeError(f"workflow {workflow_path} is disabled")
-
         now = datetime.datetime.utcnow().isoformat()
         run = WorkflowRun(
             id=str(uuid.uuid4()),

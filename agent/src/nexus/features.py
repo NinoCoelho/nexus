@@ -49,11 +49,39 @@ _cache_lock = threading.Lock()
 _cached_features: set[str] | None = None
 
 _CACHE_PATH = Path.home() / ".nexus" / "feature_cache.json"
-_HMAC_KEY = b"nexus-features-cache-v1-vE7kQ2zN9pXmR4wL"
+_KEY_PATH = Path.home() / ".nexus" / ".feature_cache_key"
+
+
+def _get_hmac_key() -> bytes:
+    try:
+        if _KEY_PATH.exists():
+            key = _KEY_PATH.read_bytes()
+            if len(key) >= 32:
+                return key
+    except Exception:
+        pass
+    key = os.urandom(32)
+    try:
+        _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _KEY_PATH.write_bytes(key)
+        _KEY_PATH.chmod(0o600)
+    except Exception:
+        log.debug("[features] failed to write cache key", exc_info=True)
+    return key
+
+
+_HMAC_KEY: bytes | None = None
+
+
+def _ensure_key() -> bytes:
+    global _HMAC_KEY
+    if _HMAC_KEY is None:
+        _HMAC_KEY = _get_hmac_key()
+    return _HMAC_KEY
 
 
 def _sign_payload(data: bytes) -> str:
-    return hmac.new(_HMAC_KEY, data, hashlib.sha256).hexdigest()
+    return hmac.new(_ensure_key(), data, hashlib.sha256).hexdigest()
 
 
 def _save_cache(features: set[str]) -> None:

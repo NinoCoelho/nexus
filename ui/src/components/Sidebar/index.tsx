@@ -64,6 +64,7 @@ interface Props {
   onMobileClose?: () => void;
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
   isViewVisible?: (viewId: string) => boolean;
+  appDatabases?: DatabaseSummary[];
 }
 
 export default function Sidebar({
@@ -77,6 +78,7 @@ export default function Sidebar({
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
   isViewVisible = () => true,
+  appDatabases: appDatabasesProp,
 }: Props) {
   const { t } = useTranslation("sidebar");
   const VIEWS = {
@@ -108,10 +110,11 @@ export default function Sidebar({
   const [width, setWidth] = useState<number>(() => loadStoredWidth());
   const [resizing, setResizing] = useState(false);
 
-  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>([]);
+  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>(appDatabasesProp ?? []);
   useEffect(() => {
+    if (appDatabasesProp) { setAppDatabases(appDatabasesProp); return; }
     listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
-  }, [databaseListRevision]);
+  }, [databaseListRevision, appDatabasesProp]);
 
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
