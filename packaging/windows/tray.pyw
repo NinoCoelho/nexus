@@ -93,7 +93,7 @@ class ServerController:
         )
         log.info("spawned python pid=%d", self.process.pid)
 
-    def wait_for_ready(self, timeout: float = 60.0) -> int:
+    def wait_for_ready(self, timeout: float = 300.0) -> int:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             port = self._read_port()
@@ -274,7 +274,7 @@ def main() -> int:
 
     controller = ServerController()
     updater = UpdateChecker()
-    icon = pystray.Icon("Nexus", _make_icon_image(), "Nexus")
+    icon = pystray.Icon("Nexus", _make_icon_image(), "Nexus — initializing…")
 
     state = {"opened_once": False}
 
@@ -386,12 +386,17 @@ def main() -> int:
     def boot() -> None:
         try:
             controller.launch()
+            icon.title = "Nexus — waiting for server…"
             port = controller.wait_for_ready()
             icon.title = f"Nexus — running on {controller.bind_host}:{port}"
             if not state["opened_once"]:
                 state["opened_once"] = True
                 webbrowser.open(f"http://127.0.0.1:{port}/")
             updater.configure(port)
+        except TimeoutError:
+            log.error("server did not become ready in time")
+            icon.title = "Nexus — failed to start (timeout)"
+            icon.notify("Server took too long to start. Check logs.", "Nexus")
         except Exception as exc:
             log.exception("startup failed")
             icon.title = f"Nexus — error: {exc}"

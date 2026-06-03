@@ -136,6 +136,20 @@ jobs:
         shell: pwsh
         run: .\packaging\build.ps1 -LoomDir "$env:GITHUB_WORKSPACE\loom"
 
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          makensis /VERSION
+
+      - name: Build NSIS installer
+        working-directory: nexus
+        shell: pwsh
+        run: |
+          $pyproject = Get-Content 'agent\pyproject.toml' -Raw
+          if ($pyproject -match 'version\s*=\s*"([^"]+)"') { $v = $Matches[1] } else { $v = '0.0.0' }
+          makensis /DPRODUCT_VERSION=$v /DSOURCE_DIR=dist\Nexus packaging\windows\installer.nsi
+
       - name: Rename for clarity
         working-directory: nexus
         shell: pwsh
@@ -144,5 +158,7 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
-          files: nexus/dist/Nexus-windows-x64.zip
+          files: |
+            nexus/dist/Nexus-windows-x64.zip
+            nexus/dist/Nexus-Setup-*.exe
           fail_on_unmatched_files: true

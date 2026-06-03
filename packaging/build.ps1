@@ -363,5 +363,36 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Write-Host "==> Compressing $zip"
 Compress-Archive -Path $App -DestinationPath $zip -CompressionLevel Optimal
 
+# ── NSIS installer (optional) ───────────────────────────────────────────────
+# If makensis is on PATH, build a proper Setup.exe in addition to the zip.
+$makensis = Get-Command 'makensis' -ErrorAction SilentlyContinue
+if ($makensis) {
+    $nsi = Join-Path $WindowsPkg 'installer.nsi'
+    # Derive version from agent/pyproject.toml if present.
+    $version = '0.0.0'
+    $pyproject = Join-Path $RepoRoot 'agent\pyproject.toml'
+    if (Test-Path $pyproject) {
+        $match = Select-String -Path $pyproject -Pattern '^version\s*=\s*"([^"]+)"'
+        if ($match) { $version = $match.Matches[0].Groups[1].Value }
+    }
+    $setupExe = Join-Path $Dist "Nexus-Setup-$version.exe"
+    Write-Host "==> Building NSIS installer ($setupExe)"
+    Push-Location $RepoRoot
+    try {
+        & $makensis.Path `
+            /DPRODUCT_VERSION=$version `
+            /DSOURCE_DIR=$App `
+            $nsi
+        if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+    } finally {
+        Pop-Location
+    }
+    if (-not (Test-Path $setupExe)) {
+        Write-Warning "NSIS installer not found at $setupExe (expected output from script)"
+    }
+} else {
+    Write-Host '==> Skipping NSIS installer (makensis not found on PATH)'
+}
+
 $size = (Get-ChildItem $App -Recurse | Measure-Object -Property Length -Sum).Sum
 Write-Host ("==> Done: {0} ({1:N1} GB)" -f $App, ($size / 1GB))

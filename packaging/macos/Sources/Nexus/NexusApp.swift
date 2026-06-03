@@ -8,7 +8,7 @@ struct NexusApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {
-        MenuBarExtra("Nexus", systemImage: delegate.controller.updateChecker.updateAvailable ? "circle.hexagongrid.fill.badge" : "circle.hexagongrid.fill") {
+        MenuBarExtra("Nexus", systemImage: delegate.controller.status.hasPrefix("Running") ? (delegate.controller.updateChecker.updateAvailable ? "circle.hexagongrid.fill.badge" : "circle.hexagongrid.fill") : "circle.hexagongrid") {
             MenuView()
                 .environmentObject(delegate.controller)
                 .environmentObject(delegate.controller.updateChecker)
@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class AppController: ObservableObject {
-    @Published var status: String = "Starting…"
+    @Published var status: String = "Initializing…"
     @Published var startAtLogin: Bool = SMAppService.mainApp.status == .enabled
     let updateChecker = UpdateChecker()
     private let server = ServerController()
@@ -43,8 +43,8 @@ final class AppController: ObservableObject {
         Task {
             do {
                 try server.launch()
-                status = "Waiting for server…"
-                let port = try await server.waitForReady(timeout: 60)
+                status = "Initializing server…"
+                let port = try await server.waitForReady(timeout: 300)
                 status = "Running on \(server.bindHost):\(port)"
                 openInBrowser(port: port)
                 notifier.start(server: server)
@@ -69,7 +69,8 @@ final class AppController: ObservableObject {
             server.terminate()
             do {
                 try server.launch()
-                let port = try await server.waitForReady(timeout: 60)
+                status = "Initializing server…"
+                let port = try await server.waitForReady(timeout: 300)
                 status = "Running on \(server.bindHost):\(port)"
                 openInBrowser(port: port)
                 notifier.start(server: server)
