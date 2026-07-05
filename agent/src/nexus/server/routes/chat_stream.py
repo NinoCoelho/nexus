@@ -24,7 +24,7 @@ from ._streaming import TurnAccumulator, build_done_sse, build_error_sse
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
-from ...config_file import load as load_config
+from ...config_file import load_cached as load_config
 from ...redact import redact_sensitive_text
 from ...voice_ack import (
     _AckTrigger,

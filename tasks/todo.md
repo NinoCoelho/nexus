@@ -26,12 +26,16 @@ assistant message on every keystroke** — the dominant CPU cost.
 
 ## Phase 2 — Backend lag fixes (event-loop blocking)
 
-- [ ] B1. `BrokerPoller._discover_endpoints` vault `os.walk` → `asyncio.to_thread`.
+- [x] B1. `BrokerPoller._discover_endpoints` vault `os.walk` → `asyncio.to_thread`
+      (both the per-cycle `_poll_all` and startup `_ensure_webhook_tokens`).
 - [ ] B2. Exempt `text/event-stream` from `FeatureGateMiddleware`/`SecurityHeadersMiddleware`
       (or convert to pure ASGI).
-- [ ] B3. Drop eager `replace_history` at `chat_stream.py:315`; batch inserts.
+- [ ] B3. Drop eager `replace_history` at `chat_stream.py:315` — **deferred**: the
+      finally-clause persist covers it, but dropping it regresses reload-during-turn
+      UX (user msg not in DB until turn ends). Needs a cheaper append or to_thread.
 - [ ] B4. `calendar_trigger`/`dream_trigger` driver `check()` vault+SQLite I/O → `to_thread`.
-- [ ] B5. mtime-cached `load_config()` (currently 5 disk reads+parses per chat POST).
+- [x] B5. mtime-cached `load_cached()` in config_file.py; migrated chat_stream,
+      broker poller, dream_trigger to it. `save()` invalidates the cache.
 
 ## Phase 3 — Memory / unbounded growth
 

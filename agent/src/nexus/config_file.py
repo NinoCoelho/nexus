@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -230,11 +231,52 @@ def load() -> NexusConfig:
     return _parse(raw)
 
 
+# mtime-keyed cache for hot paths (chat stream, broker poller, heartbeat
+# drivers) that re-read the config repeatedly per request/tick. The file is
+# small but re-parsing TOML + rebuilding the dataclass tree on every chat POST
+# (up to ~5×) shows up as event-loop time. Callers MUST treat the result as
+# read-only — mutating edits go through load() + save().
+_config_cache_lock = threading.Lock()
+_config_cache: dict[str, Any] = {}
+
+
+def load_cached() -> NexusConfig:
+    """mtime-cached variant of load() for read-only hot paths.
+
+    Returns the same NexusConfig instance until the file's mtime changes or
+    save() clears the cache. Falls back to load() (which creates the default
+    config) when the file is missing.
+    """
+    try:
+        st = CONFIG_PATH.stat()
+    except FileNotFoundError:
+        return load()
+    mtime = st.st_mtime
+    with _config_cache_lock:
+        cached = _config_cache.get("cfg")
+        if cached is not None and _config_cache.get("mtime") == mtime:
+            return cached
+    # Parse outside the lock so concurrent readers don't serialize on parsing.
+    with open(CONFIG_PATH, "rb") as f:
+        raw = tomllib.load(f)
+    cfg = _parse(raw)
+    with _config_cache_lock:
+        # Another thread may have parsed in the meantime; either is fine.
+        _config_cache["mtime"] = mtime
+        _config_cache["cfg"] = cfg
+    return cfg
+
+
 def save(cfg: NexusConfig) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = _cfg_to_dict(cfg)
     with open(CONFIG_PATH, "wb") as f:
         tomli_w.dump(data, f)
+    # Invalidate the read cache. mtime could be coarse-grained (1s on some
+    # filesystems), so a save-then-load within the same second must not return
+    # the stale pre-save object.
+    with _config_cache_lock:
+        _config_cache.clear()
 
 
 def _migrate_legacy_embedder(graphrag_raw: dict[str, Any]) -> None:

@@ -21,8 +21,8 @@ class Driver(HeartbeatDriver):
         self, state: dict[str, Any]
     ) -> tuple[list[HeartbeatEvent], dict[str, Any]]:
         try:
-            from nexus.config_file import load
-            cfg = load()
+            from nexus.config_file import load_cached
+            cfg = load_cached()
         except Exception:
             log.exception("dream_trigger: config load failed")
             return [], state

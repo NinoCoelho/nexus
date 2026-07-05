@@ -58,7 +58,10 @@ class BrokerPoller:
         except Exception:
             log.exception("broker: initial sync failed")
 
-        self._ensure_webhook_tokens()
+        # Endpoint discovery + token registration is pure sync file/SQLite I/O
+        # (vault walk, read_file, store.lookup_webhook_token) — run it off the
+        # event loop so the always-open SSE streams can keep flushing.
+        await asyncio.to_thread(self._ensure_webhook_tokens)
 
         while not self._stop_event.is_set():
             try:
@@ -67,7 +70,7 @@ class BrokerPoller:
                 log.exception("broker: poll cycle failed")
 
             try:
-                from ..config_file import load as load_config
+                from ..config_file import load_cached as load_config
                 interval = load_config().broker.poll_interval_seconds
             except Exception:
                 interval = 30
@@ -108,8 +111,16 @@ class BrokerPoller:
         if not self._client.available:
             return
 
-        endpoints = self._discover_endpoints()
-        _, priv_pem = load_or_generate_private_key()
+        # _discover_endpoints walks the entire vault (os.walk + read_file +
+        # YAML parse for every .md) and load_or_generate_private_key reads a
+        # file — all synchronous. Run them in a worker thread so the 30s poll
+        # cycle doesn't freeze the event loop (and the open SSE streams).
+        def _discover() -> tuple[list[dict[str, Any]], str]:
+            endpoints = self._discover_endpoints()
+            _, priv_pem = load_or_generate_private_key()
+            return endpoints, priv_pem
+
+        endpoints, priv_pem = await asyncio.to_thread(_discover)
 
         for ep in endpoints:
             if ep["type"] == "workflow" and not self._is_workflow_enabled(ep):
