@@ -43,7 +43,12 @@ assistant message on every keystroke** — the dominant CPU cost.
 
 ## Phase 3 — Memory / unbounded growth
 
-- [ ] M1. LRU cap on frontend `chatStates` Map (evict least-recent non-thinking session).
+- [x] M1. LRU cap on frontend `chatStates` Map (MAX_CACHED_SESSIONS=8). Evicts the
+      least-recently-used session via an access-order ref + useEffect; never
+      evicts NEW_KEY, the active session, or any `thinking` session. Evicted
+      sessions re-fetch on next select via the existing lazy-load path. Typing
+      (now local draft via F6) doesn't churn the Map, so eviction never fires
+      mid-keystroke.
 - [x] M2. `maxsize=512` on SSE subscriber queues (`pubsub.py`) + drop-on-full
       (mirrors `event_bus.py`). HITL events still persisted to `hitl_events` +
       web-push, so dropping the ephemeral SSE copy loses no prompts.

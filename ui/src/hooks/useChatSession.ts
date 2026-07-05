@@ -20,6 +20,18 @@ import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 export type { UseChatSessionResult };
 
 /**
+ * Cap on how many sessions keep their full message history pinned in React
+ * state. Each ChatState holds the complete message list (with tool timelines
+ * and traces) for its session, so without a cap, a user who clicks through
+ * dozens of sessions accumulates megabytes of JSON in JS heap for the tab's
+ * lifetime — growing GC pressure and slowing every keystroke. Evicted sessions
+ * are re-fetched on next select via the existing lazy-load path. NEW_KEY, the
+ * active session, and any session with an in-flight turn (thinking) are never
+ * evicted.
+ */
+const MAX_CACHED_SESSIONS = 8;
+
+/**
  * Hook for managing multiple concurrent chat sessions with SSE streaming.
  *
  * Maintains a `Map<sessionKey, ChatState>` to preserve the state of all open
@@ -85,6 +97,39 @@ export function useChatSession(
       return next;
     });
   }, []);
+
+  // LRU tracking + eviction for the chatStates Map (see MAX_CACHED_SESSIONS).
+  // accessOrderRef holds session keys least-recently-used first; the active
+  // session is bumped to the end whenever it changes.
+  const accessOrderRef = useRef<string[]>([]);
+  useEffect(() => {
+    const order = accessOrderRef.current;
+    const i = order.indexOf(activeKey);
+    if (i >= 0) order.splice(i, 1);
+    order.push(activeKey);
+  }, [activeKey]);
+
+  useEffect(() => {
+    if (chatStates.size <= MAX_CACHED_SESSIONS) return;
+    setChatStates((prev) => {
+      if (prev.size <= MAX_CACHED_SESSIONS) return prev;
+      const order = accessOrderRef.current;
+      let victim: string | null = null;
+      for (const key of order) {
+        if (key === NEW_KEY || key === activeKey) continue;
+        const st = prev.get(key);
+        if (!st || st.thinking) continue; // never drop an in-flight turn
+        victim = key;
+        break;
+      }
+      if (!victim) return prev; // nothing evictable right now
+      const next = new Map(prev);
+      next.delete(victim);
+      // Prune the access order to surviving keys so it can't grow unbounded.
+      accessOrderRef.current = order.filter((k) => next.has(k));
+      return next;
+    });
+  }, [chatStates, activeKey, setChatStates]);
 
   const loadSessionHistory = useCallback(
     (id: string) => loadHistory(id, setChatStates, computeSeedModel, patchState),
