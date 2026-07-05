@@ -21,7 +21,6 @@ from ...workflows.engine import WorkflowEngine
 from ...workflows.models import (
     StepConfig,
     StepRun,
-    StepRunStatus,
     TriggerConfig,
     TriggerType,
     WorkflowDef,
@@ -436,7 +435,6 @@ async def get_interactive_state(path: str, run_id: str, request: Request) -> dic
     state = engine.interactive_get_state(run_id)
     if state is None:
         raise HTTPException(status_code=404, detail="interactive run not found")
-    from ...workflows.models import StepRun
     step_runs = [StepRun(
         run_id=s["run_id"], step_id=s["step_id"], status=s["status"],
         input_resolved=s.get("input_resolved"), output=s.get("output"),
@@ -614,17 +612,20 @@ async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request,
 
 
 def _register_triggers(path: str, wf: WorkflowDef, request: Request) -> None:
+    _register_triggers_state(path, wf, request.app.state)
+
+
+def _register_triggers_state(path: str, wf: WorkflowDef, app_state: Any) -> None:
     if not wf.enabled:
         return
     try:
-        fsw = getattr(request.app.state, "workflow_fsw_driver", None)
+        fsw = getattr(app_state, "workflow_fsw_driver", None)
         if fsw:
-            import asyncio
             asyncio.create_task(fsw.start(path, wf))
     except Exception:
         pass
     try:
-        evt = getattr(request.app.state, "workflow_event_listener", None)
+        evt = getattr(app_state, "workflow_event_listener", None)
         if evt:
             for t in wf.triggers:
                 if t.type == TriggerType.event and t.event:
@@ -632,12 +633,65 @@ def _register_triggers(path: str, wf: WorkflowDef, request: Request) -> None:
     except Exception:
         pass
     try:
-        rss = getattr(request.app.state, "workflow_rss_driver", None)
+        rss = getattr(app_state, "workflow_rss_driver", None)
         if rss:
-            import asyncio
             asyncio.create_task(rss.start(path, wf))
     except Exception:
         pass
+
+
+async def reregister_workflow_triggers(app: Any) -> None:
+    """Re-register fs_watch/event/rss triggers for pre-existing workflows.
+
+    These stateful drivers only register when a workflow is created or updated;
+    after a server restart they were silently lost until each workflow was
+    re-saved. Schedule/webhook triggers survive (they scan or resolve via the
+    store on demand), but the observer / event-subscription / RSS-feed drivers
+    need explicit re-registration. Run once at startup after the drivers are on
+    ``app.state``. The vault walk + parse runs in a worker thread; only the
+    registration (which schedules tasks on the loop) runs on the event loop.
+    """
+    import os
+
+    from ... import home as _home
+    from ... import vault as _vault
+
+    vault_path = _home.vault_root()
+    if not vault_path:
+        return
+
+    def _collect() -> list[tuple[str, WorkflowDef]]:
+        out: list[tuple[str, WorkflowDef]] = []
+        for root, _dirs, files in os.walk(vault_path):
+            for fname in files:
+                if not fname.endswith(".md"):
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    content = _vault.read_file(fpath)
+                    raw = content.get("content", "") if isinstance(content, dict) else str(content)
+                    wf = parser.parse(raw)
+                except Exception:
+                    continue
+                if wf.enabled:
+                    out.append((fpath, wf))
+        return out
+
+    try:
+        enabled = await asyncio.to_thread(_collect)
+    except Exception:
+        log.exception("workflow trigger re-scan failed")
+        return
+
+    registered = 0
+    for fpath, wf in enabled:
+        try:
+            _register_triggers_state(fpath, wf, app.state)
+            registered += 1
+        except Exception:
+            log.exception("workflow trigger re-register failed for %s", fpath)
+    if registered:
+        log.info("re-registered triggers for %d existing workflow(s)", registered)
 
 
 def _unregister_triggers(path: str, wf: WorkflowDef | None, request: Request) -> None:
@@ -976,7 +1030,6 @@ async def test_trigger_listen(
     path: str, body: TestTriggerListenBody, request: Request,
     _admin: None = Depends(require_admin),
 ) -> StreamingResponse:
-    import asyncio as _asyncio
     from ... import vault as _vault
     from ...workflows.triggers.test_listener import TestTriggerListener
 

@@ -38,6 +38,17 @@ class Driver(HeartbeatDriver):
             log.exception("dream_trigger: state store init failed")
             return [], state
 
+        # Clear any 'running' row orphaned by a previous crash before checking
+        # is_running() — otherwise a single interrupted dream would permanently
+        # block all future dreams. Age-gated so an in-progress dream is never
+        # touched.
+        try:
+            reconciled = store.reconcile_stale_runs()
+            if reconciled:
+                log.info("dream_trigger: reconciled %d stale running dream(s)", reconciled)
+        except Exception:
+            log.exception("dream_trigger: stale-run reconcile failed")
+
         if store.is_running():
             log.debug("dream_trigger: dream already running, skipping")
             store.close()

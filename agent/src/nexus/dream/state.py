@@ -130,6 +130,27 @@ class DreamStateStore(SqliteStore):
         ).fetchone()
         return row is not None
 
+    def reconcile_stale_runs(self, stale_after_hours: int = 2) -> int:
+        """Clear orphaned 'running' rows left by a process kill mid-dream.
+
+        A dream interrupted by a server crash / SIGKILL never reaches
+        finish_run(), so its dream_runs row stays status='running' forever and
+        permanently blocks all future dreams (is_running() short-circuits).
+        Mirrors WorkflowStore.reconcile_stale_runs, but age-gated: a legitimate
+        in-progress dream never outlives the engine's max_duration timeout, so
+        any 'running' row older than stale_after_hours is definitively orphaned.
+        """
+        cutoff = datetime.now(UTC)
+        from datetime import timedelta
+        cutoff -= timedelta(hours=stale_after_hours)
+        cur = self._db.execute(
+            "UPDATE dream_runs SET status='interrupted', error='reconciled stale lock' "
+            "WHERE status='running' AND started_at < ?",
+            (_to_ts(cutoff),),
+        )
+        self._db.commit()
+        return cur.rowcount or 0
+
     def last_run(self) -> DreamRun | None:
         row = self._db.execute(
             "SELECT id, started_at, finished_at, depth, phases_run, status, "

@@ -457,6 +457,15 @@ def create_lifespan(state: dict[str, Any]):
                 except Exception:
                     log.exception("workflow event listener start failed")
 
+                # Re-register fs_watch/event/rss triggers for workflows that
+                # already existed before this restart — otherwise those
+                # stateful drivers stay silent until each workflow is re-saved.
+                try:
+                    from .routes.workflows import reregister_workflow_triggers
+                    await reregister_workflow_triggers(app)
+                except Exception:
+                    log.exception("workflow trigger re-registration failed")
+
                 log.info("workflow engine initialised")
             except Exception:
                 log.exception("workflow engine bootstrap failed")

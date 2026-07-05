@@ -62,9 +62,14 @@ assistant message on every keystroke** — the dominant CPU cost.
 
 ## Phase 4 — Background process robustness
 
-- [ ] P1. Dream `is_running` stale-lock reconciliation at startup
-      (mirror workflow `reconcile_stale_runs`).
-- [ ] P2. Re-register fs_watch/rss/event triggers in `workflows.init()` on restart.
+- [x] P1. Dream `is_running` stale-lock reconciliation: `DreamStateStore.
+      reconcile_stale_runs()` (age-gated, 2h) called in the dream_trigger driver
+      before `is_running()`, so a single crashed dream no longer permanently
+      blocks all future dreaming.
+- [x] P2. Re-register workflow fs_watch/event/rss triggers on restart:
+      `reregister_workflow_triggers(app)` scans the vault (in a worker thread)
+      at startup and registers existing enabled workflows' stateful triggers,
+      which were previously silently lost until each workflow was re-saved.
 - [ ] P3. MCP server bridge thread: store handle on `app.state`, shutdown hook in lifespan.
 - [ ] P4. Prune fs_watch `_pending` debounce dict by age.
 - [ ] P5. Close OCR `log_handle` in parent after `Popen`.
