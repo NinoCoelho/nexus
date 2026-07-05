@@ -69,19 +69,27 @@ class Driver(HeartbeatDriver):
         fired_events: dict[str, str] = dict(state.get("fired_events") or {})
         alarmed_events: dict[str, str] = dict(state.get("alarmed_events") or {})
 
+        # Vault walk + per-calendar file read+parse is synchronous and scales
+        # with the number of calendars — run it off the event loop so the
+        # always-open SSE streams keep flushing during this 60s tick.
+        def _load_calendars():
+            loaded = []
+            for summary in vault_calendar.list_calendars():
+                try:
+                    cal = vault_calendar.read_calendar(summary.path)
+                except Exception:
+                    log.exception("calendar_trigger: read failed for %s", summary.path)
+                    continue
+                loaded.append((summary, cal))
+            return loaded
+
         try:
-            summaries = vault_calendar.list_calendars()
+            calendars = await asyncio.to_thread(_load_calendars)
         except Exception:
             log.exception("calendar_trigger: list_calendars failed")
             return [], state
 
-        for summary in summaries:
-            try:
-                cal = vault_calendar.read_calendar(summary.path)
-            except Exception:
-                log.exception("calendar_trigger: read failed for %s", summary.path)
-                continue
-
+        for summary, cal in calendars:
             for ev in list(cal.events):
                 if ev.status == "cancelled":
                     continue
@@ -168,7 +176,7 @@ class Driver(HeartbeatDriver):
 
         if alarm_store is not None:
             gc_cutoff = (now - _ALARM_GC_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
-            alarm_store.garbage_collect(gc_cutoff)
+            await asyncio.to_thread(alarm_store.garbage_collect, gc_cutoff)
 
         return [], {
             "last_processed": now.strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -33,7 +33,11 @@ assistant message on every keystroke** — the dominant CPU cost.
 - [ ] B3. Drop eager `replace_history` at `chat_stream.py:315` — **deferred**: the
       finally-clause persist covers it, but dropping it regresses reload-during-turn
       UX (user msg not in DB until turn ends). Needs a cheaper append or to_thread.
-- [ ] B4. `calendar_trigger`/`dream_trigger` driver `check()` vault+SQLite I/O → `to_thread`.
+- [x] B4. `calendar_trigger` driver `check()`: pre-load all calendars
+      (list_calendars + read_calendar vault walk) in `asyncio.to_thread`, and
+      run `alarm_store.garbage_collect` in a thread. dream_trigger's remaining
+      sync ops are lightweight SQLite reads (early-return in most ticks) — left
+      as-is to avoid over-engineering.
 - [x] B5. mtime-cached `load_cached()` in config_file.py; migrated chat_stream,
       broker poller, dream_trigger to it. `save()` invalidates the cache.
 
