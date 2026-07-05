@@ -45,6 +45,14 @@ _GLOBAL_HITL_KINDS = frozenset({
     "job_done",
 })
 
+# Cap per-subscriber SSE queues. A backgrounded/throttled browser tab stops
+# draining its queue while the agent keeps publishing tool/delta events; an
+# unbounded queue grows until OOM and slows put_nowait + GC for every publish.
+# Drop new events for a full subscriber (mirrors server/event_bus.py). HITL
+# events are also persisted to hitl_events + web-push, so dropping the
+# ephemeral SSE copy doesn't lose prompts — a stuck client recovers on reconnect.
+_SSE_QUEUE_MAX = 512
+
 
 def _row_to_pending_dict(r: Any) -> dict[str, Any]:
     """Hydrate a hitl_pending row tuple into the dict shape used by routes."""
@@ -123,9 +131,15 @@ class PubSubMixin:
                 else ()
             )
         for q in subscribers:
-            q.put_nowait(event)
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                log.debug("pubsub: dropping event for full session subscriber queue")
         for gq in global_subscribers:
-            gq.put_nowait((session_id, event))
+            try:
+                gq.put_nowait((session_id, event))
+            except asyncio.QueueFull:
+                log.debug("pubsub: dropping event for full global subscriber queue")
         if event.kind in _GLOBAL_HITL_KINDS:
             self._on_global_hitl_event(session_id, event)
 
@@ -532,7 +546,7 @@ class PubSubMixin:
         )
 
     async def subscribe(self, session_id: str) -> AsyncIterator[SessionEvent]:
-        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
+        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)
         with self._lock:
             self._subscribers.setdefault(session_id, []).append(queue)
         try:
@@ -559,7 +573,7 @@ class PubSubMixin:
         Used by ``GET /notifications/events`` so the UI can surface a
         single popup regardless of which session is currently active.
         """
-        queue: asyncio.Queue[tuple[str, SessionEvent] | None] = asyncio.Queue()
+        queue: asyncio.Queue[tuple[str, SessionEvent] | None] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)
         with self._lock:
             self._global_subscribers.append(queue)
         try:

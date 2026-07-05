@@ -44,13 +44,21 @@ assistant message on every keystroke** — the dominant CPU cost.
 ## Phase 3 — Memory / unbounded growth
 
 - [ ] M1. LRU cap on frontend `chatStates` Map (evict least-recent non-thinking session).
-- [ ] M2. `maxsize` on SSE subscriber queues (`pubsub.py:535,562`) + drop-on-full.
-- [ ] M3. `dream_runs` retention: add `cleanup_old_runs` + wire to dream heartbeat tick.
-- [ ] M4. Wire `cleanup_territory()` into dream engine run completion.
+- [x] M2. `maxsize=512` on SSE subscriber queues (`pubsub.py`) + drop-on-full
+      (mirrors `event_bus.py`). HITL events still persisted to `hitl_events` +
+      web-push, so dropping the ephemeral SSE copy loses no prompts.
+- [x] M3. `dream_runs` retention: `DreamStateStore.cleanup_old_runs()` + wired to
+      the dream_trigger driver (runs after each dream, ≤daily cadence).
+- [x] M4. `cleanup_territory()` now called alongside `cleanup_old_runs` in the
+      dream_trigger retention sweep.
 - [ ] M5. Wire `check_message_count` into agent loop pre-flight (dead code at `overflow.py:34`).
-- [ ] M6. Daemon log rotation (`RotatingFileHandler`) in `daemon/manager.py:160`.
-- [ ] M7. Startup sweep of `~/.nexus/tmp/` (decouple from in-memory import dict).
-- [ ] M8. `llm_errors` retention at startup (e.g. 90-day delete).
+- [ ] M6. Daemon log rotation (`RotatingFileHandler`) in `daemon/manager.py:160`
+      — **deferred**: logs are raw stdout redirects capturing subprocess output,
+      needs a rotating stream wrapper (non-trivial).
+- [x] M7. Startup sweep of `~/.nexus/tmp/` (rmtree, decoupled from the in-memory
+      import dict lost on restart).
+- [x] M8. `cleanup_old_llm_errors(keep_days=90)` + `trim_hitl_events()` wired into
+      the startup sweep alongside `trim_hitl_pending`.
 
 ## Phase 4 — Background process robustness
 

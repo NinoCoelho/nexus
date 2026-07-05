@@ -475,6 +475,19 @@ class SessionStore(PubSubMixin, QueryMixin):
         self._loom._db.commit()
         self._cancel_all_pending(session_id)
 
+    def cleanup_old_llm_errors(self, *, keep_days: int = 90) -> int:
+        """Delete retained LLM error rows older than ``keep_days``.
+
+        llm_errors accumulates one row per error with no retention, so over
+        months of use it bloats the sessions DB and slows error-log views.
+        """
+        cur = self._loom._db.execute(
+            "DELETE FROM llm_errors WHERE datetime(created_at) < datetime('now', ?)",
+            (f"-{int(keep_days)} days",),
+        )
+        self._loom._db.commit()
+        return cur.rowcount or 0
+
     # ── feedback ─────────────────────────────────────────────────────────────
 
     def set_feedback(self, session_id: str, seq: int, value: str | None) -> None:

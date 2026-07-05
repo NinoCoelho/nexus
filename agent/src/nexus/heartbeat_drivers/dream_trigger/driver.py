@@ -104,6 +104,20 @@ class Driver(HeartbeatDriver):
         except Exception:
             log.exception("dream_trigger: dream run failed")
 
+        # Best-effort retention sweep. Dreams fire at most daily (min interval),
+        # so running this after each completion caps dream_runs /
+        # dream_explored_territory growth without a separate timer.
+        try:
+            cleaned = store.cleanup_old_runs(max_age_days=30)
+            territory = store.cleanup_territory(max_age_days=90)
+            if cleaned or territory:
+                log.info(
+                    "dream_trigger: cleaned %d old run(s), %d territory rows",
+                    cleaned, territory,
+                )
+        except Exception:
+            log.exception("dream_trigger: retention sweep failed")
+
         store.close()
         return [], state
 

@@ -72,6 +72,20 @@ def create_lifespan(state: dict[str, Any]):
         except Exception:
             log.exception("cloudflared orphan cleanup failed")
 
+        # Sweep orphaned import temp dirs. vault_import tracks these in an
+        # in-memory dict that's lost on restart, so any crashed/abandoned
+        # import leaves a full extracted tree under ~/.nexus/tmp/ forever.
+        # The import flow recreates subdirs on demand, so removing the whole
+        # tmp root is safe.
+        try:
+            import shutil
+            from .. import home as _home
+            _tmp_root = _home.root() / "tmp"
+            if _tmp_root.exists():
+                shutil.rmtree(_tmp_root, ignore_errors=True)
+        except Exception:
+            log.exception("tmp dir sweep failed")
+
         skip_local_llm = bool(os.environ.get("NEXUS_SKIP_LOCAL_LLM_RESTART"))
 
         if not skip_local_llm:
@@ -189,6 +203,10 @@ def create_lifespan(state: dict[str, Any]):
                     )
                     re_published += 1
                 store.trim_hitl_pending(keep_days=30)
+                store.trim_hitl_events()
+                cleaned_errs = store.cleanup_old_llm_errors(keep_days=90)
+                if cleaned_errs:
+                    log.info("cleaned up %d old llm_errors rows (>90d)", cleaned_errs)
 
             if multi_user and session_registry is not None:
                 for _uid, user_store_inst in session_registry.all_stores().items():

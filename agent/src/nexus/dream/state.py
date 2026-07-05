@@ -192,6 +192,25 @@ class DreamStateStore(SqliteStore):
         self._db.commit()
         return cur.rowcount
 
+    def cleanup_old_runs(self, max_age_days: int = 30) -> int:
+        """Delete finished dream runs older than ``max_age_days``.
+
+        dream_runs accumulates one row per cycle with no retention; over months
+        this bloats dream_state.sqlite and slows the history view. Mirrors
+        WorkflowStore.cleanup_old_runs. Never touches status='running' rows.
+        """
+        cutoff = datetime.now(UTC)
+        from datetime import timedelta
+        cutoff -= timedelta(days=max_age_days)
+        cur = self._db.execute(
+            "DELETE FROM dream_runs "
+            "WHERE status != 'running' "
+            "  AND COALESCE(finished_at, started_at) < ?",
+            (_to_ts(cutoff),),
+        )
+        self._db.commit()
+        return cur.rowcount or 0
+
     def close(self) -> None:
         if self._closed:
             return
