@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../api";
 import { setMessageFeedback, setMessagePin } from "../api";
@@ -36,9 +36,13 @@ interface Props {
   sessionId?: string | null;
   seq?: number;
   feedback?: "up" | "down" | null;
-  onFeedbackChange?: (value: "up" | "down" | null) => void;
+  onFeedbackChange?: (msgIndex: number, value: "up" | "down" | null) => void;
   pinned?: boolean;
-  onPinChange?: (pinned: boolean) => void;
+  onPinChange?: (msgIndex: number, pinned: boolean) => void;
+  /** Visible-message index from the parent — used to call back into the
+   * stable per-list handler so this component can be `React.memo`'d without
+   * per-render arrow wrappers defeating the shallow compare. */
+  msgIndex?: number;
   thinking?: string;
   reconnecting?: {
     attempt: number;
@@ -72,7 +76,7 @@ function inlineResourcesFromTrace(trace?: TraceEvent[]): { uri: string; toolResu
   return out;
 }
 
-export default function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, thinking, reconnecting }: Props) {
+function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const tts = useTTS();
@@ -100,25 +104,25 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
     if (!canFeedback || !sessionId || typeof seq !== "number") return;
     const next = !localPinned;
     setLocalPinned(next);
-    onPinChange?.(next);
+    onPinChange?.(msgIndex ?? -1, next);
     try {
       await setMessagePin(sessionId, seq, next);
     } catch {
       setLocalPinned(!next);
-      onPinChange?.(!next);
+      onPinChange?.(msgIndex ?? -1, !next);
     }
   }
   async function handleFeedback(value: "up" | "down") {
     if (!canFeedback || !sessionId || typeof seq !== "number") return;
     const next = localFeedback === value ? null : value;
     setLocalFeedback(next);
-    onFeedbackChange?.(next);
+    onFeedbackChange?.(msgIndex ?? -1, next);
     try {
       await setMessageFeedback(sessionId, seq, next);
     } catch {
       // revert on failure
       setLocalFeedback(localFeedback);
-      onFeedbackChange?.(localFeedback);
+      onFeedbackChange?.(msgIndex ?? -1, localFeedback);
     }
   }
 
@@ -281,3 +285,5 @@ export default function AssistantMessage({ content, trace, timeline, timestamp, 
     </div>
   );
 }
+
+export default memo(AssistantMessage);

@@ -476,6 +476,55 @@ export default function App() {
     }
   }, [toast]);
 
+  // Stable feedback/pin handlers — kept out of the JSX so they don't create a
+  // fresh arrow on every App re-render (which would defeat React.memo on
+  // AssistantMessage and re-trigger markdown parsing on every keystroke).
+  const handleFeedbackChange = useCallback((idx: number, value: "up" | "down" | null) => {
+    setChatStates((prev) => {
+      const key = activeSession ?? NEW_KEY;
+      const cur = prev.get(key);
+      if (!cur) return prev;
+      const next = new Map(prev);
+      const visible = cur.messages.filter(
+        (m) =>
+          (m.content ?? "").trim().length > 0 ||
+          (m.timeline ?? []).length > 0 ||
+          m.partial != null,
+      );
+      const target = visible[idx];
+      if (!target) return prev;
+      const fullIdx = cur.messages.indexOf(target);
+      if (fullIdx < 0) return prev;
+      const messages = cur.messages.slice();
+      messages[fullIdx] = { ...messages[fullIdx], feedback: value };
+      next.set(key, { ...cur, messages });
+      return next;
+    });
+  }, [activeSession]);
+
+  const handlePinChange = useCallback((idx: number, pinned: boolean) => {
+    setChatStates((prev) => {
+      const key = activeSession ?? NEW_KEY;
+      const cur = prev.get(key);
+      if (!cur) return prev;
+      const next = new Map(prev);
+      const visible = cur.messages.filter(
+        (m) =>
+          (m.content ?? "").trim().length > 0 ||
+          (m.timeline ?? []).length > 0 ||
+          m.partial != null,
+      );
+      const target = visible[idx];
+      if (!target) return prev;
+      const fullIdx = cur.messages.indexOf(target);
+      if (fullIdx < 0) return prev;
+      const messages = cur.messages.slice();
+      messages[fullIdx] = { ...messages[fullIdx], pinned };
+      next.set(key, { ...cur, messages });
+      return next;
+    });
+  }, [activeSession]);
+
   if (shareToken) {
     return <SharedSessionView token={shareToken} />;
   }
@@ -596,50 +645,8 @@ export default function App() {
               messages={activeState.messages}
               thinking={activeState.thinking}
               activeSessionId={activeSession}
-              onFeedbackChange={(idx, value) => {
-                setChatStates((prev) => {
-                  const key = activeSession ?? NEW_KEY;
-                  const cur = prev.get(key);
-                  if (!cur) return prev;
-                  const next = new Map(prev);
-                  const visible = cur.messages.filter(
-                    (m) =>
-                      (m.content ?? "").trim().length > 0 ||
-                      (m.timeline ?? []).length > 0 ||
-                      m.partial != null,
-                  );
-                  const target = visible[idx];
-                  if (!target) return prev;
-                  const fullIdx = cur.messages.indexOf(target);
-                  if (fullIdx < 0) return prev;
-                  const messages = cur.messages.slice();
-                  messages[fullIdx] = { ...messages[fullIdx], feedback: value };
-                  next.set(key, { ...cur, messages });
-                  return next;
-                });
-              }}
-              onPinChange={(idx, pinned) => {
-                setChatStates((prev) => {
-                  const key = activeSession ?? NEW_KEY;
-                  const cur = prev.get(key);
-                  if (!cur) return prev;
-                  const next = new Map(prev);
-                  const visible = cur.messages.filter(
-                    (m) =>
-                      (m.content ?? "").trim().length > 0 ||
-                      (m.timeline ?? []).length > 0 ||
-                      m.partial != null,
-                  );
-                  const target = visible[idx];
-                  if (!target) return prev;
-                  const fullIdx = cur.messages.indexOf(target);
-                  if (fullIdx < 0) return prev;
-                  const messages = cur.messages.slice();
-                  messages[fullIdx] = { ...messages[fullIdx], pinned };
-                  next.set(key, { ...cur, messages });
-                  return next;
-                });
-              }}
+              onFeedbackChange={handleFeedbackChange}
+              onPinChange={handlePinChange}
               searchOpen={chatSearchOpen}
               onSearchClose={() => setChatSearchOpen(false)}
               input={activeState.input}

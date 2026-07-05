@@ -275,12 +275,9 @@ export default function ChatView({
                   feedback={msg.feedback ?? null}
                   pinned={msg.pinned ?? false}
                   reconnecting={msg.reconnecting}
-                  onFeedbackChange={
-                    onFeedbackChange ? (v) => onFeedbackChange(idx, v) : undefined
-                  }
-                  onPinChange={
-                    onPinChange ? (p) => onPinChange(idx, p) : undefined
-                  }
+                  msgIndex={idx}
+                  onFeedbackChange={onFeedbackChange}
+                  onPinChange={onPinChange}
                 />
               )}
               {msg.partial && !thinking && (

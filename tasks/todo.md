@@ -1,65 +1,65 @@
-# Feature Flag System — Implementation Plan
+# Performance & Enhancement Review — Implementation Plan
 
-## Key Decisions
+## Root cause of chat typing lag
 
-| Decision | Answer |
-|---|---|
-| Self-hosted | Not supported — subscription is mandatory |
-| Feature source | Exclusively from nexus-llm plan |
-| `cloud_models` | Subscription-only, no config override |
-| Disabled feature data | Preserved on disk, visible in vault tree, but views/tools/APIs return errors |
-| UI mode | Per-user, stored in `settings.json` |
-| First-run | Must force Nexus account sign-in before app is usable |
-| Insights | Completely removed |
+Controlled textarea lifts every keystroke into the top-level `chatStates` Map
+(`useChatSession.ts:80-87,106`), re-rendering the entire app tree. With zero
+`React.memo` on chat components, `react-markdown` re-parses **every visible
+assistant message on every keystroke** — the dominant CPU cost.
 
-## Feature Taxonomy & Tool Mapping
+## Phase 1 — Frontend lag fixes (highest leverage, low risk)
 
-| Feature Key | Agent Tools | UI Views | Backend Routes |
-|---|---|---|---|
-| `chat` | — (core) | `chat` | `/chat/*` |
-| `local_models` | — (provider config) | — | `/local/*` |
-| `cloud_models` | `web_search`, `web_scrape` (indirect) | Provider wizard cloud entries | `/providers/*/key` |
-| `kanban` | `kanban_manage`, `kanban_query`, `show_kanban` | `kanban` | `/vault/kanban/*` |
-| `calendar` | `calendar_manage` | `calendar` | `/vault/calendar/*`, `/alarms/*` |
-| `database` | `datatable_manage`, `dashboard_manage`, `vault_csv`, `visualize_table`, `show_data_table`, `show_dashboard_widget` | `data` | `/vault/datatable/*`, `/vault/dashboard/*` |
-| `workflow` | — (HTTP API) | `workflows` | `/workflows/*`, `/workflow/*` |
-| `knowledge` | `vault_semantic_search`, `ontology_manage` | `graph` | `/graph/*`, `/graphrag/*` |
-| `dream` | — (background engine) | `dream` | `/dream/*` |
-| `heartbeat` | `manage_heartbeat`, `dispatch_card` | `heartbeat` | `/heartbeat/*` |
-| `multi_user` | — | Login/register UI | `/auth/*`, `/admin/*`, `/share/*` |
+- [x] F1. `React.memo` on `AssistantMessage` + stabilize feedback/pin callbacks
+      (pass `msgIndex`, hoist App inline arrows to `useCallback`). Kills
+      per-keystroke markdown re-parsing. **(biggest win)**
+- [x] F2. `InputBar`: dedup `adjust()` (drop synchronous call, keep `useEffect`
+      only) — removes one forced layout per keystroke.
+- [x] F3. `InputBar`: drop redundant mention/secret detection in `onKeyUp`
+      (keep `onClick` only) — removes extra `setState` per keystroke.
+- [ ] F4. `React.memo` on `Sidebar` — **deferred**: Sidebar takes ~10 inline-arrow
+      props in `App.tsx` (onViewChange, onMobileClose, onOpenSettings, …) that
+      change identity every render; memo won't short-circuit until those are
+      hoisted to `useCallback`. Do as a focused follow-up.
+- [ ] F5. `React.memo` on view-pane components rendered alongside chat.
+- [ ] F6. Move textarea draft to local component state; sync to `chatStates`
+      only on send/blur (removes keystroke from global state entirely).
 
-**Always-on tools:** `skills_list`, `skill_view`, `skill_manage`, all `vault_*` (except semantic_search), `memory_read/write`, `http_call`, `ask_user`, `terminal`, `notify_user`, `spawn_subagents`, `context_status`, `fork_session`, `nexus_kb_search`, `ocr_image`.
+## Phase 2 — Backend lag fixes (event-loop blocking)
 
-**Normal mode hides:** `knowledge` (graph), `heartbeat`, `dream`.
+- [ ] B1. `BrokerPoller._discover_endpoints` vault `os.walk` → `asyncio.to_thread`.
+- [ ] B2. Exempt `text/event-stream` from `FeatureGateMiddleware`/`SecurityHeadersMiddleware`
+      (or convert to pure ASGI).
+- [ ] B3. Drop eager `replace_history` at `chat_stream.py:315`; batch inserts.
+- [ ] B4. `calendar_trigger`/`dream_trigger` driver `check()` vault+SQLite I/O → `to_thread`.
+- [ ] B5. mtime-cached `load_config()` (currently 5 disk reads+parses per chat POST).
 
-## Plan Assignments
+## Phase 3 — Memory / unbounded growth
 
-| Plan | Features |
-|---|---|
-| **Free** | `chat`, `local_models` |
-| **Starter** | `chat`, `local_models`, `cloud_models`, `kanban`, `calendar`, `database` |
-| **Pro** | `chat`, `local_models`, `cloud_models`, `kanban`, `calendar`, `database`, `workflow`, `knowledge`, `dream`, `heartbeat`, `multi_user` |
+- [ ] M1. LRU cap on frontend `chatStates` Map (evict least-recent non-thinking session).
+- [ ] M2. `maxsize` on SSE subscriber queues (`pubsub.py:535,562`) + drop-on-full.
+- [ ] M3. `dream_runs` retention: add `cleanup_old_runs` + wire to dream heartbeat tick.
+- [ ] M4. Wire `cleanup_territory()` into dream engine run completion.
+- [ ] M5. Wire `check_message_count` into agent loop pre-flight (dead code at `overflow.py:34`).
+- [ ] M6. Daemon log rotation (`RotatingFileHandler`) in `daemon/manager.py:160`.
+- [ ] M7. Startup sweep of `~/.nexus/tmp/` (decouple from in-memory import dict).
+- [ ] M8. `llm_errors` retention at startup (e.g. 90-day delete).
 
-## API Changes
+## Phase 4 — Background process robustness
 
-| Endpoint | Change |
-|---|---|
-| nexus-llm `GET /api/status` | Add `features: string[]` |
-| Nexus `GET /config` | Add `features: { active: string[], all: string[] }` |
-| Nexus `GET /settings` | Add `ui_mode` |
-| Nexus `POST /settings` | Accept `ui_mode` |
-| Nexus `GET /auth/nexus/status` | Add `features: string[]` |
-| Nexus disabled-feature routes | Return `403` |
-| Nexus `GET /insights` | Removed |
+- [ ] P1. Dream `is_running` stale-lock reconciliation at startup
+      (mirror workflow `reconcile_stale_runs`).
+- [ ] P2. Re-register fs_watch/rss/event triggers in `workflows.init()` on restart.
+- [ ] P3. MCP server bridge thread: store handle on `app.state`, shutdown hook in lifespan.
+- [ ] P4. Prune fs_watch `_pending` debounce dict by age.
+- [ ] P5. Close OCR `log_handle` in parent after `Popen`.
+- [ ] P6. Skip dream_trigger DB open + config load when dream disabled.
 
-## Implementation Order
+## Verification
 
-- [ ] P1: Remove insights completely
-- [ ] P2: nexus-llm — add features to status + seed plans + admin editor
-- [ ] P3: Backend — features.py + propagation from status watcher
-- [ ] P4: Backend — dynamic tool registration in registry.py
-- [ ] P5: Backend — route gating middleware
-- [ ] P6: Backend — settings ui_mode
-- [ ] P7: Frontend — feature context + sidebar filtering
-- [ ] P8: Frontend — first-run mandatory login flow
-- [ ] P9: Frontend — provider wizard cloud gating
+After each phase: `npm run build` (tsc) from `ui/`, `uv run ruff check` + `uv run pytest`
+from `agent/`.
+
+## Summary
+
+Review synthesized from 4 parallel specialist investigations (frontend lag,
+backend lag, background processes, memory protection). Phase 1 in progress.

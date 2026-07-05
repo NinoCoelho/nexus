@@ -166,7 +166,6 @@ export default function InputBar({
 
   const handleTextChange = (text: string) => {
     onChange(text);
-    adjust();
     const caret = textareaRef.current?.selectionStart ?? text.length;
     setMention(detectMention(text, caret));
     setSecret(detectSecret(text, caret));
@@ -178,6 +177,22 @@ export default function InputBar({
     const caret = el.selectionStart ?? 0;
     setMention(detectMention(el.value, caret));
     setSecret(detectSecret(el.value, caret));
+  };
+
+  // Only re-detect mention/secret on caret-movement keys. Character keys are
+  // already handled by onChange above; re-running detection on every keyup
+  // would trigger an extra setState (and thus an extra render) per keystroke.
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    switch (e.key) {
+      case "ArrowLeft":
+      case "ArrowRight":
+      case "ArrowUp":
+      case "ArrowDown":
+      case "Home":
+      case "End":
+        handleSelectionChange();
+        break;
+    }
   };
 
   const retryFollowUpRef = useRef<() => void>(() => {});
@@ -500,7 +515,7 @@ export default function InputBar({
               value={value}
               onChange={(e) => handleTextChange(e.target.value)}
               onKeyDown={handleKeyDown}
-              onKeyUp={handleSelectionChange}
+              onKeyUp={handleKeyUp}
               onClick={handleSelectionChange}
               onBlur={() => setTimeout(() => { setMention(null); setSecret(null); }, 120)}
               disabled={disabled}
