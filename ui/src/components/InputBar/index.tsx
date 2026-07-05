@@ -102,6 +102,35 @@ export default function InputBar({
   const [pendingSecret, setPendingSecret] = useState<SecretMatch | null>(null);
   const [pendingSendText, setPendingSendText] = useState<string>("");
 
+  // Local draft decouples typing from the global chatStates Map: keystrokes
+  // update only this local state (no app-wide re-render per keypress), and we
+  // push the draft back up on a ~300ms debounce so per-session drafts still
+  // survive session switches and reloads. `value` remains the source of truth
+  // and is adopted whenever it changes externally (session switch, rollback
+  // restore, clear-after-send, vault dispatch seed). Send paths pass `draft`
+  // explicitly as the onSend override so the parent never reads a stale
+  // `state.input` that hasn't caught up to the latest keystrokes.
+  const [draft, setDraft] = useState(value);
+  // Adopt external value changes (session switch, rollback restore,
+  // clear-after-send, vault dispatch seed). `onChange` is also a dep because
+  // its identity changes on session switch (handleInputChange closes over
+  // activeKey) — resetting `draft` then prevents a stale draft from session A
+  // being written into session B when the values happen to match (e.g. both "").
+  useEffect(() => { setDraft(value); }, [value, onChange]);
+  // Debounced upward sync — persists the draft so per-session drafts survive
+  // session switches and reloads, without a global re-render per keystroke.
+  // Reads the latest committed value via a ref at fire time so a pending timer
+  // can't write a stale draft into a session the user already switched away
+  // from (where `value` and `draft` were both reset by the adopt effect above).
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (draft !== valueRef.current) onChange(draft);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [draft, onChange]);
+
   // Intercepts onSend with the secret guard. Returns true when send proceeded
   // (or was queued); false when it was blocked pending the modal.
   const guardedSend = (textToCheck: string, doSend: () => void): boolean => {
@@ -127,16 +156,16 @@ export default function InputBar({
     setConversationMode(false);
   }, [cancelRecording]);
 
-  const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(value, onChange);
-  const { secret, setSecret, secretResults, detectSecret, insertSecret } = useSecretPicker(value, onChange);
-  const { slash, setSlash, commands: slashCommands } = useSlashPicker(value);
+  const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(draft, setDraft);
+  const { secret, setSecret, secretResults, detectSecret, insertSecret } = useSecretPicker(draft, setDraft);
+  const { slash, setSlash, commands: slashCommands } = useSlashPicker(draft);
 
   const insertSlashCommand = (cmd: SlashCommand) => {
     // Replace the leading "/<query>" with "/<name>" and (if the command takes
     // args) leave a trailing space so the user can type the args directly.
     const trailing = cmd.args_hint ? " " : "";
     const next = `/${cmd.name}${trailing}`;
-    onChange(next);
+    setDraft(next);
     setSlash(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -149,7 +178,7 @@ export default function InputBar({
     });
   };
 
-  const hasContent = value.trim().length > 0 || (attachments && attachments.length > 0) || !!audio;
+  const hasContent = draft.trim().length > 0 || (attachments && attachments.length > 0) || !!audio;
 
   const adjust = () => {
     const el = textareaRef.current;
@@ -158,14 +187,14 @@ export default function InputBar({
     el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
   };
 
-  // Re-fit the textarea whenever the controlled value changes — this is
-  // what shrinks the box back to a single row after a successful send
-  // (the parent clears `value` to "" but keeps the imperative height
-  // we set on the last keystroke).
-  useEffect(() => { adjust(); }, [value]);
+  // Re-fit the textarea whenever the draft changes — this is what shrinks the
+  // box back to a single row after a successful send (the parent clears `value`
+  // to "" which propagates into `draft` via the sync effect, but we keep the
+  // imperative height set on the last keystroke).
+  useEffect(() => { adjust(); }, [draft]);
 
   const handleTextChange = (text: string) => {
-    onChange(text);
+    setDraft(text);
     const caret = textareaRef.current?.selectionStart ?? text.length;
     setMention(detectMention(text, caret));
     setSecret(detectSecret(text, caret));
@@ -238,8 +267,8 @@ export default function InputBar({
         // Transcription check failed — send anyway, let the backend handle it.
       }
 
-      const typed = value.trim() || transcript.trim();
-      onChange("");
+      const typed = draft.trim() || transcript.trim();
+      setDraft("");
       onSend({ text: typed, extraAttachments: newAttachments, inputMode: "voice" });
     } catch (err) {
       toast.error(t("chat:input.uploadFailed"), { detail: err instanceof Error ? err.message : undefined });
@@ -300,7 +329,7 @@ export default function InputBar({
       if (audio) { void runTranscribeAndSend(); return; }
       if (hasContent) {
         setConversationMode(false);
-        guardedSend(value, () => onSend());
+        guardedSend(draft, () => { setDraft(""); onSend(draft); });
       }
     }
   };
@@ -357,7 +386,7 @@ export default function InputBar({
     if (audio) { void runTranscribeAndSend(); return; }
     if (hasContent) {
       setConversationMode(false);
-      guardedSend(value, () => onSend());
+      guardedSend(draft, () => { setDraft(""); onSend(draft); });
       return;
     }
     tapModeRef.current = true;
@@ -512,7 +541,7 @@ export default function InputBar({
               className="input-textarea"
               rows={1}
               placeholder={t("chat:input.placeholder")}
-              value={value}
+              value={draft}
               onChange={(e) => handleTextChange(e.target.value)}
               onKeyDown={handleKeyDown}
               onKeyUp={handleKeyUp}
@@ -580,16 +609,11 @@ export default function InputBar({
             const textToSend = pendingSendText;
             setPendingSecret(null);
             setPendingSendText("");
-            // If the parked send was a transcription/attachment-merged
-            // payload that the parent didn't yet have in state, pass it
-            // back as an override; otherwise the textarea content is the
-            // source of truth.
-            const sameAsValue = textToSend === value;
-            onChange("");
-            onSend(sameAsValue
-              ? { bypassSecretGuard: true }
-              : { text: textToSend, bypassSecretGuard: true }
-            );
+            setDraft("");
+            // Always pass the parked text explicitly — the parent's
+            // `state.input` may lag behind the local draft because typing no
+            // longer propagates on every keystroke.
+            onSend({ text: textToSend, bypassSecretGuard: true });
           }}
           onSaveAsCredential={(name) => {
             // Replace every occurrence of the matched secret in the
@@ -600,7 +624,7 @@ export default function InputBar({
             );
             setPendingSecret(null);
             setPendingSendText("");
-            onChange(replaced);
+            setDraft(replaced);
             // Don't auto-send — the user might want to review the message
             // with the placeholder in place before pressing send again.
             textareaRef.current?.focus();

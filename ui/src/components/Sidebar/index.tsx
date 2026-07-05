@@ -3,7 +3,7 @@
  * session mutations bump sessionsRevision to refresh the list.
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getSessions, searchSessions,
@@ -67,7 +67,7 @@ interface Props {
   appDatabases?: DatabaseSummary[];
 }
 
-export default function Sidebar({
+function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
   sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
@@ -79,8 +79,7 @@ export default function Sidebar({
   onUpdateAvailable,
   isViewVisible = () => true,
   appDatabases: appDatabasesProp,
-}: Props) {
-  const { t } = useTranslation("sidebar");
+}: Props) {  const { t } = useTranslation("sidebar");
   const VIEWS = {
     primary: [
       { id: "chat" as View,     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
@@ -590,3 +589,5 @@ export default function Sidebar({
     </>
   );
 }
+
+export default memo(Sidebar);

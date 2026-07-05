@@ -16,13 +16,13 @@ assistant message on every keystroke** — the dominant CPU cost.
       only) — removes one forced layout per keystroke.
 - [x] F3. `InputBar`: drop redundant mention/secret detection in `onKeyUp`
       (keep `onClick` only) — removes extra `setState` per keystroke.
-- [ ] F4. `React.memo` on `Sidebar` — **deferred**: Sidebar takes ~10 inline-arrow
-      props in `App.tsx` (onViewChange, onMobileClose, onOpenSettings, …) that
-      change identity every render; memo won't short-circuit until those are
-      hoisted to `useCallback`. Do as a focused follow-up.
+- [x] F4. `React.memo` on `Sidebar` + hoist its ~10 inline-arrow props in App to
+      `useCallback` (onViewChange, onMobileClose, onOpenSettings, …).
 - [ ] F5. `React.memo` on view-pane components rendered alongside chat.
-- [ ] F6. Move textarea draft to local component state; sync to `chatStates`
-      only on send/blur (removes keystroke from global state entirely).
+- [x] F6. Move textarea draft to local component state (`InputBar`); push to
+      `chatStates` on a 300ms debounce + on send (pass `draft` as the onSend
+      override so parent never reads stale `state.input`). Resets on session
+      switch via the `onChange`-identity dep.
 
 ## Phase 2 — Backend lag fixes (event-loop blocking)
 

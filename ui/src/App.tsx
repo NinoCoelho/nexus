@@ -525,6 +525,26 @@ export default function App() {
     });
   }, [activeSession]);
 
+  // Stable handlers for Sidebar props — keeps their referential identity
+  // across keystroke-driven re-renders so React.memo on Sidebar short-circuits.
+  // All depend only on setState setters (guaranteed stable by React).
+  const handleSidebarViewChange = useCallback((v: typeof view) => { setView(v); setMobileDrawerOpen(false); }, []);
+  const handleMobileClose = useCallback(() => setMobileDrawerOpen(false), []);
+  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+  const handleSessionsRevisionBump = useCallback(() => setSessionsRevision((r) => r + 1), []);
+  const handleVaultOpenPathHandled = useCallback(() => setVaultOpenPath(null), []);
+  const handleKanbanOpen = useCallback((path: string) => { setKanbanSelectedPath(path); setView("kanban"); }, []);
+  const handleDatabaseSelectFolder = useCallback((folder: string) => {
+    setDataSelectedDatabase(folder);
+    setDataSelectedPath(null);
+    setDataDiagramFolder(null);
+    setView("data");
+  }, []);
+  const handleUpdateAvailable = useCallback((check: UpdateCheckResult) => {
+    setUpdateCheck(check);
+    setUpdateModalOpen(true);
+  }, []);
+
   if (shareToken) {
     return <SharedSessionView token={shareToken} />;
   }
@@ -546,38 +566,30 @@ export default function App() {
     <div className="app app--layout">
       <Sidebar
         view={view}
-        onViewChange={(v) => { setView(v); setMobileDrawerOpen(false); }}
+        onViewChange={handleSidebarViewChange}
         mobileOpen={mobileDrawerOpen}
-        onMobileClose={() => setMobileDrawerOpen(false)}
+        onMobileClose={handleMobileClose}
         activeSessionId={activeSession ?? pendingNewSession?.id ?? null}
         onSessionSelect={handleSessionSelect}
         onNewChat={handleNewChat}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         sessionsRevision={sessionsRevision}
-        onSessionsRevisionBump={() => setSessionsRevision((r) => r + 1)}
+        onSessionsRevisionBump={handleSessionsRevisionBump}
         pendingNewSession={pendingNewSession}
         onActiveSessionDeleted={handleNewChat}
         vaultSelectedPath={vaultSelectedPath}
         onVaultSelectPath={setVaultSelectedPath}
         vaultOpenPath={vaultOpenPath}
-        onVaultOpenPathHandled={() => setVaultOpenPath(null)}
+        onVaultOpenPathHandled={handleVaultOpenPathHandled}
         onDispatchToChat={handleDispatchToChat}
         onViewEntityGraph={handleViewEntityGraph}
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
         kanbanSelectedPath={kanbanSelectedPath}
-        onKanbanOpen={(path) => { setKanbanSelectedPath(path); setView("kanban"); }}
+        onKanbanOpen={handleKanbanOpen}
         databaseSelectedFolder={dataSelectedDatabase}
         databaseListRevision={databaseListRevision}
-        onDatabaseSelectFolder={(folder) => {
-          setDataSelectedDatabase(folder);
-          setDataSelectedPath(null);
-          setDataDiagramFolder(null);
-          setView("data");
-        }}
-        onUpdateAvailable={(check) => {
-          setUpdateCheck(check);
-          setUpdateModalOpen(true);
-        }}
+        onDatabaseSelectFolder={handleDatabaseSelectFolder}
+        onUpdateAvailable={handleUpdateAvailable}
         isViewVisible={isViewVisible}
         appDatabases={appDatabases}
       />
@@ -656,7 +668,7 @@ export default function App() {
               onRetryPartial={handleRetryPartial}
               onContinuePartial={handleContinuePartial}
               hasModel={hasModel}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={handleOpenSettings}
               onOpenInVault={handleOpenInVault}
               attachments={activeState.attachments}
               onAttachmentsChange={handleAttachmentsChange}
