@@ -111,12 +111,32 @@ export default function InputBar({
   // explicitly as the onSend override so the parent never reads a stale
   // `state.input` that hasn't caught up to the latest keystrokes.
   const [draft, setDraft] = useState(value);
-  // Adopt external value changes (session switch, rollback restore,
-  // clear-after-send, vault dispatch seed). `onChange` is also a dep because
-  // its identity changes on session switch (handleInputChange closes over
-  // activeKey) — resetting `draft` then prevents a stale draft from session A
-  // being written into session B when the values happen to match (e.g. both "").
-  useEffect(() => { setDraft(value); }, [value, onChange]);
+  // Last value we pushed up via onChange. When the parent echoes it back as
+  // the `value` prop we must NOT re-adopt: the user may have typed more
+  // between the debounce fire and the parent re-render landing, and blindly
+  // running setDraft(value) would drop those characters. This is the
+  // "some keys fail, I have to type them again" symptom — the echo clobbers
+  // typed-ahead input, and the window widens under load (the lag you still
+  // see) because the parent re-render is delayed.
+  const lastPushedRef = useRef(value);
+  // onChange identity changes on session switch (handleInputChange closes
+  // over activeKey). We force-adopt on identity change so an un-pushed draft
+  // from session A can't leak into session B even when both values match.
+  const adoptedOnChangeRef = useRef(onChange);
+  // Adopt external value changes — session switch, rollback restore,
+  // clear-after-send, vault dispatch seed — but skip echoes of our own
+  // debounced push to avoid clobbering typed-ahead characters.
+  useEffect(() => {
+    if (onChange !== adoptedOnChangeRef.current) {
+      adoptedOnChangeRef.current = onChange;
+      setDraft(value);
+      lastPushedRef.current = value;
+      return;
+    }
+    if (value === lastPushedRef.current) return;
+    setDraft(value);
+    lastPushedRef.current = value;
+  }, [value, onChange]);
   // Debounced upward sync — persists the draft so per-session drafts survive
   // session switches and reloads, without a global re-render per keystroke.
   // Reads the latest committed value via a ref at fire time so a pending timer
@@ -126,7 +146,10 @@ export default function InputBar({
   valueRef.current = value;
   useEffect(() => {
     const t = setTimeout(() => {
-      if (draft !== valueRef.current) onChange(draft);
+      if (draft !== valueRef.current) {
+        lastPushedRef.current = draft;
+        onChange(draft);
+      }
     }, 300);
     return () => clearTimeout(t);
   }, [draft, onChange]);
