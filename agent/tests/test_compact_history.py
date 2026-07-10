@@ -159,3 +159,62 @@ def test_auto_compact_persists_original_to_vault_ref() -> None:
     out, report = auto_compact(history)
     assert report.compacted == 1
     assert "vault://" in out[0].content
+
+
+# ── recursive redaction (nested JSON) ──────────────────────────────────────
+# Regression: a payload nested one level deep — e.g. a kanban board dump
+# ``{"board": {"lanes": [...cards...]}}`` — used to be marked nx:compacted but
+# pass through ~verbatim because the redaction only looked at top-level keys.
+
+
+def test_compact_one_redacts_long_strings_nested_in_dict() -> None:
+    from nexus.agent.loop.compact import _compact_one
+
+    content = json.dumps({"board": {"note": "y" * 5_000}})
+    out = json.loads(_compact_one(content, head_keep=512, sample_rows=3))
+    note = out["board"]["note"]
+    assert "[+" in note  # nested string was head-truncated
+    assert len(note) < 600
+
+
+def test_compact_one_redacts_long_list_nested_in_dict() -> None:
+    from nexus.agent.loop.compact import _compact_one
+
+    cards = [{"id": f"c{i}", "body": "x" * 200} for i in range(40)]
+    content = json.dumps({"board": {"lanes": [{"id": "l1", "cards": cards}]}})
+    out = json.loads(_compact_one(content, head_keep=512, sample_rows=3))
+    lane_cards = out["board"]["lanes"][0]["cards"]
+    assert isinstance(lane_cards, dict)
+    assert lane_cards["_truncated_list"] is True
+    assert lane_cards["total_items"] == 40
+    assert len(lane_cards["sample"]) == 3
+
+
+def test_compact_one_shrinks_kanban_board_shape_dramatically() -> None:
+    """The motivating case: a full board dump must collapse, not pass through."""
+    from nexus.agent.loop.compact import _compact_one
+
+    lanes = [
+        {
+            "id": f"l{i}",
+            "title": f"Lane {i}",
+            "cards": [{"id": f"c{j}", "title": f"card {j}", "body": "B" * 800} for j in range(50)],
+        }
+        for i in range(9)
+    ]
+    content = json.dumps({"ok": True, "path": "boards/job-search.md", "board": {"title": "jobs", "lanes": lanes}})
+    out = _compact_one(content, head_keep=512, sample_rows=3)
+    assert len(out) < 8_000  # was ~360KB; must collapse to a few KB
+    obj = json.loads(out)
+    assert obj["nx:compacted"] is True
+    # lanes list itself got capped (9 > 6) with a survivor sample
+    lanes_val = obj["board"]["lanes"]
+    assert isinstance(lanes_val, dict) and lanes_val["_truncated_list"] is True
+
+
+def test_compact_one_preserves_short_nested_values() -> None:
+    from nexus.agent.loop.compact import _compact_one
+
+    content = json.dumps({"meta": {"id": "abc", "title": "small"}})
+    out = json.loads(_compact_one(content, head_keep=512, sample_rows=3))
+    assert out["meta"] == {"id": "abc", "title": "small"}

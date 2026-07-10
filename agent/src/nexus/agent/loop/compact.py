@@ -102,6 +102,51 @@ def _summarize_unstructured(text: str, head_keep: int) -> str:
     )
 
 
+# Cap recursion so a pathologically deep structure can't blow the stack;
+# beyond this a subtree is stringified and head-truncated.
+_MAX_REDACT_DEPTH = 8
+
+
+def _redact_node(node: Any, *, head_keep: int, sample_rows: int, depth: int = 0) -> Any:
+    """Recursively shrink long strings and long lists throughout a JSON tree.
+
+    The historical redaction only looked at *top-level* dict values, so a
+    payload nested one level deeper — e.g. ``{"board": {"lanes": [...cards...]}}``
+    from a kanban dump — was marked ``nx:compacted`` but passed through almost
+    verbatim, defeating the whole point. This walks every dict/list and applies
+    the same truncation uniformly.
+    """
+    if depth > _MAX_REDACT_DEPTH:
+        s = json.dumps(node, ensure_ascii=False, default=str)
+        if len(s) <= head_keep:
+            return s
+        return s[:head_keep] + f" ...[+{len(s) - head_keep} bytes]"
+    if isinstance(node, str):
+        if len(node) > head_keep:
+            return node[:head_keep] + f" ...[+{len(node) - head_keep} bytes]"
+        return node
+    if isinstance(node, list):
+        if len(node) > sample_rows * 2:
+            return {
+                "_truncated_list": True,
+                "total_items": len(node),
+                "sample": [
+                    _redact_node(x, head_keep=head_keep, sample_rows=sample_rows, depth=depth + 1)
+                    for x in node[:sample_rows]
+                ],
+            }
+        return [
+            _redact_node(x, head_keep=head_keep, sample_rows=sample_rows, depth=depth + 1)
+            for x in node
+        ]
+    if isinstance(node, dict):
+        return {
+            k: _redact_node(v, head_keep=head_keep, sample_rows=sample_rows, depth=depth + 1)
+            for k, v in node.items()
+        }
+    return node
+
+
 def _compact_one(content: str, *, head_keep: int, sample_rows: int) -> str:
     """Return a compacted form of a single tool message's content string."""
     # Try JSON first — vault tools wrap their payload as ``{"ok": true, ...}``.
@@ -121,23 +166,16 @@ def _compact_one(content: str, *, head_keep: int, sample_rows: int) -> str:
         ordered = {_COMPACT_MARKER: True, **csv_summary}
         return json.dumps(ordered, ensure_ascii=False)
 
-    # Generic JSON: keep top-level keys; redact long strings *and* long lists.
-    # Long lists are the common shape behind tools like ``vault_list`` — many
-    # tiny entries that individually never trigger the string heuristic but
+    # Generic JSON: recursively redact long strings and long lists at every
+    # nesting depth (not just the top level). Long lists are the common shape
+    # behind tools like ``vault_list`` and kanban board dumps — many entries
+    # that individually never triggered the old top-only heuristic but
     # collectively dominate the message. We keep ``sample_rows`` head items,
-    # record the original count, and drop the rest.
+    # record the original count, and recurse into the survivors so nested
+    # card/document bodies are head-truncated too.
     redacted: dict[str, Any] = {_COMPACT_MARKER: True, "original_size": len(content)}
     for k, v in obj.items():
-        if isinstance(v, str) and len(v) > head_keep:
-            redacted[k] = v[:head_keep] + f" ...[+{len(v) - head_keep} bytes]"
-        elif isinstance(v, list) and len(v) > sample_rows * 2:
-            redacted[k] = {
-                "_truncated_list": True,
-                "total_items": len(v),
-                "sample": v[:sample_rows],
-            }
-        else:
-            redacted[k] = v
+        redacted[k] = _redact_node(v, head_keep=head_keep, sample_rows=sample_rows)
     return json.dumps(redacted, ensure_ascii=False)
 
 

@@ -49,6 +49,15 @@ KANBAN_MANAGE_TOOL = ToolSpec(
                 "type": "string",
                 "description": "Vault-relative path to the kanban .md file (e.g. 'boards/work.md').",
             },
+            "full": {
+                "type": "boolean",
+                "description": (
+                    "view only. By default large boards are returned as a compact "
+                    "summary (lane counts + a sample of cards with previewed bodies) "
+                    "to avoid flooding the context window. Pass full=true to get the "
+                    "verbatim board with every card body in full."
+                ),
+            },
             "title": {
                 "type": "string",
                 "description": "Board title (create_board), card title (add_card/update_card), or lane title (add_lane/update_lane).",
@@ -136,12 +145,55 @@ def _create_board(args: dict[str, Any]) -> str:
     return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
 
 
+# Boards over this many bytes are returned as a compact summary by `view` so
+# a single call can't flood the context window (a 500KB board ≈ 160K tokens).
+# Under the budget the verbatim board is returned unchanged.
+_VIEW_BUDGET_BYTES = 12_000
+_VIEW_BODY_PREVIEW_CHARS = 200   # card body kept verbatim up to this length
+_VIEW_CARDS_PER_LANE = 10        # cards detailed per lane; the rest are counted
+
+
+def _compact_board_dict(bd: dict[str, Any]) -> dict[str, Any]:
+    """Shrink a board dict in place: preview long card bodies, cap cards per
+    lane, and annotate with counts so the agent still knows the full shape.
+
+    Preserves every card ``id``/``title`` in the sample (so the agent can
+    target update/move/delete) and records how many were elided."""
+    total_cards = 0
+    for ln in bd.get("lanes", []):
+        cards = ln.get("cards", [])
+        total_cards += len(cards)
+        for c in cards[:_VIEW_CARDS_PER_LANE]:
+            body = c.get("body", "")
+            if len(body) > _VIEW_BODY_PREVIEW_CHARS:
+                c["body"] = body[:_VIEW_BODY_PREVIEW_CHARS] + f"...[+{len(body) - _VIEW_BODY_PREVIEW_CHARS} chars]"
+        if len(cards) > _VIEW_CARDS_PER_LANE:
+            ln["cards_truncated"] = len(cards) - _VIEW_CARDS_PER_LANE
+        ln["card_count"] = len(cards)
+        ln["cards"] = cards[:_VIEW_CARDS_PER_LANE]
+    bd["total_cards"] = total_cards
+    bd["truncated"] = True
+    bd["hint"] = (
+        "Large board — card bodies previewed and each lane capped at "
+        f"{_VIEW_CARDS_PER_LANE} cards. Re-call view with full=true for the "
+        "verbatim board, or read a single card via update_card."
+    )
+    return bd
+
+
 def _view(args: dict[str, Any]) -> str:
     from .. import vault_kanban
 
     path = args.get("path", "")
     board = vault_kanban.read_board(path)
-    return json.dumps({"ok": True, "path": path, "board": board.to_dict()})
+    full = bool(args.get("full", False))
+    bd = board.to_dict()
+    if full or len(json.dumps(bd, ensure_ascii=False)) <= _VIEW_BUDGET_BYTES:
+        return json.dumps({"ok": True, "path": path, "board": bd}, ensure_ascii=False)
+    return json.dumps(
+        {"ok": True, "path": path, "board": _compact_board_dict(bd)},
+        ensure_ascii=False,
+    )
 
 
 def _update_board(args: dict[str, Any]) -> str:
