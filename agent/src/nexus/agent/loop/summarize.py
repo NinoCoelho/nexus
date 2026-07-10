@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 
 from ..llm import ChatMessage, LLMProvider, Role
 from nexus.home import vault_session_memory as _session_memory_fn
-from nexus.agent.loop.relevance import score_messages
+from nexus.agent.loop.relevance import _content_text, score_messages
 from nexus.agent.loop.retention import partition
 
 log = logging.getLogger(__name__)
@@ -113,6 +114,56 @@ def _find_summary_index(messages: list[ChatMessage]) -> int | None:
     return None
 
 
+# Max chars of a message fed to the embedder. fastembed truncates at 512
+# tokens regardless, but capping here bounds the per-message cost and keeps
+# the embedding semantically meaningful (not a clipped tail).
+_EMBED_TEXT_CAP = 1500
+
+
+async def _compute_semantic_sim(
+    messages: list[ChatMessage],
+    query: str,
+    embedder: object,
+) -> dict[int, float] | None:
+    """Embedding cosine similarity of each message to the query.
+
+    Returns ``{index: similarity_0_to_1}`` (only for messages with non-empty
+    text), or ``None`` on any failure — callers fall back to regex-only
+    scoring. Pure math given an embedder; the ``knowledge``-feature gating and
+    embedder acquisition live in :func:`summarize_older_turns` so this stays
+    unit-testable with a fake embedder.
+    """
+    texts: list[str] = []
+    idx_map: list[int] = []
+    for i, m in enumerate(messages):
+        t = _content_text(m)
+        if t and t.strip():
+            texts.append(t[:_EMBED_TEXT_CAP])
+            idx_map.append(i)
+    if not texts:
+        return None
+
+    try:
+        vecs = await embedder.embed([query[:_EMBED_TEXT_CAP], *texts])  # type: ignore[attr-defined]
+    except Exception:
+        log.debug("semantic similarity embedding failed", exc_info=True)
+        return None
+    if not vecs or len(vecs) != len(texts) + 1:
+        return None
+
+    qv = vecs[0]
+    qnorm = math.sqrt(sum(x * x for x in qv)) or 1.0
+    out: dict[int, float] = {}
+    for k, idx in enumerate(idx_map):
+        mv = vecs[k + 1]
+        mnorm = math.sqrt(sum(x * x for x in mv)) or 1.0
+        dot = sum(a * b for a, b in zip(qv, mv))
+        cos = dot / (qnorm * mnorm)
+        # Negative cosine (anti-correlated) is "not relevant" → 0.
+        out[idx] = max(0.0, min(1.0, cos))
+    return out
+
+
 async def summarize_older_turns(
     messages: list[ChatMessage],
     provider: LLMProvider,
@@ -141,7 +192,27 @@ async def summarize_older_turns(
     if query is None:
         query = _last_user_text(messages)
 
-    scores = score_messages(messages, query=query)
+    # Phase 4: when the knowledge feature is active and the builtin embedder
+    # is available, score meaning-level (semantic) relevance in addition to
+    # regex entity overlap. Catches an old tool result that shares intent with
+    # the current query but no surface tokens. Strictly opt-in and best-effort
+    # — any failure degrades silently to regex-only scoring.
+    semantic_sim: dict[int, float] | None = None
+    if query:
+        try:
+            from ...features import is_enabled
+
+            if is_enabled("knowledge"):
+                from ..builtin_embedder import get_builtin_embedder
+
+                semantic_sim = await _compute_semantic_sim(
+                    messages, query, get_builtin_embedder()
+                )
+        except Exception:
+            log.debug("semantic relevance unavailable; using regex-only", exc_info=True)
+            semantic_sim = None
+
+    scores = score_messages(messages, query=query, semantic_sim=semantic_sim)
     plan = partition(messages, scores, recent_k=keep_recent_n)
 
     if plan.is_noop():

@@ -32,6 +32,7 @@ from nexus.agent.llm import ChatMessage, Role
 
 _W_RECENCY = 0.35      # weight on the exponential recency term
 _W_ENTITY = 0.30       # max contribution from query entity overlap
+_W_SEMANTIC = 0.35     # max contribution from embedding cosine similarity
 _W_PIN = 0.50          # explicit ``nx:pin`` marker contribution
 _RECENCY_LAMBDA = 0.06  # decay constant; ~0.06 keeps recent msgs dominant
 
@@ -119,6 +120,7 @@ def score_messages(
     messages: list[ChatMessage],
     *,
     query: str | None = None,
+    semantic_sim: dict[int, float] | None = None,
 ) -> list[MessageScore]:
     """Score every message for relevance to the current turn.
 
@@ -127,6 +129,11 @@ def score_messages(
         query: The current turn's focus — typically the latest user message
             text. Entity overlap with this is the dominant "what still
             matters" signal. ``None`` skips the entity factor.
+        semantic_sim: Optional precomputed embedding cosine similarity per
+            message index (``{index: 0..1}``). When supplied (Phase 4,
+            ``knowledge`` feature), adds a semantic factor that catches
+            meaning-level relevance the regex entity match misses. ``None``
+            keeps scoring cheap, sync, and dependency-free.
 
     The returned list is index-aligned with ``messages`` (result[i] describes
     messages[i]).
@@ -153,6 +160,11 @@ def score_messages(
                 min(1.0, overlap / _ENTITY_SATURATION) * _W_ENTITY
             )
 
+        semantic_component = 0.0
+        if semantic_sim is not None:
+            sim = semantic_sim.get(i, 0.0)
+            semantic_component = max(0.0, min(1.0, sim)) * _W_SEMANTIC
+
         pin = _W_PIN if _PIN_MARKER in text else 0.0
 
         if pin:
@@ -165,6 +177,7 @@ def score_messages(
                 recency * _W_RECENCY
                 + role_w
                 + entity_component
+                + semantic_component
             )
             total = min(1.0, total)
 
@@ -176,6 +189,7 @@ def score_messages(
                     "recency": round(recency * _W_RECENCY, 4),
                     "role": role_w,
                     "entity": round(entity_component, 4),
+                    "semantic": round(semantic_component, 4),
                     "pin": pin,
                 },
             )

@@ -106,3 +106,21 @@ def test_multipart_text_parts_scored() -> None:
     scores = score_messages([msg, _user("frobulate")], query="`frobulate`")
     # The multipart message's text part contributed the entity token.
     assert scores[0].factors["entity"] > 0.0
+
+
+def test_semantic_factor_boosts_semantically_related() -> None:
+    # Two tool results at the same position; index 0 is semantically similar
+    # to the query, index 1 is not. The semantic factor must separate them.
+    msgs = [_tool("a"), _tool("b")]
+    scores = score_messages(
+        msgs, query="query", semantic_sim={0: 0.9, 1: 0.0}
+    )
+    assert scores[0].score > scores[1].score
+    assert scores[0].factors["semantic"] > scores[1].factors["semantic"]
+    assert scores[1].factors["semantic"] == 0.0
+
+
+def test_semantic_none_keeps_factor_zero() -> None:
+    msgs = [_tool("a"), _tool("b")]
+    scores = score_messages(msgs, query="query", semantic_sim=None)
+    assert all(s.factors["semantic"] == 0.0 for s in scores)

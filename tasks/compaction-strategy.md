@@ -105,7 +105,7 @@ into the Session Memory header (mirrors `.tool-cache`).
 - [x] **Phase 1 — Loom primitive** (additive, low risk). — committed `7ea558e` on loom main.
 - [x] **Phase 2 — De-dup + nexus adopts contract.** — committed `4748dbd` on nexus main.
 - [x] **Phase 3 — Relevance-ranked retention.**
-- [ ] **Phase 4 — Optional**: embeddings, real tokenizers, tool-schema
+- [~] **Phase 4 — Optional**: embeddings ✓, real tokenizers, tool-schema
   filtering, metrics.
 
 ## Verification

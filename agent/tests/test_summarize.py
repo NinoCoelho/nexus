@@ -6,8 +6,22 @@ get collapsed into the summary, without depending on a real model.
 
 from __future__ import annotations
 
+import pytest
+
 from nexus.agent.llm import ChatMessage, ChatResponse, Role, StopReason
-from nexus.agent.loop.summarize import summarize_older_turns
+from nexus.agent.loop.summarize import _compute_semantic_sim, summarize_older_turns
+
+
+@pytest.fixture(autouse=True)
+def _stub_semantic_for_mechanism_tests(monkeypatch):
+    # The mechanism tests must be deterministic and not depend on the real
+    # fastembed model. Stub the semantic step so summarize_older_turns uses
+    # regex-only scoring. The explicit _compute_semantic_sim tests below bind
+    # the real function via direct import and are unaffected.
+    async def _noop(messages, query, embedder):
+        return None
+
+    monkeypatch.setattr("nexus.agent.loop.summarize._compute_semantic_sim", _noop)
 
 
 class _MockSummarizer:
@@ -20,6 +34,16 @@ class _MockSummarizer:
     async def chat(self, messages, *, tools=None, model=None, max_tokens=None):
         self.calls += 1
         return ChatResponse(content=self._text, stop_reason=StopReason.STOP)
+
+
+class _FakeEmbedder:
+    """Returns canned vectors (caller passes [query, *msgs] order)."""
+
+    def __init__(self, vectors: list[list[float]]):
+        self._vectors = vectors
+
+    async def embed(self, texts):
+        return self._vectors
 
 
 def _u(text: str) -> ChatMessage:
@@ -125,3 +149,42 @@ def test_persist_summary_part_empty_is_noop(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(sm, "_session_memory_fn", lambda: tmp_path)
     assert sm.persist_summary_part("s", []) is None
     assert not (tmp_path / ".parts").exists()
+
+
+# ── semantic similarity (Phase 4) ──────────────────────────────────────────
+
+
+async def test_compute_semantic_sim_cosine_ranking() -> None:
+    # query vector ~parallel to msg0, orthogonal to msg1.
+    embedder = _FakeEmbedder([[1.0, 0.0], [0.95, 0.05], [0.0, 1.0]])
+    msgs = [_u("similar intent"), _u("unrelated")]
+    sim = await _compute_semantic_sim(msgs, "query", embedder)
+    assert sim is not None
+    assert sim[0] > 0.9
+    assert sim[1] < 0.1
+
+
+async def test_compute_semantic_sim_skips_empty_messages() -> None:
+    # Only one non-empty message → embedder gets query + 1 text.
+    embedder = _FakeEmbedder([[1.0, 0.0], [0.95, 0.05]])
+    msgs = [ChatMessage(role=Role.USER, content=None), _u("has text")]
+    sim = await _compute_semantic_sim(msgs, "q", embedder)
+    assert sim is not None
+    assert 1 in sim
+    assert 0 not in sim
+
+
+async def test_compute_semantic_sim_embed_failure_returns_none() -> None:
+    class _Boom:
+        async def embed(self, texts):
+            raise RuntimeError("embedder unavailable")
+
+    sim = await _compute_semantic_sim([_u("x")], "q", _Boom())
+    assert sim is None
+
+
+async def test_compute_semantic_sim_all_empty_returns_none() -> None:
+    embedder = _FakeEmbedder([[1.0, 0.0]])
+    msgs = [ChatMessage(role=Role.USER, content=None)]
+    sim = await _compute_semantic_sim(msgs, "q", embedder)
+    assert sim is None
