@@ -103,8 +103,8 @@ into the Session Memory header (mirrors `.tool-cache`).
 ## Phasing
 
 - [x] **Phase 1 — Loom primitive** (additive, low risk). — committed `7ea558e` on loom main.
-- [x] **Phase 2 — De-dup + nexus adopts contract.**
-- [ ] **Phase 3 — Relevance-ranked retention.**
+- [x] **Phase 2 — De-dup + nexus adopts contract.** — committed `4748dbd` on nexus main.
+- [x] **Phase 3 — Relevance-ranked retention.**
 - [ ] **Phase 4 — Optional**: embeddings, real tokenizers, tool-schema
   filtering, metrics.
 
@@ -161,3 +161,32 @@ are left in place as they carry orthogonal concerns (scrape-garbage removal,
 retry recovery). The `overflow.py` full de-dup (estimator naming, frozen
 `OverflowCheck`, KNOWN_WINDOWS registry) was deferred as lower-value/higher-
 risk than the zones re-export.
+
+## Results — Phase 3
+
+**Relevance-ranked retention** replaces the fixed positional split
+("keep last 20, summarize the rest") with a five-bucket partition scored by
+relevance to the current turn. The single biggest quality lever from the
+review — a critical old message (a key file, a stated constraint) is no
+longer dropped just for being old.
+
+- NEW `loop/relevance.py` — `score_messages()` with additive, documented
+  factors: exponential recency decay, role weighting (user/assistant sticky,
+  tool compressible), query entity-overlap (regex: backtick code spans,
+  slashy paths, URLs, `nx:` markers), and a hard `nx:pin` → max. No
+  embeddings (those are Phase 4 behind the `knowledge` feature).
+- NEW `loop/retention.py` — `partition()` into protected / recent /
+  relevant / summarize / drop. Tool-pair integrity is guaranteed by grouping
+  each assistant(tool_calls) + its tool results into an **atomic compaction
+  unit** — a kept assistant never loses its tool result, and a summarized tool
+  result takes its caller into the prose summary. Scrape-noise tool results
+  route to `drop`.
+- `loop/summarize.py` — `summarize_older_turns` now consumes a
+  `RetentionPlan` instead of a positional split; the superseded old summary
+  SYSTEM message is dropped from survivors; the return contract is preserved.
+- NEW `persist_summary_part()` — every summarization journals the verbatim
+  collapsed messages to `~/.nexus/session-memory/.parts/{sid}.jsonl` so
+  nothing is ever truly lost (reversibility parity with the `.tool-cache`
+  tool-shrink path).
+- 36 new tests (9 relevance, 13 retention, 7 summarize, 7 reversibility) —
+  all property/invariant-based, robust to weight re-tuning. ruff clean.
