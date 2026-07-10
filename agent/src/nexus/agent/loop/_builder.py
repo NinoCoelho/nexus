@@ -12,6 +12,7 @@ from loom.loop import Agent as LoomAgent, AgentConfig
 
 from ..prompt_builder import build_system_prompt
 from ...skills.registry import SkillRegistry
+from .compactor import NexusCompactor
 from .helpers import DEFAULT_MAX_TOOL_ITERATIONS, _AFFIRMATIVES, _NEGATIVES
 
 if TYPE_CHECKING:
@@ -140,9 +141,14 @@ def build_loom_agent(
                     cw = int(getattr(entry, "context_window", 0) or 0)
                     if cw > 0:
                         return cw
-        from .overflow import known_context_window
+        from .overflow import _DEFAULT_FALLBACK_WINDOW, known_context_window
         fallback = known_context_window(model_id)
-        return fallback if fallback > 0 else 0
+        # Return the fallback default (not 0) so loom's overflow detection
+        # still runs for models without an explicit window — mirroring the
+        # 32K fallback the old nexus pre-flight applied. ``known_context_window``
+        # covers all common models, so this default only touches truly-unknown
+        # ones, where a conservative 32K is safer than skipping detection.
+        return fallback if fallback > 0 else _DEFAULT_FALLBACK_WINDOW
 
     loom_cfg = AgentConfig(
         max_iterations=max_iter,
@@ -159,6 +165,8 @@ def build_loom_agent(
         context_window=_model_context_window,
         overflow_output_headroom=8192,
         overflow_tools_overhead=12_000,
+        compactor=NexusCompactor(nexus_provider),
+        max_compaction_attempts=3,
     )
     graphrag_engine = None
     if _init_cfg:

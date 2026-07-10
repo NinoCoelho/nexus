@@ -1,31 +1,15 @@
+"""Zone classification — thin re-export from loom.
+
+The canonical implementation lives in ``loom.loop.compaction`` (moved there
+from nexus in Phase 1 of the compaction-contract work). This shim preserves
+the historical ``nexus.agent.loop.zones`` import path for the call sites that
+predate the move; new code should import from loom directly.
+"""
+
 from __future__ import annotations
 
-from typing import Literal
-
-Zone = Literal["green", "yellow", "orange", "red"]
-
-_GREEN_THRESHOLD = 0.60
-_YELLOW_THRESHOLD = 0.80
-_ORANGE_THRESHOLD = 0.90
-
-
-def classify_zone(tokens_used: int, context_window: int, *, tools_overhead: int = 0) -> Zone:
-    effective = context_window - tools_overhead
-    if effective <= 0:
-        return "red"
-    pct = tokens_used / effective
-    if pct < _GREEN_THRESHOLD:
-        return "green"
-    if pct < _YELLOW_THRESHOLD:
-        return "yellow"
-    if pct < _ORANGE_THRESHOLD:
-        return "orange"
-    return "red"
-
-
-def zone_thresholds() -> dict[str, float]:
-    return {
-        "green": _GREEN_THRESHOLD,
-        "yellow": _YELLOW_THRESHOLD,
-        "orange": _ORANGE_THRESHOLD,
-    }
+from loom.loop.compaction import (  # noqa: F401 — re-export
+    Zone,
+    classify_zone,
+    zone_thresholds,
+)

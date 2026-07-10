@@ -489,59 +489,12 @@ class Agent:
                 "High token usage: ~%dK estimated input tokens for session %s, model %s",
                 check.estimated_input_tokens // 1024, session_id, model_id,
             )
-        if check.overflowed:
-            from .compact import auto_compact
-
-            compacted_stripped, compact_report = auto_compact(stripped_history)
-            if compact_report.compacted > 0:
-                loom_messages = [_to_loom_message(m) for m in compacted_stripped]
-                for nm, lm in zip(compacted_stripped, loom_messages):
-                    if nm.role == Role.ASSISTANT and nm.reasoning_content:
-                        lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
-                loom_messages.append(_to_loom_message(user_msg))
-                check = check_overflow(loom_messages, context_window=ctx_window)
-                if not check.overflowed:
-                    _auto_compacted_history = compacted_stripped
-
-        if check.overflowed:
-            self._log_llm_error(
-                session_id=session_id,
-                error_type="context_overflow",
-                message=check.detail,
-                model_id=model_id,
-                tokens_est=check.estimated_input_tokens,
-                ctx_window=check.context_window,
-            )
-            yield {
-                "type": "error",
-                "detail": check.detail,
-                "reason": "context_overflow",
-                "retryable": False,
-                "status_code": None,
-                "estimated_input_tokens": check.estimated_input_tokens,
-                "context_window": check.context_window,
-                "actions": ["compact_history", "new_session"],
-            }
-            yield {
-                "type": "done",
-                "session_id": session_id,
-                "reply": "",
-                "trace": [{"event": "context_overflow",
-                           "estimated_input_tokens": check.estimated_input_tokens,
-                           "context_window": check.context_window}],
-                "skills_touched": [],
-                "iterations": 0,
-                "messages": list(history or []) + [
-                    ChatMessage(role=Role.USER, content=user_msg_content),
-                ],
-                "usage": {
-                    "input_tokens": check.estimated_input_tokens,
-                    "output_tokens": 0,
-                    "tool_calls": 0,
-                    "model": model_id or self._chosen_model,
-                },
-            }
-            return
+        # Overflow rescue is now delegated to loom's per-iteration
+        # ``resolve_overflow`` (wired in _builder via NexusCompactor), so the
+        # turn is handed to loom regardless of the pre-flight estimate. If the
+        # compactor can't bring it under budget, loom emits OverflowEvent,
+        # which the in-loop ``context_overflow`` branch below surfaces as the
+        # SSE error (with the same actions payload this block used to emit).
 
         _saw_loom_error = False
         _history_snapshot = list(_auto_compacted_history if _auto_compacted_history is not None else (history or []))
