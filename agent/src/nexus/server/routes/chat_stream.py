@@ -20,23 +20,17 @@ from fastapi.responses import StreamingResponse
 from ..deps import get_agent, get_sessions, get_job_tracker
 from ..schemas import ChatRequest
 from ._sse import keepalive
-from ._streaming import TurnAccumulator, build_done_sse, build_error_sse
+from ._streaming import TurnAccumulator
 from ...agent.context import CURRENT_SESSION_ID
-from ...agent.llm import LLMTransportError, MalformedOutputError
 from ...agent.loop import Agent
 from ...config_file import load_cached as load_config
 from ...redact import redact_sensitive_text
-from ...voice_ack import (
-    _AckTrigger,
-    emit_completion_ack,
-    emit_start_ack,
-)
 from ..session_store import SessionStore
 from ..job_tracker import JobTracker
 
 # Shared with chat.py — the cancel endpoint in chat.py mutates these same dicts
 # at runtime (imported once at module load; Python module objects are singletons).
-from .chat import _inflight_turns, _user_cancelled, _trajectory_logger
+from .chat import _inflight_turns
 
 log = logging.getLogger(__name__)
 
@@ -138,7 +132,6 @@ async def chat_stream_route(
         # abnormal exit can rebuild "history + user + partial assistant"
         # without double-appending.
         pre_turn_history = list(session.history)
-        acc = TurnAccumulator()
         # Bind session context for the duration of the stream so
         # any ask_user call inside the turn knows which session to
         # publish on. The contextvar is local to this coroutine
@@ -149,9 +142,6 @@ async def chat_stream_route(
         from ..permissions import allowed_tools_for_role
         user_role = getattr(request.state, "user_role", None)
         _allowed_token = ALLOWED_TOOLS.set(allowed_tools_for_role(user_role))
-        current = asyncio.current_task()
-        if current is not None:
-            _inflight_turns[session.id] = current
 
         turn_job_id = tracker.start(
             type="chat_turn",
@@ -168,6 +158,9 @@ async def chat_stream_route(
         slash = is_slash_command(req.message)
         handler = _slash_dispatch(slash) if slash else None
         if handler is not None:
+            current = asyncio.current_task()
+            if current is not None:
+                _inflight_turns[session.id] = current
             try:
                 async for chunk in handler(
                     store=store,
@@ -179,6 +172,7 @@ async def chat_stream_route(
             finally:
                 CURRENT_SESSION_ID.reset(token)
                 ALLOWED_TOOLS.reset(_allowed_token)
+                tracker.done(turn_job_id, publish_fn=_publish_job_event)
                 if _inflight_turns.get(session.id) is current:
                     _inflight_turns.pop(session.id, None)
             return
@@ -335,275 +329,65 @@ async def chat_stream_route(
                 )
             )
 
-        # ── Voice acknowledgment plumbing ────────────────────────────────────
-        # Only kicks in for voice-input turns. There's NO programmatic
-        # start ack anymore — the agent itself uses the `notify_user`
-        # tool when it wants to give the user a status update mid-turn
-        # (the tool routes to TTS when input_mode is voice). The
-        # completion ack still fires on `done` to summarize the reply.
-        is_voice = req.input_mode == "voice"
-        # Stash on session.context so the notify_user tool handler knows
-        # whether to TTS the message or just surface it as a toast.
-        try:
-            session.context = (session.context or "") + ""  # no-op touch
-        except Exception:  # noqa: BLE001
-            pass
+        # ── Input mode tracking ──────────────────────────────────────────────
+        # Stash the input mode so the notify_user tool handler knows whether
+        # to TTS the message. Voice ack logic (start ack, speculative
+        # completion ack) lives in the ChatTurnRunner.
         store._latest_input_mode = getattr(store, "_latest_input_mode", {})  # type: ignore[attr-defined]
         store._latest_input_mode[session.id] = req.input_mode  # type: ignore[attr-defined]
-        # Also track the last *global* input_mode so notify_user fired
-        # from sessions we didn't see (vault dispatch, kanban-card spawn,
-        # etc.) can fall back to "what the user has been doing recently"
-        # instead of always defaulting to text.
         store._last_global_input_mode = req.input_mode  # type: ignore[attr-defined]
-        log.warning(
-            "[chat_stream] sess=%s input_mode=%r (is_voice=%s)",
-            session.id, req.input_mode, is_voice,
+        is_voice = req.input_mode == "voice"
+
+        # ── Detached turn runner ─────────────────────────────────────────────
+        # The agent loop runs as a detached asyncio.Task that survives client
+        # disconnects (machine sleep, tab close). This handler subscribes to
+        # the session bus and forwards events to the SSE response. When the
+        # client disconnects, only the subscriber dies — the runner keeps
+        # going. A reconnecting client can resume via GET /chat/{sid}/turn/stream.
+        store.clear_replay(session.id)
+
+        from ..services.chat_turn_runner import ChatTurnRunner
+        runner = ChatTurnRunner(
+            agent=a,
+            store=store,
+            session_id=session.id,
+            message=req.message,
+            context=session.context or "",
+            model_id=resolved_model_id,
+            pre_turn_history=pre_turn_history,
+            attachment_parts=attachment_parts or None,
+            resume_working_messages=_resume_loom_msgs,
+            tracker=tracker,
+            turn_job_id=turn_job_id,
+            publish_job_event=_publish_job_event,
+            is_voice=is_voice,
         )
+        runner.start()
 
-        tts_cfg = load_config().tts
-        # ack_mode="always" → fire on every turn; "voice" → voice-input only.
-        ack_wanted = is_voice or tts_cfg.ack_mode == "always"
-        ack_active = (
-            ack_wanted
-            and tts_cfg.enabled
-            and tts_cfg.ack_enabled
-            and getattr(a, "_provider_registry", None) is not None
-        )
-        log.warning(
-            "[chat_stream] voice_ack ack_active=%s (is_voice=%s ack_wanted=%s ack_mode=%s tts.enabled=%s ack_enabled=%s registry=%s)",
-            ack_active, is_voice, ack_wanted, tts_cfg.ack_mode,
-            tts_cfg.enabled, tts_cfg.ack_enabled,
-            getattr(a, "_provider_registry", None) is not None,
-        )
-
-        # Fire a spoken start-ack for voice-input turns so the user
-        # hears an immediate contextual acknowledgment while the agent
-        # loop processes. Runs as a fire-and-forget task concurrent
-        # with the main agent loop.
-        if is_voice and ack_active:
-            asyncio.create_task(emit_start_ack(
-                agent=a, store=store,
-                trigger=_AckTrigger(
-                    user_text=req.message,
-                    session_id=session.id,
-                ),
-                cfg=load_config(),
-            ))
-
-        # Speculative completion-ack kickoff: when the agent has streamed
-        # ~80+ words of content and is in the middle of writing its final
-        # reply, fire the summary call NOW so the audio is ready (or
-        # nearly ready) by the time `done` arrives. Without this, audio
-        # plays 5-15s AFTER the visible text is fully written — the user
-        # has been complaining about exactly that lag.
-        SPECULATIVE_WORD_THRESHOLD = 80
-        completion_task: asyncio.Task | None = None
-
+        # ── Subscribe to bus and forward events to SSE ───────────────────────
+        acc_sub = TurnAccumulator()
         try:
-            async for event in keepalive(
-                a.run_turn_stream(
-                    req.message,
-                    history=session.history,
-                    context=session.context,
-                    session_id=session.id,
-                    model_id=resolved_model_id,
-                    attachments=attachment_parts or None,
-                    resume_working_messages=_resume_loom_msgs,
-                ),
+            async for sevent in keepalive(
+                store.subscribe_with_replay(session.id),
                 interval=15.0,
             ):
-                if event is None:
+                if sevent is None:
                     yield ": ping\n\n"
                     continue
-                etype = event.get("type")
-
-                if etype == "delta":
-                    if (
-                        ack_active
-                        and completion_task is None
-                        and len(acc.accumulated_text.split()) >= SPECULATIVE_WORD_THRESHOLD
-                    ):
-                        snapshot = acc.accumulated_text
-                        log.warning(
-                            "[chat_stream] kicking off speculative completion ack at %d words",
-                            len(snapshot.split()),
-                        )
-                        completion_task = asyncio.create_task(emit_completion_ack(
-                            agent=a, store=store,
-                            trigger=_AckTrigger(
-                                user_text=req.message,
-                                session_id=session.id,
-                                full_reply=snapshot,
-                            ),
-                            cfg=load_config(),
-                        ))
-                    for frame in acc.process_event(event):
-                        yield frame
-
-                elif etype == "done":
-                    acc.final_messages = event.get("messages")
-                    usage = event.get("usage") or {}
-                    try:
-                        store.bump_usage(
-                            session.id,
-                            model=usage.get("model"),
-                            input_tokens=int(usage.get("input_tokens") or 0),
-                            output_tokens=int(usage.get("output_tokens") or 0),
-                            tool_calls=int(usage.get("tool_calls") or 0),
-                        )
-                    except Exception:  # noqa: BLE001 — best-effort
-                        log.exception("bump_usage failed")
-                    if _trajectory_logger:
-                        from .chat_stream_helpers import log_stream_trajectory
-                        log_stream_trajectory(
-                            trajectory_logger=_trajectory_logger,
-                            session_id=session.id,
-                            turn_index=len(session.history) // 2,
-                            user_message=req.message,
-                            history_length=len(session.history),
-                            context=req.context or "",
-                            reply_text=event.get("reply", ""),
-                            model=usage.get("model") or "",
-                            iterations=event.get("iterations", 0),
-                            input_tokens=int(usage.get("input_tokens") or 0),
-                            output_tokens=int(usage.get("output_tokens") or 0),
-                            tool_calls=int(usage.get("tool_calls") or 0),
-                        )
-                    done_payload = {
-                        "session_id": event.get("session_id") or session.id,
-                        "reply": event.get("reply", ""),
-                        "trace": event.get("trace", []),
-                        "skills_touched": event.get("skills_touched", []),
-                        "iterations": event.get("iterations", 0),
-                        "usage": usage,
-                        "model": usage.get("model") or resolved_model_id,
-                    }
-                    yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
-
-                    if ack_active and completion_task is None:
-                        asyncio.create_task(emit_completion_ack(
-                            agent=a, store=store,
-                            trigger=_AckTrigger(
-                                user_text=req.message,
-                                session_id=session.id,
-                                full_reply=event.get("reply", ""),
-                            ),
-                            cfg=load_config(),
-                        ))
-                    elif completion_task is not None:
-                        log.warning(
-                            "[chat_stream] speculative ack already running — "
-                            "skipping post-done emit (snapshot may be ~%d words "
-                            "vs final %d words)",
-                            SPECULATIVE_WORD_THRESHOLD,
-                            len(event.get("reply", "").split()),
-                        )
-
-                elif etype == "error":
-                    reason = event.get("reason")
-                    if reason and reason not in ("interrupted", "cancelled"):
-                        acc.partial_status = reason
-                    log.warning(
-                        "chat_stream forwarding error to UI: reason=%r status=%r detail=%r",
-                        reason,
-                        event.get("status_code"),
-                        (event.get("detail") or "")[:300],
-                    )
-                    err_payload = {
-                        "detail": event.get("detail", ""),
-                        "reason": reason,
-                        "retryable": event.get("retryable"),
-                        "status_code": event.get("status_code"),
-                    }
-                    for k in ("likely_cause", "estimated_input_tokens",
-                              "context_window", "actions"):
-                        if k in event:
-                            err_payload[k] = event[k]
-                    yield f"event: error\ndata: {json.dumps(err_payload)}\n\n"
-
-                else:
-                    for frame in acc.process_event(event):
-                        yield frame
-        except (LLMTransportError, MalformedOutputError) as exc:
-            acc.partial_status = "llm_error"
-            detail = str(exc)
-            reason = None
-            retryable = None
-            status_code = getattr(exc, "status_code", None)
-            try:
-                from ...error_classifier import classify_api_error, is_budget_exceeded, budget_exceeded_detail
-                if is_budget_exceeded(exc):
-                    acc.partial_status = "budget_exceeded"
-                    reason = "budget_exceeded"
-                    retryable = False
-                    bd = budget_exceeded_detail(exc)
-                    if bd:
-                        detail = bd
-                else:
-                    _reason = classify_api_error(exc).reason.value
-                    if _reason == "timeout":
-                        acc.partial_status = "upstream_timeout"
-            except Exception:  # noqa: BLE001
-                pass
-            log.warning(
-                "chat_stream LLM call failed: %s (status=%s)",
-                exc, getattr(exc, "status_code", None),
-            )
-            if not detail or detail == str(exc):
-                detail = str(exc)
-            if reason is None:
-                try:
-                    from ...error_classifier import classify_api_error
-                    classified = classify_api_error(exc)
-                    reason = classified.reason.value
-                    retryable = classified.retryable
-                    if classified.user_facing_summary:
-                        detail = f"{classified.user_facing_summary} ({detail})"
-                except Exception:
-                    pass
-            try:
-                store.log_error(
-                    session.id,
-                    reason or "llm_error",
-                    message=detail[:2000],
-                    status_code=status_code,
-                    model=session.model_id if hasattr(session, 'model_id') else None,
-                    retryable=retryable or False,
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            yield build_error_sse(detail=detail, reason=reason, retryable=retryable, status_code=status_code)
-            yield build_done_sse(session_id=session.id)
+                for frame in acc_sub.process_event(sevent.data):
+                    yield frame
+                if sevent.data.get("type") == "done":
+                    break
         except asyncio.CancelledError:
-            acc.partial_status = "cancelled" if session.id in _user_cancelled else "interrupted"
-            _user_cancelled.discard(session.id)
-            yield build_error_sse(detail="cancelled by user", reason="cancelled")
-            yield build_done_sse(session_id=session.id)
-        except Exception as exc:
-            acc.partial_status = "crashed"
-            log.exception("chat_stream crashed")
-            yield build_error_sse(detail=f"{type(exc).__name__}: {exc}")
-            yield build_done_sse(session_id=session.id)
+            # Client disconnected. The subscriber coroutine dies here;
+            # the ChatTurnRunner keeps running in the background.
+            pass
         finally:
-            from .chat_stream_helpers import persist_stream_turn
-            persist_stream_turn(
-                store=store,
-                session_id=session.id,
-                final_messages=acc.final_messages,
-                pre_turn_history=pre_turn_history,
-                user_message=req.message,
-                accumulated_text=acc.accumulated_text,
-                accumulated_tools=acc.accumulated_tools,
-                partial_status=acc.partial_status,
-            )
-            tracker.done(turn_job_id, publish_fn=_publish_job_event)
             try:
                 CURRENT_SESSION_ID.reset(token)
                 ALLOWED_TOOLS.reset(_allowed_token)
             except ValueError:
                 log.debug("CURRENT_SESSION_ID reset across contexts")
-            if _inflight_turns.get(session.id) is current:
-                _inflight_turns.pop(session.id, None)
 
     return StreamingResponse(
         event_generator(),

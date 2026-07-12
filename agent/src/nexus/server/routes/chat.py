@@ -493,7 +493,7 @@ async def chat_hitl_cancel(
         return {"ok": True, "cancelled": "parked"}
 
     # Live path: drop the broker future first so ask_user returns
-    # quickly, then abort the inflight turn task so the agent stops.
+    # quickly, then abort the inflight turn so the agent stops.
     cancelled_future = store.cancel_pending(session_id, request_id)
     store.publish(
         session_id,
@@ -502,12 +502,15 @@ async def chat_hitl_cancel(
             data={"request_id": request_id, "reason": "user_cancelled"},
         ),
     )
-    task = _inflight_turns.get(session_id)
-    cancelled_task = False
-    if task is not None and not task.done():
-        _user_cancelled.add(session_id)
-        task.cancel()
-        cancelled_task = True
+    # Try detached ChatTurnRunner first, then inline SSE task.
+    from ..services.chat_turn_runner import cancel_running_turn
+    cancelled_task = cancel_running_turn(session_id)
+    if not cancelled_task:
+        task = _inflight_turns.get(session_id)
+        if task is not None and not task.done():
+            _user_cancelled.add(session_id)
+            task.cancel()
+            cancelled_task = True
     if not cancelled_future and not cancelled_task:
         # Nothing to cancel — request already resolved or never existed.
         # Returning ok=True keeps the UI state consistent (bell row will
@@ -529,21 +532,29 @@ async def chat_cancel(
     """Interrupt the currently-streaming turn for this session.
 
     Cancels any pending HITL wait (so ``ask_user`` returns fast) and
-    cancels the asyncio Task driving the SSE generator. The client
-    will see an ``error`` (reason=cancelled) + ``done`` before the
-    stream closes.
+    cancels the task driving the turn. For the main chat path, this is
+    the ChatTurnRunner's detached task; for HITL-resume / slash commands,
+    it falls back to the SSE generator task. The client will see an
+    ``error`` (reason=cancelled) + ``done`` before the stream closes.
     """
+    from ..services.chat_turn_runner import cancel_running_turn
+
     # Unblock any HITL future first so the tool dispatch stops waiting.
     try:
         store.broker.cancel_session(session_id, reason="user_cancelled")
     except Exception:  # noqa: BLE001 — best-effort
         log.exception("broker.cancel_session failed")
-    task = _inflight_turns.get(session_id)
-    cancelled = False
-    if task is not None and not task.done():
-        _user_cancelled.add(session_id)
-        task.cancel()
-        cancelled = True
+
+    # Try the detached ChatTurnRunner first (main chat path).
+    cancelled = cancel_running_turn(session_id)
+
+    # Fall back to inline SSE task (HITL-resume, slash commands).
+    if not cancelled:
+        task = _inflight_turns.get(session_id)
+        if task is not None and not task.done():
+            _user_cancelled.add(session_id)
+            task.cancel()
+            cancelled = True
     return {"ok": True, "cancelled": cancelled}
 
 
@@ -604,6 +615,76 @@ async def chat_events(session_id: str, store: SessionStore = Depends(get_session
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",  # nginx: don't buffer SSE
+        },
+    )
+
+
+@router.get("/chat/{session_id}/turn/active")
+async def turn_active(session_id: str) -> dict[str, Any]:
+    """Check whether a background chat turn is still running for this session.
+
+    Called by the frontend after a stream drop to decide whether to attempt
+    a reconnect (``GET /chat/{sid}/turn/stream``) or fall back to history reload.
+    """
+    from ..services.chat_turn_runner import get_running_turn
+
+    runner = get_running_turn(session_id)
+    if runner is not None:
+        return {
+            "running": True,
+            "started_at": runner.started_at.isoformat(),
+        }
+    return {"running": False}
+
+
+@router.get("/chat/{session_id}/turn/stream")
+async def turn_stream(
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> StreamingResponse:
+    """Reconnect to a running background turn.
+
+    Subscribes to the session bus with replay so the client sees the full
+    turn from the beginning (deltas, tools, done/error). If no turn is
+    active, returns an immediate ``done`` event so the client closes cleanly.
+    """
+    from ..services.chat_turn_runner import get_running_turn
+    from ._streaming import TurnAccumulator
+
+    runner = get_running_turn(session_id)
+
+    async def stream() -> AsyncIterator[bytes]:
+        if runner is None:
+            payload = json.dumps({
+                "session_id": session_id,
+                "reply": "",
+                "trace": [],
+                "skills_touched": [],
+                "iterations": 0,
+                "usage": {},
+                "model": "",
+            })
+            yield f"event: done\ndata: {payload}\n\n".encode()
+            return
+
+        acc = TurnAccumulator()
+        async for sevent in keepalive(
+            store.subscribe_with_replay(session_id), interval=15.0,
+        ):
+            if sevent is None:
+                yield b": ping\n\n"
+                continue
+            for frame in acc.process_event(sevent.data):
+                yield frame.encode()
+            if sevent.data.get("type") == "done":
+                break
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
         },
     )
 

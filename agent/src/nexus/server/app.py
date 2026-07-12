@@ -407,6 +407,10 @@ def create_app(
         session_id = CURRENT_SESSION_ID.get()
         if session_id is None:
             return
+        # Skip when a ChatTurnRunner is active — it publishes the canonical
+        # stream events directly to the bus, so _trace would double-publish.
+        if session_id in store_proxy._trace_suppressed:
+            return
         store_proxy.publish(session_id, SessionEvent(kind=kind, data=data))
 
     # Install the trace hook without clobbering one the caller may

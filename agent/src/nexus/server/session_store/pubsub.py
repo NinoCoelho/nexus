@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from collections.abc import AsyncIterator
 from threading import Lock
 from typing import Any
@@ -52,6 +53,11 @@ _GLOBAL_HITL_KINDS = frozenset({
 # events are also persisted to hitl_events + web-push, so dropping the
 # ephemeral SSE copy doesn't lose prompts — a stuck client recovers on reconnect.
 _SSE_QUEUE_MAX = 512
+
+# Max events retained per session for reconnect-with-replay. A long turn may
+# emit hundreds of delta chunks; 500 covers most turns while bounding memory.
+# Eviction is automatic (deque drops oldest).
+_REPLAY_MAX = 500
 
 
 def _row_to_pending_dict(r: Any) -> dict[str, Any]:
@@ -101,6 +107,15 @@ class PubSubMixin:
         self._global_subscribers: list[
             asyncio.Queue[tuple[str, SessionEvent] | None]
         ] = []
+        # Replay buffer: bounded deque of (seq, event) per session. A
+        # reconnecting subscriber (e.g. after machine sleep) drains the
+        # buffer before switching to live events, so it sees the full turn.
+        self._replay: dict[str, deque[tuple[int, SessionEvent]]] = {}
+        self._seq: dict[str, int] = {}
+        # Sessions where a ChatTurnRunner is active. The _trace hook checks
+        # this set to avoid double-publishing (ChatTurnRunner publishes the
+        # canonical stream events directly).
+        self._trace_suppressed: set[str] = set()
         # In-flight tool_call_id keyed by session_id, updated by the agent
         # façade on each tool_exec_start. ask_user_tool reads this when it
         # parks a request so we can persist tool_call_id alongside the
@@ -124,6 +139,13 @@ class PubSubMixin:
 
     def publish(self, session_id: str, event: SessionEvent) -> None:
         with self._lock:
+            seq = self._seq.get(session_id, 0) + 1
+            self._seq[session_id] = seq
+            buf = self._replay.get(session_id)
+            if buf is None:
+                buf = deque(maxlen=_REPLAY_MAX)
+                self._replay[session_id] = buf
+            buf.append((seq, event))
             subscribers = list(self._subscribers.get(session_id, ()))
             global_subscribers = (
                 list(self._global_subscribers)
@@ -562,6 +584,48 @@ class PubSubMixin:
                     subs.remove(queue)
                     if not subs:
                         self._subscribers.pop(session_id, None)
+
+    async def subscribe_with_replay(
+        self, session_id: str,
+    ) -> AsyncIterator[SessionEvent]:
+        """Like ``subscribe`` but drains the replay buffer first.
+
+        Atomic snapshot + subscribe under the lock guarantees no event is
+        lost or duplicated between buffer and live tail:
+        - Events in the snapshot are enqueued manually.
+        - Events published after the lock are enqueued by ``publish()``.
+        - No event appears in both because the snapshot is a point-in-time copy.
+        """
+        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)
+        with self._lock:
+            buf_snapshot = list(self._replay.get(session_id, ()))
+            self._subscribers.setdefault(session_id, []).append(queue)
+        for _seq, event in buf_snapshot:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                log.debug("pubsub: replay event dropped for full subscriber queue")
+                break
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    return
+                yield event
+        finally:
+            with self._lock:
+                subs = self._subscribers.get(session_id)
+                if subs is not None and queue in subs:
+                    subs.remove(queue)
+                    if not subs:
+                        self._subscribers.pop(session_id, None)
+
+    def clear_replay(self, session_id: str) -> None:
+        """Drop the replay buffer for a session. Called when a new turn starts
+        so stale events from a previous turn don't leak to reconnecting clients."""
+        with self._lock:
+            self._replay.pop(session_id, None)
+            self._seq[session_id] = 0
 
     async def subscribe_global(
         self,

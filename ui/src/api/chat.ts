@@ -114,7 +114,22 @@ export async function chatStream(
     throw new Error(detail);
   }
 
-  const reader = res.body.getReader();
+  await consumeSSEFrames(res.body, onEvent);
+}
+
+/**
+ * Parse an SSE byte stream and dispatch ``StreamEvent``s to ``onEvent``.
+ *
+ * Shared between ``chatStream`` (POST /chat/stream) and ``resumeTurnStream``
+ * (GET /chat/{sid}/turn/stream). Splits on ``\n\n`` frame boundaries, extracts
+ * ``event:`` / ``data:`` lines, and maps the SSE event type to the
+ * ``StreamEvent`` union.
+ */
+async function consumeSSEFrames(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (e: StreamEvent) => void,
+): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
 
@@ -123,7 +138,6 @@ export async function chatStream(
     if (done) break;
     buf += decoder.decode(value, { stream: true });
 
-    // SSE frames are separated by \n\n
     const frames = buf.split("\n\n");
     buf = frames.pop() ?? "";
 
@@ -193,6 +207,49 @@ export async function chatStream(
       } catch { /* malformed frame — skip */ }
     }
   }
+}
+
+/**
+ * Check whether a background chat turn is still running for a session.
+ *
+ * Called after a stream drop to decide whether to attempt a reconnect
+ * (``resumeTurnStream``) or fall back to history reload.
+ */
+export async function checkTurnActive(
+  session_id: string,
+): Promise<{ running: boolean; started_at?: string }> {
+  try {
+    const res = await fetch(
+      `${BASE}/chat/${encodeURIComponent(session_id)}/turn/active`,
+    );
+    if (!res.ok) return { running: false };
+    return res.json();
+  } catch {
+    return { running: false };
+  }
+}
+
+/**
+ * Reconnect to a running background turn via ``GET /chat/{sid}/turn/stream``.
+ *
+ * The server replays all buffered events from the start of the turn, then
+ * continues with live events. The caller should reset its assistant message
+ * state before calling this, since replayed deltas will re-accumulate from
+ * the beginning.
+ */
+export async function resumeTurnStream(
+  session_id: string,
+  onEvent: (e: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/turn/stream`,
+    { signal },
+  );
+  if (!res.ok || !res.body) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  await consumeSSEFrames(res.body, onEvent);
 }
 
 /**

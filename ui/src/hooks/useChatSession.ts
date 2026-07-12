@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, type SessionSummary } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
 import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
@@ -314,13 +314,70 @@ export function useChatSession(
       }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode, projectId: state.projectId });
 
       if (!sawDone && !abortController.signal.aborted) {
-        // Server closed the stream without a terminal `done`. Pull persisted
-        // state so any partial progress surfaces in the UI.
+        // Server closed the stream without a terminal `done`. Check if the
+        // backend turn is still running (machine sleep, network blip). If so,
+        // reconnect to the live turn via the resume endpoint. If not, fall
+        // back to reloading persisted history.
         const recoverSid = activeSession ?? sidForPost;
         if (recoverSid) {
-          setChatStates((prev) => { const next = new Map(prev); const cur = next.get(key) ?? emptyState(); next.set(key, { ...cur, historyLoaded: false, thinking: false }); return next; });
-          if (!activeSession) setActiveSession(recoverSid);
-          void loadSessionHistory(recoverSid);
+          const turnStatus = await checkTurnActive(recoverSid).catch(() => ({ running: false }));
+          if (turnStatus.running) {
+            // Reset the trailing assistant message so replayed deltas
+            // re-accumulate from scratch (the server replays from turn start).
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(key) ?? emptyState();
+              const msgs = cur.messages.slice();
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+                msgs[lastIdx] = { ...msgs[lastIdx], content: "", trace: [], timeline: [], streaming: true };
+              }
+              next.set(key, { ...cur, messages: msgs, thinking: true });
+              return next;
+            });
+            const resumeAbort = new AbortController();
+            abortControllersRef.current.set(key, resumeAbort);
+            let resumeDone = false;
+            try {
+              await resumeTurnStream(recoverSid, (event) => {
+                if (event.type === "delta") {
+                  applyDeltaEvent(setChatStates, key, event.text);
+                } else if (event.type === "thinking") {
+                  applyThinkingEvent(setChatStates, key, event.text);
+                } else if (event.type === "tool") {
+                  applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview });
+                } else if (event.type === "done") {
+                  resumeDone = true;
+                  applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, key, activeSession, state.selectedModel, event);
+                } else if (event.type === "limit_reached") {
+                  applyLimitReachedEvent(setChatStates, key, event.iterations);
+                } else if (event.type === "reconnecting") {
+                  applyReconnectingEvent(setChatStates, key, { attempt: event.attempt, maxAttempts: event.maxAttempts, delaySeconds: event.delaySeconds, reason: event.reason });
+                } else if (event.type === "paused_for_cooldown") {
+                  applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
+                } else if (event.type === "error") {
+                  applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
+                }
+              }, resumeAbort.signal);
+              if (!resumeDone && !resumeAbort.signal.aborted) {
+                // Resume stream also died — fall back to history reload.
+                setChatStates((prev) => { const next = new Map(prev); const cur = next.get(key) ?? emptyState(); next.set(key, { ...cur, historyLoaded: false, thinking: false }); return next; });
+                void loadSessionHistory(recoverSid);
+              }
+            } catch (err) {
+              if (!(err instanceof DOMException && err.name === "AbortError")) {
+                const recovered = await tryRecoverSession(recoverSid, key, activeSession, setChatStates, setActiveSession, loadSessionHistory);
+                if (!recovered) appendConnectionErrorBanner(err, key, setChatStates);
+              }
+            } finally {
+              if (abortControllersRef.current.get(key) === resumeAbort) abortControllersRef.current.delete(key);
+            }
+          } else {
+            // Turn is not running — reload persisted history for partial progress.
+            setChatStates((prev) => { const next = new Map(prev); const cur = next.get(key) ?? emptyState(); next.set(key, { ...cur, historyLoaded: false, thinking: false }); return next; });
+            if (!activeSession) setActiveSession(recoverSid);
+            void loadSessionHistory(recoverSid);
+          }
         } else {
           patchState(key, { thinking: false });
         }
