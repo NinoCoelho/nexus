@@ -347,17 +347,16 @@ def create_lifespan(state: dict[str, Any]):
                 from .events import SessionEvent
 
                 def _calendar_notifier(payload: dict) -> None:
+                    # Route the SSE event kind from the payload type so the UI
+                    # can distinguish persistent alarm cards (calendar_alarm)
+                    # from fire-and-forget agent-fire alerts (calendar_alert).
+                    kind = "calendar_alarm" if payload.get("type") == "calendar_alarm" else "calendar_alert"
+                    event = SessionEvent(kind=kind, data=payload)
                     if multi_user and session_registry is not None:
                         for _uid, user_store_inst in session_registry.all_stores().items():
-                            user_store_inst.publish(
-                                "__calendar__",
-                                SessionEvent(kind="calendar_alert", data=payload),
-                            )
+                            user_store_inst.publish("__calendar__", event)
                     else:
-                        sessions.publish(
-                            "__calendar__",
-                            SessionEvent(kind="calendar_alert", data=payload),
-                        )
+                        sessions.publish("__calendar__", event)
                 _set_cal_notifier(_calendar_notifier)
 
                 heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()

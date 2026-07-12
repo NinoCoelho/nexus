@@ -234,6 +234,13 @@ export async function queryVaultCalendarEvents(
   return jsonOrThrow<{ events: CalendarEvent[]; count: number }>(res, "Event query error");
 }
 
+export interface MissedEvent extends CalendarEvent {}
+
+export async function listMissedEvents(): Promise<{ events: MissedEvent[]; count: number }> {
+  const res = await fetch(`${BASE}/vault/calendar/events/missed`);
+  return jsonOrThrow<{ events: MissedEvent[]; count: number }>(res, "Missed events error");
+}
+
 export async function ackAlarm(eventId: string, occurrenceStart: string): Promise<{ ok: boolean }> {
   const res = await fetch(
     `${BASE}/vault/calendar/events/${encodeURIComponent(eventId)}/alarm/ack`,

@@ -207,6 +207,20 @@ async def vault_calendar_query(body: dict) -> dict:
     return {"events": hits, "count": len(hits)}
 
 
+@router.get("/vault/calendar/events/missed")
+async def vault_calendar_missed_events() -> dict:
+    """Return all events flagged ``missed`` across every calendar.
+
+    Used by the UI's missed-task recovery prompt to ask the user which
+    scheduled tasks (that fell due while the computer/server was offline)
+    they want to re-run. ``sweep_missed`` flags these at startup; the
+    calendar driver flags them at runtime.
+    """
+    from ... import vault_calendar
+    hits = vault_calendar.query_events(status="missed")
+    return {"events": hits, "count": len(hits)}
+
+
 # ── alarm endpoints ──────────────────────────────────────────────────────────
 
 

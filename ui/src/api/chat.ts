@@ -540,6 +540,7 @@ function openGlobalNotifSource(): void {
     "user_request_auto",
     "user_request_cancelled",
     "calendar_alert",
+    "calendar_alarm",
     "voice_ack",
     "nexus_tier_changed",
     "features_changed",

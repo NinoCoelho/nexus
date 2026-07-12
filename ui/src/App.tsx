@@ -36,8 +36,11 @@ import { useNexusAccount } from "./hooks/useNexusAccount";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useCalendarAlarms } from "./hooks/useCalendarAlarms";
+import { useMissedTasks } from "./hooks/useMissedTasks";
 import AlarmNotification from "./components/AlarmNotification";
 import "./components/AlarmNotification.css";
+import MissedTasksModal from "./components/MissedTasksModal";
+import "./components/MissedTasksModal.css";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
 import { useVoiceAckPlayer } from "./hooks/useVoiceAckPlayer";
 import { usePushSubscription } from "./hooks/usePushSubscription";
@@ -309,6 +312,8 @@ export default function App() {
   const { alarms, dismiss: dismissAlarm, snooze: snoozeAlarm } = useCalendarAlarms({
     onOpenCalendar: handleOpenCalendar,
   });
+
+  const { missed, removeOne: removeMissedOne, dismissAll: dismissAllMissed } = useMissedTasks();
 
   const handleViewEntityGraph = useCallback((mode: "file" | "folder", path: string) => {
     setGraphSourceFilter({ mode, path });
@@ -847,6 +852,15 @@ export default function App() {
         onSnooze={snoozeAlarm}
         onOpen={handleOpenCalendar}
       />
+
+      {missed.length > 0 && (
+        <MissedTasksModal
+          events={missed}
+          onFired={removeMissedOne}
+          onDismissAll={dismissAllMissed}
+          onClose={dismissAllMissed}
+        />
+      )}
     </div>
   );
 }
