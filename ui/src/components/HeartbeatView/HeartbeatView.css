@@ -65,6 +65,16 @@
   color: var(--fg);
 }
 
+.hb-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.hb-btn:disabled:hover {
+  background: transparent;
+  color: var(--fg-dim);
+}
+
 .hb-btn--accent {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--accent);

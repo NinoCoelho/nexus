@@ -172,10 +172,12 @@ function HeartbeatCard({
   hb,
   onToggle,
   onTrigger,
+  triggering,
 }: {
   hb: HeartbeatRun;
   onToggle: (id: string, enabled: boolean) => void;
   onTrigger: (id: string) => void;
+  triggering: boolean;
 }) {
   return (
     <div className="hb-card">
@@ -187,6 +189,7 @@ function HeartbeatCard({
           <button
             className="hb-btn"
             onClick={() => onToggle(hb.id, !hb.enabled)}
+            disabled={triggering}
             type="button"
           >
             {hb.enabled ? "Disable" : "Enable"}
@@ -194,9 +197,10 @@ function HeartbeatCard({
           <button
             className="hb-btn hb-btn--accent"
             onClick={() => onTrigger(hb.id)}
+            disabled={triggering}
             type="button"
           >
-            Trigger
+            {triggering ? <Spinner /> : "Trigger"}
           </button>
         </div>
       </div>
@@ -364,6 +368,7 @@ export default function HeartbeatView({
   const [logEntries, setLogEntries] = useState<FireLogEntry[]>([]);
   const [tab, setTab] = useState<Tab>("events");
   const [loading, setLoading] = useState(true);
+  const [triggering, setTriggering] = useState<Set<string>>(new Set());
   const toast = useToast();
 
   const [activityEvent, setActivityEvent] = useState<{
@@ -422,11 +427,21 @@ export default function HeartbeatView({
   };
 
   const handleTrigger = async (id: string) => {
+    setTriggering((prev) => new Set(prev).add(id));
     try {
-      await triggerHeartbeat(id);
+      const res = await triggerHeartbeat(id);
+      toast.success(`Triggered "${heartbeats.find((h) => h.id === id)?.name ?? id}"`, {
+        detail: res.turns > 0 ? `${res.turns} turn(s) fired` : undefined,
+      });
       await load();
     } catch (e) {
       toast.error("Failed to trigger heartbeat", { detail: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setTriggering((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -490,6 +505,7 @@ export default function HeartbeatView({
               hb={hb}
               onToggle={handleToggle}
               onTrigger={handleTrigger}
+              triggering={triggering.has(hb.id)}
             />
           ))}
           {heartbeats.length === 0 && (
