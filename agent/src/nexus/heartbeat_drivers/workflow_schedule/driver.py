@@ -83,11 +83,16 @@ class Driver(HeartbeatDriver):
                             except Exception:
                                 log.exception("schedule trigger: failed to dispatch %s", entry.path)
                         events.append(HeartbeatEvent(
-                            id=f"wf-sched-{trigger.id}",
-                            title=f"Workflow schedule: {wf.title}",
-                            instructions="",
+                            name=f"wf-sched-{trigger.id}",
+                            payload={
+                                "title": f"Workflow schedule: {wf.title}",
+                                "trigger_id": trigger.id,
+                                "cron": trigger.cron,
+                                "fired_at": now.isoformat(),
+                            },
                         ))
             except Exception:
+                log.exception("schedule trigger: failed to process %s", entry.path)
                 continue
 
         return events, state
