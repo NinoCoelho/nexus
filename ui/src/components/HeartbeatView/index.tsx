@@ -14,6 +14,7 @@ import { fireVaultCalendarEvent } from "../../api/calendar";
 import CardActivityModal from "../CardActivityModal";
 import type { KanbanCardStatus } from "../../api";
 import { usePollWhileRunning } from "../../hooks/usePollWhileRunning";
+import { useToast } from "../../toast/ToastProvider";
 import "./HeartbeatView.css";
 
 type Tab = "events" | "log";
@@ -363,6 +364,7 @@ export default function HeartbeatView({
   const [logEntries, setLogEntries] = useState<FireLogEntry[]>([]);
   const [tab, setTab] = useState<Tab>("events");
   const [loading, setLoading] = useState(true);
+  const toast = useToast();
 
   const [activityEvent, setActivityEvent] = useState<{
     sessionId: string;
@@ -414,8 +416,8 @@ export default function HeartbeatView({
     try {
       await patchHeartbeat(id, enabled);
       await load();
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error("Failed to toggle heartbeat", { detail: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -423,8 +425,8 @@ export default function HeartbeatView({
     try {
       await triggerHeartbeat(id);
       await load();
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error("Failed to trigger heartbeat", { detail: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -432,8 +434,8 @@ export default function HeartbeatView({
     try {
       await reloadHeartbeats();
       await load();
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error("Failed to reload heartbeats", { detail: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -441,8 +443,8 @@ export default function HeartbeatView({
     try {
       await fireVaultCalendarEvent(ev.calendar_path, ev.event_id);
       await load();
-    } catch {
-      // ignore
+    } catch (e) {
+      toast.error("Failed to fire event", { detail: e instanceof Error ? e.message : String(e) });
     }
   };
 

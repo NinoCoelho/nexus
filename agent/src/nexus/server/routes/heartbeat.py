@@ -179,8 +179,8 @@ async def heartbeat_patch(heartbeat_id: str, body: dict, request: Request) -> di
     enabled = body.get("enabled")
     if enabled is None:
         raise HTTPException(status_code=422, detail="'enabled' is required")
-    action = "enable" if enabled else "disable"
-    result = manager.invoke({"action": action, "name": heartbeat_id})
+    args = {"name": heartbeat_id}
+    result = manager.enable(args) if enabled else manager.disable(args)
     if result.startswith("error:"):
         raise HTTPException(status_code=422, detail=result)
     return {"ok": True, "message": result}
