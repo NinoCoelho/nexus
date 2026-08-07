@@ -159,7 +159,18 @@ jobs:
         run: |
           $pyproject = Get-Content 'agent\pyproject.toml' -Raw
           if ($pyproject -match 'version\s*=\s*"([^"]+)"') { $v = $Matches[1] } else { $v = '0.0.0' }
-          makensis /DPRODUCT_VERSION=$v /DSOURCE_DIR=dist\Nexus packaging\windows\installer.nsi
+          # NSIS resolves File paths relative to the .nsi script's directory,
+          # not the CWD, so SOURCE_DIR must be absolute — build.ps1 does the
+          # same. Without this, File "dist\Nexus\*.*" looks under packaging\windows\.
+          $src = (Resolve-Path 'dist\Nexus').Path
+          makensis /DPRODUCT_VERSION=$v /DSOURCE_DIR=$src packaging\windows\installer.nsi
+          # OutFile ("dist\Nexus-Setup-<v>.exe") is relative; normalize its
+          # location into dist\ so the release-attach glob always matches.
+          $expected = "dist\Nexus-Setup-$v.exe"
+          if (-not (Test-Path $expected)) {
+            $found = Get-ChildItem -Path . -Filter 'Nexus-Setup-*.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { Move-Item $found.FullName $expected -Force }
+          }
 
       - name: Rename for clarity
         working-directory: nexus
