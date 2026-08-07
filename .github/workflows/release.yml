@@ -140,6 +140,10 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis -y --no-progress
+          # choco updates the *machine* PATH, but this shell captured PATH at
+          # startup — refresh from the registry so makensis resolves. Without
+          # this the next line fails with "makensis: command not found".
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
           makensis /VERSION
 
       - name: Build NSIS installer
