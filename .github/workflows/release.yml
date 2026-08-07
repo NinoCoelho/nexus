@@ -140,11 +140,18 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis -y --no-progress
-          # choco updates the *machine* PATH, but this shell captured PATH at
-          # startup — refresh from the registry so makensis resolves. Without
-          # this the next line fails with "makensis: command not found".
-          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-          makensis /VERSION
+          # The choco `nsis` package neither adds makensis to PATH nor creates
+          # a shim (and GitHub's runner image no longer ships NSIS pre-installed).
+          # Locate makensis.exe and prepend its dir to $GITHUB_PATH so both
+          # this step and the later "Build NSIS installer" step resolve it.
+          $nsisDir = 'C:\Program Files (x86)\NSIS'
+          if (-not (Test-Path "$nsisDir\makensis.exe")) {
+            $hit = Get-ChildItem 'C:\Program Files*\NSIS','C:\ProgramData\chocolatey' -Filter makensis.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $nsisDir = $hit.DirectoryName }
+          }
+          if (-not (Test-Path "$nsisDir\makensis.exe")) { throw 'makensis.exe not found after choco install' }
+          Add-Content -Path $env:GITHUB_PATH -Value $nsisDir
+          & "$nsisDir\makensis.exe" /VERSION
 
       - name: Build NSIS installer
         working-directory: nexus
