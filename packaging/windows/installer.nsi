@@ -64,8 +64,9 @@ Section "Install" SecInstall
   WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "NoModify" 1
   WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "NoRepair" 1
 
-  ; Estimate size for ARP
-  ${GetSize} "$INSTDIR" "/S=0K" $0
+  ; Estimate size for ARP. FileFunc's ${GetSize} requires three output vars
+  ; (size, file count, dir count); passing only one is a compile error.
+  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "EstimatedSize" "$0"
 

@@ -154,6 +154,7 @@ jobs:
           & "$nsisDir\makensis.exe" /VERSION
 
       - name: Build NSIS installer
+        continue-on-error: true   # optional installer — never block the zip release
         working-directory: nexus
         shell: pwsh
         run: |
@@ -177,10 +178,14 @@ jobs:
         shell: pwsh
         run: Move-Item dist\Nexus.zip dist\Nexus-windows-x64.zip
 
-      - name: Attach to release
+      - name: Attach zip to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            nexus/dist/Nexus-windows-x64.zip
-            nexus/dist/Nexus-Setup-*.exe
+          files: nexus/dist/Nexus-windows-x64.zip
           fail_on_unmatched_files: true
+
+      - name: Attach installer to release (if built)
+        continue-on-error: true   # installer is optional; zip is the required deliverable
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nexus/dist/Nexus-Setup-*.exe
