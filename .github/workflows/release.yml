@@ -164,6 +164,10 @@ jobs:
           # not the CWD, so SOURCE_DIR must be absolute — build.ps1 does the
           # same. Without this, File "dist\Nexus\*.*" looks under packaging\windows\.
           $src = (Resolve-Path 'dist\Nexus').Path
+          # OutFile ("dist\Nexus-Setup-<v>.exe") is also script-dir-relative,
+          # so NSIS writes under packaging\windows\dist\. Pre-create it or
+          # makensis aborts with "Can't open output file".
+          New-Item -ItemType Directory -Force -Path 'packaging\windows\dist' | Out-Null
           makensis /DPRODUCT_VERSION=$v /DSOURCE_DIR=$src packaging\windows\installer.nsi
           # OutFile ("dist\Nexus-Setup-<v>.exe") is relative; normalize its
           # location into dist\ so the release-attach glob always matches.
