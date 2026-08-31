@@ -105,11 +105,6 @@ def _broker_connected() -> bool:
     return bool(_secrets.get("broker_api_key"))
 
 
-def _is_signed_in() -> bool:
-    from ... import secrets as _secrets
-    return bool(_secrets.get("nexus_api_key"))
-
-
 @router.post("/webhook/{token}")
 async def webhook_receive(token: str, request: Request) -> Response:
     found = _find_lane_by_token(token)
@@ -175,7 +170,7 @@ async def lane_webhook_get(lane_id: str, path: str, request: Request) -> dict:
         broker_base = load_config().broker.url.rstrip("/")
         url = f"{broker_base}/wh/{lane.broker_slug}"
 
-    return {"enabled": enabled, "url": url, "token": token, "has_broker": has_broker, "broker_connected": _broker_connected(), "signed_in": _is_signed_in()}
+    return {"enabled": enabled, "url": url, "token": token, "has_broker": has_broker, "broker_connected": _broker_connected()}
 
 
 @router.post("/vault/kanban/lanes/{lane_id}/webhook")
@@ -241,7 +236,7 @@ async def lane_webhook_set(lane_id: str, path: str, request: Request) -> dict:
         broker_base = load_config().broker.url.rstrip("/")
         url = f"{broker_base}/wh/{lane.broker_slug}"
 
-    return {"enabled": enabled, "url": url, "token": lane.webhook_token, "broker_connected": _broker_connected(), "signed_in": _is_signed_in()}
+    return {"enabled": enabled, "url": url, "token": lane.webhook_token, "broker_connected": _broker_connected()}
 
 
 @router.delete("/vault/kanban/lanes/{lane_id}/webhook")

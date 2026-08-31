@@ -20,13 +20,20 @@ def create_lifespan(state: dict[str, Any]):
         mutable_state = state["mutable_state"]
         agent = state["agent"]
         sessions = state["sessions"]
-        multi_user = state["multi_user"]
-        session_registry = state["session_registry"]
-        store_proxy = state.get("store_proxy")
         job_tracker = state["job_tracker"]
         publish_job_event = state["publish_job_event"]
 
         log.info("Lifespan starting (graphrag_cfg=%s)", "present" if graphrag_cfg is not None else "None")
+
+        try:
+            from ..local_migration import run as _run_local_migration
+            migrated = _run_local_migration()
+            if migrated.get("config_changed"):
+                from ..config_file import load as _load_cfg
+                from .routes.config import _rebuild_registry
+                _rebuild_registry(_load_cfg(), mutable_state, agent)
+        except Exception:
+            log.exception("local migration failed")
 
         _nexus_logger = logging.getLogger("nexus")
         if not _nexus_logger.handlers:
@@ -142,25 +149,6 @@ def create_lifespan(state: dict[str, Any]):
             log.exception("[ocr_server] bootstrap failed")
 
         try:
-            from ..auth.status_watcher import StatusWatcher
-            from ..config_file import save as _save_cfg
-            from .routes.config import _rebuild_registry as _rebuild_reg
-
-            watcher = StatusWatcher(
-                mutable_state=mutable_state,
-                agent=agent,
-                sessions=sessions,
-                rebuild_registry=_rebuild_reg,
-                save_config=_save_cfg,
-            )
-            watcher.start()
-            app.state.nexus_status_watcher = watcher
-            log.info("[nexus] status watcher started")
-        except Exception:
-            log.exception("[nexus] status watcher start failed")
-            app.state.nexus_status_watcher = None
-
-        try:
             from .events import SessionEvent as _SE
             from datetime import datetime, timezone
 
@@ -208,11 +196,7 @@ def create_lifespan(state: dict[str, Any]):
                 if cleaned_errs:
                     log.info("cleaned up %d old llm_errors rows (>90d)", cleaned_errs)
 
-            if multi_user and session_registry is not None:
-                for _uid, user_store_inst in session_registry.all_stores().items():
-                    _sweep_store(user_store_inst)
-            else:
-                _sweep_store(sessions)
+            _sweep_store(sessions)
             if re_published:
                 log.info(
                     "[hitl] re-published %d parked request(s) at startup",
@@ -266,208 +250,201 @@ def create_lifespan(state: dict[str, Any]):
                 pass
 
         scheduler = None
-        from ..features import is_enabled as _feat_enabled
-        if _feat_enabled("heartbeat"):
-            try:
-                from .. import vault_calendar
-                from ..calendar_runtime import (
-                    set_dispatcher as _set_cal_dispatcher,
-                    set_notifier as _set_cal_notifier,
-                    set_alarm_store as _set_cal_alarm_store,
-                )
-                from ..heartbeat_drivers import DRIVERS_DIR
-                from pathlib import Path
-                from loom.heartbeat import (
-                    HeartbeatRegistry,
-                    HeartbeatScheduler,
-                    HeartbeatStore,
-                )
+        try:
+            from .. import vault_calendar
+            from ..calendar_runtime import (
+                set_dispatcher as _set_cal_dispatcher,
+                set_notifier as _set_cal_notifier,
+                set_alarm_store as _set_cal_alarm_store,
+            )
+            from ..heartbeat_drivers import DRIVERS_DIR
+            from pathlib import Path
+            from loom.heartbeat import (
+                HeartbeatRegistry,
+                HeartbeatScheduler,
+                HeartbeatStore,
+            )
 
-                vault_calendar.ensure_default_calendar()
-                vault_calendar.sweep_missed(grace_minutes=5)
+            vault_calendar.ensure_default_calendar()
+            vault_calendar.sweep_missed(grace_minutes=5)
 
-                from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
+            from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
 
-                async def _calendar_dispatcher(
-                    *,
-                    path: str,
-                    event_id: str,
-                    mode: str = "background",
-                    occurrence_start: str | None = None,
-                ) -> dict:
-                    import time as _time
-                    from .. import vault_calendar as _vc
-                    event_title = ""
-                    try:
-                        _cal = _vc.read_calendar(path)
-                        _found = _vc.find_event(_cal, event_id)
-                        if _found:
-                            event_title = _found[0].title
-                    except Exception:
-                        pass
-                    _log_id = log_store.log_fire(
-                        heartbeat_id="calendar_trigger",
-                        event_id=event_id,
-                        event_title=event_title,
-                        calendar_path=path,
-                    )
-                    _t0 = _time.monotonic()
-                    _cal_job_id = job_tracker.start(
-                        type="calendar",
-                        label=event_title or "Calendar trigger",
-                        session_id=None,
-                        extra={"event_id": event_id, "calendar_path": path},
-                        publish_fn=publish_job_event,
-                    )
-                    try:
-                        result = await _cal_dispatch(
-                            path=path, card_id=None, event_id=event_id,
-                            mode=mode, a=agent, store=sessions,
-                            occurrence_start=occurrence_start,
-                        )
-                        _sid = result.get("session_id")
-                        if _sid:
-                            log_store.update_session_id(_log_id, _sid)
-                        log_store.update_status(
-                            _log_id, status="done",
-                            duration_ms=int((_time.monotonic() - _t0) * 1000),
-                        )
-                        return result
-                    except Exception as _dispatch_err:
-                        log_store.update_status(
-                            _log_id, status="failed",
-                            error=str(_dispatch_err),
-                            duration_ms=int((_time.monotonic() - _t0) * 1000),
-                        )
-                        raise
-                    finally:
-                        job_tracker.done(_cal_job_id, publish_fn=publish_job_event)
-                _set_cal_dispatcher(_calendar_dispatcher)
-
-                from .events import SessionEvent
-
-                def _calendar_notifier(payload: dict) -> None:
-                    # Route the SSE event kind from the payload type so the UI
-                    # can distinguish persistent alarm cards (calendar_alarm)
-                    # from fire-and-forget agent-fire alerts (calendar_alert).
-                    kind = "calendar_alarm" if payload.get("type") == "calendar_alarm" else "calendar_alert"
-                    event = SessionEvent(kind=kind, data=payload)
-                    if multi_user and session_registry is not None:
-                        for _uid, user_store_inst in session_registry.all_stores().items():
-                            user_store_inst.publish("__calendar__", event)
-                    else:
-                        sessions.publish("__calendar__", event)
-                _set_cal_notifier(_calendar_notifier)
-
-                heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
-                heartbeats_dir.mkdir(parents=True, exist_ok=True)
-                db_path = Path("~/.nexus/heartbeat.db").expanduser()
-                registry = HeartbeatRegistry(
-                    heartbeats_dir=heartbeats_dir,
-                    additional_dirs=[DRIVERS_DIR],
-                )
-                registry.scan()
-                store = HeartbeatStore(db_path)
-
-                from ..heartbeat_log import HeartbeatLogStore
-                log_store = HeartbeatLogStore(db_path)
-
-                from ..alarm_store import AlarmStore
-                alarm_store = AlarmStore(db_path)
-                _set_cal_alarm_store(alarm_store)
-
-                async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
-                    from loom.loop import AgentTurn
-                    return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
-
-                scheduler = HeartbeatScheduler(
-                    registry, store, run_fn=_noop_run_fn, tick_interval=60.0,
-                )
-                scheduler.start()
-                app.state.heartbeat_scheduler = scheduler
-                app.state.heartbeat_registry = registry
-                app.state.heartbeat_store = store
-                app.state.heartbeat_log_store = log_store
-                app.state.alarm_store = alarm_store
-
-                from loom.heartbeat import HeartbeatManager
-
-                def _hb_manager_getter():
-                    return HeartbeatManager(registry=registry, store=store)
-
-                agent._handlers.hb_manager_getter = _hb_manager_getter
-
-                log.info("heartbeat scheduler started (calendar_trigger registered)")
-            except Exception:
-                log.exception("heartbeat / calendar bootstrap failed")
-
-        if _feat_enabled("workflow"):
-            try:
-                from ..workflows.store import WorkflowStore
-                from ..workflows.engine import WorkflowEngine
-                from .. import home as _wf_home
-
-                wf_db = str(_wf_home.workflow_runs_db())
-                wf_store = WorkflowStore(wf_db)
-                wf_engine = WorkflowEngine(wf_store)
-                app.state.workflow_store = wf_store
-                app.state.workflow_engine = wf_engine
-
-                reconciled = wf_store.reconcile_stale_runs()
-                if reconciled:
-                    log.info("reconciled %d stale workflow runs", reconciled)
-                cleaned = wf_store.cleanup_old_runs(30)
-                if cleaned:
-                    log.info("cleaned up %d old workflow runs (>30d)", cleaned)
-
-                if agent is not None:
-                    wf_engine._agent = agent
-                if sessions is not None:
-                    wf_engine._sessions = store_proxy or sessions
-
-                from .routes.workflows import init as _wf_init
-                _wf_init(wf_store, wf_engine)
-
-                from ..workflows.triggers.webhook import WebhookTriggerDriver
-                from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
-                from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
-                from ..workflows.triggers.rss import RssTriggerDriver, set_engine_ref as _set_rss_ref
-
-                webhook_driver = WebhookTriggerDriver(wf_store)
-                event_listener = EventTriggerListener(wf_store)
-                fsw_driver = FsWatchTriggerDriver(wf_store)
-                rss_driver = RssTriggerDriver(wf_store)
-
-                _set_evt_ref(wf_engine)
-                _set_fsw_ref(wf_engine)
-                _set_rss_ref(wf_engine)
-
-                from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
-                _set_engine_evt(wf_engine)
-
-                app.state.workflow_webhook_driver = webhook_driver
-                app.state.workflow_event_listener = event_listener
-                app.state.workflow_fsw_driver = fsw_driver
-                app.state.workflow_rss_driver = rss_driver
-
+            async def _calendar_dispatcher(
+                *,
+                path: str,
+                event_id: str,
+                mode: str = "background",
+                occurrence_start: str | None = None,
+            ) -> dict:
+                import time as _time
+                from .. import vault_calendar as _vc
+                event_title = ""
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(event_listener.start())
+                    _cal = _vc.read_calendar(path)
+                    _found = _vc.find_event(_cal, event_id)
+                    if _found:
+                        event_title = _found[0].title
                 except Exception:
-                    log.exception("workflow event listener start failed")
-
-                # Re-register fs_watch/event/rss triggers for workflows that
-                # already existed before this restart — otherwise those
-                # stateful drivers stay silent until each workflow is re-saved.
+                    pass
+                _log_id = log_store.log_fire(
+                    heartbeat_id="calendar_trigger",
+                    event_id=event_id,
+                    event_title=event_title,
+                    calendar_path=path,
+                )
+                _t0 = _time.monotonic()
+                _cal_job_id = job_tracker.start(
+                    type="calendar",
+                    label=event_title or "Calendar trigger",
+                    session_id=None,
+                    extra={"event_id": event_id, "calendar_path": path},
+                    publish_fn=publish_job_event,
+                )
                 try:
-                    from .routes.workflows import reregister_workflow_triggers
-                    await reregister_workflow_triggers(app)
-                except Exception:
-                    log.exception("workflow trigger re-registration failed")
+                    result = await _cal_dispatch(
+                        path=path, card_id=None, event_id=event_id,
+                        mode=mode, a=agent, store=sessions,
+                        occurrence_start=occurrence_start,
+                    )
+                    _sid = result.get("session_id")
+                    if _sid:
+                        log_store.update_session_id(_log_id, _sid)
+                    log_store.update_status(
+                        _log_id, status="done",
+                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    )
+                    return result
+                except Exception as _dispatch_err:
+                    log_store.update_status(
+                        _log_id, status="failed",
+                        error=str(_dispatch_err),
+                        duration_ms=int((_time.monotonic() - _t0) * 1000),
+                    )
+                    raise
+                finally:
+                    job_tracker.done(_cal_job_id, publish_fn=publish_job_event)
+            _set_cal_dispatcher(_calendar_dispatcher)
 
-                log.info("workflow engine initialised")
+            from .events import SessionEvent
+
+            def _calendar_notifier(payload: dict) -> None:
+                # Route the SSE event kind from the payload type so the UI
+                # can distinguish persistent alarm cards (calendar_alarm)
+                # from fire-and-forget agent-fire alerts (calendar_alert).
+                kind = "calendar_alarm" if payload.get("type") == "calendar_alarm" else "calendar_alert"
+                event = SessionEvent(kind=kind, data=payload)
+                sessions.publish("__calendar__", event)
+            _set_cal_notifier(_calendar_notifier)
+
+            heartbeats_dir = Path("~/.nexus/heartbeats").expanduser()
+            heartbeats_dir.mkdir(parents=True, exist_ok=True)
+            db_path = Path("~/.nexus/heartbeat.db").expanduser()
+            registry = HeartbeatRegistry(
+                heartbeats_dir=heartbeats_dir,
+                additional_dirs=[DRIVERS_DIR],
+            )
+            registry.scan()
+            store = HeartbeatStore(db_path)
+
+            from ..heartbeat_log import HeartbeatLogStore
+            log_store = HeartbeatLogStore(db_path)
+
+            from ..alarm_store import AlarmStore
+            alarm_store = AlarmStore(db_path)
+            _set_cal_alarm_store(alarm_store)
+
+            async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
+                from loom.loop import AgentTurn
+                return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
+
+            scheduler = HeartbeatScheduler(
+                registry, store, run_fn=_noop_run_fn, tick_interval=60.0,
+            )
+            scheduler.start()
+            app.state.heartbeat_scheduler = scheduler
+            app.state.heartbeat_registry = registry
+            app.state.heartbeat_store = store
+            app.state.heartbeat_log_store = log_store
+            app.state.alarm_store = alarm_store
+
+            from loom.heartbeat import HeartbeatManager
+
+            def _hb_manager_getter():
+                return HeartbeatManager(registry=registry, store=store)
+
+            agent._handlers.hb_manager_getter = _hb_manager_getter
+
+            log.info("heartbeat scheduler started (calendar_trigger registered)")
+        except Exception:
+            log.exception("heartbeat / calendar bootstrap failed")
+
+        try:
+            from ..workflows.store import WorkflowStore
+            from ..workflows.engine import WorkflowEngine
+            from .. import home as _wf_home
+
+            wf_db = str(_wf_home.workflow_runs_db())
+            wf_store = WorkflowStore(wf_db)
+            wf_engine = WorkflowEngine(wf_store)
+            app.state.workflow_store = wf_store
+            app.state.workflow_engine = wf_engine
+
+            reconciled = wf_store.reconcile_stale_runs()
+            if reconciled:
+                log.info("reconciled %d stale workflow runs", reconciled)
+            cleaned = wf_store.cleanup_old_runs(30)
+            if cleaned:
+                log.info("cleaned up %d old workflow runs (>30d)", cleaned)
+
+            if agent is not None:
+                wf_engine._agent = agent
+            if sessions is not None:
+                wf_engine._sessions = sessions
+
+            from .routes.workflows import init as _wf_init
+            _wf_init(wf_store, wf_engine)
+
+            from ..workflows.triggers.webhook import WebhookTriggerDriver
+            from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
+            from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
+            from ..workflows.triggers.rss import RssTriggerDriver, set_engine_ref as _set_rss_ref
+
+            webhook_driver = WebhookTriggerDriver(wf_store)
+            event_listener = EventTriggerListener(wf_store)
+            fsw_driver = FsWatchTriggerDriver(wf_store)
+            rss_driver = RssTriggerDriver(wf_store)
+
+            _set_evt_ref(wf_engine)
+            _set_fsw_ref(wf_engine)
+            _set_rss_ref(wf_engine)
+
+            from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
+            _set_engine_evt(wf_engine)
+
+            app.state.workflow_webhook_driver = webhook_driver
+            app.state.workflow_event_listener = event_listener
+            app.state.workflow_fsw_driver = fsw_driver
+            app.state.workflow_rss_driver = rss_driver
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(event_listener.start())
             except Exception:
-                log.exception("workflow engine bootstrap failed")
+                log.exception("workflow event listener start failed")
+
+            # Re-register fs_watch/event/rss triggers for workflows that
+            # already existed before this restart — otherwise those
+            # stateful drivers stay silent until each workflow is re-saved.
+            try:
+                from .routes.workflows import reregister_workflow_triggers
+                await reregister_workflow_triggers(app)
+            except Exception:
+                log.exception("workflow trigger re-registration failed")
+
+            log.info("workflow engine initialised")
+        except Exception:
+            log.exception("workflow engine bootstrap failed")
 
         mcp_manager = None
         try:
@@ -515,12 +492,6 @@ def create_lifespan(state: dict[str, Any]):
             yield
         finally:
             _vault_cache_task.cancel()
-            watcher = getattr(app.state, "nexus_status_watcher", None)
-            if watcher is not None:
-                try:
-                    await watcher.stop()
-                except Exception:
-                    log.exception("[nexus] status watcher stop failed")
             if scheduler is not None:
                 try:
                     scheduler.stop()

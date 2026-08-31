@@ -10,11 +10,9 @@ import uuid
 import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-
-from ..auth import require_admin
 
 from ...workflows import parser
 from ...workflows.engine import WorkflowEngine
@@ -302,7 +300,7 @@ async def get_run(path: str, run_id: str, request: Request) -> dict:
 
 
 @router.delete("/workflows/{path:path}/runs")
-async def clear_runs(path: str, request: Request, _admin: None = Depends(require_admin), statuses: str | None = None) -> dict:
+async def clear_runs(path: str, request: Request, statuses: str | None = None) -> dict:
     store = _get_store(request)
     status_list = statuses.split(",") if statuses else None
     deleted = store.delete_runs_for_workflow(path, status_list)
@@ -356,11 +354,10 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     from ... import secrets as _secrets
     broker_base = load_config().broker.url.rstrip("/")
     broker_connected = bool(_secrets.get("broker_api_key"))
-    signed_in = bool(_secrets.get("nexus_api_key"))
 
     broker_ok: bool | None = None
     broker_error: str | None = None
-    if broker_connected and signed_in:
+    if broker_connected:
         broker_ok, broker_error = await _check_broker_health()
 
     hooks = []
@@ -377,7 +374,6 @@ async def get_webhook_url(path: str, request: Request) -> dict:
     return {
         "webhooks": hooks,
         "broker_connected": broker_connected,
-        "signed_in": signed_in,
         "broker_ok": broker_ok,
         "broker_error": broker_error,
     }
@@ -465,7 +461,7 @@ async def get_workflow(path: str, request: Request) -> dict:
 
 
 @router.post("/workflows")
-async def create_workflow(body: WorkflowCreateBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def create_workflow(body: WorkflowCreateBody, request: Request) -> dict:
     from ... import vault as _vault
 
     if not body.path.endswith(".md"):
@@ -484,7 +480,7 @@ async def create_workflow(body: WorkflowCreateBody, request: Request, _admin: No
 
 
 @router.put("/workflows/{path:path}")
-async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def update_workflow(path: str, body: WorkflowUpdateBody, request: Request) -> dict:
     from ... import vault as _vault
 
     try:
@@ -727,7 +723,7 @@ def _unregister_triggers(path: str, wf: WorkflowDef | None, request: Request) ->
 
 
 @router.delete("/workflows/{path:path}")
-async def delete_workflow(path: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def delete_workflow(path: str, request: Request) -> dict:
     from ... import vault as _vault
 
     wf = None
@@ -761,7 +757,7 @@ async def delete_workflow(path: str, request: Request, _admin: None = Depends(re
 
 
 @router.post("/workflows/{path:path}/run")
-async def manual_run(path: str, body: ManualRunBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def manual_run(path: str, body: ManualRunBody, request: Request) -> dict:
     from ... import vault as _vault
 
     try:
@@ -946,7 +942,7 @@ class DebugStartBody(BaseModel):
 
 
 @router.post("/workflows/{path:path}/debug")
-async def start_debug(path: str, body: DebugStartBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def start_debug(path: str, body: DebugStartBody, request: Request) -> dict:
     from ... import vault as _vault
 
     try:
@@ -968,7 +964,7 @@ async def start_debug(path: str, body: DebugStartBody, request: Request, _admin:
 
 
 @router.post("/workflows/{path:path}/debug/{run_id}/continue")
-async def debug_continue(path: str, run_id: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def debug_continue(path: str, run_id: str, request: Request) -> dict:
     engine = _get_engine(request)
     step_id = None
     body_data = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
@@ -980,7 +976,7 @@ async def debug_continue(path: str, run_id: str, request: Request, _admin: None 
 
 
 @router.post("/workflows/{path:path}/debug/{run_id}/step/{step_id}/rerun")
-async def debug_rerun_step(path: str, run_id: str, step_id: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def debug_rerun_step(path: str, run_id: str, step_id: str, request: Request) -> dict:
     engine = _get_engine(request)
     sr = await engine.debug_rerun_step(run_id, step_id)
     if sr is None:
@@ -989,7 +985,7 @@ async def debug_rerun_step(path: str, run_id: str, step_id: str, request: Reques
 
 
 @router.post("/workflows/{path:path}/debug/{run_id}/cancel")
-async def debug_cancel(run_id: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def debug_cancel(run_id: str, request: Request) -> dict:
     engine = _get_engine(request)
     ok = engine.cancel_run(run_id)
     if not ok:
@@ -1002,7 +998,7 @@ class TestTriggerBody(BaseModel):
 
 
 @router.post("/workflows/{path:path}/test-trigger")
-async def test_trigger(path: str, body: TestTriggerBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def test_trigger(path: str, body: TestTriggerBody, request: Request) -> dict:
     from ... import vault as _vault
 
     try:
@@ -1028,7 +1024,6 @@ class TestTriggerListenBody(BaseModel):
 @router.post("/workflows/{path:path}/test-trigger/listen")
 async def test_trigger_listen(
     path: str, body: TestTriggerListenBody, request: Request,
-    _admin: None = Depends(require_admin),
 ) -> StreamingResponse:
     from ... import vault as _vault
     from ...workflows.triggers.test_listener import TestTriggerListener
@@ -1083,7 +1078,7 @@ async def test_trigger_listen(
 
 
 @router.delete("/workflows/{path:path}/test-trigger/{test_id}")
-async def cancel_test_listener(path: str, test_id: str, _admin: None = Depends(require_admin)) -> dict:
+async def cancel_test_listener(path: str, test_id: str) -> dict:
     from ...workflows.triggers.test_listener import remove_test_listener
     info = remove_test_listener(test_id)
     if info is None:
@@ -1106,7 +1101,7 @@ class FsWatchPickBody(BaseModel):
 
 
 @router.post("/workflows/{path:path}/test-trigger/fs-watch-list")
-async def fs_watch_list_files(path: str, body: TestTriggerListenBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def fs_watch_list_files(path: str, body: TestTriggerListenBody, request: Request) -> dict:
     import os
     from fnmatch import fnmatch
     from ... import vault as _vault
@@ -1155,7 +1150,7 @@ async def fs_watch_list_files(path: str, body: TestTriggerListenBody, request: R
 
 
 @router.post("/workflows/{path:path}/test-trigger/fs-watch-pick")
-async def fs_watch_pick_file(path: str, body: FsWatchPickBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def fs_watch_pick_file(path: str, body: FsWatchPickBody, request: Request) -> dict:
     from ...workflows.triggers.test_listener import get_test_listener
 
     payload = {
@@ -1173,7 +1168,7 @@ async def fs_watch_pick_file(path: str, body: FsWatchPickBody, request: Request,
 
 
 @router.post("/workflows/{path:path}/test-trigger/broker-dequeue")
-async def test_trigger_broker_dequeue(path: str, body: TestTriggerListenBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def test_trigger_broker_dequeue(path: str, body: TestTriggerListenBody, request: Request) -> dict:
     import logging as _logging
     _log = _logging.getLogger(__name__)
     from ... import vault as _vault
@@ -1261,7 +1256,7 @@ class InteractiveExecuteStepBody(BaseModel):
 
 
 @router.post("/workflows/{path:path}/interactive-run")
-async def start_interactive_run(path: str, body: InteractiveStartBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def start_interactive_run(path: str, body: InteractiveStartBody, request: Request) -> dict:
     from ... import vault as _vault
 
     try:
@@ -1303,7 +1298,7 @@ class SeedFromRunBody(BaseModel):
 
 
 @router.post("/workflows/{path:path}/seed-from-run/{run_id}")
-async def seed_from_run(path: str, run_id: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def seed_from_run(path: str, run_id: str, request: Request) -> dict:
     engine = _get_engine(request)
     run = await engine.seed_from_run(path, run_id)
     if run is None:
@@ -1323,7 +1318,6 @@ class ExecuteStepBody(BaseModel):
 @router.post("/workflows/{path:path}/interactive-run/{run_id}/execute-step/{step_id}")
 async def interactive_execute_step(
     path: str, run_id: str, step_id: str, body: ExecuteStepBody, request: Request,
-    _admin: None = Depends(require_admin),
 ) -> dict:
     step_override = None
     if body.step_config:
@@ -1345,7 +1339,7 @@ async def interactive_execute_step(
 
 
 @router.post("/workflows/{path:path}/interactive-run/{run_id}/execute-all")
-async def interactive_execute_all(path: str, run_id: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def interactive_execute_all(path: str, run_id: str, request: Request) -> dict:
     engine = _get_engine(request)
     run = await engine.interactive_execute_all(run_id)
     if run is None:
@@ -1354,7 +1348,7 @@ async def interactive_execute_all(path: str, run_id: str, request: Request, _adm
 
 
 @router.post("/workflows/{path:path}/interactive-run/{run_id}/cancel")
-async def interactive_cancel(run_id: str, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def interactive_cancel(run_id: str, request: Request) -> dict:
     engine = _get_engine(request)
     ok = engine.interactive_cancel(run_id)
     if not ok:
@@ -1397,7 +1391,7 @@ async def interactive_events(path: str, run_id: str) -> StreamingResponse:
 
 
 @router.post("/workflows/{path:path}/test-step")
-async def test_step(path: str, body: TestStepBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def test_step(path: str, body: TestStepBody, request: Request) -> dict:
     from ... import vault as _vault
 
     try:
@@ -1439,7 +1433,7 @@ def _schema_only(value: Any, max_depth: int = 3) -> Any:
 
 
 @router.post("/workflows/{path:path}/generate-script")
-async def generate_script(path: str, body: GenerateScriptBody, request: Request, _admin: None = Depends(require_admin)) -> dict:
+async def generate_script(path: str, body: GenerateScriptBody, request: Request) -> dict:
     engine = _get_engine(request)
 
     input_desc = ""

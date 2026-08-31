@@ -10,7 +10,6 @@ from loom.tools.base import ToolHandler, ToolResult
 from loom.tools.registry import ToolRegistry
 
 from nexus.agent.llm import ToolSpec
-from nexus.features import FEATURE_TOOLS
 
 log = logging.getLogger(__name__)
 
@@ -66,15 +65,6 @@ class AgentHandlers:
         self.hb_manager_getter = hb_manager_getter
 
 
-def _should_register(tool_name: str, features: set[str] | None) -> bool:
-    if features is None:
-        return True
-    for feat, tools in FEATURE_TOOLS.items():
-        if tool_name in tools and feat not in features:
-            return False
-    return True
-
-
 def build_tool_registry(
     *,
     skill_registry: Any,
@@ -83,7 +73,6 @@ def build_tool_registry(
     scrape_cfg: Any | None = None,
     home: "AgentHome | None" = None,
     permissions: "AgentPermissions | None" = None,
-    features: set[str] | None = None,
 ) -> ToolRegistry:
     """Build a loom ToolRegistry populated with all Nexus tools.
 
@@ -183,8 +172,7 @@ def build_tool_registry(
     async def _ontology_manage(args: dict) -> str:
         return await _ontology_handler(args)
 
-    if _should_register("ontology_manage", features):
-        registry.register(_SimpleToolHandler(ONTOLOGY_MANAGE_TOOL, _ontology_manage))
+    registry.register(_SimpleToolHandler(ONTOLOGY_MANAGE_TOOL, _ontology_manage))
 
     # acp_call — only advertise when an ACP gateway is actually configured.
     # When env vars are missing, hiding the tool keeps it out of the system
@@ -361,30 +349,28 @@ def build_tool_registry(
     async def _nexus_kb_search(args: dict) -> str:
         return json.dumps(handle_nexus_kb_search(args))
 
-    _TOOL_TABLE: list[tuple[Any, Any, str | None]] = [
-        (HTTP_CALL_TOOL, _http_call, None),
-        (VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search, "knowledge"),
-        (KANBAN_MANAGE_TOOL, handle_kanban_tool, "kanban"),
-        (KANBAN_QUERY_TOOL, handle_kanban_query_tool, "kanban"),
-        (CALENDAR_MANAGE_TOOL, handle_calendar_tool, "calendar"),
-        (DISPATCH_CARD_TOOL, _dispatch_card, "heartbeat"),
-        (HEARTBEAT_MANAGE_TOOL, _manage_heartbeat, "heartbeat"),
-        (DATATABLE_MANAGE_TOOL, handle_datatable_tool, "database"),
-        (DASHBOARD_MANAGE_TOOL, _dashboard, "database"),
-        (SHOW_KANBAN_TOOL, handle_show_kanban, "kanban"),
-        (SHOW_DASHBOARD_WIDGET_TOOL, handle_show_dashboard_widget, "database"),
-        (SHOW_DATA_TABLE_TOOL, handle_show_data_table, "database"),
-        (CSV_TOOL, handle_csv_tool, "database"),
-        (VISUALIZE_TABLE_TOOL, handle_visualize_tool, "database"),
-        (OCR_IMAGE_TOOL, handle_ocr_image_tool, None),
-        (NEXUS_KB_TOOL, _nexus_kb_search, None),
-        (CONTEXT_STATUS_TOOL, handle_context_status, None),
-        (FORK_SESSION_TOOL, handle_fork_session, None),
+    _TOOL_TABLE: list[tuple[Any, Any]] = [
+        (HTTP_CALL_TOOL, _http_call),
+        (VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search),
+        (KANBAN_MANAGE_TOOL, handle_kanban_tool),
+        (KANBAN_QUERY_TOOL, handle_kanban_query_tool),
+        (CALENDAR_MANAGE_TOOL, handle_calendar_tool),
+        (DISPATCH_CARD_TOOL, _dispatch_card),
+        (HEARTBEAT_MANAGE_TOOL, _manage_heartbeat),
+        (DATATABLE_MANAGE_TOOL, handle_datatable_tool),
+        (DASHBOARD_MANAGE_TOOL, _dashboard),
+        (SHOW_KANBAN_TOOL, handle_show_kanban),
+        (SHOW_DASHBOARD_WIDGET_TOOL, handle_show_dashboard_widget),
+        (SHOW_DATA_TABLE_TOOL, handle_show_data_table),
+        (CSV_TOOL, handle_csv_tool),
+        (VISUALIZE_TABLE_TOOL, handle_visualize_tool),
+        (OCR_IMAGE_TOOL, handle_ocr_image_tool),
+        (NEXUS_KB_TOOL, _nexus_kb_search),
+        (CONTEXT_STATUS_TOOL, handle_context_status),
+        (FORK_SESSION_TOOL, handle_fork_session),
     ]
 
-    for spec, fn, gate in _TOOL_TABLE:
-        if gate is not None and features is not None and gate not in features:
-            continue
+    for spec, fn in _TOOL_TABLE:
         registry.register(_SimpleToolHandler(spec, fn))
 
     _install_skill_redirect(registry, skill_registry)

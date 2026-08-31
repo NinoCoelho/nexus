@@ -3,7 +3,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import {
-  createSessionShare,
   deleteSession,
   exportSession,
   importSession,
@@ -114,29 +113,6 @@ export function useSessionActions({
     }
   };
 
-  const handleShare = async (id: string) => {
-    setMenuNull();
-    try {
-      const link = await createSessionShare(id);
-      const fullUrl = `${window.location.origin}${window.location.pathname}${link.path}`;
-      try {
-        await navigator.clipboard.writeText(fullUrl);
-        toast.success(t("sidebar:session.shareCopied"), { detail: t("sidebar:session.shareCopiedDetail"), duration: 5000 });
-      } catch {
-        toast.info(t("sidebar:session.shareReady"), {
-          detail: fullUrl,
-          duration: 12000,
-          action: {
-            label: t("sidebar:session.shareCopyLabel"),
-            onClick: () => { void navigator.clipboard.writeText(fullUrl).catch(() => {}); },
-          },
-        });
-      }
-    } catch (e) {
-      toast.error(t("sidebar:session.shareFailed"), { detail: e instanceof Error ? e.message : undefined });
-    }
-  };
-
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -153,5 +129,5 @@ export function useSessionActions({
   void sessions; // referenced via closure in rename/delete
   void renamingId;
 
-  return { handleRename, handleDelete, handleExport, handleToVault, handleShare, handleImportFile };
+  return { handleRename, handleDelete, handleExport, handleToVault, handleImportFile };
 }

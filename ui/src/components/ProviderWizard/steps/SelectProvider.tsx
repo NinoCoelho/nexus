@@ -41,8 +41,8 @@ export default function SelectProvider({ catalog, onPick, configuredNames }: Pro
     );
   }, [catalog, query]);
 
-  // Featured entries jump above the regular categories. Keeps the wizard
-  // visually anchored on the Nexus subscription on first run.
+  // Featured entries jump above the regular categories in a
+  // "Recommended" section.
   const featured = useMemo(
     () => filtered.filter((e) => e.featured),
     [filtered],

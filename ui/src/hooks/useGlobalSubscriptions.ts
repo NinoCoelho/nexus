@@ -7,19 +7,14 @@ import {
 import i18n, { normalizeLanguage } from "../i18n";
 import type { ToastAPI } from "../toast/ToastProvider";
 import { subscribeGlobalNotifications } from "../api/chat";
-import { adminAllPending, type AdminPendingItem } from "../api/auth";
 
 interface UseGlobalSubscriptionsParams {
   backendDownThreshold?: number;
-  isAdmin: boolean;
-  userId?: string;
   focusRequest: (rid: string) => void;
   pendingFocusRequestId: string | null;
   clearPendingFocus: () => void;
   ackPlayer: { handle: (sessionId: string, data: any) => void };
   toast: ToastAPI;
-  tSettings: (key: string) => string;
-  bumpSettingsRevision: () => void;
   pendingGraphIndex: string | null;
   setPendingGraphIndex: (path: string | null) => void;
   handleViewEntityGraph: (mode: "file" | "folder", path: string) => void;
@@ -28,15 +23,11 @@ interface UseGlobalSubscriptionsParams {
 
 export function useGlobalSubscriptions({
   backendDownThreshold = 3,
-  isAdmin,
-  userId,
   focusRequest,
   pendingFocusRequestId,
   clearPendingFocus,
   ackPlayer,
   toast,
-  tSettings,
-  bumpSettingsRevision,
   pendingGraphIndex,
   setPendingGraphIndex,
   handleViewEntityGraph,
@@ -44,7 +35,6 @@ export function useGlobalSubscriptions({
 }: UseGlobalSubscriptionsParams) {
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const consecutiveDownRef = useRef(0);
-  const [teamPending, setTeamPending] = useState<AdminPendingItem[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,25 +73,6 @@ export function useGlobalSubscriptions({
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) return;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const items = await adminAllPending();
-        if (!cancelled) {
-          const ownItems = items.filter(
-            (i) => i.user_id && i.user_id !== userId,
-          );
-          setTeamPending(ownItems);
-        }
-      } catch { /* ignore */ }
-    };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [isAdmin, userId]);
-
-  useEffect(() => {
     if (!pendingFocusRequestId) return;
     focusRequest(pendingFocusRequestId);
     clearPendingFocus();
@@ -111,25 +82,10 @@ export function useGlobalSubscriptions({
     const sub = subscribeGlobalNotifications((sessionId, event) => {
       if (event.kind === "voice_ack") {
         ackPlayer.handle(sessionId, event.data);
-      } else if (event.kind === "nexus_tier_changed") {
-        const upgraded =
-          !event.data.from_models.includes("nexus")
-          && event.data.to_models.includes("nexus");
-        const downgraded =
-          event.data.from_models.includes("nexus")
-          && !event.data.to_models.includes("nexus");
-        if (upgraded) {
-          toast.success(tSettings("settings:nexus.tierChanged.upgraded"));
-        } else if (downgraded) {
-          toast.info(tSettings("settings:nexus.tierChanged.downgraded"));
-        }
-        bumpSettingsRevision();
-      } else if (event.kind === "features_changed") {
-        bumpSettingsRevision();
       }
     });
     return () => sub.close();
-  }, [ackPlayer, toast, tSettings, bumpSettingsRevision]);
+  }, [ackPlayer]);
 
   useEffect(() => {
     if (!pendingGraphIndex) return;
@@ -173,5 +129,5 @@ export function useGlobalSubscriptions({
     return () => { active = false; clearInterval(interval); };
   }, [pendingGraphIndex, handleViewEntityGraph, toast, setPendingGraphIndex, indexingToastIdRef]);
 
-  return { backendUp, teamPending, setTeamPending };
+  return { backendUp };
 }

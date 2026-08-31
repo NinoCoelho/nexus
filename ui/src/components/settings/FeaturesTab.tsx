@@ -7,8 +7,8 @@ import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
 import VaultHistorySection from "../VaultHistorySection";
-import SettingsSection from "./SettingsSection";
 import SharingSection from "./SharingSection";
+import SettingsSection from "./SettingsSection";
 import VoiceSection from "./VoiceSection";
 
 interface Props {

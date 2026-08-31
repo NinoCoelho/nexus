@@ -12,7 +12,6 @@ import VaultView from "./components/VaultView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
-import "./components/onboarding/NexusLoginScreen.css";
 import ApprovalDialog from "./components/ApprovalDialog";
 import UnifiedGraphView from "./components/UnifiedGraphView";
 import DatabaseSchemaView from "./components/DatabaseSchemaView";
@@ -32,7 +31,6 @@ import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/ch
 import { listDatabases, type DatabaseSummary } from "./api/datatable";
 import { useChatSession } from "./hooks/useChatSession";
 import { useSettings } from "./hooks/useSettings";
-import { useNexusAccount } from "./hooks/useNexusAccount";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
 import { useCalendarAlarms } from "./hooks/useCalendarAlarms";
@@ -50,37 +48,18 @@ import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
 import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
-import { useSession } from "./components/SessionProvider";
-import { adminAnswerHitl, adminCancelHitl } from "./api/auth";
 import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useActiveDownloads } from "./hooks/useActiveDownloads";
 import { useSessionUsage } from "./hooks/useSessionUsage";
 import { useFeatures } from "./hooks/useFeatures";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
-import SharedSessionView from "./components/SharedSessionView";
 import UpdateModal from "./components/UpdateModal";
 import { type UpdateCheckResult } from "./api/update";
-import NexusLoginScreen from "./components/onboarding/NexusLoginScreen";
 
 export default function App() {
   const toast = useToast();
   const { t: tBg } = useTranslation("skillWizard");
-  // Detect a read-only share-link route before any state setup. Hash routes
-  // look like ``#/share/<token>``; that page bypasses the rest of the app
-  // entirely, so unauthenticated viewers don't load the chat surface.
-  const [shareToken, setShareToken] = useState<string | null>(() => {
-    const m = window.location.hash.match(/^#\/share\/(.+)$/);
-    return m ? decodeURIComponent(m[1]) : null;
-  });
-  useEffect(() => {
-    const onHash = () => {
-      const m = window.location.hash.match(/^#\/share\/(.+)$/);
-      setShareToken(m ? decodeURIComponent(m[1]) : null);
-    };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
   const initial = readInitialView();
   const [view, setView] = useState(initial.view);
   const [openSkill, setOpenSkill] = useState<string | null>(null);
@@ -170,12 +149,6 @@ export default function App() {
   const settings = useSettings();
   const { hasModel, availableModels, lastUsedModel, defaultModel, yoloMode, bumpSettingsRevision, persistUsedModel } = settings;
 
-  // Nexus account — drives the mandatory first-run sign-in gate and the
-  // Settings → Nexus tab. ``nexusAccount.status === null`` while the
-  // initial /auth/nexus/status fetch is in flight so we don't flash the
-  // login screen for already-signed-in users on every page load.
-  const nexusAccount = useNexusAccount();
-
   const chatSession = useChatSession(
     { availableModels, lastUsedModel, defaultModel, persistUsedModel },
     freshSessionId,
@@ -261,8 +234,6 @@ export default function App() {
   // subscription registered with the backend.
   const push = usePushSubscription();
   const notificationCenter = useNotificationCenter();
-  const { user: sessionUser } = useSession();
-  const isAdmin = sessionUser?.role === "admin";
 
   const handleSessionSelect = useCallback((id: string) => {
     // The optimistic placeholder shown while the first turn is in flight
@@ -357,18 +328,13 @@ export default function App() {
       setView("chat");
     },
   });
-  const { t: tSettings } = useTranslation("settings");
 
-  const { backendUp, teamPending, setTeamPending } = useGlobalSubscriptions({
-    isAdmin,
-    userId: sessionUser?.user_id,
+  const { backendUp } = useGlobalSubscriptions({
     focusRequest,
     pendingFocusRequestId: notificationCenter.pendingFocusRequestId,
     clearPendingFocus: notificationCenter.clearPendingFocus,
     ackPlayer,
     toast,
-    tSettings,
-    bumpSettingsRevision,
     pendingGraphIndex,
     setPendingGraphIndex,
     handleViewEntityGraph,
@@ -550,23 +516,6 @@ export default function App() {
     setUpdateModalOpen(true);
   }, []);
 
-  if (shareToken) {
-    return <SharedSessionView token={shareToken} />;
-  }
-
-  // Before rendering the main app, gate on Nexus account sign-in. Even in
-  // non-multi-user mode, cloud providers in the model selector shouldn't
-  // appear before the user has authenticated — we don't know their tier or
-  // which features are available yet.
-  if (nexusAccount.status && !nexusAccount.status.signedIn) {
-    return (
-      <NexusLoginScreen
-        websiteUrl={window.__NEXUS_WEBSITE_URL__ || "https://www.nexus-model.us"}
-        onSignedIn={() => nexusAccount.reload()}
-      />
-    );
-  }
-
   return (
     <div className="app app--layout">
       <Sidebar
@@ -636,15 +585,6 @@ export default function App() {
                 await respondToUserRequest(sid, rid, answer);
                 dropRequest(rid);
               }}
-              teamPending={isAdmin ? teamPending : undefined}
-              onAdminAnswer={isAdmin ? async (sid, rid, answer) => {
-                await adminAnswerHitl(sid, rid, answer);
-                setTeamPending((prev) => prev.filter((i) => i.request_id !== rid));
-              } : undefined}
-              onAdminCancel={isAdmin ? async (sid, rid) => {
-                await adminCancelHitl(sid, rid);
-                setTeamPending((prev) => prev.filter((i) => i.request_id !== rid));
-              } : undefined}
             />
             </>
           }
@@ -795,14 +735,13 @@ export default function App() {
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false); bumpSettingsRevision(); }}
       />
-      {hasModel === false && (nexusAccount.status?.signedIn ?? false) === false && (
+      {hasModel === false && (
         <WizardModal
           mode="first-run"
           configuredNames={[]}
           onClose={(result) => {
             if (result.saved) {
               bumpSettingsRevision();
-              void nexusAccount.reload();
             }
           }}
         />

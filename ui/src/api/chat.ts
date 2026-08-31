@@ -370,17 +370,6 @@ export type SessionEvent =
   | { kind: "subagent_done"; data: { child_session_id: string; result_preview?: string; error?: string } }
   | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; started_at?: number; extra?: Record<string, unknown> } }
   | { kind: "job_done"; data: { job_id: string; type: string } }
-  | {
-      kind: "nexus_tier_changed";
-      data: {
-        from_models: string[];
-        to_models: string[];
-        default_model_from: string;
-        default_model_to: string;
-        tier?: string;
-      };
-    }
-  | { kind: "features_changed"; data: { from: string[]; to: string[] } }
   | { kind: "settings_changed"; data: { yolo_mode?: boolean; auto_accept_members?: boolean; ui_mode?: string } }
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
@@ -542,8 +531,7 @@ function openGlobalNotifSource(): void {
     "calendar_alert",
     "calendar_alarm",
     "voice_ack",
-    "nexus_tier_changed",
-    "features_changed",
+    "settings_changed",
     "job_started",
     "job_done",
   ];

@@ -24,10 +24,8 @@ def _client(request: Request) -> BrokerClient:
 async def list_broker_webhooks(request: Request) -> dict:
     client = _client(request)
     if not client.available:
-        from ... import secrets as _secrets
         return {
             "connected": False,
-            "signed_in": bool(_secrets.get("nexus_api_key")),
             "webhooks": [],
             "quota": None,
         }
@@ -83,7 +81,6 @@ async def list_broker_webhooks(request: Request) -> dict:
 
     return {
         "connected": True,
-        "signed_in": True,
         "webhooks": out,
         "quota": {
             "used": len(remote),

@@ -191,19 +191,6 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
     return out;
   }, [models]);
 
-  // Pin the hosted Nexus provider to the top of the list so the first
-  // thing the user sees in Settings → Models is the Nexus offering. BYO
-  // providers stay in their original (insertion / catalog) order below.
-  const sortedProviders = useMemo(() => {
-    const nexus: Provider[] = [];
-    const rest: Provider[] = [];
-    for (const p of providers) {
-      if (p.name === "nexus") nexus.push(p);
-      else rest.push(p);
-    }
-    return [...nexus, ...rest];
-  }, [providers]);
-
   const catalogById = useMemo(() => {
     const out: Record<string, ProviderCatalogEntry> = {};
     for (const e of catalog ?? []) out[e.id] = e;
@@ -273,11 +260,11 @@ export default function ProvidersList({ providers, models, onRefresh }: Props) {
 
   return (
     <div className="providers-list">
-      {sortedProviders.length === 0 && (
+      {providers.length === 0 && (
         <p className="providers-list-empty">No providers configured yet.</p>
       )}
 
-      {sortedProviders.map((p) => {
+      {providers.map((p) => {
         const provModels = modelsByProvider[p.name] ?? [];
         return (
           <div key={p.name} className="providers-list-card">

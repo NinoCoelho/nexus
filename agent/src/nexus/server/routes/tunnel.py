@@ -64,7 +64,7 @@ def _record_failed_attempt(key: str) -> None:
 
 
 def _request_is_proxied(request: Request) -> bool:
-    from ..middleware import _is_proxied
+    from ..app import _is_proxied
     return _is_proxied(request)
 
 

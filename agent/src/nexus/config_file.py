@@ -37,10 +37,8 @@ from .config_schema import (  # noqa: F401
     UIConfig,
     LocationConfig,
     DreamConfig,
-    NexusAccountConfig,
     McpServerEntry,
     McpConfig,
-    ServerConfig,
     BrokerConfig,
     NexusConfig,
     default_config,
@@ -165,12 +163,6 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         "ui": {
             "language": cfg.ui.language,
         },
-        "nexus_account": {
-            "base_url": cfg.nexus_account.base_url,
-            "gateway_url": cfg.nexus_account.gateway_url,
-            "poll_seconds": cfg.nexus_account.poll_seconds,
-            "auto_upgrade_default": cfg.nexus_account.auto_upgrade_default,
-        },
         "location": {
             "city": cfg.location.city,
             "region": cfg.location.region,
@@ -198,8 +190,9 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "server_expose": cfg.mcp.server_expose,
             "server_auth_token": cfg.mcp.server_auth_token,
         },
-        "server": {
-            "multi_user": cfg.server.multi_user,
+        "broker": {
+            "url": cfg.broker.url,
+            "poll_interval_seconds": cfg.broker.poll_interval_seconds,
         },
     }
     for m in cfg.models:
@@ -405,7 +398,6 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     if ui_raw.get("language") not in ("en", "pt-BR"):
         ui_raw.pop("language", None)
     ui = UIConfig(**ui_raw)
-    nexus_account = NexusAccountConfig(**dict(raw.get("nexus_account", {})))
     location = LocationConfig(**dict(raw.get("location", {})))
     dream = DreamConfig(**dict(raw.get("dream", {})))
     mcp_raw = dict(raw.get("mcp", {}))
@@ -415,14 +407,12 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         sdata.setdefault("enabled", True)
         mcp_servers[sname] = McpServerEntry(**sdata)
     mcp = McpConfig(servers=mcp_servers)
-    server = ServerConfig(**dict(raw.get("server", {})))
     broker = BrokerConfig(**dict(raw.get("broker", {})))
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
-        nexus_account=nexus_account, location=location, dream=dream,
-        mcp=mcp, server=server, broker=broker,
+        location=location, dream=dream, mcp=mcp, broker=broker,
     )
 
 

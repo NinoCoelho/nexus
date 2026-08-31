@@ -28,7 +28,6 @@ import ProjectContextMenu from "./ProjectContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
-import NexusUsageGauges from "./NexusUsageGauges";
 import "../Sidebar.css";
 
 type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
@@ -480,7 +479,6 @@ function Sidebar({
 
       {/* Settings */}
       <div className="sidebar-bottom">
-        <NexusUsageGauges collapsed={collapsed} onOpenSettings={onOpenSettings} />
         {updateAvailable && updateCheck && (
           <button
             className="sidebar-nav-item sidebar-update-btn"
@@ -517,7 +515,6 @@ function Sidebar({
             onExport={() => void sessionActions.handleExport(s.id)}
             onToVaultRaw={() => void sessionActions.handleToVault(s.id, "raw")}
             onToVaultSummary={() => void sessionActions.handleToVault(s.id, "summary")}
-            onShare={() => void sessionActions.handleShare(s.id)}
             onDelete={() => void sessionActions.handleDelete(s.id)}
             onClick={(e) => e.stopPropagation()}
             onMoveToProject={async (projectId) => {

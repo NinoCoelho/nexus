@@ -19,7 +19,7 @@ def _truncate_preview(val: Any, limit: int = 200) -> str:
 def create_subagent_runner(
     *,
     agent: Agent,
-    store_proxy: Any,
+    sessions: Any,
     job_tracker: Any,
     publish_job_event: Any,
 ):
@@ -42,7 +42,7 @@ def create_subagent_runner(
             home=agent._home,
             permissions=agent._permissions,
         )
-        parent_store = store_proxy._resolve(parent_session_id)
+        parent_store = sessions
         sub._sessions = parent_store
         child = parent_store.create_child(parent_session_id=parent_session_id, hidden=True)
         child_id = child.id

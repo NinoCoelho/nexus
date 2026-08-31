@@ -90,19 +90,6 @@ async def notifications_pending(
     ask_user_handler = request.app.state.ask_user_handler
     items: list[dict[str, Any]] = []
 
-    if getattr(request.app.state, "multi_user", False):
-        role = getattr(request.state, "user_role", None)
-        if role == "admin":
-            from .admin import _collect_pending
-            user_store = request.app.state.user_store
-            for user in user_store.list_users():
-                if user.status != "active":
-                    continue
-                registry = request.app.state.session_registry
-                user_store_inst = registry.get(user.id)
-                _collect_pending(user_store_inst, ask_user_handler, items, user)
-            return {"pending": items}
-
     _collect_pending_local(store, ask_user_handler, items)
     return {"pending": items}
 

@@ -9,7 +9,6 @@ import {
   type AgentConfig,
   type HitlSettings,
 } from "../../api";
-import { enableMultiUser } from "../../api/auth";
 import {
   SOUND_KEYS,
   SOUND_LABELS,
@@ -36,8 +35,6 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
   const [agent, setAgent] = useState<AgentConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [hitlSaving, setHitlSaving] = useState(false);
-  const [multiUserEnabled, setMultiUserEnabled] = useState<boolean | null>(null);
-  const [muBusy, setMuBusy] = useState(false);
   const [uiMode, setUiMode] = useState<"normal" | "advanced">("normal");
 
   useEffect(() => {
@@ -47,7 +44,6 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
       .then(([c, s]) => {
         if (!cancelled) {
           setAgent(c.agent);
-          setMultiUserEnabled(c.server?.multi_user ?? false);
           setUiMode((s as any).ui_mode === "advanced" ? "advanced" : "normal");
         }
       })
@@ -371,61 +367,6 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
             </SettingsField>
           );
         })}
-      </SettingsSection>
-
-      <SettingsSection
-        title={t("settings:advanced.multiUserTitle", "Multi-User Mode")}
-        icon="👥"
-        description={t(
-          "settings:advanced.multiUserDescription",
-          "Enable invite-based multi-user access. Requires server restart.",
-        )}
-      >
-        <SettingsField
-          label={t("settings:advanced.multiUserLabel", "Enable multi-user")}
-          hint={t(
-            "settings:advanced.multiUserHint",
-            "Allow multiple users with invite links and role-based permissions.",
-          )}
-          help={{
-            title: t("settings:advanced.multiUserHelpTitle", "Multi-user mode"),
-            body: (
-              <>
-                When enabled, Nexus switches from single-user to multi-user mode.
-                The first user becomes the admin and can invite others via
-                invite links. Users get isolated vaults, sessions, and skills.
-                <b>Requires a server restart</b> after enabling.
-              </>
-            ),
-          }}
-          layout="row"
-        >
-          <button
-            type="button"
-            role="switch"
-            aria-checked={multiUserEnabled === true}
-            className={`hitl-switch ${multiUserEnabled ? "on" : "off"}`}
-            disabled={muBusy || multiUserEnabled === null}
-            onClick={async () => {
-              if (multiUserEnabled) return;
-              setMuBusy(true);
-              try {
-                const result = await enableMultiUser();
-                setMultiUserEnabled(result.enabled);
-                toast.success(result.message);
-              } catch (e) {
-                toast.error(
-                  t("settings:advanced.toast.multiUserFailed", "Failed to enable multi-user"),
-                  { detail: e instanceof Error ? e.message : undefined },
-                );
-              } finally {
-                setMuBusy(false);
-              }
-            }}
-          >
-            <span className="hitl-switch-knob" />
-          </button>
-        </SettingsField>
       </SettingsSection>
 
       <SettingsSection

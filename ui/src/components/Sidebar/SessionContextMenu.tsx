@@ -13,7 +13,6 @@ interface Props {
   onExport: () => void;
   onToVaultRaw: () => void;
   onToVaultSummary: () => void;
-  onShare: () => void;
   onDelete: () => void;
   onClick: (e: React.MouseEvent) => void;
   onMoveToProject?: (projectId: string) => void;
@@ -30,7 +29,6 @@ export default function SessionContextMenu({
   onExport,
   onToVaultRaw,
   onToVaultSummary,
-  onShare,
   onDelete,
   onClick,
   onMoveToProject,
@@ -53,13 +51,6 @@ export default function SessionContextMenu({
       </button>
       <button className="sidebar-ctx-item" onClick={onExport}>
         Download .md
-      </button>
-      <button
-        className="sidebar-ctx-item"
-        onClick={onShare}
-        title="Copy a read-only share link to the clipboard"
-      >
-        Copy share link
       </button>
       <div className="sidebar-ctx-divider" />
       <button

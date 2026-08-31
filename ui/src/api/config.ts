@@ -67,13 +67,6 @@ export interface TTSConfig {
   voices_dir: string;
 }
 
-export interface NexusAccountConfig {
-  base_url: string;
-  gateway_url: string;
-  poll_seconds: number;
-  auto_upgrade_default: boolean;
-}
-
 export interface McpServerConfig {
   transport: "stdio" | "sse" | "streamable-http";
   command: string[];
@@ -99,13 +92,7 @@ export interface Config {
   tts?: TTSConfig;
   search?: SearchConfig;
   ui?: UIConfig;
-  nexus_account?: NexusAccountConfig;
   mcp?: McpConfig;
-  server?: { multi_user: boolean };
-  features?: {
-    active: string[];
-    all: string[];
-  };
 }
 
 // Patch payload — every nested object is independently partial because the

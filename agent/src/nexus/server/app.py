@@ -24,14 +24,10 @@ from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
 from .app_lifespan import create_lifespan
 from .app_subagents import create_subagent_runner
-from .auth import AuthManager
-from .deps import SessionStoreProxy
 from .events import SessionEvent
 from .job_tracker import JobTracker
-from .middleware import MultiUserAuthMiddleware
 from .session_store import SessionStore
 from .settings import SettingsStore
-from .user_store import UserStore
 
 
 _AUTH_FREE_PATHS = {"/health"}
@@ -65,8 +61,14 @@ TUNNEL_PROTECTED_PREFIXES = (
 
 
 def _is_proxied(request: Request) -> bool:
-    from .middleware import _is_proxied as _check
-    return _check(request)
+    h = request.headers
+    return bool(
+        h.get("x-forwarded-for")
+        or h.get("x-forwarded-host")
+        or h.get("cf-ray")
+        or h.get("cf-connecting-ip")
+        or h.get("ngrok-trace-id")
+    )
 
 
 def _tunnel_path_requires_auth(path: str) -> bool:
@@ -88,18 +90,6 @@ def _tunnel_path_requires_auth(path: str) -> bool:
         # so the request gets to the route, where _require_loopback will 403.
         return True
     return any(path.startswith(p) for p in TUNNEL_PROTECTED_PREFIXES)
-
-
-class FeatureGateMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        from ..features import feature_for_route, is_enabled
-        feat = feature_for_route(request.url.path)
-        if feat and not is_enabled(feat):
-            return JSONResponse(
-                {"detail": f"Feature '{feat}' is not available on your plan"},
-                status_code=403,
-            )
-        return await call_next(request)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -265,38 +255,11 @@ def create_app(
     settings_store = settings_store or SettingsStore()
     job_tracker = JobTracker()
 
-    multi_user = bool(nexus_cfg and getattr(nexus_cfg, "server", None) and nexus_cfg.server.multi_user)
-    user_store = UserStore() if multi_user else None
-    auth_manager = AuthManager() if multi_user else None
-
-    session_registry = None
-    if multi_user:
-        from .session_store.registry import UserSessionRegistry
-        session_registry = UserSessionRegistry()
-
-    # Proxy that resolves the correct per-user SessionStore based on
-    # CURRENT_SESSION_ID.  In single-user mode this is a no-op wrapper
-    # that always returns the default store — identical to before.
-    # Used by agent._sessions, AskUserHandler, _trace, etc.
-    _app_state_ns = type("_AppState", (), {
-        "multi_user": multi_user,
-        "session_registry": session_registry,
-        "user_store": user_store,
-    })()
-    store_proxy = SessionStoreProxy(sessions, _app_state_ns)
-
     def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
-        if multi_user and session_registry is not None:
-            for _uid, user_store_inst in session_registry.all_stores().items():
-                user_store_inst.publish(
-                    "__jobs__",
-                    SessionEvent(kind=kind, data=data),
-                )
-        else:
-            sessions.publish(
-                "__jobs__",
-                SessionEvent(kind=kind, data=data),
-            )
+        sessions.publish(
+            "__jobs__",
+            SessionEvent(kind=kind, data=data),
+        )
 
     # Mutable dict passed by reference into all route handlers that need to
     # read or update cfg/prov_reg (config, providers, models, routing).
@@ -308,7 +271,7 @@ def create_app(
     # restarting the server. Attached to the agent so its loop's
     # ``_tools()`` / ``_handle()`` branches pick it up.
     ask_user_handler = AskUserHandler(
-        session_store=store_proxy,
+        session_store=sessions,
         yolo_mode_getter=lambda: settings_store.get().yolo_mode,
     )
 
@@ -376,13 +339,13 @@ def create_app(
     # streaming callback can locate the running subprocess.
     _terminal_procs: dict[str, asyncio.subprocess.Process] = {}
 
-    _on_term_output = _make_terminal_output_callback(store_proxy, _terminal_procs)
+    _on_term_output = _make_terminal_output_callback(sessions, _terminal_procs)
     _proc_reg = _make_proc_register(_terminal_procs)
     _proc_unreg = _make_proc_unregister(_terminal_procs)
 
     agent._ask_user_handler = ask_user_handler
     agent._terminal_handler = TerminalTool(
-        broker=store_proxy.broker,
+        broker=sessions.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
         on_output=_on_term_output,
         proc_register=_proc_reg,
@@ -395,8 +358,8 @@ def create_app(
     # publishing on the per-session SSE channel and for reading the
     # original input_mode (stashed on the store by chat_stream).
     from ..agent.notify_user_tool import NotifyUserHandler
-    agent._notify_user_handler = NotifyUserHandler(session_store=store_proxy)
-    agent._sessions = store_proxy
+    agent._notify_user_handler = NotifyUserHandler(session_store=sessions)
+    agent._sessions = sessions
 
     # Trace callback routes every agent event (iter, tool_call,
     # tool_result, reply) into the SSE subscriber fanout for whichever
@@ -409,9 +372,9 @@ def create_app(
             return
         # Skip when a ChatTurnRunner is active — it publishes the canonical
         # stream events directly to the bus, so _trace would double-publish.
-        if session_id in store_proxy._trace_suppressed:
+        if session_id in sessions._trace_suppressed:
             return
-        store_proxy.publish(session_id, SessionEvent(kind=kind, data=data))
+        sessions.publish(session_id, SessionEvent(kind=kind, data=data))
 
     # Install the trace hook without clobbering one the caller may
     # already have wired (main.py doesn't today, but a test might).
@@ -430,9 +393,6 @@ def create_app(
         "mutable_state": mutable_state,
         "agent": agent,
         "sessions": sessions,
-        "multi_user": multi_user,
-        "session_registry": session_registry,
-        "store_proxy": store_proxy,
         "job_tracker": job_tracker,
         "publish_job_event": _publish_job_event,
     })
@@ -453,16 +413,8 @@ def create_app(
     # auth path must remain reachable on every request so it can enforce the
     # token on traffic that traversed the public tunnel.
     _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
-    if multi_user:
-        app.add_middleware(
-            MultiUserAuthMiddleware,
-            auth_manager=auth_manager,
-            user_store=user_store,
-        )
-    else:
-        app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
+    app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(FeatureGateMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+",
@@ -481,10 +433,6 @@ def create_app(
     app.state.ask_user_handler = ask_user_handler
     app.state.terminal_procs = _terminal_procs
     app.state.job_tracker = job_tracker
-    app.state.multi_user = multi_user
-    app.state.user_store = user_store
-    app.state.auth_manager = auth_manager
-    app.state.session_registry = session_registry
 
     from .kanban_queue import init_queue
     init_queue()
@@ -512,14 +460,12 @@ def create_app(
     from .routes.providers import router as providers_router
     from .routes.credentials import router as credentials_router
     from .routes.models import router as models_router
-    from .routes.share import router as share_router
     from .routes.local_llm import router as local_llm_router
     from .routes.notifications import router as notifications_router
     from .routes.push import router as push_router
     from .routes.skill_wizard import router as skill_wizard_router
     from .routes.tunnel import router as tunnel_router
     from .routes.tts import router as tts_router
-    from .routes.nexus_account import router as nexus_account_router
     from .routes.webhook import router as webhook_router
     from .routes.broker import router as broker_router
     from .routes.heartbeat import router as heartbeat_router
@@ -537,16 +483,6 @@ def create_app(
     app.include_router(chat_stream_router)
     app.include_router(settings_router)
     app.include_router(sessions_router)
-
-    if multi_user:
-        from .routes.auth import router as auth_router
-        from .routes.admin import router as admin_router
-        from .routes.vault_share import router as vault_share_router
-        app.include_router(auth_router)
-        app.include_router(admin_router)
-        app.include_router(vault_share_router)
-        if user_store and not user_store.has_any_users():
-            log.info("Multi-user mode: no users found. Sign in with a Nexus account to create the admin.")
     app.include_router(sessions_vault_router)
     app.include_router(graph_router)
     app.include_router(vault_router)
@@ -564,14 +500,12 @@ def create_app(
     app.include_router(providers_router)
     app.include_router(credentials_router)
     app.include_router(models_router)
-    app.include_router(share_router)
     app.include_router(local_llm_router)
     app.include_router(notifications_router)
     app.include_router(push_router)
     app.include_router(skill_wizard_router)
     app.include_router(tunnel_router)
     app.include_router(tts_router)
-    app.include_router(nexus_account_router)
     app.include_router(webhook_router)
     app.include_router(broker_router)
     app.include_router(heartbeat_router)
@@ -589,14 +523,14 @@ def create_app(
     from .routes.vault_dispatch import _dispatch_impl
 
     async def _agent_dispatcher(*, path: str, card_id: str | None, mode: str) -> dict:
-        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=store_proxy)
+        return await _dispatch_impl(path=path, card_id=card_id, mode=mode, a=agent, store=sessions)
 
     agent._dispatcher = _agent_dispatcher
 
     # ── wire the spawn_subagents agent tool ───────────────────────────────────
     agent._handlers.subagent_runner = create_subagent_runner(
         agent=agent,
-        store_proxy=store_proxy,
+        sessions=sessions,
         job_tracker=job_tracker,
         publish_job_event=_publish_job_event,
     )
@@ -641,7 +575,7 @@ def create_app(
         loop.create_task(
             _dispatch_impl(
                 path=path, card_id=card_id, mode="background",
-                a=agent, store=store_proxy,
+                a=agent, store=sessions,
             )
         )
 
@@ -684,7 +618,7 @@ def _mount_bundled_ui(app: FastAPI) -> None:
     GET handler serves static assets and falls back to ``index.html`` for
     client-side routing.
     """
-    from starlette.requests import Request
+    from starlette.requests import Request  # noqa: F401  (signature type only)
     from starlette.responses import FileResponse, Response
 
     dist = _resolve_ui_dist()

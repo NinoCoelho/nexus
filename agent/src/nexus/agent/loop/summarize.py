@@ -192,22 +192,19 @@ async def summarize_older_turns(
     if query is None:
         query = _last_user_text(messages)
 
-    # Phase 4: when the knowledge feature is active and the builtin embedder
-    # is available, score meaning-level (semantic) relevance in addition to
-    # regex entity overlap. Catches an old tool result that shares intent with
-    # the current query but no surface tokens. Strictly opt-in and best-effort
-    # — any failure degrades silently to regex-only scoring.
+    # Phase 4: when the builtin embedder is available, score meaning-level
+    # (semantic) relevance in addition to regex entity overlap. Catches an
+    # old tool result that shares intent with the current query but no
+    # surface tokens. Best-effort — any failure degrades silently to
+    # regex-only scoring.
     semantic_sim: dict[int, float] | None = None
     if query:
         try:
-            from ...features import is_enabled
+            from ..builtin_embedder import get_builtin_embedder
 
-            if is_enabled("knowledge"):
-                from ..builtin_embedder import get_builtin_embedder
-
-                semantic_sim = await _compute_semantic_sim(
-                    messages, query, get_builtin_embedder()
-                )
+            semantic_sim = await _compute_semantic_sim(
+                messages, query, get_builtin_embedder()
+            )
         except Exception:
             log.debug("semantic relevance unavailable; using regex-only", exc_info=True)
             semantic_sim = None

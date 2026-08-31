@@ -71,11 +71,6 @@ async def chat_stream_route(
 
     session = store.get_or_create(req.session_id, context=req.context, project_id=req.project_id)
 
-    if getattr(request.app.state, "multi_user", False):
-        user_id = getattr(request.state, "user_id", None)
-        if user_id:
-            request.app.state.user_store.claim_session(session.id, user_id)
-
     # Block if a form is parked on this session — the agent's previous turn
     # is waiting for an async answer, and starting a new turn now would
     # orphan the parked tool_call. Confirm/text/choice timeouts don't
@@ -139,9 +134,7 @@ async def chat_stream_route(
         # streams don't stomp on each other.
         token = CURRENT_SESSION_ID.set(session.id)
         from ...agent.context import ALLOWED_TOOLS
-        from ..permissions import allowed_tools_for_role
-        user_role = getattr(request.state, "user_role", None)
-        _allowed_token = ALLOWED_TOOLS.set(allowed_tools_for_role(user_role))
+        _allowed_token = ALLOWED_TOOLS.set(None)
 
         turn_job_id = tracker.start(
             type="chat_turn",
