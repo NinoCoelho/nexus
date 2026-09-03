@@ -25,6 +25,7 @@ import { EntityDetailCard } from "../../KnowledgeView/EntityDetailCard";
 import { EntityTypeFilter } from "../../KnowledgeView/EntityTypeFilter";
 import { SourceFilterBar } from "../../KnowledgeView/SourceFilterBar";
 import { FilterChips } from "../../KnowledgeView/FilterChips";
+import { ReviewPanel } from "../../KnowledgeView/ReviewPanel";
 import VaultFilePreview from "../../VaultFilePreview";
 import type {
   ContextMenuItem,
@@ -61,6 +62,9 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
   // Sidebar can be collapsed (hidden) without losing its content. Re-opens
   // automatically when there is fresh content (new query, new entity).
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Fact-review queue (bitemporal conflicts + merges)
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewCount, setReviewCount] = useState(0);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -145,7 +149,7 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
   useVaultEvents((event) => {
     if (event.type !== "graphrag.indexed" && event.type !== "graphrag.removed") return;
     refresh();
-    if (sourceFilter !== "none" && sourcePath) {
+    if (sourceFilter !== "none" && sourcePath && event.path) {
       const matches =
         sourceFilter === "file"
           ? event.path === sourcePath
@@ -424,7 +428,18 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
           <span>{stats.triples} relations</span>
           <span className="kv-stats-dot" />
           <span>{stats.component_count} groups</span>
+          <button
+            className={`kv-review-toggle${reviewCount > 0 ? " kv-review-toggle--active" : ""}`}
+            onClick={() => setReviewOpen((v) => !v)}
+            title="Review contradicting facts"
+          >
+            Review{reviewCount > 0 ? ` (${reviewCount})` : ""}
+          </button>
         </div>
+      )}
+
+      {reviewOpen && (
+        <ReviewPanel onClose={() => setReviewOpen(false)} onCountChange={setReviewCount} />
       )}
     </>
   );

@@ -116,6 +116,14 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
                 "core_relations": cfg.graphrag.ontology.core_relations,
                 "allow_custom_relations": cfg.graphrag.ontology.allow_custom_relations,
             },
+            "resolution": {
+                "enabled": cfg.graphrag.resolution.enabled,
+                "auto_merge_threshold": cfg.graphrag.resolution.auto_merge_threshold,
+                "llm_threshold": cfg.graphrag.resolution.llm_threshold,
+            },
+            "conflicts": {
+                "enabled": cfg.graphrag.conflicts.enabled,
+            },
         },
         "search": {
             "enabled": cfg.search.enabled,

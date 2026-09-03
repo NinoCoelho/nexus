@@ -21,11 +21,15 @@ export type VaultEventType =
   | "vault.indexed"
   | "vault.removed"
   | "graphrag.indexed"
-  | "graphrag.removed";
+  | "graphrag.removed"
+  | "graphrag.conflicts"
+  | "graphrag.conflict_resolved"
+  | "graphrag.entities_merged";
 
 export interface VaultEvent {
   type: VaultEventType;
-  path: string;
+  path?: string;
+  count?: number;
 }
 
 export type VaultEventListener = (event: VaultEvent) => void;

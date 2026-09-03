@@ -213,9 +213,11 @@ async def _initialize_engine(cfg: Any, graphrag_cfg: Any) -> None:
         return
 
     from loom.store.graphrag import (
+        ConflictConfig,
         EmbeddingConfig,
         ExtractionConfig,
         OntologyConfig,
+        ResolutionConfig,
     )
 
     # Ontology source of truth is the vault (~/.nexus/vault/_system/ontology/).
@@ -266,6 +268,12 @@ async def _initialize_engine(cfg: Any, graphrag_cfg: Any) -> None:
             max_gleanings=graphrag_cfg.extraction.max_gleanings,
         ),
         ontology=ontology_cfg,
+        resolution=ResolutionConfig(
+            enabled=graphrag_cfg.resolution.enabled,
+            auto_merge_threshold=graphrag_cfg.resolution.auto_merge_threshold,
+            llm_threshold=graphrag_cfg.resolution.llm_threshold,
+        ),
+        conflicts=ConflictConfig(enabled=graphrag_cfg.conflicts.enabled),
         max_hops=graphrag_cfg.max_hops,
         context_budget=graphrag_cfg.context_budget,
         top_k=graphrag_cfg.top_k,
@@ -302,6 +310,15 @@ async def index_vault_file(path: str, content: str) -> None:
     try:
         from ..server.event_bus import publish
         publish({"type": "graphrag.indexed", "path": path})
+        # Surface newly-detected fact conflicts so the UI review badge
+        # updates without a manual refresh.
+        conflicts = _engine.list_conflicts()
+        if conflicts:
+            publish({
+                "type": "graphrag.conflicts",
+                "count": len(conflicts),
+                "path": path,
+            })
     except Exception:
         pass
 

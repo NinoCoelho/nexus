@@ -116,6 +116,90 @@ export interface ReindexFileEvent {
   triples: number;
 }
 
+// ── Fact review queue ────────────────────────────────────────────────────────
+
+export interface FactTriple {
+  id: number;
+  head_id: number;
+  relation: string;
+  tail_id: number;
+  chunk_id: string;
+  description: string;
+  strength: number;
+  source_path: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  asserted_at: string | null;
+  superseded_by: number | null;
+  status: string;
+}
+
+export interface KnowledgeConflict {
+  id: number;
+  triple_a: FactTriple;
+  triple_b: FactTriple;
+  head: string;
+  old_tail: string;
+  new_tail: string;
+  relation: string;
+  kind: string;
+  detected_at: string;
+  resolved_at: string | null;
+  resolution: string | null;
+}
+
+export interface EntityMerge {
+  id: number;
+  survivor_id: number;
+  merged_id: number;
+  merged_name: string;
+  merged_at: string;
+  reverted_at: string | null;
+  survivor_name: string | null;
+}
+
+export interface KnowledgeReviewData {
+  enabled: boolean;
+  conflicts: KnowledgeConflict[];
+  merges: EntityMerge[];
+}
+
+export async function getKnowledgeReview(resolved = false): Promise<KnowledgeReviewData> {
+  const res = await fetch(`${BASE}/graph/knowledge/review${resolved ? "?resolved=true" : ""}`);
+  if (!res.ok) throw new Error(`Review error: ${res.status}`);
+  return res.json() as Promise<KnowledgeReviewData>;
+}
+
+export async function resolveKnowledgeConflict(
+  conflictId: number,
+  resolution: "approve_new" | "reject_new" | "keep_both",
+): Promise<void> {
+  const res = await fetch(`${BASE}/graph/knowledge/review/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conflict_id: conflictId, resolution }),
+  });
+  if (!res.ok) throw new Error(`Resolve error: ${res.status}`);
+}
+
+export async function mergeKnowledgeEntities(survivorId: number, mergedId: number): Promise<void> {
+  const res = await fetch(`${BASE}/graph/knowledge/review/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ survivor_id: survivorId, merged_id: mergedId }),
+  });
+  if (!res.ok) throw new Error(`Merge error: ${res.status}`);
+}
+
+export async function unmergeKnowledgeEntities(mergeId: number): Promise<void> {
+  const res = await fetch(`${BASE}/graph/knowledge/review/unmerge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ merge_id: mergeId }),
+  });
+  if (!res.ok) throw new Error(`Unmerge error: ${res.status}`);
+}
+
 export interface ReindexStatsEvent {
   files_done: number;
   files_total: number;

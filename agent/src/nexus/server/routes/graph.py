@@ -350,6 +350,99 @@ async def graphrag_index_file_status(path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Fact review queue — bitemporal-lite conflicts + entity merges
+# ---------------------------------------------------------------------------
+
+
+@router.get("/graph/knowledge/review")
+async def knowledge_review(resolved: bool = False) -> dict:
+    """Open (or resolved) fact conflicts and entity merges for review."""
+    from ...agent.graphrag_manager import get_engine
+    engine = get_engine()
+    if engine is None:
+        return {"enabled": False, "conflicts": [], "merges": []}
+    return {
+        "enabled": True,
+        "conflicts": engine.list_conflicts(resolved=resolved),
+        "merges": engine.list_merges(reverted=resolved),
+    }
+
+
+@router.post("/graph/knowledge/review/resolve")
+async def knowledge_review_resolve(body: dict) -> dict:
+    """Resolve a fact conflict: approve_new | reject_new | keep_both."""
+    from ...agent.graphrag_manager import get_engine
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="GraphRAG not initialized")
+    conflict_id = body.get("conflict_id")
+    resolution = body.get("resolution", "")
+    if not isinstance(conflict_id, int):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="conflict_id must be an integer")
+    if resolution not in ("approve_new", "reject_new", "keep_both"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="resolution must be approve_new | reject_new | keep_both")
+    ok = engine.resolve_conflict(conflict_id, resolution)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="conflict not found or already resolved")
+    try:
+        from ..event_bus import publish
+        publish({"type": "graphrag.conflict_resolved", "conflict_id": conflict_id,
+                 "resolution": resolution})
+    except Exception:
+        pass
+    return {"resolved": True, "conflict_id": conflict_id, "resolution": resolution}
+
+
+@router.post("/graph/knowledge/review/merge")
+async def knowledge_review_merge(body: dict) -> dict:
+    """Merge two duplicate entities (reversible via /review/unmerge)."""
+    from ...agent.graphrag_manager import get_engine
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="GraphRAG not initialized")
+    survivor_id = body.get("survivor_id")
+    merged_id = body.get("merged_id")
+    if not isinstance(survivor_id, int) or not isinstance(merged_id, int):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="survivor_id and merged_id must be integers")
+    merge_id = engine.merge_entities(survivor_id, merged_id)
+    if merge_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="entities not found or identical")
+    try:
+        from ..event_bus import publish
+        publish({"type": "graphrag.entities_merged", "merge_id": merge_id,
+                 "survivor_id": survivor_id, "merged_id": merged_id})
+    except Exception:
+        pass
+    return {"merged": True, "merge_id": merge_id}
+
+
+@router.post("/graph/knowledge/review/unmerge")
+async def knowledge_review_unmerge(body: dict) -> dict:
+    """Undo an entity merge, restoring the merged entity with its facts."""
+    from ...agent.graphrag_manager import get_engine
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="GraphRAG not initialized")
+    merge_id = body.get("merge_id")
+    if not isinstance(merge_id, int):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="merge_id must be an integer")
+    ok = engine.unmerge(merge_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="merge not found or already reverted")
+    return {"unmerged": True, "merge_id": merge_id}
+
+
+# ---------------------------------------------------------------------------
 # Per-folder ontology-isolated knowledge graphs
 #
 # Distinct from the global GraphRAG above: each tab here is scoped to a

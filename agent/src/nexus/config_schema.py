@@ -153,6 +153,20 @@ class GraphRAGOntologyConfig(BaseModel):
     allow_custom_relations: bool = True
 
 
+class GraphRAGResolutionConfig(BaseModel):
+    """Staged entity resolution: exact alias → prototype embedding → LLM."""
+
+    enabled: bool = True
+    auto_merge_threshold: float = 0.86
+    llm_threshold: float = 0.75
+
+
+class GraphRAGConflictConfig(BaseModel):
+    """Write-time fact-conflict detection with a human review queue."""
+
+    enabled: bool = True
+
+
 class GraphRAGConfig(BaseModel):
     # Default to on: the .app bundle ships fastembed + spaCy pre-cached and
     # `uv sync` pulls them in for dev, so the builtin embedder + extractor
@@ -165,6 +179,8 @@ class GraphRAGConfig(BaseModel):
     embeddings: GraphRAGEmbeddingConfig = Field(default_factory=GraphRAGEmbeddingConfig)
     extraction: GraphRAGExtractionConfig = Field(default_factory=GraphRAGExtractionConfig)
     ontology: GraphRAGOntologyConfig = Field(default_factory=GraphRAGOntologyConfig)
+    resolution: GraphRAGResolutionConfig = Field(default_factory=GraphRAGResolutionConfig)
+    conflicts: GraphRAGConflictConfig = Field(default_factory=GraphRAGConflictConfig)
     max_hops: int = 2
     context_budget: int = 3000
     top_k: int = 10
