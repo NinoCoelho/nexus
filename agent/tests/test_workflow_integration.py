@@ -6,12 +6,8 @@ Uses a real FastAPI TestClient with mocked vault and in-memory SQLite.
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 
 import pytest
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -24,7 +20,6 @@ def workflow_env(tmp_path, monkeypatch):
 
     from nexus.workflows.store import WorkflowStore
     from nexus.workflows.engine import WorkflowEngine
-    from nexus.workflows.models import TriggerType
 
     db_path = str(tmp_path / "workflow_runs.sqlite")
     store = WorkflowStore(db_path)

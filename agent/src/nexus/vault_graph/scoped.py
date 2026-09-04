@@ -24,8 +24,8 @@ def _expand_hops(
     """BFS expansion from seed_paths over full_edges for (hops - 1) additional hops."""
     adj: dict[str, set[str]] = {}
     for e in full_edges:
-        adj.setdefault(e["from_"], set()).add(e["to_"])
-        adj.setdefault(e["to_"], set()).add(e["from_"])
+        adj.setdefault(e["from_"], set()).add(e["to"])
+        adj.setdefault(e["to"], set()).add(e["from_"])
 
     expanded = set(seed_paths)
     frontier = set(seed_paths)
@@ -64,8 +64,8 @@ def _tag_cooccurrence_edges(
 def scope_file(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedGraphData:
     adj: dict[str, set[str]] = {}
     for e in full["edges"]:
-        adj.setdefault(e["from_"], set()).add(e["to_"])
-        adj.setdefault(e["to_"], set()).add(e["from_"])
+        adj.setdefault(e["from_"], set()).add(e["to"])
+        adj.setdefault(e["to"], set()).add(e["from_"])
 
     visited: set[str] = set()
     frontier: set[str] = {seed}
@@ -85,13 +85,13 @@ def scope_file(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedGra
     scoped_set = visited
     scoped_edges: list[ScopedGraphEdge] = []
     for e in full["edges"]:
-        if e["from_"] in scoped_set and e["to_"] in scoped_set:
-            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+        if e["from_"] in scoped_set and e["to"] in scoped_set:
+            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     connected: set[str] = set()
     for e in scoped_edges:
         connected.add(e["from_"])
-        connected.add(e["to_"])
+        connected.add(e["to"])
     orphans = [n["path"] for n in scoped_nodes if n["path"] not in connected]
 
     etypes = [t.strip() for t in edge_types.split(",") if t.strip()]
@@ -112,11 +112,11 @@ def scope_folder(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedG
     scoped_edges: list[ScopedGraphEdge] = []
     for e in full["edges"]:
         src_in = e["from_"] in folder_paths
-        dst_in = e["to_"] in folder_paths
+        dst_in = e["to"] in folder_paths
         if src_in and dst_in:
-            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
         elif src_in or dst_in:
-            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="folder-cross"))
+            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="folder-cross"))
 
     if hops >= 2:
         expanded = _expand_hops(folder_paths, full["edges"], hops)
@@ -124,16 +124,17 @@ def scope_folder(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedG
         for p in expanded - folder_paths:
             if p in node_map:
                 folder_nodes.append(node_map[p])
+        seen = {(se["from_"], se["to"]) for se in scoped_edges}
         for e in full["edges"]:
-            if e["from_"] in expanded and e["to_"] in expanded:
-                already = any(se["from_"] == e["from_"] and se["to_"] == e["to_"] for se in scoped_edges)
-                if not already:
-                    scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+            key = (e["from_"], e["to"])
+            if e["from_"] in expanded and e["to"] in expanded and key not in seen:
+                seen.add(key)
+                scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     connected: set[str] = set()
     for e in scoped_edges:
         connected.add(e["from_"])
-        connected.add(e["to_"])
+        connected.add(e["to"])
     all_paths = {n["path"] for n in folder_nodes}
     orphans = [p for p in all_paths if p not in connected]
 
@@ -158,8 +159,8 @@ def scope_tag(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedGrap
 
     scoped_edges: list[ScopedGraphEdge] = []
     for e in full["edges"]:
-        if e["from_"] in tag_files and e["to_"] in tag_files:
-            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+        if e["from_"] in tag_files and e["to"] in tag_files:
+            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     scoped_edges.extend(_tag_cooccurrence_edges(tagged_nodes, shared_tag=seed))
 
@@ -168,16 +169,17 @@ def scope_tag(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedGrap
         for p in expanded - tag_files:
             if p in node_map:
                 tagged_nodes.append(node_map[p])
+        seen = {(se["from_"], se["to"]) for se in scoped_edges}
         for e in full["edges"]:
-            if e["from_"] in expanded and e["to_"] in expanded:
-                already = any(se["from_"] == e["from_"] and se["to_"] == e["to_"] for se in scoped_edges)
-                if not already:
-                    scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+            key = (e["from_"], e["to"])
+            if e["from_"] in expanded and e["to"] in expanded and key not in seen:
+                seen.add(key)
+                scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     connected: set[str] = set()
     for e in scoped_edges:
         connected.add(e["from_"])
-        connected.add(e["to_"])
+        connected.add(e["to"])
     all_paths = {n["path"] for n in tagged_nodes}
     orphans = [p for p in all_paths if p not in connected]
 
@@ -202,24 +204,25 @@ def scope_search(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedG
 
     scoped_edges: list[ScopedGraphEdge] = []
     for e in full["edges"]:
-        if e["from_"] in result_paths and e["to_"] in result_paths:
-            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+        if e["from_"] in result_paths and e["to"] in result_paths:
+            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     if hops >= 2:
         expanded = _expand_hops(result_paths, full["edges"], hops)
         for p in expanded - result_paths:
             if p in node_map:
                 matched_nodes.append(node_map[p])
+        seen = {(se["from_"], se["to"]) for se in scoped_edges}
         for e in full["edges"]:
-            if e["from_"] in expanded and e["to_"] in expanded:
-                already = any(se["from_"] == e["from_"] and se["to_"] == e["to_"] for se in scoped_edges)
-                if not already:
-                    scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+            key = (e["from_"], e["to"])
+            if e["from_"] in expanded and e["to"] in expanded and key not in seen:
+                seen.add(key)
+                scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     connected: set[str] = set()
     for e in scoped_edges:
         connected.add(e["from_"])
-        connected.add(e["to_"])
+        connected.add(e["to"])
     all_paths = {n["path"] for n in matched_nodes}
     orphans = [p for p in all_paths if p not in connected]
 
@@ -249,19 +252,20 @@ def scope_entity(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedG
 
     scoped_edges: list[ScopedGraphEdge] = []
     for e in full["edges"]:
-        if e["from_"] in entity_file_paths and e["to_"] in entity_file_paths:
-            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+        if e["from_"] in entity_file_paths and e["to"] in entity_file_paths:
+            scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     if hops >= 2:
         expanded = _expand_hops(entity_file_paths, full["edges"], hops)
         for p in expanded - entity_file_paths:
             if p in node_map:
                 entity_file_nodes.append(node_map[p])
+        seen = {(se["from_"], se["to"]) for se in scoped_edges}
         for e in full["edges"]:
-            if e["from_"] in expanded and e["to_"] in expanded:
-                already = any(se["from_"] == e["from_"] and se["to_"] == e["to_"] for se in scoped_edges)
-                if not already:
-                    scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to_"], type="link"))
+            key = (e["from_"], e["to"])
+            if e["from_"] in expanded and e["to"] in expanded and key not in seen:
+                seen.add(key)
+                scoped_edges.append(ScopedGraphEdge(from_=e["from_"], to=e["to"], type="link"))
 
     entity_nodes = _entity_nodes_for_paths(entity_file_paths)
     for e_node in entity_nodes:
@@ -272,7 +276,7 @@ def scope_entity(*, seed: str, hops: int, edge_types: str, full: Any) -> ScopedG
     connected: set[str] = set()
     for e in scoped_edges:
         connected.add(e["from_"])
-        connected.add(e["to_"])
+        connected.add(e["to"])
     all_paths = {n["path"] for n in entity_file_nodes}
     orphans = [p for p in all_paths if p not in connected]
 

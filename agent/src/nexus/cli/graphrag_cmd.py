@@ -91,24 +91,84 @@ def graphrag_query(
 
 
 @graphrag_app.command("reindex")
-def graphrag_reindex() -> None:
+def graphrag_reindex(
+    incremental: bool = typer.Option(
+        False, "--incremental", "-i",
+        help="Skip the drop and only index files whose content changed.",
+    ),
+) -> None:
     """Drop GraphRAG data and rebuild the index from vault files."""
     import asyncio
-    from ..agent.graphrag_manager import drop_data, initialize, index_full_vault
+    import json as _json
+    from rich.console import Console
+
+    from ..agent.graphrag_manager import index_vault_streaming
     from ..config_file import load as load_config
 
+    console = Console()
     cfg = load_config()
     if not cfg.graphrag.enabled:
         typer.echo("GraphRAG is not enabled in config.", err=True)
         raise typer.Exit(1)
 
-    dropped = drop_data()
-    typer.echo(f"Dropped {dropped} GraphRAG database file(s).")
+    state = {"done": 0, "total": 0, "errors": 0, "last_pct": -1}
+
+    def _progress(data: dict) -> None:
+        state["done"] = data.get("files_done", state["done"])
+        state["total"] = data.get("files_total", state["total"])
+        total = state["total"] or 1
+        pct = int(100 * state["done"] / total)
+        # Print at most one line per percent — a 3,000-file vault must not
+        # look frozen, but also must not flood the terminal per file.
+        if pct != state["last_pct"]:
+            state["last_pct"] = pct
+            console.print(
+                f"[dim]\\r{state['done']}/{state['total']} files "
+                f"({pct}%) · {data.get('entities', '?')} entities · "
+                f"{data.get('triples', '?')} relations[/dim]",
+                end="",
+                soft_wrap=True,
+            )
 
     async def _run() -> None:
-        await initialize(cfg)
-        typer.echo("Engine initialized. Indexing vault…")
-        await index_full_vault()
+        if incremental:
+            # The streaming path only re-initializes the engine on a full
+            # rebuild; an incremental pass in a fresh CLI process needs the
+            # engine brought up first.
+            from ..agent.graphrag_manager import get_engine, initialize
+            if get_engine() is None:
+                await initialize(cfg)
+        async for frame in index_vault_streaming(cfg, full=not incremental):
+            lines = frame.strip().split("\n")
+            event = ""
+            payload: dict = {}
+            for ln in lines:
+                if ln.startswith("event:"):
+                    event = ln[6:].strip()
+                elif ln.startswith("data:"):
+                    try:
+                        payload = _json.loads(ln[5:].strip())
+                    except _json.JSONDecodeError:
+                        payload = {}
+            if event == "status":
+                console.print(f"[dim]{payload.get('message', '')}[/dim]")
+            elif event == "file":
+                _progress(payload)
+            elif event == "error":
+                state["errors"] += 1
+                path = payload.get("path") or ""
+                console.print(f"[red]error:[/red] {path} {payload.get('detail', '')}")
+            elif event == "stats":
+                console.print()  # finish the progress line
+                s = payload
+                console.print(
+                    f"[green]Indexed[/green] {s.get('files_indexed', 0)} file(s) "
+                    f"({s.get('files_skipped', 0)} skipped) in {s.get('elapsed_s', '?')}s — "
+                    f"{s.get('entities', 0)} entities, {s.get('triples', 0)} relations "
+                    f"(+{s.get('entities_added', 0)} entities, +{s.get('triples_added', 0)} relations)"
+                )
+                if state["errors"]:
+                    console.print(f"[yellow]{state['errors']} file(s) failed — see log above.[/yellow]")
 
     asyncio.run(_run())
     typer.echo("GraphRAG reindex complete.")

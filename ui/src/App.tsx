@@ -699,7 +699,6 @@ export default function App() {
             {view === "graph" && isViewVisible("graph") && (
               <UnifiedGraphView
               onOpenSkill={(name) => setOpenSkill(name)}
-              onSelectSession={handleSessionSelect}
               graphSourceFilter={graphSourceFilter}
               onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
               pendingFolderGraph={pendingFolderGraph}

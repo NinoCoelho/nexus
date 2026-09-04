@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from nexus.trajectory import TrajectoryLogger
 
@@ -41,7 +40,7 @@ def test_log_valid_json(tmp_path: Path) -> None:
     logger = _make_logger(tmp_path)
     logger.log(**_sample_record())
     f = next((tmp_path / "trajectories").glob("trajectories-*.jsonl"))
-    lines = [l for l in f.read_text().splitlines() if l.strip()]
+    lines = [line for line in f.read_text().splitlines() if line.strip()]
     assert len(lines) == 1
     record = json.loads(lines[0])
     assert record["session_id"] == "sess-1"
@@ -55,7 +54,7 @@ def test_log_appends_multiple(tmp_path: Path) -> None:
     logger.log(**_sample_record(session_id="a", turn_index=0))
     logger.log(**_sample_record(session_id="b", turn_index=1))
     f = next((tmp_path / "trajectories").glob("trajectories-*.jsonl"))
-    lines = [l for l in f.read_text().splitlines() if l.strip()]
+    lines = [line for line in f.read_text().splitlines() if line.strip()]
     assert len(lines) == 2
 
 
@@ -64,7 +63,7 @@ def test_log_unique_trajectory_ids(tmp_path: Path) -> None:
     logger.log(**_sample_record())
     logger.log(**_sample_record())
     f = next((tmp_path / "trajectories").glob("trajectories-*.jsonl"))
-    ids = [json.loads(l)["trajectory_id"] for l in f.read_text().splitlines() if l.strip()]
+    ids = [json.loads(line)["trajectory_id"] for line in f.read_text().splitlines() if line.strip()]
     assert ids[0] != ids[1]
 
 
@@ -77,7 +76,7 @@ def test_export_all(tmp_path: Path) -> None:
     out = tmp_path / "export.jsonl"
     count = logger.export(out)
     assert count == 2
-    lines = [l for l in out.read_text().splitlines() if l.strip()]
+    lines = [line for line in out.read_text().splitlines() if line.strip()]
     assert len(lines) == 2
 
 
@@ -162,5 +161,5 @@ def test_concurrent_writes(tmp_path: Path) -> None:
 
     assert not errors
     f = next((tmp_path / "trajectories").glob("trajectories-*.jsonl"))
-    lines = [l for l in f.read_text().splitlines() if l.strip()]
+    lines = [line for line in f.read_text().splitlines() if line.strip()]
     assert len(lines) == 50

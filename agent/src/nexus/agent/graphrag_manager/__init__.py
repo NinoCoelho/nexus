@@ -43,6 +43,10 @@ _last_enabled: bool = False
 # against the stale vectors), but new queries against new content drift in
 # similarity geometry. User clears it by running ``nexus graphrag reindex``.
 _stale_warning: str | None = None
+# Non-fatal warning when a configured extraction model was unresolvable and
+# the builtin extractor is running instead — entity quality is lower until
+# the user fixes extraction_model_id.
+_extraction_warning: str | None = None
 # Bounded queue of recent per-file indexing failures, exposed via
 # /graph/knowledge/recent-errors. Tuples of (path, error_message, ts).
 _recent_errors: deque[dict[str, Any]] = deque(maxlen=50)
@@ -74,6 +78,7 @@ def get_health() -> dict[str, Any]:
         "enabled": _last_enabled,
         "error": _last_init_error,
         "stale_warning": _stale_warning,
+        "extraction_warning": _extraction_warning,
     }
 
 
@@ -122,13 +127,14 @@ async def initialize(cfg: Any) -> None:
     does **not** propagate so the rest of the app keeps starting; the UI
     surfaces the failure via ``/graph/knowledge/health``.
     """
-    global _engine, _home, _last_init_error, _stale_warning, _last_enabled
+    global _engine, _home, _last_init_error, _stale_warning, _last_enabled, _extraction_warning
 
     graphrag_cfg = getattr(cfg, "graphrag", None)
     if graphrag_cfg is None or not getattr(graphrag_cfg, "enabled", False):
         log.info("[graphrag] disabled in config")
         _last_init_error = None
         _stale_warning = None
+        _extraction_warning = None
         _last_enabled = False
         return
     _last_enabled = True
@@ -146,7 +152,7 @@ async def initialize(cfg: Any) -> None:
 
 async def _initialize_engine(cfg: Any, graphrag_cfg: Any) -> None:
     """Inner init body, separated so initialize() can blanket-catch failures."""
-    global _engine, _home, _last_init_error, _stale_warning
+    global _engine, _home, _last_init_error, _stale_warning, _extraction_warning
 
     if _engine is not None:
         try:
@@ -280,7 +286,8 @@ async def _initialize_engine(cfg: Any, graphrag_cfg: Any) -> None:
         chunk_size=graphrag_cfg.chunk_size,
     )
 
-    llm_for_extraction = _resolve_extraction_llm(cfg, graphrag_cfg)
+    llm_for_extraction, extraction_warning = _resolve_extraction_llm(cfg, graphrag_cfg)
+    _extraction_warning = extraction_warning
 
     _engine = GraphRAGEngine(
         engine_cfg,
@@ -352,6 +359,12 @@ async def _index_vault_file_bounded(path: str, content: str) -> None:
         await _index_vault_file_tracked(path, content)
 
 
+# Strong refs to in-flight fire-and-forget index tasks. CPython's asyncio
+# keeps only weak references to tasks — an unreferenced task can be
+# garbage-collected mid-flight, silently dropping the index write.
+_pending_index_tasks: set[asyncio.Task] = set()
+
+
 def schedule_index(path: str, content: str) -> None:
     """Fire-and-forget GraphRAG indexing of a single vault file.
 
@@ -364,11 +377,17 @@ def schedule_index(path: str, content: str) -> None:
         return
     if not content:
         return
+    # Machine-maintained vault files (ontology CSVs, meta) are config, not
+    # prose — feeding them through entity extraction pollutes the graph.
+    if path.startswith("_system/"):
+        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(_index_vault_file_bounded(path, content))
+    task = loop.create_task(_index_vault_file_bounded(path, content))
+    _pending_index_tasks.add(task)
+    task.add_done_callback(_pending_index_tasks.discard)
 
 
 def remove_source(path: str) -> None:
@@ -397,7 +416,13 @@ async def index_full_vault() -> None:
         from nexus import vault
         entries = vault.list_tree()
         for entry in entries:
+            # Markdown only — GraphRAG indexes prose, not binaries or the
+            # machine-maintained `_system/` folder.
             if entry.type != "file":
+                continue
+            if not entry.path.endswith((".md", ".mdx")):
+                continue
+            if entry.path.startswith("_system/"):
                 continue
             try:
                 result = vault.read_file(entry.path)

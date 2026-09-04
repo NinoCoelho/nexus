@@ -1,14 +1,19 @@
 /**
- * GraphCanvas3D — the single ForceGraph3D instance for the entire graph view.
+ * GraphCanvas3D — the WebGL 3D renderer (optional; 2D is the default).
  *
  * Sandboxed webviews (VS Code, Electron) cap concurrent WebGL contexts at one
  * and forceContextLoss is async, so unmounting/remounting per tab races the
  * GPU and the new context fails. This component is mounted once by
  * UnifiedGraph/index.tsx and stays mounted across mode switches; only its
  * `graphData` and callback props change.
+ *
+ * THREE objects are tracked per node id and disposed when a node's object is
+ * rebuilt or when the node leaves the dataset — react-force-graph never
+ * disposes them itself, so without this every selection click would leak a
+ * full set of geometries + materials + label textures.
  */
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import type {
@@ -19,7 +24,8 @@ import type {
   UnifiedNode,
 } from "./types";
 import type { GraphSettings } from "./graphSettings";
-import { makeGeometry, makeTextSprite, escapeHtml } from "./threeHelpers";
+import { makeGeometry, makeTextSprite } from "./threeHelpers";
+import { GraphContextMenu, useLinkTooltip, usePendingFit } from "./canvasCommon";
 
 interface Props {
   data: UnifiedGraphData;
@@ -46,7 +52,28 @@ type FgInstance = {
   d3Force?: (kind: string) => { distance?: (n: number) => unknown; strength?: (n: number) => unknown } | undefined;
   d3ReheatSimulation?: () => void;
   controls?: () => { zoomToCursor?: boolean; screenSpacePanning?: boolean } | undefined;
+  renderer?: () => { domElement?: HTMLCanvasElement } | undefined;
 };
+
+/** Dispose every GPU resource held by a node's THREE group. */
+function disposeGroup(group: THREE.Object3D): void {
+  group.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) {
+      for (const m of mat) {
+        const anyMat = m as THREE.MeshLambertMaterial & { map?: THREE.Texture };
+        anyMat.map?.dispose();
+        m.dispose();
+      }
+    } else if (mat) {
+      const anyMat = mat as THREE.MeshLambertMaterial & { map?: THREE.Texture };
+      anyMat.map?.dispose();
+      mat.dispose();
+    }
+  });
+}
 
 export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function GraphCanvas3D(
   { data, selectedId, search, findQuery, settings, onSelect, onNodeRightClick, contextMenu, onCloseContextMenu, emptyState },
@@ -54,21 +81,9 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
 ) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<FgInstance | null>(null);
-  const tooltipRef = useRef<HTMLDivElement | null>(null);
-  const mousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const hoveredLinkRef = useRef<UnifiedLink | null>(null);
 
-  const [size, setSize] = useState<{ w: number; h: number }>({ w: 800, h: 600 });
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const update = () => setSize({ w: el.clientWidth, h: el.clientHeight });
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const tooltip = useLinkTooltip();
+  const pendingFitRef = usePendingFit(data);
 
   const callFit = useCallback(() => fgRef.current?.zoomToFit?.(600, 60), []);
   const callReheat = useCallback(() => fgRef.current?.d3ReheatSimulation?.(), []);
@@ -78,8 +93,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     if (!fg?.cameraPosition) return;
     const pos = fg.cameraPosition();
     if (!pos) return;
-    const scale = factor;
-    const next = { x: pos.x * scale, y: pos.y * scale, z: pos.z * scale };
+    const next = { x: pos.x * factor, y: pos.y * factor, z: pos.z * factor };
     if (Math.hypot(next.x, next.y, next.z) < 5) return;
     fg.cameraPosition(next, undefined, 400);
   }, []);
@@ -100,10 +114,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
   }, [data.nodes]);
 
   // Pick the matched node closest to the current camera position, then
-  // rotate the camera so that node ends up centered. "Closest" is the
-  // intuitive notion: the user is staring at one side of the cloud; we
-  // center the match they're already nearest to instead of always going
-  // to the same node. Falls back to flyTo on any single match.
+  // rotate the camera so that node ends up centered.
   const flyToNearestMatch = useCallback((nodeIds: string[]) => {
     const fg = fgRef.current;
     if (!fg?.cameraPosition || nodeIds.length === 0) return;
@@ -111,16 +122,16 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     const cam = fg.cameraPosition();
     if (!cam) { flyTo(nodeIds[0]); return; }
     const ids = new Set(nodeIds);
-    let best: { node: UnifiedNode & { x?: number; y?: number; z?: number }; dist: number } | null = null;
+    let best: { id: string; dist: number } | null = null;
     for (const raw of data.nodes) {
       if (!ids.has(raw.id)) continue;
       const n = raw as UnifiedNode & { x?: number; y?: number; z?: number };
       if (n.x == null || n.y == null || n.z == null) continue;
       const dx = n.x - cam.x, dy = n.y - cam.y, dz = n.z - cam.z;
       const d = dx * dx + dy * dy + dz * dz;
-      if (!best || d < best.dist) best = { node: n, dist: d };
+      if (!best || d < best.dist) best = { id: n.id, dist: d };
     }
-    if (best) flyTo(best.node.id);
+    if (best) flyTo(best.id);
   }, [data.nodes, flyTo]);
 
   useImperativeHandle(ref, () => ({
@@ -132,11 +143,21 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     flyToNearestMatch,
   }), [callFit, callReheat, callZoom, flyTo, flyToNearestMatch]);
 
-  // Tune d3 forces and OrbitControls behavior. screenSpacePanning makes
-  // right-click drag pan the camera in screen space (rather than world
-  // space), which feels natural on 3D scatter plots. Re-applied whenever
-  // the node count changes — ForceGraph3D rebuilds its simulation on
-  // graphData changes, dropping previously-applied force settings.
+  // Release the WebGL context on final unmount. Sandbox webviews cap
+  // contexts at one, and the next mount's probe fails if we leave it
+  // dangling for the GPU driver to reap.
+  useEffect(() => {
+    return () => {
+      try {
+        const canvas = fgRef.current?.renderer?.()?.domElement;
+        canvas?.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+      } catch { /* best-effort */ }
+    };
+  }, []);
+
+  // Tune d3 forces and OrbitControls behavior. Re-applied whenever the node
+  // count changes — ForceGraph3D rebuilds its simulation on graphData
+  // changes, dropping previously-applied force settings.
   useEffect(() => {
     if (!data.nodes.length) return;
     let cancelled = false;
@@ -177,33 +198,11 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     return () => window.removeEventListener("keydown", handler);
   }, [callFit, callReheat, onSelect]);
 
-  // Auto-fit when the data set changes substantially (initial load, mode
-  // switch, or selecting a different entity that swaps the subgraph). We
-  // detect "substantial" by comparing the current node-id signature: a
-  // single user drag never changes node ids, so the camera is never
-  // snapped back during interaction.
-  //
-  // We don't fit on a timer — at 200+ nodes the simulation needs >2s to
-  // disperse, so a fixed timeout would zoom into the pile-at-origin. Instead
-  // we fit on the FIRST onEngineStop after a data swap, by which time the
-  // physics has settled and node positions span their final bounding box.
-  // pendingFitRef ensures subsequent engine stops (re-heated by hover or
-  // any nudge) don't snap the camera back.
-  const lastSigRef = useRef<string>("");
-  const pendingFitRef = useRef(false);
-  useEffect(() => {
-    if (!data.nodes.length) return;
-    const sig = data.nodes.map((n) => n.id).sort().join("|");
-    if (sig === lastSigRef.current) return;
-    lastSigRef.current = sig;
-    pendingFitRef.current = true;
-  }, [data]);
-
   const handleEngineStop = useCallback(() => {
     if (!pendingFitRef.current) return;
     pendingFitRef.current = false;
     callFit();
-  }, [callFit]);
+  }, [callFit, pendingFitRef]);
 
   const matchedIds = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -217,11 +216,8 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     return new Set(data.nodes.filter((n) => n.label.toLowerCase().includes(term)).map((n) => n.id));
   }, [findQuery, data.nodes]);
 
-  // Two pulse tracks. The main-search pulse is a soft base→white blink at
-  // 700ms cycle. The /-find pulse is a sharper, brighter cyan blink at
-  // ~450ms cycle so the two are visually distinct when both are active.
-  // (Find takes precedence in nodeThreeObject, so a node matching both
-  // shows the find pulse.)
+  // Two pulse tracks: main-search (soft white, 700ms) and /-find (sharp
+  // cyan, 450ms). Find takes precedence in nodeThreeObject.
   const pulseRef = useRef<Map<string, { mat: THREE.MeshLambertMaterial; baseColor: THREE.Color; matchColor: THREE.Color }>>(new Map());
   const pulseFindRef = useRef<Map<string, { mat: THREE.MeshLambertMaterial; baseColor: THREE.Color; matchColor: THREE.Color }>>(new Map());
 
@@ -240,7 +236,6 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
         entry.mat.emissive.setRGB(r, g, b);
         entry.mat.emissiveIntensity = 0.3 + 0.8 * eased;
       });
-      // Find pulse: faster (450ms), sharper (pow 0.4), brighter emissive.
       const fwave = (Math.sin((t / 450) * Math.PI * 2) + 1) / 2;
       const feased = Math.pow(fwave, 0.4);
       pulseFindRef.current.forEach((entry, id) => {
@@ -258,6 +253,33 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     return () => cancelAnimationFrame(rafId);
   }, [matchedIds, findMatchedIds]);
 
+  // Live THREE objects per node id — rebuilt objects and vanished nodes are
+  // disposed so repeated selections / mode switches don't leak GPU memory.
+  const liveObjectsRef = useRef<Map<string, THREE.Group>>(new Map());
+
+  useEffect(() => {
+    const live = liveObjectsRef.current;
+    const alive = new Set(data.nodes.map((n) => n.id));
+    for (const [id, group] of live) {
+      if (!alive.has(id)) {
+        disposeGroup(group);
+        live.delete(id);
+        pulseRef.current.delete(id);
+        pulseFindRef.current.delete(id);
+      }
+    }
+  }, [data]);
+
+  // Theme colors read once per mount instead of per node (forced style
+  // reads inside nodeThreeObject were a jank source on large graphs).
+  const themeRef = useRef({ fg: "#ece8e1" });
+  useEffect(() => {
+    try {
+      const cs = getComputedStyle(document.documentElement);
+      themeRef.current.fg = cs.getPropertyValue("--fg").trim() || "#ece8e1";
+    } catch { /* ignore */ }
+  }, []);
+
   const nodeThreeObject = useCallback((raw: object) => {
     const node = raw as UnifiedNode;
     const isMatch = matchedIds.size > 0 && matchedIds.has(node.id);
@@ -265,8 +287,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     const isSelected = node.id === selectedId;
     const radius = ((1.6 + Math.log(node.degree + 1) * 0.7) + (node.radiusBoost ?? 0)) * settings.nodeSize;
     const baseColor = node.color ?? "#7a9e7e";
-    const cs = getComputedStyle(document.documentElement);
-    const fg = cs.getPropertyValue("--fg").trim() || "#ece8e1";
+    const fg = themeRef.current.fg;
     const initial = isSelected
       ? "#ffd06a"
       : isFindMatch ? "#5cf0ff"
@@ -318,6 +339,12 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     const sprite = makeTextSprite(label, settings.labelScale);
     sprite.position.set(0, (isSelected ? radius + 1 : radius) + 1.5, 0);
     group.add(sprite);
+
+    // Dispose the previous object for this node (selection/search changes
+    // rebuild every node's object).
+    const prev = liveObjectsRef.current.get(node.id);
+    if (prev) disposeGroup(prev);
+    liveObjectsRef.current.set(node.id, group);
     return group;
   }, [matchedIds, findMatchedIds, selectedId, settings]);
 
@@ -326,73 +353,8 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     return l.color || "rgba(180,180,180,0.45)";
   }, []);
 
-  // Tooltip lives on a separate document-level listener so the wrapper has
-  // no React onMouseMove that could capture or interfere with the canvas's
-  // native pointer events (which OrbitControls relies on for drag-to-rotate).
-  const renderTooltip = useCallback(() => {
-    const tt = tooltipRef.current;
-    if (!tt) return;
-    const link = hoveredLinkRef.current;
-    if (!link || !link.relations || link.relations.length === 0) {
-      tt.style.display = "none";
-      return;
-    }
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const localX = mousePosRef.current.x - rect.left;
-    const localY = mousePosRef.current.y - rect.top;
-    const ttWidth = 240;
-    const ttLeft = localX + 14 + ttWidth > rect.width ? localX - ttWidth - 8 : localX + 14;
-    tt.style.left = `${ttLeft}px`;
-    tt.style.top = `${Math.max(4, localY - 8)}px`;
-    tt.style.display = "block";
-    // Dedupe by (from|to|label) to avoid the tooltip ballooning when two
-    // entities have many parallel edges with the same relation.
-    const seen = new Set<string>();
-    const unique: typeof link.relations = [];
-    for (const r of link.relations) {
-      const key = `${r.from}|${r.to}|${r.label || ""}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(r);
-    }
-    const cap = 8;
-    const shown = unique.slice(0, cap);
-    const rest = unique.length - shown.length;
-    tt.innerHTML = shown
-      .map((r) => {
-        const label = (r.label || "").replace(/_/g, " ");
-        const labelHtml = label
-          ? `<span class="kv-edge-tooltip-label">${escapeHtml(label)}</span>`
-          : "";
-        return `<div class="kv-edge-tooltip-row"><span class="kv-edge-tooltip-names">${escapeHtml(r.from)} → ${escapeHtml(r.to)}</span>${labelHtml}</div>`;
-      })
-      .join("") + (rest > 0 ? `<div class="kv-edge-tooltip-row"><span class="kv-edge-tooltip-label">+${rest} more</span></div>` : "");
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      mousePosRef.current = { x: e.clientX, y: e.clientY };
-      if (hoveredLinkRef.current) renderTooltip();
-    };
-    window.addEventListener("mousemove", handler, { passive: true });
-    return () => window.removeEventListener("mousemove", handler);
-  }, [renderTooltip]);
-
-  const onLinkHover = useCallback((link: object | null) => {
-    hoveredLinkRef.current = (link as UnifiedLink | null) ?? null;
-    renderTooltip();
-  }, [renderTooltip]);
-
-  const onNodeHover = useCallback(() => {
-    hoveredLinkRef.current = null;
-    if (tooltipRef.current) tooltipRef.current.style.display = "none";
-  }, []);
-
   const onNodeClick = useCallback((raw: object) => {
-    const node = raw as UnifiedNode;
-    onSelect(node);
+    onSelect(raw as UnifiedNode);
   }, [onSelect]);
 
   const onNodeRC = useCallback((raw: object, e: MouseEvent) => {
@@ -404,22 +366,12 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
     onNodeRightClick(node, e.clientX - rect.left, e.clientY - rect.top);
   }, [onNodeRightClick]);
 
-  // Dismiss context menu on outside click
-  useEffect(() => {
-    if (!contextMenu) return;
-    const handler = () => onCloseContextMenu?.();
-    window.addEventListener("click", handler);
-    return () => window.removeEventListener("click", handler);
-  }, [contextMenu, onCloseContextMenu]);
-
   const hasData = data.nodes.length > 0;
 
   return (
     <div className="ug-canvas" ref={wrapRef}>
       <ForceGraph3D
         ref={fgRef as unknown as React.MutableRefObject<undefined> | undefined}
-        width={size.w}
-        height={size.h}
         graphData={data}
         backgroundColor="rgba(0,0,0,0)"
         showNavInfo={false}
@@ -431,7 +383,7 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
         linkOpacity={settings.linkOpacity}
         linkWidth={settings.linkWidth}
         linkCurvature={settings.linkCurvature}
-        linkDirectionalParticles={1}
+        linkDirectionalParticles={data.links.length <= 400 ? 1 : 0}
         linkDirectionalParticleSpeed={settings.particleSpeed}
         linkDirectionalParticleWidth={settings.particleWidth}
         enableNodeDrag={false}
@@ -439,34 +391,18 @@ export const GraphCanvas3D = forwardRef<GraphCanvasHandle, Props>(function Graph
         onNodeClick={onNodeClick}
         onNodeRightClick={onNodeRC}
         onBackgroundClick={() => onSelect(null)}
-        onLinkHover={onLinkHover}
-        onNodeHover={onNodeHover}
+        onLinkHover={tooltip.onLinkHover}
+        onNodeHover={tooltip.onNodeHover}
         onEngineStop={handleEngineStop}
       />
 
-      <div ref={tooltipRef} className="kv-edge-tooltip" style={{ display: "none" }} />
+      <div ref={tooltip.tooltipRef} className="kv-edge-tooltip" style={{ display: "none" }} />
 
       {!hasData && emptyState && (
         <div className="ug-empty">{emptyState}</div>
       )}
 
-      {contextMenu && (
-        <div
-          className="kv-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {contextMenu.items.map((item, i) => (
-            <button
-              key={i}
-              className="kv-context-menu-item"
-              onClick={() => { item.onClick(); onCloseContextMenu?.(); }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {contextMenu && <GraphContextMenu menu={contextMenu} onClose={() => onCloseContextMenu?.()} />}
     </div>
   );
 });

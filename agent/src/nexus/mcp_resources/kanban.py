@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html as html_mod
-import json
 import logging
 
 log = logging.getLogger(__name__)
@@ -25,7 +24,6 @@ def render_kanban(path: str) -> str:
         return _wrap(f"<p style='color:#ef4444'>Error: {html_mod.escape(str(e))}</p>")
 
     data = board.to_dict()
-    board_json = json.dumps(data)
 
     board_title = html_mod.escape(data.get("title", "Kanban"))
     lanes = data.get("lanes", [])

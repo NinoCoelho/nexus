@@ -214,13 +214,14 @@ def test_default_dashboard_has_empty_widgets():
 
 def test_upsert_widget_appends_first():
     d = vault_dashboard.upsert_widget("shop", {
-        "id": "monthly_rev", "title": "Monthly revenue", "kind": "chart",
-        "prompt": "Plot revenue.", "refresh": "daily",
+        "id": "monthly_rev", "title": "Monthly revenue", "viz_type": "bar",
+        "query": "Sum revenue by month", "refresh": "daily",
     })
     assert len(d["widgets"]) == 1
     w = d["widgets"][0]
     assert w["id"] == "monthly_rev"
-    assert w["kind"] == "chart"
+    assert w["viz_type"] == "bar"
+    assert w["query"] == "Sum revenue by month"
     assert w["refresh"] == "daily"
     assert w["last_refreshed_at"] is None
     assert w["order"] == 0
@@ -228,26 +229,26 @@ def test_upsert_widget_appends_first():
 
 def test_upsert_widget_replaces_by_id():
     vault_dashboard.upsert_widget("shop", {
-        "id": "kpi", "title": "v1", "kind": "kpi", "prompt": "p1",
+        "id": "kpi", "title": "v1", "viz_type": "kpi", "query": "q1",
     })
     vault_dashboard.upsert_widget("shop", {
-        "id": "kpi", "title": "v2", "kind": "kpi", "prompt": "p2",
+        "id": "kpi", "title": "v2", "viz_type": "kpi", "query": "q2",
     })
     d = vault_dashboard.read_dashboard("shop")
     assert len(d["widgets"]) == 1
     assert d["widgets"][0]["title"] == "v2"
 
 
-def test_upsert_widget_rejects_bad_kind():
-    with pytest.raises(ValueError, match="kind"):
+def test_upsert_widget_rejects_bad_viz_type():
+    with pytest.raises(ValueError, match="viz_type"):
         vault_dashboard.upsert_widget("shop", {
-            "id": "bad", "title": "Bad", "kind": "nope", "prompt": "",
+            "id": "bad", "title": "Bad", "viz_type": "nope", "query": "q",
         })
 
 
 def test_upsert_widget_round_trips_size():
     d = vault_dashboard.upsert_widget("shop", {
-        "id": "w", "title": "W", "kind": "chart", "prompt": "", "size": "lg",
+        "id": "w", "title": "W", "viz_type": "bar", "query": "q", "size": "lg",
     })
     assert d["widgets"][0]["size"] == "lg"
     read = vault_dashboard.read_dashboard("shop")
@@ -259,29 +260,29 @@ def test_upsert_widget_omits_size_when_invalid():
     legacy / agent-authored widgets resilient and lets the UI fall back to
     the per-kind default."""
     d = vault_dashboard.upsert_widget("shop", {
-        "id": "w", "title": "W", "kind": "chart", "prompt": "", "size": "huge",
+        "id": "w", "title": "W", "viz_type": "bar", "query": "q", "size": "huge",
     })
     assert "size" not in d["widgets"][0]
 
 
-def test_upsert_widget_aliases_legacy_list_kind_to_report():
-    """Old `_data.md` files with kind='list' still load (mapped to report).
+def test_upsert_widget_aliases_legacy_list_kind_to_bar():
+    """Old `_data.md` files with kind='list' still load (mapped to bar).
 
-    `list` was a separate widget kind in early versions but it's a degenerate
-    case of report (markdown can already render a bullet list). Removing it
-    outright would break existing dashboards; aliasing on read keeps them
-    working and folds future edits into the survivor kind.
+    `list` (like `chart` and `report`) was a prompt-era widget kind; the
+    query-based schema folds all of them into `bar`. Removing the legacy
+    kinds outright would break existing dashboards; aliasing on read keeps
+    them working and folds future edits into the survivor viz_type.
     """
     d = vault_dashboard.upsert_widget("shop", {
-        "id": "legacy", "title": "Legacy list", "kind": "list", "prompt": "",
+        "id": "legacy", "title": "Legacy list", "kind": "list", "query": "q",
     })
-    assert d["widgets"][0]["kind"] == "report"
+    assert d["widgets"][0]["viz_type"] == "bar"
 
 
 def test_upsert_widget_rejects_bad_id():
     with pytest.raises(ValueError, match="slug"):
         vault_dashboard.upsert_widget("shop", {
-            "id": "Bad ID", "title": "x", "kind": "report", "prompt": "",
+            "id": "Bad ID", "title": "x", "viz_type": "bar", "query": "q",
         })
 
 
@@ -289,7 +290,7 @@ def test_upsert_widget_defaults_refresh_to_manual():
     """Unknown ``refresh`` values fall back to ``manual`` rather than raising —
     keeps round-trips of legacy/agent-authored widgets resilient."""
     d = vault_dashboard.upsert_widget("shop", {
-        "id": "w", "title": "W", "kind": "report", "prompt": "",
+        "id": "w", "title": "W", "viz_type": "kpi", "query": "q",
         "refresh": "weekly",  # not allowed
     })
     assert d["widgets"][0]["refresh"] == "manual"
@@ -297,19 +298,19 @@ def test_upsert_widget_defaults_refresh_to_manual():
 
 def test_delete_widget_removes_by_id_and_result_file(_vault_tmp):
     vault_dashboard.upsert_widget("shop", {
-        "id": "a", "title": "A", "kind": "report", "prompt": "",
+        "id": "a", "title": "A", "viz_type": "table", "query": "q",
     })
-    vault_widgets.write_widget_result("shop", "a", "Hello.")
-    assert (_vault_tmp / "shop" / "_widgets" / "a.md").exists()
+    vault_widgets.write_widget_result("shop", "a", '{"data": []}')
+    assert (_vault_tmp / "shop" / "_widgets" / "a.json").exists()
     vault_dashboard.delete_widget("shop", "a")
     d = vault_dashboard.read_dashboard("shop")
     assert d["widgets"] == []
-    assert not (_vault_tmp / "shop" / "_widgets" / "a.md").exists()
+    assert not (_vault_tmp / "shop" / "_widgets" / "a.json").exists()
 
 
 def test_set_widget_refreshed_persists_timestamp():
     vault_dashboard.upsert_widget("shop", {
-        "id": "w", "title": "W", "kind": "kpi", "prompt": "",
+        "id": "w", "title": "W", "viz_type": "kpi", "query": "q",
     })
     vault_dashboard.set_widget_refreshed("shop", "w", "2026-05-01T12:00:00Z")
     d = vault_dashboard.read_dashboard("shop")
@@ -334,7 +335,7 @@ def test_widget_path_rejects_bad_id():
 def test_delete_database_cleans_up_widget_files(_vault_tmp):
     vault_datatable.create_table("shop/customers.md", {"fields": [{"name": "id", "kind": "text"}]})
     vault_dashboard.upsert_widget("shop", {
-        "id": "w", "title": "W", "kind": "report", "prompt": "",
+        "id": "w", "title": "W", "viz_type": "table", "query": "q",
     })
     vault_widgets.write_widget_result("shop", "w", "body")
     res = vault_dashboard.delete_database("shop", confirm="shop")

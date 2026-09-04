@@ -100,7 +100,6 @@ class TestRunScenarioRehearsal:
         import nexus.dream.rehearse as mod
         orig_sessions = mod._load_recent_sessions
         orig_insights = mod._load_recent_insights
-        orig_path = mod.Path
 
         mod._load_recent_sessions = lambda **kw: [
             {"session_id": f"s{i}", "title": f"Deploy {i}", "preview": f"deploying {i}"}

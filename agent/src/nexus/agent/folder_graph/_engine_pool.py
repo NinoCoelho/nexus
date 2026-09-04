@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-import sqlite3
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any

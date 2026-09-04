@@ -9,6 +9,7 @@ from typing import Any
 
 from ._constants import (
     RELATION_PROTOTYPES,
+    SPACY_LABEL_HINTS,
     SPACY_LABEL_MAP,
     TYPE_PROTOTYPES,
     _SKIP_LABELS,
@@ -209,6 +210,27 @@ class BuiltinExtractor:
     ) -> list[dict[str, str]]:
         seen_spans: set[tuple[int, int]] = set()
         entity_map: dict[str, dict[str, str]] = {}
+        # (name, spaCy label) pairs that need embedding classification.
+        pending: list[tuple[str, str]] = []
+
+        def _record(name: str, label: str, description: str) -> None:
+            if name in entity_map:
+                return
+            direct_type = SPACY_LABEL_MAP.get(label, "")
+            if direct_type and (not entity_types or direct_type in entity_types):
+                entity_map[name] = {
+                    "name": name,
+                    "type": direct_type,
+                    "description": description,
+                }
+            elif entity_types:
+                pending.append((name, label))
+            else:
+                entity_map[name] = {
+                    "name": name,
+                    "type": direct_type or "concept",
+                    "description": description,
+                }
 
         # Phase 1 — spaCy named entities (high confidence)
         for ent in doc.ents:
@@ -227,22 +249,7 @@ class BuiltinExtractor:
             if label in _SKIP_LABELS:
                 continue
 
-            # Direct mapping from spaCy label → ontology type
-            direct_type = SPACY_LABEL_MAP.get(label, "")
-            if direct_type and direct_type in entity_types:
-                etype = direct_type
-            elif entity_types:
-                # Fallback: embedding similarity
-                etype = await self._classify_type(name, entity_types, direct_type)
-            else:
-                etype = direct_type or "concept"
-
-            if etype:
-                entity_map[name] = {
-                    "name": name,
-                    "type": etype,
-                    "description": f"{label} mentioned in text",
-                }
+            _record(name, label, f"{label} mentioned in text")
 
         # Phase 2 — noun phrases with proper nouns (only capitalized ones)
         for chunk in doc.noun_chunks:
@@ -268,53 +275,95 @@ class BuiltinExtractor:
             if not has_content:
                 continue
 
-            etype = await self._classify_type(name, entity_types, "")
-            if etype:
+            if name not in entity_map and name not in {n for n, _ in pending}:
+                pending.append((name, ""))
                 seen_spans.add(span)
-                entity_map[name] = {
-                    "name": name,
-                    "type": etype,
-                    "description": "entity mentioned in text",
-                }
+
+        # Phase 3 — batch type classification for everything pending. One
+        # embedder call for all names + one for any missing type prototypes;
+        # the old per-name embed calls dominated extraction latency.
+        if pending and entity_types:
+            # .get() — labels outside the hints map (e.g. pt's MISC, or any
+            # model-specific label) must fall through to a generic hint, not
+            # crash the whole chunk's extraction.
+            texts = [
+                f"{name} — {SPACY_LABEL_HINTS.get(label) or (label.lower().replace('_', ' ') if label else '')}"
+                if label else name
+                for name, label in pending
+            ]
+            name_embs = await self._embedder.embed(texts)
+
+            proto_embs: dict[str, list[float]] = {}
+            missing = [t for t in entity_types if t not in self._type_embs]
+            if missing:
+                missing_embs = await self._embedder.embed(
+                    [t.replace("_", " ") for t in missing]
+                )
+                for t, e in zip(missing, missing_embs):
+                    self._type_embs[t] = e
+            for t in entity_types:
+                proto = self._type_embs.get(t)
+                if proto is not None:
+                    proto_embs[t] = proto
+
+            for (name, label), name_emb in zip(pending, name_embs):
+                etype = self._best_type(name_emb, proto_embs, threshold=0.35)
+                if etype is None:
+                    # Weak match — fall back to the legacy label mapping when
+                    # it names a valid type, otherwise drop the entity.
+                    legacy = SPACY_LABEL_MAP.get(label, "")
+                    etype = legacy if legacy in entity_types else None
+                if etype:
+                    entity_map[name] = {
+                        "name": name,
+                        "type": etype,
+                        "description": f"{label or 'entity'} mentioned in text",
+                    }
 
         return list(entity_map.values())
 
-    # -- type classification ------------------------------------------------
+    def _best_type(
+        self,
+        name_emb: list[float],
+        proto_embs: dict[str, list[float]],
+        *,
+        threshold: float,
+    ) -> str | None:
+        if not proto_embs:
+            return None
+        best_type: str | None = None
+        best_score = -1.0
+        for etype, proto in proto_embs.items():
+            score = _cosine_sim(name_emb, proto)
+            if score > best_score:
+                best_score = score
+                best_type = etype
+        return best_type if best_score >= threshold else None
+
+    # -- type classification (single-entity convenience API) ----------------
 
     async def _classify_type(
         self, name: str, entity_types: list[str], hint: str,
     ) -> str | None:
         if not entity_types:
             return hint or "concept"
-
-        # Direct hint match
         if hint and hint in entity_types:
             return hint
-
-        # Embedding similarity against type prototypes
         if not self._type_embs:
             return hint if hint in entity_types else entity_types[0]
 
         name_emb = (await self._embedder.embed([name]))[0]
-
-        best_type: str | None = None
-        best_score = -1.0
-
+        proto_embs: dict[str, list[float]] = {}
         for etype in entity_types:
             proto = self._type_embs.get(etype)
             if proto is None:
                 proto = (await self._embedder.embed([etype.replace("_", " ")]))[0]
                 self._type_embs[etype] = proto
-            score = _cosine_sim(name_emb, proto)
-            if score > best_score:
-                best_score = score
-                best_type = etype
-
-        # Higher threshold — reject weak matches
-        if best_score < 0.35:
+            proto_embs[etype] = proto
+        best = self._best_type(name_emb, proto_embs, threshold=0.35)
+        if best is None:
             return hint if hint in entity_types else None
-
-        return best_type
+        return best
 
     # -- relation extraction ------------------------------------------------
 
@@ -326,58 +375,78 @@ class BuiltinExtractor:
             return []
 
         rel_set = set(core_relations) if core_relations else set()
-        relations: list[dict[str, Any]] = []
-        seen_pairs: set[frozenset[str]] = set()
+        names = [e["name"] for e in entities]
+        lower_names = {n.lower(): n for n in names}
 
+        # Pair collection: entities co-occurring in a sentence, limited to a
+        # proximity window (~30 tokens) so a long sentence listing many
+        # entities doesn't produce a fully-connected clique. Sentence text
+        # and co-occurrence count are kept for classification + strength.
+        pair_context: dict[tuple[str, str], list[str]] = {}
         for sent in doc.sents:
             sent_lower = sent.text.lower()
-            found = [
-                e for e in entities
-                if e["name"].lower() in sent_lower
-            ]
-
-            for i, e1 in enumerate(found):
-                for e2 in found[i + 1:]:
-                    pair = frozenset((e1["name"], e2["name"]))
-                    if pair in seen_pairs:
+            positions: list[tuple[int, str]] = []
+            for ln, name in lower_names.items():
+                idx = sent_lower.find(ln)
+                if idx >= 0:
+                    positions.append((idx, name))
+            positions.sort()
+            for i, (p1, n1) in enumerate(positions):
+                for p2, n2 in positions[i + 1:]:
+                    if p2 - p1 > 160:  # characters ≈ 30 tokens
+                        break
+                    if n1 == n2:
                         continue
-                    seen_pairs.add(pair)
+                    key = (n1, n2) if n1 <= n2 else (n2, n1)
+                    pair_context.setdefault(key, []).append(sent.text)
 
-                    rel = await self._classify_relation(
-                        e1["name"], e2["name"], core_relations,
-                    )
-                    relations.append({
-                        "head": e1["name"],
-                        "relation": rel,
-                        "tail": e2["name"],
-                        "description": f"{e1['name']} {rel} {e2['name']}",
-                        "strength": 5,
-                        "custom": rel not in rel_set,
-                    })
+        if not pair_context:
+            return []
 
-        return relations[:20]
-
-    async def _classify_relation(
-        self, head: str, tail: str,
-        core_relations: list[str] | None = None,
-    ) -> str:
+        # Batch classification: embed each pair's shortest containing
+        # sentence (the most focused context) and match against relation
+        # prototypes. Embedding the sentence — not "{head} {tail}" — is the
+        # whole fix: the verb/semantics of the sentence decide the relation.
         rels = core_relations if core_relations else list(self._rel_embs.keys())
         if not rels:
-            return "related_to"
+            rels = ["related_to"]
 
-        combined = f"{head} {tail}"
-        emb = (await self._embedder.embed([combined]))[0]
+        contexts = [min(sents, key=len) for sents in pair_context.values()]
+        ctx_embs = await self._embedder.embed(contexts)
 
-        best_rel = "related_to"
-        best_score = -1.0
-        for rel in rels:
-            proto = self._rel_embs.get(rel)
-            if proto is None:
-                proto = (await self._embedder.embed([rel.replace("_", " ")]))[0]
-                self._rel_embs[rel] = proto
-            score = _cosine_sim(emb, proto)
-            if score > best_score:
-                best_score = score
-                best_rel = rel
+        missing = [r for r in rels if r not in self._rel_embs]
+        if missing:
+            missing_embs = await self._embedder.embed([r.replace("_", " ") for r in missing])
+            for r, e in zip(missing, missing_embs):
+                self._rel_embs[r] = e
 
-        return best_rel
+        relations: list[dict[str, Any]] = []
+        for (head, tail), ctx_emb in zip(pair_context.keys(), ctx_embs):
+            best_rel = "related_to"
+            best_score = -1.0
+            for rel in rels:
+                proto = self._rel_embs.get(rel)
+                if proto is None:
+                    continue
+                score = _cosine_sim(ctx_emb, proto)
+                if score > best_score:
+                    best_score = score
+                    best_rel = rel
+
+            # Strength grows with how often the pair co-occurs across
+            # sentences in this chunk — repeated mentions mean a real
+            # relationship, a single passing co-mention stays weak.
+            mentions = len(pair_context[(head, tail)])
+            strength = min(2.0 + mentions * 2.0, 10.0)
+
+            relations.append({
+                "head": head,
+                "relation": best_rel,
+                "tail": tail,
+                "description": f"{head} {best_rel.replace('_', ' ')} {tail}",
+                "strength": strength,
+                "custom": bool(rel_set) and best_rel not in rel_set,
+            })
+
+        relations.sort(key=lambda r: -float(r["strength"]))
+        return relations[:20]

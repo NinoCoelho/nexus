@@ -122,10 +122,20 @@ class AlarmStore(SqliteStore):
         self._db.commit()
 
     def garbage_collect(self, before_utc: str) -> int:
-        """Remove acknowledged alarms older than the given timestamp."""
+        """Remove stale alarm rows older than the given timestamp.
+
+        Two categories:
+          * ``acknowledged`` — done, keep briefly for history.
+          * ``ringing`` / ``snoozed`` with a long-past occurrence — orphaned
+            (their calendar event was deleted or the occurrence is gone).
+            Without this they sit forever and ``list_snoozed_ready`` re-rings
+            them on every driver tick.
+        """
         cur = self._db.execute(
-            "DELETE FROM alarm_state WHERE status='acknowledged' AND created_at < ?",
-            (before_utc,),
+            "DELETE FROM alarm_state WHERE "
+            "(status='acknowledged' AND created_at < ?) OR "
+            "(status IN ('ringing','snoozed') AND occurrence_start < ?)",
+            (before_utc, before_utc),
         )
         self._db.commit()
         return cur.rowcount

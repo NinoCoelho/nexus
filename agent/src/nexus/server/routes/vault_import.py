@@ -11,6 +11,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -114,6 +115,66 @@ def _count_tree(nodes: list[dict[str, Any]]) -> tuple[int, int]:
             files += f
             total_size += s
     return files, total_size
+
+
+def _confine(candidate: Path, base: Path) -> Path | None:
+    """Resolve ``candidate`` under ``base`` (realpath containment).
+
+    Returns None when the path escapes ``base`` — callers treat that as
+    "file not found" so traversal attempts never leak filesystem structure.
+    """
+    resolved = Path(os.path.realpath(candidate))
+    base_real = Path(os.path.realpath(base))
+    try:
+        resolved.relative_to(base_real)
+    except ValueError:
+        return None
+    return resolved
+
+
+def _resolve_csv_import_path(
+    csv_path: str, import_id: str | None, batch_id: str | None, source: str
+) -> Path:
+    """Resolve a client-supplied CSV path to a confined on-disk file.
+
+    ``source="vault"`` goes through vault.resolve_path (vault-root
+    confinement). Temp-dir sources must stay inside their import/batch
+    directory and be CSV/TSV files. Raises 404 when unresolvable, 400 on
+    escape/suffix violations.
+    """
+    full: Path | None = None
+    if source == "vault":
+        from ...vault import resolve_path
+
+        try:
+            full = resolve_path(csv_path)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+    elif import_id:
+        info = _active_imports.get(import_id)
+        if info:
+            full = _confine(Path(info.temp_dir) / csv_path, Path(info.temp_dir))
+    elif batch_id:
+        csv_temp = _CSV_TEMP_BASE / batch_id
+        candidate = _confine(csv_temp / csv_path.replace("/", "_"), csv_temp)
+        if candidate is not None and candidate.is_file():
+            full = candidate
+        else:
+            csvs = sorted(csv_temp.glob("*.csv"))
+            if csvs:
+                full = csvs[0]
+
+    if full is None or not full.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"CSV file not found: {csv_path}"
+        )
+    if full.suffix.lower() not in (".csv", ".tsv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"not a CSV/TSV file: {csv_path}"
+        )
+    return full
 
 
 def _find_csvs(nodes: list[dict[str, Any]], temp_dir: Path) -> list[dict[str, Any]]:
@@ -327,9 +388,11 @@ async def zip_preview(request: Request) -> dict[str, Any]:
     temp_dir = _TEMP_BASE / import_id
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
+    def _extract_zip() -> None:
+        # Synchronous zip extraction (up to 2 GB) — runs in a worker thread
+        # so the event loop keeps serving every other session meanwhile.
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            total_extracted = 0
+            nonlocal total_extracted
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -348,16 +411,20 @@ async def zip_preview(request: Request) -> dict[str, Any]:
                             shutil.rmtree(temp_dir, ignore_errors=True)
                             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="zip bomb detected: exceeds 2 GB extracted")
                         dst.write(chunk)
+
+    total_extracted = 0
+    try:
+        await asyncio.to_thread(_extract_zip)
     except HTTPException:
         raise
-    except (zipfile.BadZipFile, Exception) as exc:
+    except Exception as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"zip extraction failed: {exc}")
 
-    tree = _build_tree_from_dir(temp_dir)
+    tree = await asyncio.to_thread(_build_tree_from_dir, temp_dir)
     total_files, total_size = _count_tree(tree)
-    csvs = _find_csvs(tree, temp_dir)
-    export_format = _detect_export_format(temp_dir)
+    csvs = await asyncio.to_thread(_find_csvs, tree, temp_dir)
+    export_format = await asyncio.to_thread(_detect_export_format, temp_dir)
 
     stats = {
         "total_files": total_files,
@@ -605,42 +672,27 @@ async def batch_import(request: Request) -> StreamingResponse:
 @router.post("/vault/csv-analyze")
 async def csv_analyze(request: Request) -> dict[str, Any]:
     body = await request.json()
-    csv_path = body.get("csv_path", "")
-    import_id = body.get("import_id")
-    batch_id = body.get("batch_id")
-    source = body.get("source", "temp")
-
-    full: Path | None = None
-    if source == "vault":
-        from ...vault import resolve_path
-        full = resolve_path(csv_path)
-    elif import_id:
-        info = _active_imports.get(import_id)
-        if info:
-            full = Path(info.temp_dir) / csv_path
-    elif batch_id:
-        csv_temp = _CSV_TEMP_BASE / batch_id
-        candidate = csv_temp / csv_path.replace("/", "_")
-        if candidate.is_file():
-            full = candidate
-        else:
-            csvs = list(csv_temp.glob("*.csv"))
-            if csvs:
-                full = csvs[0]
-
-    if not full or not full.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"CSV file not found: {csv_path}")
+    full = _resolve_csv_import_path(
+        body.get("csv_path", ""), body.get("import_id"), body.get("batch_id"), body.get("source", "temp")
+    )
 
     import duckdb
-    con = duckdb.connect(database=":memory:")
-    try:
-        con.execute(f"CREATE VIEW csv_data AS SELECT * FROM read_csv_auto('{full}')")
-        cols_result = con.execute("DESCRIBE csv_data").fetchall()
-        headers = [r[0] for r in cols_result]
-        sample_rows = [dict(zip(headers, r)) for r in con.execute("SELECT * FROM csv_data LIMIT 20").fetchall()]
-        total_rows = con.execute("SELECT COUNT(*) FROM csv_data").fetchone()[0]
-    finally:
-        con.close()
+    from ...vault_csv import _sql_str
+
+    def _describe() -> tuple[list[str], list[dict], int]:
+        # DuckDB sniffing/scan is CPU+IO heavy — off the event loop.
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(f"CREATE VIEW csv_data AS SELECT * FROM read_csv_auto({_sql_str(str(full))})")
+            cols_result = con.execute("DESCRIBE csv_data").fetchall()
+            headers = [r[0] for r in cols_result]
+            sample_rows = [dict(zip(headers, r)) for r in con.execute("SELECT * FROM csv_data LIMIT 20").fetchall()]
+            total_rows = con.execute("SELECT COUNT(*) FROM csv_data").fetchone()[0]
+            return headers, sample_rows, int(total_rows)
+        finally:
+            con.close()
+
+    headers, sample_rows, total_rows = await asyncio.to_thread(_describe)
 
     agent = request.app.state.agent
     cfg = request.app.state.mutable_state.get("cfg")
@@ -655,33 +707,12 @@ async def csv_analyze(request: Request) -> dict[str, Any]:
 @router.post("/vault/csv-migrate")
 async def csv_migrate(request: Request) -> StreamingResponse:
     body = await request.json()
-    csv_path = body.get("csv_path", "")
-    import_id = body.get("import_id")
     batch_id = body.get("batch_id")
-    source = body.get("source", "temp")
+    full = _resolve_csv_import_path(
+        body.get("csv_path", ""), body.get("import_id"), batch_id, body.get("source", "temp")
+    )
     dest_dir = (body.get("dest_dir") or "").strip().strip("/")
     approved_plan: dict[str, Any] = body.get("approved_plan", {})
-
-    full: Path | None = None
-    if source == "vault":
-        from ...vault import resolve_path
-        full = resolve_path(csv_path)
-    elif import_id:
-        info = _active_imports.get(import_id)
-        if info:
-            full = Path(info.temp_dir) / csv_path
-    elif batch_id:
-        csv_temp = _CSV_TEMP_BASE / batch_id
-        candidate = csv_temp / csv_path.replace("/", "_")
-        if candidate.is_file():
-            full = candidate
-        else:
-            csvs = list(csv_temp.glob("*.csv"))
-            if csvs:
-                full = csvs[0]
-
-    if not full or not full.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"CSV file not found: {csv_path}")
 
     entities = approved_plan.get("entities", [])
     relationships = approved_plan.get("relationships", [])
@@ -697,12 +728,19 @@ async def csv_migrate(request: Request) -> StreamingResponse:
         from ...vault_datatable import _serialize
 
         import duckdb
-        con = duckdb.connect(database=":memory:")
-        try:
-            con.execute(f"CREATE VIEW csv_data AS SELECT * FROM read_csv_auto('{full}');")
-            all_rows = [dict(r) for r in con.execute("SELECT * FROM csv_data").fetchall()]
-        finally:
-            con.close()
+        from ...vault_csv import _sql_str
+
+        def _load_all_rows() -> list[dict]:
+            # Materializing the whole CSV is the heaviest step of the
+            # migration — keep it off the event loop.
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(f"CREATE VIEW csv_data AS SELECT * FROM read_csv_auto({_sql_str(str(full))});")
+                return [dict(r) for r in con.execute("SELECT * FROM csv_data").fetchall()]
+            finally:
+                con.close()
+
+        all_rows = await asyncio.to_thread(_load_all_rows)
 
         for ent in entities:
             if await request.is_disconnected():
@@ -789,8 +827,8 @@ def _collect_selected_files(
     selected_dirs: set[str] = set()
 
     for p in selected_paths:
-        full = temp_dir / p
-        if full.is_dir():
+        full = _confine(temp_dir / p, temp_dir)
+        if full is not None and full.is_dir():
             selected_dirs.add(p)
 
     def _walk(nodes: list[dict[str, Any]]) -> None:

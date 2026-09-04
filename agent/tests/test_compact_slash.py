@@ -19,7 +19,6 @@ from nexus.agent.llm import (
     ChatResponse,
     LLMProvider,
     Role,
-    StopReason,
     StreamEvent,
     ToolSpec,
 )
@@ -244,7 +243,7 @@ def test_get_commands_endpoint_returns_registry() -> None:
     import asyncio
     from nexus.server.routes.chat_slash import SLASH_COMMANDS, list_commands
 
-    out = asyncio.get_event_loop().run_until_complete(list_commands())
+    out = asyncio.new_event_loop().run_until_complete(list_commands())
     assert isinstance(out, list)
     assert len(out) == len(SLASH_COMMANDS)
     names = [c["name"] for c in out]

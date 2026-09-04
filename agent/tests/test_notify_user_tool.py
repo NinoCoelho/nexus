@@ -70,7 +70,7 @@ async def test_notify_user_text_publishes_without_audio() -> None:
 
     token = CURRENT_SESSION_ID.set("sess-1")
     try:
-        result = await handler.invoke({"message": "Looking that up — about a minute."})
+        result = await handler.invoke({"message": "Looking that up, about a minute."})
         for _ in range(20):
             if store.published:
                 break
@@ -84,7 +84,7 @@ async def test_notify_user_text_publishes_without_audio() -> None:
     assert data["kind"] == "notify"
     # No audio bytes for text input.
     assert data["audio_b64"] is None
-    assert data["transcript"] == "Looking that up — about a minute."
+    assert data["transcript"] == "Looking that up, about a minute."
 
 
 async def test_notify_user_rejects_empty_message() -> None:

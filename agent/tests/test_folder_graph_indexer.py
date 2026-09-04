@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -136,6 +135,9 @@ async def test_incremental_skips_unchanged_files(
         max_hops=2, context_budget=3000, top_k=10, chunk_size=1000,
     ))
     ontology = {"entity_types": ["x"], "relations": ["y"], "allow_custom_relations": True}
+    # Seed the build-time ontology snapshot so the drift detector sees a
+    # matching ontology and keeps this an incremental (skip) pass.
+    _storage.set_meta_kv(manifest, "build_ontology_hash", _storage.ontology_hash(ontology))
 
     frames = []
     async for fr in _indexer.index_folder_streaming(tmp_path, cfg=cfg,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from nexus.workflows import parser
 from nexus.workflows.models import (
-    WORKFLOW_PLUGIN_KEY,
     StepType,
     TriggerType,
     WorkflowDef,

@@ -50,7 +50,16 @@ async def index_vault_streaming(
 
     from nexus import vault
     entries = vault.list_tree()
-    files = [e for e in entries if e.type == "file"]
+    # GraphRAG is a knowledge graph over *markdown*: skip non-prose files
+    # upfront. Reading binaries just to get "" back wasted multi-GB of I/O
+    # on media-heavy vaults (jpgs/mp4s) and inflated the file totals.
+    # `_system/` machine files (ontology CSVs, meta) are excluded the same way.
+    files = [
+        e for e in entries
+        if e.type == "file"
+        and e.path.endswith((".md", ".mdx"))
+        and not e.path.startswith("_system/")
+    ]
     total = len(files)
     label = "full reindex" if full else "incremental update"
     yield _sse("status", {"message": f"Found {total} vault file(s) — {label}"})

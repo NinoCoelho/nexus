@@ -225,6 +225,20 @@ export async function getKnowledgeGraph(): Promise<KnowledgeGraphData> {
   return res.json() as Promise<KnowledgeGraphData>;
 }
 
+export interface KnowledgeHealth {
+  ready: boolean;
+  enabled: boolean;
+  error: string | null;
+  stale_warning?: string | null;
+  extraction_warning?: string | null;
+}
+
+export async function getKnowledgeHealth(): Promise<KnowledgeHealth> {
+  const res = await fetch(`${BASE}/graph/knowledge/health`);
+  if (!res.ok) throw new Error(`Knowledge health error: ${res.status}`);
+  return res.json() as Promise<KnowledgeHealth>;
+}
+
 export async function knowledgeQuery(query: string, limit = 10): Promise<KnowledgeQueryResult> {
   const res = await fetch(`${BASE}/graph/knowledge/query`, {
     method: "POST",

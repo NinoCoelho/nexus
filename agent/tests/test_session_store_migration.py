@@ -19,9 +19,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-import pytest
 
-from nexus.agent.llm import ChatMessage, Role
+from nexus.agent.llm import Role
 from nexus.server.session_store import SessionStore
 
 

@@ -45,6 +45,14 @@ def _isolate_vault_and_config(
     # reader directly so we control exactly what each test sees.
     monkeypatch.setattr("nexus.ocr._read_ocr_section", lambda: _read_ocr_section.section)
     _read_ocr_section.section = {}
+    # The bundled OCR server's model dir is resolved at ocr_server import
+    # time from the REAL home — on a machine that installed it, is_installed()
+    # would otherwise be True and every "unconfigured" expectation below
+    # would depend on import order. Pin it to the empty tmp dir.
+    from nexus import ocr_server as _ocr_server
+
+    monkeypatch.setattr(_ocr_server, "_OCR_MODEL_DIR", tmp_path / "ocr-model")
+    monkeypatch.setattr(_ocr_server, "is_installed", lambda: False)
     # Empty config so _resolve_vision_model finds no vision-role model
     # by default — individual tests opt-in via ``_patch_cfg``.
     from nexus.config_schema import NexusConfig

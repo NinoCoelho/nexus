@@ -129,7 +129,17 @@ async def run_dream(
         phases.append("skill_refine")
         phases.append("rehearsal")
 
-    run_id = await asyncio.to_thread(store.start_run, depth=depth, phases=",".join(phases))
+    # Atomic claim — the is_running() fast-path above can race with a manual
+    # trigger; this conditional insert is the real gatekeeper.
+    run_id = await asyncio.to_thread(store.try_start_run, depth=depth, phases=",".join(phases))
+    if run_id is None:
+        log.warning("dream/engine: a dream started concurrently, skipping")
+        return DreamResult(
+            run_id=0, depth=depth, phases_run=[], consolidation=None,
+            insights=None, skill_refine=None, rehearsal=None,
+            tokens_in=0, tokens_out=0, duration_ms=0,
+            error="dream already running",
+        )
     t0 = asyncio.get_event_loop().time()
 
     _publish_event("dream.started", {

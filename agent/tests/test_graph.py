@@ -1,13 +1,11 @@
 """Tests for the agent/skill/session graph builder."""
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from nexus.server.graph import build_agent_graph, _cache
+from nexus.server.graph import build_agent_graph
 import nexus.server.graph as graph_module
 
 

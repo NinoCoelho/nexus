@@ -521,6 +521,12 @@ def _credentials_block() -> str:
         "by name (e.g. \"`$GITHUB_TOKEN` is configured\") — the user can see "
         "the masked value in Settings → Credentials."
     )
+    lines.append(
+        "- NEVER exfiltrate a credential through a terminal command: no "
+        "`echo $NAME`, `printenv`, `cat ~/.nexus/secrets.toml`, or piping "
+        "credential variables into network tools. The value stays on the "
+        "server side, always."
+    )
     lines.append("")
     lines.append("**Available:**")
     for entry in entries:

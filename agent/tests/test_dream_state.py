@@ -141,3 +141,19 @@ class TestDreamStateStoreClose:
         s = DreamStateStore(tmp_path / "test.db")
         s.close()
         s.close()
+
+
+def test_try_start_run_atomic_claim(tmp_path):
+    """Only one run can hold the 'running' slot — closes the heartbeat vs
+    manual-trigger TOCTOU double-run."""
+    from nexus.dream.state import DreamStateStore
+
+    db = DreamStateStore(tmp_path / "dream_state.sqlite")
+    first = db.try_start_run(depth="light", phases="consolidation")
+    assert first is not None
+    assert db.is_running()
+    second = db.try_start_run(depth="deep", phases="consolidation,insight")
+    assert second is None
+    db.finish_run(first, status="done")
+    third = db.try_start_run(depth="light", phases="consolidation")
+    assert third is not None

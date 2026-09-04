@@ -100,6 +100,25 @@ class DreamStateStore(SqliteStore):
         self._db.commit()
         return cur.lastrowid  # type: ignore[return-value]
 
+    def try_start_run(self, *, depth: str = "light", phases: str = "") -> int | None:
+        """Atomically claim the single running slot.
+
+        Inserts a 'running' row only when no other run is active, in one
+        statement — closes the check-then-insert race between the heartbeat
+        driver and a manual /dream trigger both passing ``is_running`` and
+        running concurrent cycles. Returns the new run id, or None when a
+        run is already active.
+        """
+        now = _to_ts(datetime.now(UTC))
+        cur = self._db.execute(
+            "INSERT INTO dream_runs (started_at, depth, phases_run, status) "
+            "SELECT ?, ?, ?, 'running' "
+            "WHERE NOT EXISTS (SELECT 1 FROM dream_runs WHERE status = 'running')",
+            (now, depth, phases),
+        )
+        self._db.commit()
+        return cur.lastrowid if cur.rowcount > 0 else None
+
     def finish_run(
         self,
         run_id: int,

@@ -20,8 +20,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Settings as SettingsIcon, RefreshCw, X, Search, Maximize, Maximize2 } from "lucide-react";
 import "../KnowledgeView.css";
 import "../GraphView.css";
-import "../AgentGraphView.css";
 import "./UnifiedGraph.css";
+import { GraphCanvas2D } from "./GraphCanvas2D";
 import { GraphCanvas3D } from "./GraphCanvas3D";
 import { useKnowledgeMode } from "./modes/knowledge";
 import { useVaultMode } from "./modes/vault";
@@ -47,7 +47,6 @@ type KnowledgeTab = "vault" | string;
 
 interface Props {
   onOpenSkill: (name: string) => void;
-  onSelectSession: (id: string) => void;
   graphSourceFilter?: { mode: "file" | "folder"; path: string } | null;
   onGraphSourceFilterHandled?: () => void;
   pendingFolderGraph?: string | null;
@@ -65,7 +64,6 @@ const TABS: { id: ModeId; label: string }[] = [
 
 export default function UnifiedGraph({
   onOpenSkill,
-  onSelectSession,
   graphSourceFilter,
   onGraphSourceFilterHandled,
   pendingFolderGraph,
@@ -84,7 +82,6 @@ export default function UnifiedGraph({
   const [folderReindexTrigger, setFolderReindexTrigger] = useState(0);
   const [folderResetTrigger, setFolderResetTrigger] = useState(0);
 
-  const [graphSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ node: UnifiedNode; items: ContextMenuItem[]; x: number; y: number } | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
@@ -92,6 +89,17 @@ export default function UnifiedGraph({
   const [findQuery, setFindQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [graphSettings, setGraphSettings] = useState<GraphSettings>(loadGraphSettings);
+
+  // Which top-level tabs have been visited at least once — mode hooks fetch
+  // lazily on first visit instead of all firing on view mount.
+  const [visited, setVisited] = useState<Record<ModeId, boolean>>({
+    knowledge: true,
+    vault: false,
+    agent: false,
+  });
+  useEffect(() => {
+    setVisited((v) => (v[mode] ? v : { ...v, [mode]: true }));
+  }, [mode]);
 
   const handleSettingsChange = useCallback((next: GraphSettings) => {
     setGraphSettings(next);
@@ -125,9 +133,9 @@ export default function UnifiedGraph({
     onPendingFolderGraphHandled?.();
   }, [pendingFolderGraph, onPendingFolderGraphHandled]);
 
-  // All three mode hooks are always mounted so their data is fresh, but only
-  // the active mode's data drives the canvas. (The hooks are cheap; each
-  // does its own fetch on first mount and caches.)
+  // Mode hooks stay mounted (React hook rules) but fetch lazily on first
+  // tab visit — entering the knowledge tab no longer fires the (potentially
+  // huge) vault-graph fetch and the agent-graph fetch for nothing.
   const knowledge = useKnowledgeMode({
     initialSourceFilter: mode === "knowledge" && knowledgeTab === "vault" ? graphSourceFilter : null,
     onSourceFilterHandled: onGraphSourceFilterHandled,
@@ -135,8 +143,12 @@ export default function UnifiedGraph({
     onStartGraphIndex,
     onSpawnSession,
   });
-  const vault = useVaultMode({ onViewEntityGraph });
-  const agent = useAgentMode({ onOpenSkill, onSelectSession });
+  const vault = useVaultMode({
+    onViewEntityGraph,
+    onFitToView: () => canvasRef.current?.fit(),
+    enabled: visited.vault,
+  });
+  const agent = useAgentMode({ onOpenSkill, enabled: visited.agent });
 
   // The folder-knowledge hook is keyed on the active folder path; we only
   // mount it when the inner Knowledge sub-tab is a folder. A `key=` keeps the
@@ -184,10 +196,10 @@ export default function UnifiedGraph({
 
   // The "search" we feed to the canvas (for highlight + pulse) mirrors the
   // semantic-search input in knowledge mode, so a single text box drives
-  // both the GraphRAG query AND the visual highlight. Vault/agent modes
-  // fall back to the local graphSearch state. Folder tabs have no search yet.
+  // both the GraphRAG query AND the visual highlight. Vault/agent/folder
+  // modes have no equivalent query box — the /-find widget covers them.
   const canvasSearch =
-    mode === "knowledge" && !folderActive ? (knowledge.queryText ?? "") : graphSearch;
+    mode === "knowledge" && !folderActive ? (knowledge.queryText ?? "") : "";
 
   function closeFolderTab(path: string) {
     setFolderTabsState((prev) => {
@@ -417,7 +429,21 @@ export default function UnifiedGraph({
 
       <div className="ug-main">
         <div className="ug-canvas-wrap">
-          {webglProbe.ok ? (
+          {graphSettings.renderer === "2d" ? (
+            <GraphCanvas2D
+              ref={canvasRef}
+              data={active.data}
+              selectedId={selectedId}
+              search={canvasSearch}
+              findQuery={findOpen ? findQuery : ""}
+              settings={graphSettings}
+              onSelect={handleNodeClick}
+              onNodeRightClick={handleNodeRightClick}
+              contextMenu={contextMenu}
+              onCloseContextMenu={() => setContextMenu(null)}
+              emptyState={active.empty}
+            />
+          ) : webglProbe.ok ? (
             <WebGLBoundary
               fallback={(reason, retry) => (
                 <WebGLFallback

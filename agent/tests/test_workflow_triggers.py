@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import tempfile
 
 import pytest
 
 from nexus.workflows.models import (
-    StepConfig,
-    StepType,
     TriggerConfig,
     TriggerType,
     WorkflowDef,
@@ -57,7 +54,7 @@ async def test_webhook_driver_skips_non_webhook(store):
 
 async def test_webhook_driver_stop_removes_tokens(store):
     driver = WebhookTriggerDriver(store)
-    wf = WorkflowDef(
+    WorkflowDef(
         title="Test",
         triggers=[
             TriggerConfig(id="wh1", type=TriggerType.webhook, token="tok123"),

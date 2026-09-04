@@ -78,7 +78,7 @@ def create(
 ) -> None:
     """Create a tar.gz of ~/.nexus/ in OUTPUT."""
     if not _NEXUS_HOME.exists():
-        typer.echo(f"~/.nexus does not exist — nothing to back up.")
+        typer.echo("~/.nexus does not exist — nothing to back up.")
         raise typer.Exit(code=1)
 
     if output is None:

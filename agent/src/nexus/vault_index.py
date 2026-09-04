@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from . import home as _home
+from .markdown_links import extract_md_links
+from .markdown_links import strip_code_fences as _strip_fences
 
 log = logging.getLogger(__name__)
 
@@ -29,15 +31,11 @@ _lock = threading.Lock()
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
-# Strip fenced code blocks before scanning for hashtags
-_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+# Strip fenced code blocks before scanning for hashtags (shared with
+# markdown_links so graph + index agree on what counts as code).
 
 # Hashtag: word boundary, starts with letter/digit, 1-32 chars total
 _HASHTAG_RE = re.compile(r"(?:^|\s)#([a-z0-9][a-z0-9_-]{0,31})\b", re.IGNORECASE | re.MULTILINE)
-
-# Link patterns (mirrors vault_graph.py)
-_LINK_RE = re.compile(r'\]\((?:vault://)?([^)]+\.mdx?)\)')
-_BARE_RE = re.compile(r'(?<!\()(?<!\])\b([\w./-]+/[\w./-]+\.mdx?)\b')
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS file_tags (
@@ -98,7 +96,7 @@ def _extract_tags(body: str, frontmatter: dict[str, Any] | None) -> list[str]:
             tags.add(fm_tags.lower())
 
     # Body hashtags (strip code blocks first)
-    stripped = _FENCE_RE.sub("", body or "")
+    stripped = _strip_fences(body or "")
     for m in _HASHTAG_RE.finditer(stripped):
         tags.add(m.group(1).lower())
 
@@ -106,16 +104,19 @@ def _extract_tags(body: str, frontmatter: dict[str, Any] | None) -> list[str]:
 
 
 def extract_links(body: str) -> set[str]:
-    """Extract link destinations from markdown body (mirrors vault_graph.py logic)."""
-    candidates: set[str] = set()
-    for m in _LINK_RE.finditer(body):
-        candidates.add(m.group(1))
-    for m in _BARE_RE.finditer(body):
-        candidates.add(m.group(1))
-    return candidates
+    """Extract raw link destinations from markdown body (shared parser with
+    the vault link graph — wiki-links, aliases, anchors, code fences)."""
+    return extract_md_links(body)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def _all_known_paths(con: sqlite3.Connection) -> set[str]:
+    try:
+        return {r[0] for r in con.execute("SELECT path FROM file_meta")}
+    except sqlite3.Error:
+        return set()
+
 
 def reindex_file(path: str, body: str, frontmatter: dict[str, Any] | None) -> None:
     """Delete prior rows for path and re-insert tags + links."""
@@ -123,34 +124,41 @@ def reindex_file(path: str, body: str, frontmatter: dict[str, Any] | None) -> No
     tags = _extract_tags(body or "", frontmatter)
     raw_links = extract_links(body or "")
 
-    # Resolve link destinations to normalized paths
+    # Resolve link destinations to normalized paths, using the same order as
+    # the vault link graph (exact → +ext → relative → stem) so the two
+    # never disagree. file_meta supplies the known-path view.
     vault_root = _home.vault_root()
-    src_full = vault_root / norm
-    link_paths: set[str] = set()
-    for dest in raw_links:
-        dest_norm = dest.lstrip("/")
-        candidate = vault_root / dest_norm
-        if candidate.is_file():
-            link_paths.add(dest_norm)
-        else:
-            # Try relative to file's directory
-            resolved = (src_full.parent / dest).resolve()
-            if resolved.is_relative_to(vault_root) and resolved.is_file():
-                try:
-                    link_paths.add(str(resolved.relative_to(vault_root)))
-                except ValueError:
-                    pass
-
-    fp = _home.vault_root() / norm
-    try:
-        st = fp.stat()
-        mtime, size = st.st_mtime, st.st_size
-    except OSError:
-        mtime = 0.0
-        size = len((body or "").encode("utf-8", errors="replace"))
+    src_rel = norm
     with _lock:
         con = _connect()
         try:
+            known = _all_known_paths(con)
+            from nexus.markdown_links import resolve_targets
+
+            link_paths = resolve_targets(raw_links, src_rel=src_rel, path_set=known)
+            for dest in raw_links:
+                # Also accept targets that exist on disk but not yet in
+                # file_meta (fresh files indexed out of order).
+                dest_norm = dest.strip().lstrip("/").removeprefix("./")
+                candidate = vault_root / dest_norm
+                if candidate.is_file():
+                    link_paths.add(dest_norm)
+                else:
+                    resolved = (vault_root / src_rel).parent / dest_norm
+                    try:
+                        resolved_real = resolved.resolve()
+                        if resolved_real.is_relative_to(vault_root) and resolved_real.is_file():
+                            link_paths.add(str(resolved_real.relative_to(vault_root)))
+                    except OSError:
+                        pass
+
+            try:
+                st = (vault_root / norm).stat()
+                mtime, size = st.st_mtime, st.st_size
+            except OSError:
+                mtime = 0.0
+                size = len((body or "").encode("utf-8", errors="replace"))
+
             con.execute("DELETE FROM file_tags WHERE path = ?", (norm,))
             con.execute("DELETE FROM file_links WHERE from_path = ?", (norm,))
             for tag in tags:

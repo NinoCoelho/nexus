@@ -34,21 +34,24 @@ const TYPE_BOOST: Record<AgentGraphNode["type"], number> = {
 
 interface AgentModeOptions {
   onOpenSkill: (name: string) => void;
-  onSelectSession: (id: string) => void;
+  /** Fetch only once the agent tab has been visited at least once. */
+  enabled?: boolean;
 }
 
 export function useAgentMode(opts: AgentModeOptions) {
+  const enabled = opts.enabled ?? true;
   const { t } = useTranslation("skillWizard");
   const [graph, setGraph] = useState<AgentGraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
 
   const fetchGraph = useCallback(() => {
+    if (!enabled) return;
     setError(null);
     getAgentGraph()
       .then(setGraph)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load graph"));
-  }, []);
+  }, [enabled]);
 
   useEffect(() => { fetchGraph(); }, [fetchGraph]);
 
@@ -76,8 +79,9 @@ export function useAgentMode(opts: AgentModeOptions) {
   }, [graph]);
 
   const onNodeClick = useCallback((node: UnifiedNode) => {
+    // Session nodes are filtered out of the adapter above; skills are the
+    // only interactive kind in this view.
     if (node.kind === "skill") opts.onOpenSkill(node.id.replace(/^skill:/, ""));
-    else if (node.kind === "session") opts.onSelectSession(node.id.replace(/^session:/, ""));
   }, [opts]);
 
   const openWizard = useCallback(() => setWizardOpen(true), []);

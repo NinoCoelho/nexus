@@ -147,6 +147,7 @@ export function ReviewPanel({
   const [merges, setMerges] = useState<EntityMerge[]>([]);
   const [disabled, setDisabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     getKnowledgeReview()
@@ -154,9 +155,10 @@ export function ReviewPanel({
         setConflicts(data.conflicts);
         setMerges(data.merges);
         setDisabled(!data.enabled);
+        setError(null);
         onCountChange?.(data.conflicts.length);
       })
-      .catch(() => {})
+      .catch(() => setError("Could not load the review queue."))
       .finally(() => setLoaded(true));
   }, [onCountChange]);
 
@@ -182,10 +184,13 @@ export function ReviewPanel({
       </div>
       <div className="kv-review-body">
         {!loaded && <div className="kv-loading">Loading…</div>}
-        {loaded && disabled && (
+        {loaded && error && (
+          <div className="kv-review-empty kv-review-empty--error">{error}</div>
+        )}
+        {loaded && !error && disabled && (
           <div className="kv-review-empty">GraphRAG is not initialized.</div>
         )}
-        {loaded && !disabled && conflicts.length === 0 && merges.length === 0 && (
+        {loaded && !error && !disabled && conflicts.length === 0 && merges.length === 0 && (
           <div className="kv-review-empty">No conflicts awaiting review.</div>
         )}
         {loaded && conflicts.length > 0 && (

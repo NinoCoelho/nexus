@@ -18,10 +18,10 @@ import pytest
 # boto3 may not be installed (it's an optional extra)
 boto3 = pytest.importorskip("boto3", reason="bedrock extra not installed")
 
-from nexus.agent.llm.bedrock import BedrockProvider
-from nexus.agent.llm.types import ChatMessage, Role
+from nexus.agent.llm.bedrock import BedrockProvider  # noqa: E402
+from nexus.agent.llm.types import ChatMessage, Role  # noqa: E402
 
-from .conftest import echo_tool_spec
+from .conftest import echo_tool_spec  # noqa: E402
 
 
 _DEFAULT_HAIKU = "anthropic.claude-3-5-haiku-20241022-v1:0"

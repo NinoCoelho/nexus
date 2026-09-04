@@ -199,12 +199,15 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Legacy NEXUS_ACCESS_TOKEN gate for non-loopback binds.
+        # Timing-safe compares — same discipline as the tunnel token path.
         if self._access_token:
-            if provided != self._access_token:
+            import hmac as _hmac
+
+            if not _hmac.compare_digest(provided.encode(), self._access_token.encode()):
                 # Fall back to the legacy ?token= flow only on the non-tunnel
                 # path; tunnel traffic should never carry secrets in the URL.
                 qp_token = request.query_params.get("token", "")
-                if qp_token != self._access_token:
+                if not _hmac.compare_digest(qp_token.encode(), self._access_token.encode()):
                     return JSONResponse(
                         {"detail": "unauthorized"},
                         status_code=401,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html as html_mod
-import json
 import logging
 
 log = logging.getLogger(__name__)
@@ -12,7 +11,6 @@ log = logging.getLogger(__name__)
 def render_data_table(params: dict) -> str:
     from . import _wrap
 
-    folder = params.get("folder", "")
     table_path = params.get("path", "")
 
     if not table_path:

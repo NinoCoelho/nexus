@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import pytest
 import uvicorn
 
 from nexus.agent.llm import (
@@ -310,7 +309,11 @@ async def test_get_settings_returns_defaults(tmp_path: Path) -> None:
         async with httpx.AsyncClient(timeout=3.0) as c:
             resp = await c.get(f"{base}/settings")
             assert resp.status_code == 200
-            assert resp.json() == {"yolo_mode": False}
+            assert resp.json() == {
+                "yolo_mode": False,
+                "auto_accept_members": False,
+                "ui_mode": "normal",
+            }
 
 
 async def test_post_settings_persists_change(tmp_path: Path) -> None:
@@ -320,11 +323,19 @@ async def test_post_settings_persists_change(tmp_path: Path) -> None:
                 f"{base}/settings", json={"yolo_mode": True}
             )
             assert resp.status_code == 200
-            assert resp.json() == {"yolo_mode": True}
+            assert resp.json() == {
+                "yolo_mode": True,
+                "auto_accept_members": False,
+                "ui_mode": "normal",
+            }
 
             # Round-trip GET confirms persistence.
             follow = await c.get(f"{base}/settings")
-            assert follow.json() == {"yolo_mode": True}
+            assert follow.json() == {
+                "yolo_mode": True,
+                "auto_accept_members": False,
+                "ui_mode": "normal",
+            }
 
 
 async def test_post_settings_partial_update_preserves_other_fields(
@@ -339,7 +350,11 @@ async def test_post_settings_partial_update_preserves_other_fields(
             # Empty body → no changes applied.
             resp = await c.post(f"{base}/settings", json={})
             assert resp.status_code == 200
-            assert resp.json() == {"yolo_mode": True}
+            assert resp.json() == {
+                "yolo_mode": True,
+                "auto_accept_members": False,
+                "ui_mode": "normal",
+            }
 
 
 # ── streaming + HITL compose ─────────────────────────────────────────

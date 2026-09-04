@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nexus.agent.planner import PlannerAgent, PlanResult, SubTask
+from nexus.agent.planner import PlannerAgent, PlanResult
 from nexus.agent.loop import AgentTurn
 from nexus.agent.llm import (
-    ChatMessage,
     ChatResponse,
     LLMProvider,
-    Role,
     StopReason,
     Usage,
 )

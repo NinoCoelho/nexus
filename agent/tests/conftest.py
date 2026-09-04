@@ -6,7 +6,6 @@ state so tests don't block on (or mutate) the user's local LLM setup.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 

@@ -589,3 +589,188 @@
   pointer-events: none;
 }
 .ug-canvas-wrap .kv-graph-empty > * { pointer-events: auto; }
+
+/* ── Health banners (knowledge mode) ────────────────────────────────────── */
+
+.kv-health-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.kv-health-banner--warn {
+  background: rgba(234, 179, 8, 0.10);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: #fde68a;
+}
+
+.kv-health-banner code {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.kv-banner-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+/* ── Vault toolbar secondary row (cap note + orphan toggle) ─────────────── */
+
+.graph-toolbar-secondary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex-wrap: wrap;
+}
+
+.graph-cap-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-cap-more,
+.graph-orphan-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 7px;
+}
+
+.graph-cap-more:hover,
+.graph-orphan-toggle:hover,
+.graph-orphan-toggle.active {
+  color: var(--fg);
+  border-color: var(--accent, var(--border));
+}
+
+/* ── Folder entity card ─────────────────────────────────────────────────── */
+
+.ug-folder-entity-card {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  width: 240px;
+  padding: 12px;
+  background: var(--bg-panel, #1d2025);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+
+.ug-folder-entity-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ug-folder-entity-name {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ug-folder-entity-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--fg-dim);
+}
+
+.ug-folder-entity-actions button {
+  width: 100%;
+}
+
+/* ── Renderer toggle (settings panel) ───────────────────────────────────── */
+
+.ug-settings-row--renderer {
+  align-items: center;
+}
+
+.ug-settings-renderer-toggle {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.ug-settings-renderer-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.ug-settings-renderer-btn--active {
+  background: var(--accent-bg, var(--bg-hover));
+  color: var(--fg);
+  border-color: var(--accent, var(--border));
+}
+
+.kv-review-empty--error {
+  color: #fca5a5;
+}
+
+/* ── Agent mode: add-skill button + error (moved from AgentGraphView.css) ── */
+
+.agent-graph-add-skill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.agent-graph-add-skill-btn:hover {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+}
+
+.agent-graph-add-skill-btn span:first-child {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.agent-graph-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--fg-dim);
+  font-size: 13px;
+  padding: 12px 20px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}

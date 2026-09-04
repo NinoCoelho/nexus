@@ -32,10 +32,10 @@ def test_set_tabs_persists_and_normalizes(tmp_path: Path) -> None:
         {"path": str(folder_b)},
     ])
 
-    # Trailing slashes resolved away
-    assert written[0]["path"] == str(folder_a)
+    # Trailing slashes (and any leading "/") resolved away by normalization
+    assert written[0]["path"] == str(folder_a).strip("/")
     assert written[0]["label"] == "Alpha"
-    assert written[1]["path"] == str(folder_b)
+    assert written[1]["path"] == str(folder_b).strip("/")
     assert written[1]["label"] == "beta"  # default label = basename
 
 
@@ -47,7 +47,7 @@ def test_add_tab_idempotent(tmp_path: Path) -> None:
     _tabs_state.add_tab(str(folder))  # second call should not duplicate
     tabs = _tabs_state.list_tabs()
     assert len(tabs) == 1
-    assert tabs[0]["path"] == str(folder.resolve())
+    assert tabs[0]["path"] == str(folder).strip("/")
 
 
 def test_remove_tab_drops_entry(tmp_path: Path) -> None:

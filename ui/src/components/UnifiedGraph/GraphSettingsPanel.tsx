@@ -14,7 +14,7 @@ interface Props {
 
 export function GraphSettingsPanel({ settings, onChange, onClose }: Props) {
   const update = useCallback(
-    (key: keyof GraphSettings, value: number) => {
+    (key: Exclude<keyof GraphSettings, "renderer">, value: number) => {
       onChange({ ...settings, [key]: value });
     },
     [settings, onChange],
@@ -43,6 +43,28 @@ export function GraphSettingsPanel({ settings, onChange, onClose }: Props) {
         </div>
       </div>
       <div className="ug-settings-body">
+        <div className="ug-settings-row ug-settings-row--renderer">
+          <span className="ug-settings-label">Renderer</span>
+          <div className="ug-settings-renderer-toggle">
+            <button
+              className={`ug-settings-renderer-btn${settings.renderer === "2d" ? " ug-settings-renderer-btn--active" : ""}`}
+              onClick={() => onChange({ ...settings, renderer: "2d" })}
+              title="2D canvas — pan, zoom, drag nodes. No WebGL required."
+            >
+              2D
+            </button>
+            <button
+              className={`ug-settings-renderer-btn${settings.renderer === "3d" ? " ug-settings-renderer-btn--active" : ""}`}
+              onClick={() => onChange({ ...settings, renderer: "3d" })}
+              title="3D WebGL — orbit camera. Heavier on large graphs."
+            >
+              3D
+            </button>
+          </div>
+          <span className="ug-settings-value">
+            {settings.renderer === "2d" ? "flat" : "orbit"}
+          </span>
+        </div>
         {GRAPH_SETTINGS_FIELDS.map((field) => (
           <label key={field.key} className="ug-settings-row">
             <span className="ug-settings-label">{field.label}</span>

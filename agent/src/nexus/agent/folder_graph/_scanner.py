@@ -44,7 +44,6 @@ def iter_indexable_files(folder: str | Path) -> Iterator[tuple[str, Path, float,
     """
     folder_p = normalize_folder(folder)
     spec = _load_gitignore(folder_p)
-    folder_str = str(folder_p)
 
     for path in folder_p.rglob("*"):
         if not path.is_file():

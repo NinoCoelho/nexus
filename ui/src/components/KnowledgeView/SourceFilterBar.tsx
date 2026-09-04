@@ -1,6 +1,21 @@
 // Sub-component for KnowledgeView: source filter (file/folder) bar.
 
+import { useEffect, useRef } from "react";
 import { getVaultTree } from "../../api";
+
+// Cache the vault tree for the component's lifetime — one fetch serves every
+// keystroke instead of hitting /vault/tree per character.
+type TreeEntry = { path: string; type: string };
+let treeCache: Promise<TreeEntry[]> | null = null;
+function fetchTree(): Promise<TreeEntry[]> {
+  if (!treeCache) {
+    treeCache = getVaultTree().then((entries) => entries as TreeEntry[]).catch(() => {
+      treeCache = null;
+      return [] as TreeEntry[];
+    });
+  }
+  return treeCache;
+}
 
 interface SourceFilterBarProps {
   sourceFilter: "none" | "file" | "folder";
@@ -27,6 +42,9 @@ export function SourceFilterBar({
   onApply,
   onClear,
 }: SourceFilterBarProps) {
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+
   return (
     <div className="kv-source-filter">
       <select
@@ -50,21 +68,22 @@ export function SourceFilterBar({
             placeholder={sourceFilter === "file" ? "path/to/file.md" : "folder/"}
             value={sourcePath}
             onChange={(e) => {
-              onPathChange(e.target.value);
+              const value = e.target.value;
+              onPathChange(value);
               onShowSuggestionsChange(true);
-              const v = e.target.value.toLowerCase();
-              if (v.length >= 1) {
-                getVaultTree().then((entries) => {
-                  const paths = entries
-                    .filter(e => {
-                      if (sourceFilter === "file") return e.type === "file";
-                      return e.type === "dir";
-                    })
-                    .map(e => e.path)
-                    .filter(p => p.toLowerCase().includes(v))
-                    .slice(0, 12);
-                  onSuggestionsChange(paths);
-                });
+              if (debounceRef.current) clearTimeout(debounceRef.current);
+              if (value.length >= 1) {
+                const v = value.toLowerCase();
+                debounceRef.current = setTimeout(() => {
+                  fetchTree().then((entries) => {
+                    const paths = entries
+                      .filter(e => (sourceFilter === "file" ? e.type === "file" : e.type === "dir"))
+                      .map(e => e.path)
+                      .filter(p => p.toLowerCase().includes(v))
+                      .slice(0, 12);
+                    onSuggestionsChange(paths);
+                  });
+                }, 250);
               } else {
                 onSuggestionsChange([]);
               }

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
+
+from nexus.markdown_links import extract_md_links, resolve_targets
 
 from .cache import get_cache, set_cache
 from .parser import _extract_title, _top_folder
@@ -25,9 +26,6 @@ from .types import (
 )
 
 log = logging.getLogger(__name__)
-
-_LINK_RE = re.compile(r'\]\((?:vault://)?([^)]+\.mdx?)\)')
-_BARE_RE = re.compile(r'(?<!\()(?<!\])\b([\w./-]+/[\w./-]+\.mdx?)\b')
 
 
 def build_graph() -> GraphData:
@@ -56,60 +54,54 @@ def _build_full() -> GraphData:
             md_files.append(p)
 
     path_set: set[str] = {str(p.relative_to(root_real)) for p in md_files}
+    stem_map: dict[str, list[str]] = {}
+    for p in path_set:
+        stem_map.setdefault(Path(p).stem, []).append(p)
+    for v in stem_map.values():
+        v.sort()
 
     tag_map: dict[str, list[str]] = {}
     try:
         vault_index.ensure_ready()
-        for row in vault_index.list_tags():
-            pass
         for p_str in path_set:
             tag_map[p_str] = vault_index.tags_for_file(p_str)
     except Exception:
         log.warning("vault_graph: tag enrichment failed", exc_info=True)
 
     nodes: list[GraphNode] = []
+    contents: dict[str, str] = {}
     for p in sorted(md_files):
         rel = str(p.relative_to(root_real))
         size = p.stat().st_size
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
-            title = _extract_title(content)
         except OSError:
-            title = ""
+            content = ""
+        contents[rel] = content
         nodes.append(GraphNode(
             path=rel,
             size=size,
             folder=_top_folder(rel),
             tags=tag_map.get(rel, []),
-            title=title,
+            title=_extract_title(content),
         ))
 
     edges_set: set[tuple[str, str]] = set()
-    for p in md_files:
-        src_rel = str(p.relative_to(root_real))
-        try:
-            content = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-
-        candidates: set[str] = set()
-        for m in _LINK_RE.finditer(content):
-            candidates.add(m.group(1))
-        for m in _BARE_RE.finditer(content):
-            candidates.add(m.group(1))
-
-        for dest in candidates:
-            dest_path = dest.lstrip("/")
-            if dest_path in path_set:
-                key = (src_rel, dest_path)
-                if key[0] != key[1]:
-                    edges_set.add(key)
-            else:
-                resolved = str((p.parent / dest).resolve().relative_to(root_real)) if (p.parent / dest).resolve().is_relative_to(root_real) else None
-                if resolved and resolved in path_set and src_rel != resolved:
-                    edges_set.add((src_rel, resolved))
+    for src_rel, content in contents.items():
+        candidates = extract_md_links(content)
+        for dest in resolve_targets(
+            candidates, src_rel=src_rel, path_set=path_set, stem_map=stem_map
+        ):
+            edges_set.add((src_rel, dest))
 
     edges: list[GraphEdge] = [GraphEdge(from_=f, to=t) for f, t in sorted(edges_set)]
+
+    degree: dict[str, int] = {}
+    for f, t in edges_set:
+        degree[f] = degree.get(f, 0) + 1
+        degree[t] = degree.get(t, 0) + 1
+    for n in nodes:
+        n["degree"] = degree.get(n["path"], 0)
 
     connected: set[str] = set()
     for f, t in edges_set:

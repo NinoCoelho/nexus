@@ -408,29 +408,72 @@ async def vault_reindex(full: bool = False) -> dict:
     return {"indexed": n, "full": full}
 
 
+def _graphrag_summary() -> dict:
+    """Cheap GraphRAG readiness snapshot so the vault-graph UI can tell
+    'no entities' apart from 'engine down'."""
+    try:
+        from ...agent import graphrag_manager
+
+        h = graphrag_manager.get_health()
+    except Exception:
+        return {"ready": False, "enabled": False, "error": None}
+    return {"ready": h.get("ready", False), "enabled": h.get("enabled", False), "error": h.get("error")}
+
+
 @router.get("/vault/graph")
 async def vault_graph(
     scope: str = "all",
     seed: str = "",
     hops: int = 1,
     edge_types: str = "link",
+    max_nodes: int = 300,
 ) -> dict:
     from ...vault_graph import build_graph, build_scoped_graph
 
+    graphrag = _graphrag_summary()
     if scope == "all" and not seed:
         data = await asyncio.to_thread(build_graph)
+        nodes = data["nodes"]
+        total_nodes = len(nodes)
+        # Degree-ranked cap: a 5,000-file vault would otherwise build 5,000
+        # 3D label sprites and stall the sim for seconds on the initial load.
+        cap = max(1, min(int(max_nodes), 2000))
+        if total_nodes > cap:
+            kept = sorted(nodes, key=lambda n: -n.get("degree", 0))[:cap]
+            kept_paths = {n["path"] for n in kept}
+            edges = [
+                {"from": e["from_"], "to": e["to"]}
+                for e in data["edges"]
+                if e["from_"] in kept_paths and e["to"] in kept_paths
+            ]
+            return {
+                "nodes": kept,
+                "edges": edges,
+                "orphans": data["orphans"],
+                "total_nodes": total_nodes,
+                "capped": True,
+                "graphrag": graphrag,
+            }
         return {
-            "nodes": data["nodes"],
+            "nodes": nodes,
             "edges": [{"from": e["from_"], "to": e["to"]} for e in data["edges"]],
             "orphans": data["orphans"],
+            "total_nodes": total_nodes,
+            "capped": False,
+            "graphrag": graphrag,
         }
     hops = max(1, min(int(hops), 3))
-    data = await asyncio.to_thread(build_scoped_graph, scope, seed, hops, edge_types)
+    data = await asyncio.to_thread(
+        build_scoped_graph, scope=scope, seed=seed, hops=hops, edge_types=edge_types
+    )
     return {
         "nodes": data["nodes"],
-        "edges": [{"from": e["from_"], "to": e["to_"], "type": e["type"]} for e in data["edges"]],
+        "edges": [{"from": e["from_"], "to": e["to"], "type": e["type"]} for e in data["edges"]],
         "entity_nodes": data["entity_nodes"],
         "orphans": data["orphans"],
+        "total_nodes": len(data["nodes"]),
+        "capped": False,
+        "graphrag": graphrag,
     }
 
 

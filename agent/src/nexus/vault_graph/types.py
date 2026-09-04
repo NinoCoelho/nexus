@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class GraphNode(TypedDict):
@@ -11,6 +11,7 @@ class GraphNode(TypedDict):
     folder: str
     tags: list[str]
     title: str
+    degree: NotRequired[int]
 
 
 class GraphEdge(TypedDict):

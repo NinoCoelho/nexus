@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import nexus.vault as vault_module
+import nexus.vault_datatable_index as vault_datatable_index
 from nexus import vault_datatable
 from nexus.tools.datatable_tool import handle_datatable_tool
 import json
@@ -21,6 +22,15 @@ def _vault_tmp(tmp_path: Path, monkeypatch):
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
     monkeypatch.setattr(vault_module, "_VAULT_ROOT", vault_root)
+    # The datatable index caches its discovery results in-memory and on disk
+    # at ~/.nexus/.datatable_cache.json — without redirecting/resetting both,
+    # list_databases() would serve the developer's real vault cache instead
+    # of scanning the tmp vault.
+    monkeypatch.setattr(
+        vault_datatable_index, "_CACHE_PATH", tmp_path / ".datatable_cache.json"
+    )
+    monkeypatch.setattr(vault_datatable_index._cache, "_databases", None)
+    monkeypatch.setattr(vault_datatable_index._cache, "_tables", None)
     return vault_root
 
 
@@ -1370,7 +1380,7 @@ def test_ask_user_form_kind_validation():
     async def _run():
         return await handler.invoke({"prompt": "Fill this", "kind": "form"})
 
-    result = asyncio.get_event_loop().run_until_complete(_run())
+    result = asyncio.new_event_loop().run_until_complete(_run())
     # session_store is None, but fields validation happens before that check
     assert result.ok is False
     assert "fields" in (result.error or "")
@@ -1390,7 +1400,7 @@ def test_ask_user_form_kind_invalid_field():
             "fields": [{"name": "x", "kind": "INVALID_KIND"}],
         })
 
-    result = asyncio.get_event_loop().run_until_complete(_run())
+    result = asyncio.new_event_loop().run_until_complete(_run())
     assert result.ok is False
     assert result.error is not None
 

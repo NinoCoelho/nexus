@@ -87,13 +87,20 @@ def _get_provider_config(cfg: Any, model_id: str) -> Any:
 _EXTRACTION_READ_TIMEOUT = 60.0  # seconds; bounds Ollama hangs during indexing
 
 
-def resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
+def resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> tuple[Any, str | None]:
+    """Resolve the extraction provider.
+
+    Returns ``(provider, warning)``. ``warning`` is non-None when a
+    configured extraction model could not be resolved and the builtin
+    extractor (spaCy + fastembed) was used instead — the degradation must
+    stay visible via ``/graph/knowledge/health``, not silent.
+    """
     extraction_model_id = getattr(graphrag_cfg, "extraction_model_id", "")
     extraction_model = extraction_model_id or getattr(graphrag_cfg.extraction, "model", "")
     if not extraction_model:
         log.info("[graphrag] no extraction model configured — using builtin extractor (spaCy + fastembed)")
         from nexus.agent.builtin_extractor import get_builtin_extractor
-        return get_builtin_extractor()
+        return get_builtin_extractor(), None
 
     # First try: match against configured models/providers
     try:
@@ -109,21 +116,25 @@ def resolve_extraction_llm(cfg: Any, graphrag_cfg: Any) -> Any | None:
         # (e.g. Anthropic), where the streaming chat client is acceptable.
         bounded = _bounded_extraction_provider(cfg, extraction_model, upstream_name)
         if bounded is not None:
-            return LoomProviderAdapter(bounded, default_model=upstream_name or extraction_model)
+            return LoomProviderAdapter(bounded, default_model=upstream_name or extraction_model), None
 
         return LoomProviderAdapter(
             provider, provider_registry=registry, default_model=extraction_model
-        )
+        ), None
     except Exception:
         log.info("[graphrag] extraction model %s not found in registry", extraction_model)
 
-    # No fallback to Ollama — if the model isn't explicitly configured, skip extraction
-    log.warning(
-        "[graphrag] extraction model %r not resolvable — skipping entity extraction. "
-        "Configure extraction_model_id under [graphrag] to enable it.",
-        extraction_model,
+    # Loud fallback: a model was configured but can't be resolved. Keep the
+    # entity graph alive via the builtin extractor, but surface the mismatch
+    # in health so the user fixes the config.
+    warning = (
+        f"extraction model {extraction_model!r} could not be resolved from the model "
+        "registry — falling back to the builtin extractor (spaCy + fastembed). "
+        "Fix extraction_model_id under [graphrag] for LLM-quality extraction."
     )
-    return None
+    log.warning("[graphrag] %s", warning)
+    from nexus.agent.builtin_extractor import get_builtin_extractor
+    return get_builtin_extractor(), warning
 
 
 def _bounded_extraction_provider(cfg: Any, model_id: str, upstream_name: str | None) -> Any | None:

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getFolderFullSubgraph,
+  getFolderSubgraph,
   type FolderOntology,
   type FolderSubgraphData,
 } from "../../../api/folderGraph";
@@ -50,6 +51,9 @@ function typeColorForFolder(t: string, ontology?: FolderOntology): string {
 export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnowledgeHook {
   const { path, refreshKey = 0 } = opts;
   const [sg, setSg] = useState<FolderSubgraphData | null>(null);
+  const [focused, setFocused] = useState<FolderSubgraphData | null>(null);
+  const [focusSeed, setFocusSeed] = useState<number | null>(null);
+  const [selectedNode, setSelectedNode] = useState<UnifiedNode | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
@@ -71,30 +75,85 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
 
   useEffect(() => {
     void refresh();
+    setFocused(null);
+    setFocusSeed(null);
+    setSelectedNode(null);
   }, [refresh, refreshKey]);
 
+  const focusEntity = useCallback(async (entityId: number) => {
+    if (!path) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await getFolderSubgraph(path, entityId, 2);
+      setFocused(data);
+      setFocusSeed(entityId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [path]);
+
+  const clearFocus = useCallback(() => {
+    setFocused(null);
+    setFocusSeed(null);
+  }, []);
+
+  const activeSg = focused ?? sg;
+
   const typeCounts = useMemo(() => {
-    if (!sg) return {} as Record<string, number>;
+    if (!activeSg) return {} as Record<string, number>;
     const counts: Record<string, number> = {};
-    for (const n of sg.nodes) {
+    for (const n of activeSg.nodes) {
       counts[n.type] = (counts[n.type] || 0) + 1;
     }
     return counts;
-  }, [sg]);
+  }, [activeSg]);
 
   const allTypes = useMemo(() => {
-    const ontologyTypes = sg?.ontology?.entity_types ?? [];
+    const ontologyTypes = activeSg?.ontology?.entity_types ?? [];
     const actualTypes = Object.keys(typeCounts);
     const merged = new Set([...ontologyTypes, ...actualTypes]);
     return Array.from(merged);
-  }, [sg?.ontology, typeCounts]);
+  }, [activeSg, typeCounts]);
+
+  const filtersBar = useMemo(() => {
+    if (allTypes.length === 0) return null;
+    return (
+      <div className="kv-filters">
+        <button
+          className={`kv-pill${typeFilter === null ? " kv-pill--active" : ""}`}
+          onClick={() => setTypeFilter(null)}
+        >
+          All
+        </button>
+        {allTypes.map((t) => (
+          <button
+            key={t}
+            className={`kv-pill${typeFilter === t ? " kv-pill--active" : ""}`}
+            style={{ "--pill-color": typeColorForFolder(t, activeSg?.ontology) } as React.CSSProperties}
+            onClick={() => setTypeFilter(typeFilter === t ? null : t)}
+          >
+            <span
+              className="kv-pill-swatch"
+              style={{ background: typeColorForFolder(t, activeSg?.ontology) }}
+            />
+            {t} <span className="kv-pill-count">{typeCounts[t] ?? 0}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }, [allTypes, typeFilter, typeCounts, activeSg]);
 
   const data: UnifiedGraphData = useMemo(() => {
-    if (!sg) return { nodes: [], links: [] };
-    const ontology = sg.ontology;
-    let filtered = sg.nodes;
+    if (!activeSg) return { nodes: [], links: [] };
+    const ontology = activeSg.ontology;
+    let filtered = activeSg.nodes;
     if (typeFilter !== null) {
-      filtered = sg.nodes.filter((n) => n.type === typeFilter);
+      // The focused seed always stays visible, like the global knowledge mode.
+      const keep = focusSeed;
+      filtered = activeSg.nodes.filter((n) => n.type === typeFilter || n.id === keep);
     }
     const N = filtered.length;
     const radius = Math.max(40, Math.cbrt(N) * 18);
@@ -118,6 +177,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
       },
     );
 
+    const nameById = new Map(activeSg.nodes.map((n) => [n.id, n.name]));
     const groups = new Map<
       string,
       {
@@ -127,7 +187,7 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
         relations: { from: string; to: string; label: string }[];
       }
     >();
-    for (const e of sg.edges) {
+    for (const e of activeSg.edges) {
       if (!filteredIds.has(e.source) || !filteredIds.has(e.target)) continue;
       const lo = Math.min(e.source, e.target);
       const hi = Math.max(e.source, e.target);
@@ -137,44 +197,52 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
         g = { source: `fk:${lo}`, target: `fk:${hi}`, kind: "relation", relations: [] };
         groups.set(key, g);
       }
-      const fromName = sg.nodes.find((n) => n.id === e.source)?.name ?? "?";
-      const toName = sg.nodes.find((n) => n.id === e.target)?.name ?? "?";
+      const fromName = nameById.get(e.source) ?? "?";
+      const toName = nameById.get(e.target) ?? "?";
       g.relations.push({ from: fromName, to: toName, label: e.relation || "" });
     }
     return { nodes, links: Array.from(groups.values()) };
-  }, [sg, typeFilter]);
+  }, [activeSg, typeFilter, focusSeed]);
 
-  const filtersBar = useMemo(() => {
-    if (allTypes.length === 0) return null;
-    return (
-      <div className="kv-filters">
-        <button
-          className={`kv-pill${typeFilter === null ? " kv-pill--active" : ""}`}
-          onClick={() => setTypeFilter(null)}
-        >
-          All
-        </button>
-        {allTypes.map((t) => (
-          <button
-            key={t}
-            className={`kv-pill${typeFilter === t ? " kv-pill--active" : ""}`}
-            style={{ "--pill-color": typeColorForFolder(t, sg?.ontology) } as React.CSSProperties}
-            onClick={() => setTypeFilter(typeFilter === t ? null : t)}
-          >
-            <span
-              className="kv-pill-swatch"
-              style={{ background: typeColorForFolder(t, sg?.ontology) }}
-            />
-            {t} <span className="kv-pill-count">{typeCounts[t] ?? 0}</span>
-          </button>
-        ))}
-      </div>
-    );
-  }, [allTypes, typeFilter, typeCounts, sg?.ontology]);
-
-  const onNodeClick = useCallback(() => {
-    /* v1: clicks are visual only — no entity-detail panel for folder graphs yet. */
+  const onNodeClick = useCallback((node: UnifiedNode) => {
+    setSelectedNode((prev) => (prev?.id === node.id ? null : node));
   }, []);
+
+  const sidebar = selectedNode ? (
+    <div className="ug-folder-entity-card">
+      <button className="ug-floating-close" onClick={() => setSelectedNode(null)} aria-label="Close">&times;</button>
+      <div className="ug-folder-entity-head">
+        <span
+          className="kv-pill-swatch"
+          style={{ background: selectedNode.color ?? DEFAULT_TYPE_COLOR }}
+        />
+        <span className="ug-folder-entity-name">{selectedNode.label}</span>
+      </div>
+      <div className="ug-folder-entity-meta">
+        <span className="kv-entity-tag">{selectedNode.kind}</span>
+        <span className="ug-folder-entity-degree">{selectedNode.degree} connection{selectedNode.degree === 1 ? "" : "s"}</span>
+      </div>
+      <div className="ug-folder-entity-actions">
+        {(() => {
+          const meta = selectedNode.meta as { entityId?: number } | undefined;
+          const id = meta?.entityId;
+          if (id == null) return null;
+          if (focusSeed === id) {
+            return (
+              <button className="kv-index-file-btn" onClick={clearFocus}>
+                Back to full graph
+              </button>
+            );
+          }
+          return (
+            <button className="kv-index-file-btn" onClick={() => void focusEntity(id)}>
+              Focus on this entity
+            </button>
+          );
+        })()}
+      </div>
+    </div>
+  ) : null;
 
   const empty = !loading && data.nodes.length === 0 ? (
     <div className="ug-empty">
@@ -197,8 +265,9 @@ export function useFolderKnowledgeMode(opts: FolderKnowledgeOptions): FolderKnow
   return {
     data,
     filtersBar,
-    sidebar: null,
+    sidebar,
     onNodeClick,
+    contextMenu: undefined,
     refresh,
     loading,
     nodeCount: data.nodes.length,

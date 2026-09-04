@@ -60,7 +60,7 @@ Tools wired into the loop live in `agent/src/nexus/tools/` and `agent/src/nexus/
 - `skill_manage` (self-authoring — create/edit/patch/delete/view skills at runtime)
 - `vault_tool` (read/list/write markdown under `~/.nexus/vault/`)
 - `kanban_tool` (operates on vault .md files with `kanban-plugin: basic` frontmatter — boards are just markdown, not a separate store)
-- `memory_tool`, `state_tool`, `http_call`, `acp_call` (stub), `ask_user` (HITL), `terminal` (HITL)
+- `memory_tool`, `state_tool`, `http_call`, `acp_call` (loom ACP bridge), `ask_user` (HITL), `terminal` (HITL)
 
 ### Dreaming
 
@@ -90,11 +90,20 @@ Two channels on each session:
 
 ### Vault
 
-`~/.nexus/vault/` is a folder of markdown files with FTS5 search (`vault_index.py`, `vault_search.py`), tag index, and a backlinks graph (`vault_graph.py`). Kanban boards are vault-native: any `.md` file whose frontmatter contains `kanban-plugin:` is interpreted as a board by both the `vault_kanban` module (Python) and `KanbanBoard.tsx` (UI). Do not add a separate kanban store — edit the vault markdown directly. `POST /vault/dispatch` creates a new chat session seeded from a vault file or kanban card and links the session id back into the card.
+`~/.nexus/vault/` is a folder of markdown files with FTS5 search (`vault_index.py`, `vault_search.py`), tag index, and a backlinks graph (`vault_graph/` package). Kanban boards are vault-native: any `.md` file whose frontmatter contains `kanban-plugin:` is interpreted as a board by both the `vault_kanban` module (Python) and `KanbanBoard.tsx` (UI). Do not add a separate kanban store — edit the vault markdown directly. `POST /vault/dispatch` creates a new chat session seeded from a vault file or kanban card and links the session id back into the card.
+
+### Knowledge graph
+
+Two graph systems over the vault, plus per-folder isolated graphs:
+
+- **Link graph** (`vault_graph/` package): nodes = vault files, edges from markdown links. Link *parsing* has a single source of truth — `markdown_links.py` (wiki-links `[[note|alias]]`, `[[folder/note]]`, anchored `](note.md#sec)`, bare path mentions, code fences stripped, Obsidian-style stem resolution). Both `vault_graph/builder.py` and `vault_index.py` consume it — do not re-add local regexes. `/vault/graph` supports `scope=all|file|folder|tag|search|entity`, degree-ranked `max_nodes` cap (default 300), and a `graphrag` health summary.
+- **GraphRAG** (`agent/graphrag_manager/` over loom's `GraphRAGEngine`): chunk → embed → entity/relation extraction → SQLite triple store with conflict review + staged entity resolution (loom ≥ commit `7ffc4bb`). Ontology source of truth is the vault (`vault/_system/ontology/*.csv`); `_system/` paths are excluded from indexing. When an extraction model is configured but unresolvable, the manager falls back to the builtin spaCy+fastembed extractor **loudly** (`extraction_warning` in `/graph/knowledge/health`).
+- **Retrieval is hybrid**: `/graph/knowledge/query` merges vector hits with FTS5 (`vault_search`) via reciprocal-rank fusion — keyword-only matches surface as `source: "fts"` results.
+- **UI** (`ui/src/components/UnifiedGraph/`): one canvas, three modes (knowledge/vault/agent + folder sub-tabs). Renderer is **2D by default** (`GraphCanvas2D`, canvas 2D, draggable nodes, no WebGL); 3D is a settings toggle (`GraphSettings.renderer`, persisted in localStorage). Mode hooks fetch lazily on first tab visit.
 
 ### Server layout
 
-`agent/src/nexus/server/app.py` registers all FastAPI routes. Sessions are persisted via `session_store.py` (SQLite under `~/.nexus/`). Routing logic (`agent/router.py`) picks a model — `fixed` (default) uses `agent.default_model`, `auto` scores models by per-model `tier` against a simple keyword classifier.
+`agent/src/nexus/server/app.py` registers all FastAPI routes. Sessions are persisted via `session_store.py` (SQLite under `~/.nexus/`). Model routing uses the configured `agent.default_model` (the old `fixed`/`auto` router modes were removed).
 
 ### Frontend
 
@@ -131,35 +140,10 @@ Two channels on each session:
 
 ### Feature flags
 
-Features are subscription-gated via nexus-llm plans. The active feature set is resolved from the plan and cached in `agent/src/nexus/features.py`. The flow:
+The nexus-llm subscription gating system (`features.py`, `FeatureGateMiddleware`, `FEATURE_TOOLS`/`FEATURE_ROUTES`) was **removed** (commit `b4f6779`) — all tools and routes register unconditionally. What remains:
 
-1. `GET /api/status` (nexus-llm) returns `features: string[]` from the plan.
-2. `status_watcher.py` calls `features.set_features()` on each poll; emits `features_changed` SSE on change.
-3. `features.py` caches the set and provides `is_enabled()`, `feature_for_route()`, `FEATURE_TOOLS`, `FEATURE_ROUTES`.
-4. `GET /config` exposes `{ features: { active: [...], all: [...] } }` for the frontend.
-
-**Feature key → tool/route/view mapping:**
-
-| Feature | Agent tools | Routes | UI view |
-|---|---|---|---|
-| `kanban` | `kanban_manage`, `kanban_query`, `show_kanban` | `/vault/kanban` | `kanban` |
-| `calendar` | `calendar_manage` | `/vault/calendar` | `calendar` |
-| `workflow` | — (HTTP API) | `/workflows`, `/workflow/trigger` | `workflows` |
-| `knowledge` | `vault_semantic_search`, `ontology_manage` | `/graph`, `/graphrag` | `graph` |
-| `database` | `datatable_manage`, `dashboard_manage`, `vault_csv`, `visualize_table`, `show_data_table`, `show_dashboard_widget` | `/vault/datatable`, `/vault/dashboard` | `data` |
-| `dream` | — (background engine) | `/dream` | `dream` |
-| `heartbeat` | `manage_heartbeat`, `dispatch_card` | `/heartbeat` | `heartbeat` |
-| `cloud_models` | — (provider gating) | — | Provider wizard filtering |
-| `multi_user` | — | `/auth/*`, `/admin/*`, `/share/*` | Login/register |
-
-**Gating mechanisms:**
-
-- **Tool registration** (`registry.py`): `build_tool_registry(features=...)` skips feature-gated tools via `_should_register()`.
-- **Route middleware** (`app.py`): `FeatureGateMiddleware` returns 403 for routes whose feature is disabled.
-- **UI** (`useFeatures` hook): sidebar filters views by feature; `useFeatures().isViewVisible(viewId)`.
-- **UI mode** (`settings.json`): per-user `ui_mode: normal | advanced`. Normal hides knowledge, heartbeat, dream.
-
-When adding a new tool or route behind a feature gate, add it to `FEATURE_TOOLS` / `FEATURE_ROUTES` in `features.py` and wrap the registration with `_should_register()`.
+- **UI mode** (`settings.json`, per-user `ui_mode: normal | advanced`): normal hides knowledge, heartbeat, dream views. The frontend hook is `useFeatures` (`ui/src/hooks/useFeatures.ts`) — despite the name it now only handles `ui_mode`.
+- Server auth is loopback-or-token (see "Network model + sharing security" below); there is no per-feature route gating.
 
 ### Network model + sharing security
 

@@ -10,6 +10,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   knowledgeQuery,
   getKnowledgeStats,
+  getKnowledgeHealth,
+  type KnowledgeHealth,
   getKnowledgeEntity,
   getKnowledgeSubgraph,
   getKnowledgeFileSubgraph,
@@ -43,6 +45,8 @@ interface KnowledgeModeOptions {
 
 export function useKnowledgeMode(opts: KnowledgeModeOptions) {
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
+  const [health, setHealth] = useState<KnowledgeHealth | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [queryResult, setQueryResult] = useState<KnowledgeQueryResult | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<EntityDetail | null>(null);
   const [pinnedEntities, setPinnedEntities] = useState<EntityDetail[]>([]);
@@ -69,7 +73,8 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(() => {
-    getKnowledgeStats().then(setStats).catch(() => {});
+    getKnowledgeStats().then(setStats).catch(() => setStats(null));
+    getKnowledgeHealth().then(setHealth).catch(() => setHealth(null));
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -79,18 +84,22 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
     setLoading(true);
     setSelectedEntity(null);
     setPinnedEntities([]);
+    setSearchError(null);
     try {
       const result = await knowledgeQuery(q);
       setQueryResult(result);
-      if (result.subgraph.nodes.length > 0) {
-        setSubgraphData({
-          enabled: true,
-          nodes: result.subgraph.nodes.map((n) => ({ ...n, degree: n.degree ?? 0 })),
-          edges: result.subgraph.edges,
-        });
-      }
+      // Always replace the subgraph — even when empty — so the canvas and
+      // the results sidebar agree. (Previously a zero-match query left the
+      // previous graph on canvas while the sidebar said "no results".)
+      setSubgraphData({
+        enabled: true,
+        nodes: result.subgraph.nodes.map((n) => ({ ...n, degree: n.degree ?? 0 })),
+        edges: result.subgraph.edges,
+      });
     } catch {
       setQueryResult(null);
+      setSubgraphData(null);
+      setSearchError("Knowledge query failed — is the GraphRAG engine running?");
     } finally {
       setLoading(false);
     }
@@ -126,10 +135,16 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
     debounceRef.current = setTimeout(() => void doSearch(value), 300);
   }, [doSearch]);
 
+  // Re-run the active search when the type filter changes (the filter is
+  // also applied client-side to the subgraph — see filteredSubgraph).
+  const doSearchRef = useRef(doSearch);
+  doSearchRef.current = doSearch;
+  const queryTextRef = useRef(queryText);
+  queryTextRef.current = queryText;
   useEffect(() => {
-    if (!queryText.trim()) return;
+    if (!queryTextRef.current.trim()) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => void doSearch(queryText), 300);
+    debounceRef.current = setTimeout(() => void doSearchRef.current(queryTextRef.current), 300);
   }, [typeFilter]);
 
   useEffect(() => {
@@ -196,16 +211,23 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
     [pinnedEntities],
   );
 
-  // Type-filtered subgraph
+  // Type-filtered subgraph. The currently-selected entity always stays
+  // visible even when its type is filtered out — otherwise clicking a
+  // "person" pill on a "project" seed removes the node you just clicked.
+  const keepEntityId = selectedEntity?.entity?.id ?? null;
   const filteredSubgraph = useMemo((): SubgraphData | null => {
     if (!subgraphData || !typeFilter) return subgraphData;
-    const hidden = new Set(subgraphData.nodes.filter((n) => n.type !== typeFilter).map((n) => n.id));
+    const hidden = new Set(
+      subgraphData.nodes
+        .filter((n) => n.type !== typeFilter && n.id !== keepEntityId)
+        .map((n) => n.id),
+    );
     return {
       ...subgraphData,
-      nodes: subgraphData.nodes.filter((n) => n.type === typeFilter),
+      nodes: subgraphData.nodes.filter((n) => n.type === typeFilter || n.id === keepEntityId),
       edges: subgraphData.edges.filter((e) => !hidden.has(e.source) && !hidden.has(e.target)),
     };
-  }, [subgraphData, typeFilter]);
+  }, [subgraphData, typeFilter, keepEntityId]);
 
   // typeFilter scopes the visible subgraph nodes (see filteredSubgraphData).
   // Chunk results aren't filtered by entity type any more — that filter
@@ -242,6 +264,7 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
       };
     });
 
+    const nameById = new Map(sg.nodes.map((n) => [n.id, n.name]));
     const groups = new Map<string, { source: string; target: string; kind: string; relations: { from: string; to: string; label: string }[] }>();
     for (const e of sg.edges) {
       const lo = Math.min(e.source, e.target);
@@ -252,8 +275,8 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
         g = { source: `kn:${lo}`, target: `kn:${hi}`, kind: "relation", relations: [] };
         groups.set(key, g);
       }
-      const fromName = sg.nodes.find((n) => n.id === e.source)?.name ?? "?";
-      const toName = sg.nodes.find((n) => n.id === e.target)?.name ?? "?";
+      const fromName = nameById.get(e.source) ?? "?";
+      const toName = nameById.get(e.target) ?? "?";
       g.relations.push({ from: fromName, to: toName, label: e.relation || "" });
     }
     return { nodes, links: Array.from(groups.values()) };
@@ -379,6 +402,28 @@ export function useKnowledgeMode(opts: KnowledgeModeOptions) {
 
   const filtersBar = (
     <>
+      {health && !health.ready && (
+        <div className="kv-health-banner" role="alert">
+          {health.error
+            ? <>Knowledge engine failed to start — {health.error}</>
+            : health.enabled
+            ? <>Knowledge engine is initializing…</>
+            : <>Knowledge graph is disabled — enable it in config (<code>[graphrag] enabled = true</code>)</>}
+        </div>
+      )}
+      {health?.ready && health.extraction_warning && (
+        <div className="kv-health-banner kv-health-banner--warn">{health.extraction_warning}</div>
+      )}
+      {health?.ready && health.stale_warning && (
+        <div className="kv-health-banner kv-health-banner--warn">{health.stale_warning}</div>
+      )}
+      {searchError && (
+        <div className="kv-health-banner kv-health-banner--warn" role="alert">
+          {searchError}
+          <button className="kv-banner-dismiss" onClick={() => setSearchError(null)} aria-label="Dismiss">×</button>
+        </div>
+      )}
+
       <div className="kv-search-bar">
         <div className="kv-search-wrap">
           <input

@@ -16,9 +16,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...agent.llm import ChatMessage, ContentPart, Role, ToolCall
+
+if TYPE_CHECKING:
+    # Type-only: keeps loom out of the import graph while making the
+    # ``lt.ChatMessage`` string annotations below resolvable.
+    import loom.types as lt
 
 
 # ── Dataclasses consumed by server handlers ───────────────────────────────────
@@ -108,7 +113,7 @@ def _content_from_loom(content: Any) -> Any:
     return out
 
 
-def _to_loom_msg(msg: ChatMessage) -> "loom.types.ChatMessage":  # type: ignore[name-defined]
+def _to_loom_msg(msg: ChatMessage) -> "lt.ChatMessage":  # type: ignore[name-defined]
     """Convert a Nexus ChatMessage to loom's format.
 
     Nexus ``ToolCall.arguments`` is a ``dict``; loom expects a JSON string.
@@ -136,7 +141,7 @@ def _to_loom_msg(msg: ChatMessage) -> "loom.types.ChatMessage":  # type: ignore[
     )
 
 
-def _from_loom_msg(msg: "loom.types.ChatMessage") -> ChatMessage:  # type: ignore[name-defined]
+def _from_loom_msg(msg: "lt.ChatMessage") -> ChatMessage:  # type: ignore[name-defined]
     """Convert loom's ChatMessage to Nexus's format.
 
     Loom ``ToolCall.arguments`` is a JSON string; Nexus expects a ``dict``.

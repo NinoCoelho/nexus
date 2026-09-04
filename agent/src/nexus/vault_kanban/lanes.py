@@ -20,7 +20,7 @@ def add_lane(path: str, title: str) -> Lane:
     board = read_board(path)
     lane = Lane(id=_slug(title), title=title)
     # Ensure lane id is unique
-    existing = {l.id for l in board.lanes}
+    existing = {lane.id for lane in board.lanes}
     if lane.id in existing:
         base = lane.id
         i = 2
@@ -34,7 +34,7 @@ def add_lane(path: str, title: str) -> Lane:
 
 def delete_lane(path: str, lane_id: str) -> None:
     board = read_board(path)
-    board.lanes = [l for l in board.lanes if l.id != lane_id]
+    board.lanes = [lane for lane in board.lanes if lane.id != lane_id]
     write_board(path, board)
 
 

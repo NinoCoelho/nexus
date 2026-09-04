@@ -16,7 +16,6 @@ from nexus.agent.llm import (
     Role,
     StopReason,
     StreamEvent,
-    ToolSpec,
 )
 from nexus.agent.loop import Agent
 from nexus.config_schema import AgentConfig, ModelEntry, NexusConfig, ProviderConfig

@@ -144,6 +144,19 @@ def test_alarm_store_garbage_collect(alarm_db: AlarmStore):
     assert alarm_db.get("ev2", "o2") is not None
 
 
+def test_alarm_store_garbage_collect_orphaned_ringing(alarm_db: AlarmStore):
+    """Ringing/snoozed rows for long-past occurrences must be reaped —
+    otherwise list_snoozed_ready re-rings deleted events forever."""
+    alarm_db.upsert(AlarmEntry(event_id="old1", occurrence_start="2020-01-01T00:00:00Z", status="ringing"))
+    alarm_db.upsert(AlarmEntry(event_id="old2", occurrence_start="2020-01-02T00:00:00Z", status="snoozed", snoozed_until="2020-01-02T01:00:00Z"))
+    alarm_db.upsert(AlarmEntry(event_id="new1", occurrence_start="2099-01-01T00:00:00Z", status="ringing"))
+    count = alarm_db.garbage_collect("2026-01-01T00:00:00Z")
+    assert count == 2
+    assert alarm_db.get("old1", "2020-01-01T00:00:00Z") is None
+    assert alarm_db.get("old2", "2020-01-02T00:00:00Z") is None
+    assert alarm_db.get("new1", "2099-01-01T00:00:00Z") is not None
+
+
 # ── Dual Assignee Model Tests ────────────────────────────────────────────────
 
 

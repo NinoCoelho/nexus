@@ -30,32 +30,112 @@ async def get_agent_graph(
     return build_agent_graph(registry, sessions)
 
 
+def _fts_hits(query: str, limit: int) -> list[dict]:
+    """FTS5 keyword hits for hybrid retrieval (never raises)."""
+    try:
+        from ... import vault_search
+
+        if vault_search.is_empty():
+            vault_search.rebuild_from_disk()
+        return vault_search.search(query, limit=limit)
+    except Exception:
+        return []
+
+
+def _hybrid_merge(
+    vector_results: list[dict], fts_hits: list[dict], limit: int
+) -> tuple[list[dict], list[str]]:
+    """Reciprocal-rank fusion of vector chunks + FTS file hits.
+
+    RRF scores files: ``Σ 1/(k + rank)`` with k=60 (standard). Vector
+    chunks are re-ordered by their file's fused rank (chunk order kept as
+    tiebreak); FTS-only files are appended as keyword-result cards so exact
+    keyword matches (file names, tags, rare terms the embedder misses) are
+    never lost. Returns (merged_results, fused_path_order).
+    """
+    k = 60.0
+    fused: dict[str, float] = {}
+    vector_paths: list[str] = []
+    for rank, r in enumerate(vector_results):
+        p = r["source_path"]
+        if p not in fused:
+            vector_paths.append(p)
+            fused[p] = 0.0
+        fused[p] += 1.0 / (k + rank + 1)
+    fts_paths: list[str] = []
+    for rank, h in enumerate(fts_hits):
+        p = h["path"]
+        if p not in fused:
+            fts_paths.append(p)
+            fused[p] = 0.0
+        fused[p] += 1.0 / (k + rank + 1)
+
+    order = {p: i for i, p in enumerate(sorted(fused, key=lambda p: -fused[p]))}
+
+    merged = sorted(
+        vector_results,
+        key=lambda r: (order.get(r["source_path"], 1 << 30), -r.get("score", 0.0)),
+    )
+    fts_only = [
+        {
+            "chunk_id": f"fts:{h['path']}",
+            "source_path": h["path"],
+            "heading": "",
+            "content": h.get("snippet", ""),
+            "score": 0.0,
+            "source": "fts",
+            "related_entities": [],
+        }
+        for h in fts_hits
+        if h["path"] not in {r["source_path"] for r in vector_results}
+    ]
+    fts_only.sort(key=lambda r: order.get(r["source_path"], 1 << 30))
+    return (merged + fts_only)[:limit], sorted(fused, key=lambda p: -fused[p])
+
+
 @router.post("/graph/knowledge/query")
 async def knowledge_query(body: dict) -> dict:
-    """Semantic search over the knowledge graph. Returns evidence + trace + subgraph."""
+    """Hybrid search over the knowledge graph: vector (GraphRAG) + FTS5,
+    merged with reciprocal-rank fusion. Returns evidence + trace + subgraph."""
     query = body.get("query", "").strip()
     limit = min(int(body.get("limit", 10)), 50)
+    empty = {"results": [], "trace": None, "subgraph": {"nodes": [], "edges": []}}
     if not query:
-        return {"results": [], "trace": None, "subgraph": {"nodes": [], "edges": []}}
+        return empty
     from ...agent.graphrag_manager import get_engine
     engine = get_engine()
     if engine is None:
-        return {"results": [], "trace": None, "subgraph": {"nodes": [], "edges": []}, "enabled": False}
-    enriched = await engine.retrieve_enriched(query, top_k=limit)
+        return {**empty, "enabled": False}
+
+    try:
+        enriched = await engine.retrieve_enriched(query, top_k=limit)
+    except ValueError as exc:
+        # e.g. mixed-dimension vectors after an embedder change — surface a
+        # clean 503 instead of an unhandled 500.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"knowledge query failed: {exc}",
+        ) from exc
+
+    vector_results = [
+        {
+            "chunk_id": r.chunk_id,
+            "source_path": r.source_path,
+            "heading": r.heading,
+            "content": r.content,
+            "score": round(r.score, 4),
+            "source": r.source,
+            "related_entities": r.related_entities,
+        }
+        for r in enriched.results
+    ]
+
+    fts_hits = await asyncio.to_thread(_fts_hits, query, limit * 2)
+    merged, _ = _hybrid_merge(vector_results, fts_hits, limit)
+
     return {
         "enabled": True,
-        "results": [
-            {
-                "chunk_id": r.chunk_id,
-                "source_path": r.source_path,
-                "heading": r.heading,
-                "content": r.content,
-                "score": round(r.score, 4),
-                "source": r.source,
-                "related_entities": r.related_entities,
-            }
-            for r in enriched.results
-        ],
+        "results": merged,
         "trace": {
             "seed_entities": enriched.trace.seed_entities,
             "hops": [
@@ -461,7 +541,6 @@ def _resolve_vault_folder(path: str) -> str:
     The UI passes vault-relative paths (e.g. ``Projects/Alpha``); this resolver
     rejects absolute paths and any traversal outside the vault root.
     """
-    from pathlib import Path
     from ...agent.graphrag_manager import get_home
 
     if not path or not path.strip():

@@ -6,25 +6,35 @@ import re
 
 # ---------------------------------------------------------------------------
 # spaCy NER label → ontology entity type (direct, no embedding needed)
+#
+# Only mappings with near-perfect precision are direct. ORG/PRODUCT/GPE/LOC/
+# FAC intentionally have no direct mapping — "ORG → project" turned every
+# company into a project and "GPE → resource" turned every city into a
+# document. Those labels go through the embedding classifier with a label
+# hint (see SPACY_LABEL_HINTS) so the ontology type reflects the entity,
+# not the label bucket.
 # ---------------------------------------------------------------------------
 
 SPACY_LABEL_MAP: dict[str, str] = {
-    # en_core_web_sm (OntoNotes labels)
     "PERSON": "person",
-    "ORG": "project",
-    "PRODUCT": "technology",
-    "GPE": "resource",
-    "LOC": "resource",
-    "FAC": "resource",
-    "EVENT": "concept",
-    "WORK_OF_ART": "concept",
-    "LAW": "concept",
-    "NORP": "concept",
-    "LANGUAGE": "concept",
-    # pt_core_news_sm (CoNLL-style labels). MISC is intentionally absent
-    # so the embedding classifier picks a more specific type.
     "PER": "person",
-    # ORG / LOC already covered above.
+}
+
+# Human-readable label descriptions appended to the entity name before type
+# classification — gives the embedder real signal instead of a bare name.
+SPACY_LABEL_HINTS: dict[str, str] = {
+    "PERSON": "a person",
+    "PER": "a person",
+    "ORG": "an organization, company, agency or institution",
+    "PRODUCT": "a product, piece of software or technology",
+    "GPE": "a country, city or state",
+    "LOC": "a geographic location or region",
+    "FAC": "a building, facility or structure",
+    "EVENT": "an event",
+    "WORK_OF_ART": "a creative work such as a book, film or title",
+    "LAW": "a law or legal document",
+    "NORP": "a nationality, religious or political group",
+    "LANGUAGE": "a natural language",
 }
 
 # spaCy labels that are NOT knowledge-graph entities — skip entirely

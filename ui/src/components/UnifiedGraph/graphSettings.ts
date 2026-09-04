@@ -1,4 +1,6 @@
 export interface GraphSettings {
+  /** Canvas renderer — 2D is the default (pan/zoom/drag, no WebGL needed). */
+  renderer: "2d" | "3d";
   nodeSize: number;
   linkDistance: number;
   chargeStrength: number;
@@ -12,6 +14,7 @@ export interface GraphSettings {
 }
 
 export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
+  renderer: "2d",
   nodeSize: 1,
   linkDistance: 1,
   chargeStrength: 1,
@@ -44,7 +47,8 @@ export function saveGraphSettings(settings: GraphSettings): void {
 }
 
 export interface GraphSettingsField {
-  key: keyof GraphSettings;
+  /** Numeric sliders only — the renderer toggle is a separate control. */
+  key: Exclude<keyof GraphSettings, "renderer">;
   label: string;
   min: number;
   max: number;

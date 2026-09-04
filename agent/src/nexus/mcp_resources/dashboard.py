@@ -69,7 +69,7 @@ def render_widget(folder: str, widget_id: str) -> str:
     try:
         result = json.loads(result_json)
     except json.JSONDecodeError:
-        return _wrap(f"<p style='color:#ef4444'>Invalid widget result data</p>")
+        return _wrap("<p style='color:#ef4444'>Invalid widget result data</p>")
 
     columns = result.get("columns", [])
     rows = result.get("rows", [])
@@ -87,8 +87,8 @@ def render_widget(folder: str, widget_id: str) -> str:
     })
 
     chart_area = (
-        f'<div style="position:relative"><canvas id="chart-canvas" style="width:100%;height:220px"></canvas>'
-        f'<div id="kpi-display" style="display:none;text-align:center;font-size:36px;font-weight:700;color:#60a5fa;padding:60px 0"></div></div>'
+        '<div style="position:relative"><canvas id="chart-canvas" style="width:100%;height:220px"></canvas>'
+        '<div id="kpi-display" style="display:none;text-align:center;font-size:36px;font-weight:700;color:#60a5fa;padding:60px 0"></div></div>'
     )
 
     body = (
