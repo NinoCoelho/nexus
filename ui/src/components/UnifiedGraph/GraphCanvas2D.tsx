@@ -175,12 +175,19 @@ export const GraphCanvas2D = forwardRef<GraphCanvasHandle, Props>(function Graph
     return (2.5 + Math.log(node.degree + 1) * 1.3 + (node.radiusBoost ?? 0) * 1.5) * settings.nodeSize;
   }, [settings.nodeSize]);
 
+  // Custom painters in react-force-graph-2d receive the RAW canvas — unlike
+  // the 3D variant's nodeThreeObject, the ctx is NOT pre-translated to the
+  // node position. Every draw must translate to (node.x, node.y) itself or
+  // all nodes paint at the canvas origin.
   const nodeCanvasObject = useCallback((raw: object, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const node = raw as UnifiedNode;
+    const node = raw as UnifiedNode & { x?: number; y?: number };
     const r = radiusFor(node) / globalScale;
     const isMatch = matchedIds.current.has(node.id);
     const isFindMatch = findMatchedIds.current.has(node.id);
     const isSelected = node.id === selectedId;
+
+    ctx.save();
+    ctx.translate(node.x ?? 0, node.y ?? 0);
 
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, 2 * Math.PI);
@@ -223,14 +230,18 @@ export const GraphCanvas2D = forwardRef<GraphCanvasHandle, Props>(function Graph
       ctx.fillStyle = isSelected || isFindMatch || isMatch ? FG_COLOR : "rgba(236,232,225,0.82)";
       ctx.fillText(label, 0, fy);
     }
+    ctx.restore();
   }, [selectedId, settings.nodeOpacity, settings.nodeSize, settings.labelScale, radiusFor, data.nodes.length]);
 
   const nodePointerAreaPaint = useCallback((raw: object, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const node = raw as UnifiedNode;
+    const node = raw as UnifiedNode & { x?: number; y?: number };
+    ctx.save();
+    ctx.translate(node.x ?? 0, node.y ?? 0);
     ctx.beginPath();
     ctx.arc(0, 0, radiusFor(node) / globalScale + 2 / globalScale, 0, 2 * Math.PI);
     ctx.fillStyle = color;
     ctx.fill();
+    ctx.restore();
   }, [radiusFor]);
 
   const linkColor = useCallback((raw: object) => {
