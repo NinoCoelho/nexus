@@ -7,6 +7,7 @@ import {
   debugCancel as apiCancel,
   debugEventsUrl,
 } from "../../api/workflows";
+import { subscribeSse, type SseSubscription } from "../../api/sse";
 
 interface DebugState {
   runId: string;
@@ -50,64 +51,63 @@ export default function DebugPanel({
     if (!debug?.runId) return;
 
     const url = debugEventsUrl(wfPath, debug.runId);
-    const es = new EventSource(url);
-
-    es.addEventListener("workflow.debug.step_starting", (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      setDebug((prev) => prev ? {
-        ...prev,
-        currentStepId: data.step_id,
-        stepEvents: {
-          ...prev.stepEvents,
-          [data.step_id]: {
-            ...prev.stepEvents[data.step_id],
-            ...data,
-            status: "running",
-          },
+    let sub: SseSubscription;
+    sub = subscribeSse(url, {
+      handlers: {
+        "workflow.debug.step_starting": (e: MessageEvent) => {
+          const data = JSON.parse(e.data);
+          setDebug((prev) => prev ? {
+            ...prev,
+            currentStepId: data.step_id,
+            stepEvents: {
+              ...prev.stepEvents,
+              [data.step_id]: {
+                ...prev.stepEvents[data.step_id],
+                ...data,
+                status: "running",
+              },
+            },
+          } : prev);
         },
-      } : prev);
-    });
-
-    es.addEventListener("workflow.debug.step_completed", (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      setDebug((prev) => prev ? {
-        ...prev,
-        stepEvents: {
-          ...prev.stepEvents,
-          [data.step_id]: {
-            ...prev.stepEvents[data.step_id],
-            ...data,
-          },
+        "workflow.debug.step_completed": (e: MessageEvent) => {
+          const data = JSON.parse(e.data);
+          setDebug((prev) => prev ? {
+            ...prev,
+            stepEvents: {
+              ...prev.stepEvents,
+              [data.step_id]: {
+                ...prev.stepEvents[data.step_id],
+                ...data,
+              },
+            },
+          } : prev);
         },
-      } : prev);
-    });
-
-    es.addEventListener("workflow.debug.step_failed", (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      setDebug((prev) => prev ? {
-        ...prev,
-        status: "failed",
-        stepEvents: {
-          ...prev.stepEvents,
-          [data.step_id]: {
-            ...prev.stepEvents[data.step_id],
-            ...data,
-          },
+        "workflow.debug.step_failed": (e: MessageEvent) => {
+          const data = JSON.parse(e.data);
+          setDebug((prev) => prev ? {
+            ...prev,
+            status: "failed",
+            stepEvents: {
+              ...prev.stepEvents,
+              [data.step_id]: {
+                ...prev.stepEvents[data.step_id],
+                ...data,
+              },
+            },
+          } : prev);
         },
-      } : prev);
+        "workflow.debug.run_completed": (e: MessageEvent) => {
+          const data = JSON.parse(e.data);
+          setDebug((prev) => prev ? { ...prev, status: data.status || "completed" } : prev);
+          sub.close();
+        },
+      },
+      onError: () => {
+        sub.close();
+      },
     });
 
-    es.addEventListener("workflow.debug.run_completed", (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      setDebug((prev) => prev ? { ...prev, status: data.status || "completed" } : prev);
-      es.close();
-    });
-
-    es.onerror = () => {
-      es.close();
-    };
-
-    return () => { es.close(); };
+    return () => { sub.close(); };
   }, [debug?.runId, wfPath]);
 
   const handleContinue = useCallback(async (stepId?: string) => {

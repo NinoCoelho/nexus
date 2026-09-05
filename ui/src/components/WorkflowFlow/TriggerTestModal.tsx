@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  testTriggerListenUrl,
+  listenTestTrigger,
   cancelTestListener,
   testTrigger,
   listFsWatchFiles,
@@ -149,19 +149,7 @@ export default function TriggerTestModal({
 
     (async () => {
       try {
-        const url = testTriggerListenUrl(wfPath);
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ trigger_id: triggerId }),
-          signal: ac.signal,
-        });
-
-        if (!res.ok) {
-          setError(await res.text());
-          setState("error");
-          return;
-        }
+        const res = await listenTestTrigger(wfPath, triggerId, ac.signal);
 
         for await (const evt of readSSEResponse(res)) {
           if (ac.signal.aborted) break;

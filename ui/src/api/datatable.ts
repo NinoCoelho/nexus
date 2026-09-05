@@ -85,6 +85,14 @@ export async function getRelatedRows(path: string, rowId: string): Promise<Relat
   return res.json();
 }
 
+export async function getErDiagram(folder: string): Promise<{ mermaid: string }> {
+  const res = await fetch(
+    `${BASE}/vault/datatable/erdiagram?folder=${encodeURIComponent(folder)}`,
+  );
+  if (!res.ok) throw new Error(`ER diagram error: ${res.status}`);
+  return res.json();
+}
+
 export async function getVaultDataTable(path: string): Promise<DataTable> {
   const res = await fetch(`${BASE}/vault/datatable?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`DataTable load error: ${res.status}`);

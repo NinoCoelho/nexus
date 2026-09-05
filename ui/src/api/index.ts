@@ -29,3 +29,5 @@ export * from "./dream";
 export * from "./update";
 export * from "./agentGraph";
 export * from "./projects";
+export * from "./jobs";
+export * from "./sse";

@@ -18,6 +18,7 @@
  */
 
 import { BASE } from "../../api/base";
+import { subscribeSse, type SseSubscription } from "../../api/sse";
 
 export type BuildStreamStage =
   | "starting"
@@ -64,7 +65,6 @@ export function subscribeBuildStream(
   callbacks: BuildStreamCallbacks,
 ): BuildStreamHandle {
   const url = `${BASE}/chat/${encodeURIComponent(sessionId)}/events`;
-  const es = new EventSource(url, { withCredentials: true });
 
   let state: BuildStreamState = { ...INITIAL_STATE };
   let terminated = false;
@@ -86,117 +86,117 @@ export function subscribeBuildStream(
     if (terminated) return;
     terminated = true;
     callbacks.onTerminal(outcome);
-    es.close();
+    sub.close();
   };
 
-  es.addEventListener("iter", (ev) => {
-    try {
-      const d = JSON.parse((ev as MessageEvent).data ?? "{}");
-      const n = Number(d?.n ?? 0);
-      if (Number.isFinite(n)) update({ iterations: n });
-    } catch {
-      // ignore
-    }
-  });
-
-  es.addEventListener("tool_call", (ev) => {
-    try {
-      const d = JSON.parse((ev as MessageEvent).data ?? "{}");
-      const name = String(d?.name ?? "");
-      const args = d?.args ?? {};
-      if (name === "spawn_subagents") {
-        const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
-        update({
-          stage: "reviewing",
-          subagentsTotal: tasks.length,
-          subagentsCompleted: 0,
-        });
-      } else if (name === "skill_manage" && args?.action === "create") {
-        update({ stage: "saving" });
-        if (typeof args?.name === "string") pendingCreateName = args.name;
-      }
-    } catch {
-      // ignore
-    }
-  });
-
-  es.addEventListener("tool_result", (ev) => {
-    try {
-      const d = JSON.parse((ev as MessageEvent).data ?? "{}");
-      const name = String(d?.name ?? "");
-      if (name === "spawn_subagents") {
-        update({
-          stage: "synthesizing",
-          subagentsCompleted: state.subagentsTotal,
-        });
-      } else if (name === "skill_manage" && pendingCreateName) {
-        // Preview is the truncated stringified result. ``"ok": true``
-        // confirms the create landed on disk; pair it with the name we
-        // captured at tool_call time.
-        const preview = String(d?.preview ?? "");
-        if (/"ok"\s*:\s*true/.test(preview) && /created/i.test(preview)) {
-          confirmedCreatedName = pendingCreateName;
+  let sub: SseSubscription;
+  sub = subscribeSse(url, {
+    withCredentials: true,
+    handlers: {
+      iter: (ev) => {
+        try {
+          const d = JSON.parse(ev.data ?? "{}");
+          const n = Number(d?.n ?? 0);
+          if (Number.isFinite(n)) update({ iterations: n });
+        } catch {
+          // ignore
         }
-        pendingCreateName = null;
-      }
-    } catch {
-      // ignore
-    }
-  });
+      },
+      tool_call: (ev) => {
+        try {
+          const d = JSON.parse(ev.data ?? "{}");
+          const name = String(d?.name ?? "");
+          const args = d?.args ?? {};
+          if (name === "spawn_subagents") {
+            const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
+            update({
+              stage: "reviewing",
+              subagentsTotal: tasks.length,
+              subagentsCompleted: 0,
+            });
+          } else if (name === "skill_manage" && args?.action === "create") {
+            update({ stage: "saving" });
+            if (typeof args?.name === "string") pendingCreateName = args.name;
+          }
+        } catch {
+          // ignore
+        }
+      },
+      tool_result: (ev) => {
+        try {
+          const d = JSON.parse(ev.data ?? "{}");
+          const name = String(d?.name ?? "");
+          if (name === "spawn_subagents") {
+            update({
+              stage: "synthesizing",
+              subagentsCompleted: state.subagentsTotal,
+            });
+          } else if (name === "skill_manage" && pendingCreateName) {
+            // Preview is the truncated stringified result. ``"ok": true``
+            // confirms the create landed on disk; pair it with the name we
+            // captured at tool_call time.
+            const preview = String(d?.preview ?? "");
+            if (/"ok"\s*:\s*true/.test(preview) && /created/i.test(preview)) {
+              confirmedCreatedName = pendingCreateName;
+            }
+            pendingCreateName = null;
+          }
+        } catch {
+          // ignore
+        }
+      },
+      reply: (ev) => {
+        try {
+          const d = JSON.parse(ev.data ?? "{}");
+          // Trace bus carries the truncated reply under `text`.
+          const text = String(d?.text ?? d?.reply ?? "");
+          if (!text) return;
 
-  es.addEventListener("reply", (ev) => {
-    try {
-      const d = JSON.parse((ev as MessageEvent).data ?? "{}");
-      // Trace bus carries the truncated reply under `text`.
-      const text = String(d?.text ?? d?.reply ?? "");
-      if (!text) return;
-
-      const built = text.match(/Built skill[:\s]+"?([a-z0-9-]+)"?/i);
-      if (built) {
-        finalize({ kind: "success", skillName: built[1] });
-        return;
-      }
-      const failed = text.match(/Failed:\s*(.+)/i);
-      if (failed) {
-        finalize({ kind: "failure", reason: failed[1].trim() });
-        return;
-      }
-      // Reply arrived but doesn't fit either pattern (often: the model
-      // narrated for too long and the success marker fell past the
-      // server-side 200-char truncation). If we already saw a successful
-      // skill_manage create, that's the ground truth — use it.
-      if (confirmedCreatedName) {
-        finalize({ kind: "success", skillName: confirmedCreatedName });
-        return;
-      }
-      // Truly nothing to anchor on — surface the raw reply so the user
-      // sees something actionable instead of an indefinite spinner.
-      finalize({ kind: "failure", reason: text.slice(0, 200) });
-    } catch {
-      // ignore
-    }
-  });
-
-  es.addEventListener("error", () => {
-    // EventSource auto-reconnects on transient drops; only surface a hard
-    // failure if the connection has fully closed AND we haven't reached a
-    // terminal state yet. If we already confirmed a successful create, the
-    // dropped connection doesn't matter — the skill exists.
-    if (!terminated && es.readyState === EventSource.CLOSED) {
-      if (confirmedCreatedName) {
-        finalize({ kind: "success", skillName: confirmedCreatedName });
-      } else {
-        finalize({ kind: "failure", reason: "lost connection to build session" });
-      }
-    }
+          const built = text.match(/Built skill[:\s]+"?([a-z0-9-]+)"?/i);
+          if (built) {
+            finalize({ kind: "success", skillName: built[1] });
+            return;
+          }
+          const failed = text.match(/Failed:\s*(.+)/i);
+          if (failed) {
+            finalize({ kind: "failure", reason: failed[1].trim() });
+            return;
+          }
+          // Reply arrived but doesn't fit either pattern (often: the model
+          // narrated for too long and the success marker fell past the
+          // server-side 200-char truncation). If we already saw a successful
+          // skill_manage create, that's the ground truth — use it.
+          if (confirmedCreatedName) {
+            finalize({ kind: "success", skillName: confirmedCreatedName });
+            return;
+          }
+          // Truly nothing to anchor on — surface the raw reply so the user
+          // sees something actionable instead of an indefinite spinner.
+          finalize({ kind: "failure", reason: text.slice(0, 200) });
+        } catch {
+          // ignore
+        }
+      },
+      error: (_ev, source) => {
+        // EventSource auto-reconnects on transient drops; only surface a hard
+        // failure if the connection has fully closed AND we haven't reached a
+        // terminal state yet. If we already confirmed a successful create, the
+        // dropped connection doesn't matter — the skill exists.
+        if (!terminated && source.readyState === EventSource.CLOSED) {
+          if (confirmedCreatedName) {
+            finalize({ kind: "success", skillName: confirmedCreatedName });
+          } else {
+            finalize({ kind: "failure", reason: "lost connection to build session" });
+          }
+        }
+      },
+    },
   });
 
   return {
     close: () => {
-      if (!terminated) {
-        terminated = true;
-        es.close();
-      }
+      terminated = true;
+      sub.close();
     },
   };
 }

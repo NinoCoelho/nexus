@@ -1,25 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { BASE } from "../api/base";
+import { listRunningJobs, killRunningJob, type RunningJob } from "../api/jobs";
 import { subscribeGlobalNotifications } from "../api/chat";
 
-export interface RunningJob {
-  id: string;
-  type: string;
-  label: string;
-  session_id: string | null;
-  started_at: number;
-  extra?: Record<string, unknown>;
-}
+export type { RunningJob };
 
 export function useRunningJobs() {
   const [jobs, setJobs] = useState<RunningJob[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BASE}/jobs`)
-      .then((r) => (r.ok ? r.json() : { jobs: [] }))
-      .then((data) => {
-        if (!cancelled) setJobs(data.jobs ?? []);
+    listRunningJobs()
+      .then((list) => {
+        if (!cancelled) setJobs(list);
       })
       .catch(() => {});
 
@@ -51,8 +43,7 @@ export function useRunningJobs() {
 
   const killJob = useCallback(async (jobId: string) => {
     try {
-      const res = await fetch(`${BASE}/jobs/${jobId}/kill`, { method: "POST" });
-      if (res.ok) {
+      if (await killRunningJob(jobId)) {
         setJobs((prev) => prev.filter((j) => j.id !== jobId));
       }
     } catch { /* best-effort */ }

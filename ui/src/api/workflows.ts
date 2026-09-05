@@ -421,6 +421,21 @@ export function testTriggerListenUrl(path: string): string {
   return `${BASE}/workflows/${encodeURIComponent(path)}/test-trigger/listen`;
 }
 
+export async function listenTestTrigger(
+  path: string,
+  triggerId: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const res = await fetch(testTriggerListenUrl(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trigger_id: triggerId }),
+    signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res;
+}
+
 export async function cancelTestListener(
   path: string,
   testId: string,

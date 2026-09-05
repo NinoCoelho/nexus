@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { BrandMark } from "./BrandMark";
-import { BASE } from "../api/base";
+import { pingHealth } from "../api/sessions";
 import "./SplashScreen.css";
 
 const SESSION_KEY = "nexus.splashShown.v1";
 const HEALTH_POLL_MS = 2000;
-const HEALTH_TIMEOUT_MS = 3000;
 
 type Mode = "loading" | "branding" | "leaving" | "done";
 
@@ -22,18 +21,6 @@ function markSessionSplashShown(): void {
     sessionStorage.setItem(SESSION_KEY, "1");
   } catch {
     /* ignore */
-  }
-}
-
-async function isBackendUp(): Promise<boolean> {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), HEALTH_TIMEOUT_MS);
-    const res = await fetch(`${BASE}/health`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    return false;
   }
 }
 
@@ -104,7 +91,7 @@ export function SplashScreen() {
     }
 
     async function run() {
-      const up = await isBackendUp();
+      const up = await pingHealth();
       if (cancelled) return;
 
       if (up && sessionSplashShown()) {
@@ -116,7 +103,7 @@ export function SplashScreen() {
         while (!cancelled) {
           await new Promise<void>((r) => setTimeout(r, HEALTH_POLL_MS));
           if (cancelled) return;
-          if (await isBackendUp()) break;
+          if (await pingHealth()) break;
         }
         if (cancelled) return;
 

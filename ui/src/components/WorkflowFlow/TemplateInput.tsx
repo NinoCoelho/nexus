@@ -193,20 +193,17 @@ export default function TemplateInput({ value, onChange, steps, stepSchemas, tri
   }
 
   function applyItem(item: CompletionItem) {
-    console.log("[ac] applyItem", { item, triggerInfo, cursorRef: cursorRef.current, value });
     if (!triggerInfo) return;
     const cursor = cursorRef.current;
     const after = value.slice(cursor);
     const partialStart = cursor - triggerInfo.partial.length;
     const next = value.slice(0, partialStart) + item.insert + after;
-    console.log("[ac] next value:", next);
     onChange(next);
     setItems([]);
     setTriggerInfo(null);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    console.log("[ac] keydown", e.key, { itemsLen: items.length, selectedIdx });
     if (items.length === 0) return;
 
     if (e.key === "ArrowDown") {

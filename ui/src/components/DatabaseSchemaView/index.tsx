@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { BASE } from "../../api/base";
+import { getErDiagram } from "../../api/datatable";
 
 interface Props {
   folder: string;
@@ -51,10 +51,7 @@ export default function DatabaseSchemaView({ folder, onClose }: Props) {
 
     (async () => {
       try {
-        const url = `${BASE}/vault/datatable/erdiagram?folder=${encodeURIComponent(folder)}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`ER diagram error: ${res.status}`);
-        const body = await res.json();
+        const body = await getErDiagram(folder);
         if (cancelled) return;
         const code: string = body.mermaid || "";
         if (!code.trim() || code.trim() === "erDiagram") {

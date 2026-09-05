@@ -3,6 +3,7 @@ import { X, Download, SkipForward, ExternalLink, RefreshCw } from "lucide-react"
 import {
   type UpdateCheckResult,
   type UpdateStatus,
+  downloadUpdateStream,
   getUpdateStatus,
   installUpdate,
   skipVersion,
@@ -66,9 +67,7 @@ export default function UpdateModal({ check, onClose, onSkipped, onInstalled }: 
   const handleDownload = async () => {
     setPhase("downloading");
     try {
-      const { BASE } = await import("../../api/base");
-      const res = await fetch(`${BASE}/update/download`, { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await downloadUpdateStream();
       // SSE stream — read to completion
       const reader = res.body?.getReader();
       if (reader) {

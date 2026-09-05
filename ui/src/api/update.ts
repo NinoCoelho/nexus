@@ -35,6 +35,12 @@ export async function downloadUpdate(): Promise<void> {
   if (!res.ok) throw new Error(`update download error: ${res.status}`);
 }
 
+export async function downloadUpdateStream(): Promise<Response> {
+  const res = await fetch(`${BASE}/update/download`, { method: "POST" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res;
+}
+
 export async function getUpdateStatus(): Promise<UpdateStatus> {
   const res = await fetch(`${BASE}/update/status`);
   if (!res.ok) throw new Error(`update status error: ${res.status}`);

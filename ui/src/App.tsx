@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import "./tokens.css";
 import "./App.css";
@@ -7,19 +7,20 @@ import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import MobileTabBar from "./components/MobileTabBar";
 import ChatView from "./components/ChatView";
-import CalendarView from "./components/CalendarView";
-import VaultView from "./components/VaultView";
 import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
 import ApprovalDialog from "./components/ApprovalDialog";
-import UnifiedGraphView from "./components/UnifiedGraphView";
-import DatabaseSchemaView from "./components/DatabaseSchemaView";
-import DataDashboardView from "./components/DataDashboardView";
-import HeartbeatView from "./components/HeartbeatView";
-import DreamView from "./components/DreamView";
-import WorkflowView from "./components/WorkflowView";
 import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
+
+const CalendarView = lazy(() => import("./components/CalendarView"));
+const VaultView = lazy(() => import("./components/VaultView"));
+const UnifiedGraphView = lazy(() => import("./components/UnifiedGraphView"));
+const DatabaseSchemaView = lazy(() => import("./components/DatabaseSchemaView"));
+const DataDashboardView = lazy(() => import("./components/DataDashboardView"));
+const HeartbeatView = lazy(() => import("./components/HeartbeatView"));
+const DreamView = lazy(() => import("./components/DreamView"));
+const WorkflowView = lazy(() => import("./components/WorkflowView"));
 import {
   cancelGraphragIndexFile,
   cancelHitlRequest,
@@ -56,6 +57,21 @@ import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
 import UpdateModal from "./components/UpdateModal";
 import { type UpdateCheckResult } from "./api/update";
+
+function ViewFallback() {
+  return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <span className="gs-spinner" style={{ width: 22, height: 22, borderWidth: 3 }} />
+    </div>
+  );
+}
+
+function KeepMounted({ active, children }: { active: boolean; children: ReactNode }) {
+  const [mounted, setMounted] = useState(active);
+  if (active && !mounted) setMounted(true);
+  if (!mounted) return null;
+  return <Suspense fallback={<ViewFallback />}>{children}</Suspense>;
+}
 
 export default function App() {
   const toast = useToast();
@@ -628,25 +644,32 @@ export default function App() {
             />
           </div>
           <div className="view-pane" style={{ display: view === "calendar" && isViewVisible("calendar") ? "flex" : "none" }}>
-            <CalendarView
-              selectedPath={calendarSelectedPath}
-              onSelectPath={setCalendarSelectedPath}
-              onOpenInChat={handleOpenInChat}
-            />
+            <KeepMounted active={view === "calendar" && isViewVisible("calendar")}>
+              <CalendarView
+                selectedPath={calendarSelectedPath}
+                onSelectPath={setCalendarSelectedPath}
+                onOpenInChat={handleOpenInChat}
+              />
+            </KeepMounted>
           </div>
           <div className="view-pane" style={{ display: view === "vault" ? "flex" : "none" }}>
-            <VaultView selectedPath={vaultSelectedPath} {...vaultViewCommon} />
+            <KeepMounted active={view === "vault"}>
+              <VaultView selectedPath={vaultSelectedPath} {...vaultViewCommon} />
+            </KeepMounted>
           </div>
           <div className="view-pane" style={{ display: view === "kanban" && isViewVisible("kanban") ? "flex" : "none" }}>
-            {kanbanSelectedPath ? (
-              <VaultView selectedPath={kanbanSelectedPath} {...vaultViewCommon} />
-            ) : (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
-                Pick a board on the left.
-              </div>
-            )}
+            <KeepMounted active={view === "kanban" && isViewVisible("kanban")}>
+              {kanbanSelectedPath ? (
+                <VaultView selectedPath={kanbanSelectedPath} {...vaultViewCommon} />
+              ) : (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
+                  Pick a board on the left.
+                </div>
+              )}
+            </KeepMounted>
           </div>
           <div className="view-pane" style={{ display: view === "data" && isViewVisible("data") ? "flex" : "none" }}>
+            <KeepMounted active={view === "data" && isViewVisible("data")}>
             {dataDiagramFolder !== null ? (
               <DatabaseSchemaView
                 folder={dataDiagramFolder}
@@ -694,34 +717,43 @@ export default function App() {
                 Pick a database on the left to open its dashboard.
               </div>
             )}
+            </KeepMounted>
           </div>
           <div className="view-pane" style={{ display: view === "graph" && isViewVisible("graph") ? "flex" : "none" }}>
-            {view === "graph" && isViewVisible("graph") && (
-              <UnifiedGraphView
-              onOpenSkill={(name) => setOpenSkill(name)}
-              graphSourceFilter={graphSourceFilter}
-              onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
-              pendingFolderGraph={pendingFolderGraph}
-              onPendingFolderGraphHandled={() => setPendingFolderGraph(null)}
-              onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
-              onStartGraphIndex={handleStartGraphIndex}
-              onSpawnSession={handleSpawnSessionFromEntity}
-            />
-            )}
+            <Suspense fallback={<ViewFallback />}>
+              {view === "graph" && isViewVisible("graph") && (
+                <UnifiedGraphView
+                onOpenSkill={(name) => setOpenSkill(name)}
+                graphSourceFilter={graphSourceFilter}
+                onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
+                pendingFolderGraph={pendingFolderGraph}
+                onPendingFolderGraphHandled={() => setPendingFolderGraph(null)}
+                onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
+                onStartGraphIndex={handleStartGraphIndex}
+                onSpawnSession={handleSpawnSessionFromEntity}
+              />
+              )}
+            </Suspense>
           </div>
           <div className="view-pane" style={{ display: view === "heartbeat" && isViewVisible("heartbeat") ? "flex" : "none" }}>
-            {view === "heartbeat" && isViewVisible("heartbeat") && (
-              <HeartbeatView
-                onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
-                onOpenInVault={handleOpenInVault}
-              />
-            )}
+            <Suspense fallback={<ViewFallback />}>
+              {view === "heartbeat" && isViewVisible("heartbeat") && (
+                <HeartbeatView
+                  onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
+                  onOpenInVault={handleOpenInVault}
+                />
+              )}
+            </Suspense>
           </div>
           <div className="view-pane" style={{ display: view === "dream" && isViewVisible("dream") ? "flex" : "none" }}>
-            {view === "dream" && isViewVisible("dream") && <DreamView />}
+            <Suspense fallback={<ViewFallback />}>
+              {view === "dream" && isViewVisible("dream") && <DreamView />}
+            </Suspense>
           </div>
           <div className="view-pane" style={{ display: view === "workflows" && isViewVisible("workflows") ? "flex" : "none" }}>
-            {view === "workflows" && isViewVisible("workflows") && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
+            <Suspense fallback={<ViewFallback />}>
+              {view === "workflows" && isViewVisible("workflows") && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
+            </Suspense>
           </div>
         </main>
       </div>

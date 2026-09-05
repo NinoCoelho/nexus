@@ -252,6 +252,10 @@ export async function resumeTurnStream(
   await consumeSSEFrames(res.body, onEvent);
 }
 
+export async function cancelChatTurn(session_id: string): Promise<void> {
+  await fetch(`${BASE}/chat/${encodeURIComponent(session_id)}/cancel`, { method: "POST" });
+}
+
 /**
  * Send a message to the agent via `POST /chat` (synchronous, non-streaming mode).
  *
