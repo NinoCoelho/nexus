@@ -319,6 +319,7 @@ def _install_macos(pkg_path: Path) -> None:
 
     script = f"""#!/bin/bash
 sleep 2
+kill {os.getpid()}
 open "{pkg_path}"
 """
     script_path = UPDATE_DIR / "install.sh"
@@ -330,8 +331,6 @@ open "{pkg_path}"
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    import signal
-    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _install_windows(zip_path: Path) -> None:
@@ -362,7 +361,8 @@ del "%~f0"
         close_fds=True,
     )
     import signal
-    os.kill(os.getpid(), signal.SIGTERM)
+    import threading
+    threading.Timer(1.0, os.kill, args=(os.getpid(), signal.SIGTERM)).start()
 
 
 @router.post("/skip")

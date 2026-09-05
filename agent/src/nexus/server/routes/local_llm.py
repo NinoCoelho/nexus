@@ -9,6 +9,7 @@ GGUF — each registered as ``providers.local-<slug>`` while live.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..deps import get_agent, get_app_state
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -185,12 +188,12 @@ async def list_installed() -> list[dict[str, Any]]:
             try:
                 has_mamba = manager._gguf_has_mamba_layers(p)
             except Exception:
-                pass
+                log.debug("mamba probe failed for %s", p.name, exc_info=True)
             try:
                 mtp_draft_n = manager._gguf_mtp_draft_layers(p)
                 has_mtp = mtp_draft_n > 0
             except Exception:
-                pass
+                log.debug("mtp probe failed for %s", p.name, exc_info=True)
         results.append({
             "filename": p.name,
             "size_bytes": p.stat().st_size,
@@ -262,7 +265,7 @@ async def start_model(
         from ...ocr_server import pause as _ocr_pause
         _ocr_pause()
     except Exception:
-        pass
+        log.warning("ocr pause before model start failed", exc_info=True)
 
     model_id = manager.add_to_config(
         handle.slug, handle.port,
@@ -305,7 +308,7 @@ async def stop_model(
         from ...ocr_server import resume as _ocr_resume
         _ocr_resume()
     except Exception:
-        pass
+        log.warning("ocr resume after model change failed", exc_info=True)
 
     try:
         from ...config_file import load as load_cfg
@@ -344,7 +347,7 @@ async def stop_all_models(
         from ...ocr_server import resume as _ocr_resume
         _ocr_resume()
     except Exception:
-        pass
+        log.warning("ocr resume after model change failed", exc_info=True)
 
     try:
         from ...config_file import load as load_cfg

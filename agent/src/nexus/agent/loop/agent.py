@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
@@ -181,6 +182,59 @@ def _sanitize_loom_tool_pairs(msgs: list[lt.ChatMessage]) -> list[lt.ChatMessage
         else:
             out.append(m)
     return out if needs_repair else msgs
+
+
+def _log_loom_event(etype: str | None, ev: dict[str, Any]) -> None:
+    if etype == "error":
+        log.warning(
+            "loom event: type=error reason=%r status=%r retryable=%r message=%r",
+            ev.get("reason"),
+            ev.get("status_code"),
+            ev.get("retryable"),
+            (ev.get("message") or "")[:300],
+        )
+    elif etype == "done":
+        log.warning(
+            "loom event: type=done iters=%s model=%s in_tokens=%s out_tokens=%s stop_reason=%s",
+            ev.get("iterations"),
+            ev.get("model"),
+            ev.get("input_tokens"),
+            ev.get("output_tokens"),
+            ev.get("stop_reason"),
+        )
+    else:
+        log.debug(
+            "loom event: type=%s keys=%s",
+            etype,
+            sorted(ev.keys())[:8] if isinstance(ev, dict) else "?",
+        )
+
+
+@dataclass
+class _StreamTurnState:
+    session_id: str | None
+    model_id: str | None
+    ctx_window: int
+    user_msg_content: Any
+    adapter: Any
+    reasoning: ReasoningTracker
+    tr: StreamTranslator
+    retry_mgr: RetryManager
+    history_snapshot: list[ChatMessage]
+    loom_messages: list[lt.ChatMessage]
+    _tool_budget: int
+    _cumulative_tool_tokens: int = 0
+    _budget_hint_injected: bool = False
+    _tool_call_counts: dict[str, int] = field(default_factory=dict)
+    _call_limits: dict[str, int] = field(default_factory=dict)
+    _saw_loom_error: bool = False
+    restart: bool = False
+    finished: bool = False
+    thinking_q: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
+    q_task: asyncio.Task[str] | None = None
+    had_sink_attr: bool = False
+    loom_iter: Any = None
+    loom_task: asyncio.Task[Any] | None = None
 
 
 class Agent:
@@ -404,6 +458,97 @@ class Agent:
         attachments: list[ContentPart] | None = None,
         resume_working_messages: list[lt.ChatMessage] | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        st = await self._prepare_stream_turn(
+            user_message,
+            history=history,
+            session_id=session_id,
+            model_id=model_id,
+            attachments=attachments,
+            resume_working_messages=resume_working_messages,
+        )
+        try:
+            while st.loom_task is not None:
+                done, _pending = await asyncio.wait(
+                    {st.loom_task, st.q_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if st.q_task in done:
+                    text = st.q_task.result()
+                    if text:
+                        yield {"type": "thinking", "text": text}
+                    st.q_task = asyncio.ensure_future(st.thinking_q.get())
+                if st.loom_task not in done:
+                    continue
+                try:
+                    raw = st.loom_task.result()
+                except StopAsyncIteration:
+                    st.loom_task = None
+                    break
+                st.loom_task = asyncio.ensure_future(st.loom_iter.__anext__())
+
+                etype = raw.get("type") if isinstance(raw, dict) else getattr(raw, "type", None)
+                ev = raw if isinstance(raw, dict) else raw.model_dump()
+                _log_loom_event(etype, ev)
+
+                if etype == "content_delta":
+                    for sse_ev in st.tr.translate(ev, etype):
+                        yield sse_ev
+                    st.retry_mgr.delta_emitted = True
+
+                elif etype in ("tool_call_delta", "tool_exec_start"):
+                    for sse_ev in st.tr.translate(ev, etype):
+                        yield sse_ev
+
+                elif etype == "tool_exec_result":
+                    async for sse_ev in self._handle_tool_exec_result(st, ev):
+                        yield sse_ev
+                    if st.finished:
+                        return
+                    if st.restart:
+                        st.restart = False
+                        continue
+
+                elif etype == "limit_reached":
+                    yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
+
+                elif etype == "context_overflow":
+                    async for sse_ev in self._handle_context_overflow(st, ev):
+                        yield sse_ev
+
+                elif etype == "error":
+                    async for sse_ev in self._handle_error_event(st, ev):
+                        yield sse_ev
+                    if st.restart:
+                        st.restart = False
+                        continue
+
+                elif etype == "done":
+                    async for sse_ev in self._handle_done_event(st, ev):
+                        yield sse_ev
+        finally:
+            if st.had_sink_attr:
+                st.adapter._thinking_sink = None  # type: ignore[attr-defined]
+            st.reasoning.clear_adapter_map(st.adapter)
+            for t in (st.loom_task, st.q_task):
+                if t is not None and not t.done():
+                    t.cancel()
+            while not st.thinking_q.empty():
+                try:
+                    text = st.thinking_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if text:
+                    yield {"type": "thinking", "text": text}
+
+    async def _prepare_stream_turn(
+        self,
+        user_message: str,
+        *,
+        history: list[ChatMessage] | None,
+        session_id: str | None,
+        model_id: str | None,
+        attachments: list[ContentPart] | None,
+        resume_working_messages: list[lt.ChatMessage] | None,
+    ) -> _StreamTurnState:
         self._turn_trace = []
         self._skills_touched = []
         self._chosen_model = model_id
@@ -496,7 +641,6 @@ class Agent:
         # which the in-loop ``context_overflow`` branch below surfaces as the
         # SSE error (with the same actions payload this block used to emit).
 
-        _saw_loom_error = False
         _history_snapshot = list(_auto_compacted_history if _auto_compacted_history is not None else (history or []))
 
         adapter = getattr(self._loom, "_provider", None)
@@ -504,8 +648,6 @@ class Agent:
         reasoning.hydrate_adapter_map(adapter, stripped_history)
 
         retry_mgr = RetryManager()
-        _cumulative_tool_tokens: int = 0
-        _budget_hint_injected: bool = False
         _tool_call_counts: dict[str, int] = {}
         _call_limits: dict[str, int] = {}
         if _scrape_call_limit > 0:
@@ -543,454 +685,398 @@ class Agent:
         loom_iter = self._loom.run_turn_stream(loom_messages, model_id=model_id).__aiter__()
         loom_task: asyncio.Task[Any] | None = asyncio.ensure_future(loom_iter.__anext__())
         q_task: asyncio.Task[str] = asyncio.ensure_future(thinking_q.get())
-        try:
-          while loom_task is not None:
-            done, _pending = await asyncio.wait(
-                {loom_task, q_task}, return_when=asyncio.FIRST_COMPLETED
+
+        return _StreamTurnState(
+            session_id=session_id,
+            model_id=model_id,
+            ctx_window=ctx_window,
+            user_msg_content=user_msg_content,
+            adapter=adapter,
+            reasoning=reasoning,
+            tr=tr,
+            retry_mgr=retry_mgr,
+            history_snapshot=_history_snapshot,
+            loom_messages=loom_messages,
+            _tool_budget=_tool_budget,
+            _tool_call_counts=_tool_call_counts,
+            _call_limits=_call_limits,
+            thinking_q=thinking_q,
+            q_task=q_task,
+            had_sink_attr=had_sink_attr,
+            loom_iter=loom_iter,
+            loom_task=loom_task,
+        )
+    def _restart_loom_stream(self, st: _StreamTurnState) -> None:
+        st.tr.working_messages = _sanitize_loom_tool_pairs(st.tr.working_messages)
+        st.tr.reset_iteration()
+        st.loom_iter = self._loom.run_turn_stream(
+            st.tr.working_messages, model_id=st.model_id
+        ).__aiter__()
+        st.loom_task = asyncio.ensure_future(st.loom_iter.__anext__())
+
+    async def _handle_tool_exec_result(
+        self, st: _StreamTurnState, ev: dict[str, Any],
+    ) -> AsyncIterator[StreamEvent]:
+        result_text = ev.get("text") or ""
+        tool_name = ev.get("name", "")
+
+        parked_request_id = parse_parked_sentinel(result_text)
+        if parked_request_id:
+            for sse_ev in st.tr.translate(ev, "tool_exec_result"):
+                yield sse_ev
+            st.finished = True
+            return
+
+        tcid = ev.get("tool_call_id") or st.tr.last_tool_exec_id or ""
+        tc_name = ev.get("name") or st.tr.last_tool_exec_name or tool_name
+        st.tr.working_messages.append(
+            lt.ChatMessage(
+                role=lt.Role.TOOL,
+                content=result_text,
+                tool_call_id=tcid,
+                name=tc_name,
             )
-            if q_task in done:
-                text = q_task.result()
-                if text:
-                    yield {"type": "thinking", "text": text}
-                q_task = asyncio.ensure_future(thinking_q.get())
-            if loom_task not in done:
-                continue
-            try:
-                raw = loom_task.result()
-            except StopAsyncIteration:
-                loom_task = None
-                break
-            loom_task = asyncio.ensure_future(loom_iter.__anext__())
+        )
 
-            etype = raw.get("type") if isinstance(raw, dict) else getattr(raw, "type", None)
-            if isinstance(raw, dict):
-                ev = raw
-            else:
-                ev = raw.model_dump()
-
-            if etype == "error":
+        bc = check_tool_budget(
+            st._cumulative_tool_tokens, result_text,
+            budget=st._tool_budget,
+            call_counts=st._tool_call_counts,
+            tool_name=tool_name,
+            call_limits=st._call_limits,
+        )
+        st._cumulative_tool_tokens = bc.cumulative_tool_tokens
+        if bc.exceeded and not st._budget_hint_injected:
+            st._budget_hint_injected = True
+            from ..context import TOOL_BUDGET_EXCEEDED
+            TOOL_BUDGET_EXCEEDED.set(True)
+            if bc.call_limit_exceeded:
+                lim_tool, lim_count = bc.call_limit_exceeded
                 log.warning(
-                    "loom event: type=error reason=%r status=%r retryable=%r message=%r",
-                    ev.get("reason"),
-                    ev.get("status_code"),
-                    ev.get("retryable"),
-                    (ev.get("message") or "")[:300],
-                )
-            elif etype == "done":
-                log.warning(
-                    "loom event: type=done iters=%s model=%s in_tokens=%s out_tokens=%s stop_reason=%s",
-                    ev.get("iterations"),
-                    ev.get("model"),
-                    ev.get("input_tokens"),
-                    ev.get("output_tokens"),
-                    ev.get("stop_reason"),
+                    "Tool call limit exceeded: %d %s calls in turn",
+                    lim_count, lim_tool,
                 )
             else:
-                log.debug(
-                    "loom event: type=%s keys=%s",
-                    etype,
-                    sorted(ev.keys())[:8] if isinstance(ev, dict) else "?",
+                log.warning(
+                    "Tool budget exceeded: %d/%d tokens after %s",
+                    bc.cumulative_tool_tokens, st._tool_budget, tool_name,
                 )
 
-            if etype == "content_delta":
-                for sse_ev in tr.translate(ev, etype):
-                    yield sse_ev
-                retry_mgr.delta_emitted = True
-
-            elif etype == "tool_call_delta":
-                for sse_ev in tr.translate(ev, etype):
-                    yield sse_ev
-
-            elif etype == "tool_exec_start":
-                for sse_ev in tr.translate(ev, etype):
-                    yield sse_ev
-
-            elif etype == "tool_exec_result":
-                result_text = ev.get("text") or ""
-                tool_name = ev.get("name", "")
-
-                parked_request_id = parse_parked_sentinel(result_text)
-                if parked_request_id:
-                    for sse_ev in tr.translate(ev, etype):
-                        yield sse_ev
-                    return
-
-                tcid = ev.get("tool_call_id") or tr.last_tool_exec_id or ""
-                tc_name = ev.get("name") or tr.last_tool_exec_name or tool_name
-                tr.working_messages.append(
-                    lt.ChatMessage(
-                        role=lt.Role.TOOL,
-                        content=result_text,
-                        tool_call_id=tcid,
-                        name=tc_name,
+        if st.ctx_window > 0 and len(st.tr.working_messages) > 6:
+            from .compact import compact_failed_scrapes, auto_compact
+            from .overflow import estimate_tokens, _TOOLS_AND_SYSTEM_OVERHEAD
+            from .zones import classify_zone
+            class _WM:
+                pass
+            _wm_compat = []
+            for _wm in st.tr.working_messages:
+                _o = _WM()
+                _o.content = _wm.content
+                _o.role = _wm.role
+                _o.tool_calls = getattr(_wm, "tool_calls", None)
+                _wm_compat.append(_o)
+            _est_tok = estimate_tokens(_wm_compat) if _wm_compat else 0
+            _zone = classify_zone(_est_tok, st.ctx_window, tools_overhead=_TOOLS_AND_SYSTEM_OVERHEAD)
+            _need_loom_restart = False
+            if _zone in ("yellow", "orange", "red"):
+                from .._loom_bridge.message import _loom_to_nexus_message
+                _nexus_wm = [_loom_to_nexus_message(m) for m in st.tr.working_messages]
+                _nexus_wm, _n_cleaned = compact_failed_scrapes(_nexus_wm)
+                if _n_cleaned > 0:
+                    log.info(
+                        "Mid-turn: cleaned %d failed scrape results (zone=%s, %dK tokens)",
+                        _n_cleaned, _zone, _est_tok // 1024,
                     )
-                )
-
-                bc = check_tool_budget(
-                    _cumulative_tool_tokens, result_text,
-                    budget=_tool_budget,
-                    call_counts=_tool_call_counts,
-                    tool_name=tool_name,
-                    call_limits=_call_limits,
-                )
-                _cumulative_tool_tokens = bc.cumulative_tool_tokens
-                if bc.exceeded and not _budget_hint_injected:
-                    _budget_hint_injected = True
-                    from ..context import TOOL_BUDGET_EXCEEDED
-                    TOOL_BUDGET_EXCEEDED.set(True)
-                    if bc.call_limit_exceeded:
-                        lim_tool, lim_count = bc.call_limit_exceeded
-                        log.warning(
-                            "Tool call limit exceeded: %d %s calls in turn",
-                            lim_count, lim_tool,
-                        )
-                    else:
-                        log.warning(
-                            "Tool budget exceeded: %d/%d tokens after %s",
-                            bc.cumulative_tool_tokens, _tool_budget, tool_name,
-                        )
-
-                if ctx_window > 0 and len(tr.working_messages) > 6:
-                    from .compact import compact_failed_scrapes, auto_compact
-                    from .overflow import estimate_tokens, _TOOLS_AND_SYSTEM_OVERHEAD
-                    from .zones import classify_zone
-                    class _WM:
-                        pass
-                    _wm_compat = []
-                    for _wm in tr.working_messages:
-                        _o = _WM()
-                        _o.content = _wm.content
-                        _o.role = _wm.role
-                        _o.tool_calls = getattr(_wm, "tool_calls", None)
-                        _wm_compat.append(_o)
-                    _est_tok = estimate_tokens(_wm_compat) if _wm_compat else 0
-                    _zone = classify_zone(_est_tok, ctx_window, tools_overhead=_TOOLS_AND_SYSTEM_OVERHEAD)
-                    _need_loom_restart = False
-                    if _zone in ("yellow", "orange", "red"):
-                        from .._loom_bridge.message import _loom_to_nexus_message
-                        _nexus_wm = [_loom_to_nexus_message(m) for m in tr.working_messages]
-                        _nexus_wm, _n_cleaned = compact_failed_scrapes(_nexus_wm)
-                        if _n_cleaned > 0:
-                            log.info(
-                                "Mid-turn: cleaned %d failed scrape results (zone=%s, %dK tokens)",
-                                _n_cleaned, _zone, _est_tok // 1024,
-                            )
-                            _need_loom_restart = True
-                            tr.working_messages = self._rebuild_loom_messages(_nexus_wm, tr.working_messages)
-                    if _zone in ("orange", "red"):
-                        if not _need_loom_restart:
-                            from .._loom_bridge.message import _loom_to_nexus_message
-                            _nexus_wm = [_loom_to_nexus_message(m) for m in tr.working_messages]
-                        _nexus_wm, _mid_report = auto_compact(_nexus_wm)
-                        if _mid_report.compacted > 0:
-                            log.info(
-                                "Mid-turn: auto_compact compacted=%d saved=%d bytes (zone=%s)",
-                                _mid_report.compacted, _mid_report.saved_bytes, _zone,
-                            )
-                            _need_loom_restart = True
-                            tr.working_messages = self._rebuild_loom_messages(_nexus_wm, tr.working_messages)
-                    if _need_loom_restart:
-                        tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
-                        tr.reset_iteration()
-                        loom_iter = self._loom.run_turn_stream(
-                            tr.working_messages, model_id=model_id
-                        ).__aiter__()
-                        loom_task = asyncio.ensure_future(loom_iter.__anext__())
-                        continue
-
-                tr.reset_iteration()
-                retry_mgr.delta_emitted = False
-                retry_mgr.reset_all()
-                preview = result_text[:200]
-                self._on_event("tool_result", {"name": tool_name, "preview": preview})
-                yield {
-                    "type": "tool_exec_result",
-                    "name": tool_name,
-                    "result_preview": preview,
-                }
-
-            elif etype == "limit_reached":
-                yield {"type": "limit_reached", "iterations": ev.get("iterations", 0)}
-
-            elif etype == "context_overflow":
-                self._log_llm_error(
-                    session_id=session_id,
-                    error_type="context_overflow",
-                    message=ev.get("message", "context overflow"),
-                    model_id=model_id,
-                    tokens_est=ev.get("estimated_input_tokens", 0),
-                    ctx_window=ev.get("context_window", 0),
-                )
-                yield {
-                    "type": "error",
-                    "detail": ev.get("message", "context overflow"),
-                    "reason": "context_overflow",
-                    "retryable": False,
-                    "status_code": None,
-                    "estimated_input_tokens": ev.get("estimated_input_tokens", 0),
-                    "context_window": ev.get("context_window", 0),
-                    "actions": ["compact_history", "new_session"],
-                }
-
-            elif etype == "error":
-                retryable = bool(ev.get("retryable", False))
-
-                if retry_mgr.should_clean_retry(ev):
-                    try:
-                        await loom_task
-                    except StopAsyncIteration:
-                        pass
-                    except Exception:  # noqa: BLE001
-                        pass
-                    delay = retry_mgr.get_backoff()
-                    log.warning(
-                        "loom auto-retry: attempt=%d/%d delay=%.1fs reason=%r "
-                        "(message=%r)",
-                        retry_mgr.attempts + 1, RetryManager.MAX_RETRIES,
-                        delay, ev.get("reason"),
-                        (ev.get("message") or "")[:200],
-                    )
-                    yield {
-                        "type": "reconnecting",
-                        "attempt": retry_mgr.attempts + 1,
-                        "max_attempts": RetryManager.MAX_RETRIES,
-                        "delay_seconds": delay,
-                        "reason": ev.get("reason") or "",
-                    }
-                    await asyncio.sleep(delay)
-                    retry_mgr.increment()
-                    tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
-                    tr.reset_iteration()
-                    retry_mgr.delta_emitted = False
-                    loom_iter = self._loom.run_turn_stream(
-                        tr.working_messages, model_id=model_id
-                    ).__aiter__()
-                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
-                    continue
-
-                if retry_mgr.should_mid_stream_retry(ev):
-                    try:
-                        await loom_task
-                    except StopAsyncIteration:
-                        pass
-                    except Exception:  # noqa: BLE001
-                        pass
-                    tr.materialise_assistant_if_needed()
-                    last_asst = tr.working_messages[-1] if tr.working_messages else None
-                    if (
-                        last_asst
-                        and last_asst.role == lt.Role.ASSISTANT
-                        and last_asst.tool_calls
-                    ):
-                        for _tc in last_asst.tool_calls:
-                            tr.working_messages.append(lt.ChatMessage(
-                                role=lt.Role.TOOL,
-                                content=f"[Connection interrupted before {_tc.name} could execute]",
-                                tool_call_id=_tc.id,
-                                name=_tc.name,
-                            ))
-                    tr.working_messages.append(lt.ChatMessage(
-                        role=lt.Role.USER,
-                        content="[Connection was interrupted. Continue your response from where you left off.]",
-                    ))
-                    delay = retry_mgr.get_backoff()
-                    log.warning(
-                        "loom mid-stream retry: attempt=%d/%d delay=%.1fs reason=%r "
-                        "partial_len=%d",
-                        retry_mgr.attempts + 1, RetryManager.MAX_RETRIES,
-                        delay, ev.get("reason"),
-                        len(tr.full_text),
-                    )
-                    yield {
-                        "type": "reconnecting",
-                        "attempt": retry_mgr.attempts + 1,
-                        "max_attempts": RetryManager.MAX_RETRIES,
-                        "delay_seconds": delay,
-                        "reason": "mid_stream_disconnect",
-                    }
-                    await asyncio.sleep(delay)
-                    retry_mgr.increment()
-                    tr.working_messages = _sanitize_loom_tool_pairs(tr.working_messages)
-                    tr.reset_iteration()
-                    retry_mgr.delta_emitted = False
-                    loom_iter = self._loom.run_turn_stream(
-                        tr.working_messages, model_id=model_id
-                    ).__aiter__()
-                    loom_task = asyncio.ensure_future(loom_iter.__anext__())
-                    continue
-
-                if retry_mgr.should_post_retry_compaction(ev):
-                    from .compact import auto_compact
+                    _need_loom_restart = True
+                    st.tr.working_messages = self._rebuild_loom_messages(_nexus_wm, st.tr.working_messages)
+            if _zone in ("orange", "red"):
+                if not _need_loom_restart:
                     from .._loom_bridge.message import _loom_to_nexus_message
-
-                    _nexus_wm = [_loom_to_nexus_message(m) for m in tr.working_messages]
-                    compacted_wm, compact_report = auto_compact(_nexus_wm)
-                    if compact_report.compacted > 0:
-                        try:
-                            await loom_task
-                        except StopAsyncIteration:
-                            pass
-                        except Exception:  # noqa: BLE001
-                            pass
-                        retry_mgr.mark_post_compaction()
-                        log.warning(
-                            "Post-retry compaction: compacted=%d saved=%d bytes, "
-                            "retrying with %d→%d messages",
-                            compact_report.compacted, compact_report.saved_bytes,
-                            len(tr.working_messages), len(compacted_wm),
-                        )
-                        yield {
-                            "type": "reconnecting",
-                            "attempt": RetryManager.MAX_RETRIES + 1,
-                            "max_attempts": RetryManager.MAX_RETRIES + 1,
-                            "delay_seconds": 2.0,
-                            "reason": "post_retry_compaction",
-                        }
-                        await asyncio.sleep(2.0)
-                        retry_mgr.reset_all()
-                        tr.working_messages = _sanitize_loom_tool_pairs(
-                            self._rebuild_loom_messages(compacted_wm, tr.working_messages)
-                        )
-                        tr.reset_iteration()
-                        retry_mgr.delta_emitted = False
-                        loom_iter = self._loom.run_turn_stream(
-                            tr.working_messages, model_id=model_id
-                        ).__aiter__()
-                        loom_task = asyncio.ensure_future(loom_iter.__anext__())
-                        continue
-
-                _saw_loom_error = True
-                self._log_llm_error(
-                    session_id=session_id,
-                    error_type=ev.get("reason") or "llm_error",
-                    message=(ev.get("message") or "")[:2000],
-                    retryable=retryable,
-                    retry_attempt=retry_mgr.attempts if retry_mgr.attempts > 0 else None,
-                    model_id=model_id,
-                    tokens_est=check_overflow(loom_messages, context_window=ctx_window or 0).estimated_input_tokens if ctx_window > 0 else None,
-                    ctx_window=ctx_window,
-                )
-                error_reason = ev.get("reason") or ""
-                if error_reason == "rate_limit" and session_id and self._sessions is not None:
-                    try:
-                        from datetime import datetime, timezone, timedelta
-                        cooldown = 60
-                        retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
-                        wm_json = json.dumps(
-                            [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
-                              "content": m.content if isinstance(m.content, str) else json.dumps(m.content, default=str),
-                              "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in (m.tool_calls or [])] if m.tool_calls else None,
-                              "tool_call_id": m.tool_call_id, "name": m.name}
-                             for m in tr.working_messages],
-                            default=str,
-                        )
-                        self._sessions.pause_turn(
-                            session_id,
-                            user_message=user_msg_content,
-                            working_messages_json=wm_json,
-                            retry_after_iso=retry_after.isoformat(),
-                            model_id=model_id,
-                            error_detail=(ev.get("message") or "")[:500],
-                        )
-                        yield {
-                            "type": "paused_for_cooldown",
-                            "retry_after": retry_after.isoformat(),
-                            "estimated_seconds": cooldown,
-                            "reason": error_reason,
-                        }
-                    except Exception:
-                        log.debug("failed to persist paused turn", exc_info=True)
-                yield tr.format_error(ev)
-
-            elif etype == "done":
-                model_used = ev.get("model") or self._chosen_model
-                reply_text = tr.full_text
-                stop_reason = ev.get("stop_reason")
-                if stop_reason == "length":
-                    log.warning(
-                        "turn ended truncated (model=%s, stop_reason=length, reply_len=%d)",
-                        model_used, len(reply_text),
+                    _nexus_wm = [_loom_to_nexus_message(m) for m in st.tr.working_messages]
+                _nexus_wm, _mid_report = auto_compact(_nexus_wm)
+                if _mid_report.compacted > 0:
+                    log.info(
+                        "Mid-turn: auto_compact compacted=%d saved=%d bytes (zone=%s)",
+                        _mid_report.compacted, _mid_report.saved_bytes, _zone,
                     )
-                    yield {
-                        "type": "error",
-                        "detail": "Response was truncated — the model hit its output limit.",
-                        "reason": "length",
-                        "retryable": True,
-                        "status_code": None,
-                    }
-                elif not reply_text and stop_reason not in ("tool_use",) and not _saw_loom_error:
-                    usage_in = ev.get("input_tokens") or 0
-                    usage_out = ev.get("output_tokens") or 0
-                    log.warning(
-                        "turn ended with empty reply "
-                        "(model=%s, stop_reason=%s, iters=%s, in_tokens=%s, out_tokens=%s)",
-                        model_used, stop_reason, ev.get("iterations"),
-                        usage_in, usage_out,
-                    )
-                    self._log_llm_error(
-                        session_id=session_id,
-                        error_type="empty_response",
-                        message=f"stop_reason={stop_reason} iters={ev.get('iterations')} in={usage_in} out={usage_out}",
-                        model_id=model_id,
-                        tokens_est=usage_in,
-                        ctx_window=ctx_window,
-                    )
-                    est_in = check_overflow(
-                        loom_messages, context_window=ctx_window or 0
-                    ).estimated_input_tokens
-                    likely_overflow = ctx_window > 0 and est_in > ctx_window * 70 // 100
-                    err: dict[str, Any] = {
-                        "type": "error",
-                        "detail": "The model returned an empty response.",
-                        "reason": "empty_response",
-                        "retryable": True,
-                        "status_code": None,
-                    }
-                    if likely_overflow:
-                        err["detail"] += (
-                            f" Likely cause: history is at ~{est_in:,}/{ctx_window:,} "
-                            f"tokens — compact the session and try again."
-                        )
-                        err["likely_cause"] = "context_overflow"
-                        err["estimated_input_tokens"] = est_in
-                        err["context_window"] = ctx_window
-                        err["actions"] = ["compact_history", "new_session"]
-                    yield err
-                if not tr.materialised_for_iter:
-                    reasoning.capture(adapter)
+                    _need_loom_restart = True
+                    st.tr.working_messages = self._rebuild_loom_messages(_nexus_wm, st.tr.working_messages)
+            if _need_loom_restart:
+                self._restart_loom_stream(st)
+                st.restart = True
+                return
 
-                persisted_messages = tr.build_persisted_messages(ev)
-                reasoning.stamp_onto(persisted_messages, _history_snapshot)
+        st.tr.reset_iteration()
+        st.retry_mgr.delta_emitted = False
+        st.retry_mgr.reset_all()
+        preview = result_text[:200]
+        self._on_event("tool_result", {"name": tool_name, "preview": preview})
+        yield {
+            "type": "tool_exec_result",
+            "name": tool_name,
+            "result_preview": preview,
+        }
 
-                yield {
-                    "type": "done",
-                    "session_id": session_id,
-                    "reply": reply_text,
-                    "trace": list(self._turn_trace),
-                    "skills_touched": ev.get("skills_touched") or list(self._skills_touched),
-                    "iterations": ev.get("iterations", 0),
-                    "messages": persisted_messages,
-                    "usage": {
-                        "input_tokens": ev.get("input_tokens", 0),
-                        "output_tokens": ev.get("output_tokens", 0),
-                        "tool_calls": ev.get("tool_calls", 0),
-                        "model": model_used,
-                    },
-                }
-        finally:
-            if had_sink_attr:
-                adapter._thinking_sink = None  # type: ignore[attr-defined]
-            reasoning.clear_adapter_map(adapter)
-            for t in (loom_task, q_task):
-                if t is not None and not t.done():
-                    t.cancel()
-            while not thinking_q.empty():
+    async def _handle_context_overflow(
+        self, st: _StreamTurnState, ev: dict[str, Any],
+    ) -> AsyncIterator[StreamEvent]:
+        self._log_llm_error(
+            session_id=st.session_id,
+            error_type="context_overflow",
+            message=ev.get("message", "context overflow"),
+            model_id=st.model_id,
+            tokens_est=ev.get("estimated_input_tokens", 0),
+            ctx_window=ev.get("context_window", 0),
+        )
+        yield {
+            "type": "error",
+            "detail": ev.get("message", "context overflow"),
+            "reason": "context_overflow",
+            "retryable": False,
+            "status_code": None,
+            "estimated_input_tokens": ev.get("estimated_input_tokens", 0),
+            "context_window": ev.get("context_window", 0),
+            "actions": ["compact_history", "new_session"],
+        }
+
+    async def _handle_error_event(
+        self, st: _StreamTurnState, ev: dict[str, Any],
+    ) -> AsyncIterator[StreamEvent]:
+        retryable = bool(ev.get("retryable", False))
+
+        if st.retry_mgr.should_clean_retry(ev):
+            try:
+                await st.loom_task
+            except StopAsyncIteration:
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+            delay = st.retry_mgr.get_backoff()
+            log.warning(
+                "loom auto-retry: attempt=%d/%d delay=%.1fs reason=%r "
+                "(message=%r)",
+                st.retry_mgr.attempts + 1, RetryManager.MAX_RETRIES,
+                delay, ev.get("reason"),
+                (ev.get("message") or "")[:200],
+            )
+            yield {
+                "type": "reconnecting",
+                "attempt": st.retry_mgr.attempts + 1,
+                "max_attempts": RetryManager.MAX_RETRIES,
+                "delay_seconds": delay,
+                "reason": ev.get("reason") or "",
+            }
+            await asyncio.sleep(delay)
+            st.retry_mgr.increment()
+            st.retry_mgr.delta_emitted = False
+            self._restart_loom_stream(st)
+            st.restart = True
+            return
+
+        if st.retry_mgr.should_mid_stream_retry(ev):
+            try:
+                await st.loom_task
+            except StopAsyncIteration:
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+            st.tr.materialise_assistant_if_needed()
+            last_asst = st.tr.working_messages[-1] if st.tr.working_messages else None
+            if (
+                last_asst
+                and last_asst.role == lt.Role.ASSISTANT
+                and last_asst.tool_calls
+            ):
+                for _tc in last_asst.tool_calls:
+                    st.tr.working_messages.append(lt.ChatMessage(
+                        role=lt.Role.TOOL,
+                        content=f"[Connection interrupted before {_tc.name} could execute]",
+                        tool_call_id=_tc.id,
+                        name=_tc.name,
+                    ))
+            st.tr.working_messages.append(lt.ChatMessage(
+                role=lt.Role.USER,
+                content="[Connection was interrupted. Continue your response from where you left off.]",
+            ))
+            delay = st.retry_mgr.get_backoff()
+            log.warning(
+                "loom mid-stream retry: attempt=%d/%d delay=%.1fs reason=%r "
+                "partial_len=%d",
+                st.retry_mgr.attempts + 1, RetryManager.MAX_RETRIES,
+                delay, ev.get("reason"),
+                len(st.tr.full_text),
+            )
+            yield {
+                "type": "reconnecting",
+                "attempt": st.retry_mgr.attempts + 1,
+                "max_attempts": RetryManager.MAX_RETRIES,
+                "delay_seconds": delay,
+                "reason": "mid_stream_disconnect",
+            }
+            await asyncio.sleep(delay)
+            st.retry_mgr.increment()
+            st.retry_mgr.delta_emitted = False
+            self._restart_loom_stream(st)
+            st.restart = True
+            return
+
+        if st.retry_mgr.should_post_retry_compaction(ev):
+            from .compact import auto_compact
+            from .._loom_bridge.message import _loom_to_nexus_message
+
+            _nexus_wm = [_loom_to_nexus_message(m) for m in st.tr.working_messages]
+            compacted_wm, compact_report = auto_compact(_nexus_wm)
+            if compact_report.compacted > 0:
                 try:
-                    text = thinking_q.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if text:
-                    yield {"type": "thinking", "text": text}
+                    await st.loom_task
+                except StopAsyncIteration:
+                    pass
+                except Exception:  # noqa: BLE001
+                    pass
+                st.retry_mgr.mark_post_compaction()
+                log.warning(
+                    "Post-retry compaction: compacted=%d saved=%d bytes, "
+                    "retrying with %d→%d messages",
+                    compact_report.compacted, compact_report.saved_bytes,
+                    len(st.tr.working_messages), len(compacted_wm),
+                )
+                yield {
+                    "type": "reconnecting",
+                    "attempt": RetryManager.MAX_RETRIES + 1,
+                    "max_attempts": RetryManager.MAX_RETRIES + 1,
+                    "delay_seconds": 2.0,
+                    "reason": "post_retry_compaction",
+                }
+                await asyncio.sleep(2.0)
+                st.retry_mgr.reset_all()
+                st.tr.working_messages = self._rebuild_loom_messages(
+                    compacted_wm, st.tr.working_messages
+                )
+                st.retry_mgr.delta_emitted = False
+                self._restart_loom_stream(st)
+                st.restart = True
+                return
+
+        st._saw_loom_error = True
+        self._log_llm_error(
+            session_id=st.session_id,
+            error_type=ev.get("reason") or "llm_error",
+            message=(ev.get("message") or "")[:2000],
+            retryable=retryable,
+            retry_attempt=st.retry_mgr.attempts if st.retry_mgr.attempts > 0 else None,
+            model_id=st.model_id,
+            tokens_est=check_overflow(st.loom_messages, context_window=st.ctx_window or 0).estimated_input_tokens if st.ctx_window > 0 else None,
+            ctx_window=st.ctx_window,
+        )
+        error_reason = ev.get("reason") or ""
+        if error_reason == "rate_limit" and st.session_id and self._sessions is not None:
+            try:
+                from datetime import datetime, timezone, timedelta
+                cooldown = 60
+                retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+                wm_json = json.dumps(
+                    [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
+                      "content": m.content if isinstance(m.content, str) else json.dumps(m.content, default=str),
+                      "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in (m.tool_calls or [])] if m.tool_calls else None,
+                      "tool_call_id": m.tool_call_id, "name": m.name}
+                     for m in st.tr.working_messages],
+                    default=str,
+                )
+                self._sessions.pause_turn(
+                    st.session_id,
+                    user_message=st.user_msg_content,
+                    working_messages_json=wm_json,
+                    retry_after_iso=retry_after.isoformat(),
+                    model_id=st.model_id,
+                    error_detail=(ev.get("message") or "")[:500],
+                )
+                yield {
+                    "type": "paused_for_cooldown",
+                    "retry_after": retry_after.isoformat(),
+                    "estimated_seconds": cooldown,
+                    "reason": error_reason,
+                }
+            except Exception:
+                log.debug("failed to persist paused turn", exc_info=True)
+        yield st.tr.format_error(ev)
+
+    async def _handle_done_event(
+        self, st: _StreamTurnState, ev: dict[str, Any],
+    ) -> AsyncIterator[StreamEvent]:
+        model_used = ev.get("model") or self._chosen_model
+        reply_text = st.tr.full_text
+        stop_reason = ev.get("stop_reason")
+        if stop_reason == "length":
+            log.warning(
+                "turn ended truncated (model=%s, stop_reason=length, reply_len=%d)",
+                model_used, len(reply_text),
+            )
+            yield {
+                "type": "error",
+                "detail": "Response was truncated — the model hit its output limit.",
+                "reason": "length",
+                "retryable": True,
+                "status_code": None,
+            }
+        elif not reply_text and stop_reason not in ("tool_use",) and not st._saw_loom_error:
+            usage_in = ev.get("input_tokens") or 0
+            usage_out = ev.get("output_tokens") or 0
+            log.warning(
+                "turn ended with empty reply "
+                "(model=%s, stop_reason=%s, iters=%s, in_tokens=%s, out_tokens=%s)",
+                model_used, stop_reason, ev.get("iterations"),
+                usage_in, usage_out,
+            )
+            self._log_llm_error(
+                session_id=st.session_id,
+                error_type="empty_response",
+                message=f"stop_reason={stop_reason} iters={ev.get('iterations')} in={usage_in} out={usage_out}",
+                model_id=st.model_id,
+                tokens_est=usage_in,
+                ctx_window=st.ctx_window,
+            )
+            est_in = check_overflow(
+                st.loom_messages, context_window=st.ctx_window or 0
+            ).estimated_input_tokens
+            likely_overflow = st.ctx_window > 0 and est_in > st.ctx_window * 70 // 100
+            err: dict[str, Any] = {
+                "type": "error",
+                "detail": "The model returned an empty response.",
+                "reason": "empty_response",
+                "retryable": True,
+                "status_code": None,
+            }
+            if likely_overflow:
+                err["detail"] += (
+                    f" Likely cause: history is at ~{est_in:,}/{st.ctx_window:,} "
+                    f"tokens — compact the session and try again."
+                )
+                err["likely_cause"] = "context_overflow"
+                err["estimated_input_tokens"] = est_in
+                err["context_window"] = st.ctx_window
+                err["actions"] = ["compact_history", "new_session"]
+            yield err
+        if not st.tr.materialised_for_iter:
+            st.reasoning.capture(st.adapter)
+
+        persisted_messages = st.tr.build_persisted_messages(ev)
+        st.reasoning.stamp_onto(persisted_messages, st.history_snapshot)
+
+        yield {
+            "type": "done",
+            "session_id": st.session_id,
+            "reply": reply_text,
+            "trace": list(self._turn_trace),
+            "skills_touched": ev.get("skills_touched") or list(self._skills_touched),
+            "iterations": ev.get("iterations", 0),
+            "messages": persisted_messages,
+            "usage": {
+                "input_tokens": ev.get("input_tokens", 0),
+                "output_tokens": ev.get("output_tokens", 0),
+                "tool_calls": ev.get("tool_calls", 0),
+                "model": model_used,
+            },
+        }
 
     async def continue_after_hitl(
         self,

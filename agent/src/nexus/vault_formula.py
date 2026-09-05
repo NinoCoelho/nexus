@@ -36,20 +36,20 @@ def _get_functions() -> dict[str, Any]:
         return _FUNCTIONS
 
     def _if(args: list) -> Any:
-        return args[1] if _truthy(args[0]) else args[2] if len(args) > 2 else ""
+        return args[1] if truthy(args[0]) else args[2] if len(args) > 2 else ""
 
     def _round(args: list) -> float:
-        digits = _to_num(args[1]) if len(args) > 1 else 0
-        return round(_to_num(args[0]), int(digits))
+        digits = to_num(args[1]) if len(args) > 1 else 0
+        return round(to_num(args[0]), int(digits))
 
     def _abs(args: list) -> float:
-        return abs(_to_num(args[0]))
+        return abs(to_num(args[0]))
 
     def _min(args: list) -> float:
-        return min(_to_num(a) for a in args)
+        return min(to_num(a) for a in args)
 
     def _max(args: list) -> float:
-        return max(_to_num(a) for a in args)
+        return max(to_num(a) for a in args)
 
     def _coalesce(args: list) -> Any:
         for a in args:
@@ -76,7 +76,7 @@ def _get_functions() -> dict[str, Any]:
     return _FUNCTIONS
 
 
-def _to_num(v: Any) -> float:
+def to_num(v: Any) -> float:
     if isinstance(v, (int, float)):
         return float(v)
     if v is None or v == "":
@@ -87,7 +87,7 @@ def _to_num(v: Any) -> float:
         return 0.0
 
 
-def _truthy(v: Any) -> bool:
+def truthy(v: Any) -> bool:
     if v is None:
         return False
     if isinstance(v, (int, float)):
@@ -189,7 +189,7 @@ def _parse_or(p: _Parser, row: dict[str, Any]) -> Any:
         if t and t.kind == "id" and t.value == "OR":
             p.eat()
             rhs = _parse_and(p, row)
-            if _truthy(lhs) or _truthy(rhs):
+            if truthy(lhs) or truthy(rhs):
                 lhs = 1
             else:
                 lhs = 0
@@ -205,7 +205,7 @@ def _parse_and(p: _Parser, row: dict[str, Any]) -> Any:
         if t and t.kind == "id" and t.value == "AND":
             p.eat()
             rhs = _parse_comparison(p, row)
-            if _truthy(lhs) and _truthy(rhs):
+            if truthy(lhs) and truthy(rhs):
                 lhs = 1
             else:
                 lhs = 0
@@ -231,8 +231,8 @@ def _parse_comparison(p: _Parser, row: dict[str, Any]) -> Any:
         op = t.value
         p.eat()
         rhs = _parse_addition(p, row)
-        ln = _to_num(lhs) if not isinstance(lhs, str) else lhs
-        rn = _to_num(rhs) if not isinstance(rhs, str) else rhs
+        ln = to_num(lhs) if not isinstance(lhs, str) else lhs
+        rn = to_num(rhs) if not isinstance(rhs, str) else rhs
         return 1 if _CMP_OPS[op](ln, rn) else 0
     return lhs
 
@@ -249,9 +249,9 @@ def _parse_addition(p: _Parser, row: dict[str, Any]) -> Any:
                 if isinstance(lhs, str) or isinstance(rhs, str):
                     lhs = str(lhs) + str(rhs)
                 else:
-                    lhs = _to_num(lhs) + _to_num(rhs)
+                    lhs = to_num(lhs) + to_num(rhs)
             else:
-                lhs = _to_num(lhs) - _to_num(rhs)
+                lhs = to_num(lhs) - to_num(rhs)
         else:
             break
     return lhs
@@ -264,8 +264,8 @@ def _parse_multiplication(p: _Parser, row: dict[str, Any]) -> Any:
         if t and t.kind == "op" and t.value in ("*", "/", "%"):
             op = t.value
             p.eat()
-            rhs = _to_num(_parse_unary(p, row))
-            ln = _to_num(lhs)
+            rhs = to_num(_parse_unary(p, row))
+            ln = to_num(lhs)
             if op == "*":
                 lhs = ln * rhs
             elif op == "/":
@@ -281,11 +281,11 @@ def _parse_unary(p: _Parser, row: dict[str, Any]) -> Any:
     t = p.peek()
     if t and t.kind == "op" and t.value == "-":
         p.eat()
-        return -_to_num(_parse_unary(p, row))
+        return -to_num(_parse_unary(p, row))
     if t and t.kind == "id" and t.value == "NOT":
         p.eat()
         val = _parse_unary(p, row)
-        return 0 if _truthy(val) else 1
+        return 0 if truthy(val) else 1
     return _parse_call(p, row)
 
 

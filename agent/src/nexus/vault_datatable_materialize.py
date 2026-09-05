@@ -12,6 +12,7 @@ from ._vault_datatable_core import (
     read_table,
 )
 from .vault_datatable_schema import add_field, create_table
+from .vault_formula import to_num, truthy
 
 
 def resolve_ref(host_path: str, target_table: str) -> str:
@@ -117,7 +118,7 @@ def materialize(
             if filter_expr:
                 filtered = [
                     r for r in target_rows
-                    if _truthy_materialize(vault_formula.eval_formula(filter_expr, r))
+                    if truthy(vault_formula.eval_formula(filter_expr, r))
                 ]
             else:
                 filtered = target_rows
@@ -141,7 +142,7 @@ def materialize(
                 if not group:
                     row[rf["name"]] = 0 if agg == "count" else ""
                     continue
-                nums = [_to_num_materialize(v) for v in group]
+                nums = [to_num(v) for v in group]
                 row[rf["name"]] = _aggregate(nums, agg)
 
     for f in formula_flds:
@@ -150,27 +151,6 @@ def materialize(
             row[f["name"]] = vault_formula.eval_formula(expr, row)
 
     return enriched
-
-
-def _to_num_materialize(v: Any) -> float:
-    if isinstance(v, (int, float)):
-        return float(v)
-    if v is None or v == "":
-        return 0.0
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def _truthy_materialize(v: Any) -> bool:
-    if v is None:
-        return False
-    if isinstance(v, (int, float)):
-        return v != 0
-    if isinstance(v, str):
-        return v != ""
-    return bool(v)
 
 
 def _aggregate(values: list[float], fn: str) -> Any:

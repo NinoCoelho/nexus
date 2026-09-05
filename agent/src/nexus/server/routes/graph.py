@@ -39,6 +39,7 @@ def _fts_hits(query: str, limit: int) -> list[dict]:
             vault_search.rebuild_from_disk()
         return vault_search.search(query, limit=limit)
     except Exception:
+        log.debug("fts fallback failed for query %r", query, exc_info=True)
         return []
 
 
@@ -473,7 +474,7 @@ async def knowledge_review_resolve(body: dict) -> dict:
         publish({"type": "graphrag.conflict_resolved", "conflict_id": conflict_id,
                  "resolution": resolution})
     except Exception:
-        pass
+        log.warning("conflict_resolved event publish failed", exc_info=True)
     return {"resolved": True, "conflict_id": conflict_id, "resolution": resolution}
 
 
@@ -499,7 +500,7 @@ async def knowledge_review_merge(body: dict) -> dict:
         publish({"type": "graphrag.entities_merged", "merge_id": merge_id,
                  "survivor_id": survivor_id, "merged_id": merged_id})
     except Exception:
-        pass
+        log.warning("entities_merged event publish failed", exc_info=True)
     return {"merged": True, "merge_id": merge_id}
 
 
