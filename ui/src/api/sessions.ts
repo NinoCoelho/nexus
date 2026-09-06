@@ -88,7 +88,9 @@ export async function pingHealth(timeoutMs = 3000): Promise<boolean> {
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE}/health`, { signal: ctrl.signal });
-    return res.ok;
+    // 401/403 from the tunnel auth gate still proves the backend is alive —
+    // only network errors, timeouts, and 5xx mean "down".
+    return res.ok || res.status === 401 || res.status === 403;
   } catch {
     return false;
   } finally {
