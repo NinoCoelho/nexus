@@ -28,7 +28,11 @@ from fastapi.testclient import TestClient
 from nexus.main import app
 from nexus.tunnel import get_manager
 from nexus.tunnel.manager import TunnelManager, _generate_code, _normalize_code
-from nexus.tunnel.tailscale_provider import _ensure_no_funnel_targets_port
+from nexus.tunnel.tailscale_provider import (
+    TailscaleError,
+    _ensure_no_funnel_targets_port,
+    _parse_status_json,
+)
 
 
 def _fresh_client() -> TestClient:
@@ -380,6 +384,60 @@ def test_serve_guard_failure_leaves_manager_inactive() -> None:
         with pytest.raises(RuntimeError, match="(?i)funnel"):
             mgr.start(port=18989, provider="tailscale-serve")
     assert mgr.status().active is False
+
+
+# ── tailscale CLI discovery / status probing ────────────────────────────────
+
+
+def test_parse_status_json_tolerates_leading_junk() -> None:
+    raw = 'Warning: client version mismatch\n{"BackendState": "Running"}'
+    assert _parse_status_json(raw) == {"BackendState": "Running"}
+    assert _parse_status_json("") is None
+    assert _parse_status_json("The Tailscale GUI failed to start: CLIError 3.") is None
+
+
+def test_status_probe_skips_cli_that_prints_junk_to_stdout() -> None:
+    """Regression (.app on macOS): the GUI-bundled CLI prints a human error to
+    stdout with rc=0 outside a GUI session — the probe must fall through to
+    the next candidate instead of failing the JSON parse."""
+    import nexus.tunnel.tailscale_provider as tp
+
+    junk = subprocess.CompletedProcess(
+        [], 0, stdout=b"The Tailscale GUI failed to start: (Tailscale.CLIError error 3.)", stderr=b"",
+    )
+    good = subprocess.CompletedProcess(
+        [], 0, stdout=b'{"BackendState": "Running", "Self": {"DNSName": "m.ts.net."}}', stderr=b"",
+    )
+    prev = tp._resolved_cli
+    try:
+        with (
+            patch.object(tp, "_candidates", return_value=["/fake/gui-tailscale", "/fake/brew-tailscale"]),
+            patch("nexus.tunnel.tailscale_provider.subprocess.run", side_effect=[junk, good]) as fake_run,
+        ):
+            status = tp._tailnet_status()
+        assert status["BackendState"] == "Running"
+        assert tp._resolved_cli == "/fake/brew-tailscale"
+        assert fake_run.call_count == 2
+    finally:
+        tp._resolved_cli = prev
+
+
+def test_status_probe_all_candidates_fail_surfaces_real_output() -> None:
+    import nexus.tunnel.tailscale_provider as tp
+
+    junk = subprocess.CompletedProcess(
+        [], 0, stdout=b"The Tailscale GUI failed to start: (Tailscale.CLIError error 3.)", stderr=b"",
+    )
+    prev = tp._resolved_cli
+    try:
+        with (
+            patch.object(tp, "_candidates", return_value=["/fake/only-cli"]),
+            patch("nexus.tunnel.tailscale_provider.subprocess.run", return_value=junk),
+        ):
+            with pytest.raises(TailscaleError, match="GUI failed to start"):
+                tp._tailnet_status()
+    finally:
+        tp._resolved_cli = prev
 
 
 # ── /tunnel/start route: provider parameter ────────────────────────────────

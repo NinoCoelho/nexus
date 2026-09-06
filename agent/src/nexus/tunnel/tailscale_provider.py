@@ -54,6 +54,11 @@ class TailscaleError(RuntimeError):
 
 
 # macOS GUI install doesn't always symlink the CLI into /usr/local/bin.
+# Order matters least — _tailnet_status() probes every candidate and caches
+# whichever one actually answers `status --json` (the GUI-bundled CLI prints
+# a human-readable error to stdout with rc=0 when invoked outside a GUI
+# session context, e.g. from a packaged .app, so "first found" isn't
+# necessarily "usable").
 _EXTRA_BINARY_PATHS = (
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     "/usr/local/bin/tailscale",
@@ -62,25 +67,38 @@ _EXTRA_BINARY_PATHS = (
 
 _FUNNEL_START_TIMEOUT = 90.0  # first activation may provision HTTPS certs
 
+# CLI that successfully answered `status --json` in this process. All later
+# funnel/serve commands go through it — mixed CLIs against one daemon work,
+# but sticking to the probed one avoids version-skew surprises.
+_resolved_cli: str | None = None
 
-def find_binary() -> str | None:
-    """Locate the tailscale CLI, or None if not installed."""
+
+def _candidates() -> list[str]:
+    """Every tailscale CLI we could find, PATH first, deduped, ordered."""
+    out: list[str] = []
     found = shutil.which("tailscale")
     if found:
-        return found
+        out.append(found)
     for candidate in _EXTRA_BINARY_PATHS:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+        if candidate not in out and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            out.append(candidate)
+    return out
+
+
+def find_binary() -> str | None:
+    """Locate a tailscale CLI, or None if not installed."""
+    cands = _candidates()
+    return cands[0] if cands else None
 
 
 def cli_available() -> bool:
-    """True when the tailscale CLI can be found. Used by the UI pre-flight."""
-    return find_binary() is not None
+    """True when a tailscale CLI can be found. Used by the UI pre-flight."""
+    return bool(_candidates())
 
 
 def _run(cmd: list[str], *, timeout: float = 30.0) -> subprocess.CompletedProcess[bytes]:
-    binary = find_binary()
+    """Run the probed (or first-found) tailscale CLI. Fixed argv, never shell."""
+    binary = _resolved_cli or find_binary()
     if binary is None:
         raise TailscaleError(
             "tailscale CLI not found. Install Tailscale (e.g. `brew install tailscale` "
@@ -95,22 +113,59 @@ def _run(cmd: list[str], *, timeout: float = 30.0) -> subprocess.CompletedProces
     )
 
 
+def _parse_status_json(raw: str) -> dict | None:
+    """Parse `status --json` output, tolerating leading junk lines."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        brace = raw.find("{")
+        if brace < 0:
+            return None
+        try:
+            parsed = json.loads(raw[brace:])
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _tailnet_status() -> dict:
-    """Parse `tailscale status --json`; raise readable errors when unusable."""
-    try:
-        proc = _run(["status", "--json"], timeout=15)
-    except subprocess.TimeoutExpired as e:
-        raise TailscaleError("tailscale status timed out — is tailscaled running?") from e
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-        raise TailscaleError(
-            "Could not talk to the Tailscale daemon. Is Tailscale running and logged in? "
-            f"Underlying error: {stderr or f'exit {proc.returncode}'}",
-        )
-    try:
-        return json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
-    except json.JSONDecodeError as e:
-        raise TailscaleError(f"could not parse `tailscale status --json`: {e}") from e
+    """Parse `tailscale status --json`; raise readable errors when unusable.
+
+    Probes every candidate CLI and caches the first one that answers with
+    JSON — a CLI that prints diagnostics to stdout (rc=0) is skipped, and if
+    none work, the per-CLI failures are included in the error.
+    """
+    global _resolved_cli
+    problems: list[str] = []
+    for binary in _candidates():
+        try:
+            proc = subprocess.run(  # noqa: S603 — fixed argv
+                [binary, "status", "--json"],
+                capture_output=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            problems.append(f"{binary}: timed out")
+            continue
+        stdout = proc.stdout.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+            problems.append(f"{binary}: {stderr.splitlines()[0] if stderr else f'exit {proc.returncode}'}")
+            continue
+        data = _parse_status_json(stdout)
+        if data is None:
+            first = stdout.strip().splitlines()[0] if stdout.strip() else "no output"
+            problems.append(f"{binary}: {first}")
+            continue
+        if _resolved_cli != binary:
+            log.info("tailscale CLI resolved to %s", binary)
+        _resolved_cli = binary
+        return data
+    detail = "; ".join(problems) or "no tailscale CLI found"
+    raise TailscaleError(
+        "Could not talk to the Tailscale daemon. Is Tailscale running and logged in? "
+        f"Tried: {detail}",
+    )
 
 
 def _public_url_from_status(status: dict) -> str:
