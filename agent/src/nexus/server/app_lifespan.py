@@ -77,6 +77,24 @@ def _startup_tunnel_cleanup() -> None:
         log.exception("cloudflared orphan cleanup failed")
 
 
+def _startup_vault_watcher(nexus_cfg: Any) -> None:
+    if not getattr(nexus_cfg, "vault", None) or not nexus_cfg.vault.watch:
+        return
+    try:
+        from .. import vault_watch as _vault_watch
+        _vault_watch.start_default(loop=asyncio.get_running_loop())
+    except Exception:
+        log.exception("vault watcher start failed")
+
+
+def _shutdown_vault_watcher() -> None:
+    try:
+        from .. import vault_watch as _vault_watch
+        _vault_watch.stop_default()
+    except Exception:
+        log.exception("vault watcher stop failed")
+
+
 def _startup_tmp_dir_sweep() -> None:
     # Sweep orphaned import temp dirs. vault_import tracks these in an
     # in-memory dict that's lost on restart, so any crashed/abandoned
@@ -619,6 +637,7 @@ def create_lifespan(state: dict[str, Any]):
         _vault_cache_task = _start_vault_cache_listener()
         _startup_tunnel_cleanup()
         _startup_tmp_dir_sweep()
+        _startup_vault_watcher(nexus_cfg)
         await _startup_local_llm(mutable_state, agent)
         await _startup_ocr()
         _startup_hitl_sweep(sessions)
@@ -635,6 +654,7 @@ def create_lifespan(state: dict[str, Any]):
             yield
         finally:
             _shutdown_vault_cache(_vault_cache_task)
+            _shutdown_vault_watcher()
             _shutdown_heartbeat(scheduler)
             _shutdown_local_llm()
             _shutdown_ocr()

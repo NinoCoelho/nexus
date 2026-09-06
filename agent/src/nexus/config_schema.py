@@ -264,6 +264,10 @@ class VaultHistoryConfig(BaseModel):
 
 class VaultConfig(BaseModel):
     history: VaultHistoryConfig = Field(default_factory=VaultHistoryConfig)
+    # Watch the vault tree for external changes (Syncthing/rsync/Obsidian)
+    # and auto-reindex FTS/tags/graph shortly after writes settle. Disable
+    # only to troubleshoot watcher-related issues. See vault_watch.py.
+    watch: bool = True
 
 
 class UIConfig(BaseModel):

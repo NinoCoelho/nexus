@@ -167,6 +167,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "history": {
                 "enabled": cfg.vault.history.enabled,
             },
+            "watch": cfg.vault.watch,
         },
         "ui": {
             "language": cfg.ui.language,
@@ -399,7 +400,10 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     tts = TTSConfig(**tts_raw)
     vault_raw = dict(raw.get("vault", {}))
     history_raw = dict(vault_raw.get("history", {}))
-    vault = VaultConfig(history=VaultHistoryConfig(**history_raw))
+    vault = VaultConfig(
+        history=VaultHistoryConfig(**history_raw),
+        watch=bool(vault_raw.get("watch", True)),
+    )
     ui_raw = dict(raw.get("ui", {}))
     # Older configs without [ui] fall back to defaults; an unknown language
     # value (e.g. user typed "fr") is coerced to "en" rather than raising.

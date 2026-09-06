@@ -245,6 +245,21 @@ def _post_write_hooks(rel_path: str, content: str) -> None:
         vault_graph.invalidate_cache()
     except Exception:
         pass
+    _publish_update_events(rel_path, content)
+    try:
+        from .agent.graphrag_manager import schedule_index
+        schedule_index(rel_path, content)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("graphrag: schedule_index failed", exc_info=True)
+
+
+def _publish_update_events(rel_path: str, content: str) -> None:
+    """Publish vault.indexed plus frontmatter-specific update events.
+
+    Shared by the API write hooks and vault_watch (external changes) so
+    both paths emit the same kanban/workflow refresh signals to the UI.
+    """
     try:
         from .server.event_bus import publish
         publish({"type": "vault.indexed", "path": rel_path})
@@ -259,12 +274,6 @@ def _post_write_hooks(rel_path: str, content: str) -> None:
             publish({"type": event_type, "path": rel_path})
     except Exception:
         pass
-    try:
-        from .agent.graphrag_manager import schedule_index
-        schedule_index(rel_path, content)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).warning("graphrag: schedule_index failed", exc_info=True)
 
 
 def _post_remove_hooks(rel_paths: list[str]) -> None:

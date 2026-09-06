@@ -22,3 +22,7 @@ def _skip_local_llm_in_lifespan(
     SIGTERM on the developer's running daemon.
     """
     monkeypatch.setenv("NEXUS_SKIP_LOCAL_LLM_RESTART", "1")
+    # Keep the vault file-watcher (vault_watch.start_default) off in tests
+    # that boot create_app against the real config/home — otherwise every
+    # app test runs a watchdog observer on the developer's live vault.
+    monkeypatch.setenv("NEXUS_DISABLE_VAULT_WATCH", "1")
