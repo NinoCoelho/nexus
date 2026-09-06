@@ -16,7 +16,7 @@ import urllib.request
 import typer
 
 tunnel_app = typer.Typer(
-    help="Public sharing tunnel (Cloudflare Quick Tunnel)",
+    help="Public sharing tunnel (Cloudflare / Tailscale Funnel / tailnet-only Serve)",
     no_args_is_help=True,
 )
 
@@ -71,6 +71,7 @@ def _print_status(s: dict) -> None:
         typer.echo("Tunnel: inactive")
         return
     typer.echo("Tunnel: active")
+    typer.echo(f"  Provider   : {s.get('provider')}")
     typer.echo(f"  Public URL : {s.get('public_url')}")
     typer.echo(f"  Share link : {s.get('share_url')}")
     if s.get("code"):
@@ -82,9 +83,27 @@ def _print_status(s: dict) -> None:
 
 
 @tunnel_app.command("start")
-def tunnel_start() -> None:
-    """Open a public tunnel and print the share link + QR code."""
-    s = _request("POST", "/tunnel/start")
+def tunnel_start(
+    provider: str = typer.Option(
+        "cloudflare",
+        "--provider",
+        "-p",
+        help=(
+            "Tunnel backend: 'cloudflare' (public Quick Tunnel, code-gated), "
+            "'tailscale' (public Funnel, code-gated), or 'tailscale-serve' "
+            "(your tailnet only — no code, devices are authenticated by Tailscale)."
+        ),
+    ),
+) -> None:
+    """Open a tunnel and print the share link + QR code."""
+    if provider not in ("cloudflare", "tailscale", "tailscale-serve"):
+        typer.echo(
+            f"error: unknown provider {provider!r} "
+            "(expected cloudflare, tailscale, or tailscale-serve)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    s = _request("POST", "/tunnel/start", body={"provider": provider})
     _print_status(s)
 
 

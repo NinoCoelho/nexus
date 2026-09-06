@@ -31,12 +31,12 @@ import time
 from dataclasses import dataclass
 from typing import Literal
 
-from . import cloudflared_provider
+from . import cloudflared_provider, tailscale_provider
 
 log = logging.getLogger(__name__)
 
 
-Provider = Literal["cloudflare"]
+Provider = Literal["cloudflare", "tailscale", "tailscale-serve"]
 
 # Crockford-ish base32 minus easy-to-confuse characters (0/O, 1/I/L). Avoiding
 # vowels would also drop accidental words but isn't required for security —
@@ -99,13 +99,25 @@ class TunnelManager:
         with self._lock:
             if self._active:
                 return self._status_locked()
-            if provider != "cloudflare":
+            if provider not in ("cloudflare", "tailscale", "tailscale-serve"):
                 raise ValueError(f"Unsupported tunnel provider: {provider}")
 
-            token = secrets.token_urlsafe(32)
-            code = _generate_code()
+            if provider == "tailscale-serve":
+                # Tailnet-only mode: tailscaled enforces at the network layer
+                # that only devices authenticated into the tailnet can reach
+                # us, so no code/cookie pair is minted and proxied requests
+                # are trusted outright (see trusts_proxied_clients).
+                proc, public_url = tailscale_provider.start_serve(port=port)
+                token = None
+                code = None
+            else:
+                token = secrets.token_urlsafe(32)
+                code = _generate_code()
+                if provider == "tailscale":
+                    proc, public_url = tailscale_provider.start_tunnel(port=port)
+                else:
+                    proc, public_url = cloudflared_provider.start_tunnel(port=port)
             nonce = secrets.token_urlsafe(6)
-            proc, public_url = cloudflared_provider.start_tunnel(port=port)
 
             self._active = True
             self._provider = provider
@@ -123,7 +135,12 @@ class TunnelManager:
         with self._lock:
             if not self._active:
                 return self._status_locked()
-            cloudflared_provider.stop_tunnel(self._process)
+            if self._provider == "tailscale-serve":
+                tailscale_provider.stop_serve()
+            elif self._provider == "tailscale":
+                tailscale_provider.stop_tunnel()
+            else:
+                cloudflared_provider.stop_tunnel(self._process)
             self._active = False
             self._provider = None
             self._public_url = None
@@ -144,6 +161,16 @@ class TunnelManager:
 
     def is_active(self) -> bool:
         return self._active
+
+    def trusts_proxied_clients(self) -> bool:
+        """True when the active provider authenticates clients itself.
+
+        Only ``tailscale-serve`` (tailnet-only): tailscaled admits solely
+        devices authenticated into the tailnet, so the middleware lets
+        proxied requests through without the cookie gate. Every other
+        provider faces the public internet and stays code-gated.
+        """
+        return self._active and self._provider == "tailscale-serve"
 
     def validate_token(self, candidate: str | None) -> bool:
         """Validate the long session token (cookie carrier). Timing-safe."""

@@ -16,6 +16,8 @@ Flow exercised:
 
 from __future__ import annotations
 
+import json
+import subprocess
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -26,6 +28,7 @@ from fastapi.testclient import TestClient
 from nexus.main import app
 from nexus.tunnel import get_manager
 from nexus.tunnel.manager import TunnelManager, _generate_code, _normalize_code
+from nexus.tunnel.tailscale_provider import _ensure_no_funnel_targets_port
 
 
 def _fresh_client() -> TestClient:
@@ -209,6 +212,219 @@ def test_quick_url_regex_matches_cloudflared_stderr() -> None:
     assert m.group(0) == "https://magical-beaver-1234.trycloudflare.com"
 
 
+# ── tailscale provider dispatch ─────────────────────────────────────────────
+
+
+def test_start_with_tailscale_provider() -> None:
+    mgr = TunnelManager()
+    with patch(
+        "nexus.tunnel.manager.tailscale_provider.start_tunnel",
+        return_value=(None, "https://nino-max.bonito-halosaur.ts.net"),
+    ) as fake_start:
+        s = mgr.start(port=18989, provider="tailscale")
+    fake_start.assert_called_once_with(port=18989)
+    assert s.active is True
+    assert s.provider == "tailscale"
+    assert s.public_url == "https://nino-max.bonito-halosaur.ts.net"
+    assert s.share_url is not None
+    assert s.share_url.startswith("https://nino-max.bonito-halosaur.ts.net/?v=")
+    assert s.code is not None
+    with patch("nexus.tunnel.manager.tailscale_provider.stop_tunnel") as fake_stop:
+        mgr.stop()
+    fake_stop.assert_called_once_with()
+
+
+def test_start_with_tailscale_provider_does_not_spawn_cloudflared() -> None:
+    """Choosing tailscale must never shell out to cloudflared."""
+    mgr = TunnelManager()
+    with (
+        patch("nexus.tunnel.manager.cloudflared_provider.start_tunnel") as cf_start,
+        patch(
+            "nexus.tunnel.manager.tailscale_provider.start_tunnel",
+            return_value=(None, "https://machine.tailnet.ts.net"),
+        ),
+    ):
+        mgr.start(port=18989, provider="tailscale")
+    cf_start.assert_not_called()
+    with patch("nexus.tunnel.manager.tailscale_provider.stop_tunnel"):
+        mgr.stop()
+
+
+def test_start_rejects_unknown_provider() -> None:
+    mgr = TunnelManager()
+    with pytest.raises(ValueError, match="Unsupported tunnel provider"):
+        mgr.start(port=18989, provider="ngrok")
+    assert mgr.status().active is False
+
+
+def test_stop_dispatches_by_active_provider() -> None:
+    """A tailscale activation must be torn down with funnel reset, not kill()."""
+    mgr = TunnelManager()
+    with patch(
+        "nexus.tunnel.manager.tailscale_provider.start_tunnel",
+        return_value=(None, "https://machine.tailnet.ts.net"),
+    ):
+        mgr.start(port=18989, provider="tailscale")
+    with (
+        patch("nexus.tunnel.manager.cloudflared_provider.stop_tunnel") as cf_stop,
+        patch("nexus.tunnel.manager.tailscale_provider.stop_tunnel") as ts_stop,
+    ):
+        mgr.stop()
+    ts_stop.assert_called_once_with()
+    cf_stop.assert_not_called()
+
+
+# ── tailscale-serve (tailnet-only, no code) ─────────────────────────────────
+
+
+def test_start_tailscale_serve_mints_no_secrets() -> None:
+    mgr = TunnelManager()
+    with patch(
+        "nexus.tunnel.manager.tailscale_provider.start_serve",
+        return_value=(None, "https://machine.tailnet.ts.net"),
+    ) as fake_start:
+        s = mgr.start(port=18989, provider="tailscale-serve")
+    fake_start.assert_called_once_with(port=18989)
+    assert s.active is True
+    assert s.provider == "tailscale-serve"
+    assert s.code is None  # no code: tailnet auth replaces the code flow
+    assert s.share_url is not None
+    assert mgr.trusts_proxied_clients() is True
+    assert mgr.validate_token("anything") is False  # no token exists
+    assert mgr.consume_code("anything") is None
+    with patch("nexus.tunnel.manager.tailscale_provider.stop_serve") as fake_stop:
+        mgr.stop()
+    fake_stop.assert_called_once_with()
+    assert mgr.trusts_proxied_clients() is False
+
+
+def test_trusts_proxied_clients_only_for_serve_mode() -> None:
+    mgr = TunnelManager()
+    assert mgr.trusts_proxied_clients() is False
+    for provider in ("cloudflare", "tailscale"):
+        mod = (
+            "nexus.tunnel.manager.cloudflared_provider"
+            if provider == "cloudflare"
+            else "nexus.tunnel.manager.tailscale_provider"
+        )
+        fn = "start_tunnel"
+        with patch(f"{mod}.{fn}", return_value=_fake_start_tunnel("https://x.example.com")):
+            mgr.start(port=18989, provider=provider)  # type: ignore[arg-type]
+        assert mgr.trusts_proxied_clients() is False, provider
+        with patch(f"{mod}.stop_tunnel"):
+            mgr.stop()
+
+
+def test_serve_proxied_requests_bypass_cookie_gate() -> None:
+    """Tailnet-only mode: proxied clients are trusted without a cookie, but
+    tunnel admin stays loopback-only (route-level guard still applies)."""
+    mgr = get_manager()
+    mgr._active = True
+    mgr._provider = "tailscale-serve"
+    mgr._token = None
+    mgr._code = None
+    mgr._public_url = "https://machine.tailnet.ts.net"
+    mgr._redeemed = False
+    try:
+        c = _fresh_client()
+        headers = {"x-forwarded-for": "100.101.102.103"}  # tailnet peer range
+        # Full API without any cookie — tailscaled authenticated the peer.
+        assert c.get("/sessions", headers=headers).status_code == 200
+        assert c.get("/health", headers=headers).status_code == 200
+        # SPA probe boots straight into the app — no login screen.
+        r = c.get("/tunnel/auth-status", headers=headers)
+        assert r.json() == {"requires_redeem": False, "tunnel_active": True, "proxied": True}
+        # Admin surface is still loopback-only even for trusted peers.
+        assert c.post("/tunnel/start", headers=headers).status_code == 403
+    finally:
+        mgr._active = False
+        mgr._provider = None
+        mgr._token = None
+        mgr._code = None
+        mgr._public_url = None
+        mgr._redeemed = False
+
+
+def test_serve_start_fails_when_funnel_targets_nexus_port() -> None:
+    """The fail-closed guard: no code-free mode next to a public funnel."""
+    fake_status = json.dumps(
+        {"Web": {"machine.tailnet.ts.net:443": {"Handlers": {
+            "/": {"Proxy": "http://127.0.0.1:18989", "Funnel": True},
+        }}}},
+    ).encode()
+    with patch(
+        "nexus.tunnel.tailscale_provider._run",
+        return_value=subprocess.CompletedProcess([], 0, stdout=fake_status, stderr=b""),
+    ):
+        with pytest.raises(Exception, match="funnel"):
+            _ensure_no_funnel_targets_port(18989)
+    # A funnel aimed at a *different* service is not a blocker.
+    other = json.dumps(
+        {"Web": {"machine.tailnet.ts.net:443": {"Handlers": {
+            "/": {"Proxy": "http://127.0.0.1:9999", "Funnel": True},
+        }}}},
+    ).encode()
+    with patch(
+        "nexus.tunnel.tailscale_provider._run",
+        return_value=subprocess.CompletedProcess([], 0, stdout=other, stderr=b""),
+    ):
+        _ensure_no_funnel_targets_port(18989)  # must not raise
+
+
+def test_serve_guard_failure_leaves_manager_inactive() -> None:
+    mgr = TunnelManager()
+    with patch(
+        "nexus.tunnel.manager.tailscale_provider.start_serve",
+        side_effect=RuntimeError("a public Tailscale Funnel is already forwarding"),
+    ):
+        with pytest.raises(RuntimeError, match="(?i)funnel"):
+            mgr.start(port=18989, provider="tailscale-serve")
+    assert mgr.status().active is False
+
+
+# ── /tunnel/start route: provider parameter ────────────────────────────────
+
+
+def test_start_route_accepts_provider_body() -> None:
+    c = _fresh_client()
+    with (
+        patch.object(get_manager(), "start") as fake_start,
+        patch("nexus.tunnel.tailscale_provider.cli_available", return_value=False),
+    ):
+        r = c.post("/tunnel/start", json={"provider": "tailscale"})
+    assert r.status_code == 200
+    assert fake_start.call_args.kwargs.get("provider") == "tailscale"
+    assert r.json()["tailscale_available"] is False
+
+
+def test_start_route_defaults_to_cloudflare_without_body() -> None:
+    """Backward compat: the CLI/UI POST with no JSON body at all."""
+    c = _fresh_client()
+    with patch.object(get_manager(), "start") as fake_start:
+        r = c.post("/tunnel/start")
+    assert r.status_code == 200
+    assert fake_start.call_args.kwargs.get("provider") == "cloudflare"
+
+
+def test_start_route_rejects_unknown_provider() -> None:
+    c = _fresh_client()
+    with patch.object(get_manager(), "start") as fake_start:
+        r = c.post("/tunnel/start", json={"provider": "ngrok"})
+    assert r.status_code == 400
+    fake_start.assert_not_called()
+
+
+def test_admin_status_includes_tailscale_availability() -> None:
+    c = _fresh_client()
+    with (
+        patch("nexus.tunnel.tailscale_provider.cli_available", return_value=True),
+        patch("nexus.tunnel.cloudflared_provider.binary_installed", return_value=False),
+    ):
+        body = c.get("/tunnel/status").json()
+    assert body["tailscale_available"] is True
+    assert body["binary_installed"] is False
+
+
 # ── middleware policy tests ────────────────────────────────────────────────
 
 
@@ -222,6 +438,43 @@ def test_proxied_protected_path_without_cookie_is_401(_simulated_active: Any) ->
     c = _fresh_client()
     r = c.get("/sessions", headers={"x-forwarded-for": "203.0.113.5"})
     assert r.status_code == 401
+
+
+def test_tailscale_funnel_traffic_gated_identically() -> None:
+    """Regression for the manual-`tailscale funnel` unauthorized bug: with a
+    tailscale-provider tunnel active, proxied traffic goes through the same
+    cookie gate (401 without, 200 after redeeming the code)."""
+    mgr = get_manager()
+    mgr._active = True
+    mgr._provider = "tailscale"
+    mgr._token = "test-long-token-aaaaaaaaaaaaaaaaaaaa"
+    mgr._code = "TEST-CODE"
+    mgr._public_url = "https://machine.tailnet.ts.net"
+    mgr._redeemed = False
+    try:
+        c = _fresh_client()
+        # Tailscale's reverse proxy sets x-forwarded-for (+ host) on funnel hops.
+        funnel_headers = {
+            "x-forwarded-for": "203.0.113.5",
+            "x-forwarded-host": "machine.tailnet.ts.net",
+        }
+        assert c.get("/sessions", headers=funnel_headers).status_code == 401
+        # auth-status directs the SPA to the login screen…
+        r = c.get("/tunnel/auth-status", headers=funnel_headers)
+        assert r.json() == {"requires_redeem": True, "tunnel_active": True, "proxied": True}
+        # …the code redeems into a cookie, which unlocks the API.
+        r = c.post("/tunnel/redeem", json={"code": "TEST-CODE"}, headers=funnel_headers)
+        cookie = r.cookies.get("nexus_tunnel_token")
+        assert cookie is not None
+        r = c.get("/sessions", headers=funnel_headers, cookies={"nexus_tunnel_token": cookie})
+        assert r.status_code == 200
+    finally:
+        mgr._active = False
+        mgr._provider = None
+        mgr._token = None
+        mgr._code = None
+        mgr._public_url = None
+        mgr._redeemed = False
 
 
 def test_proxied_static_path_without_cookie_is_allowed(_simulated_active: Any) -> None:

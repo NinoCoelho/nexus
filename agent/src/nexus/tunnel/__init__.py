@@ -1,8 +1,8 @@
 """Public tunnel sharing for Nexus.
 
-Wraps a tunnel provider (Cloudflare Quick Tunnel) so the user can expose the
-local server to the internet with a shareable link that auto-authenticates
-via a short access code.
+Wraps a tunnel provider (Cloudflare Quick Tunnel or Tailscale Funnel) so the
+user can expose the local server to the internet with a shareable link that
+auto-authenticates via a short access code.
 
 Public surface:
     - get_manager() -> TunnelManager (process-wide singleton)

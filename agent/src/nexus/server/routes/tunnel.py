@@ -103,7 +103,7 @@ def _server_port() -> int:
 
 def _admin_status_dict() -> dict[str, Any]:
     """Full status, including the short code. Returned only to loopback callers."""
-    from ...tunnel import cloudflared_provider
+    from ...tunnel import cloudflared_provider, tailscale_provider
     s = get_manager().status()
     return {
         "active": s.active,
@@ -114,6 +114,7 @@ def _admin_status_dict() -> dict[str, Any]:
         "started_at": s.started_at,
         "redeemed": s.redeemed,
         "binary_installed": cloudflared_provider.binary_installed(),
+        "tailscale_available": tailscale_provider.cli_available(),
     }
 
 
@@ -127,16 +128,25 @@ async def tunnel_status(request: Request) -> dict[str, Any]:
 
 
 @router.post("/tunnel/start")
-async def tunnel_start(request: Request) -> dict[str, Any]:
+async def tunnel_start(request: Request, body: dict[str, Any] | None = None) -> dict[str, Any]:
     _require_loopback(request)
-    # The first activation triggers a ~30MB binary download inside start_tunnel.
-    # Push the call onto a thread so the event loop stays responsive — without
-    # this, SSE clients see the keepalive stream stall during install.
+    provider = (body or {}).get("provider", "cloudflare")
+    if provider not in ("cloudflare", "tailscale", "tailscale-serve"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown tunnel provider: {provider!r} "
+            "(expected 'cloudflare', 'tailscale', or 'tailscale-serve')",
+        )
+    # The first cloudflare activation triggers a ~30MB binary download inside
+    # start_tunnel; a first-ever funnel activation can wait on HTTPS cert
+    # provisioning. Push the call onto a thread so the event loop stays
+    # responsive — without this, SSE clients see the keepalive stream stall.
     import asyncio
     try:
         await asyncio.to_thread(
             get_manager().start,
-            port=_server_port(), provider="cloudflare",
+            port=_server_port(),
+            provider=provider,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -222,6 +232,11 @@ async def tunnel_auth_status(request: Request) -> dict[str, Any]:
         # the request shouldn't have reached us at all — be permissive so dev /
         # local-network use keeps working.
         return {"requires_redeem": False, "tunnel_active": False, "proxied": proxied}
+
+    # Tailnet-only provider: no code exists — every reachable client is an
+    # authenticated tailnet device, so the SPA boots straight into the app.
+    if mgr.trusts_proxied_clients():
+        return {"requires_redeem": False, "tunnel_active": True, "proxied": proxied}
 
     # Direct loopback (no proxy headers) always bypasses — the owner's own
     # browser hitting 127.0.0.1 should never see a login form, even when the

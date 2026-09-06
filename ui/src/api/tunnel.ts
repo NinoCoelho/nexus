@@ -1,9 +1,11 @@
 // API client for the public sharing tunnel.
 import { BASE } from "./base";
 
+export type TunnelProvider = "cloudflare" | "tailscale" | "tailscale-serve";
+
 export interface TunnelStatus {
   active: boolean;
-  provider: string | null;
+  provider: TunnelProvider | null;
   public_url: string | null;
   share_url: string | null;
   /** Short access code shown on the desktop; only populated on loopback responses. */
@@ -13,6 +15,8 @@ export interface TunnelStatus {
   redeemed: boolean;
   /** Whether the cloudflared CLI binary has been downloaded yet. */
   binary_installed: boolean;
+  /** Whether the tailscale CLI is installed (Tailscale Funnel/Serve providers). */
+  tailscale_available: boolean;
 }
 
 export interface InstallResult {
@@ -38,8 +42,14 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
   return _json(await fetch(`${BASE}/tunnel/status`));
 }
 
-export async function startTunnel(): Promise<TunnelStatus> {
-  return _json(await fetch(`${BASE}/tunnel/start`, { method: "POST" }));
+export async function startTunnel(provider: TunnelProvider = "cloudflare"): Promise<TunnelStatus> {
+  return _json(
+    await fetch(`${BASE}/tunnel/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    }),
+  );
 }
 
 export async function stopTunnel(): Promise<TunnelStatus> {

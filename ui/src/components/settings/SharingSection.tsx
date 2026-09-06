@@ -5,6 +5,7 @@ import {
   getTunnelStatus,
   startTunnel,
   stopTunnel,
+  type TunnelProvider,
   type TunnelStatus,
 } from "../../api/tunnel";
 import { useToast } from "../../toast/ToastProvider";
@@ -12,11 +13,16 @@ import { useAuthState } from "../AuthGate";
 import Modal from "../Modal";
 import SettingsSection from "./SettingsSection";
 
+const PROVIDERS: TunnelProvider[] = ["cloudflare", "tailscale", "tailscale-serve"];
+
+const isTailnetOnly = (p: TunnelProvider | null | undefined) => p === "tailscale-serve";
+
 export default function SharingSection() {
   const { t } = useTranslation("tunnel");
   const { proxied } = useAuthState();
   const toast = useToast();
   const [status, setStatus] = useState<TunnelStatus | null>(null);
+  const [provider, setProvider] = useState<TunnelProvider>("cloudflare");
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,15 +41,15 @@ export default function SharingSection() {
     refresh();
   }, [refresh]);
 
-  // While a tunnel is up but nobody's redeemed the code yet, poll status so
-  // the panel can flip to the "code burned" state within a few seconds of the
-  // pairing happening on the phone. We stop polling once redemption flips
-  // (steady state) or the tunnel goes inactive.
+  // While a code-gated tunnel is up but nobody's redeemed the code yet, poll
+  // status so the panel can flip to the "code burned" state within a few
+  // seconds of the pairing happening on the phone. Tailnet-only mode has no
+  // code, so there's nothing to poll for.
   useEffect(() => {
-    if (!status?.active || status?.redeemed) return;
+    if (!status?.active || status?.redeemed || status?.code == null) return;
     const id = window.setInterval(refresh, 4000);
     return () => window.clearInterval(id);
-  }, [status?.active, status?.redeemed, refresh]);
+  }, [status?.active, status?.redeemed, status?.code, refresh]);
 
   // Render the QR code into a canvas whenever the share URL changes. The QR
   // encodes the *plain* URL only — never the access code. The phone scans the
@@ -73,10 +79,10 @@ export default function SharingSection() {
     setBusy(true);
     setError(null);
 
-    // First-time activation downloads cloudflared (~30 MB) before the tunnel
-    // comes up. Show a long-running progress toast so the user knows what's
-    // happening and isn't tempted to retry.
-    const firstRun = status?.binary_installed === false;
+    // First-time cloudflare activation downloads cloudflared (~30 MB) before
+    // the tunnel comes up. Show a long-running progress toast so the user
+    // knows what's happening and isn't tempted to retry.
+    const firstRun = provider === "cloudflare" && status?.binary_installed === false;
     const tid = toast.info(
       firstRun ? t("tunnel:sharing.toast.preparingFirst") : t("tunnel:sharing.toast.preparing"),
       {
@@ -88,7 +94,7 @@ export default function SharingSection() {
     );
 
     try {
-      const s = await startTunnel();
+      const s = await startTunnel(provider);
       setStatus(s);
       toast.dismiss(tid);
       toast.success(t("tunnel:sharing.toast.live"));
@@ -161,18 +167,40 @@ export default function SharingSection() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
                 {t("tunnel:sharing.inactive.description")}
-                {status?.binary_installed === false && (
+                {provider === "cloudflare" && status?.binary_installed === false && (
                   <>
                     {" "}
                     <strong>{t("tunnel:sharing.inactive.firstTimeNote")}</strong>
                   </>
                 )}
               </div>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                {PROVIDERS.map((p) => (
+                  <button
+                    key={p}
+                    className={`settings-btn ${provider === p ? "settings-btn--primary" : ""}`}
+                    onClick={() => setProvider(p)}
+                    disabled={busy}
+                    style={{ flex: 1, flexDirection: "column", gap: 2, padding: "8px 10px" }}
+                  >
+                    <span>{t(`tunnel:sharing.provider.${p}`)}</span>
+                    <span style={{ fontSize: 10, opacity: 0.75, fontWeight: 400 }}>
+                      {t(`tunnel:sharing.provider.${p}Hint`)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {provider !== "cloudflare" && status?.tailscale_available === false && (
+                <p className="settings-error">{t("tunnel:sharing.inactive.tailscaleMissing")}</p>
+              )}
+
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <button
                   className="settings-btn settings-btn--primary"
                   onClick={() => setConfirmOpen(true)}
-                  disabled={busy}
+                  disabled={busy || (provider !== "cloudflare" && status?.tailscale_available === false)}
                 >
                   {busy ? t("tunnel:sharing.inactive.preparingButton") : t("tunnel:sharing.inactive.activateButton")}
                 </button>
@@ -203,7 +231,11 @@ export default function SharingSection() {
                 }}
               >
                 <strong style={{ color: "var(--warn)" }}><AlertTriangle size={14} style={{ verticalAlign: "middle" }} /> {t("tunnel:sharing.active.warning")}</strong>{" "}
-                {t("tunnel:sharing.active.warningBody")}
+                {status.provider === "tailscale"
+                  ? t("tunnel:sharing.active.warningBodyTailscale")
+                  : isTailnetOnly(status.provider)
+                    ? t("tunnel:sharing.active.warningBodyTailnet")
+                    : t("tunnel:sharing.active.warningBody")}
               </div>
               <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
                 <canvas
@@ -242,7 +274,21 @@ export default function SharingSection() {
                     </code>
                   </div>
 
-                  {status.code ? (
+                  {isTailnetOnly(status.provider) ? (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        padding: "8px 12px",
+                        borderRadius: 6,
+                        background: "rgba(80, 160, 255, 0.08)",
+                        border: "1px solid rgba(80, 160, 255, 0.35)",
+                      }}
+                    >
+                      <strong style={{ color: "var(--accent)" }}>{t("tunnel:sharing.active.tailnetNoCode")}</strong>{" "}
+                      {t("tunnel:sharing.active.tailnetNoCodeBody")}
+                    </div>
+                  ) : status.code ? (
                     <div>
                       <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 3 }}>
                         {t("tunnel:sharing.active.typeCode")}
@@ -317,7 +363,13 @@ export default function SharingSection() {
         <Modal
           kind="confirm"
           title={t("tunnel:sharing.confirm.title")}
-          message={t("tunnel:sharing.confirm.message")}
+          message={
+            provider === "tailscale"
+              ? t("tunnel:sharing.confirm.messageTailscale")
+              : provider === "tailscale-serve"
+                ? t("tunnel:sharing.confirm.messageTailnet")
+                : t("tunnel:sharing.confirm.message")
+          }
           confirmLabel={t("tunnel:sharing.confirm.confirmLabel")}
           danger
           onCancel={() => setConfirmOpen(false)}

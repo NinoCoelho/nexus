@@ -167,6 +167,11 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
         # calls /tunnel/auth-status, sees `requires_redeem: true`, and shows
         # the login form. POST /tunnel/redeem then installs the cookie.
         if tunnel.is_active() and proxied:
+            # Tailnet-only provider: tailscaled already authenticated the peer
+            # at the network layer (only tailnet devices can connect at all),
+            # so the cookie gate is skipped entirely.
+            if tunnel.trusts_proxied_clients():
+                return await call_next(request)
             if not _tunnel_path_requires_auth(path):
                 return await call_next(request)
             if not tunnel.validate_token(provided):

@@ -30,7 +30,7 @@ Backend (from `agent/`, managed by `uv`):
 uv sync                                  # install deps (needs ../../loom sibling)
 uv run nexus serve --port 18989          # run FastAPI server in foreground (always 127.0.0.1)
 uv run nexus daemon start | status | stop | logs  # background daemon (PID + log in ~/.nexus/)
-uv run nexus tunnel start | stop | status # public Cloudflare Quick Tunnel with login-form auth
+uv run nexus tunnel start | stop | status # public tunnel (Cloudflare, `--provider tailscale` Funnel, or `--provider tailscale-serve` tailnet-only/no-code) with login-form auth
 uv run nexus chat                        # interactive TUI chat
 uv run nexus config init | show          # ~/.nexus/config.toml bootstrap
 uv run pytest                            # full test suite (asyncio_mode=auto)
@@ -90,7 +90,7 @@ Two channels on each session:
 
 ### Vault
 
-`~/.nexus/vault/` is a folder of markdown files with FTS5 search (`vault_index.py`, `vault_search.py`), tag index, and a backlinks graph (`vault_graph/` package). Kanban boards are vault-native: any `.md` file whose frontmatter contains `kanban-plugin:` is interpreted as a board by both the `vault_kanban` module (Python) and `KanbanBoard.tsx` (UI). Do not add a separate kanban store — edit the vault markdown directly. `POST /vault/dispatch` creates a new chat session seeded from a vault file or kanban card and links the session id back into the card.
+`~/.nexus/vault/` is a folder of markdown files with FTS5 search (`vault_index.py`, `vault_search.py`), tag index, and a backlinks graph (`vault_graph/` package). External writes (Syncthing/rsync/Obsidian) are picked up by `vault_watch.py` — a debounced watchdog observer that re-runs the mtime-incremental reindex, invalidates graph caches, and schedules GraphRAG after changes settle (config `[vault] watch`, default on; env `NEXUS_DISABLE_VAULT_WATCH=1` to kill, set in test conftest). Kanban boards are vault-native: any `.md` file whose frontmatter contains `kanban-plugin:` is interpreted as a board by both the `vault_kanban` module (Python) and `KanbanBoard.tsx` (UI). Do not add a separate kanban store — edit the vault markdown directly. `POST /vault/dispatch` creates a new chat session seeded from a vault file or kanban card and links the session id back into the card.
 
 ### Knowledge graph
 
@@ -149,8 +149,8 @@ The nexus-llm subscription gating system (`features.py`, `FeatureGateMiddleware`
 
 The server **always** binds to `127.0.0.1`. There is no `--host` flag and no supported way to expose it on `0.0.0.0`. Remote access is only via a tunnel that runs as a local client connecting *to* the loopback bind:
 
-- `nexus tunnel start` (managed Cloudflare Quick Tunnel — auto-downloads `cloudflared` on first use, no signup required), or
-- bring-your-own — tailscale, ssh `-L`, etc., all targeting `localhost:18989`.
+- `nexus tunnel start` (managed Cloudflare Quick Tunnel — auto-downloads `cloudflared` on first use, no signup required), or `nexus tunnel start --provider tailscale` (Tailscale Funnel — public internet, needs the `tailscale` CLI logged in; stop resets the funnel config), or `nexus tunnel start --provider tailscale-serve` (tailnet-only: no access code — tailscaled authenticates peers at the network layer, the middleware trusts proxied clients via `TunnelManager.trusts_proxied_clients()`; activation fails closed if a funnel entry targets the Nexus port, and hand-enabling funnel afterwards would make the no-auth path public — don't), or
+- bring-your-own — ssh `-L` etc. targeting `localhost:18989`. Note: manually-run proxies that set `x-forwarded-*` headers (e.g. a hand-typed `tailscale funnel`) are treated as tunnel traffic and fail closed with 401 — use the managed providers so the code/cookie flow is minted.
 
 The auth gate is `LoopbackOrTokenMiddleware` in [agent/src/nexus/server/app.py](agent/src/nexus/server/app.py). It splits requests on whether proxy headers (`x-forwarded-for` / `x-forwarded-host` / `cf-ray` / `cf-connecting-ip`) are present:
 
