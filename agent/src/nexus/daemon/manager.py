@@ -184,7 +184,13 @@ finally:
                         cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
-                        close_fds=True
+                        stdin=subprocess.DEVNULL,
+                        close_fds=True,
+                        # New session (setsid) so the daemon survives the
+                        # terminal/session that spawned it — without this a
+                        # closing shell takes the "detached" daemon down with
+                        # SIGHUP/SIGTERM to the shared process group.
+                        start_new_session=True,
                     )
 
                 time.sleep(3)
@@ -253,6 +259,7 @@ finally:
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
+            start_new_session=True,
         )
 
         with open(self.ui_pid_file, 'w') as f:
