@@ -32,6 +32,16 @@ class ProviderRegistry:
             raise KeyError(f"Provider {provider_name!r} not available")
         return self._providers[provider_name], model_name
 
+    def get_for_provider_model(self, provider_name: str, model_name: str) -> tuple[LLMProvider, str]:
+        """Resolve a bare upstream model on a named provider.
+
+        Used as a fallback for catalog-style ids (`provider/model`) that
+        have no [[models]] mapping in config — the suffix after the slash
+        is what the upstream API expects as the model name."""
+        if provider_name not in self._providers:
+            raise KeyError(f"Provider {provider_name!r} not available")
+        return self._providers[provider_name], model_name
+
     def available_model_ids(
         self,
         exclude_nonfunctional: bool = False,

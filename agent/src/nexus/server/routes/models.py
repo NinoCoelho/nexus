@@ -99,7 +99,21 @@ async def delete_model(
 ) -> None:
     from ...config_file import load as load_cfg, save as save_cfg
     cfg = app_state["cfg"] or load_cfg()
+    if not any(m.id == model_id for m in cfg.models):
+        raise HTTPException(404, f"model {model_id!r} not found")
     cfg.models = [m for m in cfg.models if m.id != model_id]
+    # Clean dangling references — leaving default_model pointing at a
+    # deleted model makes every turn send an unresolvable id upstream.
+    if cfg.agent.last_used_model == model_id:
+        cfg.agent.last_used_model = ""
+    if cfg.agent.vision_model == model_id:
+        cfg.agent.vision_model = ""
+    if cfg.graphrag.embedding_model_id == model_id:
+        cfg.graphrag.embedding_model_id = ""
+    if cfg.graphrag.extraction_model_id == model_id:
+        cfg.graphrag.extraction_model_id = ""
+    if cfg.agent.default_model == model_id:
+        cfg.agent.default_model = cfg.models[0].id if cfg.models else ""
     save_cfg(cfg)
     _rebuild_registry(cfg, app_state, a)
 

@@ -64,6 +64,16 @@ class LoomProviderAdapter(LoomLLMProvider):
             try:
                 return self._registry.get_for_model(resolved)
             except KeyError as exc:
+                # Catalog-style id with no [[models]] mapping: if the
+                # prefix names a registered provider, the suffix is the
+                # upstream model name — route there instead of sending
+                # the qualified id upstream (which the API rejects).
+                provider_name, sep, bare = resolved.partition("/")
+                if sep and bare:
+                    try:
+                        return self._registry.get_for_provider_model(provider_name, bare)
+                    except KeyError:
+                        pass
                 known = []
                 try:
                     known = list(self._registry.available_model_ids())[:10]
