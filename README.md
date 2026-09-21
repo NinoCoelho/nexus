@@ -17,6 +17,7 @@
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
 - **Workflows** — visual flow-based automation with a React-flow graph editor, seven step types, five trigger types (webhook, schedule, fs_watch, event, manual), template autocomplete, and per-step run history.
+- **Nexus in Chrome** — a side-panel extension that puts the agent on the page you're actually looking at: per-tab conversations, a color-coded tab group for shared context, and a `page` tool that lets the agent read, click, type, scroll, navigate, and pull YouTube transcripts natively from your real browser tab.
 - **MCP integration** — connect to external MCP servers (stdio, HTTP, SSE) and use their tools natively, or expose Nexus tools to external hosts via server mode. One-box paste wizard in the Integrations tab makes setup trivial.
 - **Dreaming** — scheduled background agent that consolidates memories, extracts cross-session insights, refines skills, and rehearses scenarios during idle time. Dream journal, manual triggers, and staged skill-suggestion review in the UI.
 - **Packaged desktop apps** — ships as `Nexus.app` (macOS) and `Nexus.exe` (Windows) with a bundled CPython, dependencies, web UI, and pre-downloaded embedding/spaCy models so it runs offline on a fresh machine. Optionally rebuild with `--bundle-llm qwen-3b` to ship a Qwen2.5-3B model and skip the API-key requirement entirely.
@@ -45,6 +46,51 @@ cd ~/nexus/ui && npm run dev   # http://localhost:1890
 ```
 
 **API key**: set `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY`, or any OpenAI-compatible key) before starting the daemon.
+
+---
+
+## Nexus in Chrome
+
+A no-build Chrome extension that replicates the Claude-in-Chrome experience against your local Nexus server: click the toolbar icon on any tab to open a side-panel chat **bound to that tab** — one conversation per tab, hidden on every other tab, using the same themes, fonts, and markdown rendering as the main UI.
+
+### Install (one time)
+
+```bash
+nexus chrome install     # copies the extension to ~/.nexus/chrome-extension
+                          # and opens the guided install page (http://localhost:18989/ext)
+```
+
+Then, on the guided page: open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `~/.nexus/chrome-extension`. Pin the Nexus icon. The page shows a live **"Extension connected ✓"** indicator once the extension's service worker registers with the server.
+
+No fixed-port assumption: the extension matches any `localhost` port and learns the actual one automatically the first time you open any Nexus-served page (the main UI or the install page). A manual port field appears in the panel if the server is ever unreachable.
+
+Verify everything with:
+
+```bash
+nexus chrome doctor      # ✓ server · ✓ extension files · ✓ extension connected
+```
+
+### Using it
+
+- **Click the toolbar icon** on a tab → the panel opens and the tab joins the purple **Nexus tab group**. Drag more tabs into the group to give the agent shared multi-tab context.
+- **Click the icon again** (panel open) → the tab is ungrouped, the panel closes, and the conversation is finished. Server-side history is kept; the next click starts fresh.
+- **Navigate within a tab** (new video, new article) → the panel detects the page change and tells the agent; the agent re-reads what it needs.
+- The conversation context carries only a *pointer* (URL, title, changed-flag) — the agent fetches page content on demand, treating it as untrusted data.
+
+### The `page` tool
+
+In side-panel sessions the agent can act on your real browser tab:
+
+| Action | What it does |
+|--------|--------------|
+| `read` | Cleaned main-content text (nav/footer noise stripped); `mode: outline` or `links` for cheap structural reads; `selector` for a raw element; `full: true` up to 40k chars |
+| `transcript` | Native captions of the current video page (YouTube player caption tracks, with an automatic DOM transcript-panel fallback) — no yt-dlp needed |
+| `click` / `type` | Click by CSS selector or visible text; fill inputs with native value-setters (React-safe) and optional Enter |
+| `scroll` / `navigate` | Scroll by pixels; navigate the tab (asks first) |
+| `js` | Evaluate JavaScript in the page (asks first) |
+| `tab: "<substring>"` | Retarget any action at a *grouped* tab by URL/title substring |
+
+`read`/`click`/`type`/`scroll`/`transcript` auto-execute and log an activity line; `navigate` and `js` show an **Allow/Deny** card. HITL `ask_user` prompts render in the panel like in the main UI.
 
 ---
 
@@ -118,6 +164,7 @@ The named volume holds `~/.nexus/` — sessions, vault, skills, secrets, and the
 
 - [Overview](#overview)
 - [Key Features](#key-features)
+- [Nexus in Chrome](#nexus-in-chrome)
 - [Architecture](#architecture)
   - [High-Level System Diagram](#high-level-system-diagram)
   - [Loom Integration](#loom-integration)
@@ -192,6 +239,8 @@ The agentic loop is powered by **Loom** — a reusable framework that provides t
 | **Per-Folder Knowledge Graphs** | Right-click a vault folder → "Visualize as graph" to define a folder-local ontology (optional LLM wizard samples files + asks disambiguation questions). Each open folder becomes a sub-tab in Knowledge mode with Reindex / Edit-ontology controls and a stale-files banner; the index lives in a hidden `.nexus-graph/` inside the folder so it travels with the data |
 | **Vault History (opt-in)** | When enabled, every vault mutation (write/delete/move) commits into a private git work-tree at `~/.nexus/.vault-history`. Right-click → "Undo last change" steps a single file or whole folder back one commit; a per-path cursor keeps consecutive undos walking backwards |
 | **Human-in-the-Loop** | `ask_user` (confirm/choice/text) and `terminal` (shell) gated by SSE approval dialogs; YOLO mode for unattended runs |
+| **Nexus in Chrome** | Side-panel extension bound per tab: one conversation per tab, purple tab-group for shared multi-tab context, main-UI look & feel (markdown, thinking blocks, HITL cards), auto port discovery |
+| **Page Tool** | Agent acts on the user's real browser tab — cleaned reads, outline/links modes, native YouTube transcripts, click/type/scroll, grouped-tab targeting; `navigate`/`js` behind Allow/Deny cards |
 | **Web Push** | Background push notifications for HITL prompts when the tab is closed (VAPID) |
 | **Public Tunnel** | One-click Cloudflare Quick Tunnel (no signup) with a login-form flow (URL + 8-char access code) — no secrets in URLs/logs; access code is single-use per activation (burned after first device redeems) |
 | **Read-Only Share Links** | Publish a session as a read-only public link with a generated token |
@@ -992,9 +1041,10 @@ nexus/
 ├── agent/                              # Python backend
 │   ├── pyproject.toml                  # Loom as local editable
 │   └── src/nexus/
-│       ├── cli/                        # Typer CLI (sessions, vault, kanban, skills, providers, models, …)
+│       ├── cli/                        # Typer CLI (sessions, vault, kanban, skills, providers, models, chrome, …)
 │       ├── main.py                     # Uvicorn entry
 │       ├── daemon/                     # Background process + service installers
+│       ├── chrome_install.py           # `nexus chrome install|doctor` implementation
 │       ├── config.py / config_file.py / config_schema.py
 │       ├── secrets.py                  # 0600 secrets.toml
 │       ├── redact.py                   # Secret redaction for logs
@@ -1009,6 +1059,7 @@ nexus/
 │       ├── calendar_runtime.py
 │       ├── agent/
 │       │   ├── loop/                   # Façade over loom.loop.Agent
+│       │   ├── page_tool.py            # `page` tool — act on the user's real browser tab (side-panel sessions)
 │       │   ├── _loom_bridge/           # Type adapters + tool registry builder
 │       │   ├── llm/                    # OpenAI / Anthropic provider adapters
 │       │   ├── prompt_builder.py       # Progressive-disclosure system prompt
@@ -1024,7 +1075,7 @@ nexus/
 │       │   ├── app.py                  # Route registration
 │       │   ├── job_tracker.py          # In-memory running-jobs registry (SSE events)
 │       │   └── routes/
-│       │       ├── chat.py / chat_stream.py
+│       │       ├── chat.py / chat_stream.py / ext.py     # /ext install page + extension heartbeat
 │       │       ├── sessions.py / sessions_vault.py
 │       │       ├── vault.py / vault_kanban.py / vault_calendar.py / vault_datatable.py / vault_dispatch.py / vault_import.py
 │       │       ├── providers.py / models.py / config.py / settings.py
@@ -1045,6 +1096,7 @@ nexus/
 │       │                               # show_kanban, show_dashboard_widget, show_data_table
 │       ├── vault.py + vault_*.py       # vault search / index / graph / kanban / calendar / csv / datatable
 │       └── tests/
+├── chrome/                             # "Nexus in Chrome" side-panel extension (no-build MV3, load unpacked)
 ├── ui/                                 # React frontend
 │   ├── package.json                    # React 19 + Vite 6 + TypeScript 5.7
 │   ├── vite.config.ts                  # Dev server :1890
@@ -1318,6 +1370,15 @@ nexus tunnel install                          # (optional) pre-download cloudfla
 Uses Cloudflare Quick Tunnel (via the `cloudflared` binary, auto-downloaded on first use). No signup, no authtoken, no account.
 
 The phone navigates to the URL, the SPA detects the missing cookie, shows a login form. The user types the 8-character access code → server seats an HttpOnly cookie → app loads. The code is the credential; the URL alone is harmless.
+
+### Chrome (Side Panel Extension)
+
+```bash
+nexus chrome install [--port 18989] [--no-browser]   # copy to ~/.nexus/chrome-extension + open guided page
+nexus chrome doctor  [--port 18989]                  # server / files / extension-heartbeat checklist
+```
+
+Local-only distribution: the user performs the final "Load unpacked" step in Chrome (the guided page at `GET /ext` walks them through it and confirms the connection live).
 
 ### Server & Chat
 
