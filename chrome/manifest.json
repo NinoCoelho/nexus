@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus in Chrome",
+  "version": "0.13.0",
+  "description": "Chat with Nexus about the page you're on. Talks to the local Nexus server on localhost:18989.",
+  "permissions": [
+    "sidePanel",
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "activeTab",
+    "storage",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Open Nexus chat for this tab",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "port-capture.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from .backup_cmd import backup_app
+from .chrome_cmd import chrome_app
 from .config_cmd import config_app
 from .cookies_cmd import cookies_app
 from .daemon_cmd import daemon_app
@@ -31,6 +32,7 @@ app.add_typer(graphrag_app, name="graphrag")
 app.add_typer(backup_app, name="backup")
 app.add_typer(cookies_app, name="cookies")
 app.add_typer(tunnel_app, name="tunnel")
+app.add_typer(chrome_app, name="chrome")
 
 
 @app.callback()

@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, RedirectResponse
 
 from ..agent.ask_user_tool import AskUserHandler
+from ..agent.page_tool import PageHandler
 from ..agent.context import CURRENT_SESSION_ID
 from ..agent.loop import Agent
 from ..skills.registry import SkillRegistry
@@ -352,6 +353,7 @@ def create_app(
     _proc_unreg = _make_proc_unregister(_terminal_procs)
 
     agent._ask_user_handler = ask_user_handler
+    agent._page_handler = PageHandler(session_store=sessions)
     agent._terminal_handler = TerminalTool(
         broker=sessions.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
@@ -483,6 +485,7 @@ def create_app(
     from .routes.jobs import router as jobs_router
     from .routes.vault_import import router as vault_import_router
     from .routes.update import router as update_router
+    from .routes.ext import router as ext_router
     from .routes.workflows import router as workflows_router
     from .routes.projects import router as projects_router
 
@@ -522,6 +525,7 @@ def create_app(
     app.include_router(mcp_router)
     app.include_router(jobs_router)
     app.include_router(update_router)
+    app.include_router(ext_router)
     app.include_router(workflows_router)
     app.include_router(projects_router)
 

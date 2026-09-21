@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mermaidcore">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header id="hdr">
+  <div id="pageInfo">
+    <div id="pageTitle" title="">No page</div>
+    <div id="pageUrl"></div>
+  </div>
+  <div id="hdrBtns">
+    <button id="btnGrant" hidden title="Allow reading pages you haven't clicked the icon on">Grant page access</button>
+    <button id="btnGroup" hidden title="Add this tab to the Nexus tab group — grouped tabs become shared context">＋ Group</button>
+    <span id="groupBadge" hidden></span>
+    <button id="btnNew" title="Start a new conversation for this tab">New</button>
+    <button id="btnStop" hidden title="Cancel the running turn">Stop</button>
+  </div>
+</header>
+<div id="statusBar" hidden></div>
+<main id="msgs"></main>
+<footer id="composer">
+  <textarea id="input" rows="3" placeholder="Ask about this page…"></textarea>
+  <button id="btnSend" title="Send (Enter)">Send</button>
+</footer>
+<script src="vendor/marked.min.js"></script>
+<script src="panel.js"></script>
+</body>
+</html>

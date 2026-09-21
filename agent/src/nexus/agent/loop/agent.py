@@ -333,6 +333,14 @@ class Agent:
     def _notify_user_handler(self, value: Any) -> None:
         self._handlers.notify_user = value
 
+    @property
+    def _page_handler(self) -> Any:
+        return self._handlers.page
+
+    @_page_handler.setter
+    def _page_handler(self, value: Any) -> None:
+        self._handlers.page = value
+
     def _context_window_for(self, model_id: str | None) -> int:
         cfg = self._nexus_cfg
         resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)
