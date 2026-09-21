@@ -335,6 +335,14 @@ if [[ -d "$REPO_ROOT/extension" ]]; then
     "$REPO_ROOT/extension/" "$RES/extension/"
 fi
 
+if [[ -d "$REPO_ROOT/chrome" ]]; then
+  echo "==> Staging side-panel extension sources"
+  mkdir -p "$RES/chrome-extension-src"
+  /usr/bin/rsync -a \
+    --exclude='.DS_Store' \
+    "$REPO_ROOT/chrome/" "$RES/chrome-extension-src/"
+fi
+
 if [[ "$SKIP_SIGN" -eq 0 ]]; then
   if [[ -n "$SIGN_IDENTITY" ]]; then
     echo "==> Codesigning nested binaries with Developer ID: $SIGN_IDENTITY"

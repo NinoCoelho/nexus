@@ -55,12 +55,21 @@ A no-build Chrome extension that replicates the Claude-in-Chrome experience agai
 
 ### Install (one time)
 
+**From the desktop app** (Nexus.app / Nexus.exe — no terminal needed):
+
+1. Launch the app (the server starts automatically), then open **http://localhost:18989/ext**
+2. Click **Prepare extension files** — copies the bundled extension to `~/.nexus/chrome-extension`
+3. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select that folder
+4. Pin the Nexus icon. The page shows a live **"Extension connected ✓"** indicator once you're done.
+
+**From a terminal install:**
+
 ```bash
 nexus chrome install     # copies the extension to ~/.nexus/chrome-extension
                           # and opens the guided install page (http://localhost:18989/ext)
 ```
 
-Then, on the guided page: open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `~/.nexus/chrome-extension`. Pin the Nexus icon. The page shows a live **"Extension connected ✓"** indicator once the extension's service worker registers with the server.
+The guided page has copy buttons for every step and verifies the connection live. Either path works the same — the desktop app just does it from the browser.
 
 No fixed-port assumption: the extension matches any `localhost` port and learns the actual one automatically the first time you open any Nexus-served page (the main UI or the install page). A manual port field appears in the panel if the server is ever unreachable.
 

@@ -14,6 +14,7 @@ itself the moment the user opens it.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,9 @@ _LAST_PING: dict[str, Any] = {"at": 0.0, "version": ""}
 
 
 def extension_dir() -> Path:
-    return Path.home() / ".nexus" / "chrome-extension"
+    from ... import chrome_install
+
+    return chrome_install.DEST_DIR
 
 
 @router.get("/ext/ping")
@@ -43,6 +46,34 @@ async def ext_ping(x_nexus_extension: str = Header(default="")) -> dict[str, Any
         "age_seconds": round(now - _LAST_PING["at"], 1) if seen else None,
         "version": _LAST_PING["version"],
     }
+
+
+def _files_state() -> dict[str, Any]:
+    manifest = extension_dir() / "manifest.json"
+    if not manifest.exists():
+        return {"installed": False, "path": str(extension_dir()), "version": None}
+    try:
+        version = json.loads(manifest.read_text()).get("version", "?")
+    except json.JSONDecodeError:
+        version = "?"
+    return {"installed": True, "path": str(extension_dir()), "version": version}
+
+
+@router.get("/ext/files")
+async def ext_files() -> dict[str, Any]:
+    return {"ok": True, **_files_state()}
+
+
+@router.post("/ext/prepare")
+async def ext_prepare() -> dict[str, Any]:
+    from ... import chrome_install
+
+    if chrome_install._source_dir() is None:
+        return {"ok": False, "error": "extension sources not found on this machine"}
+    rc = chrome_install.install(open_browser=False)
+    if rc != 0:
+        return {"ok": False, "error": "install failed"}
+    return {"ok": True, **_files_state()}
 
 
 @router.get("/ext", response_class=HTMLResponse)
@@ -75,6 +106,10 @@ async def ext_install_page() -> HTMLResponse:
 <body>
 <h1>Nexus in Chrome</h1>
 <h2>Install (one time)</h2>
+<div id="prepare" class="wait" style="display:none; padding:10px 14px; border:1px solid #2c303a; border-radius:8px; margin-bottom:8px;">
+  <button id="prepareBtn">Prepare extension files</button>
+  <span id="prepareNote"> — copies the bundled extension to <code>~/.nexus/chrome-extension</code></span>
+</div>
 <ol>
   <li>Open <code>chrome://extensions</code> <button data-copy="chrome://extensions">copy</button></li>
   <li>Turn on <strong>Developer mode</strong> (top-right toggle)</li>
@@ -92,6 +127,36 @@ async def ext_install_page() -> HTMLResponse:
   const cp = document.querySelector("button[data-copy-path]");
   if (cp) cp.onclick = () => navigator.clipboard.writeText(document.getElementById("extpath").textContent.trim());
   const status = document.getElementById("status");
+  const prepare = document.getElementById("prepare");
+  const prepareBtn = document.getElementById("prepareBtn");
+  const prepareNote = document.getElementById("prepareNote");
+  const refreshFiles = async () => {{
+    try {{
+      const r = await fetch("/ext/files");
+      const d = await r.json();
+      if (!d.installed) {{
+        prepare.style.display = "block";
+      }} else {{
+        prepare.style.display = "none";
+      }}
+    }} catch (_) {{}}
+  }};
+  prepareBtn.onclick = async () => {{
+    prepareBtn.disabled = true;
+    prepareNote.textContent = " preparing…";
+    try {{
+      const r = await fetch("/ext/prepare", {{ method: "POST" }});
+      const d = await r.json();
+      prepareNote.textContent = d.ok
+        ? ` done — v${{d.version}} copied`
+        : ` failed: ${{d.error}}`;
+      if (d.ok) prepare.style.display = "none";
+    }} catch (e) {{
+      prepareNote.textContent = ` failed: ${{e}}`;
+    }}
+    prepareBtn.disabled = false;
+    setTimeout(() => {{ prepareNote.textContent = " — copies the bundled extension to ~/.nexus/chrome-extension"; }}, 4000);
+  }};
   const tick = async () => {{
     try {{
       const r = await fetch("/ext/ping");
@@ -108,6 +173,7 @@ async def ext_install_page() -> HTMLResponse:
       status.textContent = "server error";
     }}
   }};
+  refreshFiles();
   tick();
   setInterval(tick, 2000);
 </script>

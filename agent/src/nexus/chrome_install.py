@@ -9,7 +9,9 @@ their post-install step, which copies the bundled files and opens the guided
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -21,9 +23,15 @@ DEST_DIR = Path.home() / ".nexus" / "chrome-extension"
 
 
 def _source_dir() -> Path | None:
+    env = os.environ.get("NEXUS_CHROME_DIR")
+    if env and (Path(env) / "manifest.json").exists():
+        return Path(env)
     pkg = Path(__file__).parent / "chrome_ext"
     if (pkg / "manifest.json").exists():
         return pkg
+    app = Path(sys.prefix).parent / "chrome-extension-src"
+    if (app / "manifest.json").exists():
+        return app
     dev = Path(__file__).resolve().parents[3] / "chrome"
     if (dev / "manifest.json").exists():
         return dev

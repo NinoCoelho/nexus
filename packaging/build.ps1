@@ -243,6 +243,27 @@ if (Test-Path $skillsSrc) {
         }
 }
 
+# ── Side-panel extension sources (Nexus in Chrome) ────────────────────────────
+$chromeSrc = Join-Path $RepoRoot 'chrome'
+if (Test-Path $chromeSrc) {
+    Write-Host '==> Staging side-panel extension sources'
+    $chromeDst = Join-Path $Stage 'chrome-extension-src'
+    New-Item $chromeDst -ItemType Directory -Force | Out-Null
+    Get-Child-Item -Path $chromeSrc -Recurse |
+        Where-Object { $_.Name -ne '.DS_Store' } |
+        ForEach-Object {
+            $rel = $_.FullName.Substring($chromeSrc.Length + 1)
+            $dest = Join-Path $chromeDst $rel
+            if ($_.PSIsContainer) {
+                New-Item $dest -ItemType Directory -Force | Out-Null
+            } else {
+                $parent = Split-Path $dest -Parent
+                if (-not (Test-Path $parent)) { New-Item $parent -ItemType Directory -Force | Out-Null }
+                Copy-Item $_.FullName $dest -Force
+            }
+        }
+}
+
 # ── Demo-model manifest (optional) ───────────────────────────────────────────
 if ($DemoUrl -and $DemoKey -and $DemoModel) {
     Write-Host "==> Staging demo_llm.json (model: $DemoModel)"
