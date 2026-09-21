@@ -94,6 +94,9 @@ export default function InputBar({
   const [uploading, setUploading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  // Deadline (epoch ms) of the recorder's "about to send" grace countdown;
+  // null while recording normally. Drives the countdown UI.
+  const [endingDeadline, setEndingDeadline] = useState<number | null>(null);
   const [conversationMode, setConversationMode] = useState(false);
   // ``pendingSecret`` parks a send while the user decides what to do with a
   // secret-shaped substring. ``pendingSendText`` carries the exact text we
@@ -176,6 +179,7 @@ export default function InputBar({
 
   const handleCancelRecording = useCallback(() => {
     cancelRecording();
+    setEndingDeadline(null);
     setConversationMode(false);
   }, [cancelRecording]);
 
@@ -319,6 +323,7 @@ export default function InputBar({
   const stopRecordingAndSend = () => {
     if (transcribing) return;
     setTranscribing(true);
+    setEndingDeadline(null);
     setConversationMode(true);
     sounds.micSilence();
     stopRecording({
@@ -331,6 +336,18 @@ export default function InputBar({
 
   const handleSilenceTimeout = useCallback(() => {
     stopRecordingAndSendRef.current();
+  }, []);
+
+  // Pause-tolerant endpointing: when the adaptive silence window elapses
+  // the recorder enters a cancellable countdown instead of sending. The
+  // deadline drives the countdown UI; speaking cancels it and the SAME
+  // recording continues (pauses never truncate the utterance).
+  const handleEndingStart = useCallback((graceMs: number) => {
+    setEndingDeadline(Date.now() + graceMs);
+  }, []);
+
+  const handleEndingCancel = useCallback(() => {
+    setEndingDeadline(null);
   }, []);
 
   const handleFollowUpTimeout = useCallback(() => {
@@ -416,6 +433,8 @@ export default function InputBar({
     unlockAudioForIOS();
     void startRecording({
       onSilenceTimeout: handleSilenceTimeout,
+      onEndingStart: handleEndingStart,
+      onEndingCancel: handleEndingCancel,
     });
   };
 
@@ -437,6 +456,8 @@ export default function InputBar({
     unlockAudioForIOS();
     void startRecording({
       onSilenceTimeout: handleSilenceTimeout,
+      onEndingStart: handleEndingStart,
+      onEndingCancel: handleEndingCancel,
     });
   };
 
@@ -462,6 +483,8 @@ export default function InputBar({
     sounds.micReady();
     void startRecording({
       onSilenceTimeout: handleSilenceTimeout,
+      onEndingStart: handleEndingStart,
+      onEndingCancel: handleEndingCancel,
       followUpMode: true,
       onFollowUpTimeout: handleFollowUpTimeout,
     });
@@ -557,6 +580,7 @@ export default function InputBar({
               levels={levels}
               seconds={seconds}
               onCancel={handleCancelRecording}
+              endingAt={endingDeadline}
             />
           ) : (
             <textarea

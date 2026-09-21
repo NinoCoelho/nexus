@@ -50,6 +50,7 @@
 }
 
 .recording-waveform {
+  position: relative;
   flex: 1;
   height: 24px;
   display: flex;
@@ -66,6 +67,27 @@
   min-height: 2px;
 }
 
+/* ── "About to send" grace countdown ─────────────────────────────── */
+
+.recording-indicator--ending {
+  background: color-mix(in srgb, var(--accent, #6c8cff) 10%, var(--bg-inset, rgba(255, 255, 255, 0.04)));
+}
+
+.recording-ending-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent, var(--fg));
+  border-radius: 1px;
+  transition: width 100ms linear;
+}
+
+.recording-hint--ending {
+  color: var(--fg);
+  font-weight: 500;
+}
+
 .recording-hint {
   font-size: 11px;
   color: var(--fg-faint);
@@ -75,5 +97,10 @@
 @media (max-width: 640px) {
   .recording-hint {
     display: none;
+  }
+
+  /* The countdown hint is actionable feedback — never hide it. */
+  .recording-hint--ending {
+    display: inline;
   }
 }

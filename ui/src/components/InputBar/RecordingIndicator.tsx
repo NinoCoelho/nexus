@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import "./RecordingIndicator.css";
 
@@ -5,6 +6,10 @@ interface Props {
   levels: number[];
   seconds: number;
   onCancel: () => void;
+  /** Epoch-ms deadline of the "about to send" grace countdown. While it
+   *  counts down, resuming speech cancels the send and the recording
+   *  continues. Null = normal recording. */
+  endingAt?: number | null;
 }
 
 function fmt(seconds: number): string {
@@ -13,9 +18,25 @@ function fmt(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export default function RecordingIndicator({ levels, seconds, onCancel }: Props) {
+export default function RecordingIndicator({ levels, seconds, onCancel, endingAt }: Props) {
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (endingAt == null) {
+      setRemainingMs(null);
+      return;
+    }
+    const tickDown = () => setRemainingMs(Math.max(0, endingAt - Date.now()));
+    tickDown();
+    const id = window.setInterval(tickDown, 100);
+    return () => window.clearInterval(id);
+  }, [endingAt]);
+
+  const ending = remainingMs != null && remainingMs > 0;
+  const progress = ending ? Math.min(1, remainingMs / 1500) : 1;
+
   return (
-    <div className="recording-indicator" role="status" aria-label="Recording audio">
+    <div className={`recording-indicator${ending ? " recording-indicator--ending" : ""}`} role="status" aria-label="Recording audio">
       <button
         type="button"
         className="recording-cancel"
@@ -35,8 +56,21 @@ export default function RecordingIndicator({ levels, seconds, onCancel }: Props)
             style={{ height: `${Math.max(8, Math.min(100, v * 100))}%` }}
           />
         ))}
+        {ending && (
+          <span
+            className="recording-ending-bar"
+            style={{ width: `${progress * 100}%` }}
+            aria-hidden="true"
+          />
+        )}
       </div>
-      <span className="recording-hint">Release or tap mic to send</span>
+      {ending ? (
+        <span className="recording-hint recording-hint--ending">
+          Sending in {Math.ceil(remainingMs! / 1000)}… keep talking to continue
+        </span>
+      ) : (
+        <span className="recording-hint">Release or tap mic to send</span>
+      )}
     </div>
   );
 }

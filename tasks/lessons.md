@@ -55,3 +55,35 @@
 - **Pattern:** `chrome.scripting.executeScript({func})` serializes the function ALONE — outer-scope constants/helpers (NOISE_SELECTOR, BLOCK_TAGS, pageOutline) do NOT travel and throw ReferenceError *in the page*, surfacing only as silent null results. Every injected function must be fully self-contained (constants inlined).
 - **Pattern:** LLMs pass enum defaults explicitly — gate on the *semantic* default (`mode === undefined || mode === "text"`), not just absence, or the "explicit default" call takes the wrong branch.
 - **Pattern:** YouTube `timedtext` fetches from extensions increasingly return HTTP 4xx with EMPTY body (missing trust/PoT tokens) — "Unexpected end of JSON input" is the signature. Fallback: drive the page's own transcript UI (expand description → click transcript button → poll `ytd-transcript-segment-renderer`) which needs no tokens. Always surface HTTP status + body length in the error.
+
+## Voice mode v1 failure (user report: "doesn't respond")
+- The scripted e2e test proved the pipeline, but the USER's first turn hit
+  three stacked latency traps: cold whisper load (~33s), ack-LLM 400 +
+  retries (thinking-disabled rejected by litellm proxy), and a
+  thinking-model + tool-heavy turn that emits no reply text for minutes.
+  Silence with no visual feedback = "broken".
+- Rules: (1) test first-turn cold paths, not just warm scripted ones;
+  (2) voice UX must show live progress (delta text, tool activity) during
+  long turns — audio alone is not enough for thinking models; (3) ack-LLM
+  calls get hard timeouts and instant-template fallback; (4) warm heavy
+  models (whisper) at startup like piper voices.
+- StrictMode double-mount poisoned VoiceMode: the unmount cleanup latched
+  `closedRef=true`, so the remount's guards bailed and the overlay showed
+  "Listening…" with a dead mic — nothing reached the server. Rule: any
+  latch-style flag set in an effect cleanup MUST be re-armed at the top of
+  the effect; and hooks that own media hardware need supersede/sequence
+  guards (orphaned MediaRecorder = hot mic + dueling VAD loops).
+- Diagnose "it doesn't work" from the server log BEFORE touching code:
+  absence of uploads/POSTs instantly localizes the break to the client.
+
+## Voice mode overlay → rejected by user, rolled back
+- The user rejected the full-screen voice-mode overlay ("não tá nada
+  bom") and asked to improve the EXISTING inline mic instead. Lesson:
+  when a working flow exists, evolve it incrementally — don't introduce a
+  parallel surface for the same job. New UI surfaces multiply failure
+  modes (StrictMode mic races, autoplay policies, duplicate audio paths)
+  before the core loop is even fast.
+- Evidence worth carrying into the NEXT attempt (from daemon logs):
+  cold whisper load ~33s; ack-LLM 400 (thinking-disabled rejected by the
+  litellm proxy) with multi-second stalls; speculative 80-word ack
+  diverges from the reply; thinking-model TTFT leaves long silent gaps.

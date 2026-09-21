@@ -1,3 +1,40 @@
+# Pause-tolerant voice endpointing (2026-09-21, evolucão do mic inline)
+
+User problem: pausing mid-utterance and continuing sometimes sent the
+partial audio — the continuation was lost. Solution implemented on the
+EXISTING inline mic (no new UI surface, post-rollback):
+
+- [x] `useAudioRecorder`: adaptive silence window — 2.5s base growing
+      with cumulative speech time (×0.15, cap 5s): longer utterances
+      tolerate longer natural pauses. 200ms min-speech blip guard.
+- [x] Cancellable "ending" grace countdown (1.5s): when silence elapses
+      the recorder does NOT stop — `onEndingStart(graceMs)` fires; speech
+      before the deadline cancels (`onEndingCancel`) and the SAME
+      recording/blob continues (nothing truncated); only a completed
+      countdown sends (`onSilenceTimeout` as before).
+- [x] `RecordingIndicator`: countdown UI — accent-tinted indicator,
+      draining progress bar under the waveform, hint swaps to "Sending
+      in Ns… keep talking to continue" (kept visible on mobile).
+- [x] `InputBar`: wires ending callbacks at all 3 startRecording sites;
+      deadline cleared on send/cancel.
+- [x] Verified: tsc + vite build clean. Manual test pending (user).
+
+Effective pause tolerance: ~4s (short) → ~6.5s (long utterances), with
+visible countdown during the final 1.5s.
+
+---
+
+# Voice-mode overlay — REJECTED & ROLLED BACK (2026-09-21)
+
+User verdict: "isso não tá nada bom" — full-screen overlay rolled back to
+HEAD (git restore + untracked removed; only lessons.md kept per rules).
+The inline mic in the chat input bar remains THE voice surface. Next
+step: incremental improvements to the existing flow — see the analysis +
+proposal delivered in chat (summary: warmup/timeout fixes, speak the real
+reply, barge-in, shorter endpointing — evolve the mic, no new UI).
+
+---
+
 # Chrome Side-Panel PoC — page-connected chat over the Nexus API
 
 v0.13 (installer automation + port flexibility, local-only per decisions):

@@ -10,10 +10,21 @@
  *
  * VAD (voice activity detection): After a per-recording fingerprint
  * calibration window (first ~1s), silence below the calibrated threshold
- * for 3 consecutive seconds triggers `onSilenceTimeout`. In follow-up
- * mode, if no speech is detected within 10s of recording start, the
- * recording is auto-cancelled and a soft waiting beep plays every 2s
- * to remind the user the mic is listening.
+ * ends the turn — but PAUSES ARE SAFE:
+ *
+ *   1. The silence window is adaptive: the more you've spoken, the longer
+ *      the natural pause tolerated (2.5s → up to 5s). Mid-utterance
+ *      breaths and thinking pauses no longer cut you off.
+ *   2. When silence does elapse, the recording does NOT stop — it enters
+ *      a cancellable "ending" grace countdown (`ENDING_GRACE_MS`,
+ *      surfaced via `onEndingStart`). Resume speaking and the countdown
+ *      cancels (`onEndingCancel`); the same recording continues and the
+ *      continuation lands in the SAME audio blob (nothing is lost).
+ *      Only if the countdown completes does `onSilenceTimeout` fire.
+ *
+ * In follow-up mode, if no speech is detected within 10s of recording
+ * start, the recording is auto-cancelled and a soft waiting beep plays
+ * every 2s to remind the user the mic is listening.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sounds } from "../../hooks/useSounds";
@@ -28,11 +39,25 @@ export interface RecorderOptions {
   onSilenceTimeout?: () => void;
   followUpMode?: boolean;
   onFollowUpTimeout?: () => void;
+  /** The cancellable send countdown started (silence already elapsed).
+   *  Speech before it expires cancels via `onEndingCancel`. */
+  onEndingStart?: (graceMs: number) => void;
+  /** The user resumed speaking during the grace countdown — recording
+   *  continues, nothing is sent. */
+  onEndingCancel?: () => void;
 }
 
 const LEVEL_HISTORY = 32;
 const FINGERPRINT_DURATION_MS = 1000;
-const SILENCE_TIMEOUT_MS = 3000;
+/** Adaptive silence window: base 2.5s growing with spoken duration. */
+const SILENCE_MIN_MS = 2500;
+const SILENCE_MAX_MS = 5000;
+const SILENCE_SCALE = 0.15; // limit = min + scale × speechMs, capped
+/** Cancellable countdown between "silence elapsed" and actually sending. */
+const ENDING_GRACE_MS = 1500;
+/** Endpointing only arms after this much cumulative speech (blip guard —
+ *  a door slam shouldn't start the silence clock for a real utterance). */
+const MIN_SPEECH_MS = 200;
 const FOLLOW_UP_TIMEOUT_MS = 10000;
 const WAITING_BEEP_INTERVAL_MS = 2000;
 const DEFAULT_THRESHOLD = 0.05;
@@ -66,6 +91,10 @@ export function useAudioRecorder() {
   const waitingBeepRef = useRef<number | null>(null);
   const vadStoppedRef = useRef(false);
   const recordingStartRef = useRef<number>(0);
+  // Pause-tolerant endpointing state:
+  const speechMsRef = useRef(0);          // cumulative time above threshold
+  const lastTickAtRef = useRef<number>(0); // for dt accumulation
+  const endingAtRef = useRef<number | null>(null); // grace countdown deadline
 
   const clearVadTimers = useCallback(() => {
     if (silenceTimerRef.current != null) {
@@ -81,6 +110,7 @@ export function useAudioRecorder() {
       waitingBeepRef.current = null;
     }
     silenceStartRef.current = null;
+    endingAtRef.current = null;
   }, []);
 
   const resetVad = useCallback(() => {
@@ -91,7 +121,17 @@ export function useAudioRecorder() {
     speechDetectedRef.current = false;
     vadStoppedRef.current = false;
     recordingStartRef.current = 0;
+    speechMsRef.current = 0;
+    lastTickAtRef.current = 0;
+    endingAtRef.current = null;
   }, [clearVadTimers]);
+
+  /** Silence window grows with how much has been said — long utterances
+   *  tolerate longer natural pauses. */
+  const adaptiveSilenceMs = useCallback(() => {
+    const limit = SILENCE_MIN_MS + SILENCE_SCALE * speechMsRef.current;
+    return Math.min(SILENCE_MAX_MS, Math.round(limit));
+  }, []);
 
   const cleanupAnalyser = useCallback(() => {
     if (rafRef.current != null) {
@@ -204,6 +244,9 @@ export function useAudioRecorder() {
         }
         const rms = Math.sqrt(sum / buf.length);
         const normalized = Math.min(1, rms * 2.4);
+        const now = Date.now();
+        const dt = lastTickAtRef.current ? Math.min(100, now - lastTickAtRef.current) : 16;
+        lastTickAtRef.current = now;
 
         setLevels((prev) => {
           const next = prev.slice(1);
@@ -211,7 +254,7 @@ export function useAudioRecorder() {
           return next;
         });
 
-        const elapsed = Date.now() - startedAt;
+        const elapsed = now - startedAt;
 
         if (!fingerprintDoneRef.current && elapsed < FINGERPRINT_DURATION_MS) {
           fingerprintSamplesRef.current.push(rms);
@@ -226,7 +269,30 @@ export function useAudioRecorder() {
         }
 
         if (fingerprintDoneRef.current) {
-          if (rms > thresholdRef.current) {
+          const isSpeech = rms > thresholdRef.current;
+
+          // Grace countdown: silence already elapsed, send is imminent.
+          // Speaking any time before the deadline cancels it and the
+          // SAME recording continues — pauses never truncate the audio.
+          if (endingAtRef.current != null) {
+            if (isSpeech) {
+              endingAtRef.current = null;
+              silenceStartRef.current = null;
+              if (silenceTimerRef.current != null) {
+                clearTimeout(silenceTimerRef.current);
+                silenceTimerRef.current = null;
+              }
+              vadOptsRef.current.onEndingCancel?.();
+            } else if (now >= endingAtRef.current) {
+              endingAtRef.current = null;
+              vadStoppedRef.current = true;
+              vadOptsRef.current.onSilenceTimeout?.();
+              return;
+            }
+          }
+
+          if (isSpeech) {
+            speechMsRef.current += dt;
             if (!speechDetectedRef.current) {
               speechDetectedRef.current = true;
               if (followUpTimerRef.current != null) {
@@ -243,20 +309,19 @@ export function useAudioRecorder() {
               clearTimeout(silenceTimerRef.current);
               silenceTimerRef.current = null;
             }
-          } else if (speechDetectedRef.current) {
+          } else if (speechDetectedRef.current && speechMsRef.current >= MIN_SPEECH_MS) {
             if (silenceStartRef.current == null) {
-              silenceStartRef.current = Date.now();
+              silenceStartRef.current = now;
             }
             if (silenceTimerRef.current == null) {
               silenceTimerRef.current = window.setTimeout(() => {
-                if (vadStoppedRef.current) return;
-                const since = silenceStartRef.current;
-                if (since != null && (Date.now() - since) >= SILENCE_TIMEOUT_MS - 200) {
-                  silenceTimerRef.current = null;
-                  vadStoppedRef.current = true;
-                  vadOptsRef.current.onSilenceTimeout?.();
-                }
-              }, SILENCE_TIMEOUT_MS);
+                silenceTimerRef.current = null;
+                if (vadStoppedRef.current || endingAtRef.current != null) return;
+                // Silence held for the adaptive window — enter the
+                // cancellable countdown instead of sending immediately.
+                endingAtRef.current = Date.now() + ENDING_GRACE_MS;
+                vadOptsRef.current.onEndingStart?.(ENDING_GRACE_MS);
+              }, adaptiveSilenceMs());
             }
           }
         }
