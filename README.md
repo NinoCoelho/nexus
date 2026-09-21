@@ -83,6 +83,7 @@ nexus chrome doctor      # ✓ server · ✓ extension files · ✓ extension co
 
 - **Click the toolbar icon** on a tab → the panel opens and the tab joins the purple **Nexus tab group**. Drag more tabs into the group to give the agent shared multi-tab context.
 - **Click the icon again** (panel open) → the tab is ungrouped, the panel closes, and the conversation is finished. Server-side history is kept; the next click starts fresh.
+- **Right-click** anywhere → "Open Nexus chat on this tab"; select text first and "Ask Nexus about this selection" opens the panel with the quote pre-filled in the composer; right-click a link for "Ask Nexus about this link".
 - **Navigate within a tab** (new video, new article) → the panel detects the page change and tells the agent; the agent re-reads what it needs.
 - The conversation context carries only a *pointer* (URL, title, changed-flag) — the agent fetches page content on demand, treating it as untrusted data.
 
