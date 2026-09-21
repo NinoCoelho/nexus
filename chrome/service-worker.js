@@ -34,14 +34,12 @@ chrome.runtime.onInstalled.addListener(pingServer);
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create(
-    {
-      id: "nexus-open",
-      title: "Chat with Nexus on this tab",
-      contexts: ["action"],
-    },
-    () => void chrome.runtime.lastError
-  );
+  const mk = (id, title, contexts) =>
+    chrome.contextMenus.create({ id, title, contexts }, () => void chrome.runtime.lastError);
+  mk("nexus-open", "Chat with Nexus on this tab", ["action"]);
+  mk("nexus-page", "Open Nexus chat on this tab", ["page"]);
+  mk("nexus-selection", "Ask Nexus about this selection", ["selection"]);
+  mk("nexus-link", "Ask Nexus about this link", ["link"]);
 });
 
 async function getMap(key) {
@@ -144,8 +142,8 @@ function tryOpen(tabId) {
   });
 }
 
-function onActivateGesture(tab) {
-  if (activatedTabs[tab.id] != null && openTabs[tab.id] != null) {
+function onActivateGesture(tab, { toggle = true } = {}) {
+  if (toggle && activatedTabs[tab.id] != null && openTabs[tab.id] != null) {
     finishTab(tab).catch((err) => {
       console.warn("[nexus] finishTab failed:", err && err.message);
     });
@@ -168,12 +166,36 @@ function onActivateGesture(tab) {
     });
 }
 
+function seedComposer(text) {
+  chrome.storage.session
+    .set({ composerSeed: text })
+    .then(() => chrome.runtime.sendMessage({ type: "SEED_COMPOSER", text }))
+    .catch(() => {});
+}
+
 chrome.action.onClicked.addListener((tab) => {
-  onActivateGesture(tab).catch(() => {});
+  onActivateGesture(tab);
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "nexus-open" && tab) onActivateGesture(tab).catch(() => {});
+  if (!tab) return;
+  if (info.menuItemId === "nexus-open" || info.menuItemId === "nexus-page") {
+    onActivateGesture(tab, { toggle: false });
+    return;
+  }
+  if (info.menuItemId === "nexus-selection") {
+    const sel = (info.selectionText || "").trim();
+    onActivateGesture(tab, { toggle: false });
+    if (sel) {
+      seedComposer(`About this selection:\n\n> ${sel.replace(/\n/g, "\n> ")}\n\n`);
+    }
+    return;
+  }
+  if (info.menuItemId === "nexus-link") {
+    const url = info.linkUrl || "";
+    onActivateGesture(tab, { toggle: false });
+    if (url) seedComposer(`About this link: ${url}\n\n`);
+  }
 });
 
 chrome.tabs.onCreated.addListener((tab) => {

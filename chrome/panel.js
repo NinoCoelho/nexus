@@ -719,7 +719,29 @@ async function addToGroup() {
   }
 }
 
+function applyComposerSeed(text) {
+  if (!text) return;
+  els.input.value = text;
+  els.input.focus();
+  els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+}
+
+async function drainComposerSeed() {
+  try {
+    const data = await chrome.storage.session.get("composerSeed");
+    if (data.composerSeed) {
+      applyComposerSeed(data.composerSeed);
+      await chrome.storage.session.remove("composerSeed");
+    }
+  } catch (_) {}
+}
+
 function onWorkerMessage(msg) {
+  if (msg.type === "SEED_COMPOSER") {
+    applyComposerSeed(msg.text);
+    chrome.storage.session.remove("composerSeed").catch(() => {});
+    return;
+  }
   if (msg.type === "TAB_UPDATED" && msg.tabId === state.tabId) {
     state.url = msg.url;
     state.title = msg.title;
@@ -802,6 +824,7 @@ async function init() {
   await loadHistory();
   refreshGroup();
   chrome.runtime.onMessage.addListener(onWorkerMessage);
+  drainComposerSeed();
   els.btnSend.addEventListener("click", send);
   els.btnNew.addEventListener("click", newChat);
   els.btnStop.addEventListener("click", stopTurn);

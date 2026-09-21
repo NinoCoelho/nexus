@@ -208,3 +208,12 @@ replicated (read-only PoC): `debugger`/CDP page actions, scheduled tasks.
   whenever any context source is unreadable.
 - Uncommitted by design — review `git diff` and commit when satisfied.
 
+
+## v0.14.0 (user request: context-menu options)
+- [x] Right-click menu: "Open Nexus chat on this tab" (page), "Ask Nexus about this
+      selection" (selection → composer seeded with blockquote), "Ask Nexus about this
+      link" (link → URL seeded); action-icon menu item kept. Menu activation opens
+      without the finish-toggle (icon keeps open/finish semantics).
+- [x] Seed delivery: storage.session stash + SEED_COMPOSER broadcast; panel drains
+      after listener registration (first-boot race safe).
+- [x] Manifest 0.14.0; `nexus chrome install` refreshed (~/.nexus/chrome-extension).
