@@ -12,6 +12,7 @@ because _ROOT is read per call). GraphRAG hooks no-op with no engine.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 
@@ -68,6 +69,16 @@ def test_interesting_paths(rel: str, expected: bool) -> None:
 
 # ── integration: real watchdog events end-to-end ──────────────────────────────
 
+# GitHub-hosted runners mount the pytest tmpdir on an overlayfs whose
+# inotify delivery to watchdog is unreliable — these integration tests
+# need a real local FS to observe external writes.
+pytestmark_integration_ci_skip = pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="runner overlayfs /tmp doesn't reliably deliver inotify events to watchdog",
+)
+
+
+@pytestmark_integration_ci_skip
 async def test_external_write_gets_indexed_and_published(
     tmp_home: Path,
 ):
@@ -112,6 +123,7 @@ def _kinds(q) -> list[tuple[str, str | None]]:
     return out
 
 
+@pytestmark_integration_ci_skip
 async def test_external_delete_prunes_index_and_publishes_removed(
     tmp_home: Path,
 ):
