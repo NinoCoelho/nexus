@@ -249,7 +249,7 @@ if (Test-Path $chromeSrc) {
     Write-Host '==> Staging side-panel extension sources'
     $chromeDst = Join-Path $Stage 'chrome-extension-src'
     New-Item $chromeDst -ItemType Directory -Force | Out-Null
-    Get-Child-Item -Path $chromeSrc -Recurse |
+    Get-ChildItem -Path $chromeSrc -Recurse |
         Where-Object { $_.Name -ne '.DS_Store' } |
         ForEach-Object {
             $rel = $_.FullName.Substring($chromeSrc.Length + 1)

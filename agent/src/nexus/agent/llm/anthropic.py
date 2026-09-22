@@ -253,6 +253,38 @@ class AnthropicProvider(LLMProvider):
             kwargs["tools"] = [_encode_tool_anthropic(t) for t in tools]
         return system, filtered, kwargs
 
+    def _adapt_sdk_kwargs(
+        self, method: Any, kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Filter call kwargs against the installed SDK's signature.
+
+        Newer anthropic SDKs type ``Messages.create()/stream()`` explicitly
+        and raise ``TypeError`` on params they no longer name (e.g. a
+        future SDK that drops ``temperature``). Keep only accepted params;
+        demote the rest into ``extra_body`` (the SDK's typed escape hatch)
+        when the method supports it, so the request still carries them.
+        """
+        import inspect
+
+        try:
+            sig = inspect.signature(method)
+        except (TypeError, ValueError):
+            return kwargs
+        params = sig.parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return kwargs  # untyped signature — accept everything
+        accepted = set(params)
+        out = {k: v for k, v in kwargs.items() if k in accepted}
+        dropped = {k: v for k, v in kwargs.items() if k not in accepted}
+        if dropped and "extra_body" in accepted:
+            out["extra_body"] = {**(kwargs.get("extra_body") or {}), **dropped}
+        elif dropped:
+            log.warning(
+                "anthropic SDK dropped unsupported create params: %s",
+                sorted(dropped),
+            )
+        return out
+
     async def chat(
         self,
         messages: list[ChatMessage],
@@ -266,7 +298,9 @@ class AnthropicProvider(LLMProvider):
         prepared = await prepare_messages(resolved_model, messages)
         _, _, kwargs = self._prepare_call(resolved_model, prepared, max_tokens, tools, extra_payload)
 
-        resp = await self._client.messages.create(**kwargs)
+        resp = await self._client.messages.create(
+            **self._adapt_sdk_kwargs(self._client.messages.create, kwargs)
+        )
         return _decode_anthropic(resp)
 
     async def chat_stream(
@@ -291,7 +325,9 @@ class AnthropicProvider(LLMProvider):
             "AnthropicProvider.chat_stream → model=%s msgs=%d tools=%d max_toks=%s",
             resolved_model, len(filtered), len(tools or []), kwargs.get("max_tokens"),
         )
-        async with self._client.messages.stream(**kwargs) as stream:
+        async with self._client.messages.stream(
+            **self._adapt_sdk_kwargs(self._client.messages.stream, kwargs)
+        ) as stream:
             async for event in stream:
                 sdk_event_count += 1
                 etype = event.type
