@@ -15,12 +15,34 @@ visible to us.
 
 from __future__ import annotations
 
+from typing import Any
 
 import httpx
 import pytest
 
 from nexus.agent.llm.anthropic import AnthropicProvider
 from nexus.agent.llm.types import ChatMessage, Role
+
+
+def _sdk_httpx(inner: Any) -> Any:
+    """Return the httpx module backing the SDK's inner client.
+
+    The inner client is an SDK-defined subclass (e.g.
+    ``anthropic._base_client.AsyncHttpxClientWrapper``), and newer SDKs
+    may vendor their httpx as ``httpx2`` — building the mock from the
+    *outer* httpx then fails with "Invalid type for url … got
+    httpx2.URL". Walk the MRO past the SDK's own classes to the httpx
+    base class and resolve whichever module that is.
+    """
+    import importlib
+
+    for klass in type(inner).__mro__:
+        root = klass.__module__.split(".")[0]
+        if root not in ("anthropic", "builtins"):
+            return importlib.import_module(root)
+    import httpx as _fallback
+
+    return _fallback
 
 
 def _mock_anthropic_with(handler) -> AnthropicProvider:
@@ -42,13 +64,15 @@ def _capture_request(
     as the test runs.
     """
     captured: list[httpx.Request] = []
+    inner = provider._client._client
+    hx = _sdk_httpx(inner)
 
     def handler(req: httpx.Request) -> httpx.Response:
         captured.append(req)
         # Respond with a minimal valid Anthropic non-streaming Message —
         # enough for the SDK to parse without raising. (Streaming gets
         # its own scenario below.)
-        return httpx.Response(
+        return hx.Response(
             200,
             json={
                 "id": "msg_test",
@@ -62,12 +86,11 @@ def _capture_request(
             request=req,
         )
 
-    transport = httpx.MockTransport(handler)
+    transport = hx.MockTransport(handler)
     # The async SDK ships its own httpx client at provider._client._client.
     # Replace it with one wired to our transport so SDK retry, default
     # headers, json-encoding all run unchanged but never touch the network.
-    inner = provider._client._client
-    provider._client._client = httpx.AsyncClient(
+    provider._client._client = hx.AsyncClient(
         transport=transport,
         base_url=inner.base_url,
         timeout=inner.timeout,
@@ -242,6 +265,8 @@ async def test_oauth_streaming_request_carries_same_headers(
     """The streaming endpoint takes the same request shape; verify the
     SDK doesn't strip our default_headers in the streaming code path."""
     captured: list[httpx.Request] = []
+    inner = oauth_provider._client._client
+    hx = _sdk_httpx(inner)
 
     def handler(req: httpx.Request) -> httpx.Response:
         captured.append(req)
@@ -255,16 +280,15 @@ async def test_oauth_streaming_request_carries_same_headers(
             "event: message_stop\n"
             "data: {\"type\":\"message_stop\"}\n\n"
         )
-        return httpx.Response(
+        return hx.Response(
             200,
             content=body.encode("utf-8"),
             headers={"content-type": "text/event-stream"},
             request=req,
         )
 
-    transport = httpx.MockTransport(handler)
-    inner = oauth_provider._client._client
-    oauth_provider._client._client = httpx.AsyncClient(
+    transport = hx.MockTransport(handler)
+    oauth_provider._client._client = hx.AsyncClient(
         transport=transport,
         base_url=inner.base_url,
         timeout=inner.timeout,

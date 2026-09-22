@@ -99,12 +99,13 @@ async def _serve(
     task = asyncio.create_task(server.serve())
     # Wait for uvicorn to report started. `.started` flips after the
     # socket is listening; polling is simpler than threading events.
-    for _ in range(200):
+    # Generous budget: GitHub CI runners can take >5s under load.
+    for _ in range(1200):
         if server.started:
             break
         await asyncio.sleep(0.025)
     else:
-        raise RuntimeError("uvicorn did not start within 5s")
+        raise RuntimeError("uvicorn did not start within 30s")
     try:
         yield f"http://127.0.0.1:{port}"
     finally:

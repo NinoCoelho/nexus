@@ -29,7 +29,7 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-async def _wait_for(cond, timeout: float = 10.0) -> bool:
+async def _wait_for(cond, timeout: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cond():

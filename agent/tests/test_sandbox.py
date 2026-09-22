@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from nexus.tools._sandbox import run_sandbox
 
 
@@ -66,6 +68,9 @@ def test_run_sandbox_duckdb_available():
 
 
 def test_run_sandbox_numpy_available():
+    # numpy ships only with the ``ocr`` extra — skip where it isn't
+    # installed (CI syncs --extra dev only).
+    pytest.importorskip("numpy")
     script = "print(np.array([1, 2, 3]).sum())"
     result = run_sandbox(script, {"rows": []})
     assert result["ok"] is True
