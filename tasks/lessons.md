@@ -87,3 +87,16 @@
   cold whisper load ~33s; ack-LLM 400 (thinking-disabled rejected by the
   litellm proxy) with multi-second stalls; speculative 80-word ack
   diverges from the reply; thinking-model TTFT leaves long silent gaps.
+
+## Daemon stale-code after backend changes (2026-09-21)
+User reported the queue-then-inject feature "swallowed" a queued message.
+Root cause: `nexus daemon` was still running the pre-change code (started
+18:14; changes landed 19:58). New UI (queue path POSTs mid-turn) + old
+backend (no enqueue branch) hit the old parallel-turn corruption — the
+turn-1 final `replace_history` stomped the second message before it ever
+persisted.
+**Rule:** after changing anything under `agent/src`, restart
+`uv run nexus daemon stop && uv run nexus daemon start` before treating a
+live-session report as a code bug. Quick probe that the new code is live:
+`curl -X DELETE localhost:18989/chat/x/queue/y` → new build answers
+`{"reason":"not_queued"}`, old build answers `{"detail":"Not Found"}`.

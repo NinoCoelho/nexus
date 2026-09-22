@@ -90,6 +90,58 @@ async def chat_stream_route(
             },
         )
 
+    # ── Active-turn queueing ──────────────────────────────────────────────
+    # A message that arrives while this session's turn is still running is
+    # queued on the runner instead of starting a parallel loop (which would
+    # corrupt history — two loops racing to replace_history). The runner
+    # injects it at the next tool-batch boundary mid-turn, or chains it as
+    # a follow-up turn when the current turn ends first. The response here
+    # is a short SSE carrying a single ``queued`` ack; the running turn's
+    # own stream delivers ``user_injected`` / chained-turn events.
+    from .chat_slash import is_slash_command as _is_slash_command
+    from ..services.chat_turn_runner import get_running_turn as _get_running_turn
+    _active_runner = _get_running_turn(session.id)
+    if _active_runner is not None:
+        if _is_slash_command(req.message) or req.attachments:
+            raise HTTPException(
+                status_code=_status.HTTP_409_CONFLICT,
+                detail={
+                    "reason": "turn_active",
+                    "session_id": session.id,
+                    "message": (
+                        "a turn is still processing; wait for it to finish "
+                        "before running slash commands or sending attachments"
+                    ),
+                },
+            )
+        _qid = _active_runner.enqueue(req.message)
+        if _qid is not None:
+            from ..events import SessionEvent as _SessionEvent
+            store.publish(session.id, _SessionEvent(
+                kind="user_enqueued",
+                data={
+                    "type": "user_enqueued",
+                    "qid": _qid,
+                    "text": req.message,
+                    "session_id": session.id,
+                },
+            ))
+
+            async def _queued_ack() -> AsyncIterator[str]:
+                yield (
+                    "event: queued\ndata: "
+                    + json.dumps({"qid": _qid, "session_id": session.id})
+                    + "\n\n"
+                )
+
+            return StreamingResponse(
+                _queued_ack(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        # Runner finalized between the check and enqueue — fall through
+        # and start a normal turn.
+
     # Always fixed routing — auto mode was removed. Legacy callers passing
     # ``model: "auto"`` are coerced to "use the configured default".
     resolved_model_id = req.model if req.model and req.model != "auto" else ""
@@ -369,7 +421,10 @@ async def chat_stream_route(
                     continue
                 for frame in acc_sub.process_event(sevent.data):
                     yield frame
-                if sevent.data.get("type") == "done":
+                # `done` no longer closes the stream — a queued follow-up
+                # may chain into another turn on the same runner. The
+                # runner's terminal `turn_settled` marker is the closer.
+                if sevent.data.get("type") == "turn_settled":
                     break
         except asyncio.CancelledError:
             # Client disconnected. The subscriber coroutine dies here;

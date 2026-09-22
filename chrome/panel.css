@@ -368,12 +368,55 @@ details.think[open] summary::before { transform: rotate(90deg); }
 
 #composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 12px;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-soft);
   flex-shrink: 0;
 }
+#queueBar {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.qchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 2px 6px 2px 9px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 999px;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.qchip-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.qchip-x {
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+.qchip-x:hover { color: var(--bad); }
+.qchip-wait {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-soft);
+  border-top-color: var(--fg-dim);
+  animation: qchip-spin 0.9s linear infinite;
+}
+@keyframes qchip-spin { to { transform: rotate(360deg); } }
 #input {
   flex: 1;
   resize: none;

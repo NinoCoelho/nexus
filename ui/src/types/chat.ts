@@ -5,6 +5,18 @@ import type { SessionSummary } from "../api";
 export type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
 
 /**
+ * A message the user sent while the agent was still processing a turn.
+ * It sits queued (chip above the composer) until the server injects it
+ * mid-turn (`user_injected`) or chains it as a follow-up turn.
+ */
+export interface QueuedMessage {
+  /** Server-assigned id once the `queued` ack arrives; undefined between
+   * the optimistic add and the ack. */
+  qid?: string;
+  text: string;
+}
+
+/**
  * One entry per session the user has interacted with this tab. Keyed by
  * session id. "__new__" holds state for the not-yet-created session (first
  * message of a fresh chat). Lifted up here so nothing — view switches,
@@ -17,6 +29,8 @@ export interface ChatState {
   input: string;
   historyLoaded: boolean;
   attachments: { name: string; vaultPath: string }[];
+  /** Messages queued while the agent processes (queue-then-inject). */
+  queued?: QueuedMessage[];
   selectedModel?: string;
   projectId?: string | null;
 }
@@ -30,6 +44,7 @@ export function emptyState(): ChatState {
     input: "",
     historyLoaded: true,
     attachments: [],
+    queued: [],
   };
 }
 
@@ -241,6 +256,7 @@ export interface UseChatSessionResult {
   pendingAutoSend: React.MutableRefObject<{ sid: string; seed: string } | null>;
   send: (override?: unknown) => Promise<void>;
   handleStop: () => void;
+  handleRemoveQueued: (qid: string) => void;
   handleRollback: (visibleIdx: number) => Promise<void>;
   handleContinuePartial: (visibleIdx: number) => void;
   handleRetryPartial: (visibleIdx: number) => Promise<void>;

@@ -544,6 +544,28 @@ async def chat_cancel(
     return {"ok": True, "cancelled": cancelled}
 
 
+@router.delete("/chat/{session_id}/queue/{qid}")
+async def chat_queue_remove(
+    session_id: str,
+    qid: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict[str, bool]:
+    """Remove a queued (not yet injected) message from the running turn.
+
+    The runner publishes ``queue_removed`` on the session bus so every
+    subscribed client drops its queue chip.
+    """
+    from ..services.chat_turn_runner import get_running_turn
+
+    runner = get_running_turn(session_id)
+    if runner is None or not runner.remove_queued(qid):
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_queued", "qid": qid, "session_id": session_id},
+        )
+    return {"ok": True, "removed": True}
+
+
 @router.post("/chat/{session_id}/terminal/{call_id}/kill")
 async def kill_terminal(
     session_id: str,
@@ -662,7 +684,9 @@ async def turn_stream(
                 continue
             for frame in acc.process_event(sevent.data):
                 yield frame.encode()
-            if sevent.data.get("type") == "done":
+            # Past `done` the turn may chain a queued follow-up; only the
+            # runner's terminal marker closes the reconnect stream.
+            if sevent.data.get("type") == "turn_settled":
                 break
 
     return StreamingResponse(

@@ -64,6 +64,9 @@ interface Props {
   onStop?: () => void;
   attachments?: AttachedFile[];
   onAttachmentsChange?: (files: AttachedFile[]) => void;
+  /** Messages queued for mid-turn injection while the agent processes. */
+  queued?: { qid?: string; text: string }[];
+  onRemoveQueued?: (qid: string) => void;
   models?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
@@ -78,6 +81,8 @@ export default function InputBar({
   onStop,
   attachments,
   onAttachmentsChange,
+  queued,
+  onRemoveQueued,
   models,
   selectedModel,
   onModelChange,
@@ -526,6 +531,30 @@ export default function InputBar({
 
   return (
     <div className="input-bar-wrapper">
+      {queued && queued.length > 0 && (
+        <div className="queue-bar">
+          {queued.map((q, i) => (
+            <span className="queue-chip" key={q.qid ?? `qidx-${i}`}>
+              <span className="queue-chip-text">{q.text}</span>
+              {q.qid && onRemoveQueued ? (
+                <button
+                  className="queue-chip-x"
+                  onClick={() => onRemoveQueued(q.qid as string)}
+                  aria-label={t("chat:input.queueRemove")}
+                  title={t("chat:input.queueRemove")}
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                    <line x1="2" y1="2" x2="8" y2="8" />
+                    <line x1="8" y1="2" x2="2" y2="8" />
+                  </svg>
+                </button>
+              ) : (
+                <span className="queue-chip-spinner" aria-hidden="true" />
+              )}
+            </span>
+          ))}
+        </div>
+      )}
       <AttachmentsBar
         attachments={attachments}
         audio={audio}
@@ -564,7 +593,7 @@ export default function InputBar({
             <button
               className="input-icon-btn"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || uploading}
+              disabled={disabled || uploading || busy}
               aria-label={t("chat:input.uploadFileAria")}
               title={t("chat:input.uploadFile")}
             >

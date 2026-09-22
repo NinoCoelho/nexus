@@ -10,6 +10,100 @@ import { sounds } from "./useSounds";
 
 type SetChatStates = React.Dispatch<React.SetStateAction<Map<string, ChatState>>>;
 
+// ── Queue-then-inject lifecycle ────────────────────────────────────────────
+//
+// While a turn runs, the user can queue additional instructions. The chip
+// list lives on ChatState.queued; `user_injected` promotes a chip into a
+// real user bubble (inserted before the streaming assistant so deltas keep
+// appending to it) and flips thinking back on for chained turns.
+
+export function applyQueuedAckEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  qid: string,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const idx = (cur.queued ?? []).findIndex((q) => !q.qid);
+    if (idx === -1) return prev;
+    const queued = [...(cur.queued ?? [])];
+    queued[idx] = { ...queued[idx], qid };
+    next.set(key, { ...cur, queued });
+    return next;
+  });
+}
+
+export function applyUserEnqueuedEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  qid: string,
+  text: string,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    if ((cur.queued ?? []).some((q) => q.qid === qid)) return prev;
+    // The sender's optimistic chip (no qid yet) matches by text.
+    const idx = (cur.queued ?? []).findIndex((q) => !q.qid && q.text === text);
+    const queued = [...(cur.queued ?? [])];
+    if (idx >= 0) queued[idx] = { ...queued[idx], qid };
+    else queued.push({ qid, text });
+    next.set(key, { ...cur, queued });
+    return next;
+  });
+}
+
+export function applyUserInjectedEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  qid: string,
+  text: string,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const queued = (cur.queued ?? []).filter(
+      (q) => q.qid !== qid && !(q.qid == null && q.text === text),
+    );
+    const msgs = [...cur.messages];
+    const lastIdx = msgs.length - 1;
+    const lastIsStreamingAsst =
+      lastIdx >= 0 && msgs[lastIdx].role === "assistant" && msgs[lastIdx].streaming;
+    // Idempotency guard: a replayed event (stream reconnect) must not
+    // duplicate the bubble — skip when the same content already sits
+    // right before the assistant it precedes.
+    const insertBefore = lastIsStreamingAsst ? lastIdx : msgs.length;
+    const neighbor = lastIsStreamingAsst ? msgs[lastIdx - 1] : undefined;
+    const alreadyInserted =
+      neighbor != null && neighbor.role === "user" && neighbor.content === text;
+    if (!alreadyInserted) {
+      msgs.splice(insertBefore, 0, { role: "user", content: text, timestamp: new Date() });
+    }
+    if (!lastIsStreamingAsst) {
+      // Chained turn: the runner already started it server-side — seed
+      // the assistant placeholder the deltas will stream into.
+      msgs.push({ role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true });
+    }
+    next.set(key, { ...cur, messages: msgs, queued, thinking: true });
+    return next;
+  });
+}
+
+export function applyQueueRemovedEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  qid: string,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    if (!(cur.queued ?? []).some((q) => q.qid === qid)) return prev;
+    next.set(key, { ...cur, queued: (cur.queued ?? []).filter((q) => q.qid !== qid) });
+    return next;
+  });
+}
+
 export function applyDeltaEvent(
   setChatStates: SetChatStates,
   key: string,

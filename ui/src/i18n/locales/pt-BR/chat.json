@@ -72,7 +72,8 @@
     "voiceMessage": "Mensagem de voz",
     "uploadFailed": "Falha ao enviar arquivo",
     "transcriptionNoText": "A transcrição não retornou texto",
-    "transcriptionFailed": "Falha na transcrição"
+    "transcriptionFailed": "Falha na transcrição",
+    "queueRemove": "Remover da fila"
   },
   "secret": {
     "title": "Isso parece uma chave de API",

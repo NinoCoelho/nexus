@@ -79,7 +79,8 @@
     "voiceMessage": "Voice message",
     "uploadFailed": "Upload failed",
     "transcriptionNoText": "Transcription returned no text",
-    "transcriptionFailed": "Transcription failed"
+    "transcriptionFailed": "Transcription failed",
+    "queueRemove": "Remove from queue"
   },
   "secret": {
     "title": "This looks like an API key",

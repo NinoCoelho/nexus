@@ -32,6 +32,11 @@ export type StreamEvent =
   | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
   | { type: "paused_for_cooldown"; retry_after: string; estimated_seconds: number; reason: string }
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[] }
+  | { type: "queued"; qid: string; session_id: string }
+  | { type: "user_enqueued"; qid: string; text: string; session_id: string }
+  | { type: "user_injected"; qid: string; text: string; session_id: string }
+  | { type: "queue_removed"; qid: string; reason?: string; session_id?: string }
+  | { type: "turn_settled"; session_id: string }
   | { type: "subagent_start"; name: string; index: number; total: number; child_session_id: string }
   | { type: "subagent_delta"; child_session_id: string; text: string }
   | { type: "subagent_tool"; child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string }
@@ -203,6 +208,35 @@ async function consumeSSEFrames(
             status_code: parsed.status_code as number | null | undefined,
             actions: parsed.actions as string[] | undefined,
           });
+        } else if (eventName === "queued") {
+          onEvent({
+            type: "queued",
+            qid: (parsed.qid as string) ?? "",
+            session_id: (parsed.session_id as string) ?? "",
+          });
+        } else if (eventName === "user_enqueued") {
+          onEvent({
+            type: "user_enqueued",
+            qid: (parsed.qid as string) ?? "",
+            text: (parsed.text as string) ?? "",
+            session_id: (parsed.session_id as string) ?? "",
+          });
+        } else if (eventName === "user_injected") {
+          onEvent({
+            type: "user_injected",
+            qid: (parsed.qid as string) ?? "",
+            text: (parsed.text as string) ?? "",
+            session_id: (parsed.session_id as string) ?? "",
+          });
+        } else if (eventName === "queue_removed") {
+          onEvent({
+            type: "queue_removed",
+            qid: (parsed.qid as string) ?? "",
+            reason: parsed.reason as string | undefined,
+            session_id: parsed.session_id as string | undefined,
+          });
+        } else if (eventName === "turn_settled") {
+          onEvent({ type: "turn_settled", session_id: (parsed.session_id as string) ?? "" });
         }
       } catch { /* malformed frame — skip */ }
     }
@@ -254,6 +288,21 @@ export async function resumeTurnStream(
 
 export async function cancelChatTurn(session_id: string): Promise<void> {
   await fetch(`${BASE}/chat/${encodeURIComponent(session_id)}/cancel`, { method: "POST" });
+}
+
+/**
+ * Remove a queued (not yet injected) message from the running turn.
+ * 404 is tolerated — the message may have been injected in the meantime.
+ */
+export async function deleteQueuedMessage(session_id: string, qid: string): Promise<void> {
+  try {
+    await fetch(
+      `${BASE}/chat/${encodeURIComponent(session_id)}/queue/${encodeURIComponent(qid)}`,
+      { method: "DELETE" },
+    );
+  } catch {
+    /* best-effort — server-side queue_removed event is the source of truth */
+  }
 }
 
 /**

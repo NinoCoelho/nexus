@@ -114,6 +114,20 @@ class TurnAccumulator:
                     err_payload[k] = event[k]
             sse_frames.append(_sse("error", err_payload))
 
+        elif etype in ("user_enqueued", "user_injected", "queue_removed", "turn_settled"):
+            # Queue-then-inject lifecycle events. Pure markers — they don't
+            # touch accumulator state; they flow on the running turn's SSE
+            # so every subscribed client can update its queue chips/bubbles.
+            q_payload: dict[str, Any] = {
+                "qid": event.get("qid", ""),
+                "session_id": event.get("session_id", ""),
+            }
+            if etype != "queue_removed":
+                q_payload["text"] = event.get("text", "")
+            else:
+                q_payload["reason"] = event.get("reason", "")
+            sse_frames.append(_sse(etype, q_payload))
+
         return sse_frames
 
 

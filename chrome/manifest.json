@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nexus in Chrome",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Chat with Nexus about the page you're on. Talks to the local Nexus server on localhost:18989.",
   "permissions": [
     "sidePanel",

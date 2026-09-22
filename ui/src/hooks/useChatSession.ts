@@ -11,9 +11,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, type SessionSummary } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, type SessionSummary } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -225,7 +225,42 @@ export function useChatSession(
       ? [...state.attachments, ...extraAttachments]
       : state.attachments;
     const hasAttachments = allAttachments.length > 0;
-    if ((!rawText && !hasAttachments) || state.thinking) return;
+    if (!rawText && !hasAttachments) return;
+
+    // ── Queue-then-inject ────────────────────────────────────────────────
+    // A send while the agent is processing enqueues server-side instead of
+    // starting a parallel turn. The runner injects it at the next tool
+    // boundary or chains it as a follow-up turn; the chip lives in
+    // ChatState.queued until `user_injected` promotes it to a bubble.
+    if (state.thinking) {
+      const isHiddenSeed = rawText.startsWith(HIDDEN_SEED_MARKER);
+      // Never queue hidden seeds, in-place resumes, attachments (v1 is
+      // text-only) or slash commands — they can't run mid-turn.
+      if (isHiddenSeed || inPlace || hasAttachments || rawText.startsWith("/")) return;
+      const sidForQueue = activeSession ?? pendingSessionId;
+      patchState(key, { input: "", queued: [...(state.queued ?? []), { text: rawText }] });
+      try {
+        await chatStream(rawText, sidForQueue, (event) => {
+          const k = activeKey;
+          if (event.type === "queued") {
+            applyQueuedAckEvent(setChatStates, k, event.qid);
+          } else if (event.type === "user_enqueued") {
+            applyUserEnqueuedEvent(setChatStates, k, event.qid, event.text);
+          }
+          // Injection/chaining events arrive on the running turn's own
+          // stream (the dispatcher below), not on this short ack stream.
+        });
+      } catch {
+        // Enqueue failed (network / 409) — restore the text.
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(key) ?? emptyState();
+          next.set(key, { ...cur, queued: (cur.queued ?? []).slice(0, -1), input: cur.input || rawText });
+          return next;
+        });
+      }
+      return;
+    }
 
     // Attachments now ride a structured `attachments` field on the request
     // body; the backend translates each entry into a multipart `ContentPart`
@@ -286,30 +321,49 @@ export function useChatSession(
       });
     }
 
+    // Mutable routing for this stream: the first `done` of a fresh session
+    // migrates NEW_KEY → real session id; a queued follow-up then chains
+    // into another turn on the SAME stream, and its events must target the
+    // migrated key (and skip the migration path in applyDoneEvent).
+    let streamKey = key;
+    let streamActiveSession = activeSession;
+
     try {
       await chatStream(text, sidForPost, (event) => {
         if (event.type === "delta") {
-          applyDeltaEvent(setChatStates, key, event.text);
+          applyDeltaEvent(setChatStates, streamKey, event.text);
         } else if (event.type === "thinking") {
-          applyThinkingEvent(setChatStates, key, event.text);
+          applyThinkingEvent(setChatStates, streamKey, event.text);
         } else if (event.type === "tool") {
-          applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview });
+          applyToolEvent(setChatStates, streamKey, { name: event.name, args: event.args, result_preview: event.result_preview });
         } else if (event.type === "done") {
           sawDone = true;
-          applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, key, activeSession, state.selectedModel, event);
+          applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, streamKey, streamActiveSession, state.selectedModel, event);
+          if (!streamActiveSession) {
+            streamActiveSession = event.session_id;
+            streamKey = event.session_id;
+          }
         } else if (event.type === "limit_reached") {
-          applyLimitReachedEvent(setChatStates, key, event.iterations);
+          applyLimitReachedEvent(setChatStates, streamKey, event.iterations);
         } else if (event.type === "reconnecting") {
-          applyReconnectingEvent(setChatStates, key, {
+          applyReconnectingEvent(setChatStates, streamKey, {
             attempt: event.attempt,
             maxAttempts: event.maxAttempts,
             delaySeconds: event.delaySeconds,
             reason: event.reason,
           });
         } else if (event.type === "paused_for_cooldown") {
-          applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
+          applyPausedForCooldownEvent(setChatStates, streamKey, event.retry_after, event.estimated_seconds);
         } else if (event.type === "error") {
-          applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
+          applyErrorEvent(setChatStates, streamKey, event.reason, event.detail, event.actions);
+        } else if (event.type === "queued") {
+          applyQueuedAckEvent(setChatStates, streamKey, event.qid);
+        } else if (event.type === "user_enqueued") {
+          applyUserEnqueuedEvent(setChatStates, streamKey, event.qid, event.text);
+        } else if (event.type === "user_injected") {
+          applyUserInjectedEvent(setChatStates, streamKey, event.qid, event.text);
+        } else if (event.type === "queue_removed") {
+          applyQueueRemovedEvent(setChatStates, streamKey, event.qid);
         }
       }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode, projectId: state.projectId });
 
@@ -427,7 +481,9 @@ export function useChatSession(
     // Best-effort server cancel (unblocks HITL waits + cancels the turn task).
     cancelChatTurn(sidForCancel).catch(() => {});
     abortControllersRef.current.get(key)?.abort();
-    // Flip thinking off and mark the placeholder as stopped.
+    // Flip thinking off and mark the placeholder as stopped. The server
+    // drops the queue on cancel — clear chips locally too, since the
+    // aborted stream may die before the `queue_removed` events arrive.
     setChatStates((prev) => {
       const next = new Map(prev);
       const cur = next.get(key);
@@ -438,10 +494,25 @@ export function useChatSession(
         const existing = msgs[lastIdx].content;
         msgs[lastIdx] = { ...msgs[lastIdx], content: existing ? `${existing}\n\n_[stopped by user]_` : "_[stopped by user]_", streaming: false };
       }
-      next.set(key, { ...cur, messages: msgs, thinking: false });
+      next.set(key, { ...cur, messages: msgs, thinking: false, queued: [] });
       return next;
     });
   }, [activeKey, activeSession, pendingSessionId]);
+
+  /** Remove a queued (not yet injected) message — the chip's × button.
+   * Optimistic locally; the server publishes `queue_removed` for every
+   * other subscribed client. */
+  const handleRemoveQueued = useCallback((qid: string) => {
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(activeKey);
+      if (!cur || !(cur.queued ?? []).some((q) => q.qid === qid)) return prev;
+      next.set(activeKey, { ...cur, queued: (cur.queued ?? []).filter((q) => q.qid !== qid) });
+      return next;
+    });
+    const sid = activeSession;
+    if (sid) void deleteQueuedMessage(sid, qid);
+  }, [activeKey, activeSession]);
 
   const handleContinuePartial = useCallback((_visibleIdx: number) => {
     // Continue **in place** — no "continue" user bubble. The existing
@@ -559,6 +630,14 @@ export function useChatSession(
               applyPausedForCooldownEvent(setChatStates, activeKey, event.retry_after, event.estimated_seconds);
             } else if (event.type === "error") {
               applyErrorEvent(setChatStates, activeKey, event.reason, event.detail, event.actions);
+            } else if (event.type === "queued") {
+              applyQueuedAckEvent(setChatStates, activeKey, event.qid);
+            } else if (event.type === "user_enqueued") {
+              applyUserEnqueuedEvent(setChatStates, activeKey, event.qid, event.text);
+            } else if (event.type === "user_injected") {
+              applyUserInjectedEvent(setChatStates, activeKey, event.qid, event.text);
+            } else if (event.type === "queue_removed") {
+              applyQueueRemovedEvent(setChatStates, activeKey, event.qid);
             }
           },
           abortController.signal,
@@ -586,7 +665,7 @@ export function useChatSession(
     chatStates, setChatStates, activeKey, activeState, activeSession, setActiveSession,
     pendingSessionId, setPendingSessionId, sessionsRevision, setSessionsRevision,
     pendingNewSession,
-    pendingAutoSend, send, handleStop, handleRollback,
+    pendingAutoSend, send, handleStop, handleRemoveQueued, handleRollback,
     handleContinuePartial, handleRetryPartial, handleInputChange,
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
     handleNewChat, loadSessionHistory, patchState, computeSeedModel,

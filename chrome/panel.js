@@ -18,6 +18,7 @@ const els = {
   btnSend: document.getElementById("btnSend"),
   msgs: document.getElementById("msgs"),
   input: document.getElementById("input"),
+  queueBar: document.getElementById("queueBar"),
   statusBar: document.getElementById("statusBar"),
 };
 
@@ -31,6 +32,7 @@ const chat = {
   refs: null,
   pendingHitl: null,
   snapshotUrl: "",
+  queue: [],
 };
 
 function normalizedUrl(u) {
@@ -91,7 +93,10 @@ function setBusy(busy) {
   if (state.closed) busy = true;
   els.btnSend.disabled = busy;
   els.btnStop.hidden = !busy;
-  els.input.disabled = busy;
+  // The input stays enabled while streaming: typing + Enter enqueues a
+  // follow-up on the running turn (queue-then-inject) instead of being
+  // dropped.
+  els.input.disabled = state.closed;
   els.btnNew.disabled = busy;
   if (!busy) els.input.focus();
 }
@@ -259,6 +264,17 @@ function liveUpdate(item) {
 function ensureEvents() {
   if (chat.es) return;
   const es = new EventSource(`${apiBase()}/chat/${state.sessionId}/events`);
+  for (const kind of ["user_enqueued", "user_injected", "queue_removed"]) {
+    es.addEventListener(kind, (e) => {
+      let p;
+      try {
+        p = JSON.parse(e.data);
+      } catch (_) {
+        return;
+      }
+      onQueueEvent(kind, p);
+    });
+  }
   es.addEventListener("user_request", (e) => {
     let p;
     try {
@@ -523,9 +539,13 @@ function extractContext(tabId) {
 }
 
 function send() {
-  if (chat.streaming || state.closed) return;
+  if (state.closed) return;
   const text = els.input.value.trim();
   if (!text) return;
+  if (chat.streaming) {
+    sendQueued(text);
+    return;
+  }
   els.input.value = "";
   status("");
   ensureEvents();
@@ -578,6 +598,103 @@ function send() {
     renderAll();
     setBusy(false);
   });
+}
+
+// ── Queue-then-inject ────────────────────────────────────────────────────
+// Sending while a turn streams enqueues server-side; the runner injects
+// the message at the next tool boundary or chains a follow-up turn.
+
+function sendQueued(text) {
+  els.input.value = "";
+  status("");
+  ensureEvents();
+  chat.queue.push({ qid: null, text });
+  renderQueue();
+  fetch(`${apiBase()}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: text, session_id: state.sessionId, model: null }),
+  }).then(async (res) => {
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        detail = (j.detail && j.detail.message) || j.detail || detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+    await readSse(res, (ev, data) => {
+      if (ev === "queued" && data.qid) {
+        const item = chat.queue.find((q) => !q.qid);
+        if (item) item.qid = data.qid;
+        renderQueue();
+      }
+    });
+  }).catch((err) => {
+    if (err && err.name === "AbortError") return;
+    chat.queue = chat.queue.filter((q) => !(q.text === text && !q.qid));
+    els.input.value = text;
+    renderQueue();
+    status(`could not queue message: ${err.message}`);
+  });
+}
+
+function removeQueued(qid) {
+  chat.queue = chat.queue.filter((q) => q.qid !== qid);
+  renderQueue();
+  fetch(`${apiBase()}/chat/${state.sessionId}/queue/${encodeURIComponent(qid)}`, {
+    method: "DELETE",
+  }).catch(() => {});
+}
+
+function renderQueue() {
+  els.queueBar.hidden = chat.queue.length === 0;
+  els.queueBar.innerHTML = "";
+  for (const q of chat.queue) {
+    const chip = el("span", "qchip");
+    chip.appendChild(el("span", "qchip-text", q.text));
+    if (q.qid) {
+      const x = el("button", "qchip-x", "×");
+      x.title = "Remove from queue";
+      x.onclick = () => removeQueued(q.qid);
+      chip.appendChild(x);
+    } else {
+      chip.appendChild(el("span", "qchip-wait"));
+    }
+    els.queueBar.appendChild(chip);
+  }
+}
+
+function onQueueEvent(kind, data) {
+  if (kind === "user_enqueued") {
+    if (data.qid && !chat.queue.some((q) => q.qid === data.qid)) {
+      chat.queue.push({ qid: data.qid, text: data.text || "" });
+      renderQueue();
+    }
+    return;
+  }
+  if (kind === "queue_removed") {
+    chat.queue = chat.queue.filter((q) => q.qid !== data.qid);
+    renderQueue();
+    return;
+  }
+  // user_injected: promote the chip to a user bubble. Mid-turn injection
+  // slots it before the streaming assistant; a chained turn (after done)
+  // seeds a fresh streaming assistant and re-arms the busy state.
+  chat.queue = chat.queue.filter((q) => q.qid !== data.qid && q.text !== data.text);
+  renderQueue();
+  const msgs = chat.messages;
+  const last = msgs[msgs.length - 1];
+  if (last && last.role === "assistant" && last.streaming) {
+    msgs.splice(msgs.length - 1, 0, { role: "user", text: data.text || "" });
+    renderAll();
+  } else {
+    msgs.push({ role: "user", text: data.text || "" });
+    msgs.push({ role: "assistant", text: "", thinking: "", tools: [], streaming: true });
+    chat.streaming = true;
+    setBusy(true);
+    renderAll();
+  }
 }
 
 async function readSse(res, onEvent) {

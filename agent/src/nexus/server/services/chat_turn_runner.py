@@ -22,6 +22,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from ..events import SessionEvent
 from ...agent.context import CURRENT_SESSION_ID
@@ -33,6 +34,14 @@ if TYPE_CHECKING:
     from ..job_tracker import JobTracker
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class QueuedInput:
+    """A user message received while a turn was already running."""
+
+    qid: str
+    text: str
 
 
 @dataclass
@@ -58,6 +67,11 @@ class ChatTurnRunner:
     acc: TurnAccumulator = field(default_factory=TurnAccumulator)
     task: asyncio.Task[Any] | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Follow-up messages sent while this turn is running. Injected at the
+    # next tool-batch boundary (``drain_pending``) or chained as follow-up
+    # turns when the current turn ends first (``_next_queued``).
+    queue: list[QueuedInput] = field(default_factory=list)
+    _finalized: bool = False
 
     # ── Registry ────────────────────────────────────────────────────────
 
@@ -74,6 +88,87 @@ class ChatTurnRunner:
             return True
         return False
 
+    # ── Queue (messages sent while this turn runs) ──────────────────────
+
+    def enqueue(self, text: str) -> str | None:
+        """Queue a follow-up message for mid-turn injection or chaining.
+
+        Returns the queue id, or ``None`` when the runner already
+        finalized (the caller should start a normal turn instead).
+        Race-free: the runner's final drain check (``_next_queued``) sets
+        ``_finalized`` without any await in between, so on the event loop
+        an ``enqueue`` either lands before that check (and is chained)
+        or sees ``_finalized`` and bails — an acked message is never lost.
+        """
+        if self._finalized:
+            return None
+        qid = uuid4().hex[:12]
+        self.queue.append(QueuedInput(qid=qid, text=text))
+        return qid
+
+    def remove_queued(self, qid: str) -> bool:
+        """Drop a still-queued message (user clicked the chip's × )."""
+        for i, item in enumerate(self.queue):
+            if item.qid == qid:
+                del self.queue[i]
+                self._publish({
+                    "type": "queue_removed",
+                    "qid": qid,
+                    "session_id": self.session_id,
+                    "reason": "removed",
+                })
+                return True
+        return False
+
+    def drain_pending(self) -> list[dict[str, str]]:
+        """Drain the whole queue for mid-turn injection.
+
+        Called by the agent loop at tool-batch boundaries (via the
+        ``drain_pending_inputs`` callback) — the drained messages are
+        appended to the working context as user messages.
+        """
+        items = [{"qid": q.qid, "text": q.text} for q in self.queue]
+        self.queue.clear()
+        return items
+
+    def _drop_queue(self, reason: str) -> None:
+        for item in self.queue:
+            self._publish({
+                "type": "queue_removed",
+                "qid": item.qid,
+                "session_id": self.session_id,
+                "reason": reason,
+            })
+        self.queue.clear()
+
+    def _next_queued(self) -> QueuedInput | None:
+        """Pop the next queued input, or finalize the runner (see enqueue)."""
+        if self.queue:
+            return self.queue.pop(0)
+        self._finalized = True
+        return None
+
+    def _begin_chained_turn(self, nxt: QueuedInput) -> None:
+        """Re-arm the runner for a follow-up turn with a queued message."""
+        from ...agent.llm import ChatMessage as _CM, Role as _R
+
+        session = self.store.get(self.session_id)
+        fresh_history = list(session.history) if session else []
+        try:
+            self.store.replace_history(
+                self.session_id, fresh_history + [_CM(role=_R.USER, content=nxt.text)]
+            )
+        except Exception:  # noqa: BLE001 — best-effort eager persist
+            log.exception("queued-turn user message persist failed")
+        self.pre_turn_history = fresh_history
+        self.message = nxt.text
+        if session is not None and session.context:
+            self.context = session.context
+        self.attachment_parts = None
+        self.resume_working_messages = None
+        self.acc = TurnAccumulator()
+        self.started_at = datetime.now(timezone.utc)
+
     # ── Main loop ───────────────────────────────────────────────────────
 
     async def _run(self) -> None:
@@ -81,8 +176,25 @@ class ChatTurnRunner:
         self.store._trace_suppressed.add(self.session_id)
         try:
             await self._drive_loop()
+            # Chained turns: queued messages that arrived during the turn
+            # but were never injected (no tool-batch boundary) run as
+            # follow-up turns on the same runner, so the open SSE stream
+            # keeps flowing past the first `done`.
+            while True:
+                nxt = self._next_queued()
+                if nxt is None:
+                    break
+                self._publish({
+                    "type": "user_injected",
+                    "qid": nxt.qid,
+                    "text": nxt.text,
+                    "session_id": self.session_id,
+                })
+                self._begin_chained_turn(nxt)
+                await self._drive_loop()
         except asyncio.CancelledError:
             self.acc.partial_status = "cancelled"
+            self._drop_queue("cancelled")
             self._publish_terminal_error(
                 detail="cancelled by user",
                 reason="cancelled",
@@ -90,6 +202,7 @@ class ChatTurnRunner:
         except Exception as exc:
             log.exception("chat_turn_runner crashed")
             self.acc.partial_status = "crashed"
+            self._drop_queue("turn_error")
             self._publish_terminal_error(
                 detail=f"{type(exc).__name__}: {exc}",
             )
@@ -97,11 +210,15 @@ class ChatTurnRunner:
             self._persist()
             self.tracker.done(self.turn_job_id, publish_fn=self.publish_job_event)
             self.store._trace_suppressed.discard(self.session_id)
+            # Terminal marker: subscribers keep the SSE open past `done`
+            # (chained turns) and only close on this event.
+            self._publish({"type": "turn_settled", "session_id": self.session_id})
             try:
                 CURRENT_SESSION_ID.reset(token)
             except ValueError:
                 log.debug("CURRENT_SESSION_ID reset across contexts")
-            _running_turns.pop(self.session_id, None)
+            if _running_turns.get(self.session_id) is self:
+                _running_turns.pop(self.session_id, None)
 
     async def _drive_loop(self) -> None:
         from ...config_file import load_cached as load_config
@@ -141,6 +258,7 @@ class ChatTurnRunner:
                 model_id=self.model_id or None,
                 attachments=self.attachment_parts or None,
                 resume_working_messages=self.resume_working_messages,
+                drain_pending_inputs=self.drain_pending,
             ):
                 etype = event.get("type")
 

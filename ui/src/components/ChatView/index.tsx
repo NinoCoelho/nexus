@@ -141,6 +141,9 @@ interface Props {
   onOpenInVault?: (path: string) => void;
   attachments?: { name: string; vaultPath: string }[];
   onAttachmentsChange?: (files: { name: string; vaultPath: string }[]) => void;
+  /** Messages queued while the agent processes (queue-then-inject chips). */
+  queued?: { qid?: string; text: string }[];
+  onRemoveQueued?: (qid: string) => void;
   onRollback?: (msgIndex: number) => void;
   onCompact?: () => Promise<unknown>;
   onNewSession?: () => void;
@@ -174,6 +177,8 @@ export default function ChatView({
   onOpenInVault,
   attachments,
   onAttachmentsChange,
+  queued,
+  onRemoveQueued,
   onRollback,
   onCompact,
   onNewSession,
@@ -414,11 +419,13 @@ export default function ChatView({
               value={input}
               onChange={onInputChange}
               onSend={onSend}
-              disabled={thinking}
+              disabled={false}
               busy={thinking}
               onStop={onStop}
               attachments={attachments}
               onAttachmentsChange={onAttachmentsChange}
+              queued={queued}
+              onRemoveQueued={onRemoveQueued}
               models={models}
               selectedModel={selectedModel}
               onModelChange={onModelChange}

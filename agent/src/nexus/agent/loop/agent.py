@@ -235,6 +235,9 @@ class _StreamTurnState:
     had_sink_attr: bool = False
     loom_iter: Any = None
     loom_task: asyncio.Task[Any] | None = None
+    # Drains queued user messages at tool-batch boundaries for mid-turn
+    # injection (queue-then-inject). Items are ``{"qid": str, "text": str}``.
+    drain_pending_inputs: Callable[[], list[dict[str, str]]] | None = None
 
 
 class Agent:
@@ -465,6 +468,7 @@ class Agent:
         model_id: str | None = None,
         attachments: list[ContentPart] | None = None,
         resume_working_messages: list[lt.ChatMessage] | None = None,
+        drain_pending_inputs: Callable[[], list[dict[str, str]]] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         st = await self._prepare_stream_turn(
             user_message,
@@ -473,6 +477,7 @@ class Agent:
             model_id=model_id,
             attachments=attachments,
             resume_working_messages=resume_working_messages,
+            drain_pending_inputs=drain_pending_inputs,
         )
         try:
             while st.loom_task is not None:
@@ -556,6 +561,7 @@ class Agent:
         model_id: str | None,
         attachments: list[ContentPart] | None,
         resume_working_messages: list[lt.ChatMessage] | None,
+        drain_pending_inputs: Callable[[], list[dict[str, str]]] | None = None,
     ) -> _StreamTurnState:
         self._turn_trace = []
         self._skills_touched = []
@@ -713,14 +719,39 @@ class Agent:
             had_sink_attr=had_sink_attr,
             loom_iter=loom_iter,
             loom_task=loom_task,
+            drain_pending_inputs=drain_pending_inputs,
         )
     def _restart_loom_stream(self, st: _StreamTurnState) -> None:
+        # The main loop schedules the next ``__anext__`` before dispatching
+        # an event, so an in-flight LLM call from the abandoned iterator may
+        # still be running — cancel it or every restart wastes a call.
+        if st.loom_task is not None and not st.loom_task.done():
+            st.loom_task.cancel()
         st.tr.working_messages = _sanitize_loom_tool_pairs(st.tr.working_messages)
         st.tr.reset_iteration()
         st.loom_iter = self._loom.run_turn_stream(
             st.tr.working_messages, model_id=st.model_id
         ).__aiter__()
         st.loom_task = asyncio.ensure_future(st.loom_iter.__anext__())
+
+    @staticmethod
+    def _tool_batch_complete(working: list[lt.ChatMessage]) -> bool:
+        """True when every tool call of the current assistant batch has its
+        tool message appended — the safe boundary to inject a user message
+        without breaking the assistant(tool_calls) → tool pairing."""
+        last_tcs: list[Any] = []
+        answered: set[str] = set()
+        saw_batch = False
+        for m in working:
+            if m.role == lt.Role.ASSISTANT:
+                last_tcs = list(getattr(m, "tool_calls", None) or [])
+                answered = set()
+                saw_batch = bool(last_tcs)
+            elif m.role == lt.Role.TOOL and m.tool_call_id:
+                answered.add(m.tool_call_id)
+        if not saw_batch:
+            return False
+        return all(tc.id in answered for tc in last_tcs)
 
     async def _handle_tool_exec_result(
         self, st: _StreamTurnState, ev: dict[str, Any],
@@ -745,6 +776,39 @@ class Agent:
                 name=tc_name,
             )
         )
+
+        # Queue-then-inject: drain queued user messages at the first safe
+        # boundary (whole tool batch answered) and restart the loom stream
+        # so the model sees them on its next call — same rails as the
+        # mid-turn compaction restart.
+        if st.drain_pending_inputs is not None and self._tool_batch_complete(
+            st.tr.working_messages
+        ):
+            pending = st.drain_pending_inputs()
+            if pending:
+                yield {
+                    "type": "tool_exec_result",
+                    "name": tool_name,
+                    "result_preview": result_text[:200],
+                }
+                for item in pending:
+                    st.tr.working_messages.append(
+                        lt.ChatMessage(role=lt.Role.USER, content=item["text"])
+                    )
+                for item in pending:
+                    yield {
+                        "type": "user_injected",
+                        "qid": item["qid"],
+                        "text": item["text"],
+                        "session_id": st.session_id,
+                    }
+                log.info(
+                    "mid-turn: injected %d queued user message(s), restarting loom stream",
+                    len(pending),
+                )
+                self._restart_loom_stream(st)
+                st.restart = True
+                return
 
         bc = check_tool_budget(
             st._cumulative_tool_tokens, result_text,

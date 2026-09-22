@@ -174,7 +174,7 @@ export default function App() {
     activeState, activeSession, setActiveSession, setChatStates,
     sessionsRevision, setSessionsRevision,
     pendingAutoSend, pendingNewSession,
-    send, handleStop, handleRollback,
+    send, handleStop, handleRemoveQueued, handleRollback,
     handleContinuePartial, handleRetryPartial,
     handleInputChange, handleAttachmentsChange, handleModelChange,
     handleSessionSelect: _handleSessionSelect,
@@ -633,6 +633,8 @@ export default function App() {
               onOpenInVault={handleOpenInVault}
               attachments={activeState.attachments}
               onAttachmentsChange={handleAttachmentsChange}
+              queued={activeState.queued}
+              onRemoveQueued={handleRemoveQueued}
               onRollback={handleRollback}
               onCompact={handleCompact}
               onNewSession={_handleNewChat}
