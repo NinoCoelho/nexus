@@ -353,7 +353,18 @@ def create_app(
     _proc_unreg = _make_proc_unregister(_terminal_procs)
 
     agent._ask_user_handler = ask_user_handler
-    agent._page_handler = PageHandler(session_store=sessions)
+    page_handler = PageHandler(session_store=sessions)
+    agent._page_handler = page_handler
+    # site_credentials — masked HITL prompt + encrypted store + browser fill
+    # (CDP debug Chrome / the page tool's real tab). Shares the ask_user and
+    # page handlers so YOLO plumbing and panel round-trips stay consistent.
+    from ..agent.site_credentials_tool import SiteCredentialsHandler
+
+    agent._site_credentials_handler = SiteCredentialsHandler(
+        session_store=sessions,
+        ask_user=ask_user_handler,
+        page=page_handler,
+    )
     agent._terminal_handler = TerminalTool(
         broker=sessions.broker,
         yolo_getter=lambda: settings_store.get().yolo_mode,
@@ -469,6 +480,7 @@ def create_app(
     from .routes.oauth import router as oauth_router
     from .routes.providers import router as providers_router
     from .routes.credentials import router as credentials_router
+    from .routes.site_credentials import router as site_credentials_router
     from .routes.models import router as models_router
     from .routes.local_llm import router as local_llm_router
     from .routes.notifications import router as notifications_router
@@ -510,6 +522,7 @@ def create_app(
     app.include_router(local_creds_router)
     app.include_router(providers_router)
     app.include_router(credentials_router)
+    app.include_router(site_credentials_router)
     app.include_router(models_router)
     app.include_router(local_llm_router)
     app.include_router(notifications_router)

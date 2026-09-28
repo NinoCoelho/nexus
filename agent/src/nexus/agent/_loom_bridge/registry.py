@@ -57,6 +57,7 @@ class AgentHandlers:
         notify_user: Any | None = None,
         hb_manager_getter: Any | None = None,
         page: Any | None = None,
+        site_credentials: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
@@ -65,6 +66,7 @@ class AgentHandlers:
         self.subagent_runner = subagent_runner
         self.hb_manager_getter = hb_manager_getter
         self.page = page
+        self.site_credentials = site_credentials
 
 
 def build_tool_registry(
@@ -86,6 +88,7 @@ def build_tool_registry(
     from nexus.agent.loop import SKILL_MANAGE_TOOL
     from nexus.agent.notify_user_tool import NOTIFY_USER_TOOL
     from nexus.agent.page_tool import PAGE_TOOL
+    from nexus.agent.site_credentials_tool import SITE_CREDENTIALS_TOOL
     from nexus.skills.manager import SkillManager
     from nexus.tools.acp_call import ACP_CALL_TOOL, acp_call, acp_is_configured
     from nexus.tools.calendar_tool import CALENDAR_MANAGE_TOOL, handle_calendar_tool
@@ -270,6 +273,14 @@ def build_tool_registry(
         return await h.invoke(args)
 
     registry.register(_SimpleToolHandler(PAGE_TOOL, _page))
+
+    async def _site_credentials(args: dict) -> str:
+        h = handlers.site_credentials
+        if h is None:
+            return '{"ok": false, "error": "site_credentials unavailable: handler not wired"}'
+        return await h.invoke(args)
+
+    registry.register(_SimpleToolHandler(SITE_CREDENTIALS_TOOL, _site_credentials))
 
     async def _notify_user(args: dict) -> str:
         h = handlers.notify_user

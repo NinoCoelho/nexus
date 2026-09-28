@@ -344,6 +344,14 @@ class Agent:
     def _page_handler(self, value: Any) -> None:
         self._handlers.page = value
 
+    @property
+    def _site_credentials_handler(self) -> Any:
+        return self._handlers.site_credentials
+
+    @_site_credentials_handler.setter
+    def _site_credentials_handler(self, value: Any) -> None:
+        self._handlers.site_credentials = value
+
     def _context_window_for(self, model_id: str | None) -> int:
         cfg = self._nexus_cfg
         resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)
@@ -1175,6 +1183,14 @@ class Agent:
             raise RuntimeError(
                 f"parked snapshot for {request_id!r} is empty — cannot resume"
             )
+
+        # Secret form fields (e.g. passwords) are redacted before the
+        # answer is replayed into the LLM context — the resumed turn sees
+        # the same "[redacted]" shape the live (non-parked) path produces
+        # via AskUserResult.to_text.
+        from ..form_schema import redact_secret_fields
+
+        answer = redact_secret_fields(row.get("fields"), answer)
 
         loom_messages: list[lt.ChatMessage] = []
         for m in raw_snapshot:

@@ -139,6 +139,35 @@
       "deleteFailed": "Falha ao excluir"
     }
   },
+  "siteLogins": {
+    "sectionTitle": "Logins de sites",
+    "sectionIcon": "🌐",
+    "sectionDescription": "Usuários e senhas por site para automação de navegador, armazenados com criptografia nesta máquina. O agente pode pedir que você salve um login e preencher formulários com ele — ele nunca vê a senha.",
+    "addButton": "Adicionar login de site",
+    "addModalTitle": "Adicionar login de site",
+    "addModalSave": "Salvar",
+    "siteLabel": "Site",
+    "siteHint": "Domínio ou URL, ex.: example.com",
+    "usernameLabel": "Usuário / e-mail",
+    "passwordLabel": "Senha",
+    "passwordHint": "Armazenada com criptografia; pode ser substituída, mas nunca lida de volta.",
+    "loading": "Carregando…",
+    "empty": "Nenhum login de site salvo ainda.",
+    "tableColSite": "Site",
+    "tableColUsername": "Usuário",
+    "deleteButton": "Excluir",
+    "deleteModalTitle": "Excluir login de {{site}}?",
+    "deleteModalMessage": "O usuário e a senha salvos para este site serão removidos permanentemente.",
+    "deleteModalCta": "Excluir",
+    "toast": {
+      "loadFailed": "Falha ao carregar logins de sites",
+      "fieldsRequired": "Site, usuário e senha são obrigatórios",
+      "saved": "Login de {{site}} salvo",
+      "saveFailed": "Falha ao salvar login de site",
+      "deleted": "Login de {{site}} excluído",
+      "deleteFailed": "Falha ao excluir login de site"
+    }
+  },
   "advanced": {
     "agentBehaviorTitle": "Comportamento do agente",
     "agentBehaviorIcon": "⚙",

@@ -120,6 +120,11 @@ _ACTIONS = {
     "navigate": ("url",),
     "js": ("code",),
     "transcript": ("lang",),
+    # Hidden from the LLM-facing spec above: the site_credentials tool calls
+    # it programmatically with a server-resolved credential, so the password
+    # never appears in tool arguments. The Chrome side panel shows an
+    # Allow/Deny card before filling (authenticating as the user).
+    "fill_login": ("site", "username", "password", "user_selector", "pass_selector", "submit"),
 }
 
 _DEFAULT_TIMEOUT = 90.0

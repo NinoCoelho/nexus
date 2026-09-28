@@ -5,7 +5,7 @@ description: Control a dedicated Chrome instance via Chrome DevTools Protocol (C
 
 ## When to use
 - You need to interact with a website as a real browser (login, click, scroll, fill forms)
-- The target requires cookies/auth that the user will set up manually in the Chrome window
+- The target requires cookies/auth — save a site login via the `site_credentials` tool and fill it (see "Logging in")
 - JS-rendered content that http_call or web_scrape can't handle
 - Taking screenshots of pages for the user
 - Any task that needs a full browser session with state persistence
@@ -102,6 +102,16 @@ To switch focus:
 async with CDP(tab_ws_url) as cdp:
     await cdp.send('Page.bringToFront')
 ```
+
+## Logging in
+
+Do NOT ask the user to type a password into the chat and do NOT hardcode credentials in scripts. Use the `site_credentials` tool instead:
+
+1. `site_credentials(action="list")` — check whether a login is already saved for the site.
+2. If not: `site_credentials(action="save", site="example.com", reason="…")` — opens a masked form for the user; the answer is stored Fernet-encrypted and never shown to you.
+3. `site_credentials(action="fill", site="example.com", surface="cdp")` — the server fills the username/password into the debug Chrome's current login page and optionally submits. Pass `selectors={"user": "...", "pass": "..."}` when the form is not auto-detected, and `tab="…"` to target another open tab.
+
+The password never appears in tool arguments, results, or the transcript. Manual login in the visible Chrome window remains a fallback when a site needs 2FA or a captcha.
 
 ## Gotchas
 - **Profile persistence**: The Chrome profile at `~/.nexus/chrome-profile/` persists cookies, logins, and localStorage across sessions. This is intentional — once you log in, you stay logged in.

@@ -231,6 +231,40 @@ class PubSubMixin:
         )
         self._hitl_db().commit()
 
+    def _redact_answer_for_request(
+        self, request_id: str | None, answer: str | None
+    ) -> str | None:
+        """Redact secret form-field values in an answer before it is
+        written to the hitl_events history.
+
+        Looks up the form schema stored with the request's ``user_request``
+        event (``payload_json.fields``). Answers to requests without form
+        fields (confirm/choice/text/page) pass through untouched; so do
+        non-JSON strings.
+        """
+        if not request_id or not answer:
+            return answer
+        try:
+            row = self._hitl_db().execute(
+                "SELECT payload_json FROM hitl_events WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if not row or not row[0]:
+                return answer
+            fields = (json.loads(row[0]) or {}).get("fields")
+            if not fields:
+                return answer
+            parsed = json.loads(answer)
+            if not isinstance(parsed, dict):
+                return answer
+            from nexus.agent.form_schema import redact_secret_fields
+
+            return json.dumps(
+                redact_secret_fields(fields, parsed), ensure_ascii=False
+            )
+        except Exception:  # noqa: BLE001 — best-effort; never block resolve
+            return answer
+
     def _mark_hitl_resolved(
         self,
         request_id: str | None,
@@ -241,6 +275,10 @@ class PubSubMixin:
     ) -> None:
         if not request_id:
             return
+        if answer:
+            # Answers to secret forms (e.g. credential prompts) must never
+            # land in plaintext in the bell history.
+            answer = self._redact_answer_for_request(request_id, answer)
         self._hitl_db().execute(
             "UPDATE hitl_events SET status=?, reason=?, answer=COALESCE(?, answer), "
             "resolved_at=CURRENT_TIMESTAMP "
@@ -449,6 +487,14 @@ class PubSubMixin:
         Returns the row (with ``already_answered`` set) when a row exists.
         Returns None if no such request_id was ever parked.
         """
+        # Secret form fields (e.g. passwords) must never be persisted in
+        # plaintext — redact them before the answer hits the DB. The raw
+        # value only ever lives in the in-memory respond path.
+        row_pre = self.get_hitl_pending(request_id)
+        if row_pre is not None:
+            from nexus.agent.form_schema import redact_secret_fields
+
+            answer = redact_secret_fields(row_pre.get("fields"), answer)
         try:
             answer_json = json.dumps(answer, ensure_ascii=False)
         except (TypeError, ValueError):

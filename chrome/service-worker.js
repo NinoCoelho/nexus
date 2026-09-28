@@ -373,6 +373,78 @@ function pageScroll(dy) {
   return { ok: true, y: Math.round(window.scrollY) };
 }
 
+// Fill a stored site login (resolved server-side by the site_credentials
+// tool; the panel only ever sees the values transiently). Mirrors the
+// server-side CDP fill in nexus/cdp_fill.py.
+function pageFillLogin(site, username, password, userSelector, passSelector, submit) {
+  const vis = (el) => {
+    if (!el || el.disabled || el.readOnly) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== "hidden" && s.display !== "none";
+  };
+  const pass = passSelector
+    ? document.querySelector(passSelector)
+    : [...document.querySelectorAll("input[type=password]")].filter(vis).pop();
+  if (!pass) {
+    return { ok: false, error: "no visible password input found on this page" };
+  }
+  const setVal = (el, val) => {
+    const desc = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value");
+    if (desc && desc.set) desc.set.call(el, val);
+    else el.value = val;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  let user = userSelector ? document.querySelector(userSelector) : null;
+  if (!user && username) {
+    const inputs = [...document.querySelectorAll("input")].filter(vis);
+    const idx = inputs.indexOf(pass);
+    for (let i = idx - 1; i >= 0; i--) {
+      const t = (inputs[i].type || "text").toLowerCase();
+      if (t === "text" || t === "email" || t === "tel" || t === "") {
+        user = inputs[i];
+        break;
+      }
+    }
+  }
+  const filled = [];
+  if (user && username) {
+    setVal(user, username);
+    filled.push("username");
+  }
+  setVal(pass, password);
+  filled.push("password");
+  let submitted = false;
+  if (submit) {
+    const form = pass.closest("form");
+    if (form) {
+      const btn = form.querySelector(
+        'button[type="submit"], input[type="submit"], button:not([type])'
+      );
+      if (btn) {
+        btn.click();
+        submitted = true;
+      } else if (form.requestSubmit) {
+        form.requestSubmit();
+        submitted = true;
+      }
+    }
+    if (!submitted) {
+      for (const type of ["keydown", "keyup"]) {
+        pass.dispatchEvent(
+          new KeyboardEvent(type, {
+            key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true,
+          })
+        );
+      }
+      submitted = true;
+    }
+  }
+  return { ok: true, site, filled, submitted, url: location.href };
+}
+
 function pageNavigate(url) {
   location.href = url;
   return { ok: true, navigating: url };
@@ -487,6 +559,10 @@ const PAGE_ACTIONS = {
   click: { func: pageClick, args: ["selector", "text"] },
   type: { func: pageType, args: ["selector", "value", "submit"] },
   scroll: { func: pageScroll, args: ["dy"] },
+  fill_login: {
+    func: pageFillLogin,
+    args: ["site", "username", "password", "user_selector", "pass_selector", "submit"],
+  },
 };
 
 const readCache = new Map();

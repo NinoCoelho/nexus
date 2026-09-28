@@ -21,6 +21,10 @@ def isolated_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from nexus import secrets as _s
 
     monkeypatch.setattr(_s, "SECRETS_PATH", tmp_path / "secrets.toml")
+    from nexus import site_credentials as _sc
+
+    monkeypatch.setattr(_sc, "SITE_CREDS_PATH", tmp_path / "site_credentials.db")
+    monkeypatch.setattr(_sc, "SITE_CREDS_KEY_PATH", tmp_path / "keys" / "site_credentials.key")
 
 
 def test_no_credentials_means_no_block(empty_registry: SkillRegistry) -> None:
@@ -54,3 +58,18 @@ def test_credentials_block_warns_against_echo(empty_registry: SkillRegistry) -> 
     assert "printenv" in out.lower()
     # And the placeholder mechanic is named explicitly
     assert "$NAME" in out or "placeholder" in out.lower()
+
+
+def test_site_logins_block_lists_sites_not_passwords(empty_registry: SkillRegistry) -> None:
+    from nexus import site_credentials
+
+    site_credentials.save("example.com", "alice@example.com", "hunter2")
+
+    out = build_system_prompt(empty_registry)
+    assert "## Saved site logins" in out
+    assert "`example.com`" in out
+    assert "alice@example.com" in out
+    # Raw password must never end up in the prompt
+    assert "hunter2" not in out
+    # The tool is named so the model knows how to use the entries
+    assert "site_credentials" in out

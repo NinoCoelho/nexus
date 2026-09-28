@@ -9,6 +9,7 @@ import {
 import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
 import SettingsSection from "./SettingsSection";
+import SiteLoginsSection from "./SiteLoginsSection";
 
 const NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
@@ -108,8 +109,7 @@ export default function CredentialsTab() {
         title={t("settings:credentials.sectionTitle")}
         icon={t("settings:credentials.sectionIcon")}
         description={t("settings:credentials.sectionDescription")}
-      >
-        <button
+      >        <button
           type="button"
           className="settings-btn settings-btn--primary creds-add-btn"
           onClick={openAdd}
@@ -148,6 +148,8 @@ export default function CredentialsTab() {
           </table>
         )}
       </SettingsSection>
+
+      <SiteLoginsSection />
 
       {addOpen && (
         <div className="modal-backdrop" onClick={() => setAddOpen(false)}>

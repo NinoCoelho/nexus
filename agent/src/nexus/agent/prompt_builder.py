@@ -431,6 +431,11 @@ def build_system_prompt(
         parts.append(creds_block)
         parts.append("")
 
+    site_logins_block = _site_credentials_block()
+    if site_logins_block:
+        parts.append(site_logins_block)
+        parts.append("")
+
     parts.append(
         "## Status updates\n\n"
         "When a step in your plan will take more than a few seconds — web "
@@ -533,4 +538,41 @@ def _credentials_block() -> str:
         skill = entry.get("skill")
         suffix = f" (used by skill `{skill}`)" if skill else ""
         lines.append(f"- `${entry['name']}`{suffix}")
+    return "\n".join(lines)
+
+
+def _site_credentials_block() -> str:
+    """Tell the agent which site logins are saved (names only, never values).
+
+    Browser login flows should go through the ``site_credentials`` tool:
+    the password stays server-side (encrypted store → browser fill) and
+    never enters the conversation.
+    """
+    try:
+        from .. import site_credentials
+
+        entries = site_credentials.list_sites()
+    except Exception:
+        return ""
+    if not entries:
+        return ""
+
+    lines = ["## Saved site logins", ""]
+    lines.append(
+        "These sites have logins stored in the encrypted site credential "
+        "store. Use the `site_credentials` tool to fill them into a login "
+        "form (`action='fill'` — you choose the browser surface; the server "
+        "resolves the password, you never see it). To save a new login, "
+        "call `action='save'` — a masked form opens for the user; do NOT "
+        "ask the user to type a password into the chat."
+    )
+    lines.append("")
+    lines.append("**Available:**")
+    for entry in entries:
+        used = (
+            f" (last used {entry['last_used_at'][:10]})"
+            if entry.get("last_used_at")
+            else ""
+        )
+        lines.append(f"- `{entry['site']}` — {entry['username']}{used}")
     return "\n".join(lines)

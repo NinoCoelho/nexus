@@ -332,6 +332,7 @@ function describePageAction(p) {
     case "navigate": return `page · navigate to ${params.url}`;
     case "js": return `page · run JS ${JSON.stringify((params.code || "").slice(0, 60))}${target}`;
     case "transcript": return `page · transcript${params.lang ? ` (${params.lang})` : ""}${target}`;
+    case "fill_login": return `page · fill saved login for ${params.site || "?"}${target}`;
     default: return `page · ${p.action}${target}`;
   }
 }
@@ -397,7 +398,10 @@ function handlePageRequest(p) {
   }
   pendingPage = p;
   chat.messages.push({ role: "info", text: describePageAction(p) });
-  if (p.action === "js" || p.action === "navigate") {
+  // fill_login types a stored password into the page — authenticating as
+  // the user deserves the same Allow/Deny gate as navigate/js. Never
+  // auto-executed, and the activity line shows only the site name.
+  if (p.action === "js" || p.action === "navigate" || p.action === "fill_login") {
     p.state = "confirm";
     renderAll();
     return;
@@ -407,10 +411,13 @@ function handlePageRequest(p) {
 
 function respond(requestId, answer, card, buttons) {
   for (const b of buttons) b.disabled = true;
+  // The server's RespondPayload.answer is a string — objects (form answers)
+  // and booleans (confirm) must be JSON-encoded, mirroring the main UI.
+  const encoded = typeof answer === "string" ? answer : JSON.stringify(answer);
   fetch(`${apiBase()}/chat/${state.sessionId}/respond`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request_id: requestId, answer }),
+    body: JSON.stringify({ request_id: requestId, answer: encoded }),
   }).then(async (res) => {
     if (res.status === 204) {
       card.classList.add("done");
@@ -464,8 +471,16 @@ function renderHitl(p) {
     for (const f of p.fields || []) {
       const box = el("div", "hfield");
       box.appendChild(el("label", null, f.label || f.name));
-      const ta = el("textarea");
-      ta.rows = 1;
+      // secret fields render masked — the value must not be legible on
+      // screen while typing (credential prompts rely on this).
+      const ta = f.secret ? el("input") : el("textarea");
+      if (f.secret) {
+        ta.type = "password";
+        ta.autocomplete = "new-password";
+        ta.spellcheck = false;
+      } else {
+        ta.rows = 1;
+      }
       box.appendChild(ta);
       row.appendChild(box);
       fields.push({ name: f.name, ta });

@@ -84,9 +84,36 @@ Two channels on each session:
 1. `POST /chat/stream` — per-turn SSE (deltas, tool calls, done, error).
 2. `GET /chat/{sid}/events` — session-scoped SSE for out-of-band events (`user_request`, `user_request_auto`, `user_request_cancelled`). The UI opens this *before* the first POST by using a client-generated `pendingSessionId`, so approval dialogs don't miss events during the first turn. YOLO mode (`/settings`) auto-answers requests.
 
+### Site credentials (browser logins)
+
+`agent/src/nexus/site_credentials.py` is a per-site login store (username + password) **Fernet-encrypted at rest** (`~/.nexus/site_credentials.db`, key at `~/.nexus/keys/site_credentials.key`, both 0600; `cryptography` is a direct dep). Entries are keyed by normalized host (`normalize_site` strips scheme/path/port/`www.`).
+
+The `site_credentials` tool (`agent/site_credentials_tool.py`, wired via `AgentHandlers.site_credentials` in app.py) exposes `list / save / fill / delete`:
+- **save** publishes a `user_request` form (password field `secret: true`) on the session channel and waits synchronously (600s) — it **never parks** (parking would persist the answer). The user answers via the generic `/respond`; the handler stores the login and returns only `{site, username}` to the LLM. The password never enters tool args, results, or transcripts.
+- **fill** resolves the credential server-side and fills a login form: `surface="cdp"` talks to the chrome-devtools debug Chrome over the CDP websocket (`cdp_fill.py`, port 9223 — same fill JS semantics as the panel); `surface="page"` invokes PageHandler's **hidden** `fill_login` action (in `_ACTIONS`, deliberately absent from the LLM-facing `page` spec) — the Chrome panel shows an Allow/Deny card (authenticating as the user) before executing; the activity line shows only the site name. Fill JS: native value setter + input/change events, username = last visible text-like input before the password field, optional submit (button → requestSubmit → Enter fallback).
+- Routes: `GET/PUT/DELETE /site-credentials[/{site}]` (listings never include passwords). Settings → Credentials has a "Site logins" section. The system prompt lists saved sites (names only).
+
+**Secret-form redaction choke points** (leak fix): `ask_user` forms with `secret: true` fields answered late (park) or live had their raw answers persisted/replayed. `form_schema.redact_secret_fields` is now applied in `SessionStore.mark_hitl_pending_answered` (hitl_pending.answer_json), `Agent.continue_after_hitl` (resumed TOOL message), and centrally in `_mark_hitl_resolved` (hitl_events bell history — covers `resolve_pending`'s live mirror).
+
 ### Message queueing (queue-then-inject)
 
 Sending while a turn is running does **not** start a parallel loop. `POST /chat/stream` with an active `ChatTurnRunner` enqueues the message on the runner (`chat_turn_runner.py`) and answers a short `queued` SSE ack; slash commands/attachments get 409. The runner injects queued messages as user messages at the next **tool-batch boundary** (`Agent._handle_tool_exec_result` + `_tool_batch_complete` guard, riding the same loom-restart rails as mid-turn compaction); if the turn ends first, the runner **chains** a follow-up turn on the same stream. SSE lifecycle events: `user_enqueued`, `user_injected`, `queue_removed`, and `turn_settled` (terminal marker — subscribers keep the stream open past `done` so chained turns flow; the runner's `_next_queued()` finalize check is race-free against `enqueue()`). Removal via `DELETE /chat/{sid}/queue/{qid}`. The UI keeps the composer enabled while busy (Enter queues; the button stays Stop) and renders removable chips above the composer (`ChatState.queued`); the Chrome panel mirrors this via its events-channel listeners (`onQueueEvent`).
+
+### Telegram bot (`agent/src/nexus/telegram/`)
+
+Long-polling (`getUpdates`, outbound-only — fits the loopback server; webhooks would need a tunnel) Telegram gateway into Nexus chat. Enable via `[telegram]` in config: `enabled`, `bot_token_env` (default `TELEGRAM_BOT_TOKEN`, resolved via `secrets.resolve()` — never inline), `allowed_user_ids` (**allowlist — empty list rejects everyone**), `poll_timeout_seconds`, `stream_edits`, `proxy_url`, `deny_message`. Started/stopped from `app_lifespan.py` (`app.state.telegram_poller`) like the broker poller.
+
+**Mapping ("topic = project")**: forum **topic → project** (binding adopts the project's most recent session as its main chat); plain group → one unprojected chat (auto-created); DM → unprojected chat (auto-created). Bindings live in the `telegram_bindings` table (PK `chat_id, thread_id`) in the sessions DB. Multiple chats per project via `/new` (created with `sessions.project_id` set → they appear in the UI sidebar under the project automatically), listed/switched via `/chats` + inline buttons (`sw:` callbacks).
+
+**Turn execution** goes through `server/services/turn_launcher.py` (`launch_turn`) — the same pipeline as `/chat/stream`: parked-form guard, active-runner **queueing** (busy → "Queued" ack, injection/chaining identical to the UI), 50k cap, context-window precheck (`precheck_context_window` — shared with the HTTP route), eager persist, autotitle, detached `ChatTurnRunner`. Group messages are prefixed `From <name> (@user):` so the agent knows who's speaking.
+
+**Reply streaming**: one **long-lived streamer task per session** subscribes to the session bus (`subscribe_with_replay`); it does NOT exit on `turn_settled` (that finalizes the current message and resets) — exiting/respawning per turn would race back-to-back launches into an unstreamed turn. It idle-exits after 30s quiet with no live runner (stays alive while a runner blocks on HITL). Replies render as throttled message edits (≥2.5s) via `formatting.md_to_telegram_html` (streaming-tolerant line-based converter — unclosed fences are closed; raw text fallback on parse errors; >4000 UTF-16 units split into balanced chunks).
+
+**Commands** (`commands.py`, mirror `chat_slash.py` semantics): `/help`, `/id` (ids for config), `/project <name|id>` (bind; no-arg shows buttons), `/new [title]`, `/chats`, `/switch`, `/title`, `/usage`, `/cancel`, `/compact [aggressive]` (uses `compact_and_summarize` like `POST /sessions/{sid}/compact`). Bot-name suffixes (`/compact@MyBot`) stripped.
+
+**HITL** (`hitl.py`): `user_request` events on Telegram-bound sessions (found via `find_by_session`) are forwarded to the bound chat as inline keyboards — confirm → yes/no, choice → the choices; text/form kinds get an "answer in the Nexus UI" note. Buttons resolve via `store.resolve_pending` (same primitive as `/respond`) — a Telegram answer and a UI answer race like two browser tabs. Parked requests can't be resumed from Telegram (told to use the UI).
+
+**Caveats**: two processes polling the same token get 409 from Telegram (daemon + foreground serve — one must stop); config hot-reloads each poll cycle (allowlist edits apply without restart); the poller dispatches updates per-(chat, thread) serialized, across chats concurrent.
 
 ### Vault import wizard
 

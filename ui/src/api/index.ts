@@ -15,6 +15,7 @@ export * from "./config";
 export * from "./providers";
 export * from "./catalog";
 export * from "./credentials";
+export * from "./siteCredentials";
 export * from "./models";
 export * from "./routing";
 export * from "./knowledge";

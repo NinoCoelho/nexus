@@ -136,6 +136,35 @@
       "deleteFailed": "Failed to delete"
     }
   },
+  "siteLogins": {
+    "sectionTitle": "Site logins",
+    "sectionIcon": "🌐",
+    "sectionDescription": "Per-site usernames and passwords for browser automation, stored encrypted on this machine. The agent can ask you to save a login and fill it into a login form — it never sees the password itself.",
+    "addButton": "Add site login",
+    "addModalTitle": "Add site login",
+    "addModalSave": "Save",
+    "siteLabel": "Site",
+    "siteHint": "Domain or URL, e.g. example.com",
+    "usernameLabel": "Username / email",
+    "passwordLabel": "Password",
+    "passwordHint": "Stored encrypted; it can be replaced but never read back.",
+    "loading": "Loading…",
+    "empty": "No site logins saved yet.",
+    "tableColSite": "Site",
+    "tableColUsername": "Username",
+    "deleteButton": "Delete",
+    "deleteModalTitle": "Delete login for {{site}}?",
+    "deleteModalMessage": "The saved username and password for this site will be permanently removed.",
+    "deleteModalCta": "Delete",
+    "toast": {
+      "loadFailed": "Failed to load site logins",
+      "fieldsRequired": "Site, username, and password are all required",
+      "saved": "Saved login for {{site}}",
+      "saveFailed": "Failed to save site login",
+      "deleted": "Deleted login for {{site}}",
+      "deleteFailed": "Failed to delete site login"
+    }
+  },
   "advanced": {
     "agentBehaviorTitle": "Agent behavior",
     "agentBehaviorIcon": "⚙",
