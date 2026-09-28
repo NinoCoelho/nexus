@@ -122,6 +122,11 @@ class TelegramRouter:
             await self._handle_chat_message(text, chat_type, info)
 
     async def _deny(self, user_id: int, chat_id: int, thread_id: int) -> None:
+        log.info(
+            "telegram: unauthorized message from user %s in chat %s (thread %s) — "
+            "not in allowed_user_ids",
+            user_id, chat_id, thread_id,
+        )
         if not self.cfg.deny_message:
             return
         now = time.monotonic()
@@ -131,7 +136,9 @@ class TelegramRouter:
         try:
             await self.client.send_text_safe(
                 chat_id,
-                "⛔ You are not authorized to use this bot.",
+                "⛔ You are not authorized to use this bot.\n"
+                f"Your Telegram id: <code>{user_id}</code> — if you're the owner, "
+                "add it under Settings → Features → Telegram → Allowed users.",
                 thread_id=thread_id or None,
             )
         except Exception:

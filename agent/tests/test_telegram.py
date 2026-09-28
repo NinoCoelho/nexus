@@ -171,7 +171,10 @@ async def test_unauthorized_user_ignored_with_deny_message(tmp_path: Path) -> No
     h = Harness(tmp_path, FakeProvider([_final("hi")]))
     await h.message("hello", user_id=666)
     await asyncio.sleep(0.05)
-    assert any("not authorized" in t for t in h.client.sent_texts())
+    denies = [t for t in h.client.sent_texts() if "not authorized" in t]
+    assert len(denies) == 1
+    # The deny message teaches the owner their id for the allowlist.
+    assert "<code>666</code>" in denies[0]
     assert h.bindings.get(1000, 0) is None  # no session/binding created
 
 
