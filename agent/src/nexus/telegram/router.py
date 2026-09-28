@@ -33,6 +33,8 @@ log = logging.getLogger(__name__)
 _EDIT_INTERVAL = 2.5  # min seconds between progressive message edits
 _TYPING_INTERVAL = 4.5
 _DENY_THROTTLE = 60.0  # seconds between "not authorized" replies per user
+_ACK_DONE_EMOJI = "👍"  # reaction upgrade when the turn finishes successfully
+_MAX_PENDING_ACKS = 50  # cap per session; acks are cosmetic — bound memory
 _COMMAND_RE = re.compile(r"^/([a-zA-Z_]+)(@\w+)?\s*(.*)$", re.S)
 
 
@@ -75,6 +77,9 @@ class TelegramRouter:
         self._hitl_buttons: dict[str, tuple[str, str, str]] = {}
         # request_id → (chat_id, thread_id, message_id) for forwarded prompts
         self._hitl_messages: dict[str, tuple[int, int, int]] = {}
+        # session_id → [(chat_id, message_id)] of acknowledged-but-unanswered
+        # user messages. 👀 on receipt; upgraded to 👍 when the turn settles.
+        self._pending_acks: dict[str, list[tuple[int, int]]] = {}
 
     # ── Entry point ──────────────────────────────────────────────────────
 
@@ -110,6 +115,7 @@ class TelegramRouter:
             chat_type=chat_type,
             user_id=user_id,
             user_label=label,
+            message_id=int(msg.get("message_id") or 0),
         )
 
         if user_id not in (self.cfg.allowed_user_ids or []):
@@ -223,18 +229,42 @@ class TelegramRouter:
             )
             return
 
-        if outcome.queued:
-            await self.client.send_text_safe(
-                info.chat_id,
-                "📥 Queued — I'll answer when the current turn finishes.",
-                thread_id=info.thread_id or None,
+        # Ack via reaction (👀) — no bubble. Tracked so the streamer can
+        # upgrade to 👍 when the turn settles.
+        self._track_ack(session.id, info)
+        if self.cfg.ack_reaction:
+            await self.client.set_message_reaction(
+                info.chat_id, info.message_id, self.cfg.ack_reaction
             )
-            # A streamer should already be alive for this session; if it
-            # died (idle exit / crash), spawn one so the answer still lands.
-            self._ensure_streamer(session.id, info.chat_id, info.thread_id)
-            return
 
+        # Queued: a streamer should already be alive; if it died (idle exit
+        # / crash), spawn one so the answer still lands.
         self._ensure_streamer(session.id, info.chat_id, info.thread_id)
+
+    def _track_ack(self, session_id: str, info: MsgInfo) -> None:
+        if not info.message_id or not self.cfg.ack_reaction:
+            return
+        pending = self._pending_acks.setdefault(session_id, [])
+        pending.append((info.chat_id, info.message_id))
+        if len(pending) > _MAX_PENDING_ACKS:
+            del pending[: len(pending) - _MAX_PENDING_ACKS]
+
+    async def _upgrade_acks(self, session_id: str) -> None:
+        """Swap tracked 👀 acks to 👍 after a turn settles successfully.
+
+        Called from the streamer. If another turn is already running on the
+        session (back-to-back launch), the list is kept — the next settle
+        will upgrade everything (never a premature 👍).
+        """
+        from ..server.services.chat_turn_runner import get_running_turn
+
+        if get_running_turn(session_id) is not None:
+            return
+        pending = self._pending_acks.pop(session_id, [])
+        for chat_id, message_id in pending:
+            await self.client.set_message_reaction(
+                chat_id, message_id, _ACK_DONE_EMOJI
+            )
 
     def _session_context(self, info: MsgInfo) -> str:
         if info.chat_type == "private":
@@ -297,6 +327,7 @@ class TelegramRouter:
         acc = ""
         msg_id = 0
         last_edit = 0.0
+        turn_errored = False  # error seen in the current turn — keep its 👀 ack
         typing_stop = asyncio.Event()
         typing_task = asyncio.create_task(
             self._typing_loop(session_id, chat_id, thread_id, typing_stop)
@@ -339,9 +370,14 @@ class TelegramRouter:
                     if acc.strip():
                         await self._finalize_reply(chat_id, thread_id, msg_id, acc)
                     acc, msg_id = "", 0
+                    if etype == "turn_settled":
+                        if not turn_errored:
+                            await self._upgrade_acks(session_id)
+                        turn_errored = False
 
                 elif etype == "error":
                     detail = ev.get("detail") or "unexpected error"
+                    turn_errored = True
                     acc = f"{acc}\n\n⚠️ {detail}" if acc.strip() else f"⚠️ {detail}"
 
                 # user_request / tool / queue events are handled elsewhere

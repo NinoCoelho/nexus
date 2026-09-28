@@ -235,6 +235,27 @@ class TelegramClient:
     async def get_me(self) -> dict[str, Any]:
         return await self._call("getMe", {})
 
+    async def set_message_reaction(
+        self, chat_id: int, message_id: int, emoji: str = ""
+    ) -> None:
+        """Set (or, with an empty emoji, remove) the bot's reaction on a message.
+
+        Best-effort: Telegram only accepts its fixed reaction-emoji set for
+        bots and reactions can race message deletion — failures are logged
+        at debug and never propagate to the caller.
+        """
+        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
+        if emoji:
+            payload["emoji"] = emoji
+        try:
+            await self._call("setMessageReaction", payload)
+        except TelegramError:
+            log.debug(
+                "telegram: setMessageReaction(%s, %s, %r) failed",
+                chat_id, message_id, emoji,
+                exc_info=True,
+            )
+
     # ── HTML-safe wrappers ───────────────────────────────────────────────
 
     async def send_text_safe(

@@ -24,6 +24,7 @@ const DEFAULT_CFG: TelegramConfig = {
   stream_edits: true,
   proxy_url: "",
   deny_message: true,
+  ack_reaction: "👀",
 };
 
 /**
@@ -341,6 +342,30 @@ export default function TelegramSection() {
         >
           <span className="hitl-switch-knob" />
         </button>
+      </div>
+
+      <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>
+        <span className="settings-row-name">
+          {t("settings:telegram.ackReactionLabel")}
+          <span
+            className="settings-row-hint"
+            style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}
+          >
+            {t("settings:telegram.ackReactionHint")}
+          </span>
+        </span>
+        <input
+          className="settings-input"
+          placeholder="👀"
+          defaultValue={cfg.ack_reaction}
+          onBlur={(e) => {
+            const v = e.target.value.trim();
+            if (v !== cfg.ack_reaction) {
+              void save({ ack_reaction: v });
+            }
+          }}
+          style={{ width: 120, marginTop: 4 }}
+        />
       </div>
 
       <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>

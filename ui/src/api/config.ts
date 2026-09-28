@@ -95,6 +95,8 @@ export interface TelegramConfig {
   stream_edits: boolean;
   proxy_url: string;
   deny_message: boolean;
+  /** Reaction emoji acking each accepted message (👀); empty = no ack. */
+  ack_reaction: string;
 }
 
 export interface Config {

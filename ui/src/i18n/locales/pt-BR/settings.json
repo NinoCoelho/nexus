@@ -280,6 +280,8 @@
       "stopped": "Bot do Telegram parado",
       "tokenSaved": "Token do bot salvo",
       "allowlistSaved": "Usuários permitidos salvos"
-    }
+    },
+    "ackReactionLabel": "Reação de confirmação",
+    "ackReactionHint": "Emoji reagido na sua mensagem enquanto o turno executa (vira 👍 quando respondido). Vazio desativa."
   }
 }

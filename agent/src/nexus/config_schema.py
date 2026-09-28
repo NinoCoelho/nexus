@@ -334,6 +334,9 @@ class TelegramConfig(BaseModel):
     proxy_url: str = ""
     # Reply "not authorized" to ignored users (off = silently ignore).
     deny_message: bool = True
+    # Reaction placed on each accepted message (👀) while its turn runs;
+    # must be one of Telegram's bot-allowed reaction emojis. Empty = no ack.
+    ack_reaction: str = "👀"
 
 
 class NexusConfig(BaseModel):

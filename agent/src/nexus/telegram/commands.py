@@ -51,6 +51,9 @@ class MsgInfo:
     chat_type: str  # 'private' | 'group' | 'supergroup'
     user_id: int
     user_label: str  # "Alice" / "Alice (@alice)"
+    # Telegram message_id of the incoming update — used by the router to
+    # place the reaction ack (👀 → 👍). 0 for synthetic contexts.
+    message_id: int = 0
 
 
 async def _reply(deps: CommandDeps, info: MsgInfo, text: str) -> None:

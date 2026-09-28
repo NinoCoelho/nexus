@@ -42,6 +42,7 @@ class FakeTGClient:
         self.edits: list[dict[str, Any]] = []
         self.actions: list[tuple[int, int]] = []
         self.callback_answers: list[str] = []
+        self.reactions: list[tuple[int, int, str]] = []
 
     async def send_text_safe(self, chat_id, text, *, thread_id=None, reply_markup=None):
         self.sent.append(
@@ -54,6 +55,9 @@ class FakeTGClient:
             {"chat_id": chat_id, "message_id": message_id, "text": text, "kb": reply_markup}
         )
         return True
+
+    async def set_message_reaction(self, chat_id, message_id, emoji=""):
+        self.reactions.append((chat_id, message_id, emoji))
 
     async def send_chat_action(self, chat_id, action="typing", *, thread_id=None):
         self.actions.append((chat_id, thread_id or 0))
@@ -212,6 +216,14 @@ async def test_dm_message_creates_session_and_streams_reply(tmp_path: Path) -> N
     texts = " ".join(h.client.sent_texts())
     assert "Hello" in texts and "<b>world</b>" in texts
 
+    # Ack lifecycle: 👀 on receipt, upgraded to 👍 once the turn settles.
+    assert (1000, 1, "👀") in h.client.reactions
+    assert (1000, 1, "👍") in h.client.reactions
+    assert h.client.reactions.index((1000, 1, "👀")) < h.client.reactions.index(
+        (1000, 1, "👍")
+    )
+    assert h.router._pending_acks.get(binding.active_session_id) in (None, [])
+
 
 async def test_dm_sender_prefix_not_added(tmp_path: Path) -> None:
     h = Harness(tmp_path, FakeProvider([_final("ok")]))
@@ -350,14 +362,58 @@ async def test_message_while_turn_running_is_queued(tmp_path: Path) -> None:
 
     await h.message("second while busy")
     await asyncio.sleep(0.05)
-    assert any("Queued" in t for t in h.client.sent_texts())
+    # Queued messages are acked with a reaction, not a bubble.
+    assert not any("Queued" in t for t in h.client.sent_texts())
+    assert h.client.reactions.count((1000, 1, "👀")) == 2
 
     provider.gate.set()
     await h.wait_turns_done()
 
+    # Both replies eventually delivered (chained turn gets its own message).
     all_text = " ".join(h.client.sent_texts() + [e["text"] for e in h.client.edits])
     assert "first reply" in all_text
     assert "second reply" in all_text
+    # After the (single) settle, the 👀 acks were upgraded to 👍.
+    assert (1000, 1, "👍") in h.client.reactions
+
+
+async def test_no_reactions_when_ack_disabled(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    h.router.cfg.ack_reaction = ""
+    await h.message("hi")
+    await h.wait_turns_done()
+    assert h.client.reactions == []
+    # The reply still arrives as a bubble.
+    assert any("ok" in t for t in h.client.sent_texts())
+
+
+async def test_upgrade_acks_deferred_while_runner_alive(tmp_path: Path) -> None:
+    """_upgrade_acks keeps pending entries when another turn is already
+    running — never a premature 👍."""
+    from nexus.server.services.chat_turn_runner import ChatTurnRunner, _running_turns
+
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    sid = h.store.create().id
+    h.router._pending_acks[sid] = [(1000, 7)]
+    fake_runner = ChatTurnRunner(
+        agent=h.agent, store=h.store, session_id=sid, message="m", context="",
+        model_id="", pre_turn_history=[], attachment_parts=None,
+        resume_working_messages=None, tracker=None, turn_job_id="",
+        publish_job_event=lambda *a: None,
+    )
+    fake_runner.task = asyncio.get_running_loop().create_task(asyncio.sleep(10))
+    _running_turns[sid] = fake_runner
+    try:
+        await h.router._upgrade_acks(sid)
+        assert h.router._pending_acks[sid] == [(1000, 7)]  # kept, not upgraded
+        assert (1000, 7, "👍") not in h.client.reactions
+    finally:
+        _running_turns.pop(sid, None)
+        fake_runner.task.cancel()
+    # With no live runner the list drains and the upgrade fires.
+    await h.router._upgrade_acks(sid)
+    assert h.router._pending_acks.get(sid) is None
+    assert (1000, 7, "👍") in h.client.reactions
 
 
 # ── HITL ────────────────────────────────────────────────────────────────

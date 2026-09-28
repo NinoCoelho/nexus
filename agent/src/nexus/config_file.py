@@ -212,6 +212,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "stream_edits": cfg.telegram.stream_edits,
             "proxy_url": cfg.telegram.proxy_url,
             "deny_message": cfg.telegram.deny_message,
+            "ack_reaction": cfg.telegram.ack_reaction,
         },
     }
     for m in cfg.models:

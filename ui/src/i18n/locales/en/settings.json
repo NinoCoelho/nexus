@@ -277,6 +277,8 @@
       "stopped": "Telegram bot stopped",
       "tokenSaved": "Bot token saved",
       "allowlistSaved": "Allowed users saved"
-    }
+    },
+    "ackReactionLabel": "Ack reaction",
+    "ackReactionHint": "Emoji reaction placed on your message while the turn runs (upgraded to 👍 when answered). Empty disables."
   }
 }
