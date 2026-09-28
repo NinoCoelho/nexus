@@ -487,6 +487,7 @@ def create_app(
     from .routes.push import router as push_router
     from .routes.skill_wizard import router as skill_wizard_router
     from .routes.tunnel import router as tunnel_router
+    from .routes.telegram import router as telegram_router
     from .routes.tts import router as tts_router
     from .routes.webhook import router as webhook_router
     from .routes.broker import router as broker_router
@@ -529,6 +530,7 @@ def create_app(
     app.include_router(push_router)
     app.include_router(skill_wizard_router)
     app.include_router(tunnel_router)
+    app.include_router(telegram_router)
     app.include_router(tts_router)
     app.include_router(webhook_router)
     app.include_router(broker_router)

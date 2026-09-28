@@ -243,5 +243,43 @@
     "manageModelsTitle": "Gerenciar modelos",
     "manageModelsIcon": "📋",
     "manageModelsHelpTitle": "Modelos registrados"
+  },
+  "telegram": {
+    "sectionTitle": "Bot do Telegram",
+    "sectionDescription": "Converse com o Nexus pelo Telegram. Tópicos de fórum podem ser vinculados a projetos, cada um com seu chat principal; comandos como /compact e /new funcionam no Telegram.",
+    "helpTitle": "Bot do Telegram",
+    "helpBody1": "Crie um bot com o",
+    "helpBody2": "(desative o Group Privacy lá se quiser que o bot veja todas as mensagens do grupo), cole o token abaixo, adicione seu id de usuário do Telegram à lista de permitidos e pressione Iniciar. Envie /id para o bot ou consulte @userinfobot para saber seu id.",
+    "helpBody3": "Importante:",
+    "helpBody4": "a lista de permitidos é um controle de segurança — quem estiver nela pode comandar o agente.",
+    "enabledLabel": "Ativar bot do Telegram",
+    "statusRunning": "Executando como {{bot}}",
+    "statusStopped": "Ativado — poller parado",
+    "statusDisabled": "Desativado",
+    "startButton": "Iniciar",
+    "stopButton": "Parar",
+    "starting": "Iniciando…",
+    "startNeedsToken": "Cole o token do bot primeiro",
+    "tokenLabel": "Token do bot",
+    "tokenPresent": "Token salvo — nunca é exibido de volta",
+    "tokenMissing": "Nenhum token ainda — obtenha um com @BotFather",
+    "tokenReplaceHint": "Cole um novo token para substituir o salvo",
+    "tokenSave": "Salvar token",
+    "allowlistLabel": "Usuários permitidos",
+    "allowlistHint": "Ids de usuário do Telegram separados por vírgula. Vazio rejeita todos.",
+    "allowlistSave": "Salvar",
+    "allowlistInvalid": "Usuários permitidos devem ser ids numéricos do Telegram",
+    "allowlistEmptyWarning": "A lista de permitidos está vazia — toda mensagem será rejeitada até adicionar pelo menos um id.",
+    "streamEditsLabel": "Transmitir respostas",
+    "streamEditsHint": "Edita a mensagem no Telegram progressivamente enquanto o agente escreve",
+    "proxyLabel": "URL do proxy",
+    "proxyHint": "Opcional — para redes onde api.telegram.org está inacessível",
+    "toast": {
+      "started": "Bot do Telegram executando como {{bot}}",
+      "startFailed": "Falha ao iniciar o bot do Telegram",
+      "stopped": "Bot do Telegram parado",
+      "tokenSaved": "Token do bot salvo",
+      "allowlistSaved": "Usuários permitidos salvos"
+    }
   }
 }

@@ -240,5 +240,43 @@
     "manageModelsTitle": "Manage models",
     "manageModelsIcon": "📋",
     "manageModelsHelpTitle": "Registered models"
+  },
+  "telegram": {
+    "sectionTitle": "Telegram bot",
+    "sectionDescription": "Chat with Nexus from Telegram. Forum topics can each be bound to a project with their own main chat; commands like /compact and /new work inside Telegram.",
+    "helpTitle": "Telegram bot",
+    "helpBody1": "Create a bot with",
+    "helpBody2": "(disable Group Privacy there if you want the bot to see all group messages), paste the token below, add your Telegram user id to the allowlist and press Start. Send /id to the bot or check @userinfobot for your id.",
+    "helpBody3": "Important:",
+    "helpBody4": "the allowlist is a security control — anyone on it can drive the agent.",
+    "enabledLabel": "Enable Telegram bot",
+    "statusRunning": "Running as {{bot}}",
+    "statusStopped": "Enabled — poller stopped",
+    "statusDisabled": "Disabled",
+    "startButton": "Start",
+    "stopButton": "Stop",
+    "starting": "Starting…",
+    "startNeedsToken": "Paste the bot token first",
+    "tokenLabel": "Bot token",
+    "tokenPresent": "Token saved — never displayed back",
+    "tokenMissing": "No token yet — get one from @BotFather",
+    "tokenReplaceHint": "Paste a new token to replace the saved one",
+    "tokenSave": "Save token",
+    "allowlistLabel": "Allowed users",
+    "allowlistHint": "Comma-separated Telegram user ids. Empty rejects everyone.",
+    "allowlistSave": "Save",
+    "allowlistInvalid": "Allowed users must be numeric Telegram ids",
+    "allowlistEmptyWarning": "The allowlist is empty — every message will be rejected until you add at least one user id.",
+    "streamEditsLabel": "Stream replies",
+    "streamEditsHint": "Progressively edit the Telegram message as the agent writes",
+    "proxyLabel": "Proxy URL",
+    "proxyHint": "Optional — for networks where api.telegram.org is unreachable",
+    "toast": {
+      "started": "Telegram bot running as {{bot}}",
+      "startFailed": "Failed to start the Telegram bot",
+      "stopped": "Telegram bot stopped",
+      "tokenSaved": "Bot token saved",
+      "allowlistSaved": "Allowed users saved"
+    }
   }
 }

@@ -84,6 +84,19 @@ export interface McpConfig {
   server_auth_token: string;
 }
 
+export interface TelegramConfig {
+  enabled: boolean;
+  /** Env-var / secrets.toml key holding the bot token (never inline). */
+  bot_token_env: string;
+  /** Synthesized presence flag — the token value never round-trips. */
+  has_token?: boolean;
+  allowed_user_ids: number[];
+  poll_timeout_seconds: number;
+  stream_edits: boolean;
+  proxy_url: string;
+  deny_message: boolean;
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
@@ -93,6 +106,7 @@ export interface Config {
   search?: SearchConfig;
   ui?: UIConfig;
   mcp?: McpConfig;
+  telegram?: TelegramConfig;
 }
 
 // Patch payload — every nested object is independently partial because the
@@ -112,6 +126,7 @@ export interface ConfigPatch {
     server_expose?: string[];
     server_auth_token?: string;
   };
+  telegram?: Partial<Omit<TelegramConfig, "has_token">>;
 }
 
 export async function getConfig(): Promise<Config> {

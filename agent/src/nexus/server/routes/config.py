@@ -15,7 +15,7 @@ router = APIRouter()
 def _redact_cfg(cfg: Any) -> dict[str, Any]:
     if cfg is None:
         return {}
-    from ...secrets import get as secrets_get
+    from ...secrets import get as secrets_get, resolve as secrets_resolve
     out: dict[str, Any] = {
         "agent": cfg.agent.model_dump(),
         "providers": {},
@@ -93,6 +93,20 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "server_port": mcp.server_port,
             "server_expose": mcp.server_expose,
             "server_auth_token": "***" if mcp.server_auth_token else "",
+        }
+    tg = getattr(cfg, "telegram", None)
+    if tg is not None:
+        out["telegram"] = {
+            "enabled": tg.enabled,
+            "bot_token_env": tg.bot_token_env,
+            # Synthesized presence flag — the token value never round-trips.
+            # resolve() mirrors the poller: env var first, then secrets file.
+            "has_token": bool(secrets_resolve(tg.bot_token_env)),
+            "allowed_user_ids": tg.allowed_user_ids,
+            "poll_timeout_seconds": tg.poll_timeout_seconds,
+            "stream_edits": tg.stream_edits,
+            "proxy_url": tg.proxy_url,
+            "deny_message": tg.deny_message,
         }
     return out
 
@@ -189,6 +203,20 @@ async def patch_config(
         ALLOWED = {"enabled", "ack_enabled", "ack_mode", "ack_model", "voice_language", "voices_dir"}
         clean = {k: v for k, v in patch.items() if k in ALLOWED}
         raw["tts"] = {**existing, **clean}
+    if "telegram" in body:
+        existing = raw.get("telegram", {}) or {}
+        patch = body["telegram"] or {}
+        ALLOWED_TG = {
+            "enabled", "bot_token_env", "allowed_user_ids",
+            "poll_timeout_seconds", "stream_edits", "proxy_url", "deny_message",
+        }
+        clean = {k: v for k, v in patch.items() if k in ALLOWED_TG}
+        if isinstance(clean.get("allowed_user_ids"), list):
+            clean["allowed_user_ids"] = [
+                int(u) for u in clean["allowed_user_ids"]
+                if str(u).strip().lstrip("-").isdigit()
+            ]
+        raw["telegram"] = {**existing, **clean}
     if "mcp" in body:
         existing = raw.get("mcp", {}) or {}
         patch = body["mcp"] or {}

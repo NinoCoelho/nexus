@@ -541,34 +541,33 @@ def _startup_telegram(
 ) -> None:
     try:
         from ..config_file import load_cached as load_config
-        from ..telegram.api import TelegramClient
-        from ..telegram.poller import TelegramPoller
+        from ..telegram.poller import build_telegram_poller
 
         tg_cfg = load_config().telegram
         if not tg_cfg.enabled:
-            return
-        client = TelegramClient.from_config(tg_cfg)
-        if client is None:
-            log.warning(
-                "telegram: enabled but no bot token found under %r "
-                "(env var or ~/.nexus/secrets.toml) — poller not started",
-                tg_cfg.bot_token_env,
-            )
             return
         if not tg_cfg.allowed_user_ids:
             log.warning(
                 "telegram: allowed_user_ids is empty — every message will be "
                 "rejected. Add your Telegram user id (send /id to the bot, or "
-                "check @userinfobot) under [telegram].allowed_user_ids."
+                "check @userinfobot) under [telegram].allowed_user_ids "
+                "(Settings → Features → Telegram)."
             )
-        poller = TelegramPoller(
-            client=client,
+        poller = build_telegram_poller(
+            cfg=tg_cfg,
             agent=agent,
             store=sessions,
             tracker=job_tracker,
-            cfg=tg_cfg,
             publish_job_event=publish_job_event,
         )
+        if poller is None:
+            log.warning(
+                "telegram: enabled but no bot token found under %r "
+                "(env var or ~/.nexus/secrets.toml) — poller not started. "
+                "Configure it in Settings → Features → Telegram.",
+                tg_cfg.bot_token_env,
+            )
+            return
         poller.start()
         app.state.telegram_poller = poller
         log.info("telegram poller started")

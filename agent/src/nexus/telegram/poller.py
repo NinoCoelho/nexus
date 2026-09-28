@@ -41,6 +41,8 @@ class TelegramPoller:
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._chains: dict[tuple[int, int], asyncio.Task] = {}
+        # getMe() result cached at poll start — surfaced by GET /telegram/status.
+        self.bot_info: dict[str, Any] = {}
         self.router = TelegramRouter(
             client=client,
             agent=agent,
@@ -87,6 +89,7 @@ class TelegramPoller:
         # Startup diagnostics: verify the token and log the bot identity.
         try:
             me = await self._client.get_me()
+            self.bot_info = me
             log.info(
                 "telegram: polling as @%s (id=%s)",
                 me.get("username", "?"),
@@ -171,3 +174,38 @@ class TelegramPoller:
             self._chains = {
                 k: t for k, t in self._chains.items() if not t.done()
             }
+
+
+def build_telegram_poller(
+    *,
+    cfg: Any,
+    agent: Any,
+    store: Any,
+    tracker: Any,
+    publish_job_event: Any = None,
+) -> TelegramPoller | None:
+    """Build a poller from a ``[telegram]`` config section.
+
+    Returns None when the bot token isn't resolvable (env var or
+    ``~/.nexus/secrets.toml``). Shared by the lifespan startup and the
+    ``POST /telegram/start`` route.
+    """
+    from .api import TelegramClient
+
+    client = TelegramClient.from_config(cfg)
+    if client is None:
+        return None
+    if publish_job_event is None:
+        from ..server.events import SessionEvent
+
+        def publish_job_event(kind: str, data: dict) -> None:  # noqa: F811
+            store.publish("__jobs__", SessionEvent(kind=kind, data=data))
+
+    return TelegramPoller(
+        client=client,
+        agent=agent,
+        store=store,
+        tracker=tracker,
+        cfg=cfg,
+        publish_job_event=publish_job_event,
+    )

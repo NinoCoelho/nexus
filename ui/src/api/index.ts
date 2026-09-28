@@ -16,6 +16,7 @@ export * from "./providers";
 export * from "./catalog";
 export * from "./credentials";
 export * from "./siteCredentials";
+export * from "./telegram";
 export * from "./models";
 export * from "./routing";
 export * from "./knowledge";
