@@ -26,6 +26,7 @@ const DEFAULT_CFG: TelegramConfig = {
   deny_message: true,
   ack_reaction: "👀",
   voice_replies: true,
+  voice_speechify: "auto",
 };
 
 /**
@@ -363,6 +364,30 @@ export default function TelegramSection() {
         >
           <span className="hitl-switch-knob" />
         </button>
+      </div>
+
+      <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>
+        <span className="settings-row-name">
+          {t("settings:telegram.speechifyLabel")}
+          <span
+            className="settings-row-hint"
+            style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}
+          >
+            {t("settings:telegram.speechifyHint")}
+          </span>
+        </span>
+        <div style={{ flexBasis: "100%", marginTop: 4 }}>
+          <select
+            className="s-select"
+            disabled={saving}
+            value={cfg.voice_speechify}
+            onChange={(e) => void save({ voice_speechify: e.target.value as TelegramConfig["voice_speechify"] })}
+          >
+            <option value="auto">{t("settings:telegram.speechifyAuto")}</option>
+            <option value="always">{t("settings:telegram.speechifyAlways")}</option>
+            <option value="off">{t("settings:telegram.speechifyOff")}</option>
+          </select>
+        </div>
       </div>
 
       <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>

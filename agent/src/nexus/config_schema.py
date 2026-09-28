@@ -340,6 +340,10 @@ class TelegramConfig(BaseModel):
     # Voice notes are transcribed into the turn; when true, the reply is
     # also synthesized (TTS) and sent back as a voice note.
     voice_replies: bool = True
+    # LLM rewrite of voice replies for natural speech: "auto" only when
+    # the reply is messy (markdown/emoji/units), "always" every reply,
+    # "off" never. Uses [tts].ack_model.
+    voice_speechify: Literal["auto", "always", "off"] = "auto"
 
 
 class NexusConfig(BaseModel):

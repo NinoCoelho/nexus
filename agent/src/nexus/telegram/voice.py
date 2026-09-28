@@ -1,17 +1,19 @@
 """Voice replies — synthesize the agent's answer and deliver it as a
 Telegram voice note.
 
-Pipeline: ``tts.synthesize`` (Piper, mono 16-bit WAV) → PyAV transcode to
-OGG/Opus (the only container Telegram's sendVoice accepts) → sendVoice.
-When the transcode is unavailable (PyAV wheel without libopus) or Telegram
-rejects the voice note, delivery falls back to sendAudio and finally
-sendDocument — a text-degraded reply is better than none.
+Pipeline: raw reply → optional LLM "speechify" rewrite (drops markdown,
+expands abbreviations, transliterates foreign words to the reply's
+phonetics) → ``tts.synthesize`` (Piper applies ``normalize_for_speech``
+— ranges/units/numbers — on top) → PyAV transcode to OGG/Opus →
+sendVoice, with sendAudio as fallback when any step degrades.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -22,6 +24,77 @@ log = logging.getLogger(__name__)
 # Piper on long text is slow and voice notes that long are useless anyway —
 # keep the spoken reply to roughly a few minutes at most.
 _MAX_SYNTH_CHARS = 4000
+
+_SPEECHIFY_TIMEOUT = 8.0
+
+# "Messy" heuristic for voice_speechify="auto": anything the deterministic
+# normalizer can't fully fix — markdown residue, emoji, unit symbols,
+# range dashes, URLs — earns an LLM rewrite.
+_MESSY_RE = re.compile(
+    r"[*_#`~•]\S"  # markdown
+    r"|[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2757\u3030]"  # emoji/symbols
+    r"|\d\s*[°%]"  # units/percent attached to digits
+    r"|[–—]"  # ranges
+    r"|https?://",
+    re.UNICODE,
+)
+
+_SPEECHIFY_PROMPTS = {
+    "pt": (
+        "Reescreva o texto abaixo para ser lido em voz alta em português, "
+        "como uma pessoa falando naturalmente:\n"
+        "- Sem emojis, markdown, listas ou parênteses; use frases corridas.\n"
+        "- Expanda abreviações e unidades (ex.: 30°C → 30 graus; 50% → "
+        "50 por cento; 14h → 14 horas).\n"
+        "- Translitere palavras estrangeiras para a fonética do português "
+        "para que a síntese de voz as pronuncie bem (ex.: \"backup\" → "
+        "\"bécape\", \"zero chance\" → \"zero chance\").\n"
+        "- Mantenha todo o conteúdo, o mesmo idioma e seja conciso.\n"
+        "Responda APENAS com o texto reescrito, sem comentários.\n\n"
+        "Texto:\n{text}"
+    ),
+    "en": (
+        "Rewrite the text below to be read aloud in English, like a person "
+        "speaking naturally:\n"
+        "- No emojis, markdown, lists, or parentheses; use flowing "
+        "sentences.\n"
+        "- Expand abbreviations and units (e.g. 30°C → 30 degrees; 50% → "
+        "50 percent; 2pm → 2 PM).\n"
+        "- Transliterate foreign words into English-friendly phonetics so "
+        "text-to-speech pronounces them well.\n"
+        "- Keep all the content, the same language, and stay concise.\n"
+        "Reply with ONLY the rewritten text, no commentary.\n\n"
+        "Text:\n{text}"
+    ),
+}
+
+
+def needs_speechify(text: str) -> bool:
+    return bool(_MESSY_RE.search(text or ""))
+
+
+async def speechify(agent: Any, text: str, *, timeout: float = _SPEECHIFY_TIMEOUT) -> str:
+    """LLM-rewrite ``text`` for natural speech. Returns the original on
+    any failure/timeout — callers fall back gracefully."""
+    try:
+        from ..voice_ack import _detect_lang_short, _generate_text
+
+        def _load_cfg():
+            from ..config_file import load_cached as load_config
+
+            return load_config()
+
+        lang = _detect_lang_short(text)
+        template = _SPEECHIFY_PROMPTS.get(lang, _SPEECHIFY_PROMPTS["en"])
+        prompt = template.format(text=text[:8000])
+        out = await asyncio.wait_for(
+            _generate_text(agent, _load_cfg(), prompt), timeout=timeout
+        )
+        out = (out or "").strip()
+        return out or text
+    except Exception:
+        log.debug("telegram: speechify failed — using original text", exc_info=True)
+        return text
 
 
 def wav_to_ogg_opus(wav: bytes) -> bytes | None:
@@ -66,8 +139,15 @@ async def deliver_voice_note(
     text: str,
     *,
     tts_cfg: Any = None,
+    agent: Any = None,
+    speechify_mode: str = "auto",
 ) -> bool:
     """Synthesize ``text`` and send it as a voice note (with fallbacks).
+
+    ``speechify_mode``: ``always`` rewrites every reply through the LLM
+    (``[tts].ack_model``) for natural spoken phrasing; ``auto`` only when
+    the text is messy (markdown/emoji/units/foreign words); ``off`` never.
+    LLM failure/timeout degrades silently to the rule-normalized text.
 
     Returns True when some audio bubble was delivered. Silently no-ops
     when TTS is disabled or synthesis fails — the text reply already
@@ -85,6 +165,17 @@ async def deliver_voice_note(
         tts_cfg = load_config().tts
     if not getattr(tts_cfg, "enabled", False):
         return False
+
+    if agent is not None and speechify_mode in ("auto", "always"):
+        if speechify_mode == "always" or needs_speechify(text):
+            try:
+                text = await speechify(agent, text)
+            except Exception:
+                log.debug(
+                    "telegram: speechify failed — falling back to rule "
+                    "normalization",
+                    exc_info=True,
+                )
 
     try:
         result = await synthesize(text[:_MAX_SYNTH_CHARS], cfg=tts_cfg)

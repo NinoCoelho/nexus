@@ -99,6 +99,8 @@ export interface TelegramConfig {
   ack_reaction: string;
   /** Voice notes get transcribed; the reply is also TTS'd back as a voice note. */
   voice_replies: boolean;
+  /** LLM rewrite of voice replies for natural speech: auto | always | off. */
+  voice_speechify: "auto" | "always" | "off";
 }
 
 export interface Config {

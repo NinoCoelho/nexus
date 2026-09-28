@@ -628,7 +628,13 @@ class TelegramRouter:
 
         try:
             await deliver_voice_note(
-                self.client, chat_id, thread_id, text, tts_cfg=self._tts_cfg()
+                self.client,
+                chat_id,
+                thread_id,
+                text,
+                tts_cfg=self._tts_cfg(),
+                agent=self.agent,
+                speechify_mode=getattr(self.cfg, "voice_speechify", "auto"),
             )
         except Exception:
             log.exception("telegram: voice reply failed")

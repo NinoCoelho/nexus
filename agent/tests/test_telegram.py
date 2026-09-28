@@ -855,3 +855,136 @@ def test_config_telegram_defaults() -> None:
     assert cfg.telegram.bot_token_env == "TELEGRAM_BOT_TOKEN"
     assert cfg.telegram.allowed_user_ids == []
     assert cfg.telegram.stream_edits is True
+
+
+# ── Voice speechify ─────────────────────────────────────────────────────
+
+
+def test_needs_speechify_heuristic() -> None:
+    from nexus.telegram.voice import needs_speechify
+
+    assert needs_speechify("Agora: 31°C, **sol** ✅")
+    assert needs_speechify("18–33°C na terça")
+    assert needs_speechify("chance de 50%")
+    assert needs_speechify("**bold** and `code`")
+    assert not needs_speechify("Tudo bem por aqui, obrigado por perguntar.")
+
+
+async def test_deliver_speechify_auto_messy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+    from nexus.telegram.voice import deliver_voice_note
+    from nexus.tts import SynthResult
+
+    h = Harness(tmp_path, FakeProvider([_final("x")]))
+    synth_calls: list[str] = []
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        synth_calls.append(text)
+        return SynthResult(b"RIFF", "audio/wav")
+
+    llm_calls: list[str] = []
+
+    async def fake_llm(agent, cfg, prompt, **kwargs):
+        llm_calls.append(prompt)
+        return "resposta reescrita para fala"
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fake_llm)
+    monkeypatch.setattr("nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGG")
+
+    ok = await deliver_voice_note(
+        h.client, 1000, 0, "Agora: **31°C** ✅ com 50% de chance",
+        tts_cfg=TTSConfig(enabled=True),
+        agent=object(),
+        speechify_mode="auto",
+    )
+    assert ok is True
+    assert len(llm_calls) == 1 and "31°C" in llm_calls[0]
+    assert synth_calls == ["resposta reescrita para fala"]
+    assert h.client.voices and h.client.voices[0]["audio"] == b"OGG"
+
+
+async def test_deliver_speechify_auto_clean_skips_llm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+    from nexus.telegram.voice import deliver_voice_note
+    from nexus.tts import SynthResult
+
+    h = Harness(tmp_path, FakeProvider([_final("x")]))
+    synth_calls: list[str] = []
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        synth_calls.append(text)
+        return SynthResult(b"RIFF", "audio/wav")
+
+    async def fail_llm(*a, **k):  # pragma: no cover — must not be reached
+        raise AssertionError("LLM should not be called for clean text")
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fail_llm)
+
+    ok = await deliver_voice_note(
+        h.client, 1000, 0, "Tudo certo, resolvi o seu pedido.",
+        tts_cfg=TTSConfig(enabled=True),
+        agent=object(),
+        speechify_mode="auto",
+    )
+    assert ok is True
+    assert synth_calls and "Tudo certo" in synth_calls[0]
+
+
+async def test_deliver_speechify_off_never_calls_llm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+    from nexus.telegram.voice import deliver_voice_note
+    from nexus.tts import SynthResult
+
+    h = Harness(tmp_path, FakeProvider([_final("x")]))
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        return SynthResult(b"RIFF", "audio/wav")
+
+    async def fail_llm(*a, **k):  # pragma: no cover
+        raise AssertionError("LLM should not be called when off")
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fail_llm)
+
+    ok = await deliver_voice_note(
+        h.client, 1000, 0, "bagunçado **31°C** ✅",
+        tts_cfg=TTSConfig(enabled=True),
+        agent=object(),
+        speechify_mode="off",
+    )
+    assert ok is True
+
+
+async def test_speechify_timeout_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus.telegram.voice import speechify
+
+    async def slow_llm(agent, cfg, prompt, **kwargs):
+        await asyncio.sleep(2.0)
+        return "never"
+
+    monkeypatch.setattr("nexus.voice_ack._generate_text", slow_llm)
+    out = await speechify(object(), "texto original", timeout=0.05)
+    assert out == "texto original"
+
+
+async def test_speechify_failure_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus.telegram.voice import speechify
+
+    async def boom(agent, cfg, prompt, **kwargs):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr("nexus.voice_ack._generate_text", boom)
+    out = await speechify(object(), "texto original", timeout=1.0)
+    assert out == "texto original"

@@ -318,3 +318,66 @@ def test_underscore_removed() -> None:
     assert "_" not in out
     assert "skill" in out
     assert "drafter" in out
+
+
+# ── Ranges, units, weekday-parenthesis (en + pt) ───────────────────────────
+
+
+def test_temperature_range_pt() -> None:
+    out = normalize_for_speech("Mínima de 18–33°C hoje", lang="pt")
+    assert "dezoito a trinta e três graus" in out
+    assert "°" not in out and "C" != out[-1:]
+
+
+def test_temperature_bare_c_pt() -> None:
+    out = normalize_for_speech("Vai fazer 30C lá fora.", lang="pt")
+    assert "trinta graus" in out
+    assert "30C" not in out
+
+
+def test_percent_pt() -> None:
+    out = normalize_for_speech("Chance de chuva de 5% à tarde", lang="pt")
+    assert "5 por cento" in out
+    assert "%" not in out
+
+
+def test_percent_en() -> None:
+    out = normalize_for_speech("Humidity at 8% now", lang="en")
+    assert "8 percent" in out
+
+
+def test_fahrenheit_and_units_en() -> None:
+    out = normalize_for_speech("High of 9°F, wind 7 km/h, 5 kg of gear, $6", lang="en")
+    assert "degrees fahrenheit" in out
+    assert "kilometers per hour" in out
+    assert "kilograms" in out
+    assert "6 dollars" in out
+
+
+def test_currency_reais_pt() -> None:
+    out = normalize_for_speech("Custa R$ 1.250 hoje", lang="pt")
+    assert "reais" in out and "mil" in out
+
+
+def test_weekday_paren_pt() -> None:
+    out = normalize_for_speech("Ter (29): 18–33°C, sol", lang="pt")
+    assert "terça, dia vinte e nove" in out
+    assert "dezoito a trinta e três graus" in out
+
+
+def test_weekday_paren_en() -> None:
+    out = normalize_for_speech("Tue (29): sunny, 72F", lang="en")
+    assert "Tuesday" in out and "degrees fahrenheit" in out
+
+
+def test_non_weekday_paren_untouched() -> None:
+    out = normalize_for_speech("A versão (29) do app saiu", lang="pt")
+    # 29 expands to words, but the parenthetical is NOT treated as a date
+    assert "vinte e nove" in out and "versão" in out and "dia" not in out
+
+
+def test_hyphen_dates_not_range_expanded() -> None:
+    # Plain-hyphen dates belong to the date expander, not ranges.
+    out = normalize_for_speech("Prazo 18-09-2026", lang="pt")
+    assert " a " not in out
+    assert "setembro" in out

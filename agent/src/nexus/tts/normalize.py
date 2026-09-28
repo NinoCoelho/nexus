@@ -267,6 +267,70 @@ def _collapse_whitespace(text: str) -> str:
 
 # ── Date + time + number expansion (en + pt) ───────────────────────────────
 
+# En/em dashes only — plain hyphens belong to _DATE_RE (18-09-2026).
+_RANGE_RE = re.compile(r"\b(\d+)\s*[–—]\s*(\d+)\b")
+
+_WEEKDAYS_PT = {
+    "seg": "segunda", "ter": "terça", "qua": "quarta", "qui": "quinta",
+    "sex": "sexta", "sáb": "sábado", "dom": "domingo",
+}
+_WEEKDAYS_EN = {
+    "mon": "Monday", "tue": "Tuesday", "wed": "Wednesday", "thu": "Thursday",
+    "fri": "Friday", "sat": "Saturday", "sun": "Sunday",
+}
+_WEEKDAY_PAREN_RE = re.compile(r"\b(\w{3})\w*\s*\((\d{1,2})\)")
+
+_UNITS_PT = [
+    (re.compile(r"\b(\d+)\s*[°º]?\s*C\b"), r"\1 graus"),
+    (re.compile(r"\b(\d+)\s*[°º]?\s*F\b"), r"\1 graus fahrenheit"),
+    (re.compile(r"\b(\d+)\s*%"), r"\1 por cento"),
+    (re.compile(r"\b(\d+)\s*km/h\b"), r"\1 quilômetros por hora"),
+    (re.compile(r"\b(\d+)\s*kg\b"), r"\1 quilos"),
+    # R$ before/after the amount ("R$ 1.250" / "1.250 R$").
+    (re.compile(r"\b(\d+(?:[.,]\d+)*)\s*R\$"), r"\1 reais"),
+    (re.compile(r"R\$\s*(\d+(?:[.,]\d+)*)"), r"\1 reais"),
+    # Bare $ — not the R$ above (lookbehind excludes the R).
+    (re.compile(r"(?<!R)\$\s*(\d+)"), r"\1 dólares"),
+]
+_UNITS_EN = [
+    (re.compile(r"\b(\d+)\s*[°º]?\s*C\b"), r"\1 degrees"),
+    (re.compile(r"\b(\d+)\s*[°º]?\s*F\b"), r"\1 degrees fahrenheit"),
+    (re.compile(r"\b(\d+)\s*%"), r"\1 percent"),
+    (re.compile(r"\b(\d+)\s*km/h\b"), r"\1 kilometers per hour"),
+    (re.compile(r"\b(\d+)\s*kg\b"), r"\1 kilograms"),
+    (re.compile(r"\b(\d+(?:[.,]\d+)*)\s*R\$"), r"\1 reais"),
+    (re.compile(r"R\$\s*(\d+(?:[.,]\d+)*)"), r"\1 reais"),
+    (re.compile(r"(?<!R)\$\s*(\d+)"), r"\1 dollars"),
+]
+
+
+def _expand_ranges(text: str, lang: str) -> str:
+    """18–33 → "18 a 33" (pt) / "18 to 33" (en). Runs before units so
+    "18–33°C" becomes "18 a 33°C" and then "… 33 graus"."""
+    joiner = " a " if lang == "pt" else " to "
+    return _RANGE_RE.sub(lambda m: f"{m.group(1)}{joiner}{m.group(2)}", text)
+
+
+def _expand_units(text: str, lang: str) -> str:
+    for pattern, repl in (_UNITS_PT if lang == "pt" else _UNITS_EN):
+        text = pattern.sub(repl, text)
+    return text
+
+
+def _expand_weekdays(text: str, lang: str) -> str:
+    """Ter (29) → "terça, dia 29" / Tue (29) → "Tuesday, 29"."""
+    table = _WEEKDAYS_PT if lang == "pt" else _WEEKDAYS_EN
+
+    def _r(m: re.Match[str]) -> str:
+        full = table.get(m.group(1).lower())
+        if not full:
+            return m.group(0)
+        day = f"dia {m.group(2)}" if lang == "pt" else m.group(2)
+        return f"{full}, {day}"
+
+    return _WEEKDAY_PAREN_RE.sub(_r, text)
+
+
 
 # Matches "12/07" or "12/07/2026" or "12-07" (dot separator avoided so
 # decimals like 3.14 don't get parsed as dates).
@@ -274,8 +338,9 @@ _DATE_RE = re.compile(
     r"\b(?P<d>\d{1,2})[/-](?P<m>\d{1,2})(?:[/-](?P<y>\d{4}|\d{2}))?\b"
 )
 
-# Matches "14:30" or "14h30" — common BR + EN time formats.
-_TIME_RE = re.compile(r"\b(?P<h>\d{1,2})[:h](?P<min>\d{2})\b")
+# Matches "14:30", "14h30" — and bare "14h" (minutes optional) so the h
+# never fuses with an expanded number ("catorzeh").
+_TIME_RE = re.compile(r"\b(?P<h>\d{1,2})[:h](?:(?P<min>\d{2}))?\b")
 
 # Numbers (integers + decimals + thousand separators). Skip things that look
 # like dates / times — they get processed first.
@@ -361,7 +426,7 @@ def _expand_dates(text: str, lang: str) -> str:
 def _expand_times(text: str, lang: str) -> str:
     is_pt = lang == "pt"
     def _r(m: re.Match[str]) -> str:
-        h, mins = int(m.group("h")), int(m.group("min"))
+        h, mins = int(m.group("h")), int(m.group("min") or 0)
         if not (0 <= h < 24) or not (0 <= mins < 60):
             return m.group(0)
         if is_pt:
@@ -432,6 +497,9 @@ def normalize_for_speech(text: str, lang: str | None = None) -> str:
     # (so num2words doesn't try to spell out a 32-digit hex string).
     text = _replace_hashes(text, L)
     if L in ("en", "pt"):
+        text = _expand_ranges(text, L)
+        text = _expand_units(text, L)
+        text = _expand_weekdays(text, L)
         text = _expand_dates(text, L)
         text = _expand_times(text, L)
         text = _expand_numbers(text, L)
