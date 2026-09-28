@@ -113,7 +113,7 @@ Long-polling (`getUpdates`, outbound-only — fits the loopback server; webhooks
 
 **HITL** (`hitl.py`): `user_request` events on Telegram-bound sessions (found via `find_by_session`) are forwarded to the bound chat as inline keyboards — confirm → yes/no, choice → the choices; text/form kinds get an "answer in the Nexus UI" note. Buttons resolve via `store.resolve_pending` (same primitive as `/respond`) — a Telegram answer and a UI answer race like two browser tabs. Parked requests can't be resumed from Telegram (told to use the UI).
 
-**Caveats**: two processes polling the same token get 409 from Telegram (daemon + foreground serve — one must stop); config hot-reloads each poll cycle (allowlist edits apply without restart); the poller dispatches updates per-(chat, thread) serialized, across chats concurrent.
+**Caveats**: two processes polling the same token get 409 from Telegram (daemon + foreground serve — one must stop); a 401 in the poll loop **disables the poller** (retrying can't help) and the error surfaces via `GET /telegram/status` — re-saving the token in the UI restarts the poller automatically; config hot-reloads each poll cycle (allowlist edits apply without restart); the poller dispatches updates per-(chat, thread) serialized, across chats concurrent.
 
 ### Vault import wizard
 

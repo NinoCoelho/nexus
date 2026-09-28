@@ -37,6 +37,9 @@ def _status(app: Any) -> dict[str, Any]:
         "bot_username": bot.get("username"),
         "allowed_user_ids": cfg.allowed_user_ids,
         "allowlist_empty": not cfg.allowed_user_ids,
+        # Why the poller isn't delivering, when it's alive but failing
+        # (e.g. 401 bad token) or died (last error before exit).
+        "error": getattr(poller, "last_error", None),
     }
 
 

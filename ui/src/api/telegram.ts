@@ -11,6 +11,8 @@ export interface TelegramStatus {
   bot_username: string | null;
   allowed_user_ids: number[];
   allowlist_empty: boolean;
+  /** Why the poller isn't delivering (e.g. "401 — re-save the token"), if any. */
+  error: string | null;
 }
 
 async function _json(res: Response): Promise<any> {

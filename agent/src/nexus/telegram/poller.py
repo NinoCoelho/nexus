@@ -43,6 +43,9 @@ class TelegramPoller:
         self._chains: dict[tuple[int, int], asyncio.Task] = {}
         # getMe() result cached at poll start — surfaced by GET /telegram/status.
         self.bot_info: dict[str, Any] = {}
+        # Last poll-cycle error (e.g. 401 bad token). Surfaced via
+        # GET /telegram/status so the UI can explain a dead poller.
+        self.last_error: str | None = None
         self.router = TelegramRouter(
             client=client,
             agent=agent,
@@ -109,20 +112,35 @@ class TelegramPoller:
                 updates = await self._client.get_updates(
                     offset=offset, timeout_seconds=self._cfg.poll_timeout_seconds
                 )
+                self.last_error = None
                 for update in updates:
                     # Acknowledge immediately — Telegram redelivers unconfirmed
                     # updates after the long-poll timeout.
                     offset = max(offset, int(update.get("update_id", 0)) + 1)
                     self._dispatch(update)
             except TelegramConflictError as exc:
+                self.last_error = str(exc)
                 log.error("telegram: %s — sleeping 30s", exc)
                 await self._sleep_or_stop(30.0)
-            except TelegramError:
+            except TelegramError as exc:
+                # A rejected token never recovers by retrying — disable the
+                # poller (status surfaces the error; re-save the token and
+                # press Start, which rebuilds the client).
+                if getattr(exc, "status_code", None) == 401:
+                    self.last_error = (
+                        "Telegram rejected the bot token (401). Re-save the "
+                        "token in Settings → Features → Telegram and press "
+                        "Start again."
+                    )
+                    log.error("telegram: %s", self.last_error)
+                    return
+                self.last_error = str(exc)
                 log.exception("telegram: poll cycle failed")
                 await self._sleep_or_stop(5.0)
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.last_error = "unexpected poller error"
                 log.exception("telegram: poller loop error")
                 await self._sleep_or_stop(5.0)
 

@@ -147,6 +147,11 @@ export default function TelegramSection() {
       if (c.telegram) setCfg((prev) => ({ ...prev, ...c.telegram }));
       await refreshStatus();
       toast.success(t("settings:telegram.toast.tokenSaved"));
+      // The running poller still holds the OLD token (and Telegram may
+      // have revoked it) — restart it so the new one takes effect now.
+      if (cfg.enabled) {
+        await handleStart();
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save token";
       setError(msg);
@@ -361,6 +366,9 @@ export default function TelegramSection() {
         />
       </div>
 
+      {cfg.enabled && status?.error && !running && (
+        <p className="settings-error">{status.error}</p>
+      )}
       {cfg.enabled && status?.allowlist_empty && (
         <p className="settings-error">{t("settings:telegram.allowlistEmptyWarning")}</p>
       )}

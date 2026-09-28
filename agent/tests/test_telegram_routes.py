@@ -183,3 +183,42 @@ async def test_build_poller_returns_none_without_token(
         )
         is None
     )
+
+
+async def test_poller_disables_on_401_and_status_surfaces_error(
+    tmp_path, isolated_config, fake_client_cls
+) -> None:
+    from nexus.server.routes.telegram import telegram_status
+    from nexus.server.session_store import SessionStore
+    from nexus.telegram.api import TelegramError
+    from nexus.telegram.poller import TelegramPoller
+
+    class RejectingClient(FakeClient):
+        async def get_updates(self, *, offset: int, timeout_seconds: int) -> list:
+            raise TelegramError(
+                "getUpdates failed (401): Unauthorized", status_code=401
+            )
+
+    cfg = TelegramConfig(enabled=True, allowed_user_ids=[42])
+    isolated_config(cfg)
+    store = SessionStore(db_path=tmp_path / "sessions.sqlite")
+    poller = TelegramPoller(
+        client=RejectingClient("revoked"),
+        agent=None,
+        store=store,
+        tracker=None,
+        cfg=cfg,
+    )
+    poller.start()
+    assert poller._task is not None
+    await asyncio.wait_for(poller._task, timeout=5.0)
+
+    # The poller self-disabled instead of retrying forever, and the error
+    # is surfaced through GET /telegram/status.
+    assert poller.running is False
+    assert "401" in (poller.last_error or "")
+    app = _app(cfg)
+    app.state.telegram_poller = poller
+    status = await telegram_status(_request(app))
+    assert status["running"] is False
+    assert status["error"] is not None and "401" in status["error"]
