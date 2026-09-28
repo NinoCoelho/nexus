@@ -25,6 +25,7 @@ const DEFAULT_CFG: TelegramConfig = {
   proxy_url: "",
   deny_message: true,
   ack_reaction: "👀",
+  voice_replies: true,
 };
 
 /**
@@ -338,6 +339,26 @@ export default function TelegramSection() {
           className={`hitl-switch${cfg.stream_edits ? " on" : ""}`}
           onClick={() => void save({ stream_edits: !cfg.stream_edits })}
           aria-pressed={cfg.stream_edits}
+          disabled={saving}
+        >
+          <span className="hitl-switch-knob" />
+        </button>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-row-name">
+          {t("settings:telegram.voiceRepliesLabel")}
+          <span
+            className="settings-row-hint"
+            style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}
+          >
+            {t("settings:telegram.voiceRepliesHint")}
+          </span>
+        </span>
+        <button
+          className={`hitl-switch${cfg.voice_replies ? " on" : ""}`}
+          onClick={() => void save({ voice_replies: !cfg.voice_replies })}
+          aria-pressed={cfg.voice_replies}
           disabled={saving}
         >
           <span className="hitl-switch-knob" />

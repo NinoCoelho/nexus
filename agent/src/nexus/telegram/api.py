@@ -52,6 +52,8 @@ class TelegramClient:
             # Follow Bot API redirects (rare, but e.g. file downloads may).
             follow_redirects=True,
         )
+        # File downloads live under /file/bot<token>/, not the method path.
+        self._file_base = f"{_API_BASE}/file/bot{token}"
         self._closed = False
 
     # ── Construction helpers ─────────────────────────────────────────────
@@ -92,13 +94,19 @@ class TelegramClient:
         payload: dict[str, Any],
         *,
         retries: int = 2,
+        files: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            resp = await self._http.post(f"/{method}", json=payload)
+            if files is not None:
+                # Multipart upload (sendVoice/sendAudio): form fields ride
+                # as `data`, the media as `files`.
+                resp = await self._http.post(f"/{method}", data=payload, files=files)
+            else:
+                resp = await self._http.post(f"/{method}", json=payload)
         except httpx.HTTPError as exc:
             if retries > 0:
                 await asyncio.sleep(1.5)
-                return await self._call(method, payload, retries=retries - 1)
+                return await self._call(method, payload, retries=retries - 1, files=files)
             raise TelegramError(f"network error calling {method}: {exc}") from exc
 
         if resp.status_code == 429:
@@ -234,6 +242,73 @@ class TelegramClient:
 
     async def get_me(self) -> dict[str, Any]:
         return await self._call("getMe", {})
+
+    # ── Files ────────────────────────────────────────────────────────────
+
+    async def get_file(self, file_id: str) -> dict[str, Any]:
+        """Resolve a file_id to ``{file_id, file_size, file_path}``.
+
+        Bot-API downloads are capped at 20 MB by Telegram — check
+        ``file_size`` before downloading.
+        """
+        return await self._call("getFile", {"file_id": file_id})
+
+    async def download_file(self, file_path: str) -> bytes:
+        url = f"{self._file_base}/{file_path.lstrip('/')}"
+        try:
+            resp = await self._http.get(url)
+        except httpx.HTTPError as exc:
+            raise TelegramError(f"file download failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise TelegramError(
+                f"file download failed ({resp.status_code})", status_code=resp.status_code
+            )
+        return resp.content
+
+    # ── Voice / audio replies ────────────────────────────────────────────
+
+    async def send_voice(
+        self,
+        chat_id: int,
+        audio: bytes,
+        filename: str,
+        *,
+        thread_id: int | None = None,
+        caption: str = "",
+    ) -> int:
+        """Send a voice note (OGG/Opus required by Telegram)."""
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+        if caption:
+            payload["caption"] = caption[:900]
+        msg = await self._call(
+            "sendVoice",
+            payload,
+            files={"voice": (filename, audio, "audio/ogg")},
+        )
+        return int(msg.get("message_id", 0))
+
+    async def send_audio(
+        self,
+        chat_id: int,
+        audio: bytes,
+        filename: str,
+        mime: str,
+        *,
+        thread_id: int | None = None,
+    ) -> int:
+        """Send an audio file (music-player bubble). Fallback for sendVoice
+        when the payload isn't OGG/Opus."""
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+        msg = await self._call(
+            "sendAudio",
+            payload,
+            files={"audio": (filename, audio, mime)},
+        )
+        return int(msg.get("message_id", 0))
 
     async def set_message_reaction(
         self, chat_id: int, message_id: int, emoji: str = ""

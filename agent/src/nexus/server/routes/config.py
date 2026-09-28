@@ -108,6 +108,7 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "proxy_url": tg.proxy_url,
             "deny_message": tg.deny_message,
             "ack_reaction": tg.ack_reaction,
+            "voice_replies": tg.voice_replies,
         }
     return out
 
@@ -210,7 +211,7 @@ async def patch_config(
         ALLOWED_TG = {
             "enabled", "bot_token_env", "allowed_user_ids",
             "poll_timeout_seconds", "stream_edits", "proxy_url", "deny_message",
-            "ack_reaction",
+            "ack_reaction", "voice_replies",
         }
         clean = {k: v for k, v in patch.items() if k in ALLOWED_TG}
         if isinstance(clean.get("allowed_user_ids"), list):

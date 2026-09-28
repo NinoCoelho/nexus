@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from nexus.agent.llm import ChatMessage, ChatResponse, Role, StopReason
 from nexus.agent.loop import Agent
 from nexus.config_schema import TelegramConfig
@@ -43,6 +45,8 @@ class FakeTGClient:
         self.actions: list[tuple[int, int]] = []
         self.callback_answers: list[str] = []
         self.reactions: list[tuple[int, int, str]] = []
+        self.voices: list[dict[str, Any]] = []
+        self.audios: list[dict[str, Any]] = []
 
     async def send_text_safe(self, chat_id, text, *, thread_id=None, reply_markup=None):
         self.sent.append(
@@ -58,6 +62,24 @@ class FakeTGClient:
 
     async def set_message_reaction(self, chat_id, message_id, emoji=""):
         self.reactions.append((chat_id, message_id, emoji))
+
+    async def get_file(self, file_id):
+        return {"file_id": file_id, "file_size": 8, "file_path": f"files/{file_id}"}
+
+    async def download_file(self, file_path):
+        return b"FAKEDATA"
+
+    async def send_voice(self, chat_id, audio, filename, *, thread_id=None, caption=""):
+        self.voices.append(
+            {"chat_id": chat_id, "audio": audio, "filename": filename, "thread_id": thread_id}
+        )
+        return 1
+
+    async def send_audio(self, chat_id, audio, filename, mime, *, thread_id=None):
+        self.audios.append(
+            {"chat_id": chat_id, "audio": audio, "filename": filename, "mime": mime}
+        )
+        return 1
 
     async def send_chat_action(self, chat_id, action="typing", *, thread_id=None):
         self.actions.append((chat_id, thread_id or 0))
@@ -533,6 +555,190 @@ async def test_bindings_crud(tmp_path: Path) -> None:
 
     store.delete(1, 2)
     assert store.get(1, 2) is None
+
+
+# ── Attachments & voice ─────────────────────────────────────────────────
+
+
+async def test_photo_attachment_ingested_to_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus import vault as vault_module
+
+    monkeypatch.setattr(vault_module, "_VAULT_ROOT", tmp_path / "vault")
+
+    h = Harness(tmp_path, FakeProvider([_final("it's a photo")]))
+    msg = _msg("", )
+    msg.pop("text")
+    msg["caption"] = "what is this?"
+    msg["photo"] = [
+        {"file_id": "small", "file_size": 10},
+        {"file_id": "big", "width": 1280, "file_size": 500},
+    ]
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+
+    binding = h.bindings.get(1000, 0)
+    session = h.store.get(binding.active_session_id)
+    user_msgs = [m for m in session.history if m.role.value == "user"]
+    content = user_msgs[-1].content
+    assert isinstance(content, list), "attachment turns persist multipart content"
+
+    text_parts = [p for p in content if p.kind == "text"]
+    assert text_parts and "what is this?" in text_parts[0].text
+
+    media_parts = [p for p in content if p.kind != "text"]
+    assert len(media_parts) == 1
+    part = media_parts[0]
+    assert part.kind == "image" and part.mime_type == "image/jpeg"
+    assert part.vault_path.startswith("uploads/telegram/")
+    # Largest photo size was fetched and stored.
+    assert (tmp_path / "vault" / part.vault_path).read_bytes() == b"FAKEDATA"
+
+    assert any("it's a photo" in t for t in h.client.sent_texts())
+
+
+async def test_document_without_caption_still_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus import vault as vault_module
+
+    monkeypatch.setattr(vault_module, "_VAULT_ROOT", tmp_path / "vault")
+
+    h = Harness(tmp_path, FakeProvider([_final("read it")]))
+    msg = _msg("", )
+    msg.pop("text")
+    msg["document"] = {
+        "file_id": "doc1",
+        "file_name": "report.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 2048,
+    }
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+
+    binding = h.bindings.get(1000, 0)
+    session = h.store.get(binding.active_session_id)
+    user_msgs = [m for m in session.history if m.role.value == "user"]
+    content = user_msgs[-1].content
+    parts = [p for p in content if p.kind != "text"]
+    assert len(parts) == 1 and parts[0].kind == "document"
+    assert parts[0].mime_type == "application/pdf"
+    assert any("read it" in t for t in h.client.sent_texts())
+
+
+async def test_oversized_file_rejected_before_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus import vault as vault_module
+
+    monkeypatch.setattr(vault_module, "_VAULT_ROOT", tmp_path / "vault")
+
+    h = Harness(tmp_path, FakeProvider([_final("nope")]))
+    msg = _msg("check this", )
+    msg["document"] = {
+        "file_id": "huge",
+        "file_name": "big.zip",
+        "mime_type": "application/zip",
+        "file_size": 25 * 1024 * 1024,  # over the 20 MB bot cap
+    }
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await asyncio.sleep(0.1)
+
+    assert any("Couldn't fetch" in t for t in h.client.sent_texts())
+    # No turn ran: the session exists (DM auto-binding) but stays empty.
+    binding = h.bindings.get(1000, 0)
+    assert binding is not None
+    assert h.store.get(binding.active_session_id).history == []
+    assert not any("nope" in t for t in h.client.sent_texts())
+
+
+async def test_voice_message_transcribed_with_voice_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+
+    h = Harness(tmp_path, FakeProvider([_final("spoken answer")]))
+    monkeypatch.setattr(
+        "nexus.multimodal.transcribe_bytes",
+        lambda data, mime: _async_value("hello from voice"),
+    )
+
+    from nexus.tts import SynthResult
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        return SynthResult(b"RIFFWAV", "audio/wav")
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr(
+        "nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGGBYTES"
+    )
+    h.router._tts_cfg = lambda: TTSConfig(enabled=True)
+
+    msg = _msg("", )
+    msg.pop("text")
+    msg["voice"] = {"file_id": "vf1", "duration": 3, "mime_type": "audio/ogg"}
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+
+    # Transcript became the turn text.
+    binding = h.bindings.get(1000, 0)
+    session = h.store.get(binding.active_session_id)
+    user_msgs = [m for m in session.history if m.role.value == "user"]
+    assert "hello from voice" in user_msgs[0].content
+    assert any("spoken answer" in t for t in h.client.sent_texts())
+
+    # Voice reply delivered after settle (transcoded to OGG/Opus).
+    for _ in range(100):
+        if h.client.voices:
+            break
+        await asyncio.sleep(0.02)
+    assert h.client.voices, "voice reply was not sent"
+    assert h.client.voices[0]["audio"] == b"OGGBYTES"
+    assert h.client.voices[0]["thread_id"] is None  # DM: no thread
+
+
+async def _async_value(value):
+    return value
+
+
+async def test_voice_reply_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+
+    h = Harness(tmp_path, FakeProvider([_final("text only")]))
+    monkeypatch.setattr(
+        "nexus.multimodal.transcribe_bytes",
+        lambda data, mime: _async_value("transcript"),
+    )
+    h.router._tts_cfg = lambda: TTSConfig(enabled=True)
+    h.router.cfg.voice_replies = False
+
+    msg = _msg("", )
+    msg.pop("text")
+    msg["voice"] = {"file_id": "vf1", "duration": 2}
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+    await asyncio.sleep(0.1)
+    assert h.client.voices == []
+    assert any("text only" in t for t in h.client.sent_texts())
+
+
+async def test_voice_transcription_failure_notifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("unused")]))
+    monkeypatch.setattr(
+        "nexus.multimodal.transcribe_bytes", lambda data, mime: _async_value("")
+    )
+    msg = _msg("", )
+    msg.pop("text")
+    msg["voice"] = {"file_id": "vf1", "duration": 2}
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await asyncio.sleep(0.1)
+    assert any("transcribe" in t for t in h.client.sent_texts())
+    assert h.bindings.get(1000, 0) is None  # no turn started
 
 
 # ── Turn launcher guards ────────────────────────────────────────────────

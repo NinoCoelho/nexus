@@ -279,6 +279,8 @@
       "allowlistSaved": "Allowed users saved"
     },
     "ackReactionLabel": "Ack reaction",
-    "ackReactionHint": "Emoji reaction placed on your message while the turn runs (upgraded to 👍 when answered). Empty disables."
+    "ackReactionHint": "Emoji reaction placed on your message while the turn runs (upgraded to 👍 when answered). Empty disables.",
+    "voiceRepliesLabel": "Voice replies",
+    "voiceRepliesHint": "Voice messages are transcribed and answered with a spoken (TTS) voice note too"
   }
 }

@@ -97,6 +97,8 @@ export interface TelegramConfig {
   deny_message: boolean;
   /** Reaction emoji acking each accepted message (👀); empty = no ack. */
   ack_reaction: string;
+  /** Voice notes get transcribed; the reply is also TTS'd back as a voice note. */
+  voice_replies: boolean;
 }
 
 export interface Config {

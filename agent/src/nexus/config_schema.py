@@ -337,6 +337,9 @@ class TelegramConfig(BaseModel):
     # Reaction placed on each accepted message (👀) while its turn runs;
     # must be one of Telegram's bot-allowed reaction emojis. Empty = no ack.
     ack_reaction: str = "👀"
+    # Voice notes are transcribed into the turn; when true, the reply is
+    # also synthesized (TTS) and sent back as a voice note.
+    voice_replies: bool = True
 
 
 class NexusConfig(BaseModel):

@@ -23,7 +23,7 @@ import time
 from uuid import uuid4
 
 from ..server.services.turn_launcher import launch_turn
-from .api import TelegramClient
+from .api import TelegramClient, TelegramError
 from .bindings import TelegramBindingStore
 from .commands import COMMANDS, CommandDeps, MsgInfo
 from .formatting import md_to_telegram_html, split_for_telegram
@@ -35,6 +35,7 @@ _TYPING_INTERVAL = 4.5
 _DENY_THROTTLE = 60.0  # seconds between "not authorized" replies per user
 _ACK_DONE_EMOJI = "👍"  # reaction upgrade when the turn finishes successfully
 _MAX_PENDING_ACKS = 50  # cap per session; acks are cosmetic — bound memory
+_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram bot download cap
 _COMMAND_RE = re.compile(r"^/([a-zA-Z_]+)(@\w+)?\s*(.*)$", re.S)
 
 
@@ -80,6 +81,9 @@ class TelegramRouter:
         # session_id → [(chat_id, message_id)] of acknowledged-but-unanswered
         # user messages. 👀 on receipt; upgraded to 👍 when the turn settles.
         self._pending_acks: dict[str, list[tuple[int, int]]] = {}
+        # Sessions whose next settled turn should get a voice-note reply
+        # (set when the trigger message was a voice note).
+        self._voice_reply_sessions: set[str] = set()
 
     # ── Entry point ──────────────────────────────────────────────────────
 
@@ -96,8 +100,9 @@ class TelegramRouter:
 
     async def _on_message(self, msg: dict) -> None:
         text = (msg.get("text") or msg.get("caption") or "").strip()
-        if not text:
-            return  # service messages (topic created, joins, photos, …)
+        media, voice_note = self._extract_media(msg)
+        if not text and not media and voice_note is None:
+            return  # service messages (topic created, joins, stickers, …)
 
         chat = msg.get("chat", {})
         from_user = msg.get("from") or {}
@@ -122,10 +127,12 @@ class TelegramRouter:
             await self._deny(user_id, chat_id, thread_id)
             return
 
-        if text.startswith("/"):
+        if text.startswith("/") and not media and voice_note is None:
             await self._dispatch_command(text, info)
+        elif voice_note is not None:
+            await self._handle_voice_message(voice_note, text, chat_type, info)
         else:
-            await self._handle_chat_message(text, chat_type, info)
+            await self._handle_chat_message(text, chat_type, info, media=media)
 
     async def _deny(self, user_id: int, chat_id: int, thread_id: int) -> None:
         log.info(
@@ -173,10 +180,163 @@ class TelegramRouter:
                 thread_id=info.thread_id or None,
             )
 
+    # ── Media (photos / files) and voice notes ───────────────────────────
+
+    @staticmethod
+    def _extract_media(msg: dict) -> tuple[list[dict], dict | None]:
+        """Pull downloadable media out of a message payload.
+
+        Returns ``(media_list, voice_note)``. ``voice_note`` is a separate
+        return because voice is transcribed into the turn text rather than
+        attached. Stickers/animations are ignored (no useful content).
+        """
+        media: list[dict] = []
+        voice: dict | None = None
+
+        photo = msg.get("photo")
+        if isinstance(photo, list) and photo:
+            largest = photo[-1]  # sizes are ordered ascending
+            media.append({
+                "file_id": largest.get("file_id"),
+                "mime": "image/jpeg",
+                "name": "photo.jpg",
+                "size": int(largest.get("file_size") or 0),
+            })
+
+        for key, default_mime, default_name in (
+            ("document", None, None),
+            ("video", "video/mp4", "video.mp4"),
+            ("audio", "audio/mpeg", "audio.mp3"),
+            ("video_note", "video/mp4", "video_note.mp4"),
+        ):
+            obj = msg.get(key)
+            if isinstance(obj, dict) and obj.get("file_id"):
+                media.append({
+                    "file_id": obj["file_id"],
+                    "mime": obj.get("mime_type") or default_mime or "",
+                    "name": obj.get("file_name") or default_name or key,
+                    "size": int(obj.get("file_size") or 0),
+                })
+
+        v = msg.get("voice")
+        if isinstance(v, dict) and v.get("file_id"):
+            voice = {
+                "file_id": v["file_id"],
+                "mime": v.get("mime_type") or "audio/ogg",
+                "duration": int(v.get("duration") or 0),
+            }
+        return media, voice
+
+    async def _download_media(self, file_id: str, declared_size: int) -> bytes:
+        """Download a Telegram file, enforcing the 20 MB bot cap."""
+        if declared_size and declared_size > _MAX_DOWNLOAD_BYTES:
+            raise TelegramError(
+                f"file too large ({declared_size / 1024 / 1024:.0f} MB; "
+                "Telegram bot downloads cap at 20 MB)"
+            )
+        info = await self.client.get_file(file_id)
+        size = int(info.get("file_size") or 0)
+        if size and size > _MAX_DOWNLOAD_BYTES:
+            raise TelegramError("file too large (over Telegram's 20 MB bot cap)")
+        return await self.client.download_file(info["file_path"])
+
+    async def _ingest_media(self, media: list[dict], info: MsgInfo) -> list | None:
+        """Download each media item into the vault, returning ContentParts.
+
+        None (after a ⚠️ bubble) when nothing could be ingested — the turn
+        is not started so the user immediately knows why.
+        """
+        from .. import vault
+        from ..agent.llm import ContentPart
+        from ..multimodal import sniff_mime
+
+        parts: list = []
+        for m in media:
+            file_id = m.get("file_id")
+            if not file_id:
+                continue
+            try:
+                data = await self._download_media(file_id, int(m.get("size") or 0))
+            except Exception as exc:
+                await self.client.send_text_safe(
+                    info.chat_id,
+                    f"⚠️ Couldn't fetch {m.get('name', 'attachment')}: {exc}",
+                    thread_id=info.thread_id or None,
+                )
+                continue
+            name = re.sub(r"[^\w.\-]+", "_", str(m.get("name") or "file")).strip("._") or "file"
+            rel = f"uploads/telegram/{int(time.time() * 1000)}_{name}"
+            try:
+                vault.write_file_bytes(rel, data)
+            except Exception as exc:
+                await self.client.send_text_safe(
+                    info.chat_id,
+                    f"⚠️ Couldn't store {name}: {exc}",
+                    thread_id=info.thread_id or None,
+                )
+                continue
+            mime = m.get("mime") or sniff_mime(rel)
+            if mime.startswith("image/"):
+                kind = "image"
+            elif mime.startswith("audio/"):
+                kind = "audio"
+            else:
+                kind = "document"
+            parts.append(
+                ContentPart(kind=kind, vault_path=rel, mime_type=mime)  # type: ignore[arg-type]
+            )
+
+        if not parts:
+            return None
+        return parts
+
+    async def _handle_voice_message(
+        self, voice: dict, caption: str, chat_type: str, info: MsgInfo
+    ) -> None:
+        """Voice note → transcript → normal chat turn (+ voice reply)."""
+        from ..multimodal import transcribe_bytes
+
+        await self.client.send_chat_action(
+            info.chat_id, "typing", thread_id=info.thread_id or None
+        )
+        try:
+            audio = await self._download_media(
+                voice["file_id"], 0
+            )
+            transcript = await transcribe_bytes(audio, voice.get("mime") or "audio/ogg")
+        except Exception as exc:
+            await self.client.send_text_safe(
+                info.chat_id,
+                f"⚠️ Couldn't process the voice message: {exc}",
+                thread_id=info.thread_id or None,
+            )
+            return
+
+        transcript = (transcript or "").strip()
+        if not transcript:
+            await self.client.send_text_safe(
+                info.chat_id,
+                "⚠️ Couldn't transcribe the voice message (transcription may "
+                "be unavailable — check Settings → Features → Transcription).",
+                thread_id=info.thread_id or None,
+            )
+            return
+
+        text = transcript if not caption else f"{transcript}\n\n{caption}"
+        await self._handle_chat_message(
+            text, chat_type, info, media=None, voice_reply=self.cfg.voice_replies
+        )
+
     # ── Chat messages ────────────────────────────────────────────────────
 
     async def _handle_chat_message(
-        self, text: str, chat_type: str, info: MsgInfo
+        self,
+        text: str,
+        chat_type: str,
+        info: MsgInfo,
+        *,
+        media: list[dict] | None = None,
+        voice_reply: bool = False,
     ) -> None:
         binding = self.bindings.get(info.chat_id, info.thread_id)
 
@@ -207,10 +367,22 @@ class TelegramRouter:
             project_id=binding.project_id,
         )
 
+        # Media ingestion: download → vault → ContentParts. On total failure
+        # the turn isn't started (the user got a ⚠️ bubble per file).
+        attachment_parts: list | None = None
+        if media:
+            attachment_parts = await self._ingest_media(media, info)
+            if attachment_parts is None:
+                return
+            if not text.strip() and not attachment_parts:
+                return
+
         # Group messages carry the sender so the agent knows who's talking.
         message = text
         if chat_type != "private":
-            message = f"From {info.user_label}:\n\n{text}"
+            message = f"From {info.user_label}:\n\n{text}" if text.strip() else (
+                f"From {info.user_label} (attachment):"
+            )
 
         outcome = await launch_turn(
             agent=self.agent,
@@ -218,6 +390,7 @@ class TelegramRouter:
             tracker=self.tracker,
             session=session,
             message=message,
+            attachment_parts=attachment_parts,
             publish_job_event=self.publish_job_event,
         )
 
@@ -236,6 +409,8 @@ class TelegramRouter:
             await self.client.set_message_reaction(
                 info.chat_id, info.message_id, self.cfg.ack_reaction
             )
+        if voice_reply:
+            self._voice_reply_sessions.add(session.id)
 
         # Queued: a streamer should already be alive; if it died (idle exit
         # / crash), spawn one so the answer still lands.
@@ -369,10 +544,20 @@ class TelegramRouter:
                     # let the next turn render into a fresh one.
                     if acc.strip():
                         await self._finalize_reply(chat_id, thread_id, msg_id, acc)
+                    reply_text = acc
                     acc, msg_id = "", 0
                     if etype == "turn_settled":
                         if not turn_errored:
                             await self._upgrade_acks(session_id)
+                            if session_id in self._voice_reply_sessions:
+                                self._voice_reply_sessions.discard(session_id)
+                                # Detached: TTS synthesis can take seconds —
+                                # don't hold the stream loop.
+                                asyncio.create_task(
+                                    self._send_voice_reply(
+                                        chat_id, thread_id, reply_text
+                                    )
+                                )
                         turn_errored = False
 
                 elif etype == "error":
@@ -431,6 +616,30 @@ class TelegramRouter:
                 await asyncio.wait_for(stop.wait(), timeout=_TYPING_INTERVAL)
             except asyncio.TimeoutError:
                 pass
+
+    async def _send_voice_reply(
+        self, chat_id: int, thread_id: int, text: str
+    ) -> None:
+        """Synthesize the final reply and send it as a voice note.
+
+        Best-effort: failures log and leave the text reply as the answer.
+        """
+        from .voice import deliver_voice_note
+
+        try:
+            await deliver_voice_note(
+                self.client, chat_id, thread_id, text, tts_cfg=self._tts_cfg()
+            )
+        except Exception:
+            log.exception("telegram: voice reply failed")
+
+    def _tts_cfg(self):
+        try:
+            from ..config_file import load_cached as load_config
+
+            return load_config().tts
+        except Exception:
+            return None
 
     # ── Callback queries (inline buttons) ────────────────────────────────
 

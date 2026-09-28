@@ -282,6 +282,8 @@
       "allowlistSaved": "Usuários permitidos salvos"
     },
     "ackReactionLabel": "Reação de confirmação",
-    "ackReactionHint": "Emoji reagido na sua mensagem enquanto o turno executa (vira 👍 quando respondido). Vazio desativa."
+    "ackReactionHint": "Emoji reagido na sua mensagem enquanto o turno executa (vira 👍 quando respondido). Vazio desativa.",
+    "voiceRepliesLabel": "Respostas por voz",
+    "voiceRepliesHint": "Mensagens de voz são transcritas e respondidas também com um áudio (TTS)"
   }
 }

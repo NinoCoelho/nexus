@@ -213,6 +213,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "proxy_url": cfg.telegram.proxy_url,
             "deny_message": cfg.telegram.deny_message,
             "ack_reaction": cfg.telegram.ack_reaction,
+            "voice_replies": cfg.telegram.voice_replies,
         },
     }
     for m in cfg.models:
