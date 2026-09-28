@@ -532,6 +532,59 @@ def _startup_broker_poller(app: FastAPI, agent: Any) -> None:
         log.exception("broker poller start failed")
 
 
+def _startup_telegram(
+    app: FastAPI,
+    agent: Any,
+    sessions: Any,
+    job_tracker: Any,
+    publish_job_event: Any,
+) -> None:
+    try:
+        from ..config_file import load_cached as load_config
+        from ..telegram.api import TelegramClient
+        from ..telegram.poller import TelegramPoller
+
+        tg_cfg = load_config().telegram
+        if not tg_cfg.enabled:
+            return
+        client = TelegramClient.from_config(tg_cfg)
+        if client is None:
+            log.warning(
+                "telegram: enabled but no bot token found under %r "
+                "(env var or ~/.nexus/secrets.toml) — poller not started",
+                tg_cfg.bot_token_env,
+            )
+            return
+        if not tg_cfg.allowed_user_ids:
+            log.warning(
+                "telegram: allowed_user_ids is empty — every message will be "
+                "rejected. Add your Telegram user id (send /id to the bot, or "
+                "check @userinfobot) under [telegram].allowed_user_ids."
+            )
+        poller = TelegramPoller(
+            client=client,
+            agent=agent,
+            store=sessions,
+            tracker=job_tracker,
+            cfg=tg_cfg,
+            publish_job_event=publish_job_event,
+        )
+        poller.start()
+        app.state.telegram_poller = poller
+        log.info("telegram poller started")
+    except Exception:
+        log.exception("telegram poller start failed")
+
+
+async def _shutdown_telegram(app: FastAPI) -> None:
+    try:
+        poller = getattr(app.state, "telegram_poller", None)
+        if poller is not None:
+            await poller.stop()
+    except Exception:
+        log.exception("telegram poller stop failed")
+
+
 def _shutdown_vault_cache(task: asyncio.Task[None]) -> None:
     task.cancel()
 
@@ -649,6 +702,7 @@ def create_lifespan(state: dict[str, Any]):
         mcp_manager = await _startup_mcp_manager(nexus_cfg, agent, app)
         _startup_mcp_server_mode(nexus_cfg, agent)
         _startup_broker_poller(app, agent)
+        _startup_telegram(app, agent, sessions, job_tracker, publish_job_event)
 
         try:
             yield
@@ -663,6 +717,7 @@ def create_lifespan(state: dict[str, Any]):
             await _shutdown_workflows(app)
             await _shutdown_mcp(mcp_manager)
             await _shutdown_broker(app)
+            await _shutdown_telegram(app)
             await agent.aclose()
 
     return lifespan

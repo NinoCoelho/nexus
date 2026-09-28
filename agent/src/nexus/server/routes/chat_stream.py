@@ -23,7 +23,6 @@ from ._sse import keepalive
 from ._streaming import TurnAccumulator
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.loop import Agent
-from ...config_file import load_cached as load_config
 from ...redact import redact_sensitive_text
 from ..session_store import SessionStore
 from ..job_tracker import JobTracker
@@ -256,67 +255,24 @@ async def chat_stream_route(
         # tokens and refuse early if they won't fit. The agent loop's own
         # pre-flight check (overflow.py) runs after this, but this gate
         # prevents the oversized message from being persisted.
-        #
-        # The estimate covers messages only — tool schemas and system prompt
-        # are NOT included in estimate_tokens().  We add a flat overhead
-        # constant to approximate their cost (~12K for ~46 tool schemas +
-        # system prompt + protocol framing).
-        _OUTPUT_HEADROOM = 4096
-        _TOOLS_AND_SYSTEM_OVERHEAD = 12_000
-        try:
-            from ...agent.loop.overflow import estimate_tokens as _est_tok
-            cfg = load_config()
-            ctx_window = 0
-            effective_model = resolved_model_id or getattr(cfg.agent, "default_model", "")
-            for entry in cfg.models:
-                if entry.id == effective_model or entry.model_name == effective_model:
-                    ctx_window = int(entry.context_window or 0)
-                    break
-            if ctx_window == 0:
-                from ...agent.loop.overflow import known_context_window as _kcw
-                ctx_window = _kcw(effective_model)
-            if ctx_window > 0 and pre_turn_history:
-                history_tokens = _est_tok(pre_turn_history)
-                incoming_tokens = _est_tok([
-                    type("M", (), {"content": req.message, "tool_calls": []})()
-                ])
-                total_est = history_tokens + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
-                if total_est > ctx_window - _OUTPUT_HEADROOM:
-                    from ...agent.loop.compact import auto_compact
-                    compacted, report = auto_compact(pre_turn_history)
-                    if report.compacted > 0:
-                        new_tokens = _est_tok(compacted) + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
-                        if new_tokens <= ctx_window - _OUTPUT_HEADROOM:
-                            pre_turn_history = compacted
-                            total_est = new_tokens
-                if total_est > ctx_window - _OUTPUT_HEADROOM:
-                    yield json.dumps({
-                        "type": "error",
-                        "detail": (
-                            f"Sending this message would exceed the model's context window "
-                            f"(~{total_est:,} tokens needed vs "
-                            f"{ctx_window:,} available). Compact the conversation or start a new session."
-                        ),
-                        "reason": "message_too_large",
-                        "retryable": False,
-                        "status_code": None,
-                        "actions": ["compact_history", "new_session"],
-                        "estimated_input_tokens": total_est,
-                        "context_window": ctx_window,
-                    }) + "\n"
-                    yield json.dumps({
-                        "type": "done",
-                        "session_id": session.id,
-                        "reply": "",
-                        "trace": [],
-                        "skills_touched": [],
-                        "iterations": 0,
-                        "messages": list(pre_turn_history),
-                        "usage": {"input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "model": resolved_model_id},
-                    }) + "\n"
-                    return
-        except Exception:
-            log.debug("pre-send context-window check failed", exc_info=True)
+        # Shared with the Telegram gateway via services/turn_launcher.
+        from ..services.turn_launcher import precheck_context_window
+        pre_turn_history, _ctx_err = precheck_context_window(
+            pre_turn_history, req.message, resolved_model_id
+        )
+        if _ctx_err is not None:
+            yield json.dumps({"type": "error", **_ctx_err}) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "session_id": session.id,
+                "reply": "",
+                "trace": [],
+                "skills_touched": [],
+                "iterations": 0,
+                "messages": list(pre_turn_history),
+                "usage": {"input_tokens": 0, "output_tokens": 0, "tool_calls": 0, "model": resolved_model_id},
+            }) + "\n"
+            return
 
         # Eagerly persist the user message so a crash between POST
         # and the first delta doesn't lose the prompt the user typed.

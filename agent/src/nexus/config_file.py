@@ -40,6 +40,7 @@ from .config_schema import (  # noqa: F401
     McpServerEntry,
     McpConfig,
     BrokerConfig,
+    TelegramConfig,
     NexusConfig,
     default_config,
 )
@@ -202,6 +203,15 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         "broker": {
             "url": cfg.broker.url,
             "poll_interval_seconds": cfg.broker.poll_interval_seconds,
+        },
+        "telegram": {
+            "enabled": cfg.telegram.enabled,
+            "bot_token_env": cfg.telegram.bot_token_env,
+            "allowed_user_ids": cfg.telegram.allowed_user_ids,
+            "poll_timeout_seconds": cfg.telegram.poll_timeout_seconds,
+            "stream_edits": cfg.telegram.stream_edits,
+            "proxy_url": cfg.telegram.proxy_url,
+            "deny_message": cfg.telegram.deny_message,
         },
     }
     for m in cfg.models:
@@ -420,11 +430,18 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         mcp_servers[sname] = McpServerEntry(**sdata)
     mcp = McpConfig(servers=mcp_servers)
     broker = BrokerConfig(**dict(raw.get("broker", {})))
+    telegram_raw = dict(raw.get("telegram", {}))
+    if isinstance(telegram_raw.get("allowed_user_ids"), list):
+        telegram_raw["allowed_user_ids"] = [
+            int(u) for u in telegram_raw["allowed_user_ids"] if str(u).strip()
+        ]
+    telegram = TelegramConfig(**telegram_raw)
     return NexusConfig(
         agent=agent, providers=providers, models=models,
         graphrag=graphrag, search=search, scrape=scrape,
         transcription=transcription, tts=tts, vault=vault, ui=ui,
         location=location, dream=dream, mcp=mcp, broker=broker,
+        telegram=telegram,
     )
 
 

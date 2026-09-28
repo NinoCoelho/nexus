@@ -322,6 +322,20 @@ class BrokerConfig(BaseModel):
     poll_interval_seconds: int = 30
 
 
+class TelegramConfig(BaseModel):
+    enabled: bool = False
+    # Env var (or ~/.nexus/secrets.toml key) holding the bot token — never inline.
+    bot_token_env: str = "TELEGRAM_BOT_TOKEN"
+    allowed_user_ids: list[int] = Field(default_factory=list)
+    poll_timeout_seconds: int = 25
+    # Progressively edit the reply message as the agent streams.
+    stream_edits: bool = True
+    # Optional httpx proxy for regions where api.telegram.org is unreachable.
+    proxy_url: str = ""
+    # Reply "not authorized" to ignored users (off = silently ignore).
+    deny_message: bool = True
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -337,6 +351,7 @@ class NexusConfig(BaseModel):
     dream: DreamConfig = Field(default_factory=DreamConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
 
 # Fresh install starts with providers configured but NO models.

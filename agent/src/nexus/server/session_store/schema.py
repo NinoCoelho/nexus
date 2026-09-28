@@ -185,6 +185,25 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE INDEX IF NOT EXISTS projects_updated_idx ON projects(updated_at DESC);
 """
 
+# Telegram chat/thread → project + active session mapping.
+# One row per (chat_id, thread_id): DMs use chat_id=<user id>, thread_id=0;
+# forum topics use thread_id=<message_thread_id>; plain groups thread_id=0.
+_TELEGRAM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS telegram_bindings (
+    chat_id           INTEGER NOT NULL,
+    thread_id         INTEGER NOT NULL DEFAULT 0,
+    kind              TEXT NOT NULL,
+    project_id        TEXT,
+    active_session_id TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chat_id, thread_id),
+    CHECK(kind IN ('dm','group','topic'))
+);
+CREATE INDEX IF NOT EXISTS telegram_bindings_project_idx
+    ON telegram_bindings(project_id);
+"""
+
 
 def _ensure_feedback_pinned_column(db) -> None:
     """Migrate older databases that pre-date the ``pinned`` column."""
@@ -251,6 +270,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_LLM_ERRORS_SCHEMA)
     db.executescript(_PAUSED_TURNS_SCHEMA)
     db.executescript(_PROJECTS_SCHEMA)
+    db.executescript(_TELEGRAM_SCHEMA)
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
     _ensure_project_column(db)
