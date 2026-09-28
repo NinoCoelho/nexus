@@ -14,6 +14,11 @@ Only HITL kinds (``user_request``, ``user_request_auto``,
 whitelist in ``session_store.pubsub``. Per-session activity events
 (delta, tool_call, tool_result, iter, reply) stay scoped to
 ``/chat/{sid}/events``.
+
+Prompts for Telegram-bound sessions are suppressed here (SSE and
+pending) — the Telegram forwarder delivers them to the bound chat, and
+the user answers inline; duplicating them in the UI dialog would race.
+The bell history keeps every prompt (audit trail).
 """
 
 from __future__ import annotations
@@ -35,6 +40,12 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _telegram_routed(session_id: str) -> bool:
+    from ...telegram.bindings import session_is_telegram_routed
+
+    return session_is_telegram_routed(session_id)
+
+
 @router.get("/notifications/events")
 async def notifications_events(
     store: SessionStore = Depends(get_sessions),
@@ -53,6 +64,8 @@ async def notifications_events(
                 yield b": ping\n\n"
                 continue
             session_id, event = item
+            if _telegram_routed(session_id):
+                continue  # Telegram owns these prompts — no UI dialog
             payload = {"session_id": session_id, **event.data}
             yield f"event: {event.kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
@@ -101,6 +114,8 @@ def _collect_pending_local(
 ) -> None:
     seen: set[str] = set()
     for (sid, _rid), r in store.broker._requests.items():
+        if _telegram_routed(sid):
+            continue
         seen.add(r.request_id)
         payload: dict[str, Any] = {
             "session_id": sid,
@@ -120,6 +135,8 @@ def _collect_pending_local(
     for row in store.list_all_pending():
         rid = row["request_id"]
         if rid in seen:
+            continue
+        if _telegram_routed(row["session_id"]):
             continue
         items.append({
             "session_id": row["session_id"],

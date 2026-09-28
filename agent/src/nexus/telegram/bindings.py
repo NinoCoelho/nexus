@@ -158,3 +158,18 @@ class TelegramBindingStore:
             project_id=row["project_id"],
             active_session_id=row["active_session_id"],
         )
+
+
+def session_is_telegram_routed(session_id: str) -> bool:
+    """True when ``session_id`` is a Telegram binding's active session.
+
+    Used to suppress duplicate HITL prompts in the web UI (dialog,
+    pending recovery, web push) — the Telegram forwarder owns those
+    prompts. Best-effort: any failure reads as "not routed" so prompts
+    still surface somewhere.
+    """
+    try:
+        return TelegramBindingStore().find_by_session(session_id) is not None
+    except Exception:
+        log.debug("telegram: routing check failed", exc_info=True)
+        return False
