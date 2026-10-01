@@ -1,0 +1,56 @@
+.tg-bindings {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+
+.tg-bindings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tg-bindings-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--fg-faint);
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--bg-soft);
+}
+
+.tg-bindings-table td {
+  padding: 5px 8px 5px 0;
+  border-bottom: 1px solid var(--bg-soft);
+  vertical-align: middle;
+}
+
+.tg-bindings-row--busy {
+  opacity: 0.55;
+}
+
+.tg-bindings-kind {
+  margin-right: 6px;
+}
+
+.tg-bindings-select {
+  max-width: 160px;
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid var(--bg-soft);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tg-bindings-session {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-faint);
+}
+
+.tg-bindings-empty {
+  font-size: 12px;
+  color: var(--fg-faint);
+  margin: 8px 0 0;
+}

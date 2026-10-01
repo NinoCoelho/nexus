@@ -278,3 +278,14 @@ button.projects-meta-chip:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Full-width grid state (no selection) */
+.projects-pane--grid {
+  overflow-y: auto;
+}
+
+/* Solo workspace (selection driven from the sidebar list) */
+.projects-workspace--solo {
+  flex: 1;
+  border-left: none;
+}

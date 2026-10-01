@@ -18,6 +18,7 @@ up in the UI sidebar under the project automatically.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,9 @@ from typing import Any
 from ..home import sessions_db
 
 log = logging.getLogger(__name__)
+
+# "Telegram: topic 4242/7" | "Telegram: group 4242" | "Telegram: dm 4242"
+_TG_CONTEXT_RE = re.compile(r"^Telegram: (?:dm|topic|group) (\d+)(?:/(\d+))?$")
 
 
 @dataclass
@@ -135,6 +139,11 @@ class TelegramBindingStore:
 
         Used by the HITL forwarder to route ask_user prompts for
         Telegram-created sessions back to the right chat/thread.
+
+        Fallback: sessions created *through* a binding keep a
+        ``Telegram: topic|group|dm <chat>[/<thread>]`` context prefix even
+        after ``/switch`` moves the binding's active session elsewhere —
+        match those too so approval prompts never get stranded.
         """
         conn = self._connect()
         try:
@@ -142,9 +151,23 @@ class TelegramBindingStore:
                 "SELECT * FROM telegram_bindings WHERE active_session_id = ?",
                 (session_id,),
             ).fetchone()
+            if row is not None:
+                return self._row_to_binding(row)
+            # Context-prefix fallback: find the session's context, then the
+            # binding whose chat/thread it names.
+            srow = conn.execute(
+                "SELECT context FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
         finally:
             conn.close()
-        return self._row_to_binding(row) if row else None
+        context = (srow["context"] or "") if srow is not None else ""
+        # Context shapes (router._session_context): "Telegram: dm <chat>",
+        # "Telegram: topic <chat>/<thread>", "Telegram: group <chat>".
+        m = _TG_CONTEXT_RE.match(context)
+        if not m:
+            return None
+        chat_id, thread_id = m.group(1), m.group(2)
+        return self.get(int(chat_id), int(thread_id) if thread_id else 0)
 
     def list_all(self) -> list[TelegramBinding]:
         """Every binding, most recently updated first (admin listing)."""

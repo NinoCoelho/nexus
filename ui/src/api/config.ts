@@ -142,6 +142,7 @@ export interface ConfigPatch {
     server_auth_token?: string;
   };
   telegram?: Partial<Omit<TelegramConfig, "has_token">>;
+  coordinator?: Partial<Omit<CoordinatorConfig, "session_id">>;
 }
 
 export async function getConfig(): Promise<Config> {

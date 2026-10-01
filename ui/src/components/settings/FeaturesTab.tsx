@@ -9,6 +9,7 @@ import TranscriptionSection from "../TranscriptionSection";
 import VaultHistorySection from "../VaultHistorySection";
 import SharingSection from "./SharingSection";
 import TelegramSection from "./TelegramSection";
+import CoordinatorSection from "./CoordinatorSection";
 import SettingsSection from "./SettingsSection";
 import VoiceSection from "./VoiceSection";
 
@@ -150,6 +151,8 @@ export default function FeaturesTab({ graphStats, models }: Props) {
       <SharingSection />
 
       <TelegramSection />
+
+      <CoordinatorSection />
 
       <CookiesSection />
 

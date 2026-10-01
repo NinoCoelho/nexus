@@ -794,3 +794,78 @@
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
+
+/* Sidebar project rows (Projects view panel) */
+.sidebar-projects-section,
+.sidebar-apps-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-project-list,
+.sidebar-app-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-project-row,
+.sidebar-app-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.sidebar-project-row:hover,
+.sidebar-app-row:hover {
+  background: var(--bg-alt);
+}
+
+.sidebar-project-row--active,
+.sidebar-app-row--active {
+  background: var(--bg-alt);
+}
+
+.sidebar-project-row-name,
+.sidebar-app-row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-app-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--bg-soft);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.sidebar-app-icon--emoji {
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.sidebar-project-empty {
+  padding: 10px 8px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}

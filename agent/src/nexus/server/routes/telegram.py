@@ -88,6 +88,58 @@ async def telegram_bindings(request: Request) -> list[dict[str, Any]]:
     ]
 
 
+@router.patch("/telegram/bindings")
+async def patch_telegram_binding(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    """Update a binding: rebind its project and/or switch its active session."""
+    import asyncio
+
+    from ...home import sessions_db
+    from ...telegram.bindings import TelegramBindingStore
+    from ..project_store import ProjectStore
+
+    chat_id = body.get("chat_id")
+    thread_id = int(body.get("thread_id") or 0)
+    if not isinstance(chat_id, int):
+        raise HTTPException(status_code=400, detail="chat_id (int) is required")
+
+    store = TelegramBindingStore()
+    binding = store.get(chat_id, thread_id)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="no such binding")
+
+    if "project_id" in body:
+        project_id = body.get("project_id")
+        if project_id:
+            project = await asyncio.to_thread(
+                ProjectStore(sessions_db()).get, project_id
+            )
+            if project is None:
+                raise HTTPException(status_code=404, detail="unknown project")
+        store.set_project(chat_id, thread_id, project_id)
+
+    if body.get("active_session_id"):
+        sid = str(body["active_session_id"])
+        if await asyncio.to_thread(request.app.state.sessions.get, sid) is None:
+            raise HTTPException(status_code=404, detail="unknown session")
+        store.set_active_session(chat_id, thread_id, sid)
+
+    return {"ok": True}
+
+
+@router.delete("/telegram/bindings")
+async def delete_telegram_binding(body: dict[str, Any]) -> dict[str, Any]:
+    """Remove a binding — the Telegram chat/topic falls back to its default
+    routing on the next message (DM → coordinator/new chat, topic → hint)."""
+    from ...telegram.bindings import TelegramBindingStore
+
+    chat_id = body.get("chat_id")
+    thread_id = int(body.get("thread_id") or 0)
+    if not isinstance(chat_id, int):
+        raise HTTPException(status_code=400, detail="chat_id (int) is required")
+    TelegramBindingStore().delete(chat_id, thread_id)
+    return {"ok": True}
+
+
 @router.post("/telegram/start")
 async def telegram_start(request: Request) -> dict[str, Any]:
     from ..events import SessionEvent

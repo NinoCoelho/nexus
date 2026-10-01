@@ -19,6 +19,8 @@ import { useToast } from "../../toast/ToastProvider";
 import { checkUpdate as apiCheckUpdate, type UpdateCheckResult } from "../../api/update";
 import VaultTreePanel from "../VaultTreePanel";
 import WorkflowListPanel from "../WorkflowListPanel";
+import ProjectsListPanel from "./ProjectsListPanel";
+import AppsListPanel from "./AppsListPanel";
 import { IconChat, IconCalendar, IconVault, IconWorkflow, IconGear, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
@@ -59,6 +61,12 @@ interface Props {
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
   /** Coordinator master session id — badges the row in the session list. */
   coordinatorSessionId?: string | null;
+  /** Selected project in the Projects view (shared with ProjectsPane). */
+  projectsSelectedId?: string | null;
+  onProjectsSelect?: (id: string) => void;
+  /** Selected app folder in the Apps view (shared with AppsPane). */
+  appSelectedFolder?: string | null;
+  onAppSelectFolder?: (folder: string | null) => void;
 }
 
 function Sidebar({
@@ -69,6 +77,10 @@ function Sidebar({
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
   coordinatorSessionId = null,
+  projectsSelectedId = null,
+  onProjectsSelect,
+  appSelectedFolder = null,
+  onAppSelectFolder,
 }: Props) {
   const { t } = useTranslation("sidebar");
   const NAV_GROUPS = {
@@ -368,6 +380,24 @@ function Sidebar({
         />
       )}
 
+      {/* Projects list — only in Projects view */}
+      {view === "projects" && !collapsed && onProjectsSelect && (
+        <ProjectsListPanel
+          selectedId={projectsSelectedId}
+          onSelect={onProjectsSelect}
+          onNewProject={() => setShowCreateProject(true)}
+          refreshKey={sessionsRevision}
+        />
+      )}
+
+      {/* Apps list — only in Apps view */}
+      {view === "apps" && !collapsed && onAppSelectFolder && (
+        <AppsListPanel
+          selectedFolder={appSelectedFolder}
+          onSelect={onAppSelectFolder}
+        />
+      )}
+
       {/* Vault tree — only in Vault view */}
       {view === "vault" && !collapsed && (
         <div className="sidebar-section sidebar-vault-section">
@@ -394,7 +424,11 @@ function Sidebar({
       )}
 
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "workflows" && !collapsed) && (
+      {!(view === "chat" && !collapsed) &&
+        !(view === "projects" && !collapsed) &&
+        !(view === "apps" && !collapsed) &&
+        !(view === "vault" && !collapsed) &&
+        !(view === "workflows" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}
 

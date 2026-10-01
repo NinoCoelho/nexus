@@ -12,6 +12,7 @@ import {
   stopTelegram,
   type TelegramStatus,
 } from "../../api/telegram";
+import TelegramBindingsPanel from "./TelegramBindingsPanel";
 import { setCredential } from "../../api/credentials";
 import { useToast } from "../../toast/ToastProvider";
 import SettingsSection from "./SettingsSection";
@@ -437,6 +438,14 @@ export default function TelegramSection() {
         />
       </div>
 
+      {cfg.enabled && (
+        <div className="tg-bindings-wrap">
+          <div className="s-field__hint" style={{ marginTop: 12 }}>
+            Linked chats &amp; topics
+          </div>
+          <TelegramBindingsPanel />
+        </div>
+      )}
       {cfg.enabled && status?.error && !running && (
         <p className="settings-error">{status.error}</p>
       )}

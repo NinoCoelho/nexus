@@ -53,3 +53,28 @@ export interface TelegramBindingInfo {
 export async function getTelegramBindings(): Promise<TelegramBindingInfo[]> {
   return _json(await fetch(`${BASE}/telegram/bindings`));
 }
+
+export async function patchTelegramBinding(patch: {
+  chat_id: number;
+  thread_id?: number;
+  project_id?: string | null;
+  active_session_id?: string;
+}): Promise<{ ok: boolean }> {
+  return _json(
+    await fetch(`${BASE}/telegram/bindings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+export async function deleteTelegramBinding(chat_id: number, thread_id: number = 0): Promise<{ ok: boolean }> {
+  return _json(
+    await fetch(`${BASE}/telegram/bindings`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id, thread_id }),
+    }),
+  );
+}

@@ -86,6 +86,12 @@ export default function App() {
   const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(() => (route.view === "vault" ? route.path ?? null : null));
   /** Currently selected calendar (.md path) inside the Calendar view. Lifted here so view switches preserve it. */
   const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
+  /** Selected project in the Projects view — shared by the sidebar list and the workspace pane. */
+  const [projectsSelectedId, setProjectsSelectedId] = useState<string | null>(null);
+  /** Selected app folder in the Apps view — shared by the sidebar list and the Apps pane. */
+  const [appsSelectedFolder, setAppsSelectedFolder] = useState<string | null>(
+    () => (route.view === "apps" ? route.path ?? null : null),
+  );
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -127,6 +133,9 @@ export default function App() {
     const p = route.path ?? null;
     if (route.view === "vault" && p && p !== lastRoutePathRef.current) {
       setVaultSelectedPath(p);
+    }
+    if (route.view === "apps" && p && p !== lastRoutePathRef.current) {
+      setAppsSelectedFolder(p);
     }
     lastRoutePathRef.current = p;
   }, [route.view, route.path]);
@@ -525,6 +534,10 @@ export default function App() {
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
         onUpdateAvailable={handleUpdateAvailable}
         coordinatorSessionId={coordinator.enabled ? coordinator.sessionId : null}
+        projectsSelectedId={projectsSelectedId}
+        onProjectsSelect={setProjectsSelectedId}
+        appSelectedFolder={appsSelectedFolder}
+        onAppSelectFolder={setAppsSelectedFolder}
       />
 
       <div className="app-main">
@@ -612,6 +625,8 @@ export default function App() {
             <KeepMounted active={view === "projects"}>
               <ProjectsPane
                 activeSessionId={activeSession}
+                selectedId={projectsSelectedId}
+                onSelectId={setProjectsSelectedId}
                 onSessionSelect={handleSessionSelect}
                 onNewChatInProject={handleNewChat}
                 onOpenInVault={handleOpenInVault}
@@ -622,7 +637,8 @@ export default function App() {
           <div className="view-pane" style={{ display: view === "apps" ? "flex" : "none" }}>
             <KeepMounted active={view === "apps"}>
               <AppsPane
-                initialFolder={view === "apps" ? route.path : null}
+                selectedFolder={appsSelectedFolder}
+                onSelectFolder={setAppsSelectedFolder}
                 vaultViewCommon={vaultViewCommon}
                 onOpenInVault={handleOpenInVault}
               />
@@ -646,6 +662,7 @@ export default function App() {
             <div className="view-pane" style={{ display: "flex" }}>
               <AdvancedPane
                 area={view}
+                onAreaChange={(a) => setView(a)}
                 onOpenSkill={(name) => setOpenSkill(name)}
                 graphSourceFilter={graphSourceFilter}
                 onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}

@@ -273,3 +273,82 @@ async def test_bindings_lists_with_project_names(tmp_path) -> None:
         assert dm["project_name"] is None
     finally:
         home.set_user_home(None)
+
+
+async def test_find_by_session_context_fallback(tmp_path) -> None:
+    """After /switch, sessions created through a binding still route their
+    HITL prompts to that binding via the Telegram:* context prefix."""
+    from nexus.server.session_store import SessionStore
+    from nexus.telegram.bindings import TelegramBindingStore
+
+    store = SessionStore(db_path=tmp_path / "sessions.sqlite")
+    bindings = TelegramBindingStore(tmp_path / "sessions.sqlite")
+
+    active = store.create(context="Telegram: topic 11/7")
+    old = store.create(context="Telegram: topic 11/7")
+    bindings.upsert(
+        chat_id=11, thread_id=7, kind="topic",
+        project_id=None, active_session_id=active.id,
+    )
+
+    # Active session: direct hit.
+    assert bindings.find_by_session(active.id) is not None
+    # Switched-away session: context-prefix fallback still finds the binding.
+    found = bindings.find_by_session(old.id)
+    assert found is not None and found.chat_id == 11 and found.thread_id == 7
+    # Unrelated session: no binding.
+    other = store.create(context="Plain web session")
+    assert bindings.find_by_session(other.id) is None
+
+
+async def test_patch_and_delete_binding_endpoints(tmp_path) -> None:
+    from nexus.server.project_store import ProjectStore
+    from nexus.server.routes.telegram import (
+        delete_telegram_binding,
+        patch_telegram_binding,
+        telegram_bindings,
+    )
+    from nexus.server.session_store import SessionStore
+    from nexus.telegram.bindings import TelegramBindingStore
+
+    import nexus.home as home
+
+    home.set_user_home(tmp_path)
+    try:
+        store = SessionStore(db_path=tmp_path / "sessions.sqlite")
+        bindings = TelegramBindingStore()
+        projects = ProjectStore(tmp_path / "sessions.sqlite")
+        proj = projects.create(name="Beta")
+        session = store.create(context="Telegram: dm 42")
+        bindings.upsert(
+            chat_id=42, thread_id=0, kind="dm",
+            project_id=None, active_session_id=session.id,
+        )
+
+        app = _app(TelegramConfig())
+        app.state.sessions = store
+
+        # Rebind to project Beta.
+        res = await patch_telegram_binding(
+            app, {"chat_id": 42, "thread_id": 0, "project_id": proj.id}
+        )
+        assert res == {"ok": True}
+        row = bindings.get(42, 0)
+        assert row is not None and row.project_id == proj.id
+
+        # Unknown project → 404.
+        with pytest.raises(Exception):
+            await patch_telegram_binding(
+                app, {"chat_id": 42, "thread_id": 0, "project_id": "nope"}
+            )
+
+        # Listing reflects the enrichment.
+        listed = await telegram_bindings(SimpleNamespace(app=app))
+        assert listed[0]["project_name"] == "Beta"
+
+        # Unbind.
+        res = await delete_telegram_binding({"chat_id": 42, "thread_id": 0})
+        assert res == {"ok": True}
+        assert bindings.get(42, 0) is None
+    finally:
+        home.set_user_home(None)
