@@ -797,7 +797,10 @@
 
 /* Sidebar list panels (Projects / Apps views) — metrics mirror .sidebar-session */
 .sidebar-projects-section,
-.sidebar-apps-section {
+.sidebar-apps-section,
+.sidebar-kanban-section {
+  flex: 1;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;

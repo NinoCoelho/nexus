@@ -22,7 +22,7 @@ import WorkflowListPanel from "../WorkflowListPanel";
 import ProjectsListPanel from "./ProjectsListPanel";
 import KanbanListPanel from "./KanbanListPanel";
 import AppsListPanel from "./AppsListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconWorkflow, IconGear, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconWorkflow, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -39,7 +39,6 @@ interface Props {
   activeSessionId: string | null;
   onSessionSelect: (id: string) => void;
   onNewChat: (projectId?: string | null) => void;
-  onOpenSettings: () => void;
   sessionsRevision: number;
   onSessionsRevisionBump: () => void;
   /** Optimistic placeholder shown above fetched sessions while the first
@@ -72,7 +71,7 @@ interface Props {
 }
 
 function Sidebar({
-  view, onViewChange, activeSessionId, onSessionSelect, onNewChat, onOpenSettings,
+  view, onViewChange, activeSessionId, onSessionSelect, onNewChat,
   sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
   onVisualizeFolderGraph,
@@ -436,9 +435,9 @@ function Sidebar({
         <div className="sidebar-spacer" />
       )}
 
-      {/* Settings */}
-      <div className="sidebar-bottom">
-        {updateAvailable && updateCheck && (
+      {/* Update notice — pinned at the bottom; Settings lives in the Header gear */}
+      {updateAvailable && updateCheck && (
+        <div className="sidebar-bottom">
           <button
             className="sidebar-nav-item sidebar-update-btn"
             onClick={() => onUpdateAvailable?.(updateCheck)}
@@ -450,12 +449,8 @@ function Sidebar({
             </span>
             {!collapsed && <span className="sidebar-nav-label">Update v{updateCheck.latest}</span>}
           </button>
-        )}
-        <button className="sidebar-nav-item" onClick={onOpenSettings} title={collapsed ? t("sidebar:settings") : undefined}>
-          <span className="sidebar-nav-icon"><IconGear /></span>
-          {!collapsed && <span className="sidebar-nav-label">{t("sidebar:settings")}</span>}
-        </button>
-      </div>
+        </div>
+      )}
 
       {/* Floating context menu — position:fixed so it escapes the row's
           overflow:hidden clip. Anchored to the cursor (right-click) or

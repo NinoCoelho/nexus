@@ -5,11 +5,12 @@ interface Props {
   onReset: () => void;
   yoloMode?: boolean;
   onOpenMobileDrawer?: () => void;
+  onOpenSettings?: () => void;
   statusSlot?: ReactNode;
   notificationSlot?: ReactNode;
 }
 
-export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, statusSlot, notificationSlot }: Props) {
+export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, onOpenSettings, statusSlot, notificationSlot }: Props) {
   const { darkMode, toggleDarkMode } = useTheme();
 
   return (
@@ -43,6 +44,19 @@ export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, 
             <span className="yolo-badge" title="YOLO mode: confirm prompts auto-approved">
               YOLO ON
             </span>
+          )}
+          {onOpenSettings && (
+            <button
+              className="header-btn"
+              onClick={onOpenSettings}
+              title="Settings"
+              aria-label="Settings"
+            >
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="10" cy="10" r="2.6" />
+                <path d="M10 1.8v2.2M10 16v2.2M1.8 10h2.2M16 10h2.2M4.2 4.2l1.6 1.6M14.2 14.2l1.6 1.6M4.2 15.8l1.6-1.6M14.2 5.8l1.6-1.6" />
+              </svg>
+            </button>
           )}
           <button
             className="header-btn"

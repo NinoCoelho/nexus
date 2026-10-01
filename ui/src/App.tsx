@@ -528,11 +528,10 @@ export default function App() {
         onViewChange={handleSidebarViewChange}
         mobileOpen={mobileDrawerOpen}
         onMobileClose={handleMobileClose}
-        activeSessionId={activeSession ?? pendingNewSession?.id ?? null}
-        onSessionSelect={handleSessionSelect}
-        onNewChat={handleNewChat}
-        onOpenSettings={handleOpenSettings}
-        sessionsRevision={sessionsRevision}
+         activeSessionId={activeSession ?? pendingNewSession?.id ?? null}
+         onSessionSelect={handleSessionSelect}
+         onNewChat={handleNewChat}
+         sessionsRevision={sessionsRevision}
         onSessionsRevisionBump={handleSessionsRevisionBump}
         pendingNewSession={pendingNewSession}
         onActiveSessionDeleted={handleNewChat}
@@ -558,6 +557,7 @@ export default function App() {
           onReset={handleNewChat}
           yoloMode={yoloMode}
           onOpenMobileDrawer={() => setMobileDrawerOpen(true)}
+          onOpenSettings={handleOpenSettings}
           statusSlot={
             view === "chat"
               ? <AgentStatusBar
