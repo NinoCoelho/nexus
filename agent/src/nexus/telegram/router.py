@@ -629,6 +629,9 @@ class TelegramRouter:
         first_id = 0
         if msg_id:
             ok = await self.client.edit_text_safe(chat_id, msg_id, chunks[0], reply_markup=kb)
+            # The button lives on the message we just edited — register the
+            # menu under THAT id (a resend on failed edit gets a fresh id).
+            first_id = msg_id if ok else 0
             if not ok:  # original deleted → send instead
                 first_id = await self.client.send_text_safe(
                     chat_id, chunks[0], thread_id=thread_id or None, reply_markup=kb

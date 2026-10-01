@@ -1210,3 +1210,17 @@ async def test_vault_command_browsing_and_file(tmp_path: Path, monkeypatch: Any)
     # Direct file path in the command sends immediately.
     await h.message("/vault soltos/dois.md")
     assert h.client.documents[-1]["filename"] == "dois.md"
+
+
+async def test_finalize_reply_edit_path_registers_menu(tmp_path: Path) -> None:
+    """Regression: on the normal streaming path the reply message is EDITED
+    (not resent) — the 📂 menu must be registered under the edited message's
+    id, else the button answers 'Menu expired'."""
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    text = "Salvo: [projects/p/nota.md](vault://projects/p/nota.md)"
+    await h.router._finalize_reply(1000, 0, 777, text)
+    # Keyboard attached to the edit of message 777…
+    edit = [e for e in h.client.edits if e["message_id"] == 777][-1]
+    assert edit["kb"] is not None
+    # …and the menu registered under 777, not under a fresh send id.
+    assert h.router._vault_menus[(1000, 777)] == ["projects/p/nota.md"]
