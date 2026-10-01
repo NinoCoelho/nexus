@@ -89,6 +89,14 @@ export function IconCollapse({ collapsed }: { collapsed: boolean }) {
   );
 }
 
+export function IconProjects() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 5a1 1 0 0 1 1-1h4l2 2h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z" />
+    </svg>
+  );
+}
+
 export function IconHeartbeat() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

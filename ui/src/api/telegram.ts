@@ -39,3 +39,17 @@ export async function startTelegram(): Promise<TelegramStatus> {
 export async function stopTelegram(): Promise<TelegramStatus> {
   return _json(await fetch(`${BASE}/telegram/stop`, { method: "POST" }));
 }
+
+export interface TelegramBindingInfo {
+  chat_id: number;
+  thread_id: number;
+  kind: "dm" | "group" | "topic";
+  project_id: string | null;
+  project_name: string | null;
+  active_session_id: string | null;
+  active_session_title: string | null;
+}
+
+export async function getTelegramBindings(): Promise<TelegramBindingInfo[]> {
+  return _json(await fetch(`${BASE}/telegram/bindings`));
+}

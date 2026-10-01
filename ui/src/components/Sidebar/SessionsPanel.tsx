@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { SessionSearchResult, SessionSummary } from "../../api";
 import type { ProjectSummary } from "../../api/projects";
 import ProjectSection from "./ProjectSection";
@@ -15,6 +16,8 @@ interface Props {
   toVaultBusy: Set<string>;
   canCreateProject: boolean;
   hasMore: boolean;
+  /** Coordinator master session id — badges the row. */
+  masterSessionId?: string | null;
   onSearchChange: (q: string) => void;
   onSessionSelect: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
@@ -29,14 +32,39 @@ interface Props {
   onLoadMore: () => void;
 }
 
+const collapsedKey = (projectId: string) => `nx-project-collapsed-${projectId}`;
+
+function readCollapsed(projectId: string): boolean {
+  try {
+    return localStorage.getItem(collapsedKey(projectId)) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export default function SessionsPanel({
   sessions, projects, sessionsError, activeSessionId, searchQuery, searchResults,
-  renamingId, renameValue, toVaultBusy, canCreateProject, hasMore,
+  renamingId, renameValue, toVaultBusy, canCreateProject, hasMore, masterSessionId,
   onSearchChange, onSessionSelect,
   onContextMenu, onMenuBtnClick, onTitleDoubleClick, onRenameChange,
   onRenameCommit, onRenameCancel, onNewProject, onProjectContextMenu,
   onNewChatInProject, onLoadMore,
 }: Props) {
+  // Bumped by collapse-all/expand-all so every ProjectSection remounts and
+  // re-reads its persisted collapsed state.
+  const [collapseRev, setCollapseRev] = useState(0);
+  const anyExpanded = projects.some((p) => !readCollapsed(p.id));
+
+  const toggleAll = () => {
+    const next = anyExpanded; // any expanded → collapse everything
+    for (const p of projects) {
+      try {
+        localStorage.setItem(collapsedKey(p.id), String(next));
+      } catch { /* ignore */ }
+    }
+    setCollapseRev((r) => r + 1);
+  };
+
   const projectMap = new Map<string, SessionSummary[]>();
   const ungrouped: SessionSummary[] = [];
 
@@ -54,7 +82,31 @@ export default function SessionsPanel({
 
   return (
     <div className="sidebar-section sidebar-sessions-section">
-      <div className="sidebar-section-label">Sessions</div>
+      <div className="sidebar-sessions-header">
+        <div className="sidebar-section-label">Sessions</div>
+        {projects.length > 1 && (
+          <button
+            className="sidebar-collapse-all-btn"
+            onClick={toggleAll}
+            title={anyExpanded ? "Collapse all projects" : "Expand all projects"}
+          >
+            <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {anyExpanded ? (
+                <>
+                  <polyline points="13 4 7 10 13 16" />
+                  <polyline points="8 4 2 10 8 16" />
+                </>
+              ) : (
+                <>
+                  <polyline points="7 4 13 10 7 16" />
+                  <polyline points="12 4 18 10 12 16" />
+                </>
+              )}
+            </svg>
+            {anyExpanded ? "Collapse all" : "Expand all"}
+          </button>
+        )}
+      </div>
       <div className="sidebar-search-wrap">
         <input
           id="nx-session-search"
@@ -106,7 +158,7 @@ export default function SessionsPanel({
               const pSessions = projectMap.get(p.id) || [];
               return (
                 <ProjectSection
-                  key={p.id}
+                  key={`${p.id}:${collapseRev}`}
                   project={p}
                   sessions={pSessions}
                   activeSessionId={activeSessionId}
@@ -136,6 +188,7 @@ export default function SessionsPanel({
                     isRenaming={renamingId === s.id}
                     renameValue={renameValue}
                     toVaultBusy={toVaultBusy}
+                    isMaster={s.id === masterSessionId}
                     onSelect={() => onSessionSelect(s.id)}
                     onContextMenu={(e) => onContextMenu(e, s.id)}
                     onMenuBtnClick={(e) => onMenuBtnClick(e, s.id)}
@@ -157,6 +210,7 @@ export default function SessionsPanel({
             isRenaming={renamingId === s.id}
             renameValue={renameValue}
             toVaultBusy={toVaultBusy}
+            isMaster={s.id === masterSessionId}
             onSelect={() => onSessionSelect(s.id)}
             onContextMenu={(e) => onContextMenu(e, s.id)}
             onMenuBtnClick={(e) => onMenuBtnClick(e, s.id)}

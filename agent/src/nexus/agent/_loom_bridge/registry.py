@@ -58,6 +58,7 @@ class AgentHandlers:
         hb_manager_getter: Any | None = None,
         page: Any | None = None,
         site_credentials: Any | None = None,
+        coordinator_getter: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
@@ -67,6 +68,7 @@ class AgentHandlers:
         self.hb_manager_getter = hb_manager_getter
         self.page = page
         self.site_credentials = site_credentials
+        self.coordinator_getter = coordinator_getter
 
 
 def build_tool_registry(
@@ -205,9 +207,7 @@ def build_tool_registry(
     # and resolves the runner at dispatch time via runner_getter — so
     # app.py can late-bind handlers.subagent_runner without rebuilding
     # the registry.
-    registry.register(
-        SpawnSubagentsTool(runner_getter=lambda: handlers.subagent_runner)
-    )
+    registry.register(SpawnSubagentsTool(runner_getter=lambda: handlers.subagent_runner))
 
     _mem_handler = MemoryHandler()
 
@@ -289,6 +289,26 @@ def build_tool_registry(
         return await h.invoke(args)
 
     registry.register(_SimpleToolHandler(NOTIFY_USER_TOOL, _notify_user))
+
+    # Coordinator (master chat) tools — the handlers resolve the current
+    # session from CURRENT_SESSION_ID (nexus.agent.context re-exports loom's)
+    # and refuse to run outside the coordinator session.
+    from nexus.agent.context import CURRENT_SESSION_ID as _SESSION_CTX
+    from nexus.coordinator_tools import (
+        NEXUS_SESSIONS_TOOL,
+        SESSION_DISPATCH_TOOL,
+        handle_nexus_sessions,
+        handle_session_dispatch,
+    )
+
+    async def _nexus_sessions(args: dict) -> str:
+        return await handle_nexus_sessions(args, _SESSION_CTX.get(None))
+
+    async def _session_dispatch(args: dict) -> str:
+        return await handle_session_dispatch(args, _SESSION_CTX.get(None))
+
+    registry.register(_SimpleToolHandler(NEXUS_SESSIONS_TOOL, _nexus_sessions))
+    registry.register(_SimpleToolHandler(SESSION_DISPATCH_TOOL, _session_dispatch))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.
@@ -435,18 +455,32 @@ def _install_skill_redirect(registry: ToolRegistry, skill_registry: Any) -> None
 # emits one of these, the bare ``Unknown tool: …`` response gives no recovery
 # signal: the model retries with another invented name and gives up. Replacing
 # it with a structured hint converts the wasted turn into a useful retry.
-_EXEC_ALIASES = frozenset({
-    "tool_use", "tool_create_file", "create_file", "write_file",
-    "run_python", "python", "python3", "code_interpreter", "execute_code",
-    "exec", "execute", "shell", "bash", "run_shell", "run_command",
-})
+_EXEC_ALIASES = frozenset(
+    {
+        "tool_use",
+        "tool_create_file",
+        "create_file",
+        "write_file",
+        "run_python",
+        "python",
+        "python3",
+        "code_interpreter",
+        "execute_code",
+        "exec",
+        "execute",
+        "shell",
+        "bash",
+        "run_shell",
+        "run_command",
+    }
+)
 
 
 _EXEC_ALIAS_HINT = (
     "Tool {name!r} doesn't exist in Nexus. To run code, call `terminal` "
     "with command=\"python3 -c '...'\" (or write the script to a temp file "
     "first via `vault_write` and run it with `terminal` "
-    "command=\"python3 ~/.nexus/vault/<path>\"). To create a file, use "
+    'command="python3 ~/.nexus/vault/<path>"). To create a file, use '
     "`vault_write` for vault paths, or `terminal` with `cat > /path << EOF` "
     "for arbitrary paths. Retry the original intent using one of these tools."
 )

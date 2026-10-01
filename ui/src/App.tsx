@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft } from "lucide-react";
 import "./tokens.css";
 import "./App.css";
 import "./components/Header.css";
@@ -11,15 +10,12 @@ import SkillDrawer from "./components/SkillDrawer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
 import ApprovalDialog from "./components/ApprovalDialog";
-import "./components/DatabaseSchemaView/DatabaseSchemaView.css";
+import AppsPane from "./components/views/AppsPane";
+import ProjectsPane from "./components/views/ProjectsPane";
+import AdvancedPane from "./components/views/AdvancedPane";
 
 const CalendarView = lazy(() => import("./components/CalendarView"));
 const VaultView = lazy(() => import("./components/VaultView"));
-const UnifiedGraphView = lazy(() => import("./components/UnifiedGraphView"));
-const DatabaseSchemaView = lazy(() => import("./components/DatabaseSchemaView"));
-const DataDashboardView = lazy(() => import("./components/DataDashboardView"));
-const HeartbeatView = lazy(() => import("./components/HeartbeatView"));
-const DreamView = lazy(() => import("./components/DreamView"));
 const WorkflowView = lazy(() => import("./components/WorkflowView"));
 import {
   cancelGraphragIndexFile,
@@ -28,9 +24,10 @@ import {
   respondToUserRequest,
 } from "./api";
 import { useToast } from "./toast/ToastProvider";
-import { NEW_KEY, emptyState, freshSessionId, readInitialView } from "./types/chat";
-import { listDatabases, type DatabaseSummary } from "./api/datatable";
+import { NEW_KEY, emptyState, freshSessionId } from "./types/chat";
+import { useAppRoute, type AnyView } from "./routes";
 import { useChatSession } from "./hooks/useChatSession";
+import { useCoordinator } from "./hooks/useCoordinator";
 import { useSettings } from "./hooks/useSettings";
 import { useApprovalQueue } from "./hooks/useApprovalQueue";
 import { useCalendarAlerts } from "./hooks/useCalendarAlerts";
@@ -52,7 +49,6 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { useRunningJobs } from "./hooks/useRunningJobs";
 import { useActiveDownloads } from "./hooks/useActiveDownloads";
 import { useSessionUsage } from "./hooks/useSessionUsage";
-import { useFeatures } from "./hooks/useFeatures";
 import ShortcutsModal from "./components/ShortcutsModal";
 import AgentStatusBar from "./components/AgentStatusBar";
 import UpdateModal from "./components/UpdateModal";
@@ -76,30 +72,20 @@ function KeepMounted({ active, children }: { active: boolean; children: ReactNod
 export default function App() {
   const toast = useToast();
   const { t: tBg } = useTranslation("skillWizard");
-  const initial = readInitialView();
-  const [view, setView] = useState(initial.view);
+  // URL-driven navigation: the hash is the source of truth for the active
+  // view (back/forward + deep links work). `setView` is a stable alias so
+  // the rest of the component reads naturally.
+  const { route, navigate } = useAppRoute();
+  const view = route.view;
+  const setView = navigate;
   const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Bumps a vault path into VaultView when user clicks "Open in Vault" from a preview modal. */
-  const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(initial.vaultPath);
+  const [vaultOpenPath, setVaultOpenPath] = useState<string | null>(() => (route.view === "vault" ? route.path ?? null : null));
   /** The currently selected file path in the vault tree (lifted so Sidebar tree + editor share it). */
-  const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(initial.vaultPath);
+  const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(() => (route.view === "vault" ? route.path ?? null : null));
   /** Currently selected calendar (.md path) inside the Calendar view. Lifted here so view switches preserve it. */
   const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
-  /** Currently selected kanban board path inside the Kanban view. */
-  const [kanbanSelectedPath, setKanbanSelectedPath] = useState<string | null>(null);
-  /** Currently selected data-table path inside the Data view (when drilling into a single table). */
-  const [dataSelectedPath, setDataSelectedPath] = useState<string | null>(null);
-  /** Folder for which to render an ER diagram inside the Data view. */
-  const [dataDiagramFolder, setDataDiagramFolder] = useState<string | null>(null);
-  /** Currently selected database (folder) — drives the dashboard view. */
-  const [dataSelectedDatabase, setDataSelectedDatabase] = useState<string | null>(null);
-  /** Bumped to force DatabaseListPanel to reload (e.g. after delete). */
-  const [databaseListRevision, setDatabaseListRevision] = useState(0);
-  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>([]);
-  useEffect(() => {
-    listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
-  }, [databaseListRevision]);
   const [graphSourceFilter, setGraphSourceFilter] = useState<{ mode: "file" | "folder"; path: string } | null>(null);
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
@@ -108,8 +94,6 @@ export default function App() {
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
-
-  const { isViewVisible } = useFeatures();
 
   // Wizard background-build tracker — owns SSE subscriptions for any skill
   // builds the user dismissed mid-flight, so they keep running on the
@@ -124,34 +108,8 @@ export default function App() {
     },
   });
 
-  // Sync `view` ⇄ URL hash so refresh / share / Capacitor app-resume land on
-  // the right tab. Hash is preferred over query string because it's
-  // self-contained for static hosting and doesn't fight the existing
-  // `?path=` deep link from `readInitialView`.
-  useEffect(() => {
-    const target = `#/${view}`;
-    if (window.location.hash !== target) {
-      window.history.replaceState(null, "", target);
-    }
-  }, [view]);
-  useEffect(() => {
-    const onHash = () => {
-      if (window.location.hash === "#/database") {
-        window.history.replaceState(null, "", "#/data");
-      }
-      const m = window.location.hash.match(/^#\/(chat|calendar|vault|kanban|data|graph|heartbeat|dream|workflows)$/);
-      if (m) {
-        if (!isViewVisible(m[1])) {
-          window.location.hash = "#/chat";
-          return;
-        }
-        setView(m[1] as typeof view);
-      }
-    };
-    onHash();
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, [isViewVisible]);
+  // URL sync, legacy redirects, and back/forward handling live in
+  // routes.ts (useAppRoute) — nothing to do here.
 
   // Dismiss any full-screen overlay (settings, skill drawer, mobile nav)
   // when the user switches top-level views — otherwise on mobile the
@@ -162,7 +120,20 @@ export default function App() {
     setMobileDrawerOpen(false);
   }, [view]);
 
+  // Follow vault deep links (`#/vault/<path>`) whenever they arrive — the
+  // initial one is seeded by the useState initializers above.
+  const lastRoutePathRef = useRef<string | null>(route.path ?? null);
+  useEffect(() => {
+    const p = route.path ?? null;
+    if (route.view === "vault" && p && p !== lastRoutePathRef.current) {
+      setVaultSelectedPath(p);
+    }
+    lastRoutePathRef.current = p;
+  }, [route.view, route.path]);
+
   const settings = useSettings();
+  const { settingsRevision } = settings;
+  const coordinator = useCoordinator(settingsRevision);
   const { hasModel, availableModels, lastUsedModel, defaultModel, yoloMode, bumpSettingsRevision, persistUsedModel } = settings;
 
   const chatSession = useChatSession(
@@ -514,23 +485,21 @@ export default function App() {
 
   // Stable handlers for Sidebar props — keeps their referential identity
   // across keystroke-driven re-renders so React.memo on Sidebar short-circuits.
-  // All depend only on setState setters (guaranteed stable by React).
-  const handleSidebarViewChange = useCallback((v: typeof view) => { setView(v); setMobileDrawerOpen(false); }, []);
+  // `navigate` from useAppRoute is referentially stable.
+  const handleSidebarViewChange = useCallback((v: AnyView) => { setView(v); setMobileDrawerOpen(false); }, [setView]);
   const handleMobileClose = useCallback(() => setMobileDrawerOpen(false), []);
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleSessionsRevisionBump = useCallback(() => setSessionsRevision((r) => r + 1), []);
   const handleVaultOpenPathHandled = useCallback(() => setVaultOpenPath(null), []);
-  const handleKanbanOpen = useCallback((path: string) => { setKanbanSelectedPath(path); setView("kanban"); }, []);
-  const handleDatabaseSelectFolder = useCallback((folder: string) => {
-    setDataSelectedDatabase(folder);
-    setDataSelectedPath(null);
-    setDataDiagramFolder(null);
-    setView("data");
-  }, []);
   const handleUpdateAvailable = useCallback((check: UpdateCheckResult) => {
     setUpdateCheck(check);
     setUpdateModalOpen(true);
   }, []);
+  const handleSettingsNavigate = useCallback((v: AnyView) => {
+    setSettingsOpen(false);
+    bumpSettingsRevision();
+    setView(v);
+  }, [setView, bumpSettingsRevision]);
 
   return (
     <div className="app app--layout">
@@ -554,14 +523,8 @@ export default function App() {
         onDispatchToChat={handleDispatchToChat}
         onViewEntityGraph={handleViewEntityGraph}
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
-        kanbanSelectedPath={kanbanSelectedPath}
-        onKanbanOpen={handleKanbanOpen}
-        databaseSelectedFolder={dataSelectedDatabase}
-        databaseListRevision={databaseListRevision}
-        onDatabaseSelectFolder={handleDatabaseSelectFolder}
         onUpdateAvailable={handleUpdateAvailable}
-        isViewVisible={isViewVisible}
-        appDatabases={appDatabases}
+        coordinatorSessionId={coordinator.enabled ? coordinator.sessionId : null}
       />
 
       <div className="app-main">
@@ -645,8 +608,28 @@ export default function App() {
               onModelChange={handleModelChange}
             />
           </div>
-          <div className="view-pane" style={{ display: view === "calendar" && isViewVisible("calendar") ? "flex" : "none" }}>
-            <KeepMounted active={view === "calendar" && isViewVisible("calendar")}>
+          <div className="view-pane" style={{ display: view === "projects" ? "flex" : "none" }}>
+            <KeepMounted active={view === "projects"}>
+              <ProjectsPane
+                activeSessionId={activeSession}
+                onSessionSelect={handleSessionSelect}
+                onNewChatInProject={handleNewChat}
+                onOpenInVault={handleOpenInVault}
+                refreshKey={sessionsRevision}
+              />
+            </KeepMounted>
+          </div>
+          <div className="view-pane" style={{ display: view === "apps" ? "flex" : "none" }}>
+            <KeepMounted active={view === "apps"}>
+              <AppsPane
+                initialFolder={view === "apps" ? route.path : null}
+                vaultViewCommon={vaultViewCommon}
+                onOpenInVault={handleOpenInVault}
+              />
+            </KeepMounted>
+          </div>
+          <div className="view-pane" style={{ display: view === "calendar" ? "flex" : "none" }}>
+            <KeepMounted active={view === "calendar"}>
               <CalendarView
                 selectedPath={calendarSelectedPath}
                 onSelectPath={setCalendarSelectedPath}
@@ -659,72 +642,10 @@ export default function App() {
               <VaultView selectedPath={vaultSelectedPath} {...vaultViewCommon} />
             </KeepMounted>
           </div>
-          <div className="view-pane" style={{ display: view === "kanban" && isViewVisible("kanban") ? "flex" : "none" }}>
-            <KeepMounted active={view === "kanban" && isViewVisible("kanban")}>
-              {kanbanSelectedPath ? (
-                <VaultView selectedPath={kanbanSelectedPath} {...vaultViewCommon} />
-              ) : (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
-                  Pick a board on the left.
-                </div>
-              )}
-            </KeepMounted>
-          </div>
-          <div className="view-pane" style={{ display: view === "data" && isViewVisible("data") ? "flex" : "none" }}>
-            <KeepMounted active={view === "data" && isViewVisible("data")}>
-            {dataDiagramFolder !== null ? (
-              <DatabaseSchemaView
-                folder={dataDiagramFolder}
-                onClose={() => setDataDiagramFolder(null)}
-              />
-            ) : dataSelectedPath ? (
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-                {dataSelectedDatabase !== null && (
-                  <div style={{ padding: "6px 16px", borderBottom: "1px solid var(--bg-soft)", fontSize: 12 }}>
-                    <button
-                      className="dt-action-btn"
-                      onClick={() => setDataSelectedPath(null)}
-                      title="Back to dashboard"
-                    >
-                      <ArrowLeft size={14} /> Back to dashboard
-                    </button>
-                  </div>
-                )}
-                <VaultView
-                  selectedPath={dataSelectedPath}
-                  {...vaultViewCommon}
-                  onOpenTable={(p) => {
-                    setDataSelectedPath(p);
-                    setDataDiagramFolder(null);
-                    const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-                    setDataSelectedDatabase(parent);
-                  }}
-                />
-              </div>
-            ) : dataSelectedDatabase !== null ? (
-              <DataDashboardView
-                folder={dataSelectedDatabase}
-                onOpenTable={(p) => setDataSelectedPath(p)}
-                onOpenDiagram={(f) => { setDataDiagramFolder(f); setDataSelectedPath(null); }}
-                onAfterDelete={() => {
-                  setDataSelectedDatabase(null);
-                  setDataSelectedPath(null);
-                  setDataDiagramFolder(null);
-                  setDatabaseListRevision((n) => n + 1);
-                }}
-                onOpenInVault={handleOpenInVault}
-              />
-            ) : (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--fg-faint)", fontSize: 13 }}>
-                Pick a database on the left to open its dashboard.
-              </div>
-            )}
-            </KeepMounted>
-          </div>
-          <div className="view-pane" style={{ display: view === "graph" && isViewVisible("graph") ? "flex" : "none" }}>
-            <Suspense fallback={<ViewFallback />}>
-              {view === "graph" && isViewVisible("graph") && (
-                <UnifiedGraphView
+          {(view === "graph" || view === "heartbeat" || view === "dream") && (
+            <div className="view-pane" style={{ display: "flex" }}>
+              <AdvancedPane
+                area={view}
                 onOpenSkill={(name) => setOpenSkill(name)}
                 graphSourceFilter={graphSourceFilter}
                 onGraphSourceFilterHandled={() => setGraphSourceFilter(null)}
@@ -733,28 +654,14 @@ export default function App() {
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onStartGraphIndex={handleStartGraphIndex}
                 onSpawnSession={handleSpawnSessionFromEntity}
+                onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
+                onOpenInVault={handleOpenInVault}
               />
-              )}
-            </Suspense>
-          </div>
-          <div className="view-pane" style={{ display: view === "heartbeat" && isViewVisible("heartbeat") ? "flex" : "none" }}>
+            </div>
+          )}
+          <div className="view-pane" style={{ display: view === "workflows" ? "flex" : "none" }}>
             <Suspense fallback={<ViewFallback />}>
-              {view === "heartbeat" && isViewVisible("heartbeat") && (
-                <HeartbeatView
-                  onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
-                  onOpenInVault={handleOpenInVault}
-                />
-              )}
-            </Suspense>
-          </div>
-          <div className="view-pane" style={{ display: view === "dream" && isViewVisible("dream") ? "flex" : "none" }}>
-            <Suspense fallback={<ViewFallback />}>
-              {view === "dream" && isViewVisible("dream") && <DreamView />}
-            </Suspense>
-          </div>
-          <div className="view-pane" style={{ display: view === "workflows" && isViewVisible("workflows") ? "flex" : "none" }}>
-            <Suspense fallback={<ViewFallback />}>
-              {view === "workflows" && isViewVisible("workflows") && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
+              {view === "workflows" && <WorkflowView selectedPath={vaultSelectedPath} onOpen={(p) => { setVaultSelectedPath(p); setView("workflows"); }} />}
             </Suspense>
           </div>
         </main>
@@ -767,6 +674,7 @@ export default function App() {
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false); bumpSettingsRevision(); }}
+        onNavigateView={handleSettingsNavigate}
       />
       {hasModel === false && (
         <WizardModal
@@ -796,15 +704,6 @@ export default function App() {
         view={view}
         onViewChange={setView}
         onOpenDrawer={() => setMobileDrawerOpen(true)}
-        databases={appDatabases}
-        selectedApp={dataSelectedDatabase}
-        onAppSelect={(folder) => {
-          setDataSelectedDatabase(folder);
-          setDataSelectedPath(null);
-          setDataDiagramFolder(null);
-          setView("data");
-        }}
-        isViewVisible={isViewVisible}
       />
 
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />

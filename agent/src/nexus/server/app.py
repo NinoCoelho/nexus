@@ -39,12 +39,14 @@ TUNNEL_COOKIE = "nexus_tunnel_token"
 # Endpoints the phone needs to reach BEFORE it has a cookie, so the login flow
 # can complete: probe auth, exchange code for cookie. Listed explicitly so the
 # tunnel-traffic gate has a tight, auditable allowlist.
-TUNNEL_PUBLIC_PATHS = frozenset({
-    "/tunnel/redeem",
-    "/tunnel/auth-status",
-    "/webhook",
-    "/workflow/trigger",
-})
+TUNNEL_PUBLIC_PATHS = frozenset(
+    {
+        "/tunnel/redeem",
+        "/tunnel/auth-status",
+        "/webhook",
+        "/workflow/trigger",
+    }
+)
 
 # API surface that must require a cookie when reached through the tunnel. This
 # is an allowlist of *prefixes*; everything not matching is treated as static
@@ -52,11 +54,33 @@ TUNNEL_PUBLIC_PATHS = frozenset({
 # and allowed through. Static UI is harmless without auth — the data routes
 # below carry all the actual session state.
 TUNNEL_PROTECTED_PREFIXES = (
-    "/chat", "/sessions", "/vault", "/skills", "/config", "/providers",
-    "/catalog", "/auth", "/models", "/routing", "/graph", "/graphrag",
-    "/share", "/local", "/notifications", "/push",
-    "/transcribe", "/audio", "/health", "/heartbeat", "/cookies",
-    "/dream", "/mcp", "/jobs", "/update", "/workflows", "/projects",
+    "/chat",
+    "/sessions",
+    "/vault",
+    "/skills",
+    "/config",
+    "/providers",
+    "/catalog",
+    "/auth",
+    "/models",
+    "/routing",
+    "/graph",
+    "/graphrag",
+    "/share",
+    "/local",
+    "/notifications",
+    "/push",
+    "/transcribe",
+    "/audio",
+    "/health",
+    "/heartbeat",
+    "/cookies",
+    "/dream",
+    "/mcp",
+    "/jobs",
+    "/update",
+    "/workflows",
+    "/projects",
     "/credentials",
 )
 
@@ -143,6 +167,7 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         from ..tunnel import get_manager  # local import to avoid cycles
+
         tunnel = get_manager()
 
         path = request.url.path
@@ -229,6 +254,7 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
             headers={"Cache-Control": "no-store"},
         )
 
+
 log = logging.getLogger(__name__)
 
 
@@ -303,6 +329,7 @@ def create_app(
                     },
                 ),
             )
+
         return _on_terminal_output
 
     def _make_proc_register(
@@ -319,6 +346,7 @@ def create_app(
                 return
             key = f"{session_id}:{call_id}"
             proc_registry[key] = proc
+
         return _register
 
     def _make_proc_unregister(
@@ -334,6 +362,7 @@ def create_app(
             if not call_id:
                 return
             proc_registry.pop(f"{session_id}:{call_id}", None)
+
         return _unregister
 
     # Late-bind the handler onto the agent. Constructed-outside-the-app
@@ -379,6 +408,7 @@ def create_app(
     # publishing on the per-session SSE channel and for reading the
     # original input_mode (stashed on the store by chat_stream).
     from ..agent.notify_user_tool import NotifyUserHandler
+
     agent._notify_user_handler = NotifyUserHandler(session_store=sessions)
     agent._sessions = sessions
 
@@ -403,20 +433,24 @@ def create_app(
         agent._trace = _trace
     else:
         existing = agent._trace
+
         def _compose(k: str, d: dict[str, Any]) -> None:
             existing(k, d)
             _trace(k, d)
+
         agent._trace = _compose
 
-    lifespan = create_lifespan({
-        "graphrag_cfg": graphrag_cfg,
-        "nexus_cfg": nexus_cfg,
-        "mutable_state": mutable_state,
-        "agent": agent,
-        "sessions": sessions,
-        "job_tracker": job_tracker,
-        "publish_job_event": _publish_job_event,
-    })
+    lifespan = create_lifespan(
+        {
+            "graphrag_cfg": graphrag_cfg,
+            "nexus_cfg": nexus_cfg,
+            "mutable_state": mutable_state,
+            "agent": agent,
+            "sessions": sessions,
+            "job_tracker": job_tracker,
+            "publish_job_event": _publish_job_event,
+        }
+    )
 
     # Single-user app, not a third-party API — disable FastAPI's auto-generated
     # /docs, /redoc, /openapi.json. Otherwise anyone with the tunnel URL could
@@ -455,7 +489,23 @@ def create_app(
     app.state.terminal_procs = _terminal_procs
     app.state.job_tracker = job_tracker
 
+    # Coordinator (master chat) — one session wired to nexus_sessions /
+    # session_dispatch tools and the sweep heartbeat driver via the
+    # module-level service handle in nexus.coordinator.
+    if getattr(nexus_cfg, "coordinator", None) is not None and nexus_cfg.coordinator.enabled:
+        from ..coordinator import CoordinatorService, set_service
+
+        coordinator = CoordinatorService(sessions, agent, job_tracker)
+        try:
+            coordinator.ensure_session()
+        except Exception:
+            log.exception("coordinator: master session provisioning failed")
+        set_service(coordinator)
+        app.state.coordinator = coordinator
+        log.info("coordinator service enabled (master session %s)", coordinator.session_id)
+
     from .kanban_queue import init_queue
+
     init_queue()
     log.info("kanban queue initialised")
 
@@ -584,14 +634,17 @@ def create_app(
         chain = DISPATCH_CHAIN.get()
         if card_id in chain:
             log.info(
-                "lane_change_hook: skipping auto-dispatch for card %s "
-                "(cycle: already in chain %s)", card_id, chain,
+                "lane_change_hook: skipping auto-dispatch for card %s (cycle: already in chain %s)",
+                card_id,
+                chain,
             )
             return
         if len(chain) >= MAX_DISPATCH_DEPTH:
             log.warning(
                 "lane_change_hook: depth limit reached (%d) for card %s, chain=%s",
-                MAX_DISPATCH_DEPTH, card_id, chain,
+                MAX_DISPATCH_DEPTH,
+                card_id,
+                chain,
             )
             return
         try:
@@ -601,16 +654,21 @@ def create_app(
             return
         loop.create_task(
             _dispatch_impl(
-                path=path, card_id=card_id, mode="background",
-                a=agent, store=sessions,
+                path=path,
+                card_id=card_id,
+                mode="background",
+                a=agent,
+                store=sessions,
             )
         )
 
     from .. import vault_kanban as _vk
+
     _vk.set_lane_change_hook(_lane_change_hook)
 
     # ── transcription + bundled UI ─────────────────────────────────────────────
     from . import transcribe as _transcribe_mod
+
     _transcribe_mod.register(app)
 
     _mount_bundled_ui(app)
@@ -630,6 +688,7 @@ def _resolve_ui_dist() -> "Any | None":
             return p
 
     from ..config import get_frontend_dir
+
     fe = get_frontend_dir()
     if fe is not None:
         dist = fe / "dist"

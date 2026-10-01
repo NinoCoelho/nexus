@@ -2,7 +2,7 @@ import type React from "react";
 import type { Message } from "../components/ChatView";
 import type { SessionSummary } from "../api";
 
-export type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
+// The View union now lives in routes.ts (URL-driven navigation).
 
 /**
  * A message the user sent while the agent was still processing a turn.
@@ -227,17 +227,6 @@ export function freshSessionId(): string {
       ? crypto.randomUUID()
       : Math.random().toString(36).slice(2) + Date.now().toString(36);
   return raw.replace(/-/g, "");
-}
-
-/** Parse ?view=vault&path=... deep link on first mount. */
-export function readInitialView(): { view: View; vaultPath: string | null } {
-  if (typeof window === "undefined") return { view: "chat", vaultPath: null };
-  const qs = new URLSearchParams(window.location.search);
-  const v = qs.get("view");
-  const path = qs.get("path");
-  const allowed: View[] = ["chat", "calendar", "vault", "kanban", "data", "graph", "heartbeat", "dream", "workflows"];
-  const view = (allowed as string[]).includes(v ?? "") ? (v as View) : "chat";
-  return { view, vaultPath: path };
 }
 
 /** Return type of useChatSession — exported here to avoid circular imports. */

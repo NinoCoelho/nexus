@@ -48,6 +48,46 @@ async def telegram_status(request: Request) -> dict[str, Any]:
     return _status(request.app)
 
 
+@router.get("/telegram/bindings")
+async def telegram_bindings(request: Request) -> list[dict[str, Any]]:
+    """List every Telegram chat/topic binding, enriched with project names
+    and active-session titles (for the Projects workspace + topic dashboard)."""
+    import asyncio
+
+    from ...home import sessions_db
+    from ...telegram.bindings import TelegramBindingStore
+    from ..project_store import ProjectStore
+
+    store = request.app.state.sessions
+    db_path = sessions_db()
+    bindings = await asyncio.to_thread(TelegramBindingStore().list_all)
+    project_store = ProjectStore(db_path)
+    projects: dict[str, Any] = {}
+    for b in bindings:
+        if b.project_id and b.project_id not in projects:
+            p = await asyncio.to_thread(project_store.get, b.project_id)
+            projects[b.project_id] = p
+    sessions: dict[str, Any] = {}
+    for b in bindings:
+        if b.active_session_id and b.active_session_id not in sessions:
+            s = await asyncio.to_thread(store.get, b.active_session_id)
+            sessions[b.active_session_id] = s
+    return [
+        {
+            "chat_id": b.chat_id,
+            "thread_id": b.thread_id,
+            "kind": b.kind,
+            "project_id": b.project_id,
+            "project_name": projects[b.project_id].name if projects.get(b.project_id) else None,
+            "active_session_id": b.active_session_id,
+            "active_session_title": (
+                sessions[b.active_session_id].title if sessions.get(b.active_session_id) else None
+            ),
+        }
+        for b in bindings
+    ]
+
+
 @router.post("/telegram/start")
 async def telegram_start(request: Request) -> dict[str, Any]:
     from ..events import SessionEvent

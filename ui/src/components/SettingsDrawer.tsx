@@ -42,11 +42,13 @@ import "./settings/settings.css";
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** Navigate to an advanced-only view from Settings (closes the drawer). */
+  onNavigateView?: (view: "graph" | "heartbeat" | "dream") => void;
 }
 
 type TabId = "quick" | "models" | "credentials" | "features" | "integrations" | "advanced";
 
-export default function SettingsDrawer({ open, onClose }: Props) {
+export default function SettingsDrawer({ open, onClose, onNavigateView }: Props) {
   const { t } = useTranslation("settings");
 
   const ALL_TABS: { id: TabId; label: string }[] = [
@@ -155,7 +157,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
           {active === "features" && <FeaturesTab graphStats={graphStats} models={models} />}
           {active === "integrations" && <IntegrationsTab />}
           {active === "advanced" && (
-            <AdvancedTab hitl={hitl} onHitlChanged={setHitl} />
+            <AdvancedTab hitl={hitl} onHitlChanged={setHitl} onNavigateView={onNavigateView} />
           )}
         </div>
       </div>

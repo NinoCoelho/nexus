@@ -37,6 +37,7 @@ from .config_schema import (  # noqa: F401
     UIConfig,
     LocationConfig,
     DreamConfig,
+    CoordinatorConfig,
     McpServerEntry,
     McpConfig,
     BrokerConfig,
@@ -85,10 +86,7 @@ def _provider_to_dict(v: ProviderConfig) -> dict[str, Any]:
 def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
     d: dict[str, Any] = {
         "agent": cfg.agent.model_dump(),
-        "providers": {
-            k: _provider_to_dict(v)
-            for k, v in cfg.providers.items()
-        },
+        "providers": {k: _provider_to_dict(v) for k, v in cfg.providers.items()},
         "models": [],
         "graphrag": {
             "enabled": cfg.graphrag.enabled,
@@ -216,6 +214,13 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "voice_replies": cfg.telegram.voice_replies,
             "voice_speechify": cfg.telegram.voice_speechify,
         },
+        "coordinator": {
+            "enabled": cfg.coordinator.enabled,
+            "session_id": cfg.coordinator.session_id,
+            "sweep_interval_minutes": cfg.coordinator.sweep_interval_minutes,
+            "quiet_hours": cfg.coordinator.quiet_hours,
+            "auto_approve": cfg.coordinator.auto_approve,
+        },
     }
     for m in cfg.models:
         md: dict[str, Any] = {
@@ -314,7 +319,8 @@ def _migrate_legacy_embedder(graphrag_raw: dict[str, Any]) -> None:
         emb["model"] = BUILTIN_MODEL
         log.info(
             "[config] migrated graphrag.embeddings.model: %s -> %s",
-            current, BUILTIN_MODEL,
+            current,
+            BUILTIN_MODEL,
         )
 
 
@@ -402,11 +408,20 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         if isinstance(vd, str):
             tts_raw["voices_dir"] = vd
     for legacy_key in (
-        "openai", "elevenlabs", "engine",
-        "voice", "speed", "language", "auto_detect_language",
-        "ack_start_enabled", "ack_progress_enabled", "ack_complete_enabled",
-        "completion_ack_cross_session", "ack_model",
-        "long_process_threshold_s", "long_process_repeat_s",
+        "openai",
+        "elevenlabs",
+        "engine",
+        "voice",
+        "speed",
+        "language",
+        "auto_detect_language",
+        "ack_start_enabled",
+        "ack_progress_enabled",
+        "ack_complete_enabled",
+        "completion_ack_cross_session",
+        "ack_model",
+        "long_process_threshold_s",
+        "long_process_repeat_s",
         "completion_ack_threshold_s",
     ):
         tts_raw.pop(legacy_key, None)
@@ -440,11 +455,22 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         ]
     telegram = TelegramConfig(**telegram_raw)
     return NexusConfig(
-        agent=agent, providers=providers, models=models,
-        graphrag=graphrag, search=search, scrape=scrape,
-        transcription=transcription, tts=tts, vault=vault, ui=ui,
-        location=location, dream=dream, mcp=mcp, broker=broker,
+        agent=agent,
+        providers=providers,
+        models=models,
+        graphrag=graphrag,
+        search=search,
+        scrape=scrape,
+        transcription=transcription,
+        tts=tts,
+        vault=vault,
+        ui=ui,
+        location=location,
+        dream=dream,
+        mcp=mcp,
+        broker=broker,
         telegram=telegram,
+        coordinator=CoordinatorConfig(**dict(raw.get("coordinator", {}))),
     )
 
 
@@ -454,7 +480,9 @@ def apply_env_overlay(cfg: NexusConfig) -> NexusConfig:
     api_key = os.environ.get("NEXUS_LLM_API_KEY", "")
     model = os.environ.get("NEXUS_LLM_MODEL", "")
     if base_url and api_key and model:
-        log.info("[config] NEXUS_LLM_* env overlay active — using _env provider with model %s", model)
+        log.info(
+            "[config] NEXUS_LLM_* env overlay active — using _env provider with model %s", model
+        )
         os.environ["_NEXUS_ENV_KEY"] = api_key
         cfg = cfg.model_copy(deep=True)
         cfg.providers["_env"] = ProviderConfig(base_url=base_url, api_key_env="_NEXUS_ENV_KEY")

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 
 from ..deps import get_agent, get_app_state
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -16,6 +19,7 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
     if cfg is None:
         return {}
     from ...secrets import get as secrets_get, resolve as secrets_resolve
+
     out: dict[str, Any] = {
         "agent": cfg.agent.model_dump(),
         "providers": {},
@@ -111,11 +115,21 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "voice_replies": tg.voice_replies,
             "voice_speechify": tg.voice_speechify,
         }
+    coord = getattr(cfg, "coordinator", None)
+    if coord is not None:
+        out["coordinator"] = {
+            "enabled": coord.enabled,
+            "session_id": coord.session_id,
+            "sweep_interval_minutes": coord.sweep_interval_minutes,
+            "quiet_hours": coord.quiet_hours,
+            "auto_approve": coord.auto_approve,
+        }
     return out
 
 
 def _rebuild_registry(cfg: Any, app_state: dict[str, Any], agent: Any) -> None:
     from ...agent.registry import build_registry
+
     new_reg = build_registry(cfg)
     app_state["prov_reg"] = new_reg
     agent._provider_registry = new_reg
@@ -129,9 +143,7 @@ def _rebuild_registry(cfg: Any, app_state: dict[str, Any], agent: Any) -> None:
         if _provider is not None and hasattr(_provider, "_registry"):
             _provider._registry = new_reg
         if _provider is not None and hasattr(_provider, "_default_model"):
-            _provider._default_model = getattr(
-                getattr(cfg, "agent", None), "default_model", None
-            )
+            _provider._default_model = getattr(getattr(cfg, "agent", None), "default_model", None)
 
 
 @router.get("/config")
@@ -147,6 +159,7 @@ async def patch_config(
     a=Depends(get_agent),
 ) -> dict[str, Any]:
     from ...config_file import load as load_cfg, save as save_cfg, NexusConfig
+
     cfg = app_state["cfg"] or load_cfg()
     raw = cfg.model_dump()
     # Shallow merge for "agent"; NESTED merge for "providers" so a partial
@@ -203,24 +216,48 @@ async def patch_config(
     if "tts" in body:
         existing = raw.get("tts", {}) or {}
         patch = body["tts"] or {}
-        ALLOWED = {"enabled", "ack_enabled", "ack_mode", "ack_model", "voice_language", "voices_dir"}
+        ALLOWED = {
+            "enabled",
+            "ack_enabled",
+            "ack_mode",
+            "ack_model",
+            "voice_language",
+            "voices_dir",
+        }
         clean = {k: v for k, v in patch.items() if k in ALLOWED}
         raw["tts"] = {**existing, **clean}
     if "telegram" in body:
         existing = raw.get("telegram", {}) or {}
         patch = body["telegram"] or {}
         ALLOWED_TG = {
-            "enabled", "bot_token_env", "allowed_user_ids",
-            "poll_timeout_seconds", "stream_edits", "proxy_url", "deny_message",
-            "ack_reaction", "voice_replies", "voice_speechify",
+            "enabled",
+            "bot_token_env",
+            "allowed_user_ids",
+            "poll_timeout_seconds",
+            "stream_edits",
+            "proxy_url",
+            "deny_message",
+            "ack_reaction",
+            "voice_replies",
+            "voice_speechify",
         }
         clean = {k: v for k, v in patch.items() if k in ALLOWED_TG}
         if isinstance(clean.get("allowed_user_ids"), list):
             clean["allowed_user_ids"] = [
-                int(u) for u in clean["allowed_user_ids"]
-                if str(u).strip().lstrip("-").isdigit()
+                int(u) for u in clean["allowed_user_ids"] if str(u).strip().lstrip("-").isdigit()
             ]
         raw["telegram"] = {**existing, **clean}
+    if "coordinator" in body:
+        existing = raw.get("coordinator", {}) or {}
+        patch = body["coordinator"] or {}
+        ALLOWED_COORD = {
+            "enabled",
+            "sweep_interval_minutes",
+            "quiet_hours",
+            "auto_approve",
+        }
+        clean = {k: v for k, v in patch.items() if k in ALLOWED_COORD}
+        raw["coordinator"] = {**existing, **clean}
     if "mcp" in body:
         existing = raw.get("mcp", {}) or {}
         patch = body["mcp"] or {}
@@ -245,4 +282,31 @@ async def patch_config(
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)
+    _sync_coordinator_service(new_cfg, request)
     return _redact_cfg(new_cfg)
+
+
+def _sync_coordinator_service(cfg: Any, request: Request) -> None:
+    """(Re)wire the module-level coordinator service on config changes.
+
+    Enabling [coordinator] from the UI takes effect immediately — the
+    master session is provisioned and the tools/sweep driver see the
+    service. Disabling just drops the handle (turns tools read-only-off).
+    """
+    from ...coordinator import CoordinatorService, get_service, set_service
+
+    coord = getattr(cfg, "coordinator", None)
+    if coord is None:
+        return
+    svc = get_service()
+    if coord.enabled and svc is None:
+        try:
+            svc = CoordinatorService(
+                request.app.state.sessions, request.app.state.agent, request.app.state.job_tracker
+            )
+            svc.ensure_session()
+            set_service(svc)
+        except Exception:
+            log.exception("config patch: coordinator service init failed")
+    elif not coord.enabled and svc is not None:
+        set_service(None)

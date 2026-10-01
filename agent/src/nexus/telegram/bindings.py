@@ -93,9 +93,7 @@ class TelegramBindingStore:
             active_session_id=active_session_id,
         )
 
-    def set_active_session(
-        self, chat_id: int, thread_id: int, session_id: str
-    ) -> None:
+    def set_active_session(self, chat_id: int, thread_id: int, session_id: str) -> None:
         conn = self._connect()
         try:
             conn.execute(
@@ -108,9 +106,7 @@ class TelegramBindingStore:
         finally:
             conn.close()
 
-    def set_project(
-        self, chat_id: int, thread_id: int, project_id: str | None
-    ) -> None:
+    def set_project(self, chat_id: int, thread_id: int, project_id: str | None) -> None:
         conn = self._connect()
         try:
             conn.execute(
@@ -149,6 +145,17 @@ class TelegramBindingStore:
         finally:
             conn.close()
         return self._row_to_binding(row) if row else None
+
+    def list_all(self) -> list[TelegramBinding]:
+        """Every binding, most recently updated first (admin listing)."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM telegram_bindings ORDER BY updated_at DESC, chat_id, thread_id"
+            ).fetchall()
+        finally:
+            conn.close()
+        return [self._row_to_binding(r) for r in rows]
 
     def _row_to_binding(self, row: Any) -> TelegramBinding:
         return TelegramBinding(

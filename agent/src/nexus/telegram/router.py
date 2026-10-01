@@ -138,7 +138,9 @@ class TelegramRouter:
         log.info(
             "telegram: unauthorized message from user %s in chat %s (thread %s) — "
             "not in allowed_user_ids",
-            user_id, chat_id, thread_id,
+            user_id,
+            chat_id,
+            thread_id,
         )
         if not self.cfg.deny_message:
             return
@@ -196,12 +198,14 @@ class TelegramRouter:
         photo = msg.get("photo")
         if isinstance(photo, list) and photo:
             largest = photo[-1]  # sizes are ordered ascending
-            media.append({
-                "file_id": largest.get("file_id"),
-                "mime": "image/jpeg",
-                "name": "photo.jpg",
-                "size": int(largest.get("file_size") or 0),
-            })
+            media.append(
+                {
+                    "file_id": largest.get("file_id"),
+                    "mime": "image/jpeg",
+                    "name": "photo.jpg",
+                    "size": int(largest.get("file_size") or 0),
+                }
+            )
 
         for key, default_mime, default_name in (
             ("document", None, None),
@@ -211,12 +215,14 @@ class TelegramRouter:
         ):
             obj = msg.get(key)
             if isinstance(obj, dict) and obj.get("file_id"):
-                media.append({
-                    "file_id": obj["file_id"],
-                    "mime": obj.get("mime_type") or default_mime or "",
-                    "name": obj.get("file_name") or default_name or key,
-                    "size": int(obj.get("file_size") or 0),
-                })
+                media.append(
+                    {
+                        "file_id": obj["file_id"],
+                        "mime": obj.get("mime_type") or default_mime or "",
+                        "name": obj.get("file_name") or default_name or key,
+                        "size": int(obj.get("file_size") or 0),
+                    }
+                )
 
         v = msg.get("voice")
         if isinstance(v, dict) and v.get("file_id"):
@@ -296,13 +302,9 @@ class TelegramRouter:
         """Voice note → transcript → normal chat turn (+ voice reply)."""
         from ..multimodal import transcribe_bytes
 
-        await self.client.send_chat_action(
-            info.chat_id, "typing", thread_id=info.thread_id or None
-        )
+        await self.client.send_chat_action(info.chat_id, "typing", thread_id=info.thread_id or None)
         try:
-            audio = await self._download_media(
-                voice["file_id"], 0
-            )
+            audio = await self._download_media(voice["file_id"], 0)
             transcript = await transcribe_bytes(audio, voice.get("mime") or "audio/ogg")
         except Exception as exc:
             await self.client.send_text_safe(
@@ -342,7 +344,21 @@ class TelegramRouter:
 
         if binding is None:
             if chat_type == "private":
-                binding = await self._create_binding(info, project_id=None)
+                # Owner DM → the coordinator master chat when enabled; the
+                # DM becomes the always-on deputy instead of a throwaway
+                # unprojected session.
+                coordinator = self._coordinator_service()
+                if coordinator is not None:
+                    sid = coordinator.ensure_session()
+                    binding = self.bindings.upsert(
+                        chat_id=info.chat_id,
+                        thread_id=info.thread_id,
+                        kind="dm",
+                        project_id=None,
+                        active_session_id=sid,
+                    )
+                else:
+                    binding = await self._create_binding(info, project_id=None)
             elif info.thread_id:  # forum topic — require explicit binding
                 if (info.chat_id, info.thread_id) not in self._hinted:
                     self._hinted.add((info.chat_id, info.thread_id))
@@ -380,8 +396,10 @@ class TelegramRouter:
         # Group messages carry the sender so the agent knows who's talking.
         message = text
         if chat_type != "private":
-            message = f"From {info.user_label}:\n\n{text}" if text.strip() else (
-                f"From {info.user_label} (attachment):"
+            message = (
+                f"From {info.user_label}:\n\n{text}"
+                if text.strip()
+                else (f"From {info.user_label} (attachment):")
             )
 
         outcome = await launch_turn(
@@ -437,9 +455,7 @@ class TelegramRouter:
             return
         pending = self._pending_acks.pop(session_id, [])
         for chat_id, message_id in pending:
-            await self.client.set_message_reaction(
-                chat_id, message_id, _ACK_DONE_EMOJI
-            )
+            await self.client.set_message_reaction(chat_id, message_id, _ACK_DONE_EMOJI)
 
     def _session_context(self, info: MsgInfo) -> str:
         if info.chat_type == "private":
@@ -448,13 +464,21 @@ class TelegramRouter:
             return f"Telegram: topic {info.chat_id}/{info.thread_id}"
         return f"Telegram: group {info.chat_id}"
 
+    def _coordinator_service(self):
+        """The coordinator service when [coordinator] is enabled."""
+        try:
+            from ..coordinator import get_service
+
+            svc = get_service()
+            if svc is None or not svc.config.enabled:
+                return None
+            return svc
+        except Exception:
+            return None
+
     async def _create_binding(self, info: MsgInfo, *, project_id: str | None):
-        kind = "dm" if info.chat_type == "private" else (
-            "topic" if info.thread_id else "group"
-        )
-        session = self.store.create(
-            context=self._session_context(info), project_id=project_id
-        )
+        kind = "dm" if info.chat_type == "private" else ("topic" if info.thread_id else "group")
+        session = self.store.create(context=self._session_context(info), project_id=project_id)
         return self.bindings.upsert(
             chat_id=info.chat_id,
             thread_id=info.thread_id,
@@ -473,9 +497,7 @@ class TelegramRouter:
     # message and resets for the next turn. The task is cancelled only in
     # ``aclose()`` (poller shutdown).
 
-    def _ensure_streamer(
-        self, session_id: str, chat_id: int, thread_id: int
-    ) -> None:
+    def _ensure_streamer(self, session_id: str, chat_id: int, thread_id: int) -> None:
         existing = self._streamers.get(session_id)
         if existing is not None and not existing.done():
             return
@@ -496,9 +518,7 @@ class TelegramRouter:
                 pass
         self._streamers.clear()
 
-    async def _stream_reply(
-        self, session_id: str, chat_id: int, thread_id: int
-    ) -> None:
+    async def _stream_reply(self, session_id: str, chat_id: int, thread_id: int) -> None:
         acc = ""
         msg_id = 0
         last_edit = 0.0
@@ -522,11 +542,7 @@ class TelegramRouter:
                             thread_id=thread_id or None,
                         )
                         last_edit = now
-                    elif (
-                        msg_id
-                        and self.cfg.stream_edits
-                        and now - last_edit >= _EDIT_INTERVAL
-                    ):
+                    elif msg_id and self.cfg.stream_edits and now - last_edit >= _EDIT_INTERVAL:
                         ok = await self.client.edit_text_safe(
                             chat_id, msg_id, md_to_telegram_html(acc)
                         )
@@ -554,9 +570,7 @@ class TelegramRouter:
                                 # Detached: TTS synthesis can take seconds —
                                 # don't hold the stream loop.
                                 asyncio.create_task(
-                                    self._send_voice_reply(
-                                        chat_id, thread_id, reply_text
-                                    )
+                                    self._send_voice_reply(chat_id, thread_id, reply_text)
                                 )
                         turn_errored = False
 
@@ -581,26 +595,18 @@ class TelegramRouter:
                 log.exception("telegram: final reply failed")
             self._streamers.pop(session_id, None)
 
-    async def _finalize_reply(
-        self, chat_id: int, thread_id: int, msg_id: int, text: str
-    ) -> None:
+    async def _finalize_reply(self, chat_id: int, thread_id: int, msg_id: int, text: str) -> None:
         chunks = split_for_telegram(md_to_telegram_html(text))
         if not chunks:
             return
         if msg_id:
             ok = await self.client.edit_text_safe(chat_id, msg_id, chunks[0])
             if not ok:  # original deleted → send instead
-                await self.client.send_text_safe(
-                    chat_id, chunks[0], thread_id=thread_id or None
-                )
+                await self.client.send_text_safe(chat_id, chunks[0], thread_id=thread_id or None)
         else:
-            await self.client.send_text_safe(
-                chat_id, chunks[0], thread_id=thread_id or None
-            )
+            await self.client.send_text_safe(chat_id, chunks[0], thread_id=thread_id or None)
         for chunk in chunks[1:]:
-            await self.client.send_text_safe(
-                chat_id, chunk, thread_id=thread_id or None
-            )
+            await self.client.send_text_safe(chat_id, chunk, thread_id=thread_id or None)
 
     async def _typing_loop(
         self, session_id: str, chat_id: int, thread_id: int, stop: asyncio.Event
@@ -609,17 +615,13 @@ class TelegramRouter:
 
         while not stop.is_set():
             if get_running_turn(session_id) is not None:
-                await self.client.send_chat_action(
-                    chat_id, "typing", thread_id=thread_id or None
-                )
+                await self.client.send_chat_action(chat_id, "typing", thread_id=thread_id or None)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=_TYPING_INTERVAL)
             except asyncio.TimeoutError:
                 pass
 
-    async def _send_voice_reply(
-        self, chat_id: int, thread_id: int, text: str
-    ) -> None:
+    async def _send_voice_reply(self, chat_id: int, thread_id: int, text: str) -> None:
         """Synthesize the final reply and send it as a voice note.
 
         Best-effort: failures log and leave the text reply as the answer.
@@ -709,8 +711,7 @@ class TelegramRouter:
             [
                 {
                     "text": (
-                        f"{'● ' if s.id == session_id else ''}"
-                        f"{(s.title or 'New session')[:56]}"
+                        f"{'● ' if s.id == session_id else ''}{(s.title or 'New session')[:56]}"
                     ),
                     "callback_data": f"sw:{s.id[:56]}",
                 }
@@ -764,15 +765,11 @@ class TelegramRouter:
     async def _on_hitl_answer(self, key: str, cq: dict) -> None:
         entry = self._hitl_buttons.pop(key, None)
         if entry is None:
-            await self.client.answer_callback_query(
-                cq.get("id", ""), "Already answered"
-            )
+            await self.client.answer_callback_query(cq.get("id", ""), "Already answered")
             return
         session_id, request_id, answer = entry
         # Sibling buttons for the same request are dead now — drop them.
-        self._hitl_buttons = {
-            k: v for k, v in self._hitl_buttons.items() if v[1] != request_id
-        }
+        self._hitl_buttons = {k: v for k, v in self._hitl_buttons.items() if v[1] != request_id}
 
         resolved = self.store.resolve_pending(session_id, request_id, answer)
         if resolved:

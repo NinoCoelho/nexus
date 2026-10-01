@@ -1,6 +1,10 @@
 /**
  * Sidebar — main nav/session panel. State flows from App via props;
  * session mutations bump sessionsRevision to refresh the list.
+ *
+ * Nav groups: primary (Chat, Projects) and content (Apps, Vault, Calendar,
+ * Workflows). Advanced views (knowledge/heartbeat/dream) live behind
+ * #/advanced/* routes and the Settings drawer — not here.
  */
 
 import React, { memo, useEffect, useRef, useState } from "react";
@@ -10,15 +14,12 @@ import {
   type SessionSearchResult, type SessionSummary,
   type SessionsResponse,
 } from "../../api";
-import { listDatabases, type DatabaseSummary } from "../../api/datatable";
 import { listProjects, type ProjectSummary } from "../../api/projects";
 import { useToast } from "../../toast/ToastProvider";
 import { checkUpdate as apiCheckUpdate, type UpdateCheckResult } from "../../api/update";
-import { useVaultEvents } from "../../hooks/useVaultEvents";
 import VaultTreePanel from "../VaultTreePanel";
-import KanbanListPanel from "../KanbanListPanel";
 import WorkflowListPanel from "../WorkflowListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph, IconWorkflow, IconGear, IconCollapse, IconHeartbeat, IconDream, IconUpdate } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconWorkflow, IconGear, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -28,13 +29,12 @@ import ProjectContextMenu from "./ProjectContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
+import type { AnyView } from "../../routes";
 import "../Sidebar.css";
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
-
 interface Props {
-  view: View;
-  onViewChange: (v: View) => void;
+  view: AnyView;
+  onViewChange: (v: AnyView) => void;
   activeSessionId: string | null;
   onSessionSelect: (id: string) => void;
   onNewChat: (projectId?: string | null) => void;
@@ -53,17 +53,12 @@ interface Props {
   onDispatchToChat?: (sessionId: string, seedMessage: string) => void;
   onViewEntityGraph?: (mode: "file" | "folder", path: string) => void;
   onVisualizeFolderGraph?: (path: string) => void;
-  kanbanSelectedPath: string | null;
-  onKanbanOpen: (path: string) => void;
-  databaseSelectedFolder: string | null;
-  databaseListRevision?: number;
-  onDatabaseSelectFolder: (folder: string) => void;
   /** Mobile drawer open state. When true, sidebar slides in from the left. */
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
-  isViewVisible?: (viewId: string) => boolean;
-  appDatabases?: DatabaseSummary[];
+  /** Coordinator master session id — badges the row in the session list. */
+  coordinatorSessionId?: string | null;
 }
 
 function Sidebar({
@@ -71,34 +66,22 @@ function Sidebar({
   sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
   vaultOpenPath, onVaultOpenPathHandled, onDispatchToChat, onViewEntityGraph,
   onVisualizeFolderGraph,
-  kanbanSelectedPath, onKanbanOpen,
-  databaseSelectedFolder, databaseListRevision,
-  onDatabaseSelectFolder,
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
-  isViewVisible = () => true,
-  appDatabases: appDatabasesProp,
-}: Props) {  const { t } = useTranslation("sidebar");
-  const VIEWS = {
+  coordinatorSessionId = null,
+}: Props) {
+  const { t } = useTranslation("sidebar");
+  const NAV_GROUPS = {
     primary: [
-      { id: "chat" as View,     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
+      { id: "chat" as const,     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
+      { id: "projects" as const, label: t("sidebar:viewNames.projects"), Icon: IconProjects },
     ],
     content: [
-      { id: "vault" as View,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
-      { id: "kanban" as View,   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
-      { id: "calendar" as View, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
-      { id: "workflows" as View, label: "Workflows", Icon: IconWorkflow },
+      { id: "apps" as const,     label: t("sidebar:viewNames.apps"),     Icon: IconDatabase },
+      { id: "vault" as const,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
+      { id: "calendar" as const, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+      { id: "workflows" as const, label: "Workflows", Icon: IconWorkflow },
     ],
-    analytics: [
-      { id: "graph" as View,    label: t("sidebar:viewNames.graph"),    Icon: IconGraph },
-      { id: "heartbeat" as View, label: "Heartbeat", Icon: IconHeartbeat },
-      { id: "dream" as View, label: "Dream", Icon: IconDream },
-    ],
-  };
-  const filteredViews = {
-    primary: VIEWS.primary.filter((v) => isViewVisible(v.id)),
-    content: VIEWS.content.filter((v) => isViewVisible(v.id)),
-    analytics: VIEWS.analytics.filter((v) => isViewVisible(v.id)),
   };
   const toast = useToast();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -107,12 +90,6 @@ function Sidebar({
   });
   const [width, setWidth] = useState<number>(() => loadStoredWidth());
   const [resizing, setResizing] = useState(false);
-
-  const [appDatabases, setAppDatabases] = useState<DatabaseSummary[]>(appDatabasesProp ?? []);
-  useEffect(() => {
-    if (appDatabasesProp) { setAppDatabases(appDatabasesProp); return; }
-    listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
-  }, [databaseListRevision, appDatabasesProp]);
 
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
@@ -129,12 +106,6 @@ function Sidebar({
     }, 3000);
     return () => { cancelled = true; clearTimeout(timer); };
   }, []);
-
-  useVaultEvents((ev) => {
-    if (ev.type === "vault.indexed" || ev.type === "vault.removed") {
-      listDatabases().then((r) => setAppDatabases(r.databases)).catch(() => {});
-    }
-  });
 
   useEffect(() => {
     try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* ignore */ }
@@ -212,8 +183,10 @@ function Sidebar({
       .catch(() => setSessionsError(true));
   }, [sessionsRevision]);
 
-  const ungroupedLoaded = sessions.filter((s) => !s.project_id).length;
-  const hasMoreSessions = ungroupedLoaded < sessionsTotal;
+  // "Has more" = more *ungrouped* pages exist. The endpoint returns ALL
+  // project sessions on every call and X-Total-Count counts ungrouped
+  // sessions only, so compare the ungrouped slice against that total.
+  const hasMoreSessions = sessions.filter((s) => !s.project_id).length < sessionsTotal;
 
   const handleLoadMoreSessions = () => {
     getSessions(SESSIONS_PAGE, sessionsOffset)
@@ -281,6 +254,19 @@ function Sidebar({
     ? [pendingNewSession, ...sessions]
     : sessions;
 
+  const renderNavItems = (items: ReadonlyArray<{ id: AnyView; label: string; Icon: React.ComponentType }>) =>
+    items.map(({ id, label, Icon }) => (
+      <button
+        key={id}
+        className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
+        onClick={() => onViewChange(id)}
+        title={collapsed ? label : undefined}
+      >
+        <span className="sidebar-nav-icon"><Icon /></span>
+        {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+      </button>
+    ));
+
   return (
     <>
       {mobileOpen && (
@@ -336,65 +322,9 @@ function Sidebar({
       <div className="sidebar-section">
         {!collapsed && <div className="sidebar-section-label">{t("sidebar:views")}</div>}
         <nav className="sidebar-nav">
-          {filteredViews.primary.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
-              onClick={() => onViewChange(id)}
-              title={collapsed ? label : undefined}
-            >
-              <span className="sidebar-nav-icon"><Icon /></span>
-              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
-            </button>
-          ))}
-          {!collapsed && filteredViews.content.length > 0 && <div className="sidebar-nav-divider" />}
-          {filteredViews.content.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
-              onClick={() => onViewChange(id)}
-              title={collapsed ? label : undefined}
-            >
-              <span className="sidebar-nav-icon"><Icon /></span>
-              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
-            </button>
-          ))}
-          {appDatabases.length > 0 && isViewVisible("data") && (
-            <>
-              {!collapsed && <div className="sidebar-nav-divider" />}
-              {appDatabases.map((db) => {
-                const active = view === "data" && databaseSelectedFolder === db.folder;
-                return (
-                  <button
-                    key={db.folder}
-                    className={`sidebar-nav-item sidebar-nav-item--app${active ? " sidebar-nav-item--active" : ""}`}
-                    onClick={() => {
-                      onDatabaseSelectFolder(db.folder);
-                      onViewChange("data");
-                    }}
-                    title={collapsed ? db.title : undefined}
-                  >
-                    <span className={`sidebar-nav-icon${db.icon ? " sidebar-nav-icon--emoji" : " sidebar-nav-icon--letter"}`}>
-                      {db.icon || db.title.charAt(0).toUpperCase()}
-                    </span>
-                    {!collapsed && <span className="sidebar-nav-label">{db.title}</span>}
-                  </button>
-                );
-              })}
-            </>
-          )}
-          {!collapsed && filteredViews.analytics.length > 0 && <div className="sidebar-nav-divider" />}
-          {filteredViews.analytics.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              className={`sidebar-nav-item${view === id ? " sidebar-nav-item--active" : ""}`}
-              onClick={() => onViewChange(id)}
-              title={collapsed ? label : undefined}
-            >
-              <span className="sidebar-nav-icon"><Icon /></span>
-              {!collapsed && <span className="sidebar-nav-label">{label}</span>}
-            </button>
-          ))}
+          {renderNavItems(NAV_GROUPS.primary)}
+          {!collapsed && <div className="sidebar-nav-divider" />}
+          {renderNavItems(NAV_GROUPS.content)}
         </nav>
       </div>
 
@@ -413,8 +343,9 @@ function Sidebar({
           renamingId={renamingId}
           renameValue={renameValue}
           toVaultBusy={toVaultBusy}
-          canCreateProject={isViewVisible("projects")}
+          canCreateProject
           hasMore={hasMoreSessions}
+          masterSessionId={coordinatorSessionId}
           onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
           onSessionSelect={onSessionSelect}
           onContextMenu={(e, id) => { e.preventDefault(); setMenu({ id, x: e.clientX, y: e.clientY }); }}
@@ -452,16 +383,6 @@ function Sidebar({
         </div>
       )}
 
-      {/* Kanban list — only in Kanban view */}
-      {view === "kanban" && !collapsed && (
-        <div className="sidebar-section sidebar-vault-section">
-          <KanbanListPanel
-            selectedPath={kanbanSelectedPath}
-            onOpen={onKanbanOpen}
-          />
-        </div>
-      )}
-
       {/* Workflow list — only in Workflows view */}
       {view === "workflows" && !collapsed && (
         <div className="sidebar-section sidebar-vault-section">
@@ -473,7 +394,7 @@ function Sidebar({
       )}
 
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "kanban" && !collapsed) && !(view === "workflows" && !collapsed) && (
+      {!(view === "chat" && !collapsed) && !(view === "vault" && !collapsed) && !(view === "workflows" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}
 

@@ -1,30 +1,29 @@
-import type { ComponentType } from "react";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconGraph } from "./Sidebar/icons";
-import type { DatabaseSummary } from "../api/datatable";
+/**
+ * MobileTabBar — bottom navigation for small screens. Mirrors the main
+ * nav: Chat, Projects, Apps, Vault, Calendar, Workflows (+ menu drawer).
+ * App-database selection happens inside the Apps view, not as tabs.
+ */
 
-type View = "chat" | "calendar" | "vault" | "kanban" | "data" | "graph" | "heartbeat" | "dream" | "workflows";
+import type { ComponentType } from "react";
+import { IconChat, IconCalendar, IconVault, IconWorkflow, IconDatabase, IconProjects } from "./Sidebar/icons";
+import type { AnyView } from "../routes";
 
 interface Props {
-  view: View;
-  onViewChange: (v: View) => void;
+  view: AnyView;
+  onViewChange: (v: AnyView) => void;
   onOpenDrawer: () => void;
-  databases?: DatabaseSummary[];
-  selectedApp?: string | null;
-  onAppSelect?: (folder: string) => void;
-  isViewVisible?: (viewId: string) => boolean;
 }
 
-const STATIC_TABS: ReadonlyArray<{ id: View; label: string; Icon: ComponentType }> = [
+const TABS: ReadonlyArray<{ id: AnyView; label: string; Icon: ComponentType }> = [
   { id: "chat", label: "Chat", Icon: IconChat },
-  { id: "calendar", label: "Calendar", Icon: IconCalendar },
+  { id: "projects", label: "Projects", Icon: IconProjects },
+  { id: "apps", label: "Apps", Icon: IconDatabase },
   { id: "vault", label: "Vault", Icon: IconVault },
-  { id: "kanban", label: "Kanban", Icon: IconKanban },
-  { id: "graph", label: "Graph", Icon: IconGraph },
+  { id: "calendar", label: "Calendar", Icon: IconCalendar },
+  { id: "workflows", label: "Flows", Icon: IconWorkflow },
 ];
 
-export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databases, selectedApp, onAppSelect, isViewVisible = () => true }: Props) {
-  const appTabs = (databases ?? []).slice(0, 3);
-  const visibleTabs = STATIC_TABS.filter((tab) => isViewVisible(tab.id));
+export default function MobileTabBar({ view, onViewChange, onOpenDrawer }: Props) {
   return (
     <nav className="mobile-tab-bar" aria-label="Primary">
       <button
@@ -39,7 +38,7 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databas
         </svg>
         <span>Menu</span>
       </button>
-      {visibleTabs.map(({ id, label, Icon }) => (
+      {TABS.map(({ id, label, Icon }) => (
         <button
           key={id}
           type="button"
@@ -52,24 +51,6 @@ export default function MobileTabBar({ view, onViewChange, onOpenDrawer, databas
           <span>{label}</span>
         </button>
       ))}
-      {isViewVisible("data") && appTabs.map((db) => {
-        const active = view === "data" && selectedApp === db.folder;
-        return (
-          <button
-            key={db.folder}
-            type="button"
-            aria-label={db.title}
-            aria-current={active ? "page" : undefined}
-            className={active ? "is-active" : undefined}
-            onClick={() => onAppSelect?.(db.folder)}
-          >
-            <span className={`mobile-tab-letter${db.icon ? " mobile-tab-letter--emoji" : ""}`}>
-              {db.icon || db.title.charAt(0).toUpperCase()}
-            </span>
-            <span>{db.title.length > 8 ? db.title.slice(0, 7) + "…" : db.title}</span>
-          </button>
-        );
-      })}
     </nav>
   );
 }

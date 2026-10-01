@@ -10,10 +10,10 @@
   "settings": "Configurações",
   "viewNames": {
     "chat": "Conversa",
+    "projects": "Projetos",
+    "apps": "Apps",
     "calendar": "Calendário",
     "vault": "Vault",
-    "kanban": "Kanban",
-    "data": "Dados",
     "graph": "Conhecimento"
   },
   "session": {

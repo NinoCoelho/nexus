@@ -5,7 +5,6 @@ import {
   getConfig,
   patchAgentConfig,
   setHitlSettings,
-  getHitlSettings,
   type AgentConfig,
   type HitlSettings,
 } from "../../api";
@@ -18,6 +17,7 @@ import {
   useSoundVolumes,
 } from "../../hooks/useSounds";
 import { useToast } from "../../toast/ToastProvider";
+import type { AdvancedArea } from "../../routes";
 import NumberFieldWithDefault from "./NumberFieldWithDefault";
 import SettingsField from "./SettingsField";
 import SettingsSection from "./SettingsSection";
@@ -25,9 +25,17 @@ import SettingsSection from "./SettingsSection";
 interface Props {
   hitl: HitlSettings | null;
   onHitlChanged: (next: HitlSettings) => void;
+  /** Navigate to an advanced-only view (knowledge/heartbeat/dream). */
+  onNavigateView?: (view: AdvancedArea) => void;
 }
 
-export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
+const ADVANCED_TOOLS: ReadonlyArray<{ id: AdvancedArea; label: string; description: string; icon: string }> = [
+  { id: "graph", label: "Knowledge graph", description: "Vault graph + GraphRAG entity search", icon: "🕸️" },
+  { id: "heartbeat", label: "Heartbeat", description: "Scheduled drivers and their runs", icon: "💓" },
+  { id: "dream", label: "Dream", description: "Idle-cycle insights and skill suggestions", icon: "🌙" },
+];
+
+export default function AdvancedTab({ hitl, onHitlChanged, onNavigateView }: Props) {
   const { t } = useTranslation("settings");
   const toast = useToast();
   const { muted: soundMuted, setMuted: setSoundMuted } = useSoundMute();
@@ -35,16 +43,14 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
   const [agent, setAgent] = useState<AgentConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [hitlSaving, setHitlSaving] = useState(false);
-  const [uiMode, setUiMode] = useState<"normal" | "advanced">("normal");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([getConfig(), getHitlSettings()])
-      .then(([c, s]) => {
+    getConfig()
+      .then((c) => {
         if (!cancelled) {
           setAgent(c.agent);
-          setUiMode((s as any).ui_mode === "advanced" ? "advanced" : "normal");
         }
       })
       .catch((e) => {
@@ -370,51 +376,25 @@ export default function AdvancedTab({ hitl, onHitlChanged }: Props) {
       </SettingsSection>
 
       <SettingsSection
-        title={t("settings:advanced.uiModeTitle", "Interface Mode")}
-        icon={t("settings:advanced.uiModeIcon", "🎛️")}
-        description={t(
-          "settings:advanced.uiModeDescription",
-          "Advanced mode shows all views including Knowledge Graph, Heartbeat, and Dream.",
-        )}
+        title="Advanced tools"
+        icon="🔬"
+        description="Deep-dive surfaces that live outside the main navigation. Opens in the main area."
       >
-        <SettingsField
-          label={t("settings:advanced.uiModeLabel", "UI mode")}
-          hint={t(
-            "settings:advanced.uiModeHint",
-            "Normal hides power-user views. Advanced shows everything.",
-          )}
-          help={{
-            title: t("settings:advanced.uiModeHelpTitle", "Interface mode"),
-            body: (
-              <>
-                <b>Normal</b> hides advanced views (Knowledge Graph, Heartbeat,
-                Dream) for a simpler interface. <b>Advanced</b> shows all views.
-              </>
-            ),
-          }}
-          layout="row"
-        >
-          <button
-            type="button"
-            role="switch"
-            aria-checked={uiMode === "advanced"}
-            className={`hitl-switch ${uiMode === "advanced" ? "on" : "off"}`}
-            onClick={async () => {
-              const next = uiMode === "normal" ? "advanced" : "normal";
-              try {
-                await setHitlSettings({ ui_mode: next });
-                setUiMode(next);
-                toast.success(next === "advanced" ? "Advanced mode enabled" : "Normal mode enabled");
-              } catch (e) {
-                toast.error(t("settings:advanced.toast.saveFailed"), {
-                  detail: e instanceof Error ? e.message : undefined,
-                });
-              }
-            }}
-          >
-            <span className="hitl-switch-knob" />
-          </button>
-        </SettingsField>
+        <div className="advanced-tools-grid">
+          {ADVANCED_TOOLS.map(({ id, label, description, icon }) => (
+            <button
+              key={id}
+              type="button"
+              className="advanced-tool-card"
+              onClick={() => onNavigateView?.(id)}
+              disabled={!onNavigateView}
+            >
+              <span className="advanced-tool-icon">{icon}</span>
+              <span className="advanced-tool-label">{label}</span>
+              <span className="advanced-tool-desc">{description}</span>
+            </button>
+          ))}
+        </div>
       </SettingsSection>
     </>
   );

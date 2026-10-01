@@ -57,17 +57,15 @@ def build_loom_agent(
                     v = int(getattr(entry, "max_output_tokens", 0) or 0)
                     if v > 0:
                         return v
-        return int(getattr(
-            getattr(nexus_cfg, "agent", None), "default_max_output_tokens", 0
-        ) or 0)
+        return int(getattr(getattr(nexus_cfg, "agent", None), "default_max_output_tokens", 0) or 0)
 
     _init_cfg = get_nexus_cfg()
     adapter = LoomProviderAdapter(
         nexus_provider,
         provider_registry=provider_registry,
-        default_model=getattr(
-            getattr(_init_cfg, "agent", None), "default_model", None
-        ) if _init_cfg else None,
+        default_model=getattr(getattr(_init_cfg, "agent", None), "default_model", None)
+        if _init_cfg
+        else None,
         max_tokens_for=_model_max_output_tokens,
     )
     tool_reg = build_tool_registry(
@@ -80,8 +78,7 @@ def build_loom_agent(
     )
 
     max_iter = (
-        getattr(_init_cfg.agent, "max_iterations", None)
-        if _init_cfg else None
+        getattr(_init_cfg.agent, "max_iterations", None) if _init_cfg else None
     ) or DEFAULT_MAX_TOOL_ITERATIONS
 
     def _choose_model(messages: list[lt.ChatMessage]) -> str | None:
@@ -102,19 +99,28 @@ def build_loom_agent(
         nexus_cfg = get_nexus_cfg()
         language = getattr(getattr(nexus_cfg, "ui", None), "language", None) if nexus_cfg else None
         project = None
+        coordinator = False
         try:
             from ..context import CURRENT_SESSION_ID
             from ...server.project_store import ProjectStore
             from ...home import sessions_db
+
             session_id = CURRENT_SESSION_ID.get()
             if session_id:
                 ps = ProjectStore(sessions_db())
                 project = ps.get_project_for_session(session_id)
+                from ...coordinator import get_service
+
+                svc = get_service()
+                coordinator = bool(svc is not None and svc.is_coordinator(session_id))
         except Exception:
             pass
-        sys_prompt = build_system_prompt(registry, home=home, language=language, project=project)
+        sys_prompt = build_system_prompt(
+            registry, home=home, language=language, project=project, coordinator=coordinator
+        )
         from ..context import TOOL_BUDGET_EXCEEDED
         from .budget import BUDGET_EXCEEDED_HINT
+
         if TOOL_BUDGET_EXCEEDED.get(False):
             sys_prompt += BUDGET_EXCEEDED_HINT
         return [
@@ -138,6 +144,7 @@ def build_loom_agent(
                     if cw > 0:
                         return cw
         from .overflow import _DEFAULT_FALLBACK_WINDOW, known_context_window
+
         fallback = known_context_window(model_id)
         # Return the fallback default (not 0) so loom's overflow detection
         # still runs for models without an explicit window — mirroring the
@@ -149,7 +156,8 @@ def build_loom_agent(
     loom_cfg = AgentConfig(
         max_iterations=max_iter,
         model=getattr(getattr(_init_cfg, "agent", None), "default_model", None)
-        if _init_cfg else None,
+        if _init_cfg
+        else None,
         choose_model=_choose_model if _init_cfg else None,
         before_llm_call=_before_llm_call,
         on_event=on_trace_event,
@@ -167,6 +175,7 @@ def build_loom_agent(
     graphrag_engine = None
     if _init_cfg:
         from ..graphrag_manager import build_graphrag_for_agent
+
         graphrag_engine = build_graphrag_for_agent(_init_cfg)
     return LoomAgent(
         provider=adapter,

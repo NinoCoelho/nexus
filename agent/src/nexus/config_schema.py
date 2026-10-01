@@ -346,6 +346,25 @@ class TelegramConfig(BaseModel):
     voice_speechify: Literal["auto", "always", "off"] = "auto"
 
 
+class CoordinatorConfig(BaseModel):
+    """The coordinator ("master chat") — one designated session that can
+    inspect projects/sessions, dispatch turns into them, and sweep
+    proactively. Bound to the owner's Telegram DM when Telegram is on."""
+
+    enabled: bool = False
+    # Session id of the master chat; auto-provisioned (and persisted here)
+    # on first use when empty.
+    session_id: str = ""
+    # Periodic read-only sweep that digests activity and messages you on
+    # Telegram. 0 disables sweeps regardless of the driver schedule.
+    sweep_interval_minutes: int = 120
+    # Local-time window during which sweeps stay silent ("23:00-08:00").
+    quiet_hours: str = ""
+    # session_dispatch tool names that run without asking (HITL) — empty
+    # means every dispatch with side effects asks first.
+    auto_approve: list[str] = Field(default_factory=list)
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -362,6 +381,7 @@ class NexusConfig(BaseModel):
     mcp: McpConfig = Field(default_factory=McpConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    coordinator: CoordinatorConfig = Field(default_factory=CoordinatorConfig)
 
 
 # Fresh install starts with providers configured but NO models.

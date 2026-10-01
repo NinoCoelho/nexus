@@ -121,6 +121,29 @@ def _memory_summary() -> str:
         return ""
     return "\n".join(lines)
 
+
+_COORDINATOR_BLOCK = """\
+## Coordinator
+
+You are the user's **coordinator** — the master chat with a view over every
+project and session in Nexus. Tools only you have:
+
+- `nexus_sessions` — inspect projects (descriptions, instructions, chat
+  counts) and read the tail of any chat session.
+- `session_dispatch` — send a message into another session and run its
+  agent turn (delegation). With `wait=true` you get its reply back.
+
+Working agreements:
+- To act on a project, prefer dispatching into its most recent chat over
+  doing everything here — the per-project sessions keep the context.
+- Announce what you dispatched and where; when the reply matters, wait for
+  it and summarize the outcome.
+- When a request would mutate something significant (delete, send, spend),
+  say what you intend and ask unless the user already approved it.
+- During periodic sweeps you are read-only: inspect, digest, and report —
+  never dispatch or write.
+"""
+
 IDENTITY = """\
 You are Nexus. You're not a chatbot — you're a capable agent with tools, memory, \
 and the ability to grow your own toolbox. You can also manage kanban boards \
@@ -299,7 +322,7 @@ keep executing and let the user decide when to compact.
 
 
 _USER_NUDGE = (
-    "Update this file via `edit_profile(file=\"user\", ...)` when you learn a "
+    'Update this file via `edit_profile(file="user", ...)` when you learn a '
     "**stable** fact about the user (name, preferred tone, timezone, recurring "
     "context). Keep it short — task-specific or ephemeral facts go in "
     "`vault/memory/` or `vault/me.md`."
@@ -386,6 +409,7 @@ def build_system_prompt(
     home: "AgentHome | None" = None,
     language: str | None = None,
     project: "Project | None" = None,
+    coordinator: bool = False,
 ) -> str:
     _migrate_legacy_memory()
     parts = [IDENTITY.strip(), ""]
@@ -426,6 +450,10 @@ def build_system_prompt(
         p_lines.append("")
         parts.append("\n".join(p_lines))
 
+    if coordinator:
+        parts.append(_COORDINATOR_BLOCK)
+        parts.append("")
+
     creds_block = _credentials_block()
     if creds_block:
         parts.append(creds_block)
@@ -444,9 +472,9 @@ def build_system_prompt(
         "`notify_user` tool with a short, casual message before starting. "
         "If the run keeps going, call it again mid-flight to reassure the "
         "user something is still happening. Examples:\n\n"
-        "- `notify_user(message=\"Looking that up — about a minute, hold on.\")`\n"
-        "- `notify_user(message=\"Already got the headlines, drafting the summary now.\")`\n"
-        "- `notify_user(message=\"Tô buscando, vai demorar uns instantes.\")`\n\n"
+        '- `notify_user(message="Looking that up — about a minute, hold on.")`\n'
+        '- `notify_user(message="Already got the headlines, drafting the summary now.")`\n'
+        '- `notify_user(message="Tô buscando, vai demorar uns instantes.")`\n\n'
         "Match the user's language. Keep messages under 20 words. Don't use "
         "this tool to ask questions (that's `ask_user`) or to deliver final "
         "results (those go in your reply). The user sees a toast in every "
@@ -460,7 +488,7 @@ def build_system_prompt(
         parts.append("")
         parts.append(
             "These are procedures, not tools. To use one, call "
-            "`skill_view(name=\"<skill-name>\")` to load its body, then follow "
+            '`skill_view(name="<skill-name>")` to load its body, then follow '
             "its steps. Skill names use hyphens (e.g. `deep-research`); never "
             "call a skill name as a tool."
         )
@@ -476,7 +504,9 @@ def build_system_prompt(
     else:
         parts.append("## Available skills")
         parts.append("")
-        parts.append("_No skills are currently loaded. Author one with `skill_manage` after you complete something non-trivial._")
+        parts.append(
+            "_No skills are currently loaded. Author one with `skill_manage` after you complete something non-trivial._"
+        )
 
     mem = _memory_summary()
     if mem:
@@ -523,7 +553,7 @@ def _credentials_block() -> str:
     lines.append(
         "- Do NOT include the literal value of any credential in your "
         "messages. If you need to confirm a credential is present, say so "
-        "by name (e.g. \"`$GITHUB_TOKEN` is configured\") — the user can see "
+        'by name (e.g. "`$GITHUB_TOKEN` is configured") — the user can see '
         "the masked value in Settings → Credentials."
     )
     lines.append(
@@ -569,10 +599,6 @@ def _site_credentials_block() -> str:
     lines.append("")
     lines.append("**Available:**")
     for entry in entries:
-        used = (
-            f" (last used {entry['last_used_at'][:10]})"
-            if entry.get("last_used_at")
-            else ""
-        )
+        used = f" (last used {entry['last_used_at'][:10]})" if entry.get("last_used_at") else ""
         lines.append(f"- `{entry['site']}` — {entry['username']}{used}")
     return "\n".join(lines)

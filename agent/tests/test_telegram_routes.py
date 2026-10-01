@@ -222,3 +222,54 @@ async def test_poller_disables_on_401_and_status_surfaces_error(
     status = await telegram_status(_request(app))
     assert status["running"] is False
     assert status["error"] is not None and "401" in status["error"]
+
+
+async def test_bindings_lists_with_project_names(tmp_path) -> None:
+    """GET /telegram/bindings — rows enriched with project names, tolerant
+    of dangling project/session references."""
+    import nexus.home as home
+    from nexus.server.project_store import ProjectStore
+    from nexus.telegram.bindings import TelegramBindingStore
+
+    home.set_user_home(tmp_path)
+    try:
+        # The projects table is created by the session-store schema; boot it
+        # first so both stores share the same DB file.
+        from nexus.server.session_store import SessionStore
+
+        SessionStore(db_path=tmp_path / "sessions.sqlite")
+        bindings_db = TelegramBindingStore()
+        projects = ProjectStore(tmp_path / "sessions.sqlite")
+        proj = projects.create(name="Alpha")
+
+        bindings_db.upsert(
+            chat_id=1,
+            thread_id=7,
+            kind="topic",
+            project_id=proj.id,
+            active_session_id="sess-1",
+        )
+        bindings_db.upsert(
+            chat_id=2, kind="dm", project_id=None, active_session_id="sess-2"
+        )
+
+        from nexus.server.routes.telegram import telegram_bindings
+
+        app = _app(TelegramConfig())
+        app.state.sessions = SimpleNamespace(
+            get=lambda sid: None, publish=lambda *a, **k: None
+        )
+        res = await telegram_bindings(_request(app))
+        assert {b["chat_id"] for b in res} == {1, 2}
+
+        alpha = next(b for b in res if b["chat_id"] == 1)
+        assert alpha["kind"] == "topic"
+        assert alpha["project_id"] == proj.id
+        assert alpha["project_name"] == "Alpha"
+        # Dangling session reference degrades to null, not an error.
+        assert alpha["active_session_title"] is None
+
+        dm = next(b for b in res if b["chat_id"] == 2)
+        assert dm["project_name"] is None
+    finally:
+        home.set_user_home(None)

@@ -103,6 +103,14 @@ export interface TelegramConfig {
   voice_speechify: "auto" | "always" | "off";
 }
 
+export interface CoordinatorConfig {
+  enabled: boolean;
+  session_id: string;
+  sweep_interval_minutes: number;
+  quiet_hours: string;
+  auto_approve: string[];
+}
+
 export interface Config {
   agent: AgentConfig;
   providers: Record<string, { base_url?: string; key_env?: string; has_key: boolean }>;
@@ -113,6 +121,7 @@ export interface Config {
   ui?: UIConfig;
   mcp?: McpConfig;
   telegram?: TelegramConfig;
+  coordinator?: CoordinatorConfig;
 }
 
 // Patch payload — every nested object is independently partial because the
