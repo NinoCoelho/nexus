@@ -260,4 +260,11 @@ export interface UseChatSessionResult {
   handleCompact: (options?: { strategy?: string; force_summarize?: boolean }) => Promise<import("../api/sessions").CompactResult | undefined>;
   handleRemoveLast: () => Promise<void>;
   handleResumePaused: () => Promise<void>;
+  /** Fixed-session variants used by the coordinator bubble — target an
+   * explicit session id instead of the active one. */
+  sendToSession: (sessionId: string, text: string) => Promise<void>;
+  stopSession: (sessionId: string) => void;
+  attachToSession: (sessionId: string) => Promise<void>;
+  respondForSession: (sessionId: string, requestId: string, answer: string | Record<string, unknown>) => Promise<void>;
+  removeQueuedForSession: (sessionId: string, qid: string) => void;
 }

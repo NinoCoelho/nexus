@@ -423,6 +423,7 @@ export type SessionEvent =
   | { kind: "subagent_done"; data: { child_session_id: string; result_preview?: string; error?: string } }
   | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; started_at?: number; extra?: Record<string, unknown> } }
   | { kind: "job_done"; data: { job_id: string; type: string } }
+  | { kind: "turn_settled"; data: { session_id?: string } }
   | { kind: "settings_changed"; data: { yolo_mode?: boolean; auto_accept_members?: boolean; ui_mode?: string } }
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
@@ -462,6 +463,7 @@ export function subscribeSessionEvents(
     "user_request_cancelled",
     "voice_ack",
     "op_done",
+    "turn_settled",
     "subagent_start",
     "subagent_delta",
     "subagent_tool",
@@ -735,6 +737,56 @@ export async function respondToUserRequest(
     return;
   }
   throw new Error(`Respond error: ${res.status}`);
+}
+
+/**
+ * Variant of `respondToUserRequest` for callers that own the chat state and
+ * want to *stream* the parked continuation into their own message pipeline
+ * (the coordinator bubble). Behavior:
+ *
+ * - non-parked: POST /respond only. The turn continues on the caller's
+ *   original /chat/stream fetch — returns "answered".
+ * - parked (409): fires `onParkedResume`, then POST /hitl/{rid}/answer and
+ *   consumes its SSE replay through `onEvent` — returns "parked".
+ * - 404 (stale): returns "stale" without throwing.
+ */
+export async function respondToUserRequestStream(
+  session_id: string,
+  request_id: string,
+  answer: string | Record<string, unknown>,
+  onEvent?: (e: StreamEvent) => void,
+  options?: { onParkedResume?: () => void; signal?: AbortSignal },
+): Promise<"answered" | "parked" | "stale"> {
+  const encoded = typeof answer === "string" ? answer : JSON.stringify(answer);
+  const body = JSON.stringify({ request_id, answer: encoded });
+  const res = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/respond`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: options?.signal,
+    },
+  );
+  if (res.status === 404) return "stale";
+  if (res.ok) return "answered";
+  if (res.status !== 409) throw new Error(`Respond error: ${res.status}`);
+
+  options?.onParkedResume?.();
+  const resume = await fetch(
+    `${BASE}/chat/${encodeURIComponent(session_id)}/hitl/${encodeURIComponent(request_id)}/answer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: options?.signal,
+    },
+  );
+  if (resume.status === 404) return "stale";
+  if (!resume.ok || !resume.body) throw new Error(`Respond (parked resume) error: ${resume.status}`);
+  if (onEvent) await consumeSSEFrames(resume.body, onEvent);
+  else if (resume.body) void resume.body.cancel().catch(() => {});
+  return "parked";
 }
 
 export async function killTerminalProc(

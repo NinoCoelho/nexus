@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../../api";
 import { classify } from "../../fileTypes";
+import { stripContextPreamble } from "../../contextPreamble";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
 import Modal, { type ModalProps } from "../Modal";
@@ -361,7 +362,7 @@ export default function ChatView({
                     ))}
                   </div>
                 )}
-                {!msg.attachments?.some((a) => isAudioAttachment(a.vaultPath)) && msg.content}
+                {!msg.attachments?.some((a) => isAudioAttachment(a.vaultPath)) && stripContextPreamble(msg.content)}
               </div>
             </div>
           )

@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, type SessionSummary } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, respondToUserRequestStream, type SessionSummary, type StreamEvent } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
 import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
@@ -514,6 +514,249 @@ export function useChatSession(
     if (sid) void deleteQueuedMessage(sid, qid);
   }, [activeKey, activeSession]);
 
+  // ── Fixed-session operations (coordinator bubble) ─────────────────────
+  //
+  // The bubble drives the master session while the user may be anywhere
+  // else in the app. These variants target an explicit session id instead
+  // of `activeKey`: no NEW_KEY migration, no optimistic sidebar row — the
+  // session already exists server-side.
+
+  /** Event handler for a stream bound to a fixed session key. Mirrors the
+   * switch inside `send`, minus the fresh-session migration. */
+  const makeFixedSessionHandler = useCallback(
+    (key: string, selectedModel: string | undefined) => (event: StreamEvent) => {
+      if (event.type === "delta") {
+        applyDeltaEvent(setChatStates, key, event.text);
+      } else if (event.type === "thinking") {
+        applyThinkingEvent(setChatStates, key, event.text);
+      } else if (event.type === "tool") {
+        applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview });
+      } else if (event.type === "done") {
+        applyDoneEvent(setChatStates, setActiveSession, setSessionsRevision, persistUsedModel, key, key, selectedModel, event);
+      } else if (event.type === "limit_reached") {
+        applyLimitReachedEvent(setChatStates, key, event.iterations);
+      } else if (event.type === "reconnecting") {
+        applyReconnectingEvent(setChatStates, key, {
+          attempt: event.attempt, maxAttempts: event.maxAttempts, delaySeconds: event.delaySeconds, reason: event.reason,
+        });
+      } else if (event.type === "paused_for_cooldown") {
+        applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
+      } else if (event.type === "error") {
+        applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
+      } else if (event.type === "queued") {
+        applyQueuedAckEvent(setChatStates, key, event.qid);
+      } else if (event.type === "user_enqueued") {
+        applyUserEnqueuedEvent(setChatStates, key, event.qid, event.text);
+      } else if (event.type === "user_injected") {
+        applyUserInjectedEvent(setChatStates, key, event.qid, event.text);
+      } else if (event.type === "queue_removed") {
+        applyQueueRemovedEvent(setChatStates, key, event.qid);
+      }
+    },
+    [persistUsedModel],
+  );
+
+  /** Attach to a running turn via the replay endpoint. Resets/creates the
+   * trailing assistant bubble first — the server replays from turn start. */
+  const reattachRunningTurn = useCallback(async (sid: string, key: string, selectedModel: string | undefined) => {
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(key) ?? emptyState();
+      const msgs = cur.messages.slice();
+      const lastIdx = msgs.length - 1;
+      if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+        msgs[lastIdx] = { ...msgs[lastIdx], content: "", trace: [], timeline: [], streaming: true, partial: undefined };
+      } else {
+        msgs.push({ role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true });
+      }
+      next.set(key, { ...cur, messages: msgs, thinking: true });
+      return next;
+    });
+    const resumeAbort = new AbortController();
+    abortControllersRef.current.set(key, resumeAbort);
+    const handler = makeFixedSessionHandler(key, selectedModel);
+    let sawDone = false;
+    try {
+      await resumeTurnStream(sid, (event) => {
+        if (event.type === "done") sawDone = true;
+        handler(event);
+      }, resumeAbort.signal);
+      if (!sawDone && !resumeAbort.signal.aborted) {
+        patchState(key, { historyLoaded: false, thinking: false });
+        void loadSessionHistory(sid);
+      }
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        patchState(key, { historyLoaded: false, thinking: false });
+        void loadSessionHistory(sid);
+      }
+    } finally {
+      if (abortControllersRef.current.get(key) === resumeAbort) abortControllersRef.current.delete(key);
+    }
+  }, [makeFixedSessionHandler, patchState, loadSessionHistory]);
+
+  /** Guard against concurrent attaches for the same session (bubble mount +
+   * popup open racing a user send). */
+  const attachingRef = useRef<Set<string>>(new Set());
+
+  /** Load history for a session without selecting it, then attach to its
+   * running turn if one exists (started from Telegram / sweep / before a
+   * reload). No-op when our own stream is already live. */
+  const attachToSession = useCallback(async (sessionId: string) => {
+    if (attachingRef.current.has(sessionId)) return;
+    attachingRef.current.add(sessionId);
+    try {
+      const st = chatStates.get(sessionId);
+      if (!st || !st.historyLoaded) await loadSessionHistory(sessionId);
+      const after = chatStates.get(sessionId);
+      if (after?.thinking || abortControllersRef.current.has(sessionId)) return;
+      const turnStatus = await checkTurnActive(sessionId).catch(() => ({ running: false }));
+      if (turnStatus.running) {
+        const st2 = chatStates.get(sessionId);
+        await reattachRunningTurn(sessionId, sessionId, st2?.selectedModel);
+      }
+    } finally {
+      attachingRef.current.delete(sessionId);
+    }
+  }, [chatStates, loadSessionHistory, reattachRunningTurn]);
+
+  /** Send a message into a fixed session (coordinator bubble). Enqueues on
+   * the server when a turn is already running — same queue-then-inject
+   * semantics as the main composer. */
+  const sendToSession = useCallback(async (sessionId: string, text: string) => {
+    const key = sessionId;
+    const rawText = text.trim();
+    if (!rawText) return;
+    const state = chatStates.get(key) ?? emptyState();
+
+    if (state.thinking) {
+      // Slash commands and hidden seeds can't run mid-turn.
+      if (rawText.startsWith("/") || rawText.startsWith(HIDDEN_SEED_MARKER)) return;
+      patchState(key, { queued: [...(state.queued ?? []), { text: rawText }] });
+      try {
+        await chatStream(rawText, sessionId, (event) => {
+          if (event.type === "queued") applyQueuedAckEvent(setChatStates, key, event.qid);
+          else if (event.type === "user_enqueued") applyUserEnqueuedEvent(setChatStates, key, event.qid, event.text);
+        });
+      } catch {
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(key) ?? emptyState();
+          next.set(key, { ...cur, queued: (cur.queued ?? []).slice(0, -1), input: cur.input || rawText });
+          return next;
+        });
+      }
+      return;
+    }
+
+    const userMsg: Message = { role: "user", content: rawText, timestamp: new Date() };
+    const placeholderAsst: Message = { role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true };
+    patchState(key, { input: "", thinking: true, messages: [...state.messages, userMsg, placeholderAsst] });
+
+    const abortController = new AbortController();
+    abortControllersRef.current.set(key, abortController);
+    const sendModel = state.selectedModel && state.selectedModel !== "auto" ? state.selectedModel : "";
+    const handler = makeFixedSessionHandler(key, state.selectedModel);
+    let sawDone = false;
+    try {
+      await chatStream(rawText, sessionId, (event) => {
+        if (event.type === "done") sawDone = true;
+        handler(event);
+      }, abortController.signal, sendModel);
+      if (!sawDone && !abortController.signal.aborted) {
+        const turnStatus = await checkTurnActive(sessionId).catch(() => ({ running: false }));
+        if (turnStatus.running) {
+          await reattachRunningTurn(sessionId, key, state.selectedModel);
+        } else {
+          patchState(key, { historyLoaded: false, thinking: false });
+          void loadSessionHistory(sessionId);
+        }
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // stopSession already updated the UI.
+      } else {
+        patchState(key, { historyLoaded: false, thinking: false });
+        void loadSessionHistory(sessionId);
+      }
+    } finally {
+      if (abortControllersRef.current.get(key) === abortController) abortControllersRef.current.delete(key);
+    }
+  }, [chatStates, patchState, makeFixedSessionHandler, reattachRunningTurn, loadSessionHistory]);
+
+  /** Stop button for a fixed session — mirrors handleStop. */
+  const stopSession = useCallback((sessionId: string) => {
+    cancelChatTurn(sessionId).catch(() => {});
+    abortControllersRef.current.get(sessionId)?.abort();
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(sessionId);
+      if (!cur) return prev;
+      const msgs = cur.messages.slice();
+      const lastIdx = msgs.length - 1;
+      if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+        const existing = msgs[lastIdx].content;
+        msgs[lastIdx] = { ...msgs[lastIdx], content: existing ? `${existing}\n\n_[stopped by user]_` : "_[stopped by user]_", streaming: false };
+      }
+      next.set(sessionId, { ...cur, messages: msgs, thinking: false, queued: [] });
+      return next;
+    });
+  }, []);
+
+  /** Answer a HITL request on a fixed session. Non-parked answers unblock
+   * the waiting tool call on the caller's original stream; parked ones
+   * (409) stream the continuation back through the replay pipeline. */
+  const respondForSession = useCallback(async (sessionId: string, requestId: string, answer: string | Record<string, unknown>) => {
+    const key = sessionId;
+    const state = chatStates.get(key) ?? emptyState();
+    const handler = makeFixedSessionHandler(key, state.selectedModel);
+    let sawDone = false;
+    try {
+      const outcome = await respondToUserRequestStream(sessionId, requestId, answer, (event) => {
+        if (event.type === "done") sawDone = true;
+        handler(event);
+      }, {
+        onParkedResume: () => {
+          // The parked turn's original stream is long gone — mark the
+          // trailing assistant streaming again so the continuation
+          // (deltas + tool events) appends to it.
+          setChatStates((prev) => {
+            const next = new Map(prev);
+            const cur = next.get(key) ?? emptyState();
+            const msgs = cur.messages.slice();
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+              msgs[lastIdx] = { ...msgs[lastIdx], streaming: true, partial: undefined };
+            } else {
+              msgs.push({ role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true });
+            }
+            next.set(key, { ...cur, messages: msgs, thinking: true });
+            return next;
+          });
+        },
+      });
+      if (outcome === "parked" && !sawDone) {
+        patchState(key, { historyLoaded: false, thinking: false });
+        void loadSessionHistory(sessionId);
+      }
+    } catch {
+      patchState(key, { historyLoaded: false, thinking: false });
+      void loadSessionHistory(sessionId);
+    }
+  }, [chatStates, makeFixedSessionHandler, patchState, loadSessionHistory]);
+
+  /** Queue-chip removal for a fixed session. */
+  const removeQueuedForSession = useCallback((sessionId: string, qid: string) => {
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = prev.get(sessionId);
+      if (!cur || !(cur.queued ?? []).some((q) => q.qid === qid)) return prev;
+      next.set(sessionId, { ...cur, queued: (cur.queued ?? []).filter((q) => q.qid !== qid) });
+      return next;
+    });
+    void deleteQueuedMessage(sessionId, qid);
+  }, []);
+
   const handleContinuePartial = useCallback((_visibleIdx: number) => {
     // Continue **in place** — no "continue" user bubble. The existing
     // partial assistant keeps its content and timeline; its ``partial``
@@ -670,5 +913,6 @@ export function useChatSession(
     handleAttachmentsChange, handleModelChange, handleSessionSelect,
     handleNewChat, loadSessionHistory, patchState, computeSeedModel,
     handleCompact, handleRemoveLast, handleResumePaused,
+    sendToSession, stopSession, attachToSession, respondForSession, removeQueuedForSession,
   };
 }

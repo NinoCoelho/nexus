@@ -35,6 +35,7 @@ import { useCalendarAlarms } from "./hooks/useCalendarAlarms";
 import { useMissedTasks } from "./hooks/useMissedTasks";
 import AlarmNotification from "./components/AlarmNotification";
 import "./components/AlarmNotification.css";
+import CoordinatorBubble from "./components/CoordinatorBubble";
 import MissedTasksModal from "./components/MissedTasksModal";
 import "./components/MissedTasksModal.css";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
@@ -172,7 +173,7 @@ export default function App() {
   );
 
   const {
-    activeState, activeSession, setActiveSession, setChatStates,
+    chatStates, activeState, activeSession, setActiveSession, setChatStates,
     sessionsRevision, setSessionsRevision,
     pendingAutoSend, pendingNewSession,
     send, handleStop, handleRemoveQueued, handleRollback,
@@ -182,21 +183,11 @@ export default function App() {
     handleNewChat: _handleNewChat,
     handleCompact: _handleCompact, handleRemoveLast,
     handleResumePaused,
+    sendToSession, stopSession, attachToSession, respondForSession, removeQueuedForSession,
   } = chatSession;
 
-  // Landing: when the coordinator is enabled, entering the system opens the
-  // master chat directly (once, and only when there's no deep link and no
-  // already-active session).
-  const landedRef = useRef(false);
-  useEffect(() => {
-    if (landedRef.current) return;
-    if (!coordinator.enabled || !coordinator.sessionId) return;
-    if (route.path) return;
-    landedRef.current = true;
-    if (activeSession === null) {
-      _handleSessionSelect(coordinator.sessionId);
-    }
-  }, [coordinator.enabled, coordinator.sessionId, route.path, activeSession, _handleSessionSelect]);
+  // The coordinator master chat lives in the floating bubble (mounted below)
+  // — the app no longer auto-lands on it.
 
   const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
     try {
@@ -549,6 +540,22 @@ export default function App() {
     setView(v);
   }, [setView, bumpSettingsRevision]);
 
+  const masterSessionId = coordinator.enabled ? coordinator.sessionId : null;
+
+  // Where the user currently is — fed to the coordinator bubble so its
+  // messages can carry a <context> preamble ("this project", "this app").
+  // The master session itself is never the context target.
+  const bubbleLocation = useMemo(() => ({
+    view,
+    projectId: projectsSelectedId,
+    appFolder: appsSelectedFolder,
+    vaultPath: vaultSelectedPath,
+    kanbanPath: kanbanSelectedPath,
+    calendarPath: calendarSelectedPath,
+    activeSessionId: activeSession && activeSession !== masterSessionId ? activeSession : null,
+    activeProjectId: activeState.projectId ?? null,
+  }), [view, projectsSelectedId, appsSelectedFolder, vaultSelectedPath, kanbanSelectedPath, calendarSelectedPath, activeSession, activeState.projectId, masterSessionId]);
+
   return (
     <div className="app app--layout">
       <Sidebar
@@ -570,10 +577,9 @@ export default function App() {
         onDispatchToChat={handleDispatchToChat}
         onViewEntityGraph={handleViewEntityGraph}
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
-        onUpdateAvailable={handleUpdateAvailable}
-        coordinatorSessionId={coordinator.enabled ? coordinator.sessionId : null}
-        coordinatorName={coordinator.name}
-        collapsed={sidebarCollapsed}
+         onUpdateAvailable={handleUpdateAvailable}
+         coordinatorSessionId={masterSessionId}
+         collapsed={sidebarCollapsed}
         onCollapsedChange={setSidebarCollapsed}
         projectsSelectedId={projectsSelectedId}
         onProjectsSelect={setProjectsSelectedId}
@@ -808,6 +814,24 @@ export default function App() {
         onSnooze={snoozeAlarm}
         onOpen={handleOpenCalendar}
       />
+
+      {masterSessionId && (
+        <CoordinatorBubble
+          sessionId={masterSessionId}
+          name={coordinator.name}
+          state={chatStates.get(masterSessionId) ?? undefined}
+          location={bubbleLocation}
+          sendToSession={sendToSession}
+          stopSession={stopSession}
+          attachToSession={attachToSession}
+          respondForSession={respondForSession}
+          removeQueuedForSession={removeQueuedForSession}
+          sessionsRevision={sessionsRevision}
+          onMaximize={() => handleSessionSelect(masterSessionId)}
+          onHitlHandled={dropRequest}
+          onOpenInVault={handleOpenInVault}
+        />
+      )}
 
       {missed.length > 0 && (
         <MissedTasksModal

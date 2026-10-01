@@ -58,10 +58,9 @@ interface Props {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
-  /** Coordinator master session id — badges the row in the session list. */
+  /** Coordinator master session id — excluded from the Chat list (it lives
+   * in the floating coordinator bubble). */
   coordinatorSessionId?: string | null;
-  /** Coordinator display name (badge label; default "Master"). */
-  coordinatorName?: string;
   /** Collapsed (icon-rail) state — owned by App so the Header's maximize
    * button and the sidebar's own toggle stay in sync. */
   collapsed: boolean;
@@ -80,10 +79,6 @@ interface Props {
   onCalendarSelect?: (path: string) => void;
 }
 
-function listHasMaster(list: SessionSummary[], masterId: string | null): boolean {
-  return !!masterId && list.some((s) => s.id === masterId);
-}
-
 function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat,
   sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
@@ -92,7 +87,6 @@ function Sidebar({
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
   coordinatorSessionId = null,
-  coordinatorName = "Master",
   collapsed,
   onCollapsedChange,
   projectsSelectedId = null,
@@ -276,38 +270,11 @@ function Sidebar({
     : sessions;
 
   // Chat view shows only unprojected chats — project chats live in the
-  // Projects view. Project ids seen in the feed also filter message-search
-  // results for the same reason. The coordinator master chat is pinned to
-  // the top (fetched directly when the paged list hasn't reached it yet).
-  const unprojected = displaySessions.filter((s) => !s.project_id);
-  const masterInList = listHasMaster(unprojected, coordinatorSessionId);
-  const [masterFallback, setMasterFallback] = useState<SessionSummary | null>(null);
-  useEffect(() => {
-    setMasterFallback(null);
-    if (!coordinatorSessionId || masterInList) return;
-    let cancelled = false;
-    import("../../api/sessions").then(({ getSession }) =>
-      getSession(coordinatorSessionId)
-        .then((d) => {
-          if (cancelled) return;
-          setMasterFallback({
-            id: d.id,
-            title: d.title,
-            created_at: Math.floor(Date.now() / 1000),
-            updated_at: Math.floor(Date.now() / 1000),
-            message_count: d.messages?.length ?? 0,
-            project_id: null,
-          });
-        })
-        .catch(() => {}),
-    );
-    return () => { cancelled = true; };
-  }, [coordinatorSessionId, masterInList]);
-  const chatSessions = masterInList
-    ? unprojected
-    : masterFallback
-      ? [masterFallback, ...unprojected]
-      : unprojected;
+  // Projects view. The coordinator master chat is deliberately absent: it
+  // lives in the floating coordinator bubble (its Maximize button is the
+  // route into the full ChatView).
+  const unprojected = displaySessions.filter((s) => !s.project_id && s.id !== coordinatorSessionId);
+  const chatSessions = unprojected;
   const projectSessionIds = useMemo(
     () => new Set(displaySessions.filter((s) => s.project_id).map((s) => s.id)),
     [displaySessions],
@@ -402,8 +369,6 @@ function Sidebar({
           renameValue={renameValue}
           toVaultBusy={toVaultBusy}
           hasMore={hasMoreSessions}
-          masterSessionId={coordinatorSessionId}
-          masterLabel={coordinatorName}
           projectSessionIds={projectSessionIds}
           onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
           onSessionSelect={onSessionSelect}

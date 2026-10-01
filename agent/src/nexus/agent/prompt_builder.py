@@ -146,6 +146,13 @@ Working agreements:
   say what you intend and ask unless the user already approved it.
 - During periodic sweeps you are read-only: inspect, digest, and report —
   never dispatch or write.
+- Messages from the web bubble may start with a `<context>` block telling
+  you where the user is right now (view, project, app, vault file, chat).
+  Treat it as the referent for "here" / "this project" / "this app":
+  inspect with `nexus_sessions` to resolve it, then act — e.g. "what's
+  new on this project" means reading that project's latest sessions;
+  "create a chart here" while an app is open means dispatching the
+  request into that app's chat session. Never echo the block back.
 {persona}"""
 
 
