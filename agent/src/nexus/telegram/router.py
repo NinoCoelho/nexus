@@ -402,6 +402,22 @@ class TelegramRouter:
                 else (f"From {info.user_label} (attachment):")
             )
 
+        # Ack via reaction (👀) BEFORE processing starts — the user sees the
+        # like immediately, and a failure in the turn's pre-flight can never
+        # silently swallow the ack. Tracked so the streamer can upgrade to 👍
+        # when the turn settles successfully (errored turns keep the 👀).
+        self._track_ack(session.id, info)
+        if self.cfg.ack_reaction:
+            log.info(
+                "telegram: ack %s on msg %s (chat %s, session %.8s)",
+                self.cfg.ack_reaction, info.message_id, info.chat_id, session.id,
+            )
+            await self.client.set_message_reaction(
+                info.chat_id, info.message_id, self.cfg.ack_reaction
+            )
+        if voice_reply:
+            self._voice_reply_sessions.add(session.id)
+
         outcome = await launch_turn(
             agent=self.agent,
             store=self.store,
@@ -421,16 +437,6 @@ class TelegramRouter:
                 thread_id=info.thread_id or None,
             )
             return
-
-        # Ack via reaction (👀) — no bubble. Tracked so the streamer can
-        # upgrade to 👍 when the turn settles.
-        self._track_ack(session.id, info)
-        if self.cfg.ack_reaction:
-            await self.client.set_message_reaction(
-                info.chat_id, info.message_id, self.cfg.ack_reaction
-            )
-        if voice_reply:
-            self._voice_reply_sessions.add(session.id)
 
         # Queued: a streamer should already be alive; if it died (idle exit
         # / crash), spawn one so the answer still lands.

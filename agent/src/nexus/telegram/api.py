@@ -316,19 +316,20 @@ class TelegramClient:
         """Set (or, with an empty emoji, remove) the bot's reaction on a message.
 
         Best-effort: Telegram only accepts its fixed reaction-emoji set for
-        bots and reactions can race message deletion — failures are logged
-        at debug and never propagate to the caller.
+        bots and reactions can race message deletion — failures never
+        propagate to the caller. They ARE logged at warning (with the API's
+        own description) because a silently-missing ack is indistinguishable
+        from a broken flow.
         """
         payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
         if emoji:
             payload["emoji"] = emoji
         try:
             await self._call("setMessageReaction", payload)
-        except TelegramError:
-            log.debug(
-                "telegram: setMessageReaction(%s, %s, %r) failed",
-                chat_id, message_id, emoji,
-                exc_info=True,
+        except TelegramError as exc:
+            log.warning(
+                "telegram: setMessageReaction(chat=%s msg=%s emoji=%r) failed: %s",
+                chat_id, message_id, emoji, exc,
             )
 
     # ── HTML-safe wrappers ───────────────────────────────────────────────
