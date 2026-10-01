@@ -795,7 +795,7 @@
   text-transform: uppercase;
 }
 
-/* Sidebar project rows (Projects view panel) */
+/* Sidebar list panels (Projects / Apps views) — metrics mirror .sidebar-session */
 .sidebar-projects-section,
 .sidebar-apps-section {
   display: flex;
@@ -808,7 +808,7 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .sidebar-project-row,
@@ -816,9 +816,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--fg);
   font-size: 12.5px;
@@ -826,16 +826,17 @@
   cursor: pointer;
   text-align: left;
   min-width: 0;
+  transition: background 150ms ease;
 }
 
 .sidebar-project-row:hover,
 .sidebar-app-row:hover {
-  background: var(--bg-alt);
+  background: var(--bg-hover);
 }
 
 .sidebar-project-row--active,
 .sidebar-app-row--active {
-  background: var(--bg-alt);
+  background: var(--bg-hover);
 }
 
 .sidebar-project-row-name,
@@ -852,8 +853,9 @@
   justify-content: center;
   width: 20px;
   height: 20px;
-  border-radius: 5px;
-  background: var(--bg-soft);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--fg-dim);
   font-size: 11px;
   font-weight: 600;
   flex-shrink: 0;
@@ -865,7 +867,7 @@
 }
 
 .sidebar-project-empty {
-  padding: 10px 8px;
+  padding: 10px 10px;
   font-size: 11.5px;
   color: var(--fg-faint);
 }

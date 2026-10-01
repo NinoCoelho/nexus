@@ -1,12 +1,8 @@
-import { useState } from "react";
 import type { SessionSearchResult, SessionSummary } from "../../api";
-import type { ProjectSummary } from "../../api/projects";
-import ProjectSection from "./ProjectSection";
 import SessionItem from "./SessionItem";
 
 interface Props {
   sessions: SessionSummary[];
-  projects: ProjectSummary[];
   sessionsError: boolean;
   activeSessionId: string | null;
   searchQuery: string;
@@ -14,10 +10,12 @@ interface Props {
   renamingId: string | null;
   renameValue: string;
   toVaultBusy: Set<string>;
-  canCreateProject: boolean;
-  hasMore: boolean;
   /** Coordinator master session id — badges the row. */
   masterSessionId?: string | null;
+  /** session ids that belong to a project — project chats live in the
+   * Projects view, so both the list and message-search results skip them. */
+  projectSessionIds?: Set<string>;
+  hasMore: boolean;
   onSearchChange: (q: string) => void;
   onSessionSelect: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
@@ -26,87 +24,23 @@ interface Props {
   onRenameChange: (v: string) => void;
   onRenameCommit: (id: string) => void;
   onRenameCancel: () => void;
-  onNewProject: () => void;
-  onProjectContextMenu?: (e: React.MouseEvent, projectId: string) => void;
-  onNewChatInProject?: (projectId: string) => void;
   onLoadMore: () => void;
 }
 
-const collapsedKey = (projectId: string) => `nx-project-collapsed-${projectId}`;
-
-function readCollapsed(projectId: string): boolean {
-  try {
-    return localStorage.getItem(collapsedKey(projectId)) === "true";
-  } catch {
-    return false;
-  }
-}
-
 export default function SessionsPanel({
-  sessions, projects, sessionsError, activeSessionId, searchQuery, searchResults,
-  renamingId, renameValue, toVaultBusy, canCreateProject, hasMore, masterSessionId,
-  onSearchChange, onSessionSelect,
+  sessions, sessionsError, activeSessionId, searchQuery, searchResults,
+  renamingId, renameValue, toVaultBusy, masterSessionId, projectSessionIds,
+  hasMore, onSearchChange, onSessionSelect,
   onContextMenu, onMenuBtnClick, onTitleDoubleClick, onRenameChange,
-  onRenameCommit, onRenameCancel, onNewProject, onProjectContextMenu,
-  onNewChatInProject, onLoadMore,
+  onRenameCommit, onRenameCancel, onLoadMore,
 }: Props) {
-  // Bumped by collapse-all/expand-all so every ProjectSection remounts and
-  // re-reads its persisted collapsed state.
-  const [collapseRev, setCollapseRev] = useState(0);
-  const anyExpanded = projects.some((p) => !readCollapsed(p.id));
-
-  const toggleAll = () => {
-    const next = anyExpanded; // any expanded → collapse everything
-    for (const p of projects) {
-      try {
-        localStorage.setItem(collapsedKey(p.id), String(next));
-      } catch { /* ignore */ }
-    }
-    setCollapseRev((r) => r + 1);
-  };
-
-  const projectMap = new Map<string, SessionSummary[]>();
-  const ungrouped: SessionSummary[] = [];
-
-  for (const s of sessions) {
-    if (s.project_id) {
-      const list = projectMap.get(s.project_id) || [];
-      list.push(s);
-      projectMap.set(s.project_id, list);
-    } else {
-      ungrouped.push(s);
-    }
-  }
-
-  const hasProjects = projects.length > 0 || projectMap.size > 0;
+  const visibleSearch = projectSessionIds?.size
+    ? searchResults.filter((r) => !projectSessionIds.has(r.session_id))
+    : searchResults;
 
   return (
     <div className="sidebar-section sidebar-sessions-section">
-      <div className="sidebar-sessions-header">
-        <div className="sidebar-section-label">Sessions</div>
-        {projects.length > 1 && (
-          <button
-            className="sidebar-collapse-all-btn"
-            onClick={toggleAll}
-            title={anyExpanded ? "Collapse all projects" : "Expand all projects"}
-          >
-            <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              {anyExpanded ? (
-                <>
-                  <polyline points="13 4 7 10 13 16" />
-                  <polyline points="8 4 2 10 8 16" />
-                </>
-              ) : (
-                <>
-                  <polyline points="7 4 13 10 7 16" />
-                  <polyline points="12 4 18 10 12 16" />
-                </>
-              )}
-            </svg>
-            {anyExpanded ? "Collapse all" : "Expand all"}
-          </button>
-        )}
-      </div>
+      <div className="sidebar-section-label">Chats</div>
       <div className="sidebar-search-wrap">
         <input
           id="nx-session-search"
@@ -120,10 +54,10 @@ export default function SessionsPanel({
       </div>
       {searchQuery.trim() && (
         <div className="sidebar-search-results">
-          {searchResults.length === 0 ? (
+          {visibleSearch.length === 0 ? (
             <div className="sidebar-search-empty">No results</div>
           ) : (
-            searchResults.map((r) => (
+            visibleSearch.map((r) => (
               <button
                 key={`${r.session_id}-${r.snippet}`}
                 className="sidebar-search-result"
@@ -143,66 +77,7 @@ export default function SessionsPanel({
         <div className="sidebar-error">Couldn&apos;t load — is the server running?</div>
       )}
       <div className="sidebar-sessions">
-        {canCreateProject && (
-          <button className="sidebar-new-project-btn" onClick={onNewProject}>
-            <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="10" y1="4" x2="10" y2="16" />
-              <line x1="4" y1="10" x2="16" y2="10" />
-            </svg>
-            New project
-          </button>
-        )}
-        {hasProjects && (
-          <>
-            {projects.map((p) => {
-              const pSessions = projectMap.get(p.id) || [];
-              return (
-                <ProjectSection
-                  key={`${p.id}:${collapseRev}`}
-                  project={p}
-                  sessions={pSessions}
-                  activeSessionId={activeSessionId}
-                  renamingId={renamingId}
-                  renameValue={renameValue}
-                  toVaultBusy={toVaultBusy}
-                  onSessionSelect={onSessionSelect}
-                  onContextMenu={onContextMenu}
-                  onMenuBtnClick={onMenuBtnClick}
-                  onTitleDoubleClick={onTitleDoubleClick}
-                  onRenameChange={onRenameChange}
-                  onRenameCommit={onRenameCommit}
-                  onRenameCancel={onRenameCancel}
-                  onProjectContextMenu={onProjectContextMenu}
-                  onNewChatInProject={onNewChatInProject}
-                />
-              );
-            })}
-            {ungrouped.length > 0 && (
-              <>
-                <div className="sidebar-section-label" style={{ marginTop: 4 }}>Other</div>
-                {ungrouped.map((s) => (
-                  <SessionItem
-                    key={s.id}
-                    session={s}
-                    isActive={s.id === activeSessionId}
-                    isRenaming={renamingId === s.id}
-                    renameValue={renameValue}
-                    toVaultBusy={toVaultBusy}
-                    isMaster={s.id === masterSessionId}
-                    onSelect={() => onSessionSelect(s.id)}
-                    onContextMenu={(e) => onContextMenu(e, s.id)}
-                    onMenuBtnClick={(e) => onMenuBtnClick(e, s.id)}
-                    onTitleDoubleClick={(e) => onTitleDoubleClick(e, s.id, s.title || "")}
-                    onRenameChange={onRenameChange}
-                    onRenameCommit={() => onRenameCommit(s.id)}
-                    onRenameCancel={onRenameCancel}
-                  />
-                ))}
-              </>
-            )}
-          </>
-        )}
-        {!hasProjects && sessions.map((s) => (
+        {sessions.map((s) => (
           <SessionItem
             key={s.id}
             session={s}
@@ -220,8 +95,8 @@ export default function SessionsPanel({
             onRenameCancel={onRenameCancel}
           />
         ))}
-        {!hasProjects && sessions.length === 0 && !sessionsError && (
-          <div className="sidebar-sessions-empty">No sessions yet</div>
+        {sessions.length === 0 && !sessionsError && (
+          <div className="sidebar-sessions-empty">No chats yet</div>
         )}
         {hasMore && (
           <button className="sidebar-load-more-btn" onClick={onLoadMore}>

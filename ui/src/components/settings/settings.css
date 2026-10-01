@@ -669,18 +669,19 @@
   align-items: flex-start;
   gap: 4px;
   padding: 12px;
-  border: 1px solid var(--bg-soft);
-  border-radius: 8px;
-  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
   color: var(--fg);
   cursor: pointer;
   text-align: left;
   font-family: inherit;
-  transition: border-color 120ms ease;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
 .advanced-tool-card:hover:not(:disabled) {
-  border-color: var(--accent, var(--fg));
+  border-color: var(--accent);
+  background: var(--bg-hover);
 }
 
 .advanced-tool-card:disabled {

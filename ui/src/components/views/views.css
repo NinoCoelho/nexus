@@ -1,0 +1,183 @@
+/*
+ * Shared styles for the main-area view panes (Apps, Projects, Advanced).
+ * One header/toolbar/card/empty-state language built on tokens.css so the
+ * panes match the rest of the app (see DataDashboardView/Sidebar for the
+ * reference metrics).
+ */
+
+/* ── Pane skeleton ────────────────────────────────────────────────────── */
+
+.view-pane-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+
+.view-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.view-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.view-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-faint);
+  letter-spacing: 0.02em;
+}
+
+/* ── Toolbar (back-navigation strip above a selected item) ───────────── */
+
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.view-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.view-back-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* ── Card grid ────────────────────────────────────────────────────────── */
+
+.view-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.view-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.view-card:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.view-card--active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.view-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--fg-dim);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.view-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.view-card-desc {
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.view-card-meta {
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.02em;
+}
+
+.view-card-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+
+.view-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--fg-faint);
+  font-size: 13px;
+  padding: 40px 20px;
+}
+
+.view-empty-icon {
+  opacity: 0.55;
+  margin-bottom: 6px;
+}
+
+.view-empty-hint {
+  font-size: 11.5px;
+  opacity: 0.75;
+}
+
+/* ── Scrollable grid body (header above, cards below) ────────────────── */
+
+.view-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+}

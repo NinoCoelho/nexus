@@ -105,3 +105,8 @@ Decisions (locked with user 2026-09-30):
 - explore-agent claims about bugs can be wrong: the "session pagination bug" was actually
   correct semantics (`/sessions` returns ALL project sessions; X-Total-Count = ungrouped only).
   Verify endpoint behavior in source before "fixing" comparisons.
+- Every nav view must list its items in the sidebar's lower panel (user correction): new views
+  get a list panel, selection lifted to App — not main-area-only navigation.
+- Chat list shows ONLY unprojected chats once Projects is a dedicated view (user correction).
+- New surfaces must reuse the app's tokens (--border-soft for borders, not --bg-soft; var(--radius);
+  --bg-hover hovers) and the shared views.css language — bespoke CSS looks unprofessional.

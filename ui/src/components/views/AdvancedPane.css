@@ -1,3 +1,8 @@
+/*
+ * AdvancedPane styles — the advanced subsite shell (tabs). Header metrics
+ * follow views.css; the tab strip reuses the toolbar row.
+ */
+
 .advanced-pane {
   flex: 1;
   display: flex;
@@ -10,16 +15,18 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 10px 16px 0;
-  border-bottom: 1px solid var(--bg-soft);
-  flex-wrap: wrap;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
 }
 
 .advanced-pane-header h2 {
-  margin: 0 0 10px;
-  font-size: 14px;
+  margin: 0;
+  font-size: 12px;
   font-weight: 600;
   color: var(--fg-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .advanced-pane-tabs {
@@ -29,7 +36,7 @@
 }
 
 .advanced-pane-tab {
-  padding: 8px 14px 10px;
+  padding: 9px 13px 11px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -37,6 +44,7 @@
   font-size: 12.5px;
   font-family: inherit;
   cursor: pointer;
+  transition: color 120ms ease;
 }
 
 .advanced-pane-tab:hover {
@@ -45,7 +53,7 @@
 
 .advanced-pane-tab--active {
   color: var(--fg);
-  border-bottom-color: var(--accent, var(--fg));
+  border-bottom-color: var(--accent);
   font-weight: 600;
 }
 

@@ -3,7 +3,8 @@
  * its workspace — metadata (inline edit via the project modal), instructions
  * preview, vault folder link, Telegram binding chip, and the project's chats
  * with title + message search. Without one: the project card grid. Selection
- * is lifted to App (the sidebar ProjectsListPanel shares it).
+ * is lifted to App (the sidebar ProjectsListPanel shares it). Styling:
+ * shared view language (views.css) + workspace bits below.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -22,6 +23,7 @@ import {
 import { getTelegramBindings, type TelegramBindingInfo } from "../../api/telegram";
 import ProjectEditModal from "../Sidebar/ProjectEditModal";
 import "./ProjectsPane.css";
+import "./views.css";
 
 const SESSIONS_BATCH = 200;
 
@@ -126,34 +128,39 @@ export default function ProjectsPane({
     getTelegramBindings().then(setBindings).catch(() => {});
   };
 
+  const editModal = (
+    <ProjectEditModal
+      open={editId !== null}
+      projectId={editId}
+      onClose={() => setEditId(null)}
+      onSaved={reloadProjects}
+    />
+  );
+
   // No selection: the card grid.
   if (!selected) {
     return (
-      <div className="projects-pane projects-pane--grid">
-        <div className="projects-list">
-          <div className="apps-pane-header">
-            <h2>Projects</h2>
-            <p className="apps-pane-sub">Long-running workspaces — each with its own chats, instructions, and vault folder.</p>
-          </div>
+      <div className="view-pane-col">
+        <div className="view-head">
+          <h2 className="view-title">Projects</h2>
+          <p className="view-sub">Workspaces with their own chats, instructions, and vault folder</p>
+        </div>
+        <div className="view-body">
           {projects.length === 0 ? (
-            <div className="apps-pane-empty">
-              <p>No projects yet.</p>
-              <p className="apps-pane-empty-hint">Create one from the sidebar ("New") or in Chat view.</p>
+            <div className="view-empty">
+              <p>No projects yet</p>
+              <p className="view-empty-hint">Create one from the sidebar — Projects → New</p>
             </div>
           ) : (
-            <div className="projects-grid">
+            <div className="view-grid">
               {projects.map((p) => {
                 const count = sessionsByProject.get(p.id)?.length ?? 0;
                 return (
-                  <button
-                    key={p.id}
-                    className="projects-card"
-                    onClick={() => onSelectId(p.id)}
-                  >
-                    <span className="projects-card-dot" style={{ background: p.color || "var(--accent, #888)" }} />
-                    <span className="projects-card-name">{p.name}</span>
-                    {p.description && <span className="projects-card-desc">{p.description}</span>}
-                    <span className="projects-card-meta">
+                  <button key={p.id} className="view-card" onClick={() => onSelectId(p.id)}>
+                    <span className="view-card-dot" style={{ background: p.color || "var(--accent)" }} />
+                    <span className="view-card-title">{p.name}</span>
+                    {p.description && <span className="view-card-desc">{p.description}</span>}
+                    <span className="view-card-meta">
                       {count} {count === 1 ? "chat" : "chats"}
                     </span>
                   </button>
@@ -162,42 +169,30 @@ export default function ProjectsPane({
             </div>
           )}
         </div>
-        <ProjectEditModal
-          open={editId !== null}
-          projectId={editId}
-          onClose={() => setEditId(null)}
-          onSaved={reloadProjects}
-        />
+        {editModal}
       </div>
     );
   }
 
-  // Selection: the workspace, full width.
+  // Selection: the workspace.
   return (
-    <div className="projects-pane">
+    <div className="view-pane-col">
+      <div className="view-toolbar">
+        <button className="view-back-btn" onClick={() => onSelectId(null)}>
+          <ArrowLeft size={13} /> All projects
+        </button>
+      </div>
       <div className="projects-workspace projects-workspace--solo">
-        <div className="apps-pane-toolbar">
-          <button
-            className="dt-action-btn"
-            onClick={() => onSelectId(null)}
-            title="Back to all projects"
-          >
-            <ArrowLeft size={14} /> All projects
-          </button>
-        </div>
         <div className="projects-workspace-header">
-          <span className="projects-card-dot" style={{ background: selected.color || "var(--accent, #888)" }} />
+          <span className="view-card-dot" style={{ background: selected.color || "var(--accent)" }} />
           <div className="projects-workspace-title">
             <strong>{selected.name}</strong>
             {selected.description && <span className="projects-card-desc">{selected.description}</span>}
           </div>
           <button className="projects-icon-btn" title="Edit project" onClick={() => setEditId(selected.id)}>
-            <Pencil size={14} />
+            <Pencil size={13} />
           </button>
-          <button
-            className="projects-new-chat-btn"
-            onClick={() => onNewChatInProject(selected.id)}
-          >
+          <button className="projects-new-chat-btn" onClick={() => onNewChatInProject(selected.id)}>
             + New chat
           </button>
         </div>
@@ -209,12 +204,12 @@ export default function ProjectsPane({
               title={`Open ${selectedFull.vault_path} in the Vault`}
               onClick={() => onOpenInVault(selectedFull.vault_path!)}
             >
-              <FolderOpen size={12} /> {selectedFull.vault_path}
+              <FolderOpen size={11} /> {selectedFull.vault_path}
             </button>
           )}
           {selectedBindings.map((b) => (
             <span key={`${b.chat_id}-${b.thread_id}`} className="projects-meta-chip" title={`Telegram ${b.kind} — chat ${b.chat_id}${b.thread_id ? `, topic ${b.thread_id}` : ""}`}>
-              <Send size={12} /> {b.project_name ?? b.kind}
+              <Send size={11} /> Telegram
             </span>
           ))}
         </div>
@@ -238,7 +233,7 @@ export default function ProjectsPane({
         <div className="projects-workspace-sessions">
           {listedSessions.length === 0 && messageHits.length === 0 && (
             <div className="projects-workspace-empty">
-              No chats{query.trim() ? " match" : " yet"}.
+              No chats{query.trim() ? " match" : " yet"}
             </div>
           )}
           {listedSessions.map((s) => (
@@ -270,13 +265,7 @@ export default function ProjectsPane({
             ))}
         </div>
       </div>
-
-      <ProjectEditModal
-        open={editId !== null}
-        projectId={editId}
-        onClose={() => setEditId(null)}
-        onSaved={reloadProjects}
-      />
+      {editModal}
     </div>
   );
 }

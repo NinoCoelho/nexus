@@ -7,7 +7,7 @@
  * #/advanced/* routes and the Settings drawer — not here.
  */
 
-import React, { memo, useEffect, useRef, useState } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getSessions, searchSessions,
@@ -26,8 +26,6 @@ import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import ProjectCreateModal from "./ProjectCreateModal";
-import ProjectEditModal from "./ProjectEditModal";
-import ProjectContextMenu from "./ProjectContextMenu";
 import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
@@ -167,8 +165,6 @@ function Sidebar({
 
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [showCreateProject, setShowCreateProject] = useState(false);
-  const [editProjectId, setEditProjectId] = useState<string | null>(null);
-  const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null);
 
   const refreshProjects = () => {
     listProjects().then(setProjects).catch(() => {});
@@ -236,14 +232,6 @@ function Sidebar({
     return () => document.removeEventListener("click", handler);
   }, [menuId]);
 
-  // Close project context menu on outside click
-  useEffect(() => {
-    if (!projectMenu) return;
-    const handler = () => setProjectMenu(null);
-    document.addEventListener("click", handler);
-    return () => document.removeEventListener("click", handler);
-  }, [projectMenu]);
-
   const sessionActions = useSessionActions({
     sessions,
     setSessions,
@@ -265,6 +253,15 @@ function Sidebar({
   const displaySessions = pendingNewSession && !sessions.some((s) => s.id === pendingNewSession.id)
     ? [pendingNewSession, ...sessions]
     : sessions;
+
+  // Chat view shows only unprojected chats — project chats live in the
+  // Projects view. Project ids seen in the feed also filter message-search
+  // results for the same reason.
+  const chatSessions = displaySessions.filter((s) => !s.project_id);
+  const projectSessionIds = useMemo(
+    () => new Set(displaySessions.filter((s) => s.project_id).map((s) => s.id)),
+    [displaySessions],
+  );
 
   const renderNavItems = (items: ReadonlyArray<{ id: AnyView; label: string; Icon: React.ComponentType }>) =>
     items.map(({ id, label, Icon }) => (
@@ -346,8 +343,7 @@ function Sidebar({
       )}
       {view === "chat" && !collapsed && (
         <SessionsPanel
-          sessions={displaySessions}
-          projects={projects}
+          sessions={chatSessions}
           sessionsError={sessionsError}
           activeSessionId={activeSessionId}
           searchQuery={searchQuery}
@@ -355,9 +351,9 @@ function Sidebar({
           renamingId={renamingId}
           renameValue={renameValue}
           toVaultBusy={toVaultBusy}
-          canCreateProject
           hasMore={hasMoreSessions}
           masterSessionId={coordinatorSessionId}
+          projectSessionIds={projectSessionIds}
           onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
           onSessionSelect={onSessionSelect}
           onContextMenu={(e, id) => { e.preventDefault(); setMenu({ id, x: e.clientX, y: e.clientY }); }}
@@ -370,12 +366,6 @@ function Sidebar({
           onRenameChange={setRenameValue}
           onRenameCommit={(id) => void sessionActions.handleRename(id)}
           onRenameCancel={() => setRenamingId(null)}
-          onNewProject={() => setShowCreateProject(true)}
-          onProjectContextMenu={(e, projectId) => {
-            e.preventDefault();
-            setProjectMenu({ id: projectId, x: e.clientX, y: e.clientY });
-          }}
-          onNewChatInProject={(projectId) => onNewChat(projectId)}
           onLoadMore={handleLoadMoreSessions}
         />
       )}
@@ -387,6 +377,7 @@ function Sidebar({
           onSelect={onProjectsSelect}
           onNewProject={() => setShowCreateProject(true)}
           refreshKey={sessionsRevision}
+          onChanged={onSessionsRevisionBump}
         />
       )}
 
@@ -492,39 +483,10 @@ function Sidebar({
         );
       })()}
 
-      {projectMenu && (() => {
-        const p = projects.find((x) => x.id === projectMenu.id);
-        if (!p) return null;
-        return (
-          <ProjectContextMenu
-            project={p}
-            anchorX={projectMenu.x}
-            anchorY={projectMenu.y}
-            onEdit={() => { setEditProjectId(p.id); setProjectMenu(null); }}
-            onDelete={async () => {
-              const { deleteProject } = await import("../../api/projects");
-              deleteProject(p.id).then(() => {
-                refreshProjects();
-                onSessionsRevisionBump();
-              }).catch(() => {});
-              setProjectMenu(null);
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        );
-      })()}
-
       <ProjectCreateModal
         open={showCreateProject}
         onClose={() => setShowCreateProject(false)}
         onCreated={() => { refreshProjects(); onSessionsRevisionBump(); }}
-      />
-
-      <ProjectEditModal
-        open={editProjectId !== null}
-        projectId={editProjectId}
-        onClose={() => setEditProjectId(null)}
-        onSaved={() => { refreshProjects(); onSessionsRevisionBump(); }}
       />
 
       {!collapsed && (
