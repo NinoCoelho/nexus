@@ -137,6 +137,31 @@ class CoordinatorService:
         log.info("coordinator: provisioned master session %s", sid)
         return sid
 
+    def adopt_dm_bindings(self) -> int:
+        """Rebind existing DM bindings to the master session.
+
+        A DM used before the coordinator was enabled keeps its old
+        throwaway binding — without this migration the owner's Telegram
+        conversation would keep landing in the old chat while the master
+        sits empty. Called whenever the service is wired (boot + hot
+        enable). Topic/group bindings are left alone. Returns the number
+        of bindings migrated.
+        """
+        from .telegram.bindings import TelegramBindingStore
+
+        sid = self.session_id
+        if not sid:
+            return 0
+        store = TelegramBindingStore()
+        migrated = 0
+        for b in store.list_all():
+            if b.kind == "dm" and b.active_session_id != sid:
+                store.set_active_session(b.chat_id, b.thread_id, sid)
+                migrated += 1
+        if migrated:
+            log.info("coordinator: adopted %d dm binding(s) into the master session", migrated)
+        return migrated
+
     # ------------------------------------------------------------------
     # nexus_sessions tool
     # ------------------------------------------------------------------

@@ -307,6 +307,7 @@ def _sync_coordinator_service(cfg: Any, request: Request) -> None:
                 request.app.state.sessions, request.app.state.agent, request.app.state.job_tracker
             )
             svc.ensure_session()
+            svc.adopt_dm_bindings()
             set_service(svc)
         except Exception:
             log.exception("config patch: coordinator service init failed")

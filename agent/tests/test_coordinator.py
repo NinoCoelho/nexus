@@ -182,3 +182,36 @@ async def test_dispatch_approval_tiers(isolated_home, monkeypatch) -> None:
     cf.save(cfg)
     res = await svc.dispatch(session_id=ask_target.id, message="hi")
     assert res["ok"] is True
+
+
+async def test_adopt_dm_bindings_migrates_old_dm(isolated_home) -> None:
+    """DMs bound before the coordinator existed are migrated into the master
+    session on wiring; topics/groups are untouched."""
+    from nexus.server.session_store import SessionStore
+    from nexus.telegram.bindings import TelegramBindingStore
+
+    store = SessionStore(db_path=isolated_home / "sessions.sqlite")
+    bindings = TelegramBindingStore()
+    svc = CoordinatorService(store, _StubAgent(), tracker=None)
+    sid = svc.ensure_session()
+
+    old_dm_session = store.create(context="Telegram: dm 42")
+    topic_session = store.create(context="Telegram: topic 7/3")
+    bindings.upsert(chat_id=42, kind="dm", project_id=None, active_session_id=old_dm_session.id)
+    bindings.upsert(
+        chat_id=7,
+        thread_id=3,
+        kind="topic",
+        project_id=None,
+        active_session_id=topic_session.id,
+    )
+
+    migrated = svc.adopt_dm_bindings()
+    assert migrated == 1
+    dm = bindings.get(42, 0)
+    assert dm is not None and dm.active_session_id == sid
+    topic = bindings.get(7, 3)
+    assert topic is not None and topic.active_session_id == topic_session.id
+
+    # Idempotent: second run migrates nothing.
+    assert svc.adopt_dm_bindings() == 0

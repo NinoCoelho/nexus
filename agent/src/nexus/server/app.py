@@ -498,6 +498,7 @@ def create_app(
         coordinator = CoordinatorService(sessions, agent, job_tracker)
         try:
             coordinator.ensure_session()
+            coordinator.adopt_dm_bindings()
         except Exception:
             log.exception("coordinator: master session provisioning failed")
         set_service(coordinator)
