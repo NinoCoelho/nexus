@@ -292,6 +292,8 @@ def _sync_coordinator_service(cfg: Any, request: Request) -> None:
     Enabling [coordinator] from the UI takes effect immediately — the
     master session is provisioned and the tools/sweep driver see the
     service. Disabling just drops the handle (turns tools read-only-off).
+    The provisioned session id is reflected back onto ``cfg`` so the PATCH
+    response (and app_state, which shares the object) isn't stale.
     """
     from ...coordinator import CoordinatorService, get_service, set_service
 
@@ -310,3 +312,8 @@ def _sync_coordinator_service(cfg: Any, request: Request) -> None:
             log.exception("config patch: coordinator service init failed")
     elif not coord.enabled and svc is not None:
         set_service(None)
+    # Reflect the live master session id (provisioned just now or at boot)
+    # back onto the in-memory config so GET/PATCH /config and the UI badge
+    # are correct without a restart.
+    if coord.enabled and svc is not None and svc.session_id:
+        coord.session_id = svc.session_id
