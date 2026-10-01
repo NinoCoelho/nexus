@@ -254,3 +254,49 @@ async def test_name_and_persona_flow(isolated_home) -> None:
     cf.save(cfg)
     block = _coordinator_block()
     assert "Master" in block and "Persona" not in block
+
+
+async def test_config_patch_persists_name_and_persona(
+    isolated_home, monkeypatch
+) -> None:
+    """PATCH /config must round-trip every editable coordinator field —
+    regression for a silently-dropped allowlist entry (name/persona)."""
+    from types import SimpleNamespace
+
+    from nexus.server.routes.config import patch_config
+    from nexus.server.session_store import SessionStore
+
+    store = SessionStore(db_path=isolated_home / "sessions.sqlite")
+    app = SimpleNamespace(
+        state=SimpleNamespace(sessions=store, agent=None, job_tracker=None)
+    )
+    request = SimpleNamespace(app=app)
+    stub_agent = SimpleNamespace()
+
+    async def _patch(body: dict) -> dict:
+        return await patch_config(body, request, app_state={"cfg": None}, a=stub_agent)
+
+    # Enable first (provisions the master session through the sync path).
+    res = await _patch({"coordinator": {"enabled": True}})
+    assert res["coordinator"]["enabled"] is True
+    sid = res["coordinator"]["session_id"]
+    assert sid, "master session id must be reflected in the PATCH response"
+
+    # Then the identity fields.
+    res = await _patch({"coordinator": {"name": "Alfred", "persona": "Dry British wit."}})
+    assert res["coordinator"]["name"] == "Alfred"
+    assert res["coordinator"]["persona"] == "Dry British wit."
+
+    import nexus.config_file as cf
+
+    persisted = cf.load_cached().coordinator
+    assert persisted.name == "Alfred"
+    assert persisted.persona == "Dry British wit."
+    assert persisted.enabled is True
+
+    # The master chat is retitled by the sync.
+    assert store.get(sid).title == "Alfred"
+
+    # session_id is server-owned — a client attempt to set it is ignored.
+    res = await _patch({"coordinator": {"session_id": "evil"}})
+    assert res["coordinator"]["session_id"] == sid

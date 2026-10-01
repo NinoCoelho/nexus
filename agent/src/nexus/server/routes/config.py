@@ -254,6 +254,8 @@ async def patch_config(
         patch = body["coordinator"] or {}
         ALLOWED_COORD = {
             "enabled",
+            "name",
+            "persona",
             "sweep_interval_minutes",
             "quiet_hours",
             "auto_approve",
