@@ -1042,3 +1042,35 @@ async def test_topics_lists_bindings(tmp_path: Path) -> None:
     h2 = Harness(tmp_path / "empty", FakeProvider([_final("ok")]))
     await h2.message("/topics", chat_type="supergroup", thread_id=9)
     assert "No chats or topics are linked" in h2.client.sent_texts()[-1]
+
+
+async def test_group_turn_titles_from_raw_text(tmp_path: Path, monkeypatch: Any) -> None:
+    """Group messages are prefixed with the sender for the agent, but the
+    autotitle must receive the raw text (no "From <sender>:" prefix)."""
+    import nexus.server.services.turn_launcher as tl
+
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    captured: dict[str, Any] = {}
+
+    class _Outcome:
+        error = None
+        queued = False
+        runner = None
+
+    async def _spy_launch_turn(**kwargs):
+        captured.update(kwargs)
+        return _Outcome()
+
+    monkeypatch.setattr(tl, "launch_turn", _spy_launch_turn)
+    monkeypatch.setattr("nexus.telegram.router.launch_turn", _spy_launch_turn)
+    from nexus.server.project_store import ProjectStore
+
+    ProjectStore(h.tmp_path / "sessions.sqlite").create(name="Apollo")
+    await h.message("/project Apollo", chat_type="supergroup", thread_id=7)
+    await h.message(
+        "what is celon",
+        chat_type="supergroup",
+        thread_id=7,
+    )
+    assert "From " in captured["message"]
+    assert captured["autotitle_message"] == "what is celon"

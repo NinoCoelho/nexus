@@ -64,6 +64,7 @@ def precheck_context_window(
     _TOOLS_AND_SYSTEM_OVERHEAD = 12_000
     try:
         from ...agent.loop.overflow import estimate_tokens as _est_tok
+
         cfg = load_config()
         ctx_window = 0
         effective_model = model_id or getattr(cfg.agent, "default_model", "")
@@ -73,20 +74,18 @@ def precheck_context_window(
                 break
         if ctx_window == 0:
             from ...agent.loop.overflow import known_context_window as _kcw
+
             ctx_window = _kcw(effective_model)
         if ctx_window > 0 and pre_turn_history:
             history_tokens = _est_tok(pre_turn_history)
-            incoming_tokens = _est_tok([
-                type("M", (), {"content": message, "tool_calls": []})()
-            ])
+            incoming_tokens = _est_tok([type("M", (), {"content": message, "tool_calls": []})()])
             total_est = history_tokens + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
             if total_est > ctx_window - _OUTPUT_HEADROOM:
                 from ...agent.loop.compact import auto_compact
+
                 compacted, report = auto_compact(pre_turn_history)
                 if report.compacted > 0:
-                    new_tokens = (
-                        _est_tok(compacted) + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
-                    )
+                    new_tokens = _est_tok(compacted) + incoming_tokens + _TOOLS_AND_SYSTEM_OVERHEAD
                     if new_tokens <= ctx_window - _OUTPUT_HEADROOM:
                         pre_turn_history = compacted
                         total_est = new_tokens
@@ -127,6 +126,7 @@ async def launch_turn(
     attachment_parts: list[Any] | None = None,
     publish_job_event: Callable[[str, dict], None] | None = None,
     is_voice: bool = False,
+    autotitle_message: str | None = None,
 ) -> LaunchOutcome:
     """Run one chat turn on ``session`` outside of HTTP.
 
@@ -167,9 +167,7 @@ async def launch_turn(
 
     pre_turn_history = list(session.history)
 
-    pre_turn_history, ctx_err = precheck_context_window(
-        pre_turn_history, message, model_id
-    )
+    pre_turn_history, ctx_err = precheck_context_window(pre_turn_history, message, model_id)
     if ctx_err is not None:
         return LaunchOutcome(error=ctx_err["detail"], session_id=session.id)
 
@@ -177,8 +175,10 @@ async def launch_turn(
     # doesn't lose the prompt. Multipart content when attachments ride along.
     try:
         from ...agent.llm import ChatMessage as _CM, Role as _R
+
         if attachment_parts:
             from ...agent.llm import ContentPart as _CP
+
             user_content: Any = (
                 [_CP(kind="text", text=message)] if message else []
             ) + attachment_parts
@@ -190,10 +190,7 @@ async def launch_turn(
         log.exception("pre-turn user message persist failed")
 
     # LLM autotitle on the first user turn, concurrent with the loop.
-    if (
-        not pre_turn_history
-        and getattr(agent, "_provider_registry", None) is not None
-    ):
+    if not pre_turn_history and getattr(agent, "_provider_registry", None) is not None:
         from ..routes.chat_stream_helpers import maybe_autotitle_via_llm
         import asyncio
 
@@ -202,7 +199,10 @@ async def launch_turn(
                 store=store,
                 agent=agent,
                 session_id=session.id,
-                user_message=message,
+                # Group/topic turns prefix the sender ("From Alice (@a):\n\n…")
+                # for the agent; the title should describe the message, not
+                # the sender — callers can pass the un-prefixed text.
+                user_message=autotitle_message if autotitle_message else message,
             )
         )
 

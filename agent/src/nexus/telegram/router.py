@@ -410,6 +410,8 @@ class TelegramRouter:
             message=message,
             attachment_parts=attachment_parts,
             publish_job_event=self.publish_job_event,
+            # Title from the raw text, without the "From <sender>:" prefix.
+            autotitle_message=text.strip() or None,
         )
 
         if outcome.error is not None:
