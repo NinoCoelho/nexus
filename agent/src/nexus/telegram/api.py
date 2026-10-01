@@ -315,15 +315,22 @@ class TelegramClient:
     ) -> None:
         """Set (or, with an empty emoji, remove) the bot's reaction on a message.
 
+        Payload note: the Bot API takes ``reaction`` as a JSON-serialized
+        list of ReactionType — NOT an ``emoji`` string (an unknown param is
+        silently ignored and a missing ``reaction`` *clears* reactions,
+        which made acks succeed invisibly).
+
         Best-effort: Telegram only accepts its fixed reaction-emoji set for
         bots and reactions can race message deletion — failures never
         propagate to the caller. They ARE logged at warning (with the API's
         own description) because a silently-missing ack is indistinguishable
         from a broken flow.
         """
-        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
-        if emoji:
-            payload["emoji"] = emoji
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reaction": [{"type": "emoji", "emoji": emoji}] if emoji else [],
+        }
         try:
             await self._call("setMessageReaction", payload)
         except TelegramError as exc:

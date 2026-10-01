@@ -1074,3 +1074,26 @@ async def test_group_turn_titles_from_raw_text(tmp_path: Path, monkeypatch: Any)
     )
     assert "From " in captured["message"]
     assert captured["autotitle_message"] == "what is celon"
+
+
+async def test_set_message_reaction_payload_shape() -> None:
+    """Regression: setMessageReaction must send reaction=[{type: emoji, …}]
+    — the old `emoji` param was silently ignored by Telegram (a missing
+    `reaction` clears reactions), so acks succeeded invisibly."""
+    from nexus.telegram.api import TelegramClient
+
+    captured: list[tuple[str, dict]] = []
+
+    class _Cap(TelegramClient):
+        async def _call(self, method, payload, *, retries=2, files=None):
+            captured.append((method, payload))
+            return True
+
+    client = _Cap.__new__(_Cap)
+    await client.set_message_reaction(42, 7, "\U0001f440")
+    await client.set_message_reaction(42, 7, "")
+    method, payload = captured[0]
+    assert method == "setMessageReaction"
+    assert payload["reaction"] == [{"type": "emoji", "emoji": "\U0001f440"}]
+    assert "emoji" not in payload  # the old broken param
+    assert captured[1][1]["reaction"] == []  # empty clears
