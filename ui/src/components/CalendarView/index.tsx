@@ -12,7 +12,6 @@ import { useTranslation } from "react-i18next";
 import {
   type Calendar as CalendarFile,
   type CalendarEvent,
-  type CalendarSummary,
   addVaultCalendarEvent,
   createVaultCalendar,
   deleteVaultCalendarEvent,
@@ -53,7 +52,6 @@ interface Props {
 
 export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat }: Props) {
   const { t } = useTranslation("calendar");
-  const [calendars, setCalendars] = useState<CalendarSummary[]>([]);
   const [calendar, setCalendar] = useState<CalendarFile | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
@@ -73,7 +71,6 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
   const reloadList = useCallback(async () => {
     try {
       const res = await listVaultCalendars();
-      setCalendars(res.calendars);
       if (!selectedPath && res.calendars.length > 0) {
         onSelectPath(res.calendars[0].path);
       }
@@ -312,15 +309,7 @@ export default function CalendarView({ selectedPath, onSelectPath, onOpenInChat 
   return (
     <div className="cal-view">
       <div className="cal-header">
-        <select
-          value={selectedPath ?? ""}
-          onChange={(e) => onSelectPath(e.target.value || null)}
-        >
-          {calendars.length === 0 && <option value="">{t("calendar:header.noneCalendar")}</option>}
-          {calendars.map((c) => (
-            <option key={c.path} value={c.path}>{c.title}</option>
-          ))}
-        </select>
+        {calendar && <span className="cal-header-calendar-name" title={selectedPath ?? undefined}>{calendar.title}</span>}
         <button onClick={handleCreateNew}>{t("calendar:header.addNew")}</button>
 
         <div className="cal-header-spacer" />

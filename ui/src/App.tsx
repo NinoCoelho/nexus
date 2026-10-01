@@ -85,7 +85,9 @@ export default function App() {
   /** The currently selected file path in the vault tree (lifted so Sidebar tree + editor share it). */
   const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(() => (route.view === "vault" ? route.path ?? null : null));
   /** Currently selected calendar (.md path) inside the Calendar view. Lifted here so view switches preserve it. */
-  const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
+  const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(
+    () => (route.view === "calendar" ? route.path ?? null : null),
+  );
   /** Selected kanban board path — shared by the sidebar board list and the Kanban pane. */
   const [kanbanSelectedPath, setKanbanSelectedPath] = useState<string | null>(
     () => (route.view === "kanban" ? route.path ?? null : null),
@@ -143,6 +145,9 @@ export default function App() {
     }
     if (route.view === "kanban" && p && p !== lastRoutePathRef.current) {
       setKanbanSelectedPath(p);
+    }
+    if (route.view === "calendar" && p && p !== lastRoutePathRef.current) {
+      setCalendarSelectedPath(p);
     }
     lastRoutePathRef.current = p;
   }, [route.view, route.path]);
@@ -550,6 +555,8 @@ export default function App() {
         onAppSelectFolder={setAppsSelectedFolder}
         kanbanSelectedPath={kanbanSelectedPath}
         onKanbanOpen={handleKanbanOpen}
+        calendarSelectedPath={calendarSelectedPath}
+        onCalendarSelect={setCalendarSelectedPath}
       />
 
       <div className="app-main">

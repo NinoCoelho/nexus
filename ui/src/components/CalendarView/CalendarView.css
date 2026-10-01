@@ -19,6 +19,16 @@
   background: var(--bg-soft);
 }
 
+.cal-header-calendar-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cal-header select,
 .cal-header input[type="text"] {
   background: var(--bg);

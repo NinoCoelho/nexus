@@ -21,6 +21,7 @@ import VaultTreePanel from "../VaultTreePanel";
 import WorkflowListPanel from "../WorkflowListPanel";
 import ProjectsListPanel from "./ProjectsListPanel";
 import KanbanListPanel from "./KanbanListPanel";
+import CalendarListPanel from "./CalendarListPanel";
 import AppsListPanel from "./AppsListPanel";
 import { IconChat, IconCalendar, IconVault, IconKanban, IconWorkflow, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
@@ -68,6 +69,9 @@ interface Props {
   /** Selected kanban board path (shared with the Kanban pane). */
   kanbanSelectedPath?: string | null;
   onKanbanOpen?: (path: string) => void;
+  /** Selected calendar path (shared with the Calendar view). */
+  calendarSelectedPath?: string | null;
+  onCalendarSelect?: (path: string) => void;
 }
 
 function Sidebar({
@@ -84,6 +88,8 @@ function Sidebar({
   onAppSelectFolder,
   kanbanSelectedPath = null,
   onKanbanOpen,
+  calendarSelectedPath = null,
+  onCalendarSelect,
 }: Props) {
   const { t } = useTranslation("sidebar");
   const NAV_GROUPS = {
@@ -410,6 +416,15 @@ function Sidebar({
         </div>
       )}
 
+      {/* Calendars — only in Calendar view */}
+      {view === "calendar" && !collapsed && onCalendarSelect && (
+        <CalendarListPanel
+          selectedPath={calendarSelectedPath}
+          onSelect={onCalendarSelect}
+          refreshKey={sessionsRevision}
+        />
+      )}
+
       {/* Kanban boards — only in Kanban view */}
       {view === "kanban" && !collapsed && onKanbanOpen && (
         <KanbanListPanel selectedPath={kanbanSelectedPath} onOpen={onKanbanOpen} />
@@ -430,6 +445,7 @@ function Sidebar({
         !(view === "projects" && !collapsed) &&
         !(view === "apps" && !collapsed) &&
         !(view === "vault" && !collapsed) &&
+        !(view === "calendar" && !collapsed) &&
         !(view === "kanban" && !collapsed) &&
         !(view === "workflows" && !collapsed) && (
         <div className="sidebar-spacer" />
