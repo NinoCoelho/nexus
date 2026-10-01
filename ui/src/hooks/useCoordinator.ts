@@ -10,10 +10,16 @@ import { getConfig } from "../api";
 export interface CoordinatorState {
   enabled: boolean;
   sessionId: string | null;
+  /** Display name for the master chat (default "Master"). */
+  name: string;
 }
 
 export function useCoordinator(settingsRevision: number): CoordinatorState {
-  const [state, setState] = useState<CoordinatorState>({ enabled: false, sessionId: null });
+  const [state, setState] = useState<CoordinatorState>({
+    enabled: false,
+    sessionId: null,
+    name: "Master",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -24,10 +30,11 @@ export function useCoordinator(settingsRevision: number): CoordinatorState {
         setState({
           enabled: !!coord?.enabled,
           sessionId: coord?.session_id || null,
+          name: coord?.name || "Master",
         });
       })
       .catch(() => {
-        if (!cancelled) setState({ enabled: false, sessionId: null });
+        if (!cancelled) setState({ enabled: false, sessionId: null, name: "Master" });
       });
     return () => {
       cancelled = true;

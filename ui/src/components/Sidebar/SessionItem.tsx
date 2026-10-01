@@ -9,8 +9,10 @@ interface Props {
   isRenaming: boolean;
   renameValue: string;
   toVaultBusy: Set<string>;
-  /** Coordinator master chat — renders the Master badge. */
+  /** Coordinator master chat — renders the badge. */
   isMaster?: boolean;
+  /** Badge label (the coordinator's configured name). */
+  masterLabel?: string;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onMenuBtnClick: (e: React.MouseEvent) => void;
@@ -27,6 +29,7 @@ export default function SessionItem({
   renameValue,
   toVaultBusy,
   isMaster = false,
+  masterLabel = "Master",
   onSelect,
   onContextMenu,
   onMenuBtnClick,
@@ -64,7 +67,9 @@ export default function SessionItem({
             {session.title || "Untitled"}
             {toVaultBusy.has(session.id) && " ⋯"}
           </span>
-          {isMaster && <span className="sidebar-session-master" title="Coordinator master chat">Master</span>}
+          {isMaster && (
+            <span className="sidebar-session-master" title="Coordinator master chat">{masterLabel}</span>
+          )}
           <span className="sidebar-session-time">{fmtRelative(session.updated_at)}</span>
           <button
             className="sidebar-session-menu-btn"

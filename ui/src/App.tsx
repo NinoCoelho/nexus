@@ -102,6 +102,15 @@ export default function App() {
   const [pendingGraphIndex, setPendingGraphIndex] = useState<string | null>(null);
   const indexingToastIdRef = useRef<string | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  /** Icon-rail mode — shared by the sidebar's own toggle and the Header's
+   * maximize button (same persisted key the sidebar used). */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("sidebar-collapsed") === "true"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("sidebar-collapsed", String(sidebarCollapsed)); } catch { /* ignore */ }
+  }, [sidebarCollapsed]);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
@@ -174,6 +183,20 @@ export default function App() {
     handleCompact: _handleCompact, handleRemoveLast,
     handleResumePaused,
   } = chatSession;
+
+  // Landing: when the coordinator is enabled, entering the system opens the
+  // master chat directly (once, and only when there's no deep link and no
+  // already-active session).
+  const landedRef = useRef(false);
+  useEffect(() => {
+    if (landedRef.current) return;
+    if (!coordinator.enabled || !coordinator.sessionId) return;
+    if (route.path) return;
+    landedRef.current = true;
+    if (activeSession === null) {
+      _handleSessionSelect(coordinator.sessionId);
+    }
+  }, [coordinator.enabled, coordinator.sessionId, route.path, activeSession, _handleSessionSelect]);
 
   const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
     try {
@@ -549,6 +572,9 @@ export default function App() {
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
         onUpdateAvailable={handleUpdateAvailable}
         coordinatorSessionId={coordinator.enabled ? coordinator.sessionId : null}
+        coordinatorName={coordinator.name}
+        collapsed={sidebarCollapsed}
+        onCollapsedChange={setSidebarCollapsed}
         projectsSelectedId={projectsSelectedId}
         onProjectsSelect={setProjectsSelectedId}
         appSelectedFolder={appsSelectedFolder}
@@ -565,6 +591,8 @@ export default function App() {
           yoloMode={yoloMode}
           onOpenMobileDrawer={() => setMobileDrawerOpen(true)}
           onOpenSettings={handleOpenSettings}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
           statusSlot={
             view === "chat"
               ? <AgentStatusBar

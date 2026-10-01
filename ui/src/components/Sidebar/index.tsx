@@ -60,6 +60,12 @@ interface Props {
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
   /** Coordinator master session id — badges the row in the session list. */
   coordinatorSessionId?: string | null;
+  /** Coordinator display name (badge label; default "Master"). */
+  coordinatorName?: string;
+  /** Collapsed (icon-rail) state — owned by App so the Header's maximize
+   * button and the sidebar's own toggle stay in sync. */
+  collapsed: boolean;
+  onCollapsedChange: (v: boolean) => void;
   /** Selected project in the Projects view (shared with ProjectsPane). */
   projectsSelectedId?: string | null;
   onProjectsSelect?: (id: string) => void;
@@ -74,6 +80,10 @@ interface Props {
   onCalendarSelect?: (path: string) => void;
 }
 
+function listHasMaster(list: SessionSummary[], masterId: string | null): boolean {
+  return !!masterId && list.some((s) => s.id === masterId);
+}
+
 function Sidebar({
   view, onViewChange, activeSessionId, onSessionSelect, onNewChat,
   sessionsRevision, onSessionsRevisionBump, pendingNewSession, onActiveSessionDeleted, vaultSelectedPath, onVaultSelectPath,
@@ -82,6 +92,9 @@ function Sidebar({
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
   coordinatorSessionId = null,
+  coordinatorName = "Master",
+  collapsed,
+  onCollapsedChange,
   projectsSelectedId = null,
   onProjectsSelect,
   appSelectedFolder = null,
@@ -106,10 +119,7 @@ function Sidebar({
     ],
   };
   const toast = useToast();
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem("sidebar-collapsed") === "true"; }
-    catch { return false; }
-  });
+  const setCollapsed = onCollapsedChange;
   const [width, setWidth] = useState<number>(() => loadStoredWidth());
   const [resizing, setResizing] = useState(false);
 
@@ -132,7 +142,6 @@ function Sidebar({
   useEffect(() => {
     try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width)); } catch { /* ignore */ }
   }, [width]);
-  useEffect(() => { localStorage.setItem("sidebar-collapsed", String(collapsed)); }, [collapsed]);
 
   const handleResizeStart = (e: React.MouseEvent) => {
     if (collapsed) return;
@@ -268,8 +277,37 @@ function Sidebar({
 
   // Chat view shows only unprojected chats — project chats live in the
   // Projects view. Project ids seen in the feed also filter message-search
-  // results for the same reason.
-  const chatSessions = displaySessions.filter((s) => !s.project_id);
+  // results for the same reason. The coordinator master chat is pinned to
+  // the top (fetched directly when the paged list hasn't reached it yet).
+  const unprojected = displaySessions.filter((s) => !s.project_id);
+  const masterInList = listHasMaster(unprojected, coordinatorSessionId);
+  const [masterFallback, setMasterFallback] = useState<SessionSummary | null>(null);
+  useEffect(() => {
+    setMasterFallback(null);
+    if (!coordinatorSessionId || masterInList) return;
+    let cancelled = false;
+    import("../../api/sessions").then(({ getSession }) =>
+      getSession(coordinatorSessionId)
+        .then((d) => {
+          if (cancelled) return;
+          setMasterFallback({
+            id: d.id,
+            title: d.title,
+            created_at: Math.floor(Date.now() / 1000),
+            updated_at: Math.floor(Date.now() / 1000),
+            message_count: d.messages?.length ?? 0,
+            project_id: null,
+          });
+        })
+        .catch(() => {}),
+    );
+    return () => { cancelled = true; };
+  }, [coordinatorSessionId, masterInList]);
+  const chatSessions = masterInList
+    ? unprojected
+    : masterFallback
+      ? [masterFallback, ...unprojected]
+      : unprojected;
   const projectSessionIds = useMemo(
     () => new Set(displaySessions.filter((s) => s.project_id).map((s) => s.id)),
     [displaySessions],
@@ -310,7 +348,7 @@ function Sidebar({
         )}
         <button
           className="sidebar-collapse-btn"
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={() => setCollapsed(!collapsed)}
           title={collapsed ? t("sidebar:expand") : t("sidebar:collapse")}
           aria-label={collapsed ? t("sidebar:expand") : t("sidebar:collapse")}
         >
@@ -365,6 +403,7 @@ function Sidebar({
           toVaultBusy={toVaultBusy}
           hasMore={hasMoreSessions}
           masterSessionId={coordinatorSessionId}
+          masterLabel={coordinatorName}
           projectSessionIds={projectSessionIds}
           onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
           onSessionSelect={onSessionSelect}

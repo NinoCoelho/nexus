@@ -785,6 +785,10 @@
 /* Coordinator master-chat badge */
 .sidebar-session-master {
   flex-shrink: 0;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid var(--accent, var(--fg));

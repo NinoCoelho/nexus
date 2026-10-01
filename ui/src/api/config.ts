@@ -106,6 +106,8 @@ export interface TelegramConfig {
 export interface CoordinatorConfig {
   enabled: boolean;
   session_id: string;
+  name: string;
+  persona: string;
   sweep_interval_minutes: number;
   quiet_hours: string;
   auto_approve: string[];

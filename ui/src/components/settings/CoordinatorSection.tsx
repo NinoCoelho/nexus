@@ -18,6 +18,8 @@ import SettingsSection from "./SettingsSection";
 const DEFAULT_CFG: CoordinatorConfig = {
   enabled: false,
   session_id: "",
+  name: "Master",
+  persona: "",
   sweep_interval_minutes: 120,
   quiet_hours: "",
   auto_approve: [],
@@ -30,6 +32,8 @@ export default function CoordinatorSection() {
   const [saving, setSaving] = useState(false);
   const [quietDraft, setQuietDraft] = useState("");
   const [intervalDraft, setIntervalDraft] = useState("120");
+  const [nameDraft, setNameDraft] = useState("Master");
+  const [personaDraft, setPersonaDraft] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -38,6 +42,8 @@ export default function CoordinatorSection() {
         setCfg({ ...DEFAULT_CFG, ...c.coordinator });
         setQuietDraft(c.coordinator.quiet_hours ?? "");
         setIntervalDraft(String(c.coordinator.sweep_interval_minutes ?? 120));
+        setNameDraft(c.coordinator.name || "Master");
+        setPersonaDraft(c.coordinator.persona ?? "");
       }
     } catch {
       // Section renders defaults; save will surface errors.
@@ -136,6 +142,53 @@ export default function CoordinatorSection() {
 
       {cfg.enabled && (
         <>
+          <SettingsField
+            label="Name"
+            hint="The chat's title and badge (e.g. Jarvis, Alfred)."
+            layout="row"
+          >
+            <input
+              className="settings-input"
+              type="text"
+              value={nameDraft}
+              maxLength={40}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={() => {
+                const v = nameDraft.trim() || "Master";
+                setNameDraft(v);
+                if (v !== cfg.name) void save({ name: v });
+              }}
+              style={{ width: 160 }}
+            />
+          </SettingsField>
+          <SettingsField
+            label="Persona"
+            hint="How it behaves: tone, how it addresses you, focus areas. Fed verbatim to its prompt."
+            help={{
+              title: "Persona",
+              body: (
+                <>
+                  Free-text personality for the master chat — e.g. "Address me
+                  as Sir, dry British wit, be concise, proactively flag stale
+                  projects". Kept in <code>[coordinator].persona</code> and
+                  injected into every coordinator turn.
+                </>
+              ),
+            }}
+          >
+            <textarea
+              className="settings-input"
+              rows={4}
+              value={personaDraft}
+              onChange={(e) => setPersonaDraft(e.target.value)}
+              onBlur={() => {
+                const v = personaDraft.trim();
+                setPersonaDraft(v);
+                if (v !== cfg.persona) void save({ persona: v });
+              }}
+              style={{ width: "100%", resize: "vertical" }}
+            />
+          </SettingsField>
           <SettingsField
             label="Sweep interval (minutes)"
             hint="How often the read-only digest runs. 0 disables sweeps."

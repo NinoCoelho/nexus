@@ -12,6 +12,8 @@ interface Props {
   toVaultBusy: Set<string>;
   /** Coordinator master session id — badges the row. */
   masterSessionId?: string | null;
+  /** Coordinator display name for the badge (default "Master"). */
+  masterLabel?: string;
   /** session ids that belong to a project — project chats live in the
    * Projects view, so both the list and message-search results skip them. */
   projectSessionIds?: Set<string>;
@@ -29,7 +31,7 @@ interface Props {
 
 export default function SessionsPanel({
   sessions, sessionsError, activeSessionId, searchQuery, searchResults,
-  renamingId, renameValue, toVaultBusy, masterSessionId, projectSessionIds,
+  renamingId, renameValue, toVaultBusy, masterSessionId, masterLabel = "Master", projectSessionIds,
   hasMore, onSearchChange, onSessionSelect,
   onContextMenu, onMenuBtnClick, onTitleDoubleClick, onRenameChange,
   onRenameCommit, onRenameCancel, onLoadMore,
@@ -86,6 +88,7 @@ export default function SessionsPanel({
             renameValue={renameValue}
             toVaultBusy={toVaultBusy}
             isMaster={s.id === masterSessionId}
+            masterLabel={masterLabel}
             onSelect={() => onSessionSelect(s.id)}
             onContextMenu={(e) => onContextMenu(e, s.id)}
             onMenuBtnClick={(e) => onMenuBtnClick(e, s.id)}

@@ -7,11 +7,15 @@ interface Props {
   yoloMode?: boolean;
   onOpenMobileDrawer?: () => void;
   onOpenSettings?: () => void;
+  /** Icon-rail (maximize) state of the sidebar — shared with the sidebar's
+   * own toggle so both controls stay in sync. */
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
   statusSlot?: ReactNode;
   notificationSlot?: ReactNode;
 }
 
-export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, onOpenSettings, statusSlot, notificationSlot }: Props) {
+export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, onOpenSettings, sidebarCollapsed, onToggleSidebar, statusSlot, notificationSlot }: Props) {
   const { darkMode, toggleDarkMode } = useTheme();
 
   return (
@@ -45,6 +49,27 @@ export default function Header({ onReset, yoloMode = false, onOpenMobileDrawer, 
             <span className="yolo-badge" title="YOLO mode: confirm prompts auto-approved">
               YOLO ON
             </span>
+          )}
+          {onToggleSidebar && (
+            <button
+              className="header-btn"
+              onClick={onToggleSidebar}
+              title={sidebarCollapsed ? "Restore sidebar" : "Maximize (collapse sidebar to icons)"}
+              aria-label={sidebarCollapsed ? "Restore sidebar" : "Maximize"}
+            >
+              {sidebarCollapsed ? (
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
+                  <line x1="7" y1="3.5" x2="7" y2="16.5" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
+                  <line x1="7" y1="3.5" x2="7" y2="16.5" />
+                  <polyline points="9.5 8 12 10 9.5 12" />
+                </svg>
+              )}
+            </button>
           )}
           {onOpenSettings && (
             <button
