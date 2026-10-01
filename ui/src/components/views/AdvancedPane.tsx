@@ -6,7 +6,7 @@
  * stream state.
  */
 
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import type { AdvancedArea } from "../../routes";
 import "./AdvancedPane.css";
 
@@ -84,8 +84,13 @@ export default function AdvancedPane(props: AdvancedPaneProps) {
   );
 }
 
-/** One mounted-once tab body; hidden via CSS so state survives switches. */
+/** Tab body that mounts on first visit and stays alive afterwards —
+ * hidden via CSS so stream/graph state survives switches, but a visit to
+ * Heartbeat never loads the heavy graph bundle. */
 function TabPane({ active, children }: { active: boolean; children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(active);
+  if (active && !mounted) setMounted(true);
+  if (!mounted) return null;
   return (
     <div className="advanced-tab" style={{ display: active ? "flex" : "none" }}>
       <Suspense fallback={<AdvancedFallback />}>{children}</Suspense>
