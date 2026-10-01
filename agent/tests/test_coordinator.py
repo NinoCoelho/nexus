@@ -126,3 +126,59 @@ async def test_service_unavailable_without_wiring(isolated_home) -> None:
     res = json.loads(await handle_nexus_sessions({"action": "projects"}, "any"))
     assert res["ok"] is False
     assert "unavailable" in res["error"]
+
+
+async def test_dispatch_approval_tiers(isolated_home, monkeypatch) -> None:
+    """auto_approve gates session_dispatch: ask by default, pass with a
+    matching project or "all", and `confirmed=true` unlocks after ask_user."""
+    from nexus.server.project_store import ProjectStore
+    from nexus.server.session_store import SessionStore
+
+    store = SessionStore(db_path=isolated_home / "sessions.sqlite")
+    projects = ProjectStore(isolated_home / "sessions.sqlite")
+    approved_proj = projects.create(name="Trusted")
+    other_proj = projects.create(name="Other")
+    ok_target = store.create(project_id=approved_proj.id)
+    ask_target = store.create(project_id=other_proj.id)
+
+    import nexus.config_file as cf
+
+    svc = CoordinatorService(store, _StubAgent(), tracker=None)
+    svc.ensure_session()
+
+    # Default: empty auto_approve → even the trusted project asks.
+    res = await svc.dispatch(session_id=ok_target.id, message="hi")
+    assert res["ok"] is False and res.get("needs_confirmation") is True
+
+    # Confirmed dispatch proceeds to launch (stubbed).
+    launched: list[dict] = []
+
+    class _Outcome:
+        error = None
+        queued = False
+        runner = None
+
+    async def _fake_launch_turn(**kwargs):
+        launched.append(kwargs)
+        return _Outcome()
+
+    monkeypatch.setattr("nexus.server.services.turn_launcher.launch_turn", _fake_launch_turn)
+    res = await svc.dispatch(session_id=ok_target.id, message="hi", confirmed=True)
+    assert res["ok"] is True and launched[-1]["session"].id == ok_target.id
+
+    # auto_approve = [trusted project id] → that project dispatches without
+    # asking; others still ask.
+    cfg = cf.load_cached()
+    cfg.coordinator.auto_approve = [approved_proj.id]
+    cf.save(cfg)
+    res = await svc.dispatch(session_id=ok_target.id, message="hi")
+    assert res["ok"] is True
+    res = await svc.dispatch(session_id=ask_target.id, message="hi")
+    assert res["ok"] is False and res.get("needs_confirmation") is True
+
+    # auto_approve = ["all"] → everything passes.
+    cfg = cf.load_cached()
+    cfg.coordinator.auto_approve = ["all"]
+    cf.save(cfg)
+    res = await svc.dispatch(session_id=ask_target.id, message="hi")
+    assert res["ok"] is True

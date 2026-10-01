@@ -59,8 +59,10 @@ SESSION_DISPATCH_TOOL = ToolSpec(
         "Send a message into another chat session and run its agent turn — "
         "delegation to a project chat or any session. With wait=true "
         "(default) the final reply is returned; wait=false fires and "
-        "forgets. Disabled during proactive sweeps and for the coordinator "
-        "session itself."
+        "forgets. Unless the target project is in [coordinator].auto_approve, "
+        "the first call is refused with needs_confirmation — confirm with "
+        "the user via ask_user, then retry with confirmed=true. Disabled "
+        "during proactive sweeps and for the coordinator session itself."
     ),
     parameters={
         "type": "object",
@@ -76,6 +78,10 @@ SESSION_DISPATCH_TOOL = ToolSpec(
             "wait": {
                 "type": "boolean",
                 "description": "Wait for the turn to finish and return its reply (default true).",
+            },
+            "confirmed": {
+                "type": "boolean",
+                "description": "True only after the user explicitly approved this dispatch via ask_user.",
             },
         },
         "required": ["session_id", "message"],
@@ -132,5 +138,6 @@ async def handle_session_dispatch(args: dict[str, Any], current_session_id: str 
         session_id=args.get("session_id", ""),
         message=args.get("message", ""),
         wait=bool(args.get("wait", True)),
+        confirmed=bool(args.get("confirmed", False)),
     )
     return json.dumps(result)

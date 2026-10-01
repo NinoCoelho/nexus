@@ -231,12 +231,28 @@ class CoordinatorService:
     # session_dispatch tool
     # ------------------------------------------------------------------
 
+    def _dispatch_approved(self, project_id: str | None) -> bool:
+        """Whether dispatching into ``project_id`` is pre-approved.
+
+        ``[coordinator].auto_approve`` holds ``"all"`` or a list of project
+        ids that may be dispatched without an explicit user confirmation.
+        Empty list (default) = every dispatch must be confirmed.
+        """
+        rules = list(getattr(self.config, "auto_approve", None) or [])
+        if not rules:
+            return False
+        normalized = {str(r).strip().lower() for r in rules}
+        if "all" in normalized or "*" in normalized:
+            return True
+        return bool(project_id and project_id.lower() in normalized)
+
     async def dispatch(
         self,
         *,
         session_id: str,
         message: str,
         wait: bool = True,
+        confirmed: bool = False,
     ) -> dict[str, Any]:
         if in_sweep_mode():
             return {
@@ -250,6 +266,19 @@ class CoordinatorService:
         session = self._store.get(session_id)
         if session is None:
             return {"ok": False, "error": f"unknown session {session_id}"}
+
+        if not self._dispatch_approved(getattr(session, "project_id", None)) and not confirmed:
+            return {
+                "ok": False,
+                "needs_confirmation": True,
+                "error": (
+                    "This dispatch is not pre-approved. Use the ask_user tool to "
+                    "confirm with the user first (the prompt reaches their Telegram "
+                    "or the web UI), then retry session_dispatch with confirmed=true. "
+                    "Never set confirmed=true without an explicit yes."
+                ),
+                "session_id": session_id,
+            }
 
         from .server.services.turn_launcher import launch_turn
 
