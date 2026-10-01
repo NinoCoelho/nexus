@@ -215,3 +215,42 @@ async def test_adopt_dm_bindings_migrates_old_dm(isolated_home) -> None:
 
     # Idempotent: second run migrates nothing.
     assert svc.adopt_dm_bindings() == 0
+
+
+async def test_name_and_persona_flow(isolated_home) -> None:
+    """Configured name drives the session title (create + rename on change)
+    and the coordinator prompt block carries name + persona."""
+    import nexus.config_file as cf
+    from nexus.agent.prompt_builder import _coordinator_block
+    from nexus.server.session_store import SessionStore
+
+    store = SessionStore(db_path=isolated_home / "sessions.sqlite")
+
+    cfg = cf.load_cached()
+    cfg.coordinator.name = "JARVIS"
+    cfg.coordinator.persona = "Address the user as Sir. Dry British wit."
+    cf.save(cfg)
+
+    svc = CoordinatorService(store, _StubAgent(), tracker=None)
+    sid = svc.ensure_session()
+    assert store.get(sid).title == "JARVIS"
+
+    # Rename on change (e.g. edited in Settings → hot sync).
+    cfg = cf.load_cached()
+    cfg.coordinator.name = "Alfred"
+    cf.save(cfg)
+    svc.ensure_session()
+    assert store.get(sid).title == "Alfred"
+
+    # Prompt block carries name + persona.
+    block = _coordinator_block()
+    assert "Alfred" in block
+    assert "Address the user as Sir" in block
+
+    # Without persona config the block still renders with a default name.
+    cfg = cf.load_cached()
+    cfg.coordinator.name = ""
+    cfg.coordinator.persona = ""
+    cf.save(cfg)
+    block = _coordinator_block()
+    assert "Master" in block and "Persona" not in block

@@ -122,11 +122,11 @@ def _memory_summary() -> str:
     return "\n".join(lines)
 
 
-_COORDINATOR_BLOCK = """\
+_COORDINATOR_BLOCK_TEMPLATE = """\
 ## Coordinator
 
-You are the user's **coordinator** — the master chat with a view over every
-project and session in Nexus. Tools only you have:
+You are the user's **coordinator** — {name}, the master chat with a view over
+every project and session in Nexus. Tools only you have:
 
 - `nexus_sessions` — inspect projects (descriptions, instructions, chat
   counts) and read the tail of any chat session.
@@ -146,7 +146,29 @@ Working agreements:
   say what you intend and ask unless the user already approved it.
 - During periodic sweeps you are read-only: inspect, digest, and report —
   never dispatch or write.
-"""
+{persona}"""
+
+
+def _coordinator_block() -> str:
+    """Render the coordinator prompt section with the configured name and
+    persona (falls back to "Master" / no persona when config is unset)."""
+    name = "Master"
+    persona = ""
+    try:
+        from ..config_file import load_cached
+
+        coord = getattr(load_cached(), "coordinator", None)
+        if coord is not None:
+            name = (coord.name or "Master").strip() or "Master"
+            persona = (coord.persona or "").strip()
+    except Exception:
+        pass
+    persona_block = (
+        f"\nPersona — how {name} behaves (user-configured):\n\n{persona}\n"
+        if persona
+        else ""
+    )
+    return _COORDINATOR_BLOCK_TEMPLATE.format(name=name, persona=persona_block)
 
 IDENTITY = """\
 You are Nexus. You're not a chatbot — you're a capable agent with tools, memory, \
@@ -455,7 +477,7 @@ def build_system_prompt(
         parts.append("\n".join(p_lines))
 
     if coordinator:
-        parts.append(_COORDINATOR_BLOCK)
+        parts.append(_coordinator_block())
         parts.append("")
 
     creds_block = _credentials_block()

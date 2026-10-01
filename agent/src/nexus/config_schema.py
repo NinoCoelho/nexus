@@ -355,6 +355,11 @@ class CoordinatorConfig(BaseModel):
     # Session id of the master chat; auto-provisioned (and persisted here)
     # on first use when empty.
     session_id: str = ""
+    # Display name for the master chat (session title + UI badge + prompt).
+    name: str = "Master"
+    # Free-text personality: tone, how it addresses you, focus areas.
+    # Injected into the coordinator's system prompt verbatim.
+    persona: str = ""
     # Periodic read-only sweep that digests activity and messages you on
     # Telegram. 0 disables sweeps regardless of the driver schedule.
     sweep_interval_minutes: int = 120

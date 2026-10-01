@@ -217,6 +217,8 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
         "coordinator": {
             "enabled": cfg.coordinator.enabled,
             "session_id": cfg.coordinator.session_id,
+            "name": cfg.coordinator.name,
+            "persona": cfg.coordinator.persona,
             "sweep_interval_minutes": cfg.coordinator.sweep_interval_minutes,
             "quiet_hours": cfg.coordinator.quiet_hours,
             "auto_approve": cfg.coordinator.auto_approve,

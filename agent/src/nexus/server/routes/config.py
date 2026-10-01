@@ -120,6 +120,8 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
         out["coordinator"] = {
             "enabled": coord.enabled,
             "session_id": coord.session_id,
+            "name": coord.name,
+            "persona": coord.persona,
             "sweep_interval_minutes": coord.sweep_interval_minutes,
             "quiet_hours": coord.quiet_hours,
             "auto_approve": coord.auto_approve,
@@ -315,6 +317,12 @@ def _sync_coordinator_service(cfg: Any, request: Request) -> None:
         set_service(None)
     # Reflect the live master session id (provisioned just now or at boot)
     # back onto the in-memory config so GET/PATCH /config and the UI badge
-    # are correct without a restart.
-    if coord.enabled and svc is not None and svc.session_id:
-        coord.session_id = svc.session_id
+    # are correct without a restart. ensure_session also retitles the chat
+    # when the configured name changed.
+    if coord.enabled and svc is not None:
+        try:
+            svc.ensure_session()
+        except Exception:
+            log.exception("config patch: coordinator retitle failed")
+        if svc.session_id:
+            coord.session_id = svc.session_id

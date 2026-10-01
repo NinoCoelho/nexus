@@ -113,10 +113,21 @@ class CoordinatorService:
         return bool(sid and session_id and session_id == sid)
 
     def ensure_session(self) -> str:
-        """Return the coordinator session id, creating + persisting it once."""
+        """Return the coordinator session id, creating + persisting it once.
+
+        The session title tracks the configured ``name`` — renaming the
+        coordinator in Settings renames the chat on the next sync.
+        """
         cfg = load_cached()
         sid = cfg.coordinator.session_id
-        if sid and self._store.get(sid) is not None:
+        existing = self._store.get(sid) if sid else None
+        if existing is not None:
+            name = (cfg.coordinator.name or "Master").strip() or "Master"
+            if (existing.title or "") != name:
+                try:
+                    self._store.rename(sid, name)
+                except Exception:
+                    log.exception("coordinator: could not retitle the master session")
             return sid
         session = self._store.create(
             context=(
@@ -124,8 +135,9 @@ class CoordinatorService:
                 "every project and chat."
             ),
         )
+        name = (cfg.coordinator.name or "Master").strip() or "Master"
         try:
-            self._store.rename(session.id, "Master")
+            self._store.rename(session.id, name)
         except Exception:
             log.exception("coordinator: could not title the master session")
         sid = session.id
