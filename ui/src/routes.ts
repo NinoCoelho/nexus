@@ -6,15 +6,15 @@
  *  - `navigate()` pushes history entries (so Back/Forward work),
  *  - `popstate`/`hashchange` listeners re-parse on external navigation.
  *
- * Legacy routes (`#/kanban`, `#/data`, `#/graph`, `#/heartbeat`, `#/dream`,
- * `?view=…&path=…`) are redirected/mapped on parse so old links keep
- * working.
+ * Legacy routes (`#/data`, `#/graph`, `#/heartbeat`, `#/dream` — plus the
+ * first-load `?view=…&path=…` query) are redirected/mapped on parse so old
+ * links keep working.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 /** Views reachable from the main nav. */
-export type View = "chat" | "projects" | "apps" | "vault" | "calendar" | "workflows";
+export type View = "chat" | "projects" | "apps" | "vault" | "calendar" | "kanban" | "workflows";
 
 /** Advanced area views — reachable via `#/advanced/<area>` and the
  * Settings drawer, not from the main nav. */
@@ -28,12 +28,11 @@ export interface AppRoute {
   path?: string | null;
 }
 
-const MAIN_VIEWS: ReadonlySet<string> = new Set(["chat", "projects", "apps", "vault", "calendar", "workflows"]);
+const MAIN_VIEWS: ReadonlySet<string> = new Set(["chat", "projects", "apps", "vault", "calendar", "kanban", "workflows"]);
 const ADVANCED_AREAS: ReadonlySet<string> = new Set(["graph", "heartbeat", "dream"]);
 
 /** Old view ids → new routes (kept so shared/bookmarked links survive). */
 const LEGACY_MAP: Record<string, { view: AnyView; path?: string | null }> = {
-  kanban: { view: "vault" },
   database: { view: "apps" },
   data: { view: "apps" },
   graph: { view: "graph" },
@@ -76,7 +75,7 @@ export function parseLocation(hash: string, search: string): AppRoute | null {
   if (!v) return null;
   const path = qs.get("path");
   if (MAIN_VIEWS.has(v)) return { view: v as View, path };
-  if (LEGACY_MAP[v]) return { ...LEGACY_MAP[v], path: v === "kanban" || v === "data" || v === "database" ? null : path };
+  if (LEGACY_MAP[v]) return { ...LEGACY_MAP[v], path: v === "data" || v === "database" ? null : path };
   return null;
 }
 
@@ -91,7 +90,7 @@ function readCurrent(): AppRoute {
 /** Redirect legacy hash URLs in place so the address bar heals itself. */
 function maybeRedirectLegacy(): void {
   const h = window.location.hash;
-  const m = h.match(/^#\/(kanban|database|data|graph|heartbeat|dream)\/?$/);
+  const m = h.match(/^#\/(database|data|graph|heartbeat|dream)\/?$/);
   if (!m) return;
   const target = LEGACY_MAP[m[1]];
   if (target) window.history.replaceState(null, "", serializeRoute(target.view, target.path ?? null));

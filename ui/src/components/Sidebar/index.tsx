@@ -20,8 +20,9 @@ import { checkUpdate as apiCheckUpdate, type UpdateCheckResult } from "../../api
 import VaultTreePanel from "../VaultTreePanel";
 import WorkflowListPanel from "../WorkflowListPanel";
 import ProjectsListPanel from "./ProjectsListPanel";
+import KanbanListPanel from "./KanbanListPanel";
 import AppsListPanel from "./AppsListPanel";
-import { IconChat, IconCalendar, IconVault, IconWorkflow, IconGear, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
+import { IconChat, IconCalendar, IconVault, IconKanban, IconWorkflow, IconGear, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
 import SessionsPanel from "./SessionsPanel";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
@@ -65,6 +66,9 @@ interface Props {
   /** Selected app folder in the Apps view (shared with AppsPane). */
   appSelectedFolder?: string | null;
   onAppSelectFolder?: (folder: string | null) => void;
+  /** Selected kanban board path (shared with the Kanban pane). */
+  kanbanSelectedPath?: string | null;
+  onKanbanOpen?: (path: string) => void;
 }
 
 function Sidebar({
@@ -79,6 +83,8 @@ function Sidebar({
   onProjectsSelect,
   appSelectedFolder = null,
   onAppSelectFolder,
+  kanbanSelectedPath = null,
+  onKanbanOpen,
 }: Props) {
   const { t } = useTranslation("sidebar");
   const NAV_GROUPS = {
@@ -90,6 +96,7 @@ function Sidebar({
       { id: "apps" as const,     label: t("sidebar:viewNames.apps"),     Icon: IconDatabase },
       { id: "vault" as const,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
       { id: "calendar" as const, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+      { id: "kanban" as const, label: t("sidebar:viewNames.kanban"), Icon: IconKanban },
       { id: "workflows" as const, label: "Workflows", Icon: IconWorkflow },
     ],
   };
@@ -404,6 +411,11 @@ function Sidebar({
         </div>
       )}
 
+      {/* Kanban boards — only in Kanban view */}
+      {view === "kanban" && !collapsed && onKanbanOpen && (
+        <KanbanListPanel selectedPath={kanbanSelectedPath} onOpen={onKanbanOpen} />
+      )}
+
       {/* Workflow list — only in Workflows view */}
       {view === "workflows" && !collapsed && (
         <div className="sidebar-section sidebar-vault-section">
@@ -419,6 +431,7 @@ function Sidebar({
         !(view === "projects" && !collapsed) &&
         !(view === "apps" && !collapsed) &&
         !(view === "vault" && !collapsed) &&
+        !(view === "kanban" && !collapsed) &&
         !(view === "workflows" && !collapsed) && (
         <div className="sidebar-spacer" />
       )}

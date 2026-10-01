@@ -86,6 +86,10 @@ export default function App() {
   const [vaultSelectedPath, setVaultSelectedPath] = useState<string | null>(() => (route.view === "vault" ? route.path ?? null : null));
   /** Currently selected calendar (.md path) inside the Calendar view. Lifted here so view switches preserve it. */
   const [calendarSelectedPath, setCalendarSelectedPath] = useState<string | null>(null);
+  /** Selected kanban board path — shared by the sidebar board list and the Kanban pane. */
+  const [kanbanSelectedPath, setKanbanSelectedPath] = useState<string | null>(
+    () => (route.view === "kanban" ? route.path ?? null : null),
+  );
   /** Selected project in the Projects view — shared by the sidebar list and the workspace pane. */
   const [projectsSelectedId, setProjectsSelectedId] = useState<string | null>(null);
   /** Selected app folder in the Apps view — shared by the sidebar list and the Apps pane. */
@@ -136,6 +140,9 @@ export default function App() {
     }
     if (route.view === "apps" && p && p !== lastRoutePathRef.current) {
       setAppsSelectedFolder(p);
+    }
+    if (route.view === "kanban" && p && p !== lastRoutePathRef.current) {
+      setKanbanSelectedPath(p);
     }
     lastRoutePathRef.current = p;
   }, [route.view, route.path]);
@@ -500,6 +507,10 @@ export default function App() {
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleSessionsRevisionBump = useCallback(() => setSessionsRevision((r) => r + 1), []);
   const handleVaultOpenPathHandled = useCallback(() => setVaultOpenPath(null), []);
+  const handleKanbanOpen = useCallback((path: string) => {
+    setKanbanSelectedPath(path);
+    setView("kanban");
+  }, [setView]);
   const handleUpdateAvailable = useCallback((check: UpdateCheckResult) => {
     setUpdateCheck(check);
     setUpdateModalOpen(true);
@@ -538,6 +549,8 @@ export default function App() {
         onProjectsSelect={setProjectsSelectedId}
         appSelectedFolder={appsSelectedFolder}
         onAppSelectFolder={setAppsSelectedFolder}
+        kanbanSelectedPath={kanbanSelectedPath}
+        onKanbanOpen={handleKanbanOpen}
       />
 
       <div className="app-main">
@@ -632,6 +645,26 @@ export default function App() {
                 onOpenInVault={handleOpenInVault}
                 refreshKey={sessionsRevision}
               />
+            </KeepMounted>
+          </div>
+          <div className="view-pane" style={{ display: view === "kanban" ? "flex" : "none" }}>
+            <KeepMounted active={view === "kanban"}>
+              {kanbanSelectedPath ? (
+                <VaultView selectedPath={kanbanSelectedPath} {...vaultViewCommon} />
+              ) : (
+                <div className="view-pane-col">
+                  <div className="view-head">
+                    <h2 className="view-title">Kanban</h2>
+                    <p className="view-sub">Boards are vault markdown files with kanban-plugin frontmatter</p>
+                  </div>
+                  <div className="view-body">
+                    <div className="view-empty">
+                      <p>No board selected</p>
+                      <p className="view-empty-hint">Pick a board on the left</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </KeepMounted>
           </div>
           <div className="view-pane" style={{ display: view === "apps" ? "flex" : "none" }}>
