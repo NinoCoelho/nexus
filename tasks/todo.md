@@ -75,3 +75,103 @@ minutes in Settings, wait for the digest.
   --bg-hover hovers) and the shared views.css language — bespoke CSS looks unprofessional.
 - Don't remove a top-level view (kanban) without giving its items an equally reachable home.
 - Keep-mounted children must mount lazily (mount-on-first-activation), else lazy bundles all load.
+
+---
+
+# Voice Conversation Mode — Master Chat (2026-10-01)
+
+Decisions (locked with user): web-UI overlay on master chat, full-duplex with
+barge-in, local-only models (silero-vad + faster-whisper + Piper), full reply
+sentence-streamed. Architecture: voicekit-style gateway (`WS /voice/stream`)
+wrapping the existing agent loop via `turn_launcher.launch_turn` into
+`coordinator.ensure_session()`; the gateway speaks, the agent loop is untouched.
+
+## M1 — transport + half-duplex core ✅
+- [x] `[voice]` config section (endpoint_ms, min_speech_ms, barge_in, barge_in_min_speech_ms, speak_max_words) in config_schema.py
+- [x] `nexus/voice/` package: vad.py (silero-vad), endpoint.py (state machine), asr.py (reuse cached whisper), sentences.py (delta accumulator), tts_stream.py (per-sentence Piper + prefetch + cancel), gateway.py (WS /voice/stream)
+- [x] Register WS route in server/app.py; LoopbackOrTokenMiddleware is BaseHTTPMiddleware → never sees WS scopes, gateway self-enforces loopback + refuses proxy headers
+- [x] ui/src/voice/: VoiceSession.ts (WS client + blob-URL worklet + AEC capture + playback queue + barge-in stop), voiceActive.ts (ack suppression flag), useVoiceMode.ts
+- [x] ui/src/components/VoiceOverlay/: full-screen overlay (state orb reacts to VAD level, transcript, mute/stop/end); entry = mic button in the CoordinatorBubble panel header
+- [x] Suppress double speech: `suppress_voice_ack` on launch_turn/ChatTurnRunner + ack player skips while the overlay is active
+
+## M2 — barge-in ✅
+- [x] Server VAD barge-in + client instant stop (`barge_in` event) → pipeline cancel + speech suppression until the new input owns the turn
+- [x] Echo guard: barge gate raises min-speech while audio streams out (browser AEC + 400 ms sustain)
+- [x] Mid-turn interruption rides queue-then-inject; post-settle = plain new turn
+
+## M3 — polish (partial)
+- [x] HITL surfaced in overlay as a "answer it in the chat panel" note (spoken question + form UI = future)
+- [ ] Settings → Features → Voice section (config-file only for now)
+- [x] Verification: 20 unit/integration tests (endpoint machine, accumulator, pipeline, full WS loop vs real uvicorn + fake provider/ASR/TTS/VAD); ruff clean; npm run build clean; full suite 1468 passed
+- [ ] Latency: endpoint ~600ms + whisper ~400ms + first token ~500ms + first sentence ~300ms ≈ 1.8s target
+
+Risks: speaker echo (browser AEC + 400ms gate + headset advice, `barge_in=false`
+fallback), Piper underrun (prefetch + 800-word cap), whisper-base pt accuracy
+(transcript shown in overlay; model configurable in `[transcription]`).
+
+Out of scope: wake word, Chrome panel voice, streaming partials (config stub
+`partials=false`), voice through tunnel.
+
+
+### Voice mode — implementation notes (2026-10-01)
+- Full-duplex loop: mic PCM (16k int16) → silero VAD (onnxruntime direct, no
+  torch — the pip `silero-vad` package hard-depends on torch; model ~2.2 MB
+  auto-downloads to ~/.nexus/voice/models/) → EndpointDetector →
+  faster-whisper → `launch_turn(is_voice=True, suppress_voice_ack=True)` →
+  session-bus deltas → SentenceAccumulator → SpeechPipeline (per-sentence
+  Piper, lazy worker, cancel/resume) → WAV frames back over the same WS.
+- The gateway is the speaker: `suppress_voice_ack` keeps regular acks silent
+  server-side; `voiceActive.ts` gates the web ack player client-side.
+- After a barge-in the interrupted turn's remaining text is muted (shown,
+  not spoken) until `user_injected` / `turn_settled` / the next utterance —
+  `SpeechPipeline.resume()` + `_suppress_speech` in gateway.py.
+- Playback drain is client-acknowledged (`playback_end`); orphaned acks fail
+  open after 20 s so barge-in gating can't wedge.
+- Client worklet is a Blob-URL AudioWorklet (no public/ asset), capture uses
+  echoCancellation/noiseSuppression/autoGainControl, linear-resamples
+  ctx-rate → 16k with carry for continuity; sends 1536-sample batches
+  (3 exact VAD windows) per WS frame.
+- **Bugfix (2026-10-01, user report)**: utterance audio was garbled — the
+  gateway re-sliced WS messages instead of using the VAD's own window
+  framing (leftover buffering desynced alignment every ~100 ms → Whisper
+  hallucinated multilingual text). `SileroVAD.feed` now returns
+  `(prob, window)` pairs; gateway captures those exact windows.
+- **Bugfix round 2 (2026-10-01)**: still garbled → resampling moved off the
+  browser. Client streams native-rate int16 (`?rate=`, AudioContext rate);
+  server `voice/resample.py::StreamResampler` (linear, cross-block carry +
+  phase) feeds the VAD. Worklet now pulls through a gain-0 sink. Validated
+  with real speech (`say` fixture) end-to-end at 48 kHz through real VAD +
+  real whisper: exact transcript.
+
+---
+
+# Fast conversation lane — master chat (2026-10-01, afternoon) — ROLLED BACK
+
+**User rolled the entire voice-mode effort back** (both waves: gateway +
+fast lane). All code reverted via git, config restored
+(transcription base/auto, no [voice]/[coordinator] extras), ~/.nexus/voice
+deleted, UI rebuilt. Kept below as a record of what was tried and why it
+failed — see lessons.md (2026-10-01 entries) before retrying.
+
+Decisions (locked): confirm only when ambiguous; voice first (text ⚡ button later);
+STT small + language pt; rolling history trim for the coordinator.
+
+Why: log showed every master turn shipping msgs=196 + tools=183 to the LLM —
+first-token latency is dominated by prompt weight. Fast lane = tiny context,
+no tools, direct answers / one clarifying question / quick DDGS search /
+escalate to the agent loop with clarified context embedded.
+
+## Phases
+- [x] P0: config — [transcription] model=small language="pt"; [voice] endpoint_ms=450
+- [x] P1: [voice] fast_lane + fast_model config (schema + PATCH allowlist)
+- [x] P1: voice/fast_lane.py — marker protocol (ANSWER/CLARIFY/SEARCH/AGENT),
+      rolling ~6-exchange transcript, agentive-regex pre-classifier,
+      fast-model call mirroring voice_ack._generate_text
+- [x] P1: gateway — fast paths only when idle (busy → queue-inject as today);
+      answer/clarify (max 2 rounds)/search (loom DDGS + summary)/agent
+      (handoff line + context block in launch_turn message); fast_reply +
+      fast_done WS events; latency log (ms to first audio per path)
+- [x] P1: overlay — render fast_reply sentences; fast_done closes the turn
+- [x] P4: [coordinator] max_history_turns (0=off) — trim in launch_turn at
+      user-message boundaries, never orphaning tool results
+- [x] Tests + ruff + build + daemon restart — 26 voice tests, 1478 full suite, build clean; live config: transcription small+pt, voice endpoint_ms=450, coordinator max_history_turns=40

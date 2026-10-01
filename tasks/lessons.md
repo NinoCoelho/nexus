@@ -100,3 +100,48 @@ persisted.
 live-session report as a code bug. Quick probe that the new code is live:
 `curl -X DELETE localhost:18989/chat/x/queue/y` → new build answers
 `{"reason":"not_queued"}`, old build answers `{"detail":"Not Found"}`.
+
+## 2026-10-01 — voice mode garbled transcription + ws error
+- **Streaming audio pipelines must pair every detector probability with the
+  exact samples that produced it.** `SileroVAD` buffers sub-window leftovers
+  between calls; the gateway re-sliced each WS message assuming
+  window-aligned starts, inserting periodic glitches into utterance audio →
+  Whisper hallucinated multilingual gibberish. Rule: the detector returns
+  `(prob, window)` tuples; never re-slice the incoming chunk. Client now
+  sends 1536-sample batches (3 exact windows) too. Regression test:
+  `test_vad_feed_pairs_probs_with_exact_windows`.
+- **After adding server routes, the running daemon is stale.** "voice
+  websocket error" = handshake rejection from a server build without
+  `/voice/stream`. Client error messages now say "restart the Nexus server".
+  Mention restart whenever shipping new backend routes.
+
+## 2026-10-01 (2) — garbled voice round 2: client-side resampling removed
+- Symptom persisted after the alignment fix; Whisper kept hallucinating
+  multilingual text. Proving order mattered: (1) real speech through the
+  server chain → perfect transcript; (2) verbatim JS-resampler port → also
+  perfect. But the user's browser hit a device/rate path the simulation
+  couldn't reproduce (BT headsets can force odd context rates; rate
+  mismatches scramble audio into hallucination fuel).
+- Lesson: **don't resample audio in the browser when the server can do it.**
+  Client now ships native-rate int16 + `?rate=`; the server owns a tested
+  `StreamResampler`. Fragile DSP belongs where it's unit-testable.
+- Lesson: **AudioWorklet nodes need a destination path to be pulled** —
+  connect through a gain-0 sink to guarantee processing without monitoring.
+- Verification trick that found the artifact: `say` + `afconvert` gives real
+  speech fixtures; feeding them through the exact gateway chain (odd chunk
+  sizes) localizes corruption server-vs-client without a live mic.
+
+## 2026-10-01 (4) — voice mode rolled back by user
+- After five capture-path iterations (JS resample → native-rate → mic-rate
+  lock → WSTP n/a → MediaRecorder) the loop reached "mostly works" but not
+  trustworthy-enough for daily use; user rolled the whole feature back.
+- If voice mode is retried: MediaRecorder capture was the only path that
+  produced clean bilingual audio on this machine; the WebAudio graph's
+  track→graph resample is a device-state roulette (1.33x/2x speed, chop,
+  digital silence). Start from MR + the dump/`hello` diagnostics, not from
+  the worklet.
+- Rollback itself: everything was uncommitted — `git checkout --` the
+  touched files, delete the new dirs, restore config.toml BY HAND (daemon
+  stopped), rebuild ui/dist, restart. Full-file rollback is painless ONLY
+  because nothing was committed mid-feature; commit (or branch) earlier
+  next time a feature spirals.
