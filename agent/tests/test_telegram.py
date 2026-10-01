@@ -76,9 +76,7 @@ class FakeTGClient:
         return 1
 
     async def send_audio(self, chat_id, audio, filename, mime, *, thread_id=None):
-        self.audios.append(
-            {"chat_id": chat_id, "audio": audio, "filename": filename, "mime": mime}
-        )
+        self.audios.append({"chat_id": chat_id, "audio": audio, "filename": filename, "mime": mime})
         return 1
 
     async def send_chat_action(self, chat_id, action="typing", *, thread_id=None):
@@ -122,9 +120,7 @@ class Harness:
     def __init__(self, tmp_path: Path, provider: FakeProvider) -> None:
         self.tmp_path = tmp_path
         self.store = SessionStore(db_path=tmp_path / "sessions.sqlite")
-        self.agent = Agent(
-            provider=provider, registry=SkillRegistry(tmp_path / "skills")
-        )
+        self.agent = Agent(provider=provider, registry=SkillRegistry(tmp_path / "skills"))
         self.client = FakeTGClient()
         self.bindings = TelegramBindingStore(tmp_path / "sessions.sqlite")
         self.cfg = TelegramConfig(enabled=True, allowed_user_ids=[42])
@@ -241,9 +237,7 @@ async def test_dm_message_creates_session_and_streams_reply(tmp_path: Path) -> N
     # Ack lifecycle: 👀 on receipt, upgraded to 👍 once the turn settles.
     assert (1000, 1, "👀") in h.client.reactions
     assert (1000, 1, "👍") in h.client.reactions
-    assert h.client.reactions.index((1000, 1, "👀")) < h.client.reactions.index(
-        (1000, 1, "👍")
-    )
+    assert h.client.reactions.index((1000, 1, "👀")) < h.client.reactions.index((1000, 1, "👍"))
     assert h.router._pending_acks.get(binding.active_session_id) in (None, [])
 
 
@@ -291,9 +285,7 @@ async def test_project_bind_adopts_latest_session(tmp_path: Path) -> None:
     pstore = ProjectStore(h.tmp_path / "sessions.sqlite")
     project = pstore.create(name="Apollo")
     existing = h.store.create(context="seed", project_id=project.id)
-    h.store.replace_history(
-        existing.id, [ChatMessage(role=Role.USER, content="earlier work")]
-    )
+    h.store.replace_history(existing.id, [ChatMessage(role=Role.USER, content="earlier work")])
 
     await h.message("/project Apollo", chat_type="supergroup", thread_id=5)
     binding = h.bindings.get(1000, 5)
@@ -418,9 +410,17 @@ async def test_upgrade_acks_deferred_while_runner_alive(tmp_path: Path) -> None:
     sid = h.store.create().id
     h.router._pending_acks[sid] = [(1000, 7)]
     fake_runner = ChatTurnRunner(
-        agent=h.agent, store=h.store, session_id=sid, message="m", context="",
-        model_id="", pre_turn_history=[], attachment_parts=None,
-        resume_working_messages=None, tracker=None, turn_job_id="",
+        agent=h.agent,
+        store=h.store,
+        session_id=sid,
+        message="m",
+        context="",
+        model_id="",
+        pre_turn_history=[],
+        attachment_parts=None,
+        resume_working_messages=None,
+        tracker=None,
+        turn_job_id="",
         publish_job_event=lambda *a: None,
     )
     fake_runner.task = asyncio.get_running_loop().create_task(asyncio.sleep(10))
@@ -453,13 +453,16 @@ async def test_hitl_prompt_forwarded_and_button_resolves(tmp_path: Path) -> None
     from nexus.telegram.hitl import HitlForwarder
 
     fwd = HitlForwarder(h.router)
-    await fwd._forward(sid, {
-        "request_id": "req1",
-        "prompt": "Run this destructive command?",
-        "kind": "confirm",
-        "choices": None,
-        "default": None,
-    })
+    await fwd._forward(
+        sid,
+        {
+            "request_id": "req1",
+            "prompt": "Run this destructive command?",
+            "kind": "confirm",
+            "choices": None,
+            "default": None,
+        },
+    )
     assert any("destructive" in t for t in h.client.sent_texts())
     kb = h.client.sent[-1]["kb"]
     buttons = [b for row in kb["inline_keyboard"] for b in row]
@@ -540,9 +543,7 @@ async def test_bindings_crud(tmp_path: Path) -> None:
     store = TelegramBindingStore(tmp_path / "s.sqlite")
 
     assert store.get(1, 0) is None
-    b = store.upsert(
-        chat_id=1, thread_id=2, kind="topic", project_id="p1", active_session_id="s1"
-    )
+    b = store.upsert(chat_id=1, thread_id=2, kind="topic", project_id="p1", active_session_id="s1")
     assert b.kind == "topic"
     got = store.get(1, 2)
     assert got is not None and got.project_id == "p1" and got.active_session_id == "s1"
@@ -568,7 +569,9 @@ async def test_photo_attachment_ingested_to_vault(
     monkeypatch.setattr(vault_module, "_VAULT_ROOT", tmp_path / "vault")
 
     h = Harness(tmp_path, FakeProvider([_final("it's a photo")]))
-    msg = _msg("", )
+    msg = _msg(
+        "",
+    )
     msg.pop("text")
     msg["caption"] = "what is this?"
     msg["photo"] = [
@@ -606,7 +609,9 @@ async def test_document_without_caption_still_runs(
     monkeypatch.setattr(vault_module, "_VAULT_ROOT", tmp_path / "vault")
 
     h = Harness(tmp_path, FakeProvider([_final("read it")]))
-    msg = _msg("", )
+    msg = _msg(
+        "",
+    )
     msg.pop("text")
     msg["document"] = {
         "file_id": "doc1",
@@ -635,7 +640,9 @@ async def test_oversized_file_rejected_before_turn(
     monkeypatch.setattr(vault_module, "_VAULT_ROOT", tmp_path / "vault")
 
     h = Harness(tmp_path, FakeProvider([_final("nope")]))
-    msg = _msg("check this", )
+    msg = _msg(
+        "check this",
+    )
     msg["document"] = {
         "file_id": "huge",
         "file_name": "big.zip",
@@ -670,12 +677,12 @@ async def test_voice_message_transcribed_with_voice_reply(
         return SynthResult(b"RIFFWAV", "audio/wav")
 
     monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
-    monkeypatch.setattr(
-        "nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGGBYTES"
-    )
+    monkeypatch.setattr("nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGGBYTES")
     h.router._tts_cfg = lambda: TTSConfig(enabled=True)
 
-    msg = _msg("", )
+    msg = _msg(
+        "",
+    )
     msg.pop("text")
     msg["voice"] = {"file_id": "vf1", "duration": 3, "mime_type": "audio/ogg"}
     await h.router.handle_update({"update_id": 3, "message": msg})
@@ -702,9 +709,7 @@ async def _async_value(value):
     return value
 
 
-async def test_voice_reply_disabled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_voice_reply_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from nexus.config_schema import TTSConfig
 
     h = Harness(tmp_path, FakeProvider([_final("text only")]))
@@ -715,7 +720,9 @@ async def test_voice_reply_disabled(
     h.router._tts_cfg = lambda: TTSConfig(enabled=True)
     h.router.cfg.voice_replies = False
 
-    msg = _msg("", )
+    msg = _msg(
+        "",
+    )
     msg.pop("text")
     msg["voice"] = {"file_id": "vf1", "duration": 2}
     await h.router.handle_update({"update_id": 3, "message": msg})
@@ -729,10 +736,10 @@ async def test_voice_transcription_failure_notifies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     h = Harness(tmp_path, FakeProvider([_final("unused")]))
-    monkeypatch.setattr(
-        "nexus.multimodal.transcribe_bytes", lambda data, mime: _async_value("")
+    monkeypatch.setattr("nexus.multimodal.transcribe_bytes", lambda data, mime: _async_value(""))
+    msg = _msg(
+        "",
     )
-    msg = _msg("", )
     msg.pop("text")
     msg["voice"] = {"file_id": "vf1", "duration": 2}
     await h.router.handle_update({"update_id": 3, "message": msg})
@@ -895,7 +902,10 @@ async def test_deliver_speechify_auto_messy(
     monkeypatch.setattr("nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGG")
 
     ok = await deliver_voice_note(
-        h.client, 1000, 0, "Agora: **31°C** ✅ com 50% de chance",
+        h.client,
+        1000,
+        0,
+        "Agora: **31°C** ✅ com 50% de chance",
         tts_cfg=TTSConfig(enabled=True),
         agent=object(),
         speechify_mode="auto",
@@ -927,7 +937,10 @@ async def test_deliver_speechify_auto_clean_skips_llm(
     monkeypatch.setattr("nexus.voice_ack._generate_text", fail_llm)
 
     ok = await deliver_voice_note(
-        h.client, 1000, 0, "Tudo certo, resolvi o seu pedido.",
+        h.client,
+        1000,
+        0,
+        "Tudo certo, resolvi o seu pedido.",
         tts_cfg=TTSConfig(enabled=True),
         agent=object(),
         speechify_mode="auto",
@@ -955,7 +968,10 @@ async def test_deliver_speechify_off_never_calls_llm(
     monkeypatch.setattr("nexus.voice_ack._generate_text", fail_llm)
 
     ok = await deliver_voice_note(
-        h.client, 1000, 0, "bagunçado **31°C** ✅",
+        h.client,
+        1000,
+        0,
+        "bagunçado **31°C** ✅",
         tts_cfg=TTSConfig(enabled=True),
         agent=object(),
         speechify_mode="off",
@@ -988,3 +1004,41 @@ async def test_speechify_failure_falls_back(
     monkeypatch.setattr("nexus.voice_ack._generate_text", boom)
     out = await speechify(object(), "texto original", timeout=1.0)
     assert out == "texto original"
+
+
+async def test_topics_lists_bindings(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    from nexus.server.project_store import ProjectStore
+
+    pstore = ProjectStore(h.tmp_path / "sessions.sqlite")
+    apollo = pstore.create(name="Apollo")
+    borea = pstore.create(name="Borea")
+    a_session = h.store.create(context="Telegram: topic 1000/5", project_id=apollo.id)
+    h.store.rename(a_session.id, "main thread")
+    h.bindings.upsert(
+        chat_id=1000,
+        thread_id=5,
+        kind="topic",
+        project_id=apollo.id,
+        active_session_id=a_session.id,
+    )
+    h.bindings.upsert(
+        chat_id=2000,
+        thread_id=0,
+        kind="group",
+        project_id=borea.id,
+        active_session_id=h.store.create().id,
+    )
+
+    # Asked from inside topic 1000/5 — that row gets the "here" marker.
+    await h.message("/topics", chat_type="supergroup", thread_id=5)
+    text = h.client.sent_texts()[-1]
+    assert "Apollo" in text and "Borea" in text
+    assert "main thread" in text
+    assert "✅" in text
+    assert str(1000) in text and str(5) in text and str(2000) in text
+
+    # Empty state.
+    h2 = Harness(tmp_path / "empty", FakeProvider([_final("ok")]))
+    await h2.message("/topics", chat_type="supergroup", thread_id=9)
+    assert "No chats or topics are linked" in h2.client.sent_texts()[-1]

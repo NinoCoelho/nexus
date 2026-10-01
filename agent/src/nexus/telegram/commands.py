@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 _HELP_TEXT = """<b>Nexus commands</b>
 <code>/project [name]</code> — bind this chat/topic to a project (or show binding)
+<code>/topics</code> — list every linked chat/topic and its project
 <code>/new [title]</code> — start a new chat in this project
 <code>/chats</code> — list chats for this project
 <code>/switch</code> — switch the active chat (buttons)
@@ -59,9 +60,7 @@ class MsgInfo:
 async def _reply(deps: CommandDeps, info: MsgInfo, text: str) -> None:
     """Send text to the originating chat, chunked to fit Telegram limits."""
     for chunk in split_for_telegram(text):
-        await deps.client.send_text_safe(
-            info.chat_id, chunk, thread_id=info.thread_id or None
-        )
+        await deps.client.send_text_safe(info.chat_id, chunk, thread_id=info.thread_id or None)
 
 
 def _is_forum_topic(info: MsgInfo) -> bool:
@@ -103,10 +102,7 @@ def _project_keyboard(projects: list[Any]) -> dict | None:
     """Inline keyboard listing projects for /project (no-arg) binding."""
     if not projects:
         return None
-    rows = [
-        [{"text": p.name[:60], "callback_data": f"pj:{p.id[:56]}"}]
-        for p in projects[:20]
-    ]
+    rows = [[{"text": p.name[:60], "callback_data": f"pj:{p.id[:56]}"}] for p in projects[:20]]
     return {"inline_keyboard": rows}
 
 
@@ -124,9 +120,7 @@ async def cmd_id(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     project = ""
     if binding and binding.project_id:
         p = deps.projects.get(binding.project_id)
-        project = f"\nproject: <code>{binding.project_id}</code>" + (
-            f" ({p.name})" if p else ""
-        )
+        project = f"\nproject: <code>{binding.project_id}</code>" + (f" ({p.name})" if p else "")
     await _reply(
         deps,
         info,
@@ -158,8 +152,7 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
             await _reply(deps, info, f"This chat is bound to project <b>{name}</b>.")
         else:
             text = (
-                "This chat is not bound to a project yet.\n"
-                "Use /project &lt;name&gt; to bind one."
+                "This chat is not bound to a project yet.\nUse /project &lt;name&gt; to bind one."
             )
             projects = pstore.list(limit=20)
             kb = _project_keyboard(projects)
@@ -171,7 +164,9 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
                     reply_markup=kb,
                 )
             else:
-                await _reply(deps, info, text + "\n(No projects exist yet — create one in the Nexus UI.)")
+                await _reply(
+                    deps, info, text + "\n(No projects exist yet — create one in the Nexus UI.)"
+                )
         return
 
     project = await _find_project(deps, args)
@@ -211,6 +206,42 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     )
 
 
+_KIND_ICON = {"dm": "✉️", "group": "👥", "topic": "🧵"}
+
+
+async def cmd_topics(deps: CommandDeps, info: MsgInfo, args: str) -> None:
+    """List every Telegram binding (dm/group/topic) with its project and
+    active chat — the bot-side mirror of Settings → Telegram's table."""
+    bindings = deps.bindings.list_all()
+    if not bindings:
+        await _reply(
+            deps,
+            info,
+            "No chats or topics are linked yet.\nUse /project &lt;name&gt; in a topic "
+            "to bind it to a project.",
+        )
+        return
+    projects = {p.id: p for p in deps.projects.list(limit=200)}
+    lines = ["<b>Linked chats &amp; topics</b>"]
+    for b in bindings[:25]:
+        icon = _KIND_ICON.get(b.kind, "💬")
+        where = f"chat <code>{b.chat_id}</code>"
+        if b.thread_id:
+            where += f" · topic <code>{b.thread_id}</code>"
+        if b.project_id and b.project_id in projects:
+            proj = projects[b.project_id].name
+        else:
+            proj = b.project_id or "no project"
+        title = ""
+        if b.active_session_id:
+            s = deps.store.get(b.active_session_id)
+            if s is not None and s.title:
+                title = f" · {(s.title or '')[:40]}"
+        here = " ✅" if b.chat_id == info.chat_id and b.thread_id == info.thread_id else ""
+        lines.append(f"{icon} <b>{proj}</b> · {where}{title}{here}")
+    await _reply(deps, info, "\n".join(lines))
+
+
 async def cmd_new(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     binding = deps.bindings.get(info.chat_id, info.thread_id)
     kind = _binding_kind(info)
@@ -239,8 +270,7 @@ async def cmd_new(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     await _reply(
         deps,
         info,
-        f"New chat <b>{shown}</b> started"
-        + (" in project." if project_id else "."),
+        f"New chat <b>{shown}</b> started" + (" in project." if project_id else "."),
     )
 
 
@@ -249,7 +279,13 @@ async def _list_sessions(deps: CommandDeps, binding: TelegramBinding) -> list[An
         return deps.store.list(limit=25, project_id=binding.project_id)
     # DMs / unbound groups: sessions created from this chat, by context prefix.
     prefix = _context_for(
-        MsgInfo(binding.chat_id, binding.thread_id, "private" if binding.kind == "dm" else "supergroup", 0, "")
+        MsgInfo(
+            binding.chat_id,
+            binding.thread_id,
+            "private" if binding.kind == "dm" else "supergroup",
+            0,
+            "",
+        )
     )
     rows = deps.store._loom._db.execute(
         "SELECT id, title, updated_at, 0 AS message_count, project_id "
@@ -258,10 +294,17 @@ async def _list_sessions(deps: CommandDeps, binding: TelegramBinding) -> list[An
         (prefix + "%",),
     ).fetchall()
     return [
-        type("S", (), {
-            "id": r[0], "title": r[1] or "New session",
-            "updated_at": r[2], "message_count": r[3], "project_id": r[4],
-        })()
+        type(
+            "S",
+            (),
+            {
+                "id": r[0],
+                "title": r[1] or "New session",
+                "updated_at": r[2],
+                "message_count": r[3],
+                "project_id": r[4],
+            },
+        )()
         for r in rows
     ]
 
@@ -269,7 +312,9 @@ async def _list_sessions(deps: CommandDeps, binding: TelegramBinding) -> list[An
 async def cmd_chats(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     binding = deps.bindings.get(info.chat_id, info.thread_id)
     if binding is None:
-        await _reply(deps, info, "No chats yet — /project &lt;name&gt; to bind one, or just send a message.")
+        await _reply(
+            deps, info, "No chats yet — /project &lt;name&gt; to bind one, or just send a message."
+        )
         return
 
     sessions = await _list_sessions(deps, binding)
@@ -280,7 +325,14 @@ async def cmd_chats(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     rows = []
     for i, s in enumerate(sessions):
         marker = "● " if s.id == binding.active_session_id else ""
-        rows.append([{"text": f"{marker}{(s.title or 'New session')[:56]}", "callback_data": f"sw:{s.id[:56]}"}])
+        rows.append(
+            [
+                {
+                    "text": f"{marker}{(s.title or 'New session')[:56]}",
+                    "callback_data": f"sw:{s.id[:56]}",
+                }
+            ]
+        )
     kb = {"inline_keyboard": rows}
     await deps.client.send_text_safe(
         info.chat_id,
@@ -303,7 +355,9 @@ async def cmd_title(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     current = session.title if session else "(unknown)"
     new_title = args.strip()
     if not new_title:
-        await _reply(deps, info, f"Current title: <b>{current}</b>\nUsage: /title &lt;new title&gt;")
+        await _reply(
+            deps, info, f"Current title: <b>{current}</b>\nUsage: /title &lt;new title&gt;"
+        )
         return
     deps.store.rename(binding.active_session_id, new_title[:120])
     await _reply(deps, info, f"Chat renamed to <b>{new_title}</b>.")
@@ -315,8 +369,7 @@ async def cmd_usage(deps: CommandDeps, info: MsgInfo, args: str) -> None:
         await _reply(deps, info, "No active chat in this conversation yet.")
         return
     row = deps.store._loom._db.execute(
-        "SELECT model, input_tokens, output_tokens, tool_call_count "
-        "FROM sessions WHERE id = ?",
+        "SELECT model, input_tokens, output_tokens, tool_call_count FROM sessions WHERE id = ?",
         (binding.active_session_id,),
     ).fetchone()
     if row is None:
@@ -369,9 +422,7 @@ async def cmd_compact(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     provider, upstream_model = deps.agent._resolve_provider(model_id)
     context_window = deps.agent._context_window_for(upstream_model or model_id)
 
-    await deps.client.send_chat_action(
-        info.chat_id, "typing", thread_id=info.thread_id or None
-    )
+    await deps.client.send_chat_action(info.chat_id, "typing", thread_id=info.thread_id or None)
     new_history, report = await compact_and_summarize(
         session.history,
         context_window=context_window,
@@ -402,6 +453,7 @@ COMMANDS: dict[str, Any] = {
     "start": cmd_help,
     "id": cmd_id,
     "project": cmd_project,
+    "topics": cmd_topics,
     "new": cmd_new,
     "chats": cmd_chats,
     "switch": cmd_switch,
