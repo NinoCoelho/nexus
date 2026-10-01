@@ -8,6 +8,7 @@ Compact button, i.e. POST /sessions/{sid}/compact).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,7 @@ log = logging.getLogger(__name__)
 _HELP_TEXT = """<b>Nexus commands</b>
 <code>/project [name]</code> — bind this chat/topic to a project (or show binding)
 <code>/topics</code> — list every linked chat/topic and its project
+<code>/vault [path]</code> — browse the vault; files arrive as documents
 <code>/new [title]</code> — start a new chat in this project
 <code>/chats</code> — list chats for this project
 <code>/switch</code> — switch the active chat (buttons)
@@ -43,6 +45,7 @@ class CommandDeps:
     bindings: TelegramBindingStore
     projects: ProjectStore
     cfg: Any  # TelegramConfig
+    router: Any = None  # TelegramRouter — registers /vault menu listings
 
 
 @dataclass
@@ -104,6 +107,107 @@ def _project_keyboard(projects: list[Any]) -> dict | None:
         return None
     rows = [[{"text": p.name[:60], "callback_data": f"pj:{p.id[:56]}"}] for p in projects[:20]]
     return {"inline_keyboard": rows}
+
+
+_VAULT_PAGE = 16
+
+
+async def cmd_vault(deps: CommandDeps, info: MsgInfo, args: str) -> None:
+    """Browse the vault from Telegram: no args → root folders; a folder
+    path → its children; a file path → the file as a document."""
+    path = args.strip().strip("/")
+    await vault_browse(deps, info.chat_id, info.thread_id, -2, 0, path=path)
+
+
+async def vault_browse(
+    deps: CommandDeps,
+    chat_id: int,
+    thread_id: int,
+    idx: int,
+    menu_message_id: int,
+    *,
+    path: str | None = None,
+) -> None:
+    """Render one vault directory level as buttons (vd: callbacks), or send
+    a file. ``idx`` indexes the previous listing's paths (-1 = parent,
+    -2 = fresh from cmd_vault with ``path``)."""
+    from ..vault import list_tree
+
+    router = deps.router
+    if path is None:
+        listing = router._vault_menus.get((chat_id, menu_message_id)) if router else None
+        if listing is None or not 0 <= idx < len(listing):
+            await deps.client.send_text_safe(
+                chat_id,
+                "Menu expirado — usa /vault de novo.",
+                thread_id=thread_id or None,
+            )
+            return
+        path = listing[idx]
+    path = (path or "").strip("/")
+
+    entries = await asyncio.to_thread(list_tree)
+    by_path = {e.path: e for e in entries}
+
+    # Target is a file → send it.
+    if path and by_path.get(path) is not None and by_path[path].type == "file":
+        status = (
+            await router._send_vault_file(chat_id, thread_id, path) if router else "unavailable"
+        )
+        await deps.client.send_text_safe(chat_id, status, thread_id=thread_id or None)
+        return
+
+    # Children of `path` (or root when empty).
+    prefix = f"{path}/" if path else ""
+    folders, files = [], []
+    for e in entries:
+        p = e.path
+        if not p.startswith(prefix):
+            continue
+        rest = p[len(prefix) :]
+        if "/" in rest:
+            child = rest.split("/", 1)[0]
+            if child not in folders:
+                folders.append(child)
+        else:
+            if e.type == "dir":
+                if rest not in folders:
+                    folders.append(rest)
+            else:
+                files.append(rest)
+
+    if not path and not folders and not files:
+        await deps.client.send_text_safe(chat_id, "Vault vazio.", thread_id=thread_id or None)
+        return
+    if path and not folders and not files:
+        await deps.client.send_text_safe(
+            chat_id, f"Pasta vazia: <code>{path}</code>", thread_id=thread_id or None
+        )
+        return
+
+    paths: list[str] = []
+    rows: list[list[dict]] = []
+    if path:
+        paths.append(path.rsplit("/", 1)[0] if "/" in path else "")
+        rows.append([{"text": "⬆︎ ..", "callback_data": "vd:0"}])
+    for name in folders[:_VAULT_PAGE]:
+        paths.append(f"{prefix}{name}")
+        rows.append([{"text": f"📁 {name[:56]}", "callback_data": f"vd:{len(paths) - 1}"}])
+    for name in files[:_VAULT_PAGE]:
+        paths.append(f"{prefix}{name}")
+        rows.append([{"text": f"📄 {name[:56]}", "callback_data": f"vd:{len(paths) - 1}"}])
+
+    label = f"/{path}" if path else "Vault"
+    total = len(folders) + len(files)
+    shown = min(len(rows) - (1 if path else 0), _VAULT_PAGE)
+    msg_id = await deps.client.send_text_safe(
+        chat_id,
+        f"<b>{label}</b> · {shown}/{total}",
+        thread_id=thread_id or None,
+        reply_markup={"inline_keyboard": rows} if rows else None,
+    )
+    if router:
+        router._remember_vault_menu(chat_id, msg_id, paths)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -454,6 +558,7 @@ COMMANDS: dict[str, Any] = {
     "id": cmd_id,
     "project": cmd_project,
     "topics": cmd_topics,
+    "vault": cmd_vault,
     "new": cmd_new,
     "chats": cmd_chats,
     "switch": cmd_switch,

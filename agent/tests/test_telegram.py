@@ -47,12 +47,25 @@ class FakeTGClient:
         self.reactions: list[tuple[int, int, str]] = []
         self.voices: list[dict[str, Any]] = []
         self.audios: list[dict[str, Any]] = []
+        self.documents: list[dict[str, Any]] = []
 
     async def send_text_safe(self, chat_id, text, *, thread_id=None, reply_markup=None):
         self.sent.append(
             {"chat_id": chat_id, "text": text, "thread_id": thread_id, "kb": reply_markup}
         )
         return 100 + len(self.sent)
+
+    async def send_document(self, chat_id, data, filename, *, thread_id=None, caption=""):
+        self.documents.append(
+            {
+                "chat_id": chat_id,
+                "data": data,
+                "filename": filename,
+                "thread_id": thread_id,
+                "caption": caption,
+            }
+        )
+        return 100 + len(self.documents)
 
     async def edit_text_safe(self, chat_id, message_id, text, *, reply_markup=None):
         self.edits.append(
@@ -137,10 +150,16 @@ class Harness:
         await self.router.handle_update({"update_id": 1, "message": _msg(text, **kwargs)})
 
     async def callback(
-        self, data: str, *, chat_id: int = 1000, thread_id: int = 0, user_id: int = 42
+        self,
+        data: str,
+        *,
+        chat_id: int = 1000,
+        thread_id: int = 0,
+        user_id: int = 42,
+        message_override: int = 0,
     ) -> None:
         msg: dict[str, Any] = {
-            "message_id": 99,
+            "message_id": message_override or 99,
             "chat": {"id": chat_id, "type": "supergroup"},
         }
         if thread_id:
@@ -1097,3 +1116,97 @@ async def test_set_message_reaction_payload_shape() -> None:
     assert payload["reaction"] == [{"type": "emoji", "emoji": "\U0001f440"}]
     assert "emoji" not in payload  # the old broken param
     assert captured[1][1]["reaction"] == []  # empty clears
+
+
+async def test_vault_link_renders_as_code_and_extracts() -> None:
+    from nexus.telegram.formatting import extract_vault_links, md_to_telegram_html
+
+    md = "Salvo: [projects/p/energia.md](vault://projects/p/energia.md) — [docs](https://x.com)"
+    html = md_to_telegram_html(md)
+    assert "<code>projects/p/energia.md</code>" in html
+    assert "vault://" not in html
+    assert '<a href="https://x.com">docs</a>' in html
+    assert extract_vault_links(md) == ["projects/p/energia.md"]
+    assert extract_vault_links("a [x](vault://a.md) [x](vault://a.md) [y](vault://b.md)") == [
+        "a.md",
+        "b.md",
+    ]
+
+
+async def test_finalize_reply_attaches_vault_buttons(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    text = "Salvo: [projects/p/nota.md](vault://projects/p/nota.md)"
+    await h.router._finalize_reply(1000, 0, 0, text)
+    kb = h.client.sent[-1]["kb"]
+    assert kb is not None
+    flat = [b["text"] for row in kb["inline_keyboard"] for b in row]
+    assert any("nota.md" in t for t in flat)
+    msg_id = 100 + len(h.client.sent)
+    assert h.router._vault_menus[(1000, msg_id)] == ["projects/p/nota.md"]
+
+    # No links → no keyboard.
+    await h.router._finalize_reply(1000, 0, 0, "plain reply")
+    assert h.client.sent[-1]["kb"] is None
+
+
+async def test_vf_callback_sends_document(tmp_path: Path, monkeypatch: Any) -> None:
+    from nexus import vault as vault_mod
+
+    root = tmp_path / "vault"
+    (root / "projects/p").mkdir(parents=True)
+    (root / "projects/p/nota.md").write_text("# Nota\nconteúdo")
+    monkeypatch.setattr(vault_mod, "_VAULT_ROOT", root)
+
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    h.router._remember_vault_menu(1000, 55, ["projects/p/nota.md"])
+    await h.callback("vf:0", message_override=55)
+    assert len(h.client.documents) == 1
+    doc = h.client.documents[0]
+    assert doc["filename"] == "nota.md"
+    assert doc["caption"] == "projects/p/nota.md"
+    assert "conteúdo".encode() in doc["data"]
+
+
+async def test_vault_command_browsing_and_file(tmp_path: Path, monkeypatch: Any) -> None:
+    from nexus import vault as vault_mod
+
+    root = tmp_path / "vault"
+    (root / "projects/p1").mkdir(parents=True)
+    (root / "projects/p1/um.md").write_text("# Um")
+    (root / "soltos").mkdir()
+    (root / "soltos/dois.md").write_text("# Dois")
+    monkeypatch.setattr(vault_mod, "_VAULT_ROOT", root)
+
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+
+    # Root listing: folders as buttons, no keyboard-less fallback.
+    await h.message("/vault")
+    kb = h.client.sent[-1]["kb"]
+    flat = [b["text"] for row in kb["inline_keyboard"] for b in row]
+    assert any("projects" in t for t in flat) and any("soltos" in t for t in flat)
+    root_msg = 100 + len(h.client.sent)
+    listing = h.router._vault_menus[(1000, root_msg)]
+
+    # Enter projects/ → its folder p1 as a button.
+    proj_idx = listing.index("projects")
+    await h.callback(f"vd:{proj_idx}", message_override=root_msg)
+    flat2 = [b["text"] for row in h.client.sent[-1]["kb"]["inline_keyboard"] for b in row]
+    assert any("p1" in t for t in flat2)
+    proj_msg = 100 + len(h.client.sent)
+    listing2 = h.router._vault_menus[(1000, proj_msg)]
+
+    # Enter projects/p1/ → file um.md; clicking it sends the document.
+    p1_idx = listing2.index("projects/p1")
+    await h.callback(f"vd:{p1_idx}", message_override=proj_msg)
+    flat3 = [b["text"] for row in h.client.sent[-1]["kb"]["inline_keyboard"] for b in row]
+    assert any("um.md" in t for t in flat3)
+    p1_msg = 100 + len(h.client.sent)
+    listing3 = h.router._vault_menus[(1000, p1_msg)]
+
+    file_idx = listing3.index("projects/p1/um.md")
+    await h.callback(f"vd:{file_idx}", message_override=p1_msg)
+    assert h.client.documents[-1]["filename"] == "um.md"
+
+    # Direct file path in the command sends immediately.
+    await h.message("/vault soltos/dois.md")
+    assert h.client.documents[-1]["filename"] == "dois.md"

@@ -145,9 +145,7 @@ class TelegramClient:
 
     # ── Updates ──────────────────────────────────────────────────────────
 
-    async def get_updates(
-        self, *, offset: int, timeout_seconds: int
-    ) -> list[dict[str, Any]]:
+    async def get_updates(self, *, offset: int, timeout_seconds: int) -> list[dict[str, Any]]:
         # httpx-wide timeout was sized for the poll in from_config; guard the
         # per-request read so a short client timeout doesn't abort long polls.
         result = await self._call(
@@ -229,9 +227,7 @@ class TelegramClient:
             # Typing indicators are best-effort.
             log.debug("telegram: sendChatAction failed", exc_info=True)
 
-    async def answer_callback_query(
-        self, callback_query_id: str, text: str = ""
-    ) -> None:
+    async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
         payload: dict[str, Any] = {"callback_query_id": callback_query_id}
         if text:
             payload["text"] = text[:190]
@@ -266,6 +262,32 @@ class TelegramClient:
         return resp.content
 
     # ── Voice / audio replies ────────────────────────────────────────────
+
+    async def send_document(
+        self,
+        chat_id: int,
+        data: bytes,
+        filename: str,
+        *,
+        thread_id: int | None = None,
+        caption: str = "",
+    ) -> int:
+        """Send a file as a document (Telegram shows a download/open chip).
+
+        Used by the vault door: clicking a 📂 button or /vault entry sends
+        the raw file bytes. Bot API cap is 50 MB — callers pre-check.
+        """
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if thread_id:
+            payload["message_thread_id"] = thread_id
+        if caption:
+            payload["caption"] = caption[:900]
+        msg = await self._call(
+            "sendDocument",
+            payload,
+            files={"document": (filename, data, "application/octet-stream")},
+        )
+        return int(msg.get("message_id", 0))
 
     async def send_voice(
         self,
@@ -310,9 +332,7 @@ class TelegramClient:
         )
         return int(msg.get("message_id", 0))
 
-    async def set_message_reaction(
-        self, chat_id: int, message_id: int, emoji: str = ""
-    ) -> None:
+    async def set_message_reaction(self, chat_id: int, message_id: int, emoji: str = "") -> None:
         """Set (or, with an empty emoji, remove) the bot's reaction on a message.
 
         Payload note: the Bot API takes ``reaction`` as a JSON-serialized
@@ -336,7 +356,10 @@ class TelegramClient:
         except TelegramError as exc:
             log.warning(
                 "telegram: setMessageReaction(chat=%s msg=%s emoji=%r) failed: %s",
-                chat_id, message_id, emoji, exc,
+                chat_id,
+                message_id,
+                emoji,
+                exc,
             )
 
     # ── HTML-safe wrappers ───────────────────────────────────────────────

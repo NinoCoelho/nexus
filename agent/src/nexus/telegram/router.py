@@ -26,7 +26,7 @@ from ..server.services.turn_launcher import launch_turn
 from .api import TelegramClient, TelegramError
 from .bindings import TelegramBindingStore
 from .commands import COMMANDS, CommandDeps, MsgInfo
-from .formatting import md_to_telegram_html, split_for_telegram
+from .formatting import extract_vault_links, md_to_telegram_html, split_for_telegram
 
 log = logging.getLogger(__name__)
 
@@ -67,11 +67,16 @@ class TelegramRouter:
             bindings=bindings,
             projects=ProjectStore(store._db_path),
             cfg=cfg,
+            router=self,
         )
         # session_id → live reply-streamer task
         self._streamers: dict[str, asyncio.Task] = {}
         # (chat_id, thread_id) already shown the unbound-topic hint
         self._hinted: set[tuple[int, int]] = set()
+        # (chat_id, message_id) → vault paths offered by that message's 📂
+        # buttons (reply menus from the streamer, listings from /vault).
+        # Bounded — oldest entries evicted.
+        self._vault_menus: dict[tuple[int, int], list[str]] = {}
         # user_id → last deny-reply timestamp
         self._deny_last: dict[int, float] = {}
         # short key → (session_id, request_id, answer) for HITL buttons
@@ -410,7 +415,10 @@ class TelegramRouter:
         if self.cfg.ack_reaction:
             log.info(
                 "telegram: ack %s on msg %s (chat %s, session %.8s)",
-                self.cfg.ack_reaction, info.message_id, info.chat_id, session.id,
+                self.cfg.ack_reaction,
+                info.message_id,
+                info.chat_id,
+                session.id,
             )
             await self.client.set_message_reaction(
                 info.chat_id, info.message_id, self.cfg.ack_reaction
@@ -607,12 +615,29 @@ class TelegramRouter:
         chunks = split_for_telegram(md_to_telegram_html(text))
         if not chunks:
             return
+        # Vault door: every vault:// link in the reply gets a 📂 button that
+        # sends the file as a document.
+        paths = extract_vault_links(text)
+        kb: dict | None = None
+        if paths:
+            kb = {
+                "inline_keyboard": [
+                    [{"text": f"📂 {p.rsplit('/', 1)[-1][:56]}", "callback_data": f"vf:{i}"}]
+                    for i, p in enumerate(paths)
+                ]
+            }
+        first_id = 0
         if msg_id:
-            ok = await self.client.edit_text_safe(chat_id, msg_id, chunks[0])
+            ok = await self.client.edit_text_safe(chat_id, msg_id, chunks[0], reply_markup=kb)
             if not ok:  # original deleted → send instead
-                await self.client.send_text_safe(chat_id, chunks[0], thread_id=thread_id or None)
+                first_id = await self.client.send_text_safe(
+                    chat_id, chunks[0], thread_id=thread_id or None, reply_markup=kb
+                )
         else:
-            await self.client.send_text_safe(chat_id, chunks[0], thread_id=thread_id or None)
+            first_id = await self.client.send_text_safe(
+                chat_id, chunks[0], thread_id=thread_id or None, reply_markup=kb
+            )
+        self._remember_vault_menu(chat_id, first_id, paths)
         for chunk in chunks[1:]:
             await self.client.send_text_safe(chat_id, chunk, thread_id=thread_id or None)
 
@@ -657,6 +682,39 @@ class TelegramRouter:
         except Exception:
             return None
 
+    def _remember_vault_menu(self, chat_id: int, message_id: int, paths: list[str]) -> None:
+        if message_id <= 0 or not paths:
+            return
+        self._vault_menus[(chat_id, message_id)] = paths
+        while len(self._vault_menus) > 128:
+            self._vault_menus.pop(next(iter(self._vault_menus)))
+
+    async def _send_vault_file(self, chat_id: int, thread_id: int, path: str) -> str:
+        """Send one vault file as a Telegram document. Returns a user-facing
+        status line for the callback answer."""
+        from ..vault import resolve_path
+
+        try:
+            full = resolve_path(path)
+        except ValueError:
+            return "Invalid path"
+        if not full.is_file():
+            return "File not found"
+        if full.stat().st_size > 49 * 1024 * 1024:
+            return "File too large for Telegram (50 MB cap)"
+        try:
+            data = full.read_bytes()
+        except OSError:
+            return "Couldn't read file"
+        await self.client.send_document(
+            chat_id,
+            data,
+            full.name,
+            thread_id=thread_id or None,
+            caption=path[:900],
+        )
+        return f"Sent {full.name}"
+
     # ── Callback queries (inline buttons) ────────────────────────────────
 
     async def _on_callback(self, cq: dict) -> None:
@@ -688,6 +746,30 @@ class TelegramRouter:
             await cmd_project(self.deps, info, data[3:])
         elif data.startswith("hb:"):
             await self._on_hitl_answer(data[3:], cq)
+        elif data.startswith("vf:"):
+            paths = self._vault_menus.get((chat_id, message_id))
+            try:
+                idx = int(data[3:])
+                path = paths[idx] if paths else None
+            except (ValueError, IndexError):
+                path = None
+            if path is None:
+                await self.client.answer_callback_query(cq.get("id", ""), "Menu expired")
+                return
+            await self.client.send_chat_action(
+                chat_id, "upload_document", thread_id=thread_id or None
+            )
+            status = await self._send_vault_file(chat_id, thread_id, path)
+            await self.client.answer_callback_query(cq.get("id", ""), status)
+        elif data.startswith("vd:"):
+            from .commands import vault_browse
+
+            try:
+                idx = int(data[3:])
+            except ValueError:
+                idx = -1
+            await vault_browse(self.deps, chat_id, thread_id, idx, message_id)
+            await self.client.answer_callback_query(cq.get("id", ""))
         else:
             await self.client.answer_callback_query(cq.get("id", ""))
 

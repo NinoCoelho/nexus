@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 
+
 # Telegram counts message length in UTF-16 code units (emoji = 2).
 def tlen(s: str) -> int:
     return len(s.encode("utf-16-le")) // 2
@@ -35,6 +36,23 @@ _BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
 _ITAL_RE = re.compile(r"(?<![\w*])\*([^*\n]+)\*(?!\w)|(?<![\w_])_([^_\n]+)_(?!\w)")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
 _MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
+
+# vault:// markdown links — the streamer turns each into a 📂 button.
+_VAULT_LINK_RE = re.compile(r"\[[^\]\n]+\]\(vault://([^)\s]+)\)")
+
+
+def extract_vault_links(md: str, *, limit: int = 5) -> list[str]:
+    """Vault paths referenced by ``vault://`` markdown links, in order,
+    deduplicated, capped (each becomes one inline button)."""
+    seen: list[str] = []
+    for path in _VAULT_LINK_RE.findall(md or ""):
+        if path not in seen:
+            seen.append(path)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
 _URL_RE = re.compile(r"(?<![\w\"'>=])(https?://[^\s<\x00]+)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET_RE = re.compile(r"^[-*+]\s+(.*)$")
@@ -59,6 +77,11 @@ def _inline(escaped: str) -> str:
     #    bare-URL autolinker can't nest a second <a> inside them.
     def _link(m: re.Match) -> str:
         label, url = m.group(1), m.group(2)
+        if url.lower().startswith("vault://"):
+            # Vault links are app-internal (the web UI intercepts them);
+            # in Telegram they render as the path in code — the clickable
+            # door is the 📂 inline button the streamer attaches instead.
+            return _keep(f"<code>{label}</code>")
         if not re.match(r"^(https?://|mailto:)", url, re.I):
             return m.group(0)
         href = url.replace('"', "%22")
@@ -195,7 +218,7 @@ def split_for_telegram(html: str, limit: int = 4000) -> list[str]:
             nl = cut.rfind("\n")
             if nl > budget // 2:
                 cut = cut[: nl + 1]
-            piece = piece[len(cut):]
+            piece = piece[len(cut) :]
             full = prefix + cut
             pending_reopen = ""
             balanced, reopen = _pre_balance(full)
