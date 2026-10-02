@@ -13,6 +13,7 @@ the full agent loop runs against a scripted provider.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -496,20 +497,289 @@ async def test_hitl_prompt_forwarded_and_button_resolves(tmp_path: Path) -> None
 
 async def test_hitl_choice_kind_buttons(tmp_path: Path) -> None:
     h = Harness(tmp_path, FakeProvider([_final("ok")]))
-    keyboard, reason = h.router.build_hitl_keyboard(
+    markup, note, slot = h.router.build_hitl_interaction(
         "sid1", "req9", {"kind": "choice", "choices": ["Red", "Blue"]}
     )
-    assert keyboard is not None and reason is None
-    labels = [b["text"] for row in keyboard for b in row]
+    assert markup is not None and note is None and slot is None
+    labels = [b["text"] for row in markup["inline_keyboard"] for b in row]
     assert labels == ["Red", "Blue"]
-    key = keyboard[0][0]["callback_data"][3:]
+    key = markup["inline_keyboard"][0][0]["callback_data"][3:]
     assert h.router._hitl_buttons[key] == ("sid1", "req9", "Red")
 
 
-async def test_hitl_text_kind_no_buttons(tmp_path: Path) -> None:
+async def test_hitl_text_kind_force_reply_and_slot(tmp_path: Path) -> None:
     h = Harness(tmp_path, FakeProvider([_final("ok")]))
-    keyboard, reason = h.router.build_hitl_keyboard("sid1", "req9", {"kind": "text"})
-    assert keyboard is None and reason is not None
+    markup, note, slot = h.router.build_hitl_interaction("sid1", "req9", {"kind": "text"})
+    assert markup is not None and "force_reply" in markup and note is None
+    assert slot is not None and slot.kind == "text" and slot.session_id == "sid1"
+
+
+# ── Free-form HITL answers (text / form prompts) ────────────────────────
+
+
+async def _forward_request(h: Harness, sid: str, data: dict[str, Any]) -> None:
+    from nexus.telegram.hitl import HitlForwarder
+
+    await HitlForwarder(h.router)._forward(sid, data)
+
+
+async def test_text_prompt_next_message_answers(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fut = h.store.register_pending(sid, "reqT")
+    await _forward_request(
+        h, sid, {"request_id": "reqT", "prompt": "What's your name?", "kind": "text"}
+    )
+    last = h.client.sent[-1]
+    assert "What's your name?" in last["text"]
+    assert last["kb"] is not None and "force_reply" in last["kb"]
+    assert h.router._pending_answers[(1000, 0)].request_id == "reqT"
+
+    await h.message("Nino")
+    assert fut.done() and fut.result() == "Nino"
+    assert (1000, 0) not in h.router._pending_answers
+    assert any("Answered" in e["text"] for e in h.client.edits)
+    # The answer never became a chat turn: no runner started.
+    from nexus.server.services import chat_turn_runner as ctr
+
+    assert not ctr._running_turns
+
+
+async def test_answer_binds_to_quoted_prompt_only(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("a"), _final("b")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fut = h.store.register_pending(sid, "reqQ")
+    await _forward_request(
+        h, sid, {"request_id": "reqQ", "prompt": "Answer me", "kind": "text"}
+    )
+    prompt_msg_id = 100 + len(h.client.sent)
+
+    # Reply quoting a DIFFERENT message → normal chat turn, not an answer.
+    msg = _msg("side comment")
+    msg["reply_to_message"] = {"message_id": prompt_msg_id - 1}
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+    assert not fut.done()
+
+    # Reply quoting the prompt bubble → the answer.
+    msg = _msg("the real answer")
+    msg["reply_to_message"] = {"message_id": prompt_msg_id}
+    await h.router.handle_update({"update_id": 4, "message": msg})
+    assert fut.done() and fut.result() == "the real answer"
+
+
+async def test_form_prompt_named_lines_answer(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fields = [
+        {"name": "city", "label": "City", "kind": "text", "required": True},
+        {"name": "days", "kind": "number", "required": True},
+        {"name": "notes", "kind": "textarea"},
+    ]
+    fut = h.store.register_pending(sid, "reqF")
+    await _forward_request(
+        h,
+        sid,
+        {
+            "request_id": "reqF",
+            "prompt": "Trip details?",
+            "kind": "form",
+            "fields": fields,
+            "form_title": "Trip",
+        },
+    )
+    body = h.client.sent[-1]["text"]
+    assert "<b>Trip</b>" in body and "city" in body
+    assert h.client.sent[-1]["kb"] is not None and "force_reply" in h.client.sent[-1]["kb"]
+
+    await h.message("City: Lisbon\ndays: 3")
+    assert fut.done()
+    assert json.loads(fut.result()) == {"city": "Lisbon", "days": 3}
+    assert (1000, 0) not in h.router._pending_answers
+
+
+async def test_form_invalid_reply_keeps_slot_for_retry(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fields = [
+        {"name": "city", "kind": "text", "required": True},
+        {"name": "days", "kind": "number", "required": True},
+    ]
+    fut = h.store.register_pending(sid, "reqR")
+    await _forward_request(
+        h,
+        sid,
+        {"request_id": "reqR", "prompt": "Trip?", "kind": "form", "fields": fields},
+    )
+
+    await h.message("days: not-a-number")
+    assert not fut.done()
+    assert (1000, 0) in h.router._pending_answers
+    assert any("still waiting" in t for t in h.client.sent_texts())
+
+    await h.message("city: Porto\ndays: 2")
+    assert fut.done()
+    assert json.loads(fut.result()) == {"city": "Porto", "days": 2}
+
+
+async def test_secret_form_stays_ui_only(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fields = [
+        {"name": "username", "kind": "text", "required": True},
+        {"name": "password", "kind": "text", "required": True, "secret": True},
+    ]
+    h.store.register_pending(sid, "reqS")
+    await _forward_request(
+        h,
+        sid,
+        {
+            "request_id": "reqS",
+            "prompt": "Site login for example.com",
+            "kind": "form",
+            "fields": fields,
+        },
+    )
+    assert h.client.sent[-1]["kb"] is None
+    assert "Nexus UI" in h.client.sent[-1]["text"]
+    assert not h.router._pending_answers
+
+
+async def test_single_select_form_reply_keyboard(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fields = [
+        {"name": "mode", "kind": "select", "choices": ["Fast", "Slow"], "required": True}
+    ]
+    fut = h.store.register_pending(sid, "reqK")
+    await _forward_request(
+        h,
+        sid,
+        {"request_id": "reqK", "prompt": "Mode?", "kind": "form", "fields": fields},
+    )
+    kb = h.client.sent[-1]["kb"]
+    assert kb is not None and "keyboard" in kb
+    values = [b["text"] for row in kb["keyboard"] for b in row]
+    assert values == ["Fast", "Slow"]
+    assert kb.get("one_time_keyboard") is True
+
+    # Tapping a keyboard button sends the bare value — still an answer.
+    await h.message("Fast")
+    assert fut.done()
+    assert json.loads(fut.result()) == {"mode": "Fast"}
+    assert any(e.get("kb") == {"remove_keyboard": True} for e in h.client.edits)
+
+
+async def test_cancel_command_dismisses_pending_answer(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    fut = h.store.register_pending(sid, "reqC")
+    await _forward_request(
+        h, sid, {"request_id": "reqC", "prompt": "Answer?", "kind": "text"}
+    )
+    assert (1000, 0) in h.router._pending_answers
+
+    await h.message("/cancel")
+    assert fut.cancelled()
+    assert (1000, 0) not in h.router._pending_answers
+    assert any("Cancelled" in e["text"] for e in h.client.edits)
+    assert any("Dismissed the pending question" in t for t in h.client.sent_texts())
+
+
+async def test_cancelled_event_drops_answer_slot(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    await _forward_request(
+        h, sid, {"request_id": "reqX", "prompt": "Old prompt", "kind": "text"}
+    )
+    assert (1000, 0) in h.router._pending_answers
+
+    from nexus.telegram.hitl import HitlForwarder
+
+    await HitlForwarder(h.router)._cancelled({"request_id": "reqX"})
+    assert (1000, 0) not in h.router._pending_answers
+    assert any("Expired" in e["text"] for e in h.client.edits)
+
+
+async def test_parked_text_answer_resumes_turn(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("done")]))
+    await h.message("hi")
+    await h.wait_turns_done()
+    sid = h.bindings.get(1000, 0).active_session_id
+
+    # Parked row: the turn already ended waiting for this request.
+    h.store.persist_hitl_pending(
+        session_id=sid,
+        request_id="reqP",
+        tool_call_id="tc1",
+        kind="text",
+        prompt="Deferred question?",
+        choices=None,
+        fields=None,
+        form_title=None,
+        form_description=None,
+        default=None,
+        timeout_seconds=300,
+    )
+    h.store.update_hitl_pending_snapshot(
+        "reqP", json.dumps([{"role": "user", "content": "hi"}])
+    )
+
+    async def fake_continue(*, session_id: str, request_id: str, answer: Any):
+        assert answer == "later answer"
+        yield {"type": "delta", "text": "resumed reply"}
+        yield {
+            "type": "done",
+            "session_id": session_id,
+            "reply": "resumed reply",
+            "messages": [ChatMessage(role=Role.ASSISTANT, content="resumed reply")],
+            "usage": {"model": "m", "input_tokens": 1, "output_tokens": 2, "tool_calls": 0},
+        }
+
+    h.agent.continue_after_hitl = fake_continue  # type: ignore[method-assign]
+
+    await _forward_request(
+        h, sid, {"request_id": "reqP", "prompt": "Deferred question?", "kind": "text"}
+    )
+    await h.message("later answer")
+
+    task = h.router._resume_tasks.get(sid)
+    assert task is not None
+    await asyncio.wait_for(task, timeout=5.0)
+
+    row = h.store.get_hitl_pending("reqP")
+    assert row is not None and row["status"] == "answered"
+    # Terminal marker published so the reply streamer finalizes.
+    replay = h.store._replay.get(sid, [])
+    assert any(ev.kind == "turn_settled" for _, ev in replay)
+    # The resumed reply was persisted onto the session.
+    hist = h.store.get(sid).history
+    assert hist and hist[-1].content == "resumed reply"
+    assert any("Answered" in e["text"] for e in h.client.edits)
 
 
 # ── Formatting ──────────────────────────────────────────────────────────

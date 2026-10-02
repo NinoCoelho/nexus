@@ -34,7 +34,7 @@ from ..schemas import (
     SkillInfo,
 )
 from ._sse import keepalive
-from ._streaming import TurnAccumulator, build_done_sse, build_error_sse
+from ._streaming import TurnAccumulator
 from ...skills.types import Skill as _SkillModel
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.llm import LLMTransportError, MalformedOutputError
@@ -772,123 +772,52 @@ async def chat_hitl_answer(
             detail="path request_id and body.request_id must match",
         )
 
-    parked = store.get_hitl_pending(request_id)
-    if parked is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"no parked request {request_id!r}",
+    from ..services.hitl_resume import drive_parked_resume, prepare_parked_resume
+
+    try:
+        prepared = await prepare_parked_resume(
+            store,
+            session_id=session_id,
+            request_id=request_id,
+            raw_answer=body.answer,
         )
-    if parked.get("session_id") != session_id:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="request_id belongs to a different session",
-        )
-
-    # Decode the answer the same way ask_user_tool decodes broker answers
-    # (form payloads come in as JSON strings; everything else as plain text).
-    raw_answer = body.answer
-    decoded: Any = raw_answer
-    if isinstance(raw_answer, str):
-        try:
-            decoded = json.loads(raw_answer)
-        except (json.JSONDecodeError, ValueError):
-            decoded = raw_answer
-
-    row = store.mark_hitl_pending_answered(request_id, decoded)
-    if row is None:
+            detail=str(exc),
+        ) from exc
+    if prepared is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"no parked request {request_id!r}",
         )
 
-    already_answered = bool(row.get("already_answered"))
-
     async def event_generator() -> AsyncIterator[str]:
-        if already_answered:
+        if prepared.duplicate:
             payload = {
                 "session_id": session_id,
                 "reply": "",
                 "duplicate": True,
-                "answer": row.get("answer_json"),
+                "answer": prepared.answer_json,
             }
             yield f"event: done\ndata: {json.dumps(payload)}\n\n"
             return
 
-        token = CURRENT_SESSION_ID.set(session_id)
-        current = asyncio.current_task()
-        if current is not None:
-            _inflight_turns[session_id] = current
         acc = TurnAccumulator()
+        # Decoding, contextvar, persistence, usage and the terminal
+        # turn_settled bus event all live in the shared service — the
+        # Telegram gateway resumes parked prompts through the same pipe.
+        # aclose() in the finally drives the service's cleanup (persist,
+        # contextvar reset) even when the client disconnects mid-stream.
+        resume_stream = drive_parked_resume(
+            a, store, prepared, task_registry=_inflight_turns
+        )
         try:
-            async for event in a.continue_after_hitl(
-                session_id=session_id,
-                request_id=request_id,
-                answer=decoded,
-            ):
-                etype = event.get("type")
-                if etype == "done":
-                    usage = event.get("usage") or {}
-                    try:
-                        store.bump_usage(
-                            session_id,
-                            model=usage.get("model"),
-                            input_tokens=int(usage.get("input_tokens") or 0),
-                            output_tokens=int(usage.get("output_tokens") or 0),
-                            tool_calls=int(usage.get("tool_calls") or 0),
-                        )
-                    except Exception:  # noqa: BLE001
-                        log.exception("bump_usage failed (resume)")
-                    done_payload = {
-                        "session_id": event.get("session_id") or session_id,
-                        "reply": event.get("reply", ""),
-                        "trace": event.get("trace", []),
-                        "skills_touched": event.get("skills_touched", []),
-                        "iterations": event.get("iterations", 0),
-                        "usage": usage,
-                        "model": usage.get("model"),
-                    }
-                    yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
-                else:
-                    for frame in acc.process_event(event):
-                        yield frame
-        except (LLMTransportError, MalformedOutputError) as exc:
-            acc.partial_status = "llm_error"
-            yield build_error_sse(detail=str(exc))
-        except asyncio.CancelledError:
-            acc.partial_status = "cancelled"
-            yield build_error_sse(detail="cancelled by user", reason="cancelled")
-            yield build_done_sse(session_id=session_id, reply="")
-        except Exception as exc:  # noqa: BLE001
-            acc.partial_status = "crashed"
-            log.exception("hitl resume crashed")
-            yield build_error_sse(detail=f"{type(exc).__name__}: {exc}")
-            yield build_done_sse(session_id=session_id, reply="")
+            async for event in resume_stream:
+                for frame in acc.process_event(event):
+                    yield frame
         finally:
-            if acc.final_messages is not None:
-                try:
-                    store.replace_history(session_id, acc.final_messages)
-                except Exception:  # noqa: BLE001
-                    log.exception("replace_history (resume) failed")
-            elif acc.accumulated_text or acc.accumulated_tools:
-                try:
-                    sess = store.get(session_id)
-                    base = list(sess.history) if sess else []
-                    store.persist_partial_turn(
-                        session_id,
-                        base_history=base,
-                        user_message="",
-                        assistant_text=acc.accumulated_text,
-                        tool_calls=acc.accumulated_tools,
-                        status_note=acc.partial_status,
-                    )
-                except Exception:  # noqa: BLE001
-                    log.exception("persist_partial_turn (resume) failed")
-            try:
-                CURRENT_SESSION_ID.reset(token)
-            except ValueError:
-                log.debug("CURRENT_SESSION_ID reset across contexts (resume)")
-            if _inflight_turns.get(session_id) is current:
-                _inflight_turns.pop(session_id, None)
+            await resume_stream.aclose()
 
     return StreamingResponse(
         event_generator(),

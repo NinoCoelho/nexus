@@ -30,7 +30,7 @@ _HELP_TEXT = """<b>Nexus commands</b>
 <code>/compact [aggressive]</code> — free up context window
 <code>/title [new title]</code> — rename the active chat
 <code>/usage</code> — token + tool usage for this chat
-<code>/cancel</code> — cancel the running turn
+<code>/cancel</code> — cancel the running turn or dismiss a pending question
 <code>/id</code> — chat/thread/user ids (for config)
 
 Plain messages go to the project's active chat. In forum groups, each
@@ -58,6 +58,10 @@ class MsgInfo:
     # Telegram message_id of the incoming update — used by the router to
     # place the reaction ack (👀 → 👍). 0 for synthetic contexts.
     message_id: int = 0
+    # message_id of the message this one replies to (0 when not a reply).
+    # Binds a free-form HITL answer to the exact prompt bubble it answers
+    # (ForceReply sends the quote automatically).
+    reply_to_message_id: int = 0
 
 
 async def _reply(deps: CommandDeps, info: MsgInfo, text: str) -> None:
@@ -494,11 +498,24 @@ async def cmd_usage(deps: CommandDeps, info: MsgInfo, args: str) -> None:
 async def cmd_cancel(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     from ..server.services.chat_turn_runner import cancel_running_turn
 
+    # A pending free-form answer owns this chat first — /cancel dismisses
+    # the question (and the turn waiting on it) instead of the turn alone.
+    router = deps.router
+    if router is not None:
+        slot = await router.dismiss_pending_answer(info)
+        if slot is not None:
+            cancel_running_turn(slot.session_id)
+            router.cancel_resume(slot.session_id)
+            await _reply(deps, info, "Dismissed the pending question.")
+            return
+
     binding = deps.bindings.get(info.chat_id, info.thread_id)
     if binding is None:
         await _reply(deps, info, "No active chat in this conversation yet.")
         return
     if cancel_running_turn(binding.active_session_id):
+        await _reply(deps, info, "Cancelling the running turn…")
+    elif router is not None and router.cancel_resume(binding.active_session_id):
         await _reply(deps, info, "Cancelling the running turn…")
     else:
         await _reply(deps, info, "No turn is running on the active chat.")

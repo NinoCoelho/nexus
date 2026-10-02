@@ -17,9 +17,12 @@ chained turns each get their own message (``user_injected`` resets it).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
+from dataclasses import dataclass
+from html import escape as html_escape
 from uuid import uuid4
 
 from ..server.services.turn_launcher import launch_turn
@@ -36,7 +39,29 @@ _DENY_THROTTLE = 60.0  # seconds between "not authorized" replies per user
 _ACK_DONE_EMOJI = "👍"  # reaction upgrade when the turn finishes successfully
 _MAX_PENDING_ACKS = 50  # cap per session; acks are cosmetic — bound memory
 _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram bot download cap
+_MAX_PENDING_ANSWERS = 32  # free-form answer slots; bounded, oldest evicted
 _COMMAND_RE = re.compile(r"^/([a-zA-Z_]+)(@\w+)?\s*(.*)$", re.S)
+
+
+@dataclass
+class PendingAnswer:
+    """A free-form ask_user prompt awaiting the chat's next reply.
+
+    Registered when a ``text``/``form`` prompt is forwarded with a
+    ForceReply / reply-keyboard markup; consumed by the next plain
+    message (or a reply quoting the prompt bubble).
+    """
+
+    session_id: str
+    request_id: str
+    kind: str  # "text" | "form"
+    fields: list[dict] | None = None
+    # Telegram message_id of the forwarded prompt bubble — binds quoted
+    # replies to this exact prompt.
+    message_id: int = 0
+    # True when the prompt sent a reply keyboard (collapsed via
+    # remove_keyboard once the answer lands).
+    reply_keyboard: bool = False
 
 
 class TelegramRouter:
@@ -83,6 +108,10 @@ class TelegramRouter:
         self._hitl_buttons: dict[str, tuple[str, str, str]] = {}
         # request_id → (chat_id, thread_id, message_id) for forwarded prompts
         self._hitl_messages: dict[str, tuple[int, int, int]] = {}
+        # (chat_id, thread_id) → free-form prompt awaiting this chat's reply
+        self._pending_answers: dict[tuple[int, int], PendingAnswer] = {}
+        # session_id → parked-resume task (answers to parked prompts)
+        self._resume_tasks: dict[str, asyncio.Task] = {}
         # session_id → [(chat_id, message_id)] of acknowledged-but-unanswered
         # user messages. 👀 on receipt; upgraded to 👍 when the turn settles.
         self._pending_acks: dict[str, list[tuple[int, int]]] = {}
@@ -114,10 +143,11 @@ class TelegramRouter:
         chat_id = int(chat.get("id", 0))
         chat_type = str(chat.get("type", ""))
         thread_id = int(msg.get("message_thread_id") or 0)
-        user_id = int(from_user.get("id") or 0)
+        user_id = int(from_user.get("id", 0))
         first = str(from_user.get("first_name") or from_user.get("title") or "")
         username = str(from_user.get("username") or "")
         label = f"{first} (@{username})" if username else (first or f"user {user_id}")
+        reply_to = msg.get("reply_to_message") or {}
 
         info = MsgInfo(
             chat_id=chat_id,
@@ -126,6 +156,7 @@ class TelegramRouter:
             user_id=user_id,
             user_label=label,
             message_id=int(msg.get("message_id") or 0),
+            reply_to_message_id=int(reply_to.get("message_id") or 0),
         )
 
         if user_id not in (self.cfg.allowed_user_ids or []):
@@ -345,6 +376,14 @@ class TelegramRouter:
         media: list[dict] | None = None,
         voice_reply: bool = False,
     ) -> None:
+        # A pending free-form prompt owns this chat: the next plain text
+        # (typed reply or transcribed voice note) answers it instead of
+        # starting a turn. Media falls through — it queues behind the
+        # blocked turn like any other message.
+        if not media and text.strip():
+            if await self._try_answer_pending(text, info):
+                return
+
         binding = self.bindings.get(info.chat_id, info.thread_id)
 
         if binding is None:
@@ -450,6 +489,208 @@ class TelegramRouter:
         # / crash), spawn one so the answer still lands.
         self._ensure_streamer(session.id, info.chat_id, info.thread_id)
 
+    # ── Free-form HITL answers (text / form prompts) ─────────────────────
+
+    async def _try_answer_pending(self, text: str, info: MsgInfo) -> bool:
+        """Consume ``text`` as the answer to a pending free-form prompt.
+
+        Returns True when the message was an answer (consumed — no turn
+        starts). A reply quoting a *different* message is a reply to that
+        thing, not the prompt — it flows through to the chat normally.
+        """
+        key = (info.chat_id, info.thread_id)
+        slot = self._pending_answers.get(key)
+        if slot is None:
+            return False
+        if (
+            info.reply_to_message_id
+            and slot.message_id
+            and info.reply_to_message_id != slot.message_id
+        ):
+            return False
+
+        if slot.kind == "form":
+            from .forms import format_answer_for_display, parse_form_reply
+
+            answer, errors = parse_form_reply(text, slot.fields or [])
+            if errors:
+                await self.client.send_text_safe(
+                    info.chat_id,
+                    "⚠️ " + "\n".join(errors)[:800] + "\n\nThe question is still "
+                    "waiting — reply again (or /cancel to dismiss it).",
+                    thread_id=info.thread_id or None,
+                )
+                return True
+            await self._resolve_answer(
+                slot, key, answer, display=format_answer_for_display(answer)
+            )
+        else:
+            display = text.strip()
+            await self._resolve_answer(slot, key, display, display=display)
+        return True
+
+    async def _resolve_answer(
+        self,
+        slot: PendingAnswer,
+        key: tuple[int, int],
+        answer: object,
+        *,
+        display: str,
+    ) -> None:
+        """Resolve a pending prompt: live future → parked resume → gone."""
+        raw = (
+            json.dumps(answer, ensure_ascii=False)
+            if not isinstance(answer, str)
+            else answer
+        )
+        if self.store.resolve_pending(slot.session_id, slot.request_id, raw):
+            self._pending_answers.pop(key, None)
+            await self._edit_prompt_answered(slot, display)
+            return
+
+        row = self.store.get_hitl_pending(slot.request_id)
+        if (
+            row is not None
+            and row.get("status") == "parked"
+            and row.get("session_id") == slot.session_id
+        ):
+            self._pending_answers.pop(key, None)
+            await self._edit_prompt_answered(slot, display)
+            self._start_parked_resume(key[0], key[1], slot, answer)
+            return
+
+        # Answered from the web UI in the meantime, or timed out.
+        self._pending_answers.pop(key, None)
+        await self._edit_prompt_text(
+            slot, "⏩ Already answered or expired."
+        )
+
+    def _start_parked_resume(
+        self, chat_id: int, thread_id: int, slot: PendingAnswer, answer: object
+    ) -> None:
+        """Resume a parked turn from Telegram.
+
+        The resumed turn's deltas reach the session bus via the ``_trace``
+        hook (the resume service sets the session contextvar), so the
+        long-lived reply streamer renders them like any other turn.
+        """
+        self._ensure_streamer(slot.session_id, chat_id, thread_id)
+        task = asyncio.create_task(
+            self._run_parked_resume(slot.session_id, slot.request_id, answer),
+            name=f"tg-hitl-resume-{slot.request_id[:8]}",
+        )
+        self._cancel_resume_task(slot.session_id)
+        self._resume_tasks[slot.session_id] = task
+        log.info(
+            "telegram: resuming parked HITL %s (session %.8s) from telegram",
+            slot.request_id[:8],
+            slot.session_id,
+        )
+
+    async def _run_parked_resume(
+        self, session_id: str, request_id: str, answer: object
+    ) -> None:
+        from ..server.services.hitl_resume import drive_parked_resume, prepare_parked_resume
+
+        try:
+            prepared = await prepare_parked_resume(
+                self.store,
+                session_id=session_id,
+                request_id=request_id,
+                raw_answer=answer,
+            )
+            if prepared is None or prepared.duplicate:
+                return
+            async for _event in drive_parked_resume(
+                self.agent, self.store, prepared, task_registry=self._resume_tasks
+            ):
+                pass  # events flow to subscribers via the session bus
+        except Exception:
+            log.exception("telegram: parked resume failed")
+
+    def _cancel_resume_task(self, session_id: str) -> bool:
+        task = self._resume_tasks.get(session_id)
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        return False
+
+    def cancel_resume(self, session_id: str) -> bool:
+        """Cancel a Telegram-initiated parked-resume turn (/cancel)."""
+        return self._cancel_resume_task(session_id)
+
+    async def _edit_prompt_answered(self, slot: PendingAnswer, display: str) -> None:
+        shown = html_escape(display).replace("\n", " · ")
+        await self._edit_prompt_text(
+            slot, f"✅ Answered: <b>{shown[:300]}</b>"
+        )
+
+    async def _edit_prompt_text(self, slot: PendingAnswer, html_text: str) -> None:
+        fwd = self._hitl_messages.get(slot.request_id)
+        if fwd is None:
+            return
+        chat_id, _thread_id, message_id = fwd
+        markup = {"remove_keyboard": True} if slot.reply_keyboard else None
+        try:
+            await self.client.edit_text_safe(
+                chat_id, message_id, html_text, reply_markup=markup
+            )
+        except Exception:
+            log.debug("telegram: hitl prompt edit failed", exc_info=True)
+
+    def register_pending_answer(
+        self, chat_id: int, thread_id: int, slot: PendingAnswer, message_id: int
+    ) -> None:
+        slot.message_id = message_id
+        self._pending_answers[(chat_id, thread_id)] = slot
+        while len(self._pending_answers) > _MAX_PENDING_ANSWERS:
+            self._pending_answers.pop(next(iter(self._pending_answers)))
+
+    def drop_pending_answer(self, request_id: str) -> None:
+        """Forget the answer slot for a request that expired/was answered."""
+        for key, slot in list(self._pending_answers.items()):
+            if slot.request_id == request_id:
+                self._pending_answers.pop(key, None)
+
+    async def dismiss_pending_answer(self, info: MsgInfo) -> PendingAnswer | None:
+        """/cancel — dismiss this chat's pending question, if any.
+
+        Mirrors the web bell cancel: drop the broker future or parked
+        row, broadcast ``user_request_cancelled`` (every surface updates),
+        and mark the bubble cancelled. Returns the dismissed slot so the
+        caller can also stop the turn that was waiting on it.
+        """
+        key = (info.chat_id, info.thread_id)
+        slot = self._pending_answers.get(key)
+        if slot is None:
+            return None
+        self._pending_answers.pop(key, None)
+
+        from ..server.events import SessionEvent
+
+        cancelled_live = self.store.cancel_pending(slot.session_id, slot.request_id)
+        cancelled_parked = False
+        if not cancelled_live:
+            cancelled_parked = self.store.cancel_hitl_pending(
+                slot.request_id, reason="user_cancelled"
+            )
+        if cancelled_live or cancelled_parked:
+            try:
+                self.store.publish(
+                    slot.session_id,
+                    SessionEvent(
+                        kind="user_request_cancelled",
+                        data={
+                            "request_id": slot.request_id,
+                            "reason": "user_cancelled",
+                        },
+                    ),
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                log.exception("telegram: publishing hitl cancellation failed")
+        await self._edit_prompt_text(slot, "🚫 Cancelled.")
+        return slot
+
     def _track_ack(self, session_id: str, info: MsgInfo) -> None:
         if not info.message_id or not self.cfg.ack_reaction:
             return
@@ -523,16 +764,17 @@ class TelegramRouter:
         )
 
     async def aclose(self) -> None:
-        """Cancel all reply streamers (poller shutdown)."""
+        """Cancel all reply streamers + resume tasks (poller shutdown)."""
         for t in list(self._streamers.values()):
             if not t.done():
                 t.cancel()
-        for t in list(self._streamers.values()):
+        for t in list(self._streamers.values()) + list(self._resume_tasks.values()):
             try:
                 await t
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._streamers.clear()
+        self._resume_tasks.clear()
 
     async def _stream_reply(self, session_id: str, chat_id: int, thread_id: int) -> None:
         acc = ""
@@ -824,14 +1066,26 @@ class TelegramRouter:
 
     # ── HITL ─────────────────────────────────────────────────────────────
 
-    def build_hitl_keyboard(
+    def build_hitl_interaction(
         self, session_id: str, request_id: str, data: dict
-    ) -> tuple[list[list[dict]], None] | tuple[None, str]:
-        """Build buttons for a user_request; returns (keyboard, error_reason).
+    ) -> tuple[dict | None, str | None, PendingAnswer | None]:
+        """Pick the Telegram input surface for a ``user_request``.
 
-        Choice/confirm kinds get buttons; text/form kinds can't be answered
-        from Telegram (free-form input) — the prompt is still forwarded with
-        a note to answer in the Nexus UI.
+        Returns ``(reply_markup, note, pending_slot)``:
+
+        - confirm / choice → inline keyboard buttons (one tap answers);
+        - text → ForceReply: tapping the prompt opens a quoted reply box,
+          the answer is bound to the prompt via ``reply_to_message``;
+        - form without secret fields and exactly one boolean/select
+          field → reply keyboard with the allowed values (tap = answer);
+        - form without secret fields → ForceReply with a
+          ``field: value`` placeholder;
+        - form with ``secret: true`` fields → no markup: secrets typed
+          into a Telegram chat would live in Telegram's cloud history —
+          those stay answerable in the Nexus UI only.
+
+        ``pending_slot`` is non-None when the answer arrives as the
+        chat's next message; the forwarder registers it after sending.
         """
         kind = data.get("kind", "confirm")
         choices = data.get("choices") or []
@@ -840,15 +1094,61 @@ class TelegramRouter:
             options = [str(c) for c in choices]
         elif kind == "confirm":
             options = ["yes", "no"]
+        elif kind == "text":
+            markup = {
+                "force_reply": True,
+                "input_field_placeholder": "Type your answer…",
+            }
+            return (
+                markup,
+                None,
+                PendingAnswer(session_id=session_id, request_id=request_id, kind="text"),
+            )
+        elif kind == "form":
+            from .forms import choice_values, has_secret_fields, single_choice_field
+
+            fields = data.get("fields") or []
+            if has_secret_fields(fields):
+                return None, "answer in the Nexus UI (this form has secret fields)", None
+            single = single_choice_field(fields)
+            if single is not None:
+                values = choice_values(single)
+                markup = {
+                    "keyboard": [[{"text": v} for v in values]],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True,
+                }
+                return (
+                    markup,
+                    None,
+                    PendingAnswer(
+                        session_id=session_id,
+                        request_id=request_id,
+                        kind="form",
+                        fields=fields,
+                        reply_keyboard=True,
+                    ),
+                )
+            markup = {
+                "force_reply": True,
+                "input_field_placeholder": "field: value — one per line",
+            }
+            return (
+                markup,
+                None,
+                PendingAnswer(
+                    session_id=session_id, request_id=request_id, kind="form", fields=fields
+                ),
+            )
         else:
-            return None, "answer in the Nexus UI"
+            return None, "answer in the Nexus UI", None
 
         rows = []
         for opt in options:
             key = uuid4().hex[:12]
             self._hitl_buttons[key] = (session_id, request_id, opt)
             rows.append([{"text": opt[:60], "callback_data": f"hb:{key}"}])
-        return rows, None
+        return {"inline_keyboard": rows}, None, None
 
     def register_hitl_message(
         self, request_id: str, chat_id: int, thread_id: int, message_id: int
@@ -864,14 +1164,32 @@ class TelegramRouter:
         # Sibling buttons for the same request are dead now — drop them.
         self._hitl_buttons = {k: v for k, v in self._hitl_buttons.items() if v[1] != request_id}
 
+        msg = cq.get("message") or {}
+        chat_id = int(msg.get("chat", {}).get("id", 0))
+        thread_id = int(msg.get("message_thread_id") or 0)
+
         resolved = self.store.resolve_pending(session_id, request_id, answer)
         if resolved:
             await self.client.answer_callback_query(cq.get("id", ""), "Answered")
         else:
-            parked = self.store.get_hitl_pending(request_id)
-            if parked is not None and parked.get("status") == "parked":
+            # Parked (the turn ended waiting) — resume it from Telegram
+            # through the same service the web resume route uses.
+            row = self.store.get_hitl_pending(request_id)
+            if (
+                row is not None
+                and row.get("status") == "parked"
+                and row.get("session_id") == session_id
+            ):
                 await self.client.answer_callback_query(
-                    cq.get("id", ""), "This prompt parked — answer it in the Nexus UI"
+                    cq.get("id", ""), "Answered — resuming"
+                )
+                self._start_parked_resume(
+                    chat_id,
+                    thread_id,
+                    PendingAnswer(
+                        session_id=session_id, request_id=request_id, kind="confirm"
+                    ),
+                    answer,
                 )
             else:
                 await self.client.answer_callback_query(

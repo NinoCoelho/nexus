@@ -143,7 +143,8 @@ async def launch_turn(
         return LaunchOutcome(
             error=(
                 "This chat is waiting for a parked form to be answered "
-                "(answer it in the Nexus UI, or use /new to start another chat)."
+                "(reply to the form prompt, answer it in the Nexus UI, "
+                "or use /new to start another chat)."
             ),
             session_id=session.id,
         )
