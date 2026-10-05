@@ -82,11 +82,14 @@ async def heartbeat_list(request: Request) -> dict:
             "next_due": _next_due(rec.schedule, run),
             "state": run.state if run else {},
         })
+    # Loom's HeartbeatScheduler API drifts — call .status() only when
+    # the installed loom provides it (newer looms expose richer state).
+    _status_fn = getattr(scheduler, "status", None) if scheduler else None
     return {
         "heartbeats": heartbeats,
         "scheduler_running": scheduler.running if scheduler else False,
         "tick_interval": scheduler._tick_interval if scheduler else None,
-        "scheduler_status": scheduler.status() if scheduler else None,
+        "scheduler_status": _status_fn() if callable(_status_fn) else None,
         "degraded": bool(getattr(request.app.state, "heartbeat_degraded", False)),
     }
 
