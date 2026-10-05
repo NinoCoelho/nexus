@@ -831,6 +831,10 @@ class TelegramRouter:
         # web_sync off: skip rendering this web-originated turn entirely.
         suppress_turn = False
         turn_errored = False  # error seen in the current turn — keep its 👀 ack
+        # The user message of the turn in flight (every origin carries it
+        # on turn_started). Paired with the settled reply for the
+        # question-aware voice note (voice_reply_mode="answer").
+        turn_question = ""
         typing_stop = asyncio.Event()
         typing_task = asyncio.create_task(
             self._typing_loop(session_id, chat_id, thread_id, typing_stop)
@@ -875,6 +879,7 @@ class TelegramRouter:
                         await self._finalize_reply(chat_id, thread_id, msg_id, acc)
                     acc, msg_id, echo_msg_id = "", 0, 0
                     suppress_turn = False
+                    turn_question = ev.get("message", "")
                     if ev.get("origin") == "web":
                         if getattr(self.cfg, "web_sync", True):
                             echo_msg_id = await self._maybe_send_echo(
@@ -913,7 +918,10 @@ class TelegramRouter:
                                 # Detached: TTS synthesis can take seconds —
                                 # don't hold the stream loop.
                                 asyncio.create_task(
-                                    self._send_voice_reply(chat_id, thread_id, reply_text)
+                                    self._send_voice_reply(
+                                        chat_id, thread_id, reply_text,
+                                        question=turn_question,
+                                    )
                                 )
                         turn_errored = False
 
@@ -1005,8 +1013,18 @@ class TelegramRouter:
             except asyncio.TimeoutError:
                 pass
 
-    async def _send_voice_reply(self, chat_id: int, thread_id: int, text: str) -> None:
+    async def _send_voice_reply(
+        self,
+        chat_id: int,
+        thread_id: int,
+        text: str,
+        *,
+        question: str | None = None,
+    ) -> None:
         """Synthesize the final reply and send it as a voice note.
+
+        ``question`` (the turn's user message) enables the question-aware
+        condensation when ``voice_reply_mode="answer"`` (default).
 
         Best-effort: failures log and leave the text reply as the answer.
         """
@@ -1021,6 +1039,8 @@ class TelegramRouter:
                 tts_cfg=self._tts_cfg(),
                 agent=self.agent,
                 speechify_mode=getattr(self.cfg, "voice_speechify", "auto"),
+                question=question,
+                reply_mode=getattr(self.cfg, "voice_reply_mode", "answer"),
             )
         except Exception:
             log.exception("telegram: voice reply failed")

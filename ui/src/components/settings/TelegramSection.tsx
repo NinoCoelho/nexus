@@ -28,6 +28,7 @@ const DEFAULT_CFG: TelegramConfig = {
   ack_reaction: "👀",
   voice_replies: true,
   voice_speechify: "auto",
+  voice_reply_mode: "answer",
   web_sync: true,
 };
 
@@ -386,6 +387,31 @@ export default function TelegramSection() {
         >
           <span className="hitl-switch-knob" />
         </button>
+      </div>
+
+      <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>
+        <span className="settings-row-name">
+          {t("settings:telegram.voiceReplyModeLabel")}
+          <span
+            className="settings-row-hint"
+            style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}
+          >
+            {t("settings:telegram.voiceReplyModeHint")}
+          </span>
+        </span>
+        <div style={{ flexBasis: "100%", marginTop: 4 }}>
+          <select
+            className="s-select"
+            disabled={saving || !cfg.voice_replies}
+            value={cfg.voice_reply_mode}
+            onChange={(e) =>
+              void save({ voice_reply_mode: e.target.value as TelegramConfig["voice_reply_mode"] })
+            }
+          >
+            <option value="answer">{t("settings:telegram.voiceReplyModeAnswer")}</option>
+            <option value="read">{t("settings:telegram.voiceReplyModeRead")}</option>
+          </select>
+        </div>
       </div>
 
       <div className="settings-row" style={{ flexWrap: "wrap", gap: 6 }}>

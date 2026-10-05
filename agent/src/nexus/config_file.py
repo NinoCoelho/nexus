@@ -213,6 +213,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "ack_reaction": cfg.telegram.ack_reaction,
             "voice_replies": cfg.telegram.voice_replies,
             "voice_speechify": cfg.telegram.voice_speechify,
+            "voice_reply_mode": cfg.telegram.voice_reply_mode,
         },
         "coordinator": {
             "enabled": cfg.coordinator.enabled,

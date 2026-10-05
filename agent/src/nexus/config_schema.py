@@ -351,6 +351,10 @@ class TelegramConfig(BaseModel):
     # the reply is messy (markdown/emoji/units), "always" every reply,
     # "off" never. Uses [tts].ack_model.
     voice_speechify: Literal["auto", "always", "off"] = "auto"
+    # Voice-note content: "answer" condenses the reply into a question-
+    # aware spoken answer via the ack model (the chat already shows the
+    # full text); "read" speaks the reply as-is.
+    voice_reply_mode: Literal["answer", "read"] = "answer"
     # Mirror web-UI turns to the bound chat: the user's message is echoed
     # and the streamed reply quotes it. Applies to a binding's active
     # session (DM master chat or topic).

@@ -1395,6 +1395,207 @@ async def test_speechify_failure_falls_back(
     assert out == "texto original"
 
 
+# ── Voice reply condensation (question-aware) ────────────────────────────
+
+
+def test_strip_group_prefix() -> None:
+    from nexus.telegram.voice import strip_group_prefix
+
+    assert strip_group_prefix("From Alice:\n\nqual o clima?") == "qual o clima?"
+    assert strip_group_prefix("pergunta direta") == "pergunta direta"
+    assert strip_group_prefix("") == ""
+
+
+async def test_condense_for_speech_prompt_and_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus.telegram.voice import condense_for_speech
+
+    prompts: list[str] = []
+
+    async def fake_llm(agent, cfg, prompt, **kwargs):
+        prompts.append(prompt)
+        return "resposta condensada"
+
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fake_llm)
+    out = await condense_for_speech(object(), "qual o clima amanhã?", "## Previsão\n- 18–33°C")
+    assert out == "resposta condensada"
+    assert len(prompts) == 1
+    assert "qual o clima amanhã?" in prompts[0]
+    assert "## Previsão" in prompts[0]
+
+    async def slow_llm(agent, cfg, prompt, **kwargs):
+        await asyncio.sleep(2.0)
+        return "never"
+
+    monkeypatch.setattr("nexus.voice_ack._generate_text", slow_llm)
+    out = await condense_for_speech(object(), "q?", "resposta original", timeout=0.05)
+    assert out == "resposta original"
+
+    # No question → reply untouched, no LLM call.
+    async def fail_llm(*a, **k):  # pragma: no cover
+        raise AssertionError("LLM should not be called without a question")
+
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fail_llm)
+    assert await condense_for_speech(object(), "", "resposta original") == "resposta original"
+
+
+async def test_deliver_answer_mode_condenses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+    from nexus.telegram.voice import deliver_voice_note
+    from nexus.tts import SynthResult
+
+    h = Harness(tmp_path, FakeProvider([_final("x")]))
+    synth_calls: list[str] = []
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        synth_calls.append(text)
+        return SynthResult(b"RIFF", "audio/wav")
+
+    llm_prompts: list[str] = []
+
+    async def fake_llm(agent, cfg, prompt, **kwargs):
+        llm_prompts.append(prompt)
+        return "Sim, amanhã faz entre dezoito e trinta e três graus."
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fake_llm)
+
+    ok = await deliver_voice_note(
+        h.client,
+        1000,
+        0,
+        "## Previsão\n- 18–33°C com 50% de chance de chuva",
+        tts_cfg=TTSConfig(enabled=True),
+        agent=object(),
+        speechify_mode="auto",
+        question="como vai estar o clima amanhã?",
+        reply_mode="answer",
+    )
+    assert ok is True
+    # One LLM call: the condensation (clean output → speechify auto skips).
+    assert len(llm_prompts) == 1
+    assert "como vai estar o clima amanhã?" in llm_prompts[0]
+    assert synth_calls and "dezoito e trinta e três" in synth_calls[0]
+
+
+async def test_deliver_answer_mode_read_skips_condense(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+    from nexus.telegram.voice import deliver_voice_note
+    from nexus.tts import SynthResult
+
+    h = Harness(tmp_path, FakeProvider([_final("x")]))
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        return SynthResult(b"RIFF", "audio/wav")
+
+    llm_prompts: list[str] = []
+
+    async def fake_llm(agent, cfg, prompt, **kwargs):
+        llm_prompts.append(prompt)
+        return "reescrito para fala"
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fake_llm)
+
+    ok = await deliver_voice_note(
+        h.client,
+        1000,
+        0,
+        "bagunçado **31°C** ✅",
+        tts_cfg=TTSConfig(enabled=True),
+        agent=object(),
+        speechify_mode="auto",
+        question="qual a temperatura?",
+        reply_mode="read",
+    )
+    assert ok is True
+    # read mode: no condensation — only the phonetic speechify fired.
+    assert len(llm_prompts) == 1
+    assert "bagunçado" in llm_prompts[0]
+    assert "qual a temperatura?" not in llm_prompts[0]
+
+
+async def test_deliver_answer_mode_without_question_reads_aloud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+    from nexus.telegram.voice import deliver_voice_note
+    from nexus.tts import SynthResult
+
+    h = Harness(tmp_path, FakeProvider([_final("x")]))
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        return SynthResult(b"RIFF", "audio/wav")
+
+    async def fail_llm(*a, **k):  # pragma: no cover — clean text, no question
+        raise AssertionError("LLM should not be called")
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fail_llm)
+
+    ok = await deliver_voice_note(
+        h.client,
+        1000,
+        0,
+        "Tudo certo, resolvi o seu pedido.",
+        tts_cfg=TTSConfig(enabled=True),
+        agent=object(),
+        speechify_mode="auto",
+        question=None,
+        reply_mode="answer",
+    )
+    assert ok is True
+
+
+async def test_voice_message_reply_condensed_with_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus.config_schema import TTSConfig
+
+    h = Harness(tmp_path, FakeProvider([_final("full report text")]))
+    monkeypatch.setattr(
+        "nexus.multimodal.transcribe_bytes",
+        lambda data, mime: _async_value("hello from voice"),
+    )
+
+    from nexus.tts import SynthResult
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        return SynthResult(b"RIFFWAV", "audio/wav")
+
+    llm_prompts: list[str] = []
+
+    async def fake_llm(agent, cfg, prompt, **kwargs):
+        llm_prompts.append(prompt)
+        return "spoken condensed answer"
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fake_llm)
+    monkeypatch.setattr("nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGGBYTES")
+    h.router._tts_cfg = lambda: TTSConfig(enabled=True)
+
+    msg = _msg("")
+    msg.pop("text")
+    msg["voice"] = {"file_id": "vf1", "duration": 3, "mime_type": "audio/ogg"}
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+
+    for _ in range(100):
+        if h.client.voices:
+            break
+        await asyncio.sleep(0.02)
+    assert h.client.voices, "voice reply was not sent"
+    # The streamer paired turn_started.message with the settled reply and
+    # the condensation prompt saw the transcribed question.
+    assert any("hello from voice" in p for p in llm_prompts)
+    assert any("full report text" in p for p in llm_prompts)
+
+
 async def test_topics_lists_bindings(tmp_path: Path) -> None:
     h = Harness(tmp_path, FakeProvider([_final("ok")]))
     from nexus.server.project_store import ProjectStore

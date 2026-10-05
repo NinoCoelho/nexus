@@ -1,10 +1,13 @@
 """Voice replies — synthesize the agent's answer and deliver it as a
 Telegram voice note.
 
-Pipeline: raw reply → optional LLM "speechify" rewrite (drops markdown,
-expands abbreviations, transliterates foreign words to the reply's
-phonetics) → ``tts.synthesize`` (Piper applies ``normalize_for_speech``
-— ranges/units/numbers — on top) → PyAV transcode to OGG/Opus →
+Pipeline: raw reply → optional question-aware condensation
+(``voice_reply_mode="answer"``: fast LLM answers the user's original
+question from the processing result — the chat already shows the full
+text) → optional LLM "speechify" rewrite (drops markdown, expands
+abbreviations, transliterates foreign words to the reply's phonetics)
+→ ``tts.synthesize`` (Piper applies ``normalize_for_speech`` —
+ranges/units/numbers — on top) → PyAV transcode to OGG/Opus →
 sendVoice, with sendAudio as fallback when any step degrades.
 """
 
@@ -26,6 +29,7 @@ log = logging.getLogger(__name__)
 _MAX_SYNTH_CHARS = 4000
 
 _SPEECHIFY_TIMEOUT = 8.0
+_CONDENSE_TIMEOUT = 10.0
 
 # "Messy" heuristic for voice_speechify="auto": anything the deterministic
 # normalizer can't fully fix — markdown residue, emoji, unit symbols,
@@ -39,6 +43,44 @@ _MESSY_RE = re.compile(
     re.UNICODE,
 )
 
+# Question-aware condensation (voice_reply_mode="answer"): the chat
+# bubble already carries the full reply, so the voice note should ANSWER
+# the user's original question derived from the agent's result, not
+# read the screen-oriented text aloud.
+_ANSWER_PROMPTS = {
+    "pt": (
+        "O usuário fez uma pergunta por voz. O assistente já processou tudo "
+        "e produziu o resultado abaixo (o texto integral também já está "
+        "escrito no chat).\n"
+        "Com base nesse resultado, responda diretamente à pergunta do "
+        "usuário, para ser lido em voz alta:\n"
+        "- Frases corridas, sem markdown, listas, emojis ou parênteses.\n"
+        "- Mantenha os fatos, números e conclusões essenciais; seja conciso.\n"
+        "- Se o resultado contiver links, código ou arquivos, apenas "
+        "mencione que estão no chat.\n"
+        "- Responda no mesmo idioma da pergunta.\n"
+        "Responda APENAS com o texto a ser falado, sem comentários.\n\n"
+        "Pergunta do usuário:\n{question}\n\n"
+        "Resultado do processamento:\n{reply}"
+    ),
+    "en": (
+        "The user asked a question by voice. The assistant has already "
+        "processed it and produced the result below (the full text is also "
+        "written in the chat).\n"
+        "Based on that result, answer the user's question directly, to be "
+        "read aloud:\n"
+        "- Flowing sentences, no markdown, lists, emojis, or parentheses.\n"
+        "- Keep the essential facts, numbers, and conclusions; stay concise.\n"
+        "- If the result contains links, code, or files, just mention they "
+        "are in the chat.\n"
+        "- Answer in the same language as the question.\n"
+        "Reply with ONLY the text to be spoken, no commentary.\n\n"
+        "User question:\n{question}\n\n"
+        "Processing result:\n{reply}"
+    ),
+}
+
+# Phonetic rewrite (voice_speechify): same content, speakable phrasing.
 _SPEECHIFY_PROMPTS = {
     "pt": (
         "Reescreva o texto abaixo para ser lido em voz alta em português, "
@@ -97,6 +139,46 @@ async def speechify(agent: Any, text: str, *, timeout: float = _SPEECHIFY_TIMEOU
         return text
 
 
+def strip_group_prefix(question: str) -> str:
+    """Drop the ``From <sender>:`` prefix group messages carry — the
+    condensation prompt wants the user's raw words."""
+    return re.sub(r"^From [^\n]*:\s*\n+", "", (question or "").strip()).strip()
+
+
+async def condense_for_speech(
+    agent: Any,
+    question: str,
+    reply: str,
+    *,
+    timeout: float = _CONDENSE_TIMEOUT,
+) -> str:
+    """Answer the user's original question from the agent's processing
+    result, in speakable form. Returns ``reply`` unchanged on any
+    failure/timeout — callers fall back to the speechify chain."""
+    question = strip_group_prefix(question)
+    if not question or not (reply or "").strip():
+        return reply
+    try:
+        from ..voice_ack import _detect_lang_short, _generate_text
+
+        def _load_cfg():
+            from ..config_file import load_cached as load_config
+
+            return load_config()
+
+        lang = _detect_lang_short(question)
+        template = _ANSWER_PROMPTS.get(lang, _ANSWER_PROMPTS["en"])
+        prompt = template.format(question=question[:2000], reply=reply[:8000])
+        out = await asyncio.wait_for(
+            _generate_text(agent, _load_cfg(), prompt), timeout=timeout
+        )
+        out = (out or "").strip()
+        return out or reply
+    except Exception:
+        log.debug("telegram: condense failed — using original reply", exc_info=True)
+        return reply
+
+
 def wav_to_ogg_opus(wav: bytes) -> bytes | None:
     """Transcode WAV → OGG/Opus in memory via PyAV. None on any failure."""
     try:
@@ -141,13 +223,21 @@ async def deliver_voice_note(
     tts_cfg: Any = None,
     agent: Any = None,
     speechify_mode: str = "auto",
+    question: str | None = None,
+    reply_mode: str = "answer",
 ) -> bool:
     """Synthesize ``text`` and send it as a voice note (with fallbacks).
 
-    ``speechify_mode``: ``always`` rewrites every reply through the LLM
-    (``[tts].ack_model``) for natural spoken phrasing; ``auto`` only when
-    the text is messy (markdown/emoji/units/foreign words); ``off`` never.
-    LLM failure/timeout degrades silently to the rule-normalized text.
+    ``reply_mode="answer"`` (default): when the turn's user question is
+    known, first condense the reply into a question-aware spoken answer
+    (``condense_for_speech`` — no tools, fast ack model). ``"read"``
+    keeps the read-aloud behavior.
+
+    ``speechify_mode``: ``always`` rewrites the (possibly condensed)
+    text through the LLM (``[tts].ack_model``) for natural spoken
+    phrasing; ``auto`` only when the text is messy
+    (markdown/emoji/units/foreign words); ``off`` never. LLM
+    failure/timeout degrades silently to the rule-normalized text.
 
     Returns True when some audio bubble was delivered. Silently no-ops
     when TTS is disabled or synthesis fails — the text reply already
@@ -165,6 +255,15 @@ async def deliver_voice_note(
         tts_cfg = load_config().tts
     if not getattr(tts_cfg, "enabled", False):
         return False
+
+    if agent is not None and reply_mode == "answer" and question:
+        try:
+            text = await condense_for_speech(agent, question, text)
+        except Exception:
+            log.debug(
+                "telegram: condense failed — falling back to read-aloud",
+                exc_info=True,
+            )
 
     if agent is not None and speechify_mode in ("auto", "always"):
         if speechify_mode == "always" or needs_speechify(text):
