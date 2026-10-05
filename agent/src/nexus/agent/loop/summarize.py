@@ -325,7 +325,7 @@ async def _call_summarizer(
         return ""
 
 
-def persist_session_summary(session_id: str, summary: str, *, model_id: str | None = None) -> None:
+def persist_session_summary(session_id: str, summary: str, *, model_id: str | None = None) -> str | None:
     try:
         sm_dir = _session_memory_fn()
         sm_dir.mkdir(parents=True, exist_ok=True)
@@ -341,8 +341,34 @@ def persist_session_summary(session_id: str, summary: str, *, model_id: str | No
         frontmatter += "---\n\n"
         path.write_text(frontmatter + summary, encoding="utf-8")
         log.debug("persisted session summary to %s", path)
+        return str(path)
     except Exception:
         log.debug("failed to persist session summary", exc_info=True)
+        return None
+
+
+def load_session_summary(session_id: str) -> str | None:
+    """Read the persisted session-memory summary body, or None.
+
+    The frontmatter (session_id/updated_at/model) is stripped — callers
+    inject the body as the ``[Session Memory`` system message. A missing or
+    empty file is not an error.
+    """
+    try:
+        path = _session_memory_fn() / f"{session_id}.md"
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            return None
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end != -1:
+                text = text[end + 4:].strip()
+        return text or None
+    except Exception:
+        log.debug("failed to load session summary", exc_info=True)
+        return None
 
 
 def persist_summary_part(

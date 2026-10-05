@@ -274,6 +274,11 @@ class Agent:
         self._turn_trace: list[dict[str, Any]] = []
         self._skills_touched: list[str] = []
         self._chosen_model: str | None = None
+        # Soft auto-compact hysteresis: session_id → estimated input tokens at
+        # the last soft-threshold compaction. Re-trigger only after ~15%
+        # growth so a history sitting near the threshold isn't re-summarized
+        # every turn.
+        self._soft_compact_watermark: dict[str, int] = {}
 
         self._loom = build_loom_agent(
             nexus_provider=self._nexus_provider,
@@ -560,6 +565,33 @@ class Agent:
                 if text:
                     yield {"type": "thinking", "text": text}
 
+    def _seed_session_notes(
+        self, history: list[ChatMessage], session_id: str
+    ) -> list[ChatMessage]:
+        """Prepend the persisted session-memory summary when the live history
+        carries none.
+
+        Covers resumes after external history truncation and fork children:
+        the note is the point-in-time snapshot from the last compaction
+        (``persist_session_summary``), so reseeding is LLM-free and instant.
+        """
+        from .summarize import _SUMMARY_PREFIX, load_session_summary
+        if any(
+            m.role == Role.SYSTEM and (m.content or "").startswith(_SUMMARY_PREFIX)
+            for m in history
+        ):
+            return history
+        notes = load_session_summary(session_id)
+        if not notes:
+            return history
+        log.info("Seeding session %s from persisted session notes", session_id)
+        return [
+            ChatMessage(
+                role=Role.SYSTEM,
+                content=f"{_SUMMARY_PREFIX} — auto-generated summary]\n{notes}",
+            )
+        ] + history
+
     async def _prepare_stream_turn(
         self,
         user_message: str,
@@ -582,6 +614,8 @@ class Agent:
             stripped_history = [_from_loom_message(m) for m in resume_working_messages]
         elif history:
             stripped_history = _sanitize_tool_pairs(_strip_dead_placeholders(history))
+            if session_id:
+                stripped_history = self._seed_session_notes(stripped_history, session_id)
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         effective_window = ctx_window if ctx_window > 0 else _DEFAULT_FALLBACK_WINDOW
@@ -616,38 +650,73 @@ class Agent:
             loom_messages.append(_to_loom_message(user_msg))
 
         _auto_compacted_history: list[ChatMessage] | None = None
-        if _session_tool_budget > 0 and stripped_history:
-            from .budget import estimate_session_tool_tokens
-            _session_tool_tok = estimate_session_tool_tokens(stripped_history)
-            if _session_tool_tok > _session_tool_budget:
-                log.info(
-                    "Cross-turn tool budget exceeded: %dK > %dK tokens — triggering compact_and_summarize",
-                    _session_tool_tok // 1024, _session_tool_budget // 1024,
-                )
-                from .compact import compact_and_summarize
-                compacted, _cs_report = await compact_and_summarize(
-                    stripped_history,
-                    context_window=effective_window,
-                    session_id=session_id,
-                    model_id=model_id or self._chosen_model,
-                    provider=self._nexus_provider,
-                    strategy="auto",
-                )
-                if _cs_report.compact_report.compacted > 0 or _cs_report.summarized:
-                    log.info(
-                        "Cross-turn compaction: compacted=%d summarized=%s tokens %dK→%dK",
-                        _cs_report.compact_report.compacted,
-                        _cs_report.summarized,
-                        _cs_report.tokens_before // 1024,
-                        _cs_report.tokens_after // 1024,
+
+        # Pre-turn compaction triggers:
+        #   (a) cross-turn cumulative tool-result budget exceeded (the
+        #       death-spiral guard), or
+        #   (b) soft full-context threshold crossed — estimated input for the
+        #       upcoming turn is at/above ``agent.auto_compact_threshold_pct``
+        #       percent of the usable window. Counters context rot before the
+        #       hard overflow; gated by a 15% growth watermark so it doesn't
+        #       re-fire every turn once near the line.
+        _trigger_reason = ""
+        if stripped_history:
+            if _session_tool_budget > 0:
+                from .budget import estimate_session_tool_tokens
+                _session_tool_tok = estimate_session_tool_tokens(stripped_history)
+                if _session_tool_tok > _session_tool_budget:
+                    _trigger_reason = (
+                        f"cross-turn tool budget exceeded: "
+                        f"{_session_tool_tok // 1024}K > {_session_tool_budget // 1024}K tokens"
                     )
-                    stripped_history = compacted
-                    _auto_compacted_history = compacted
-                    loom_messages = [_to_loom_message(m) for m in compacted]
-                    for nm, lm in zip(compacted, loom_messages):
-                        if nm.role == Role.ASSISTANT and nm.reasoning_content:
-                            lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
-                    loom_messages.append(_to_loom_message(user_msg))
+            if not _trigger_reason:
+                _agent_cfg = getattr(self._nexus_cfg, "agent", None) if self._nexus_cfg else None
+                _pct = int(getattr(_agent_cfg, "auto_compact_threshold_pct", 0) or 0)
+                if _pct > 0:
+                    from .budget import should_soft_compact
+                    from .overflow import _OUTPUT_HEADROOM_TOKENS, _TOOLS_AND_SYSTEM_OVERHEAD
+                    _usable = max(1, effective_window - _OUTPUT_HEADROOM_TOKENS - _TOOLS_AND_SYSTEM_OVERHEAD)
+                    _est = check_overflow(loom_messages, context_window=effective_window).estimated_input_tokens
+                    _wm_key = session_id or ""
+                    if should_soft_compact(
+                        _est, _usable, _pct, self._soft_compact_watermark.get(_wm_key, 0)
+                    ):
+                        _trigger_reason = (
+                            f"soft threshold {_pct}% crossed: ~{_est // 1024}K / {_usable // 1024}K usable tokens"
+                        )
+        if _trigger_reason:
+            log.info(
+                "Pre-turn compaction (%s) — triggering compact_and_summarize",
+                _trigger_reason,
+            )
+            from .compact import compact_and_summarize
+            compacted, _cs_report = await compact_and_summarize(
+                stripped_history,
+                context_window=effective_window,
+                session_id=session_id,
+                model_id=model_id or self._chosen_model,
+                provider=self._nexus_provider,
+                strategy="auto",
+            )
+            if _cs_report.compact_report.compacted > 0 or _cs_report.summarized:
+                log.info(
+                    "Cross-turn compaction: compacted=%d summarized=%s tokens %dK→%dK",
+                    _cs_report.compact_report.compacted,
+                    _cs_report.summarized,
+                    _cs_report.tokens_before // 1024,
+                    _cs_report.tokens_after // 1024,
+                )
+                stripped_history = compacted
+                _auto_compacted_history = compacted
+                loom_messages = [_to_loom_message(m) for m in compacted]
+                for nm, lm in zip(compacted, loom_messages):
+                    if nm.role == Role.ASSISTANT and nm.reasoning_content:
+                        lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
+                loom_messages.append(_to_loom_message(user_msg))
+            self._soft_compact_watermark[session_id or ""] = max(
+                _cs_report.tokens_after,
+                self._soft_compact_watermark.get(session_id or "", 0),
+            )
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         check = check_overflow(loom_messages, context_window=ctx_window)
@@ -808,6 +877,7 @@ class Agent:
                         "type": "user_injected",
                         "qid": item["qid"],
                         "text": item["text"],
+                        "origin": item.get("origin", "web"),
                         "session_id": st.session_id,
                     }
                 log.info(

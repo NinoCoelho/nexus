@@ -122,3 +122,24 @@ def estimate_session_tool_tokens(history) -> int:
         if getattr(msg, "role", None) == Role.TOOL and msg.content:
             total += estimate_tool_result_tokens(msg.content)
     return total
+
+
+def should_soft_compact(
+    est_tokens: int,
+    usable_tokens: int,
+    threshold_pct: int,
+    watermark: int,
+) -> bool:
+    """Decide whether the soft full-context auto-compact should fire.
+
+    Fires when the estimated input for the upcoming turn crosses
+    ``threshold_pct`` percent of the usable window AND has grown ≥15% since
+    the last soft compaction (hysteresis — a history parked near the
+    threshold must not re-summarize on every turn). ``threshold_pct <= 0``
+    disables.
+    """
+    if threshold_pct <= 0 or usable_tokens <= 0:
+        return False
+    if est_tokens * 100 < threshold_pct * usable_tokens:
+        return False
+    return est_tokens > watermark * 115 // 100

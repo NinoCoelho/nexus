@@ -161,6 +161,78 @@ def test_auto_compact_persists_original_to_vault_ref() -> None:
     assert "vault://" in out[0].content
 
 
+# ── microcompaction (stub_older_than) ──────────────────────────────────────
+# Claude-Code-style tool-result clearing: OLD results (outside the trailing
+# window) become one-line stubs regardless of size; recent ones stay verbatim
+# unless oversized; tool_call_id/name linkage is always preserved.
+
+
+def _stub_history(n_tools: int = 5, size: int = 800) -> list[ChatMessage]:
+    msgs: list[ChatMessage] = [ChatMessage(role=Role.USER, content="go")]
+    for i in range(n_tools):
+        msgs.append(_tool_msg(f'{{"ok": true, "data": "{i}{"x" * size}"}}', tcid=f"c{i}", name="vault_read"))
+    return msgs
+
+
+def test_microcompact_stubs_old_small_results() -> None:
+    history = _stub_history()
+    out, report = auto_compact(history, stub_older_than=2)
+    # 6 messages, cutoff = 6-2 = 4: tool msgs at idx 1..3 are old → 3 stubs.
+    assert report.compacted == 3
+    stub = json.loads(out[1].content.split("\n\n[Full result")[0])
+    assert stub["nx:compacted"] is True and stub["stub"] is True
+    assert stub["tool"] == "vault_read"
+    assert stub["original_size"] == len(history[1].content)
+    # Old small result shrunk to a stub (+ vault ref line).
+    assert len(out[1].content) < 600
+    # Recent two untouched.
+    assert out[-1].content == history[-1].content
+    assert out[-2].content == history[-2].content
+
+
+def test_microcompact_preserves_tool_linkage() -> None:
+    history = _stub_history()
+    out, _ = auto_compact(history, stub_older_than=2)
+    for orig, new in zip(history, out):
+        assert new.role == orig.role
+        assert new.tool_call_id == orig.tool_call_id
+        assert new.name == orig.name
+
+
+def test_microcompact_idempotent() -> None:
+    history = _stub_history()
+    once, r1 = auto_compact(history, stub_older_than=2)
+    twice, r2 = auto_compact(once, stub_older_than=2)
+    assert r2.compacted == 0
+    assert [m.content for m in twice] == [m.content for m in once]
+
+
+def test_microcompact_floor_keeps_tiny_results() -> None:
+    msgs = [_tool_msg('{"ok": true}', tcid="tiny"), ChatMessage(role=Role.USER, content="q")]
+    out, report = auto_compact(msgs, stub_older_than=1)
+    assert report.compacted == 0
+    assert out[0].content == '{"ok": true}'
+
+
+def test_microcompact_oversized_recent_still_head_compacted() -> None:
+    payload = "y" * 5_000
+    history = [_tool_msg('{"ok": true, "data": "' + payload + '"}', tcid="big"),
+               ChatMessage(role=Role.USER, content="q")]
+    out, report = auto_compact(history, stub_older_than=1)
+    # Index 0 is old enough to stub (cutoff=1); oversized+old → stub path is
+    # cheapest, but either way it must shrink and stay linked.
+    assert report.compacted == 1
+    assert len(out[0].content) < 2_000
+    assert out[0].tool_call_id == "big"
+
+
+def test_microcompact_disabled_by_default() -> None:
+    history = _stub_history()
+    out, report = auto_compact(history)
+    assert report.compacted == 0
+    assert [m.content for m in out] == [m.content for m in history]
+
+
 # ── recursive redaction (nested JSON) ──────────────────────────────────────
 # Regression: a payload nested one level deep — e.g. a kanban board dump
 # ``{"board": {"lanes": [...cards...]}}`` — used to be marked nx:compacted but

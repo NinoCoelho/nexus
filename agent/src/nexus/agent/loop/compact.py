@@ -242,6 +242,13 @@ _AUTO_COMPACT_HEAD_KEEP = 512
 
 _AUTO_COMPACT_SAMPLE_ROWS = 3
 
+# Microcompaction (Claude-Code-style tool-result clearing): when enabled via
+# ``stub_older_than``, TOOL results older than that many messages are reduced
+# to one-line stubs regardless of size — old results are never re-read
+# verbatim, and the full payload is preserved in the vault tool cache.
+_STUB_FLOOR_BYTES = 512
+_STUB_FIRST_LINE_CHARS = 160
+
 
 def _persist_to_vault(content: str, tool_call_id: str | None) -> str | None:
     try:
@@ -259,12 +266,39 @@ def _persist_to_vault(content: str, tool_call_id: str | None) -> str | None:
         return None
 
 
+def _stub_one(content: str, tool_name: str | None) -> str:
+    """Return a one-line stub replacing an old tool result (microcompaction).
+
+    Keeps the ``nx:compacted`` marker as the first JSON key so ``_is_compacted``
+    idempotency holds. The tool's own call arguments live on the preceding
+    assistant message, so ``tool`` + ``first_line`` is enough for the model to
+    recognize what happened and re-fetch on demand.
+    """
+    first_line = ""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            first_line = stripped
+            break
+    obj = {
+        _COMPACT_MARKER: True,
+        "stub": True,
+        "tool": tool_name or "",
+        "original_size": len(content),
+        "first_line": first_line[:_STUB_FIRST_LINE_CHARS],
+        "hint": "Old tool result stubbed to save context; re-call the tool if needed.",
+    }
+    return json.dumps(obj, ensure_ascii=False)
+
+
 def auto_compact(
     history: list[ChatMessage],
     *,
     threshold_bytes: int = _AUTO_COMPACT_THRESHOLD_BYTES,
     head_keep: int = _AUTO_COMPACT_HEAD_KEEP,
     sample_rows: int = _AUTO_COMPACT_SAMPLE_ROWS,
+    stub_older_than: int | None = None,
+    stub_floor_bytes: int = _STUB_FLOOR_BYTES,
 ) -> tuple[list[ChatMessage], CompactionReport]:
     out: list[ChatMessage] = []
     inspected = 0
@@ -273,24 +307,34 @@ def auto_compact(
     bytes_after = 0
     skipped = 0
 
-    for msg in history:
+    # Region [0, stub_cutoff) is "old": its TOOL results are stubbable.
+    # 0 disables (and naturally guards stub_older_than >= len(history)).
+    stub_cutoff = len(history) - stub_older_than if (stub_older_than or 0) > 0 else 0
+
+    for idx, msg in enumerate(history):
         if msg.role != Role.TOOL or not msg.content:
             out.append(msg)
             continue
         inspected += 1
         size = len(msg.content)
         bytes_before += size
-        if size <= threshold_bytes:
+        already = _is_compacted(msg.content)
+        oversized = size > threshold_bytes
+        stubbable = idx < stub_cutoff and size >= stub_floor_bytes
+        if not oversized and not stubbable:
             bytes_after += size
             out.append(msg)
             continue
-        if _is_compacted(msg.content):
+        if already:
             skipped += 1
             bytes_after += size
             out.append(msg)
             continue
         vault_ref = _persist_to_vault(msg.content, msg.tool_call_id)
-        new_content = _compact_one(msg.content, head_keep=head_keep, sample_rows=sample_rows)
+        if oversized:
+            new_content = _compact_one(msg.content, head_keep=head_keep, sample_rows=sample_rows)
+        else:
+            new_content = _stub_one(msg.content, msg.name)
         if vault_ref:
             new_content += f"\n\n[Full result saved to {vault_ref}]"
         bytes_after += len(new_content)
@@ -324,6 +368,35 @@ class CompactAndSummarizeReport:
     zone_after: str = "green"
     still_overflowed: bool = False
     budget_exceeded: bool = False
+    reinjected_paths: list[str] = field(default_factory=list)
+    notes_path: str | None = None
+
+
+# Tools whose ``path`` argument identifies a vault file. Post-compaction
+# re-injection surfaces the most recent of these as JIT pointers so the
+# model can re-read what it was working with (Claude Code keeps its five
+# most-recently-accessed files for the same reason).
+_VAULT_PATH_TOOLS = frozenset({"vault_read", "vault_list", "vault_write", "vault_kanban"})
+_REINJECT_MAX_PATHS = 5
+
+
+def _recent_vault_paths(
+    messages: list[ChatMessage], *, limit: int = _REINJECT_MAX_PATHS
+) -> list[str]:
+    """Distinct vault paths referenced by tool calls, most-recent-first."""
+    paths: list[str] = []
+    for msg in reversed(messages):
+        if msg.role != Role.ASSISTANT or not msg.tool_calls:
+            continue
+        for tc in msg.tool_calls:
+            if tc.name not in _VAULT_PATH_TOOLS:
+                continue
+            path = tc.arguments.get("path")
+            if isinstance(path, str) and path and path not in paths:
+                paths.append(path)
+            if len(paths) >= limit:
+                return paths
+    return paths
 
 
 async def compact_and_summarize(
@@ -360,11 +433,20 @@ async def compact_and_summarize(
         tool_head = 512 if aggressive else _AUTO_COMPACT_HEAD_KEEP
         tool_rows = 2 if aggressive else _AUTO_COMPACT_SAMPLE_ROWS
 
+        # Microcompaction: aggressive always stubs old tool results; milder
+        # strategies only once the pre-tools estimate has already left the
+        # green zone, so a healthy history is never touched.
+        if aggressive:
+            stub_older_than: int | None = 30
+        else:
+            stub_older_than = 30 if classify_zone(est_tokens, effective_window) != "green" else None
+
         compacted_result, compact_report = auto_compact(
             result,
             threshold_bytes=tool_threshold,
             head_keep=tool_head,
             sample_rows=tool_rows,
+            stub_older_than=stub_older_than,
         )
         report.compact_report = compact_report
         if compact_report.compacted > 0:
@@ -395,12 +477,30 @@ async def compact_and_summarize(
         else:
             if summary:
                 from .summarize import _SUMMARY_PREFIX
+                # JIT re-injection: pointers to the most recent vault files
+                # touched inside the summarized-away region, so the compacted
+                # model can re-read its working set on demand instead of
+                # losing it to the summary.
+                summarized_region = result[: max(0, len(result) - len(recent))]
+                paths = _recent_vault_paths(summarized_region)
+                if paths:
+                    summary += "\n\nRecently accessed files (re-read via vault_read):\n" + "\n".join(
+                        f"- vault://{p}" for p in paths
+                    )
+                    report.reinjected_paths = paths
                 summary_msg = ChatMessage(
                     role=Role.SYSTEM,
                     content=f"{_SUMMARY_PREFIX} — auto-generated summary]\n{summary}",
                 )
                 report.summarized = True
                 report.summarized_messages = len(result) - len(recent)
+                # Persist the session-memory note so resumes/forks can reseed
+                # (see ``load_session_summary``). Best-effort — never fatal.
+                if session_id:
+                    from .summarize import persist_session_summary
+                    report.notes_path = persist_session_summary(
+                        session_id, summary, model_id=model_id
+                    )
                 result = [summary_msg] + recent
                 log.info(
                     "compact_and_summarize: summarized %d old messages into %d chars",

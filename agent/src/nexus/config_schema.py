@@ -115,6 +115,13 @@ class AgentConfig(BaseModel):
     # Prevents the death spiral where scraped content accumulates across
     # turns without cleanup. 0 = disabled.
     session_tool_budget_tokens: int = 50_000
+    # Soft full-context auto-compact threshold (percent of the usable
+    # window). When the estimated input for the next turn crosses this,
+    # compact_and_summarize runs before the turn starts — countering
+    # context rot (degraded recall well before the hard overflow) the way
+    # Claude Code's auto-compact does. A 15% token-growth hysteresis
+    # prevents re-triggering every turn once near the line. 0 = disabled.
+    auto_compact_threshold_pct: int = 85
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
@@ -344,6 +351,10 @@ class TelegramConfig(BaseModel):
     # the reply is messy (markdown/emoji/units), "always" every reply,
     # "off" never. Uses [tts].ack_model.
     voice_speechify: Literal["auto", "always", "off"] = "auto"
+    # Mirror web-UI turns to the bound chat: the user's message is echoed
+    # and the streamed reply quotes it. Applies to a binding's active
+    # session (DM master chat or topic).
+    web_sync: bool = True
 
 
 class CoordinatorConfig(BaseModel):
