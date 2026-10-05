@@ -145,3 +145,26 @@ live-session report as a code bug. Quick probe that the new code is live:
   stopped), rebuild ui/dist, restart. Full-file rollback is painless ONLY
   because nothing was committed mid-feature; commit (or branch) earlier
   next time a feature spirals.
+
+## 2026-10-04 — Scheduler reliability overhaul
+- **Never let one background driver block a shared tick loop.** The
+  heartbeat scheduler awaited every `check()` inline; one LLM sweep froze
+  ALL scheduling (email routine, alarms, dream) for its whole duration —
+  observed 20+ min live. Rule: drivers isolate (task + timeout +
+  skip-if-running), long work detaches (`create_task` + in-flight flag).
+- **SQLite must never live in a Syncthing-synced folder.** WAL + two
+  machines corrupted heartbeat.db repeatedly (138 silent bootstrap
+  failures; `.sync-conflict` copies of *.db everywhere). `.stignore`
+  excludes `*.db*`; markdown-only sync is the invariant.
+- **A silent `except: log` around bootstrap = scheduled downtime.** The
+  heartbeat init failure path left the server running with zero
+  scheduling and no retry until the next daemon restart. Bootstrap must
+  self-heal (quarantine + recreate + background retry) and expose
+  `degraded` status.
+- **Driver state is JSON-persisted** — passing live objects (WorkflowStore)
+  through heartbeat state is a design error that silently no-ops drivers
+  (workflow schedule triggers never fired once in production). Inject
+  refs via module-level setters at startup instead.
+- Diagnose with runtime state, not just code: `heartbeat_state.last_check`
+  frozen + fire log told the whole story in minutes (scheduler wedged at
+  21:12, quarantined DB recreated, twins on the port).

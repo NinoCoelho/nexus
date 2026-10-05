@@ -74,6 +74,18 @@ Tools wired into the loop live in `agent/src/nexus/tools/` and `agent/src/nexus/
 
 `agent/src/nexus/alarm_store.py` (SQLite) persists per-occurrence alarm state (ringing / acknowledged / snoozed). The UI renders a stack of alarm cards (`AlarmNotification.tsx`) with countdown timers, snooze/dismiss actions. Alarm SSE events flow through the global notification channel.
 
+### Heartbeat / scheduling reliability model
+
+All background scheduling (calendar triggers, coordinator sweeps, dream, workflow cron, user heartbeats in `~/.nexus/heartbeats/`) runs on **Loom's `HeartbeatScheduler`** (60s tick, started in `app_lifespan.py::_startup_heartbeat_calendar`). Post-2026-10 hardening rules — do not regress these:
+
+- **Driver isolation**: every `driver.check()` runs in its own task with a hard timeout (default 300s, `driver_timeout=` ctor arg) + skip-if-running. One hung driver can never block the tick loop (the pre-fix failure mode froze ALL scheduling for the length of an inline LLM sweep). Long-running work (coordinator sweeps, dream cycles) must be **detached** (`asyncio.create_task` + module-level in-flight flag) inside the driver — `check()` returns fast.
+- **Self-healing bootstrap**: store init goes through `_open_heartbeat_store` — a corrupt `heartbeat.db` is quarantined (`.corrupt-<ts>`) and recreated. On total bootstrap failure a background task retries every 60s (`_retry_heartbeat_bootstrap`); `GET /heartbeat` exposes `scheduler_status` (tick_count/last_tick/stalled/inflight) and `degraded`. Never wrap new bootstrap code in a bare `except: log` — gate it so the scheduler still starts.
+- **Calendars in `_`-prefixed dirs** (`_conflicts-quarantine`, `_system`) are excluded from `list_calendars` — Syncthing conflict copies must never fire as duplicate events.
+- **Wake catch-up**: interval schedules fire on the first tick after sleep (gap detection logged); fire-window calendar events fire once when overdue inside the window. Cron schedules still skip missed slots silently — known limitation.
+- **Twin daemons**: `daemon/manager.py` kills portless twin daemon processes on start/stop/restart (cmdline marker match) and waits for the port to free before restarting. A twin = same SQLite files + double background work.
+- **Schedule syntax**: loom `parse_schedule` accepts 5-field cron, `@shorthand`, `every N <unit>`, `HH:MM` daily, plus an optional trailing IANA tz (`0 9 * * * America/New_York`) — wall-clock schedules are DST-correct local time, default UTC. Croniter (nexus dep) drives workflow `schedule` triggers with catch-up semantics (`heartbeat_drivers/workflow_schedule`, engine ref wired in `_startup_workflows`; cleanup driver gets its store via `set_store_ref`). Driver state is JSON-persisted — **never** try to pass live objects through it.
+- **Syncthing**: `~/.nexus/.stignore` excludes `*.db*`/runtime files — SQLite must never sync between machines (WAL corruption was the #1 bootstrap killer).
+
 ### Self-evolution + safety
 
 Agent-authored skills go through `skills/guard.py` — a regex static scan for credential exfil / destructive shell patterns. Failed guards roll the write back. Skills have a trust tier (`builtin`/`user`/`agent`); bundled skills from top-level `skills/` are seeded to `~/.nexus/skills/` on first run and marked `builtin`.
