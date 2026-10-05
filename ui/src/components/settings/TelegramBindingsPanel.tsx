@@ -74,7 +74,7 @@ export default function TelegramBindingsPanel() {
   if (bindings.length === 0) {
     return (
       <p className="tg-bindings-empty">
-        No Telegram chats linked yet — message the bot and use /project to bind a topic.
+        No Telegram chats linked yet — message the bot anywhere to start chatting; /project attaches a topic to a project.
       </p>
     );
   }

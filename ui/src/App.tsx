@@ -20,9 +20,11 @@ const WorkflowView = lazy(() => import("./components/WorkflowView"));
 import {
   cancelGraphragIndexFile,
   cancelHitlRequest,
+  getSession,
   graphragIndexFile,
   respondToUserRequest,
 } from "./api";
+import { ArrowLeft } from "lucide-react";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId } from "./types/chat";
 import { useAppRoute, type AnyView } from "./routes";
@@ -94,7 +96,18 @@ export default function App() {
     () => (route.view === "kanban" ? route.path ?? null : null),
   );
   /** Selected project in the Projects view — shared by the sidebar list and the workspace pane. */
-  const [projectsSelectedId, setProjectsSelectedId] = useState<string | null>(null);
+  const [projectsSelectedId, setProjectsSelectedId] = useState<string | null>(
+    () => (route.view === "projects" ? route.path ?? null : null),
+  );
+  /** The single project whose chat list is expanded in the sidebar accordion.
+   * Only one project may be expanded at a time — expanding another collapses
+   * the current one. */
+  const [projectsExpandedId, setProjectsExpandedId] = useState<string | null>(
+    () => (route.view === "projects" ? route.path ?? null : null),
+  );
+  /** True while a project chat owns the main pane in the Projects view (the
+   * workspace is hidden behind it until the user goes back). */
+  const [projectsChatOpen, setProjectsChatOpen] = useState(false);
   /** Selected app folder in the Apps view — shared by the sidebar list and the Apps pane. */
   const [appsSelectedFolder, setAppsSelectedFolder] = useState<string | null>(
     () => (route.view === "apps" ? route.path ?? null : null),
@@ -158,6 +171,10 @@ export default function App() {
     }
     if (route.view === "calendar" && p && p !== lastRoutePathRef.current) {
       setCalendarSelectedPath(p);
+    }
+    if (route.view === "projects" && p && p !== lastRoutePathRef.current) {
+      setProjectsSelectedId(p);
+      setProjectsExpandedId(p);
     }
     lastRoutePathRef.current = p;
   }, [route.view, route.path]);
@@ -257,25 +274,100 @@ export default function App() {
   const push = usePushSubscription();
   const notificationCenter = useNotificationCenter();
 
-  const handleSessionSelect = useCallback((id: string) => {
+  // Project-chat routing: opening a session that belongs to a project keeps
+  // the user in the Projects view — the sidebar accordion expands that
+  // project (single-expanded) and the chat takes over the main pane.
+  // Unprojected chats open in the Chat view as before. The session's project
+  // comes from the caller's hint (accordion/ProjectsPane rows know it), the
+  // loaded chat state, or a one-off fetch for cross-surface jumps.
+  const openSessionLocation = useCallback((projectId: string | null) => {
+    if (projectId) {
+      setProjectsSelectedId(projectId);
+      setProjectsExpandedId(projectId);
+      setProjectsChatOpen(true);
+      setView("projects");
+    } else {
+      setProjectsChatOpen(false);
+      setView("chat");
+    }
+  }, [setView]);
+
+  const handleSessionSelect = useCallback((id: string, projectId?: string | null) => {
     // The optimistic placeholder shown while the first turn is in flight
     // shares its id with `pendingSessionId`; clicking it must NOT call into
     // _handleSessionSelect, which would try to load history for a session
     // that doesn't exist yet on the server (and would re-key chat state away
     // from NEW_KEY mid-stream).
     if (pendingNewSession && id === pendingNewSession.id) {
-      setView("chat");
+      openSessionLocation(projectId ?? pendingNewSession.project_id ?? null);
       return;
     }
     _handleSessionSelect(id);
-    setView("chat");
-  }, [_handleSessionSelect, pendingNewSession]);
+    let pid = projectId;
+    if (pid === undefined) {
+      const st = chatStates.get(id);
+      pid = st && st.projectId !== undefined ? st.projectId : undefined;
+    }
+    if (pid === undefined) {
+      // Unknown (jump to a never-opened session) — resolve via the session
+      // endpoint, then land. History loads in parallel.
+      getSession(id)
+        .then((d) => {
+          const p = d.project_id ?? null;
+          setChatStates((prev) => {
+            const cur = prev.get(id);
+            if (!cur || cur.projectId !== undefined) return prev;
+            const next = new Map(prev);
+            next.set(id, { ...cur, projectId: p });
+            return next;
+          });
+          openSessionLocation(p);
+        })
+        .catch(() => openSessionLocation(null));
+      return;
+    }
+    // Stamp the project onto the chat state immediately so the projects-view
+    // chat gate doesn't wait for the history load to land.
+    if (pid) {
+      setChatStates((prev) => {
+        const cur = prev.get(id);
+        if (cur?.projectId === pid) return prev;
+        const next = new Map(prev);
+        next.set(id, { ...(cur ?? { ...emptyState(), historyLoaded: false }), projectId: pid });
+        return next;
+      });
+    }
+    openSessionLocation(pid);
+  }, [_handleSessionSelect, chatStates, pendingNewSession, openSessionLocation, setChatStates]);
 
   const handleNewChat = useCallback((projectId?: string | null) => {
     _handleNewChat(projectId);
     clearPendingRequest();
-    setView("chat");
-  }, [_handleNewChat, clearPendingRequest]);
+    if (projectId) {
+      setProjectsSelectedId(projectId);
+      setProjectsExpandedId(projectId);
+      setProjectsChatOpen(true);
+      setView("projects");
+    } else {
+      setProjectsChatOpen(false);
+      setView("chat");
+    }
+  }, [_handleNewChat, clearPendingRequest, setView]);
+
+  /** Selecting a project (sidebar header, grid card) shows its workspace and
+   * expands its chats — expanding another project collapses the current one. */
+  const handleProjectsSelect = useCallback((id: string | null) => {
+    setProjectsSelectedId(id);
+    setProjectsExpandedId(id);
+    setProjectsChatOpen(false);
+  }, []);
+
+  /** Clicking the header of an already-selected project toggles its chat
+   * list; the workspace (not a chat) keeps the main pane. */
+  const handleProjectsToggleExpand = useCallback((id: string) => {
+    setProjectsExpandedId((cur) => (cur === id ? null : id));
+    setProjectsChatOpen(false);
+  }, []);
 
   const handleOpenInVault = useCallback((path: string) => {
     setVaultOpenPath(path);
@@ -296,11 +388,8 @@ export default function App() {
   const handleGoToJob = useCallback((sessionId: string | null, type: string) => {
     if (type === "dream") { setView("dream"); return; }
     if (type === "heartbeat") { setView("heartbeat"); return; }
-    if (sessionId) {
-      _handleSessionSelect(sessionId);
-      setView("chat");
-    }
-  }, [_handleSessionSelect]);
+    if (sessionId) handleSessionSelect(sessionId);
+  }, [handleSessionSelect]);
 
   const { alarms, dismiss: dismissAlarm, snooze: snoozeAlarm } = useCalendarAlarms({
     onOpenCalendar: handleOpenCalendar,
@@ -333,9 +422,9 @@ export default function App() {
       return next;
     });
     setActiveSession(sessionId);
-    setView("chat");
+    handleSessionSelect(sessionId);
     setSessionsRevision((r) => r + 1);
-  }, [setChatStates, setActiveSession, setSessionsRevision]);
+  }, [setChatStates, setActiveSession, setSessionsRevision, handleSessionSelect]);
 
   // Voice acknowledgment playback. The hook handles ack-kind routing
   // (suppress start/progress for background sessions, surface a clickable
@@ -345,10 +434,7 @@ export default function App() {
   const ackPlayer = useVoiceAckPlayer({
     activeSessionId: activeSession ?? null,
     view,
-    onJumpToSession: (sid) => {
-      setActiveSession(sid);
-      setView("chat");
-    },
+    onJumpToSession: (sid) => handleSessionSelect(sid),
   });
 
   const { backendUp } = useGlobalSubscriptions({
@@ -374,16 +460,14 @@ export default function App() {
       return next;
     });
     pendingAutoSend.current = { sid: sessionId, seed: seedMessage };
-    setActiveSession(sessionId);
-    setView("chat");
+    handleSessionSelect(sessionId);
     setSessionsRevision((r) => r + 1);
     void title; // title was set server-side on dispatch
-  }, [setChatStates, setActiveSession, setSessionsRevision, pendingAutoSend, chatSession]);
+  }, [handleSessionSelect, setChatStates, chatSession, setSessionsRevision, pendingAutoSend]);
 
   const handleNavigateToSession = useCallback((sessionId: string) => {
-    _handleSessionSelect(sessionId);
-    setView("chat");
-  }, [_handleSessionSelect]);
+    handleSessionSelect(sessionId);
+  }, [handleSessionSelect]);
 
   const vaultViewCommon = useMemo(() => ({
     onDispatchToChat: handleDispatchToChat,
@@ -556,6 +640,18 @@ export default function App() {
     activeProjectId: activeState.projectId ?? null,
   }), [view, projectsSelectedId, appsSelectedFolder, vaultSelectedPath, kanbanSelectedPath, calendarSelectedPath, activeSession, activeState.projectId, masterSessionId]);
 
+  // While a project chat owns the Projects main pane, the workspace hides
+  // behind it. Requires the chat's project to be the selected one — the
+  // active session's project is reliable post-load (loadSessionHistory +
+  // first-turn migration stamp it).
+  const activeProjectId = activeState.projectId ?? null;
+  const chatInProjects =
+    view === "projects" &&
+    projectsChatOpen &&
+    activeProjectId != null &&
+    activeProjectId === projectsSelectedId;
+  const chatPaneVisible = view === "chat" || chatInProjects;
+
   return (
     <div className="app app--layout">
       <Sidebar
@@ -581,8 +677,10 @@ export default function App() {
          coordinatorSessionId={masterSessionId}
          collapsed={sidebarCollapsed}
         onCollapsedChange={setSidebarCollapsed}
-        projectsSelectedId={projectsSelectedId}
-        onProjectsSelect={setProjectsSelectedId}
+         projectsSelectedId={projectsSelectedId}
+         onProjectsSelect={handleProjectsSelect}
+         projectsExpandedId={projectsExpandedId}
+         onProjectsToggleExpand={handleProjectsToggleExpand}
         appSelectedFolder={appsSelectedFolder}
         onAppSelectFolder={setAppsSelectedFolder}
         kanbanSelectedPath={kanbanSelectedPath}
@@ -600,7 +698,7 @@ export default function App() {
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
           statusSlot={
-            view === "chat"
+            chatPaneVisible
               ? <AgentStatusBar
                   usage={sessionUsage}
                   thinking={activeState.thinking}
@@ -643,7 +741,14 @@ export default function App() {
         )}
 
         <main className="app-content">
-          <div className="view-pane" style={{ display: view === "chat" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: chatPaneVisible ? "flex" : "none" }}>
+            {chatInProjects && (
+              <div className="project-chat-topbar">
+                <button className="project-chat-back" onClick={() => setProjectsChatOpen(false)} title="Back to the project workspace">
+                  <ArrowLeft size={13} /> Project workspace
+                </button>
+              </div>
+            )}
             <ChatView
               messages={activeState.messages}
               thinking={activeState.thinking}
@@ -667,7 +772,7 @@ export default function App() {
               onRemoveQueued={handleRemoveQueued}
               onRollback={handleRollback}
               onCompact={handleCompact}
-              onNewSession={_handleNewChat}
+              onNewSession={() => handleNewChat(chatInProjects ? projectsSelectedId : null)}
               onRemoveLast={handleRemoveLast}
               onResumePaused={handleResumePaused}
               models={availableModels}
@@ -675,12 +780,12 @@ export default function App() {
               onModelChange={handleModelChange}
             />
           </div>
-          <div className="view-pane" style={{ display: view === "projects" ? "flex" : "none" }}>
+          <div className="view-pane" style={{ display: view === "projects" && !chatInProjects ? "flex" : "none" }}>
             <KeepMounted active={view === "projects"}>
               <ProjectsPane
                 activeSessionId={activeSession}
                 selectedId={projectsSelectedId}
-                onSelectId={setProjectsSelectedId}
+                onSelectId={handleProjectsSelect}
                 onSessionSelect={handleSessionSelect}
                 onNewChatInProject={handleNewChat}
                 onOpenInVault={handleOpenInVault}
@@ -745,7 +850,7 @@ export default function App() {
                 onViewEntityGraph={(p) => handleViewEntityGraph("file", p)}
                 onStartGraphIndex={handleStartGraphIndex}
                 onSpawnSession={handleSpawnSessionFromEntity}
-                onOpenInChat={(sid) => { setView("chat"); handleSessionSelect(sid); }}
+                onOpenInChat={(sid) => handleSessionSelect(sid)}
                 onOpenInVault={handleOpenInVault}
               />
             </div>

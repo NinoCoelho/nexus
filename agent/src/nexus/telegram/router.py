@@ -41,6 +41,18 @@ _MAX_PENDING_ACKS = 50  # cap per session; acks are cosmetic — bound memory
 _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram bot download cap
 _MAX_PENDING_ANSWERS = 32  # free-form answer slots; bounded, oldest evicted
 _COMMAND_RE = re.compile(r"^/([a-zA-Z_]+)(@\w+)?\s*(.*)$", re.S)
+_ECHO_TRUNCATE = 600  # cap for the echoed web user message (chars)
+
+
+def _web_echo_text(message: str) -> str:
+    """Format a web-originated user message as the echo bubble (markdown)."""
+    text = (message or "").strip()
+    if not text:
+        text = "*(attachment)*"
+    if len(text) > _ECHO_TRUNCATE:
+        text = text[:_ECHO_TRUNCATE].rstrip() + "…"
+    quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in text.splitlines())
+    return f"💬 **You, via web**\n\n{quoted}"
 
 
 @dataclass
@@ -96,8 +108,6 @@ class TelegramRouter:
         )
         # session_id → live reply-streamer task
         self._streamers: dict[str, asyncio.Task] = {}
-        # (chat_id, thread_id) already shown the unbound-topic hint
-        self._hinted: set[tuple[int, int]] = set()
         # (chat_id, message_id) → vault paths offered by that message's 📂
         # buttons (reply menus from the streamer, listings from /vault).
         # Bounded — oldest entries evicted.
@@ -403,23 +413,17 @@ class TelegramRouter:
                     )
                 else:
                     binding = await self._create_binding(info, project_id=None)
-            elif info.thread_id:  # forum topic — require explicit binding
-                if (info.chat_id, info.thread_id) not in self._hinted:
-                    self._hinted.add((info.chat_id, info.thread_id))
+            else:
+                # Forum topic or plain group — standalone chat, no project
+                # needed. Topics chat right away (silent); /project can
+                # attach one later. Plain groups keep the one-time notice.
+                binding = await self._create_binding(info, project_id=None)
+                if not info.thread_id:
                     await self.client.send_text_safe(
                         info.chat_id,
-                        "This topic isn't linked to a Nexus project yet.\n"
-                        "Use /project <name> to bind it, or /help for all commands.",
-                        thread_id=info.thread_id,
+                        "This group isn't bound to a project — messages go to a "
+                        "standalone chat. Use /project <name> to bind one.",
                     )
-                return
-            else:  # plain group — auto-create an unprojected chat
-                binding = await self._create_binding(info, project_id=None)
-                await self.client.send_text_safe(
-                    info.chat_id,
-                    "This group isn't bound to a project — messages go to a "
-                    "standalone chat. Use /project <name> to bind one.",
-                )
 
         session = self.store.get_or_create(
             binding.active_session_id,
@@ -475,6 +479,7 @@ class TelegramRouter:
             publish_job_event=self.publish_job_event,
             # Title from the raw text, without the "From <sender>:" prefix.
             autotitle_message=text.strip() or None,
+            origin="telegram",
         )
 
         if outcome.error is not None:
@@ -763,6 +768,28 @@ class TelegramRouter:
             name=f"telegram-reply-{session_id[:8]}",
         )
 
+    def ensure_session_streamer(self, session_id: str) -> bool:
+        """Spawn the reply streamer when ``session_id`` is Telegram-bound.
+
+        Entry point for the web chat path: when a web-originated turn
+        starts on a bound session, this guarantees the streamed reply —
+        and the user-message echo — reach the bound chat even if no
+        Telegram activity ever spawned a streamer (server restart, poller
+        rebuild, fresh binding via PATCH). Honors ``[telegram].web_sync``.
+        Best-effort; never raises.
+        """
+        if not getattr(self.cfg, "web_sync", True):
+            return False
+        try:
+            binding = self.bindings.find_by_session(session_id)
+        except Exception:
+            log.debug("telegram: web-sync binding lookup failed", exc_info=True)
+            return False
+        if binding is None:
+            return False
+        self._ensure_streamer(session_id, binding.chat_id, binding.thread_id)
+        return True
+
     async def aclose(self) -> None:
         """Cancel all reply streamers + resume tasks (poller shutdown)."""
         for t in list(self._streamers.values()):
@@ -776,10 +803,33 @@ class TelegramRouter:
         self._streamers.clear()
         self._resume_tasks.clear()
 
+    async def _maybe_send_echo(self, chat_id: int, thread_id: int, text: str) -> int:
+        """Echo a web-originated user message; returns the echo message id.
+
+        The turn's reply is then sent as a Telegram reply to that echo,
+        giving the chat a quote thread: user message → quoted response.
+        """
+        if not (text or "").strip():
+            return 0
+        try:
+            return await self.client.send_text_safe(
+                chat_id,
+                md_to_telegram_html(_web_echo_text(text)),
+                thread_id=thread_id or None,
+            )
+        except Exception:  # noqa: BLE001 — echo is best-effort
+            log.exception("telegram: web-turn echo failed")
+            return 0
+
     async def _stream_reply(self, session_id: str, chat_id: int, thread_id: int) -> None:
         acc = ""
         msg_id = 0
         last_edit = 0.0
+        # Echo bubble for a web-originated turn: the streamed reply quotes
+        # it (reply_to_message_id) so Telegram shows user message → response.
+        echo_msg_id = 0
+        # web_sync off: skip rendering this web-originated turn entirely.
+        suppress_turn = False
         turn_errored = False  # error seen in the current turn — keep its 👀 ack
         typing_stop = asyncio.Event()
         typing_task = asyncio.create_task(
@@ -791,6 +841,8 @@ class TelegramRouter:
                 etype = ev.get("type")
 
                 if etype == "delta":
+                    if suppress_turn:
+                        continue
                     acc += ev.get("text", "")
                     now = time.monotonic()
                     if msg_id == 0 and acc.strip():
@@ -798,6 +850,7 @@ class TelegramRouter:
                             chat_id,
                             md_to_telegram_html(acc),
                             thread_id=thread_id or None,
+                            reply_to_message_id=echo_msg_id or None,
                         )
                         last_edit = now
                     elif msg_id and self.cfg.stream_edits and now - last_edit >= _EDIT_INTERVAL:
@@ -809,17 +862,49 @@ class TelegramRouter:
                                 chat_id,
                                 md_to_telegram_html(acc),
                                 thread_id=thread_id or None,
+                                reply_to_message_id=echo_msg_id or None,
                             )
                         last_edit = now
+
+                elif etype == "turn_started":
+                    # Fresh turn: finalize any leftover partial (missed
+                    # settle) and reset. Web-originated turns echo the
+                    # user's message first; the reply quotes that echo.
+                    # With web_sync off, web turns render nowhere.
+                    if acc.strip():
+                        await self._finalize_reply(chat_id, thread_id, msg_id, acc)
+                    acc, msg_id, echo_msg_id = "", 0, 0
+                    suppress_turn = False
+                    if ev.get("origin") == "web":
+                        if getattr(self.cfg, "web_sync", True):
+                            echo_msg_id = await self._maybe_send_echo(
+                                chat_id, thread_id, ev.get("message", "")
+                            )
+                        else:
+                            suppress_turn = True
 
                 elif etype in ("user_injected", "turn_settled"):
                     # Chained/queued follow-up (user_injected) or end of a
                     # turn (turn_settled): finalize the current message and
                     # let the next turn render into a fresh one.
                     if acc.strip():
-                        await self._finalize_reply(chat_id, thread_id, msg_id, acc)
+                        await self._finalize_reply(
+                            chat_id, thread_id, msg_id, acc,
+                            reply_to_message_id=echo_msg_id or None,
+                        )
                     reply_text = acc
-                    acc, msg_id = "", 0
+                    acc, msg_id, echo_msg_id = "", 0, 0
+                    suppress_turn = False
+                    if (
+                        etype == "user_injected"
+                        and ev.get("origin") == "web"
+                        and getattr(self.cfg, "web_sync", True)
+                    ):
+                        # The injected message starts the next render —
+                        # echo it so the chat keeps its quote thread.
+                        echo_msg_id = await self._maybe_send_echo(
+                            chat_id, thread_id, ev.get("text", "")
+                        )
                     if etype == "turn_settled":
                         if not turn_errored:
                             await self._upgrade_acks(session_id)
@@ -833,6 +918,8 @@ class TelegramRouter:
                         turn_errored = False
 
                 elif etype == "error":
+                    if suppress_turn:
+                        continue
                     detail = ev.get("detail") or "unexpected error"
                     turn_errored = True
                     acc = f"{acc}\n\n⚠️ {detail}" if acc.strip() else f"⚠️ {detail}"
@@ -848,12 +935,23 @@ class TelegramRouter:
                 pass
             try:
                 if acc.strip():
-                    await self._finalize_reply(chat_id, thread_id, msg_id, acc)
+                    await self._finalize_reply(
+                        chat_id, thread_id, msg_id, acc,
+                        reply_to_message_id=echo_msg_id or None,
+                    )
             except Exception:
                 log.exception("telegram: final reply failed")
             self._streamers.pop(session_id, None)
 
-    async def _finalize_reply(self, chat_id: int, thread_id: int, msg_id: int, text: str) -> None:
+    async def _finalize_reply(
+        self,
+        chat_id: int,
+        thread_id: int,
+        msg_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> None:
         chunks = split_for_telegram(md_to_telegram_html(text))
         if not chunks:
             return
@@ -876,11 +974,19 @@ class TelegramRouter:
             first_id = msg_id if ok else 0
             if not ok:  # original deleted → send instead
                 first_id = await self.client.send_text_safe(
-                    chat_id, chunks[0], thread_id=thread_id or None, reply_markup=kb
+                    chat_id,
+                    chunks[0],
+                    thread_id=thread_id or None,
+                    reply_markup=kb,
+                    reply_to_message_id=reply_to_message_id,
                 )
         else:
             first_id = await self.client.send_text_safe(
-                chat_id, chunks[0], thread_id=thread_id or None, reply_markup=kb
+                chat_id,
+                chunks[0],
+                thread_id=thread_id or None,
+                reply_markup=kb,
+                reply_to_message_id=reply_to_message_id,
             )
         self._remember_vault_menu(chat_id, first_id, paths)
         for chunk in chunks[1:]:

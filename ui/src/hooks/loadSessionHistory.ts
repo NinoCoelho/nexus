@@ -199,6 +199,7 @@ export async function loadSessionHistory(
         historyLoaded: true,
         attachments: cur?.attachments ?? [],
         selectedModel: seedModel,
+        projectId: detail.project_id ?? null,
       });
       return next;
     });

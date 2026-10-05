@@ -1,10 +1,10 @@
 """Telegram gateway tests — in-process router + fake Bot API client.
 
 Covers: allowlist auth, DM chat flow (message → session → streamed reply),
-topic binding hints, /project binding + session adoption, /new + /chats +
-switch callbacks, /title /usage /id, queue-while-busy ack, HITL forwarding
-with inline-button resolution, formatting, bindings CRUD, and the turn
-launcher's rejection paths.
+standalone topic chats (no project required), /project binding + session
+adoption, /new + /chats + switch callbacks, /title /usage /id,
+queue-while-busy ack, HITL forwarding with inline-button resolution,
+formatting, bindings CRUD, and the turn launcher's rejection paths.
 
 Reuses ``FakeProvider``/``GatedProvider`` from the SSE/queue harnesses so
 the full agent loop runs against a scripted provider.
@@ -50,9 +50,17 @@ class FakeTGClient:
         self.audios: list[dict[str, Any]] = []
         self.documents: list[dict[str, Any]] = []
 
-    async def send_text_safe(self, chat_id, text, *, thread_id=None, reply_markup=None):
+    async def send_text_safe(
+        self, chat_id, text, *, thread_id=None, reply_markup=None, reply_to_message_id=None
+    ):
         self.sent.append(
-            {"chat_id": chat_id, "text": text, "thread_id": thread_id, "kb": reply_markup}
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "thread_id": thread_id,
+                "kb": reply_markup,
+                "reply_to": reply_to_message_id,
+            }
         )
         return 100 + len(self.sent)
 
@@ -282,17 +290,43 @@ async def test_group_message_carries_sender_prefix(tmp_path: Path) -> None:
     assert "group hello" in user_msgs[0].content
 
 
-async def test_unbound_topic_gets_hint_no_session(tmp_path: Path) -> None:
+async def test_unbound_topic_auto_creates_standalone_chat(tmp_path: Path) -> None:
     h = Harness(tmp_path, FakeProvider([_final("ok")]))
     await h.message("topic msg", chat_type="supergroup", thread_id=7)
-    await asyncio.sleep(0.05)
-    assert h.bindings.get(1000, 7) is None
-    assert any("isn't linked" in t for t in h.client.sent_texts())
-    # Hint shown only once
-    h.client.sent.clear()
-    await h.message("another", chat_type="supergroup", thread_id=7)
-    await asyncio.sleep(0.05)
-    assert h.client.sent == []
+    await h.wait_turns_done()
+
+    # No project needed: binding + session auto-created, silently (topics
+    # never see a "bind a project" notice — chatting starts right away).
+    binding = h.bindings.get(1000, 7)
+    assert binding is not None and binding.kind == "topic"
+    assert binding.project_id is None
+    session = h.store.get(binding.active_session_id)
+    assert session is not None and session.project_id is None
+    texts = " ".join(h.client.sent_texts())
+    assert "isn't linked" not in texts
+    assert "isn't bound" not in texts
+    roles = [m.role.value for m in session.history]
+    assert "user" in roles and "assistant" in roles  # turn ran
+
+
+async def test_new_in_unbound_topic_starts_projectless_chat(tmp_path: Path) -> None:
+    h = Harness(tmp_path, FakeProvider([_final("ok")]))
+    # /new before any message — no binding exists yet; one is created with
+    # a fresh unprojected chat on the same topic.
+    await h.message("/new scratchpad", chat_type="supergroup", thread_id=9)
+    binding = h.bindings.get(1000, 9)
+    assert binding is not None and binding.kind == "topic"
+    assert binding.project_id is None
+    session = h.store.get(binding.active_session_id)
+    assert session is not None
+    assert session.project_id is None
+    assert session.title == "scratchpad"
+
+    # A follow-up /new starts another chat on the same topic.
+    await h.message("/new second", chat_type="supergroup", thread_id=9)
+    new_sid = h.bindings.get(1000, 9).active_session_id
+    assert new_sid != session.id
+    assert h.store.get(new_sid).project_id is None
 
 
 # ── Commands ────────────────────────────────────────────────────────────

@@ -32,7 +32,9 @@ interface Props {
   /** Selected project id — controlled by App (sidebar list shares it). */
   selectedId: string | null;
   onSelectId: (id: string | null) => void;
-  onSessionSelect: (id: string) => void;
+  /** Opens a chat; callers pass the owning project so App routes to the
+   * Projects view without waiting on a session lookup. */
+  onSessionSelect: (id: string, projectId?: string | null) => void;
   onNewChatInProject: (projectId: string) => void;
   onOpenInVault: (path: string) => void;
   /** Bumped when sessions/projects change so the pane refreshes. */
@@ -240,7 +242,7 @@ export default function ProjectsPane({
             <button
               key={s.id}
               className={`projects-session-row${activeSessionId === s.id ? " projects-session-row--active" : ""}`}
-              onClick={() => onSessionSelect(s.id)}
+              onClick={() => onSessionSelect(s.id, selected.id)}
             >
               <span className="projects-session-title">{s.title || "Untitled"}</span>
               <span className="projects-session-date">{formatDate(s.updated_at)}</span>
@@ -252,7 +254,7 @@ export default function ProjectsPane({
               <button
                 key={`${r.session_id}-${r.snippet.slice(0, 24)}`}
                 className="projects-session-row projects-session-row--hit"
-                onClick={() => onSessionSelect(r.session_id)}
+                onClick={() => onSessionSelect(r.session_id, selected.id)}
               >
                 <span className="projects-session-hit">
                   <MessageSquare size={11} />

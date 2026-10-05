@@ -262,7 +262,9 @@ export function applyDoneEvent(
         ...(preservedPartial ? { partial: preservedPartial } : {}),
       };
       const msgs = fresh.messages.slice(0, -1).concat(finalAsst);
-      next.set(event.session_id, { messages: msgs, thinking: false, input: "", historyLoaded: true, attachments: [], selectedModel: fresh.selectedModel });
+      // Carry the project binding over to the real session id — the
+      // projects-view chat gate reads chatStates[sid].projectId.
+      next.set(event.session_id, { messages: msgs, thinking: false, input: "", historyLoaded: true, attachments: [], selectedModel: fresh.selectedModel, projectId: fresh.projectId ?? null });
       next.set(NEW_KEY, { ...emptyState(), selectedModel: fresh.selectedModel });
       return next;
     });

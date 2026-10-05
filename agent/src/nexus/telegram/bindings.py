@@ -4,15 +4,17 @@ Follows the ProjectStore pattern: short-lived sqlite3 connections against
 the sessions DB (``~/.nexus/sessions.sqlite``), table created by the
 ``_TELEGRAM_SCHEMA`` migration in ``session_store/schema.py``.
 
-Mapping model ("topic = project"):
+Mapping model ("topic = chat"):
 - DM:            chat_id = user id, thread_id = 0, kind='dm', project_id NULL.
-- Plain group:   chat_id = group id, thread_id = 0, kind='group', one project.
+- Plain group:   chat_id = group id, thread_id = 0, kind='group'.
 - Forum topic:   chat_id = group id, thread_id = message_thread_id,
-                 kind='topic', each topic bound to its own project.
+                 kind='topic'.
 
-Each binding tracks the *active* session; additional chats for the same
-project are regular sessions with ``sessions.project_id`` set — they show
-up in the UI sidebar under the project automatically.
+Every surface works standalone (project_id NULL — chats appear unprojected
+in the UI); ``/project`` optionally attaches one. Each binding tracks the
+*active* session; additional chats inherit the binding's project (if any)
+via ``sessions.project_id`` and show up in the UI under the project
+automatically.
 """
 
 from __future__ import annotations

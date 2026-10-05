@@ -34,6 +34,36 @@
   min-height: 0;
 }
 
+/* Strip above the chat while it owns the Projects main pane — the only way
+   back to the project workspace without leaving the view. */
+.project-chat-topbar {
+  display: flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.2));
+  background: var(--bg-panel, transparent);
+  flex-shrink: 0;
+}
+
+.project-chat-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: var(--fg-dim, inherit);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: var(--radius, 6px);
+}
+
+.project-chat-back:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.12));
+  color: var(--fg, inherit);
+}
+
 /* Legacy: keep chat-shell for any direct usage */
 .chat-shell {
   flex: 1;

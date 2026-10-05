@@ -129,7 +129,8 @@ async def patch_telegram_binding(request: Request, body: dict[str, Any]) -> dict
 @router.delete("/telegram/bindings")
 async def delete_telegram_binding(body: dict[str, Any]) -> dict[str, Any]:
     """Remove a binding — the Telegram chat/topic falls back to its default
-    routing on the next message (DM → coordinator/new chat, topic → hint)."""
+    routing on the next message (DM → coordinator/new chat, topic/group →
+    standalone chat, no project)."""
     from ...telegram.bindings import TelegramBindingStore
 
     chat_id = body.get("chat_id")

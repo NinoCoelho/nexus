@@ -21,11 +21,11 @@ from .formatting import split_for_telegram
 log = logging.getLogger(__name__)
 
 _HELP_TEXT = """<b>Nexus commands</b>
-<code>/project [name]</code> — bind this chat/topic to a project (or show binding)
-<code>/topics</code> — list every linked chat/topic and its project
+<code>/project [name]</code> — attach this chat/topic to a project (or show binding)
+<code>/topics</code> — list every linked chat/topic
 <code>/vault [path]</code> — browse the vault; files arrive as documents
-<code>/new [title]</code> — start a new chat in this project
-<code>/chats</code> — list chats for this project
+<code>/new [title]</code> — start a new chat here
+<code>/chats</code> — list chats in this chat/topic
 <code>/switch</code> — switch the active chat (buttons)
 <code>/compact [aggressive]</code> — free up context window
 <code>/title [new title]</code> — rename the active chat
@@ -33,8 +33,8 @@ _HELP_TEXT = """<b>Nexus commands</b>
 <code>/cancel</code> — cancel the running turn or dismiss a pending question
 <code>/id</code> — chat/thread/user ids (for config)
 
-Plain messages go to the project's active chat. In forum groups, each
-topic can be bound to its own project via /project."""
+Plain messages go to the active chat. Topics and groups work standalone —
+attach one to a project any time with /project."""
 
 
 @dataclass
@@ -249,6 +249,16 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
             await _reply(deps, info, "This chat is not bound to a project.")
             return
         deps.bindings.set_project(info.chat_id, info.thread_id, None)
+        # Release the active chat too so it stops showing under the project
+        # (get_or_create never un-stamps on its own). Best-effort.
+        if binding.active_session_id:
+            try:
+                deps.projects.move_session(binding.active_session_id, None)
+            except Exception:
+                log.warning(
+                    "telegram: failed to un-stamp session %s from project",
+                    binding.active_session_id,
+                )
         await _reply(deps, info, "Unbound. /project &lt;name&gt; to bind again.")
         return
 
@@ -325,8 +335,8 @@ async def cmd_topics(deps: CommandDeps, info: MsgInfo, args: str) -> None:
         await _reply(
             deps,
             info,
-            "No chats or topics are linked yet.\nUse /project &lt;name&gt; in a topic "
-            "to bind it to a project.",
+            "No chats or topics are linked yet.\nSend a message anywhere to start "
+            "chatting — /project &lt;name&gt; attaches a topic to a project.",
         )
         return
     projects = {p.id: p for p in deps.projects.list(limit=200)}
@@ -355,10 +365,9 @@ async def cmd_new(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     kind = _binding_kind(info)
     title = args.strip()
 
-    if kind != "dm" and binding is None:
-        await _reply(deps, info, "Bind this chat to a project first: /project &lt;name&gt;")
-        return
-
+    # No binding yet (e.g. /new before any message) — start a standalone
+    # chat; /project can attach one later. With a binding, the new chat
+    # inherits its project (if any).
     project_id = binding.project_id if binding else None
     session = deps.store.create(context=_context_for(info), project_id=project_id)
     if title:
@@ -385,7 +394,8 @@ async def cmd_new(deps: CommandDeps, info: MsgInfo, args: str) -> None:
 async def _list_sessions(deps: CommandDeps, binding: TelegramBinding) -> list[Any]:
     if binding.project_id:
         return deps.store.list(limit=25, project_id=binding.project_id)
-    # DMs / unbound groups: sessions created from this chat, by context prefix.
+    # DMs / project-less groups & topics: sessions created from this chat,
+    # by context prefix.
     prefix = _context_for(
         MsgInfo(
             binding.chat_id,
@@ -420,14 +430,12 @@ async def _list_sessions(deps: CommandDeps, binding: TelegramBinding) -> list[An
 async def cmd_chats(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     binding = deps.bindings.get(info.chat_id, info.thread_id)
     if binding is None:
-        await _reply(
-            deps, info, "No chats yet — /project &lt;name&gt; to bind one, or just send a message."
-        )
+        await _reply(deps, info, "No chats yet — /new to start one, or just send a message.")
         return
 
     sessions = await _list_sessions(deps, binding)
     if not sessions:
-        await _reply(deps, info, "No chats found for this project yet.")
+        await _reply(deps, info, "No chats yet — /new to start one, or just send a message.")
         return
 
     rows = []

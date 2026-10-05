@@ -38,7 +38,7 @@ interface Props {
   view: AnyView;
   onViewChange: (v: AnyView) => void;
   activeSessionId: string | null;
-  onSessionSelect: (id: string) => void;
+  onSessionSelect: (id: string, projectId?: string | null) => void;
   onNewChat: (projectId?: string | null) => void;
   sessionsRevision: number;
   onSessionsRevisionBump: () => void;
@@ -67,7 +67,10 @@ interface Props {
   onCollapsedChange: (v: boolean) => void;
   /** Selected project in the Projects view (shared with ProjectsPane). */
   projectsSelectedId?: string | null;
-  onProjectsSelect?: (id: string) => void;
+  onProjectsSelect?: (id: string | null) => void;
+  /** The single project whose chat list is expanded in the sidebar accordion. */
+  projectsExpandedId?: string | null;
+  onProjectsToggleExpand: (id: string) => void;
   /** Selected app folder in the Apps view (shared with AppsPane). */
   appSelectedFolder?: string | null;
   onAppSelectFolder?: (folder: string | null) => void;
@@ -91,6 +94,8 @@ function Sidebar({
   onCollapsedChange,
   projectsSelectedId = null,
   onProjectsSelect,
+  projectsExpandedId = null,
+  onProjectsToggleExpand,
   appSelectedFolder = null,
   onAppSelectFolder,
   kanbanSelectedPath = null,
@@ -279,6 +284,12 @@ function Sidebar({
     () => new Set(displaySessions.filter((s) => s.project_id).map((s) => s.id)),
     [displaySessions],
   );
+  // Project sessions feed the Projects sidebar accordion (one fetch — the
+  // /sessions endpoint returns every project session on each call).
+  const projectSessions = useMemo(
+    () => displaySessions.filter((s) => s.project_id),
+    [displaySessions],
+  );
 
   const renderNavItems = (items: ReadonlyArray<{ id: AnyView; label: string; Icon: React.ComponentType }>) =>
     items.map(({ id, label, Icon }) => (
@@ -390,8 +401,14 @@ function Sidebar({
       {view === "projects" && !collapsed && onProjectsSelect && (
         <ProjectsListPanel
           selectedId={projectsSelectedId}
+          expandedId={projectsExpandedId}
           onSelect={onProjectsSelect}
+          onToggleExpand={onProjectsToggleExpand}
           onNewProject={() => setShowCreateProject(true)}
+          onNewChat={onNewChat}
+          onSessionSelect={onSessionSelect}
+          activeSessionId={activeSessionId}
+          sessions={projectSessions}
           refreshKey={sessionsRevision}
           onChanged={onSessionsRevisionBump}
         />

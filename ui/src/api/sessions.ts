@@ -62,6 +62,7 @@ export interface SessionDetail {
   id: string;
   title: string;
   context?: string;
+  project_id?: string | null;
   messages: SessionMessage[];
 }
 
