@@ -9,7 +9,9 @@ line-based converter instead:
 - unclosed ``` fences are closed implicitly (safe for partial output),
 - newlines are preserved verbatim,
 - inline emphasis/code/links are regex-based with code spans stashed so
-  they're never double-processed.
+  they're never double-processed,
+- markdown pipe tables render as column-aligned monospace <pre> blocks
+  (Telegram has no native table support).
 
 Everything else falls through as escaped text; if Telegram still refuses
 to parse the result, callers retry with the raw text and no parse_mode.
@@ -57,6 +59,66 @@ _URL_RE = re.compile(r"(?<![\w\"'>=])(https?://[^\s<\x00]+)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET_RE = re.compile(r"^[-*+]\s+(.*)$")
 _NUM_RE = re.compile(r"^(\d+)[.)]\s+(.*)$")
+
+# A markdown table separator row (e.g. ``|:---|---:|``) — only these chars.
+_TABLE_SEP_RE = re.compile(r"[\s|:\-]+")
+
+# Rough monospace "wide glyph" ranges: CJK, Hangul, fullwidth forms, common
+# emoji blocks. Used only for column padding inside table <pre> blocks.
+_WIDE_RE = re.compile(
+    "[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff"
+    "\ua000-\ua4cf\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f"
+    "\uff00-\uff60\uffe0-\uffe6\u2600-\u27bf"
+    "\U0001f000-\U0001faff]"
+)
+# Zero-width joiners / variation selectors: counted by len(), render as 0.
+_ZW_RE = re.compile("[\u200d\ufe0f]")
+
+
+def _dw(s: str) -> int:
+    """Display width in monospace cells: wide glyphs count 2, joiners 0."""
+    return len(s) + len(_WIDE_RE.findall(s)) - len(_ZW_RE.findall(s))
+
+
+def _clean_cell(cell: str) -> str:
+    """Strip markdown markers that cannot render inside a <pre> block."""
+    cell = re.sub(r"\*\*(.+?)\*\*", r"\1", cell)
+    cell = re.sub(r"__(.+?)__", r"\1", cell)
+    cell = re.sub(r"`([^`]+)`", r"\1", cell)
+    return cell
+
+
+def _split_cells(row: str) -> list[str]:
+    parts = re.split(r"(?<!\\)\|", row)
+    if parts and not parts[0].strip():
+        parts = parts[1:]
+    if parts and not parts[-1].strip():
+        parts = parts[:-1]
+    return [_clean_cell(p.strip().replace("\\|", "|")) for p in parts]
+
+
+def _render_table(rows: list[str]) -> str:
+    """Aligned monospace rendering of a markdown table (header + sep + body).
+
+    Column widths are computed on the *unescaped* cell text so HTML entities
+    (``&amp;`` etc.) don't skew the padding; cells are escaped on output.
+    """
+    parsed = [_split_cells(r) for r in rows]
+    header, body = parsed[0], parsed[2:]  # parsed[1] is the |---| separator
+    widths = [0] * max(len(r) for r in parsed)
+    for r in parsed:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], _dw(c))
+
+    def fmt(cells: list[str]) -> str:
+        parts = []
+        for i in range(len(widths)):
+            c = cells[i] if i < len(cells) else ""
+            parts.append(f" {_escape(c)}{' ' * (widths[i] - _dw(c))} ")
+        return "│".join(parts).rstrip()
+
+    sep = "┼".join("─" * (w + 2) for w in widths)
+    return "<pre>\n" + "\n".join([fmt(header), sep, *[fmt(r) for r in body]]) + "\n</pre>"
 
 
 def _inline(escaped: str) -> str:
@@ -113,7 +175,10 @@ def md_to_telegram_html(md: str) -> str:
             out.append("</blockquote>")
             in_quote = False
 
-    for line in lines:
+    skip_until = 0
+    for idx, line in enumerate(lines):
+        if idx < skip_until:
+            continue
         stripped = line.strip()
 
         if not in_pre and stripped.startswith("```"):
@@ -166,6 +231,29 @@ def md_to_telegram_html(md: str) -> str:
             out.append(f"{m.group(1)}. {_inline(_escape(m.group(2)))}")
             continue
 
+        # markdown pipe table: current line has pipes and the NEXT line is a
+        # |---|---| separator. Consume consecutive pipe rows wholesale.
+        nxt = lines[idx + 1].strip() if idx + 1 < len(lines) else ""
+        if (
+            "|" in stripped
+            and "|" in nxt
+            and "-" in nxt
+            and _TABLE_SEP_RE.fullmatch(nxt)
+        ):
+            _close_quote()
+            rows = [stripped]
+            j = idx + 1
+            while j < len(lines):
+                s = lines[j].strip()
+                if s and "|" in s and not s.startswith("```"):
+                    rows.append(s)
+                    j += 1
+                else:
+                    break
+            out.append(_render_table(rows))
+            skip_until = j
+            continue
+
         _close_quote()
         out.append(_inline(_escape(line)))
 
@@ -202,34 +290,25 @@ def split_for_telegram(html: str, limit: int = 4000) -> list[str]:
         if pending_reopen:
             piece = pending_reopen + piece
             pending_reopen = ""
-        if tlen(piece) <= limit:
+        while True:
             balanced, reopen = _pre_balance(piece)
-            chunks.append(balanced)
-            pending_reopen = reopen
-            return
-        # hard-wrap this piece, balancing pre tags across cuts (room is
-        # reserved for the reopening prefix AND the closing tag that
-        # _pre_balance may append to this chunk)
-        while tlen(pending_reopen + piece) > limit:
-            prefix = pending_reopen
-            budget = max(1, limit - tlen(prefix) - len("</pre>"))
+            if tlen(balanced) <= limit:
+                chunks.append(balanced)
+                pending_reopen = reopen
+                return
+            # doesn't fit: hard-wrap, reserving room for the closing tag
+            # that _pre_balance appends to the leading chunk (and the
+            # reopening <pre> prefix of the continuation)
+            budget = max(1, limit - len("</pre>") - len("<pre>"))
             cut = piece[:budget]
             # try to end on a newline for readability
             nl = cut.rfind("\n")
             if nl > budget // 2:
                 cut = cut[: nl + 1]
-            piece = piece[len(cut) :]
-            full = prefix + cut
-            pending_reopen = ""
-            balanced, reopen = _pre_balance(full)
-            chunks.append(balanced)
-            pending_reopen = reopen
-        if piece or pending_reopen:
-            full = pending_reopen + piece
-            pending_reopen = ""
-            balanced, reopen = _pre_balance(full)
-            chunks.append(balanced)
-            pending_reopen = reopen
+            head, piece = piece[: len(cut)], piece[len(cut) :]
+            balanced_head, reopen_head = _pre_balance(head)
+            chunks.append(balanced_head)
+            piece = reopen_head + piece
 
     current = ""
     for para in html.split("\n\n"):

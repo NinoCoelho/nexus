@@ -842,6 +842,72 @@ def test_formatting_partial_fence_closed() -> None:
     assert html.count("<pre>") == html.count("</pre>") == 1
 
 
+def test_formatting_table_renders_aligned_pre() -> None:
+    md = "| Nome | Valor |\n|---|---|\n| a | 1 |\n| bb | 22 |"
+    html = md_to_telegram_html(md)
+    assert "<pre>" in html and "</pre>" in html
+    assert "|---|" not in html  # separator row never rendered literally
+    assert "┼" in html
+    rows = [ln for ln in html.split("\n") if "│" in ln]
+    assert len(rows) == 3  # header + 2 body rows
+    assert len({ln.index("│") for ln in rows}) == 1  # columns aligned
+
+
+def test_formatting_table_escapes_cells_and_strips_markers() -> None:
+    md = "| a<b> | & |\n|---|---|\n| **bold** | `c` |"
+    html = md_to_telegram_html(md)
+    assert "&lt;b&gt;" in html and "&amp;" in html
+    assert "**" not in html  # markdown markers can't render inside <pre>
+
+
+def test_formatting_table_wide_glyphs_pad_double() -> None:
+    from nexus.telegram.formatting import _dw
+
+    md = "| 名前 | v |\n|---|---|\n| x | 1 |"
+    html = md_to_telegram_html(md)
+    rows = [ln for ln in html.split("\n") if "│" in ln]
+    assert len(rows) == 2
+    # junctions align in display columns (CJK padded as width 2), not codepoints
+    cols = [_dw(ln[: ln.index("│")]) for ln in rows]
+    assert cols[0] == cols[1]
+
+
+def test_formatting_table_partial_before_separator() -> None:
+    # Streaming partial: header row arrived, separator hasn't — stays plain.
+    html = md_to_telegram_html("| a | b |\n| c")
+    assert html.count("<pre>") == html.count("</pre>") == 0
+
+
+def test_formatting_table_block_boundaries() -> None:
+    md = (
+        "# Title\n"
+        "- bullet\n"
+        "\n"
+        "| h1 | h2 |\n"
+        "|---|---|\n"
+        "| a | b |\n"
+        "\n"
+        "plain text after | a stray pipe\n"
+    )
+    html = md_to_telegram_html(md)
+    assert "<b>Title</b>" in html
+    assert "• bullet" in html
+    assert "<pre>" in html
+    assert "plain text after | a stray pipe" in html  # not swallowed
+
+
+def test_split_table_chunks_balance_pre() -> None:
+    md = (
+        "| col | val |\n|---|---|\n"
+        + "\n".join(f"| row{i} | {'x' * 60} |" for i in range(150))
+    )
+    chunks = split_for_telegram(md_to_telegram_html(md), limit=4000)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert tlen(c) <= 4000
+        assert c.count("<pre>") == c.count("</pre>")
+
+
 def test_split_respects_limit_and_balances_pre() -> None:
     body = (
         "# T\n\n"
