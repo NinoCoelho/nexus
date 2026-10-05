@@ -168,6 +168,7 @@ class TelegramClient:
         thread_id: int | None = None,
         reply_markup: dict[str, Any] | None = None,
         parse_mode: str | None = "HTML",
+        reply_to_message_id: int | None = None,
     ) -> int:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
@@ -180,6 +181,13 @@ class TelegramClient:
             payload["parse_mode"] = parse_mode
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if reply_to_message_id:
+            # allow_sending_without_reply: a deleted/quoted-away target must
+            # not lose the reply itself (e.g. a web-sync echo bubble).
+            payload["reply_parameters"] = {
+                "message_id": reply_to_message_id,
+                "allow_sending_without_reply": True,
+            }
         msg = await self._call("sendMessage", payload)
         return int(msg.get("message_id", 0))
 
@@ -371,11 +379,16 @@ class TelegramClient:
         *,
         thread_id: int | None = None,
         reply_markup: dict[str, Any] | None = None,
+        reply_to_message_id: int | None = None,
     ) -> int:
         """Send text as HTML, falling back to raw text if parsing fails."""
         try:
             return await self.send_message(
-                chat_id, text, thread_id=thread_id, reply_markup=reply_markup
+                chat_id,
+                text,
+                thread_id=thread_id,
+                reply_markup=reply_markup,
+                reply_to_message_id=reply_to_message_id,
             )
         except TelegramError as exc:
             if "can't parse" in str(exc).lower():
@@ -384,6 +397,7 @@ class TelegramClient:
                     text,
                     thread_id=thread_id,
                     reply_markup=reply_markup,
+                    reply_to_message_id=reply_to_message_id,
                     parse_mode=None,
                 )
             raise

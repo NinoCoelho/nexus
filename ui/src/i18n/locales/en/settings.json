@@ -282,6 +282,8 @@
     "ackReactionHint": "Emoji reaction placed on your message while the turn runs (upgraded to 👍 when answered). Empty disables.",
     "voiceRepliesLabel": "Voice replies",
     "voiceRepliesHint": "Voice messages are transcribed and answered with a spoken (TTS) voice note too",
+    "webSyncLabel": "Sync web chat",
+    "webSyncHint": "Messages sent in the web UI on a linked chat's session are echoed to Telegram, and the reply quotes them",
     "speechifyLabel": "Spoken-style rewrite",
     "speechifyHint": "Rewrites voice replies through the fast LLM for natural speech — expands units (30°C → 30 degrees), drops markdown, adapts foreign words",
     "speechifyAuto": "Auto (only messy replies)",

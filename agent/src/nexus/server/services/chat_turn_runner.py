@@ -42,6 +42,9 @@ class QueuedInput:
 
     qid: str
     text: str
+    # Surface the message came from ("web" | "telegram" | "coordinator") —
+    # keeps its own identity through mid-turn injection and chained turns.
+    origin: str = "web"
 
 
 @dataclass
@@ -64,6 +67,10 @@ class ChatTurnRunner:
     turn_job_id: str
     publish_job_event: Any  # callable
     is_voice: bool = False
+    # Surface that launched this turn ("web" | "telegram" | "coordinator").
+    # Subscribers (e.g. the Telegram reply streamer) use it to tell web
+    # turns from gateway turns. Default "web" matches the /chat/stream path.
+    origin: str = "web"
     acc: TurnAccumulator = field(default_factory=TurnAccumulator)
     task: asyncio.Task[Any] | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -77,6 +84,15 @@ class ChatTurnRunner:
 
     def start(self) -> asyncio.Task[Any]:
         """Spawn the runner as a detached task and register it."""
+        # Announce the turn (and its origin) before the first delta so bus
+        # subscribers can prepare per-turn state — the Telegram streamer
+        # echoes web-originated user messages from this event.
+        self._publish({
+            "type": "turn_started",
+            "session_id": self.session_id,
+            "origin": self.origin,
+            "message": self.message,
+        })
         self.task = asyncio.create_task(self._run(), name=f"chat-turn-{self.session_id}")
         _running_turns[self.session_id] = self
         return self.task
@@ -90,7 +106,7 @@ class ChatTurnRunner:
 
     # ── Queue (messages sent while this turn runs) ──────────────────────
 
-    def enqueue(self, text: str) -> str | None:
+    def enqueue(self, text: str, origin: str = "web") -> str | None:
         """Queue a follow-up message for mid-turn injection or chaining.
 
         Returns the queue id, or ``None`` when the runner already
@@ -103,7 +119,7 @@ class ChatTurnRunner:
         if self._finalized:
             return None
         qid = uuid4().hex[:12]
-        self.queue.append(QueuedInput(qid=qid, text=text))
+        self.queue.append(QueuedInput(qid=qid, text=text, origin=origin))
         return qid
 
     def remove_queued(self, qid: str) -> bool:
@@ -127,7 +143,7 @@ class ChatTurnRunner:
         ``drain_pending_inputs`` callback) — the drained messages are
         appended to the working context as user messages.
         """
-        items = [{"qid": q.qid, "text": q.text} for q in self.queue]
+        items = [{"qid": q.qid, "text": q.text, "origin": q.origin} for q in self.queue]
         self.queue.clear()
         return items
 
@@ -168,6 +184,7 @@ class ChatTurnRunner:
         self.resume_working_messages = None
         self.acc = TurnAccumulator()
         self.started_at = datetime.now(timezone.utc)
+        self.origin = nxt.origin
 
     # ── Main loop ───────────────────────────────────────────────────────
 
@@ -188,6 +205,7 @@ class ChatTurnRunner:
                     "type": "user_injected",
                     "qid": nxt.qid,
                     "text": nxt.text,
+                    "origin": nxt.origin,
                     "session_id": self.session_id,
                 })
                 self._begin_chained_turn(nxt)
@@ -212,7 +230,11 @@ class ChatTurnRunner:
             self.store._trace_suppressed.discard(self.session_id)
             # Terminal marker: subscribers keep the SSE open past `done`
             # (chained turns) and only close on this event.
-            self._publish({"type": "turn_settled", "session_id": self.session_id})
+            self._publish({
+                "type": "turn_settled",
+                "session_id": self.session_id,
+                "origin": self.origin,
+            })
             try:
                 CURRENT_SESSION_ID.reset(token)
             except ValueError:

@@ -127,6 +127,7 @@ async def launch_turn(
     publish_job_event: Callable[[str, dict], None] | None = None,
     is_voice: bool = False,
     autotitle_message: str | None = None,
+    origin: str = "web",
 ) -> LaunchOutcome:
     """Run one chat turn on ``session`` outside of HTTP.
 
@@ -152,7 +153,7 @@ async def launch_turn(
     # Active-turn queueing — never start a parallel loop on one session.
     active = get_running_turn(session.id)
     if active is not None:
-        qid = active.enqueue(message)
+        qid = active.enqueue(message, origin=origin)
         if qid is not None:
             return LaunchOutcome(runner=active, queued=True, session_id=session.id)
         # Runner finalized between check and enqueue — fall through.
@@ -234,6 +235,7 @@ async def launch_turn(
         turn_job_id=turn_job_id,
         publish_job_event=publish_job_event,
         is_voice=is_voice,
+        origin=origin,
     )
     runner.start()
 

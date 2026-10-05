@@ -285,6 +285,8 @@
     "ackReactionHint": "Emoji reagido na sua mensagem enquanto o turno executa (vira 👍 quando respondido). Vazio desativa.",
     "voiceRepliesLabel": "Respostas por voz",
     "voiceRepliesHint": "Mensagens de voz são transcritas e respondidas também com um áudio (TTS)",
+    "webSyncLabel": "Sincronizar chat web",
+    "webSyncHint": "Mensagens enviadas na interface web na sessão de um chat vinculado são ecoadas no Telegram, e a resposta as cita",
     "speechifyLabel": "Reescrita para fala",
     "speechifyHint": "Reescreve as respostas de voz via LLM rápido para falar naturalmente — expande unidades (30°C → 30 graus), remove markdown, adapta palavras estrangeiras",
     "speechifyAuto": "Auto (só respostas \"sujas\")",

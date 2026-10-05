@@ -101,6 +101,8 @@ export interface TelegramConfig {
   voice_replies: boolean;
   /** LLM rewrite of voice replies for natural speech: auto | always | off. */
   voice_speechify: "auto" | "always" | "off";
+  /** Mirror web-UI turns to the bound chat (echo + quoted streamed reply). */
+  web_sync: boolean;
 }
 
 export interface CoordinatorConfig {

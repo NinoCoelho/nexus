@@ -28,6 +28,7 @@ const DEFAULT_CFG: TelegramConfig = {
   ack_reaction: "👀",
   voice_replies: true,
   voice_speechify: "auto",
+  web_sync: true,
 };
 
 /**
@@ -361,6 +362,26 @@ export default function TelegramSection() {
           className={`hitl-switch${cfg.voice_replies ? " on" : ""}`}
           onClick={() => void save({ voice_replies: !cfg.voice_replies })}
           aria-pressed={cfg.voice_replies}
+          disabled={saving}
+        >
+          <span className="hitl-switch-knob" />
+        </button>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-row-name">
+          {t("settings:telegram.webSyncLabel")}
+          <span
+            className="settings-row-hint"
+            style={{ display: "block", fontSize: 12, opacity: 0.6, marginTop: 2 }}
+          >
+            {t("settings:telegram.webSyncHint")}
+          </span>
+        </span>
+        <button
+          className={`hitl-switch${cfg.web_sync ? " on" : ""}`}
+          onClick={() => void save({ web_sync: !cfg.web_sync })}
+          aria-pressed={cfg.web_sync}
           disabled={saving}
         >
           <span className="hitl-switch-knob" />

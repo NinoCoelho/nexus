@@ -36,6 +36,23 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _maybe_sync_telegram(request: Request, session_id: str) -> None:
+    """Web→Telegram sync: ensure the reply streamer for a bound session.
+
+    When Telegram is active and this session is a binding's active
+    session (DM master chat or topic), the turn's reply — preceded by an
+    echo of the user's message — must reach the bound chat even if no
+    Telegram activity ever spawned a streamer. Best-effort; never raises.
+    """
+    try:
+        poller = getattr(request.app.state, "telegram_poller", None)
+        tg_router = getattr(poller, "router", None) if poller is not None else None
+        if tg_router is not None:
+            tg_router.ensure_session_streamer(session_id)
+    except Exception:
+        log.debug("telegram web-sync hook failed", exc_info=True)
+
+
 @router.post("/chat/stream")
 async def chat_stream_route(
     req: ChatRequest,
@@ -113,7 +130,7 @@ async def chat_stream_route(
                     ),
                 },
             )
-        _qid = _active_runner.enqueue(req.message)
+        _qid = _active_runner.enqueue(req.message, origin="web")
         if _qid is not None:
             from ..events import SessionEvent as _SessionEvent
             store.publish(session.id, _SessionEvent(
@@ -125,6 +142,10 @@ async def chat_stream_route(
                     "session_id": session.id,
                 },
             ))
+            # The injection (``user_injected``, origin=web) may land after a
+            # turn that never had a streamer (e.g. coordinator dispatch) —
+            # make sure the echo + reply reach the bound chat.
+            _maybe_sync_telegram(request, session.id)
 
             async def _queued_ack() -> AsyncIterator[str]:
                 yield (
@@ -362,8 +383,13 @@ async def chat_stream_route(
             turn_job_id=turn_job_id,
             publish_job_event=_publish_job_event,
             is_voice=is_voice,
+            origin="web",
         )
         runner.start()
+        # turn_started is already on the bus (replay buffer) — spawning the
+        # Telegram streamer now replays it first, so the user-message echo
+        # lands before the streamed reply quotes it.
+        _maybe_sync_telegram(request, session.id)
 
         # ── Subscribe to bus and forward events to SSE ───────────────────────
         acc_sub = TurnAccumulator()

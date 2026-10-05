@@ -114,6 +114,7 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "ack_reaction": tg.ack_reaction,
             "voice_replies": tg.voice_replies,
             "voice_speechify": tg.voice_speechify,
+            "web_sync": tg.web_sync,
         }
     coord = getattr(cfg, "coordinator", None)
     if coord is not None:
@@ -242,6 +243,7 @@ async def patch_config(
             "ack_reaction",
             "voice_replies",
             "voice_speechify",
+            "web_sync",
         }
         clean = {k: v for k, v in patch.items() if k in ALLOWED_TG}
         if isinstance(clean.get("allowed_user_ids"), list):
