@@ -316,3 +316,20 @@ def test_sweep_missed_flags_old_scheduled_events():
     statuses = {ev.title: ev.status for ev in cal.events}
     assert statuses["Past"] == "missed"
     assert statuses["Future"] == "scheduled"
+
+
+def test_list_calendars_skips_underscore_dirs():
+    """Syncthing conflict copies (_conflicts-quarantine) and system folders
+    must never be treated as real calendars — they duplicate every event."""
+    vault_calendar.create_empty("Calendars/Default.md", title="Default")
+    vault_calendar.create_empty(
+        "_conflicts-quarantine/Default.sync-conflict-20261002.md", title="Default conflict"
+    )
+    vault_calendar.create_empty("_system/Cal/Hidden.md", title="System")
+    vault_calendar.create_empty("Projects/Sub/real.md", title="Real subfolder")
+
+    paths = [s.path for s in vault_calendar.list_calendars()]
+    assert "Calendars/Default.md" in paths
+    assert "Projects/Sub/real.md" in paths
+    assert not any(p.startswith("_conflicts-quarantine") for p in paths)
+    assert not any(p.startswith("_system") for p in paths)

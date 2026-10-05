@@ -10,6 +10,7 @@ done here because the markdown schedule is static.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,6 +18,12 @@ from typing import Any
 from loom.heartbeat import HeartbeatDriver, HeartbeatEvent
 
 log = logging.getLogger(__name__)
+
+# Single-flight guard for the detached sweep task. check() returns
+# immediately (a sweep is a full LLM turn — running it inline would block
+# the scheduler's tick for minutes); this flag plus the last_sweep gate in
+# state prevents overlapping sweeps.
+_sweep_in_flight = False
 
 _SWEEP_PROMPT = """\
 SWEEP (read-only): run a proactive check across Nexus now.
@@ -87,29 +94,43 @@ class Driver(HeartbeatDriver):
             log.debug("coordinator_sweep: master chat busy, skipping")
             return [], state
 
+        global _sweep_in_flight
+        if _sweep_in_flight:
+            log.debug("coordinator_sweep: previous sweep still running, skipping")
+            return [], state
+
         state["last_sweep"] = now.isoformat()
-        log.info("coordinator_sweep: running sweep on %s", sid)
+        log.info("coordinator_sweep: dispatching sweep on %s (detached)", sid)
 
-        from nexus.server.services.background_turn import run_background_turn
+        async def _run_sweep() -> None:
+            global _sweep_in_flight
+            _sweep_in_flight = True
+            try:
+                from nexus.server.services.background_turn import run_background_turn
 
-        try:
-            with sweep_mode():
-                result = await run_background_turn(
-                    session_id=sid,
-                    seed_message=_SWEEP_PROMPT,
-                    agent_=service.agent,
-                    store=service.store,
-                )
-        except Exception:
-            log.exception("coordinator_sweep: sweep turn failed")
-            return [], state
+                try:
+                    with sweep_mode():
+                        result = await run_background_turn(
+                            session_id=sid,
+                            seed_message=_SWEEP_PROMPT,
+                            agent_=service.agent,
+                            store=service.store,
+                        )
+                except Exception:
+                    log.exception("coordinator_sweep: sweep turn failed")
+                    return
 
-        digest = (result.accumulated_text or "").strip()
-        if not digest or digest.strip().strip("*`#").upper().startswith("NOTHING_NEW"):
-            log.debug("coordinator_sweep: nothing new, no delivery")
-            return [], state
+                digest = (result.accumulated_text or "").strip()
+                if not digest or digest.strip().strip("*`#").upper().startswith("NOTHING_NEW"):
+                    log.debug("coordinator_sweep: nothing new, no delivery")
+                    return
 
-        await self._deliver(cfg, sid, digest)
+                await self._deliver(cfg, sid, digest)
+            finally:
+                _sweep_in_flight = False
+
+        # Detached: the scheduler tick must never wait on an LLM turn.
+        asyncio.create_task(_run_sweep(), name="coordinator-sweep")
         return [], state
 
     async def _deliver(self, cfg: Any, sid: str, digest: str) -> None:

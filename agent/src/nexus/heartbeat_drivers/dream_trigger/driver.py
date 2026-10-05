@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,6 +15,10 @@ log = logging.getLogger(__name__)
 
 _MIN_SESSIONS = 5
 _MIN_INTERVAL_HOURS = 24
+
+# Single-flight guard: dream cycles run for minutes and are detached from
+# check() so the scheduler tick never blocks on them.
+_dream_in_flight = False
 
 
 class Driver(HeartbeatDriver):
@@ -85,51 +90,64 @@ class Driver(HeartbeatDriver):
             return [], state
 
         depth = _pick_depth(last_run, now)
-
-        try:
-            from nexus.dream.engine import run_dream
-            provider, upstream_model = _get_provider()
-            if provider is None:
-                log.warning("dream_trigger: no provider available")
-                store.close()
-                return [], state
-
-            log.info(
-                "dream_trigger: triggering %s dream (last=%s, sessions=%d)",
-                depth,
-                last_run.started_at.isoformat() if last_run else "never",
-                recent_count,
-            )
-
-            result = await run_dream(
-                provider=provider,
-                model_id=upstream_model,
-                cfg=cfg,
-                depth=depth,
-            )
-
-            log.info(
-                "dream_trigger: dream run #%d completed (status=%s)",
-                result.run_id, "error" if result.error else "ok",
-            )
-        except Exception:
-            log.exception("dream_trigger: dream run failed")
-
-        # Best-effort retention sweep. Dreams fire at most daily (min interval),
-        # so running this after each completion caps dream_runs /
-        # dream_explored_territory growth without a separate timer.
-        try:
-            cleaned = store.cleanup_old_runs(max_age_days=30)
-            territory = store.cleanup_territory(max_age_days=90)
-            if cleaned or territory:
-                log.info(
-                    "dream_trigger: cleaned %d old run(s), %d territory rows",
-                    cleaned, territory,
-                )
-        except Exception:
-            log.exception("dream_trigger: retention sweep failed")
-
         store.close()
+
+        global _dream_in_flight
+        if _dream_in_flight:
+            log.debug("dream_trigger: dream already running, skipping")
+            return [], state
+
+        async def _run_dream() -> None:
+            global _dream_in_flight
+            _dream_in_flight = True
+            try:
+                try:
+                    from nexus.dream.engine import run_dream
+                    provider, upstream_model = _get_provider()
+                    if provider is None:
+                        log.warning("dream_trigger: no provider available")
+                        return
+
+                    log.info("dream_trigger: triggering %s dream (detached)", depth)
+
+                    result = await run_dream(
+                        provider=provider,
+                        model_id=upstream_model,
+                        cfg=cfg,
+                        depth=depth,
+                    )
+
+                    log.info(
+                        "dream_trigger: dream run #%d completed (status=%s)",
+                        result.run_id, "error" if result.error else "ok",
+                    )
+                except Exception:
+                    log.exception("dream_trigger: dream run failed")
+                finally:
+                    # Best-effort retention sweep. Dreams fire at most daily
+                    # (min interval), so running this after each completion
+                    # caps dream_runs / dream_explored_territory growth
+                    # without a separate timer.
+                    try:
+                        retention = DreamStateStore(dream_db())
+                        try:
+                            cleaned = retention.cleanup_old_runs(max_age_days=30)
+                            territory = retention.cleanup_territory(max_age_days=90)
+                            if cleaned or territory:
+                                log.info(
+                                    "dream_trigger: cleaned %d old run(s), %d territory rows",
+                                    cleaned, territory,
+                                )
+                        finally:
+                            retention.close()
+                    except Exception:
+                        log.exception("dream_trigger: retention sweep failed")
+            finally:
+                _dream_in_flight = False
+
+        # Detached: a dream cycle takes minutes; check() must return fast
+        # so the scheduler tick is never blocked.
+        asyncio.create_task(_run_dream(), name="dream-cycle")
         return [], state
 
 

@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -275,6 +276,71 @@ async def _startup_graphrag(graphrag_cfg: Any, nexus_cfg: Any) -> None:
             pass
 
 
+def _quarantine_db(db_path: Any) -> None:
+    """Rename a corrupt SQLite DB (plus -wal/-shm) aside so a fresh one is
+    recreated. Syncthing-synced WAL files made this the #1 bootstrap killer."""
+    from datetime import datetime as _dt
+
+    ts = _dt.now().strftime("%Y%m%d-%H%M%S")
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(db_path) + suffix)
+        if not p.exists():
+            continue
+        try:
+            p.rename(p.with_name(f"{p.name}.corrupt-{ts}"))
+        except OSError:
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _open_heartbeat_store(cls: Any, db_path: Path, label: str) -> Any:
+    """Open a heartbeat-related SQLite store, self-healing corruption:
+    quarantine the bad file and retry (up to 3 attempts) instead of leaving
+    the whole scheduler dead."""
+    import sqlite3
+
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            return cls(db_path)
+        except sqlite3.DatabaseError as exc:
+            last_exc = exc
+            log.error(
+                "heartbeat %s store unusable (%s) — quarantining and retrying (attempt %d/3)",
+                label, exc, attempt + 1,
+            )
+            _quarantine_db(db_path)
+    assert last_exc is not None
+    raise last_exc
+
+
+async def _retry_heartbeat_bootstrap(
+    app: Any, agent: Any, sessions: Any, job_tracker: Any, publish_job_event: Any,
+) -> None:
+    """Keep retrying heartbeat bootstrap every 60s until it succeeds.
+
+    The pre-existing behaviour was one silent failure at startup and zero
+    scheduling until the next daemon restart — sometimes for days."""
+    attempt = 0
+    while True:
+        await asyncio.sleep(60)
+        attempt += 1
+        try:
+            scheduler = _startup_heartbeat_calendar(
+                app, agent, sessions, job_tracker, publish_job_event,
+            )
+        except Exception:
+            log.exception("heartbeat bootstrap retry %d crashed", attempt)
+            scheduler = None
+        if scheduler is not None:
+            app.state.heartbeat_degraded = False
+            log.info("heartbeat bootstrap recovered after %d retry(ies)", attempt)
+            return
+        log.warning("heartbeat bootstrap still failing (retry %d) — scheduling degraded", attempt)
+
+
 def _startup_heartbeat_calendar(
     app: FastAPI,
     agent: Any,
@@ -298,8 +364,13 @@ def _startup_heartbeat_calendar(
             HeartbeatStore,
         )
 
-        vault_calendar.ensure_default_calendar()
-        vault_calendar.sweep_missed(grace_minutes=5)
+        # Calendar bootstrap issues (bad markdown, tz edge cases) must never
+        # take the heartbeat scheduler down with them.
+        try:
+            vault_calendar.ensure_default_calendar()
+            vault_calendar.sweep_missed(grace_minutes=5)
+        except Exception:
+            log.exception("calendar bootstrap (default calendar / missed sweep) failed — continuing")
 
         from .routes.vault_dispatch import _dispatch_impl as _cal_dispatch
 
@@ -378,13 +449,13 @@ def _startup_heartbeat_calendar(
             additional_dirs=[DRIVERS_DIR],
         )
         registry.scan()
-        store = HeartbeatStore(db_path)
+        store = _open_heartbeat_store(HeartbeatStore, db_path, "state")
 
         from ..heartbeat_log import HeartbeatLogStore
-        log_store = HeartbeatLogStore(db_path)
+        log_store = _open_heartbeat_store(HeartbeatLogStore, db_path, "fire-log")
 
         from ..alarm_store import AlarmStore
-        alarm_store = AlarmStore(db_path)
+        alarm_store = _open_heartbeat_store(AlarmStore, db_path, "alarm")
         _set_cal_alarm_store(alarm_store)
 
         async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
@@ -409,8 +480,18 @@ def _startup_heartbeat_calendar(
         agent._handlers.hb_manager_getter = _hb_manager_getter
 
         log.info("heartbeat scheduler started (calendar_trigger registered)")
+        app.state.heartbeat_degraded = False
     except Exception:
-        log.exception("heartbeat / calendar bootstrap failed")
+        log.exception("heartbeat / calendar bootstrap failed — retrying every 60s in background")
+        app.state.heartbeat_degraded = True
+        try:
+            app.state.heartbeat_bootstrap_task = asyncio.create_task(
+                _retry_heartbeat_bootstrap(
+                    app, agent, sessions, job_tracker, publish_job_event,
+                )
+            )
+        except RuntimeError:
+            pass  # no running event loop (unit tests) — nothing to retry on
     return scheduler
 
 
@@ -457,6 +538,15 @@ async def _startup_workflows(app: FastAPI, agent: Any, sessions: Any) -> None:
 
         from ..workflows.triggers.event import set_engine_ref as _set_engine_evt
         _set_engine_evt(wf_engine)
+
+        # Heartbeat-driver refs: schedule triggers dispatch through the
+        # engine and the cleanup driver needs the run store. Without this
+        # wiring both drivers silently no-op (state is JSON-persisted, so
+        # the refs must be injected, not stored in driver state).
+        from ..heartbeat_drivers.workflow_schedule.driver import set_engine_ref as _set_wsched_ref
+        from ..heartbeat_drivers.workflow_cleanup.driver import set_store_ref as _set_wclean_ref
+        _set_wsched_ref(wf_engine)
+        _set_wclean_ref(wf_store)
 
         app.state.workflow_webhook_driver = webhook_driver
         app.state.workflow_event_listener = event_listener
@@ -588,7 +678,12 @@ def _shutdown_vault_cache(task: asyncio.Task[None]) -> None:
     task.cancel()
 
 
-def _shutdown_heartbeat(scheduler: Any) -> None:
+def _shutdown_heartbeat(app: Any) -> None:
+    retry_task = getattr(app.state, "heartbeat_bootstrap_task", None)
+    if retry_task is not None:
+        retry_task.cancel()
+        app.state.heartbeat_bootstrap_task = None
+    scheduler = getattr(app.state, "heartbeat_scheduler", None)
     if scheduler is not None:
         try:
             scheduler.stop()
@@ -694,7 +789,7 @@ def create_lifespan(state: dict[str, Any]):
         await _startup_ocr()
         _startup_hitl_sweep(sessions)
         await _startup_graphrag(graphrag_cfg, nexus_cfg)
-        scheduler = _startup_heartbeat_calendar(
+        _startup_heartbeat_calendar(
             app, agent, sessions, job_tracker, publish_job_event,
         )
         await _startup_workflows(app, agent, sessions)
@@ -708,7 +803,7 @@ def create_lifespan(state: dict[str, Any]):
         finally:
             _shutdown_vault_cache(_vault_cache_task)
             _shutdown_vault_watcher()
-            _shutdown_heartbeat(scheduler)
+            _shutdown_heartbeat(app)
             _shutdown_local_llm()
             _shutdown_ocr()
             _shutdown_memory_store()

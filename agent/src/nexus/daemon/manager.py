@@ -101,6 +101,43 @@ class DaemonManager(DaemonDisplayMixin):
             pass
         return None
 
+    def _twin_daemon_pids(self, exclude: Optional[set[int]] = None) -> list[int]:
+        """Live PIDs whose command line matches the detached-daemon bootstrap
+        snippet (contains both ``nexus.main`` and the daemon log path) but are
+        not in ``exclude`` — i.e. twin daemons racing us for the same data dir.
+
+        Twins arise when an external restarter spawns a daemon while the
+        manager's one is alive: the loser can't bind the port but keeps
+        running, hammering the same SQLite files and double-firing
+        background work. The pidfile only tracks the winner, and the port
+        check only sees listeners — neither catches a portless twin.
+        """
+        exclude = exclude or set()
+        marker = str(self.log_file)
+        twins: list[int] = []
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            if proc.pid in exclude:
+                continue
+            try:
+                cmdline = proc.info["cmdline"] or []
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if not cmdline:
+                continue
+            joined = " ".join(cmdline)
+            if "nexus.main" in joined and marker in joined:
+                twins.append(proc.pid)
+        return twins
+
+    def _kill_twins(self, context: str) -> None:
+        tracked = self.get_pid()
+        twins = self._twin_daemon_pids(exclude={tracked} if tracked else set())
+        for pid in twins:
+            self.console.print(
+                f"[yellow]Killing twin daemon process (PID: {pid}, {context})[/yellow]"
+            )
+            self._kill_pid(pid)
+
     def get_status(self) -> str:
         """Get current daemon status."""
         if self.is_running():
@@ -141,6 +178,10 @@ class DaemonManager(DaemonDisplayMixin):
             )
             self._kill_pid(orphan)
             time.sleep(1)
+
+        # Portless twins from a racing restarter would corrupt the shared
+        # SQLite state — clear them before launching.
+        self._kill_twins("pre-start")
 
         cmd = [sys.executable, "-c", f"""
 import sys
@@ -278,6 +319,7 @@ finally:
                 f"[yellow]Killing orphan listener on port {PORT} (PID: {orphan})[/yellow]"
             )
             self._kill_pid(orphan)
+        self._kill_twins("stop")
         return result
 
     def _stop_process(self, pid_file: Path, label: str) -> bool:
@@ -352,7 +394,14 @@ finally:
                 f"[yellow]Killing orphan on port {port} (PID: {orphan})[/yellow]"
             )
             self._kill_pid(orphan)
-        time.sleep(1)
+        # Wait for the port to actually free up — uvicorn's graceful
+        # shutdown can outlive the fixed sleep, and starting too early
+        # produced twin daemons (one portless, both on the same SQLite).
+        for _ in range(20):
+            if self._untracked_listener_pid(port) is None:
+                break
+            time.sleep(0.5)
+        self._kill_twins("restart")
         return self.start(port=port)
 
     def _kill_pid(self, pid: int) -> None:

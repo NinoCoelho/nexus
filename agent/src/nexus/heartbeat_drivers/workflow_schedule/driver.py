@@ -16,7 +16,6 @@ from loom.heartbeat import HeartbeatDriver, HeartbeatEvent
 
 from nexus.workflows import parser as wf_parser
 from nexus.workflows.models import TriggerType
-from nexus.workflows.store import WorkflowStore
 
 log = logging.getLogger(__name__)
 
@@ -37,13 +36,14 @@ class Driver(HeartbeatDriver):
         events: list[HeartbeatEvent] = []
         now = datetime.datetime.now(datetime.timezone.utc)
 
+        engine = _get_engine()
+        if engine is None:
+            log.debug("schedule trigger: engine ref not wired yet, skipping tick")
+            return events, state
+
         try:
             from nexus import vault as _vault
         except Exception:
-            return events, state
-
-        store: WorkflowStore | None = state.get("_store")
-        if store is None:
             return events, state
 
         try:
@@ -71,17 +71,15 @@ class Driver(HeartbeatDriver):
                             "fired_at": now.isoformat(),
                             "trigger_id": trigger.id,
                         }
-                        engine = _get_engine()
-                        if engine:
-                            try:
-                                asyncio.create_task(engine.run_workflow(
-                                    workflow_path=entry.path,
-                                    trigger_id=trigger.id,
-                                    trigger_type=TriggerType.schedule,
-                                    trigger_payload=payload,
-                                ))
-                            except Exception:
-                                log.exception("schedule trigger: failed to dispatch %s", entry.path)
+                        try:
+                            asyncio.create_task(engine.run_workflow(
+                                workflow_path=entry.path,
+                                trigger_id=trigger.id,
+                                trigger_type=TriggerType.schedule,
+                                trigger_payload=payload,
+                            ))
+                        except Exception:
+                            log.exception("schedule trigger: failed to dispatch %s", entry.path)
                         events.append(HeartbeatEvent(
                             name=f"wf-sched-{trigger.id}",
                             payload={

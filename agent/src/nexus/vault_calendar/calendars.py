@@ -96,6 +96,13 @@ def update_calendar(path: str, updates: dict[str, Any]) -> Calendar:
     return cal
 
 
+def _is_hidden_path(path: str) -> bool:
+    """True for system/quarantine folders (``_system``, ``_conflicts-quarantine``,
+    any ``_``-prefixed segment). Syncthing conflict copies of calendars must
+    never fire — they duplicate every event with stale data."""
+    return any(part.startswith("_") for part in path.split("/"))
+
+
 def list_calendars() -> list[CalendarSummary]:
     """Walk the vault tree and summarise every calendar file."""
     out: list[CalendarSummary] = []
@@ -103,6 +110,8 @@ def list_calendars() -> list[CalendarSummary]:
         if entry.type != "file":
             continue
         if not entry.path.endswith(".md"):
+            continue
+        if _is_hidden_path(entry.path):
             continue
         try:
             file = vault.read_file(entry.path)

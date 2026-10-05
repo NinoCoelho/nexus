@@ -86,6 +86,8 @@ async def heartbeat_list(request: Request) -> dict:
         "heartbeats": heartbeats,
         "scheduler_running": scheduler.running if scheduler else False,
         "tick_interval": scheduler._tick_interval if scheduler else None,
+        "scheduler_status": scheduler.status() if scheduler else None,
+        "degraded": bool(getattr(request.app.state, "heartbeat_degraded", False)),
     }
 
 

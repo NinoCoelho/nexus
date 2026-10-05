@@ -16,6 +16,9 @@ dependencies = [
     "fastembed>=0.4",
     "spacy>=3.8",
     "langdetect>=1.0",
+    # Cron iteration for workflow schedule triggers
+    # (heartbeat_drivers/workflow_schedule) — catch-up aware due checks.
+    "croniter>=2.0",
     # Bundle the spaCy en_core_web_sm and pt_core_news_sm models so the
     # builtin extractor works offline on first run — pinned because spaCy
     # model wheels are version-locked to spaCy minor versions.

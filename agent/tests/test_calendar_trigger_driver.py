@@ -265,3 +265,43 @@ async def test_unassigned_event_never_fires(fake_dispatcher):
     day1 = datetime(2026, 4, 27, 12, 0, 0, tzinfo=UTC)
     await _tick(driver, state, day1)
     assert fake_dispatcher.calls == []
+
+
+async def test_fire_window_catches_up_after_gap(fake_dispatcher):
+    """Wake-from-sleep catch-up: ticks frozen for hours, then the next tick
+    (far past last_fired + fire_every, still inside the window) must fire
+    exactly once — not silently skip the missed slot."""
+    vault_calendar.create_empty("cal.md", title="C", timezone="UTC", prompt="run")
+    vault_calendar.add_event(
+        "cal.md",
+        title="Every 30min 8-23",
+        start="2026-04-27",
+        rrule="FREQ=DAILY",
+        trigger="on_start",
+        assignee="agent",
+        all_day=True,
+        fire_from="08:00",
+        fire_to="23:00",
+        fire_every_min=30,
+    )
+
+    driver = Driver()
+    state: dict = {}
+
+    # 09:00 UTC fires
+    t1 = datetime(2026, 4, 27, 9, 0, 0, tzinfo=UTC)
+    state = await _tick(driver, state, t1)
+    assert len(fake_dispatcher.calls) == 1
+
+    # +5 min: within the 30-min period → no fire
+    state = await _tick(driver, state, t1 + timedelta(minutes=5))
+    assert len(fake_dispatcher.calls) == 1
+
+    # Machine "sleeps": next tick arrives 3h later, still in the window.
+    # One catch-up fire (not one per missed slot).
+    state = await _tick(driver, state, t1 + timedelta(hours=3))
+    assert len(fake_dispatcher.calls) == 2
+
+    # After the window closes (23:00+), no more fires.
+    state = await _tick(driver, state, datetime(2026, 4, 27, 23, 30, 0, tzinfo=UTC))
+    assert len(fake_dispatcher.calls) == 2

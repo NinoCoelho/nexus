@@ -151,3 +151,42 @@ async def test_event_listener_start_stop(store):
     assert not listener._task.done()
     await listener.stop()
     assert listener._task.done()
+
+
+class TestScheduleDriverDue:
+    """Croniter-based catch-up due check for workflow schedule triggers."""
+
+    def _driver(self):
+        from nexus.heartbeat_drivers.workflow_schedule.driver import Driver
+
+        return Driver()
+
+    def test_due_after_elapsed_period(self):
+        import datetime as dt
+
+        d = self._driver()
+        now = dt.datetime.now(dt.timezone.utc)
+        state: dict = {}
+        # Last fire 2h ago on an hourly cron → due now (catch-up semantics).
+        key = "wf.md:t1"
+        state[key] = (now - dt.timedelta(hours=2)).isoformat()
+        assert d._is_due("0 * * * *", now, state, key) is True
+        # And it stamped the new fire time.
+        assert state[key] is not None
+
+    def test_not_due_within_period(self):
+        import datetime as dt
+
+        d = self._driver()
+        now = dt.datetime.now(dt.timezone.utc)
+        state: dict = {}
+        key = "wf.md:t1"
+        state[key] = (now - dt.timedelta(minutes=5)).isoformat()
+        assert d._is_due("0 * * * *", now, state, key) is False
+
+    def test_invalid_cron_is_not_due(self):
+        import datetime as dt
+
+        d = self._driver()
+        state: dict = {}
+        assert d._is_due("not a cron", dt.datetime.now(dt.timezone.utc), state, "k") is False

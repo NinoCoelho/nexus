@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from .calendars import create_empty, list_calendars, read_calendar, write_calendar
 from .events import effective_trigger
@@ -98,6 +99,14 @@ def sweep_missed(*, grace_minutes: int = 5) -> int:
                 start = _parse_iso(ev.start)
                 if start is None:
                     continue
+                if start.tzinfo is None:
+                    # All-day / naive dates: attach the calendar's tz so the
+                    # comparison below stays aware-vs-aware (fixes TypeError
+                    # that killed the scheduler bootstrap for ALL routines).
+                    try:
+                        start = start.replace(tzinfo=ZoneInfo(cal.timezone or "UTC"))
+                    except Exception:
+                        start = start.replace(tzinfo=UTC)
                 if start >= cutoff:
                     continue
             ev.status = "missed"
