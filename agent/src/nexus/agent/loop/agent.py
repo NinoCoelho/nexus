@@ -230,6 +230,7 @@ class _StreamTurnState:
     _saw_loom_error: bool = False
     restart: bool = False
     finished: bool = False
+    _fallback_attempted: bool = False
     thinking_q: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
     q_task: asyncio.Task[str] | None = None
     had_sink_attr: bool = False
@@ -370,6 +371,52 @@ class Agent:
             if fallback > 0:
                 return fallback
         return 0
+
+    def _select_fallback_model(self, current_model: str | None, error_msg: str) -> str | None:
+        """Select a fallback model when the current one is unavailable.
+
+        Returns a different model ID from the registry, or None if no fallback available.
+        """
+        if not self._provider_registry:
+            return None
+
+        available = self._provider_registry.available_model_ids()
+        if not available:
+            return None
+
+        # Filter out the current model
+        current = current_model or getattr(getattr(self._nexus_cfg, "agent", None), "default_model", None)
+        candidates = [m for m in available if m != current]
+
+        if not candidates:
+            return None
+
+        # Prefer models from the same provider first (likely same API shape)
+        if current:
+            current_provider = current.split("/")[0] if "/" in current else None
+            same_provider = [m for m in candidates if m.startswith(f"{current_provider}/")]
+            if same_provider:
+                return same_provider[0]
+
+        return candidates[0]
+
+    def _is_model_unavailable_error(self, error_msg: str, reason: str) -> bool:
+        """Check if the error indicates the model itself is unavailable (not just rate limited)."""
+        if not error_msg:
+            return False
+        msg = error_msg.lower()
+        # z.ai "No deployments available" and similar provider messages
+        unavailable_indicators = [
+            "no deployments available",
+            "model not found",
+            "model unavailable",
+            "deployment not found",
+            "no capacity",
+            "insufficient capacity",
+            "model not deployed",
+            "not available for this model",
+        ]
+        return any(indicator in msg for indicator in unavailable_indicators)
 
     def _log_llm_error(
         self,
@@ -1105,6 +1152,36 @@ class Agent:
                 st.retry_mgr.delta_emitted = False
                 self._restart_loom_stream(st)
                 st.restart = True
+                return
+
+        # Model fallback: if the error indicates the model itself is unavailable
+        # (not just rate limited), and we haven't tried a fallback yet, switch models.
+        error_msg = ev.get("message") or ""
+        error_reason = ev.get("reason") or ""
+        if (not st._fallback_attempted
+                and self._is_model_unavailable_error(error_msg, error_reason)
+                and self._provider_registry):
+            fallback_model = self._select_fallback_model(st.model_id, error_msg)
+            if fallback_model and fallback_model != st.model_id:
+                st._fallback_attempted = True
+                log.warning(
+                    "Model unavailable (%s), falling back from %s to %s",
+                    error_reason, st.model_id, fallback_model,
+                )
+                st.model_id = fallback_model
+                # Update context window for new model
+                st.ctx_window = self._context_window_for(fallback_model) or st.ctx_window
+                st.retry_mgr.reset_all()
+                st.retry_mgr.delta_emitted = False
+                self._restart_loom_stream(st)
+                st.restart = True
+                yield {
+                    "type": "reconnecting",
+                    "attempt": 1,
+                    "max_attempts": 1,
+                    "delay_seconds": 0,
+                    "reason": f"model_fallback:{fallback_model}",
+                }
                 return
 
         st._saw_loom_error = True
