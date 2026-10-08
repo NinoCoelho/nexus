@@ -81,11 +81,60 @@ def in_quiet_hours(spec: str, now: datetime | None = None) -> bool:
     return t >= start or t < end
 
 
+# Tools a read-only sweep actually needs. Everything else in the registry
+# (terminal, vault_write, datatable_manage, dashboard_manage, …) is schema the
+# sweep pays for on every one of its iterations and must never use anyway —
+# ~15K tokens of JSON down to roughly 2K.
+SWEEP_TOOLS: frozenset[str] = frozenset(
+    {
+        "nexus_sessions",
+        "vault_read",
+        "vault_list",
+        "vault_search",
+        "calendar_manage",
+    }
+)
+
+
+# Payload caps for ``nexus_sessions``. Every byte here lands in the model's
+# context, and the coordinator reads broadly by design, so the list views stay
+# summary-shaped and detail is fetched per item on demand.
+_PROJECTS_LIMIT = 50
+_PROJECT_DESC_CHARS = 300
+_PROJECT_SESSIONS_LIMIT = 20
+_SESSIONS_LIMIT = 100
+_READ_MAX_TAIL = 50
+_READ_CHARS_PER_MSG = 400
+
+
+def _clip(text: str, limit: int = _PROJECT_DESC_CHARS) -> str:
+    text = text or ""
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def _flatten_content(msg: Any) -> str:
+    """Message text as a string, tolerating multipart bodies.
+
+    ``content`` is ``str | list[ContentPart] | None``; the old
+    ``(getattr(m, "content", "") or "").strip()`` raised ``AttributeError`` on
+    the list form, so reading any session that contained an attachment broke
+    the tool outright.
+    """
+    from .agent.loop.relevance import _content_text
+
+    try:
+        return _content_text(msg) or ""
+    except Exception:  # noqa: BLE001 — never fail a read over one odd message
+        content = getattr(msg, "content", None)
+        return content if isinstance(content, str) else ""
+
+
 class CoordinatorService:
     def __init__(self, store: SessionStore, agent: Agent, tracker: Any) -> None:
         self._store = store
         self._agent = agent
         self._tracker = tracker
+        self._sweep_agent: Agent | None = None
 
     @property
     def store(self) -> SessionStore:
@@ -94,6 +143,37 @@ class CoordinatorService:
     @property
     def agent(self) -> Agent:
         return self._agent
+
+    @property
+    def sweep_agent(self) -> Agent:
+        """Agent for periodic sweeps, with a read-only restricted toolset.
+
+        A second ``Agent`` gets its own ``ToolRegistry``, which is the only
+        way to vary the tool payload: the main registry is a singleton shared
+        by every session, and the master chat (served by the main agent)
+        genuinely needs the full set. Same construction as the sub-agent
+        runner in ``server/app_subagents.py``.
+
+        Built lazily and cached — lazily so it is created after MCP servers
+        have registered into the *main* registry at startup, keeping MCP tool
+        schemas out of the sweep's payload too.
+        """
+        if self._sweep_agent is None:
+            from .agent.loop import Agent as _Agent
+
+            main = self._agent
+            self._sweep_agent = _Agent(
+                provider=main._nexus_provider,
+                registry=main._registry,
+                provider_registry=main._provider_registry,
+                nexus_cfg=main._nexus_cfg,
+                home=main._home,
+                permissions=main._permissions,
+                tool_allowlist=set(SWEEP_TOOLS),
+            )
+            self._sweep_agent._sessions = self._store
+            log.info("coordinator: built sweep agent with %d tools", len(SWEEP_TOOLS))
+        return self._sweep_agent
 
     # ------------------------------------------------------------------
     # Identity
@@ -186,46 +266,28 @@ class CoordinatorService:
         session_id: str = "",
         q: str = "",
         tail: int = 20,
+        updated_since: str = "",
+        include_tools: bool = False,
     ) -> dict[str, Any]:
         if action == "projects":
-            from .home import sessions_db
-            from .server.project_store import ProjectStore
-
-            project_store = ProjectStore(sessions_db())
-            projects = []
-            for summary in project_store.list(limit=200):
-                full = project_store.get(summary.id)
-                projects.append(full if full is not None else summary)
-            sessions = self._store.list(limit=9999, offset=0, include_hidden=False)
-            counts: dict[str, int] = {}
-            last_titles: dict[str, str] = {}
-            for s in sessions:
-                if s.project_id:
-                    counts[s.project_id] = counts.get(s.project_id, 0) + 1
-                    last_titles.setdefault(s.project_id, s.title or "Untitled")
-            return {
-                "ok": True,
-                "projects": [
-                    {
-                        "id": p.id,
-                        "name": p.name,
-                        "description": p.description,
-                        "instructions": p.instructions,
-                        "session_count": counts.get(p.id, 0),
-                        "latest_chat": last_titles.get(p.id),
-                    }
-                    for p in projects
-                ],
-            }
+            return self._inspect_projects(project_id)
 
         if action == "sessions":
             kwargs: dict[str, Any] = {}
             if project_id:
                 kwargs["project_id"] = project_id
-            rows = self._store.list(limit=100, offset=0, include_hidden=False, **kwargs)
+            rows = self._store.list(
+                limit=_SESSIONS_LIMIT, offset=0, include_hidden=False, **kwargs
+            )
             ql = q.strip().lower()
             if ql:
                 rows = [r for r in rows if ql in (r.title or "").lower()]
+            since = (updated_since or "").strip()
+            if since:
+                # Lexicographic compare works on the stored ISO timestamps and
+                # lets a sweep ask only for what changed instead of pulling a
+                # full page of rows it will ignore.
+                rows = [r for r in rows if (r.updated_at or "") >= since]
             return {
                 "ok": True,
                 "sessions": [
@@ -247,22 +309,97 @@ class CoordinatorService:
             if session is None:
                 return {"ok": False, "error": f"unknown session {session_id}"}
             history = list(session.history)
-            tail = max(1, min(int(tail), 50))
+            tail = max(1, min(int(tail), _READ_MAX_TAIL))
             lines = []
+            skipped_tools = 0
             for m in history[-tail:]:
                 role = getattr(getattr(m, "role", None), "value", "user")
-                content = (getattr(m, "content", "") or "").strip()
+                if not include_tools and str(role).lower() == "tool":
+                    # Tool JSON dominates a tool-heavy tail and tells a digest
+                    # nothing the assistant's own message doesn't.
+                    skipped_tools += 1
+                    continue
+                content = _flatten_content(m).strip()
                 if content:
-                    lines.append(f"[{role}] {content[:600]}")
-            return {
+                    lines.append(f"[{role}] {content[:_READ_CHARS_PER_MSG]}")
+            out: dict[str, Any] = {
                 "ok": True,
                 "session_id": session_id,
                 "title": session.title,
                 "message_count": len(history),
                 "tail": "\n\n".join(lines) or "(empty)",
             }
+            if skipped_tools:
+                out["skipped_tool_messages"] = skipped_tools
+            return out
 
         return {"ok": False, "error": f"unknown action {action!r}"}
+
+    def _inspect_projects(self, project_id: str = "") -> dict[str, Any]:
+        """Project overview, or one project's full record.
+
+        The list view deliberately omits ``instructions`` and truncates
+        ``description``: it used to return every project's full instructions
+        text untruncated for up to 200 projects, which was by far the largest
+        uncapped payload the coordinator could pull into its context. Pass
+        ``project_id`` to get one project in full.
+        """
+        from .home import sessions_db
+        from .server.project_store import ProjectStore
+
+        project_store = ProjectStore(sessions_db())
+
+        if project_id:
+            full = project_store.get(project_id)
+            if full is None:
+                return {"ok": False, "error": f"unknown project {project_id}"}
+            sessions = self._store.list(
+                limit=_SESSIONS_LIMIT, offset=0, include_hidden=False,
+                project_id=project_id,
+            )
+            return {
+                "ok": True,
+                "project": {
+                    "id": full.id,
+                    "name": full.name,
+                    "description": full.description,
+                    "instructions": full.instructions,
+                    "session_count": len(sessions),
+                    "sessions": [
+                        {"id": s.id, "title": s.title, "updated_at": s.updated_at}
+                        for s in sessions[:_PROJECT_SESSIONS_LIMIT]
+                    ],
+                },
+            }
+
+        # Summaries already carry id/name/description, so there is no need for
+        # the per-project get() this used to do (201 queries for 200 projects).
+        summaries = project_store.list(limit=_PROJECTS_LIMIT)
+        sessions = self._store.list(limit=9999, offset=0, include_hidden=False)
+        counts: dict[str, int] = {}
+        last_titles: dict[str, str] = {}
+        for s in sessions:
+            if s.project_id:
+                counts[s.project_id] = counts.get(s.project_id, 0) + 1
+                last_titles.setdefault(s.project_id, s.title or "Untitled")
+        return {
+            "ok": True,
+            "projects": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "description": _clip(getattr(p, "description", "") or ""),
+                    "session_count": counts.get(p.id, 0),
+                    "latest_chat": last_titles.get(p.id),
+                }
+                for p in summaries
+            ],
+            "hint": (
+                "Descriptions are truncated and instructions omitted. Call "
+                "nexus_sessions(action='projects', project_id=...) for one "
+                "project's full record."
+            ),
+        }
 
     # ------------------------------------------------------------------
     # session_dispatch tool

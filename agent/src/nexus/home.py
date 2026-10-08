@@ -87,6 +87,10 @@ def vault_session_memory() -> Path:
     return _base() / "vault" / ".session-memory"
 
 
+def vault_coordinator() -> Path:
+    return _base() / "vault" / ".coordinator"
+
+
 def dreams_dir() -> Path:
     return _base() / "vault" / "dreams"
 

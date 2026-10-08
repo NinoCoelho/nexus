@@ -5,6 +5,7 @@ Isolated here to keep agent.py under 300 LOC.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
@@ -23,6 +24,79 @@ if TYPE_CHECKING:
     from loom.home import AgentHome
     from loom.permissions import AgentPermissions
 
+log = logging.getLogger(__name__)
+
+
+def _measure_call_overhead(tool_reg: Any, skill_registry: Any, home: Any) -> None:
+    """Measure the real per-call system-prompt + tool-schema cost.
+
+    Every budget calculation (``usable_tokens``, overflow detection, the soft
+    auto-compact trigger, the pre-turn gate) subtracts this from the model's
+    window. It was a hardcoded 12,000 that under-counted a default install by
+    roughly 10,000 tokens, so every one of those calculations believed there
+    was more room than there was.
+
+    Deliberately measured with no project and no coordinator block: the result
+    is a floor, which is how the constant was already documented. Per-session
+    extras land in the history estimate instead. Best-effort — on any failure
+    the constant stays in force.
+    """
+    import json
+
+    from .overflow import estimate_tokens, set_measured_overhead, tools_and_system_overhead
+    from .overflow import TOOLS_AND_SYSTEM_OVERHEAD
+
+    # Measure once per process. Every sub-agent and the sweep agent construct
+    # their own Agent, and re-walking the prompt files on each one is pure
+    # waste; ``invalidate_measured_overhead`` (called when MCP tools change)
+    # is what re-opens the measurement.
+    if tools_and_system_overhead() != TOOLS_AND_SYSTEM_OVERHEAD:
+        return
+
+    try:
+        specs = tool_reg.specs()
+    except Exception:  # noqa: BLE001 — no specs(), keep the constant
+        log.debug("overhead measurement: registry exposes no specs()", exc_info=True)
+        return
+    try:
+        schema_text = json.dumps(
+            [
+                {
+                    "name": s.name,
+                    "description": getattr(s, "description", "") or "",
+                    "parameters": getattr(s, "parameters", {}) or {},
+                }
+                for s in specs
+            ],
+            ensure_ascii=False,
+            default=str,
+        )
+        prompt = build_system_prompt(skill_registry, home=home)
+        total = estimate_tokens(
+            [
+                _OverheadProbe(schema_text),
+                _OverheadProbe(prompt),
+            ]
+        )
+        set_measured_overhead(total)
+        log.info(
+            "per-call overhead measured: ~%d tokens (%d tool schemas, prompt %d chars)",
+            total, len(specs), len(prompt),
+        )
+    except Exception:  # noqa: BLE001 — never block agent construction
+        log.debug("overhead measurement failed; keeping the default", exc_info=True)
+
+
+class _OverheadProbe:
+    """Minimal message-shaped object for the token estimator."""
+
+    __slots__ = ("content", "tool_calls", "role")
+
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.tool_calls = None
+        self.role = None
+
 
 def build_loom_agent(
     *,
@@ -36,6 +110,7 @@ def build_loom_agent(
     on_trace_event: Any,
     home: "AgentHome | None" = None,
     permissions: "AgentPermissions | None" = None,
+    tool_allowlist: set[str] | None = None,
 ) -> LoomAgent:
     """Build and return the configured loom.Agent.
 
@@ -79,7 +154,15 @@ def build_loom_agent(
         scrape_cfg=_init_cfg.scrape if _init_cfg else None,
         home=home,
         permissions=permissions,
+        tool_allowlist=tool_allowlist,
     )
+
+    # Only the unrestricted registry describes what a normal call costs. The
+    # sweep agent's allowlisted registry is a fraction of the size, and this
+    # value is process-global — measuring from it would tell every other
+    # session it had ~10K more room than it really has.
+    if tool_allowlist is None:
+        _measure_call_overhead(tool_reg, registry, home)
 
     max_iter = (
         getattr(_init_cfg.agent, "max_iterations", None) if _init_cfg else None

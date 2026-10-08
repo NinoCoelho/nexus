@@ -79,12 +79,18 @@ def build_tool_registry(
     scrape_cfg: Any | None = None,
     home: "AgentHome | None" = None,
     permissions: "AgentPermissions | None" = None,
+    tool_allowlist: set[str] | None = None,
 ) -> ToolRegistry:
     """Build a loom ToolRegistry populated with all Nexus tools.
 
     HITL handler closures read from ``handlers`` at dispatch time, so
     late-binding by the server (setting ``handlers.ask_user`` after
     registry construction) takes effect on the next tool call.
+
+    ``tool_allowlist`` restricts the result to those tool names (``None`` =
+    everything). Used by the coordinator sweep, whose read-only digest needs
+    inspection and vault reads but was paying for all ~15K tokens of tool
+    schemas on every one of its iterations.
     """
     from nexus.agent.ask_user_tool import ASK_USER_TOOL, parse_parked_sentinel
     from nexus.agent.loop import SKILL_MANAGE_TOOL
@@ -415,10 +421,47 @@ def build_tool_registry(
     for spec, fn in _TOOL_TABLE:
         registry.register(_SimpleToolHandler(spec, fn))
 
+    if tool_allowlist is not None:
+        _apply_tool_allowlist(registry, tool_allowlist)
+
     _install_skill_redirect(registry, skill_registry)
     _install_unknown_tool_helper(registry)
 
     return registry
+
+
+def _apply_tool_allowlist(registry: ToolRegistry, allowed: set[str]) -> None:
+    """Drop every registered tool outside ``allowed``.
+
+    Filtering after the fact rather than guarding ~20 ``register`` call sites
+    keeps the registration block readable and means a newly added tool is
+    excluded from restricted registries by default, which is the safe
+    direction.
+
+    The tool *schemas* are the cost being avoided here: ~15K tokens of JSON
+    re-sent on every LLM call. Refusing a tool at dispatch time (the pattern
+    the coordinator tools use) saves nothing.
+    """
+    try:
+        names = [spec.name for spec in registry.specs()]
+    except Exception:  # noqa: BLE001 — never make a registry unusable
+        log.warning("tool allowlist: registry does not expose specs(); not filtering")
+        return
+    removed = 0
+    for name in names:
+        if name in allowed:
+            continue
+        try:
+            registry.unregister(name)
+            removed += 1
+        except Exception:  # noqa: BLE001
+            log.debug("tool allowlist: could not unregister %s", name, exc_info=True)
+    missing = sorted(allowed - set(names))
+    if missing:
+        log.warning("tool allowlist: requested tools are not registered: %s", missing)
+    log.info(
+        "tool allowlist: kept %d tool(s), dropped %d", len(names) - removed, removed
+    )
 
 
 def _install_skill_redirect(registry: ToolRegistry, skill_registry: Any) -> None:

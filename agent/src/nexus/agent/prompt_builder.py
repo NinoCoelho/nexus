@@ -20,6 +20,13 @@ if TYPE_CHECKING:
 
     from ..server.project_store import Project
 
+# Separates the prompt's stable prefix from its volatile tail so providers can
+# place a prompt-cache breakpoint between them. An HTML comment so that if a
+# provider ever fails to strip it, the model sees inert markup rather than a
+# stray instruction. Never reaches the wire: every provider either splits on
+# it or strips it (see ``split_cache_zones`` / ``strip_cache_marker``).
+CACHE_BREAKPOINT_MARKER = "<!--nx:cache-breakpoint-->"
+
 _MEMORY_MAX_TOTAL = 1500
 _MEMORY_PREVIEW_BYTES = 500
 _MEMORY_TOP_N = 5
@@ -445,6 +452,35 @@ def _time_location_block() -> str:
     return "\n".join(lines)
 
 
+# Per-skill blurb budget in the catalog. The full description is still
+# returned by ``skill_view``; this is only what rides in every system prompt.
+# 49 bundled skills at a 250-char mean cost ~3.4K tokens per call, which is
+# more than the IDENTITY block.
+_SKILL_BLURB_CHARS = 160
+
+
+def _skill_blurb(desc: str, limit: int = _SKILL_BLURB_CHARS) -> str:
+    """First sentence of a skill description, capped.
+
+    The description doubles as the routing signal ("use this when…"), so the
+    opening sentence is kept whole where possible rather than cutting at a
+    fixed offset mid-word. Falls back to a hard clip for descriptions whose
+    first sentence is itself long.
+    """
+    text = " ".join((desc or "").split())
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    # Prefer a sentence boundary inside the budget; ". " avoids splitting on
+    # abbreviations and file extensions like `.md`.
+    cut = text.rfind(". ", 0, limit + 1)
+    if cut >= limit // 3:
+        return text[: cut + 1]
+    clipped = text[:limit].rsplit(" ", 1)[0].rstrip(",;:—-")
+    return f"{clipped}…"
+
+
 def build_system_prompt(
     registry: SkillRegistry,
     *,
@@ -455,57 +491,13 @@ def build_system_prompt(
     coordinator: bool = False,
 ) -> str:
     _migrate_legacy_memory()
+
+    # ── stable zone ────────────────────────────────────────────────────────
+    # Byte-identical across every session and every call until the install's
+    # skills or credentials change, so it is the cacheable prefix. Anything
+    # that varies per session, per project, or per minute must go in the
+    # volatile zone below, or the cache never hits.
     parts = [IDENTITY.strip(), ""]
-
-    tl_block = _time_location_block()
-    parts.append(tl_block)
-    parts.append("")
-
-    lang_block = _language_directive(language)
-    if lang_block:
-        parts.append(lang_block)
-        parts.append("")
-
-    user_block = _user_block(home)
-    if user_block:
-        parts.append(user_block)
-        parts.append("")
-
-    if context:
-        parts.append(f"## Session context\n\n{context}")
-        parts.append("")
-
-    if project:
-        p_lines = [f"## Project: {project.name}", ""]
-        if project.description:
-            p_lines.append(f"{project.description}")
-            p_lines.append("")
-        if project.instructions:
-            p_lines.append("### Instructions")
-            p_lines.append("")
-            p_lines.append(project.instructions)
-            p_lines.append("")
-        p_lines.append(
-            f"This session is part of the **{project.name}** project. "
-            f"The project vault folder is at `~/.nexus/vault/{project.vault_path}/`. "
-            f"When writing notes, memory, or project files, prefer this folder over the global vault."
-        )
-        p_lines.append("")
-        parts.append("\n".join(p_lines))
-
-    if coordinator:
-        parts.append(_coordinator_block())
-        parts.append("")
-
-    creds_block = _credentials_block()
-    if creds_block:
-        parts.append(creds_block)
-        parts.append("")
-
-    site_logins_block = _site_credentials_block()
-    if site_logins_block:
-        parts.append(site_logins_block)
-        parts.append("")
 
     parts.append(
         "## Status updates\n\n"
@@ -543,7 +535,7 @@ def build_system_prompt(
         for name, desc in descs:
             skill = registry.get(name)
             tag = " [venv]" if skill.has_requirements else ""
-            parts.append(f"- **{name}**{tag} — {desc}")
+            parts.append(f"- **{name}**{tag} — {_skill_blurb(desc)}")
     else:
         parts.append("## Available skills")
         parts.append("")
@@ -551,12 +543,90 @@ def build_system_prompt(
             "_No skills are currently loaded. Author one with `skill_manage` after you complete something non-trivial._"
         )
 
+    creds_block = _credentials_block()
+    if creds_block:
+        parts.append("")
+        parts.append(creds_block)
+
+    site_logins_block = _site_credentials_block()
+    if site_logins_block:
+        parts.append("")
+        parts.append(site_logins_block)
+
+    # ── breakpoint ─────────────────────────────────────────────────────────
+    parts.append("")
+    parts.append(CACHE_BREAKPOINT_MARKER)
+
+    # ── volatile zone ──────────────────────────────────────────────────────
+    # Per-call or per-session content. The time block in particular changes
+    # every minute, and it used to sit second in the prompt — which made the
+    # whole prefix byte-unstable and left nothing cacheable at all.
+    parts.append("")
+    parts.append(_time_location_block())
+
+    lang_block = _language_directive(language)
+    if lang_block:
+        parts.append("")
+        parts.append(lang_block)
+
+    user_block = _user_block(home)
+    if user_block:
+        parts.append("")
+        parts.append(user_block)
+
+    if coordinator:
+        parts.append("")
+        parts.append(_coordinator_block())
+
+    if context:
+        parts.append("")
+        parts.append(f"## Session context\n\n{context}")
+
+    if project:
+        p_lines = [f"## Project: {project.name}", ""]
+        if project.description:
+            p_lines.append(f"{project.description}")
+            p_lines.append("")
+        if project.instructions:
+            p_lines.append("### Instructions")
+            p_lines.append("")
+            p_lines.append(project.instructions)
+            p_lines.append("")
+        p_lines.append(
+            f"This session is part of the **{project.name}** project. "
+            f"The project vault folder is at `~/.nexus/vault/{project.vault_path}/`. "
+            f"When writing notes, memory, or project files, prefer this folder over the global vault."
+        )
+        parts.append("")
+        parts.append("\n".join(p_lines))
+
     mem = _memory_summary()
     if mem:
         parts.append("")
         parts.append(mem)
 
     return "\n".join(parts)
+
+
+def split_cache_zones(prompt: str) -> tuple[str, str]:
+    """Split a built system prompt into ``(stable, volatile)``.
+
+    Returns ``(prompt, "")`` when the marker is absent, so a caller that
+    cannot find a breakpoint simply treats the whole prompt as one block.
+    Providers call this to place their cache breakpoint; the marker itself is
+    never sent to a model.
+    """
+    if CACHE_BREAKPOINT_MARKER not in prompt:
+        return prompt, ""
+    stable, volatile = prompt.split(CACHE_BREAKPOINT_MARKER, 1)
+    return stable.rstrip(), volatile.lstrip("\n")
+
+
+def strip_cache_marker(prompt: str) -> str:
+    """Remove the breakpoint marker — for providers that don't use it."""
+    return prompt.replace(CACHE_BREAKPOINT_MARKER + "\n", "").replace(
+        CACHE_BREAKPOINT_MARKER, ""
+    )
 
 
 def _credentials_block() -> str:

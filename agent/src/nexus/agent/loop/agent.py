@@ -261,6 +261,7 @@ class Agent:
         ask_user_handler: AskUserHandler | None = None,
         home: "AgentHome | None" = None,
         permissions: "AgentPermissions | None" = None,
+        tool_allowlist: set[str] | None = None,
     ) -> None:
         from .._loom_bridge import AgentHandlers
 
@@ -295,6 +296,7 @@ class Agent:
             on_trace_event=self._on_event,
             home=self._home,
             permissions=self._permissions,
+            tool_allowlist=tool_allowlist,
         )
         self._loom._build_tools = self._filtered_tools
         self._sessions: Any | None = None
@@ -1418,6 +1420,12 @@ class Agent:
                 "output_tokens": ev.get("output_tokens", 0),
                 "tool_calls": ev.get("tool_calls", 0),
                 "model": model_used,
+                # Prompt-cache accounting. The nexus providers and the loom
+                # adapter both already parse these; nothing surfaced them, so
+                # there was no way to tell whether caching was working.
+                # Absent from the turn event = 0, which reads as "no cache".
+                "cache_read_tokens": ev.get("cache_read_tokens", 0),
+                "cache_write_tokens": ev.get("cache_write_tokens", 0),
             },
         }
 

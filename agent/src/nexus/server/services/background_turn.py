@@ -39,6 +39,29 @@ class TurnResult:
     final_messages: list[Any] | None = None
     accumulated_text: str = ""
     accumulated_tools: list[dict[str, Any]] = field(default_factory=list)
+    # Provider-reported usage for the turn (input/output tokens, iterations,
+    # cache hits). Exposed so recurring background work can report its own
+    # cost — the coordinator sweep had no token visibility at all.
+    usage: dict[str, Any] = field(default_factory=dict)
+
+    def final_reply(self) -> str:
+        """The last assistant message, falling back to the streamed text.
+
+        ``accumulated_text`` concatenates deltas from *every* loop iteration,
+        so on a multi-step turn it includes intermediate narration ("Let me
+        check the projects...") ahead of the real answer. Callers that publish
+        the reply want only the final message.
+        """
+        for msg in reversed(self.final_messages or []):
+            role = getattr(getattr(msg, "role", None), "value", None) or getattr(
+                msg, "role", None
+            )
+            if str(role).lower() != "assistant":
+                continue
+            content = getattr(msg, "content", None)
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+        return self.accumulated_text.strip()
 
 
 async def run_background_turn(
@@ -49,26 +72,44 @@ async def run_background_turn(
     store: SessionStore,
     model_id: str | None = None,
     partial_status_note: str = "background_interrupted",
+    history_override: list[Any] | None = None,
+    ephemeral: bool = False,
 ) -> TurnResult:
+    """Run one agent turn outside a request, streaming into a ``TurnResult``.
+
+    ``history_override`` replaces the session's stored history for this turn
+    (pass ``[]`` to run on a fresh context). ``ephemeral=True`` additionally
+    skips every write back to the session: the seed message, the final
+    history, and the partial-turn fallback.
+
+    Both default to the historical behaviour, so the vault-dispatch, skill-
+    wizard and dashboard callers are unaffected. They exist for the
+    coordinator sweep, which is a recurring read-only digest: persisting its
+    transcript meant each sweep re-sent every previous sweep's prompt, tool
+    calls and tool results, so the cost grew with the number of sweeps ever
+    run. Usage is still recorded in both modes, so the cost stays visible.
+    """
     token = CURRENT_SESSION_ID.set(session_id)
     try:
         session = store.get_or_create(session_id)
         pre_turn = list(session.history)
-        try:
-            from ...agent.llm import ChatMessage as _CM, Role as _R
+        turn_history = pre_turn if history_override is None else list(history_override)
+        if not ephemeral:
+            try:
+                from ...agent.llm import ChatMessage as _CM, Role as _R
 
-            store.replace_history(
-                session_id,
-                pre_turn + [_CM(role=_R.USER, content=seed_message)],
-            )
-        except Exception:
-            log.exception("background turn: pre-turn persist failed")
+                store.replace_history(
+                    session_id,
+                    pre_turn + [_CM(role=_R.USER, content=seed_message)],
+                )
+            except Exception:
+                log.exception("background turn: pre-turn persist failed")
 
         result = TurnResult(status="done")
         try:
             async for event in agent_.run_turn_stream(
                 seed_message,
-                history=session.history,
+                history=turn_history,
                 context=session.context,
                 session_id=session_id,
                 model_id=model_id or None,
@@ -95,6 +136,10 @@ async def run_background_turn(
                 elif etype == "done":
                     result.final_messages = event.get("messages")
                     usage = event.get("usage") or {}
+                    result.usage = {
+                        **usage,
+                        "iterations": event.get("iterations", 0),
+                    }
                     try:
                         store.bump_usage(
                             session_id,
@@ -110,7 +155,9 @@ async def run_background_turn(
             log.exception("background turn: agent loop crashed")
             result.status = "failed"
         finally:
-            if result.final_messages is not None:
+            if ephemeral:
+                pass  # nothing is written back — see the docstring
+            elif result.final_messages is not None:
                 try:
                     store.replace_history(session_id, result.final_messages)
                 except Exception:

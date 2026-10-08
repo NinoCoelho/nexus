@@ -243,7 +243,7 @@ class AnthropicProvider(LLMProvider):
                     system_parts.append(text if isinstance(text, str) else str(text))
             else:
                 filtered.append(_encode_msg_anthropic(m))
-        system: Any = "\n\n".join(system_parts)
+        system_text = "\n\n".join(system_parts)
 
         kwargs: dict[str, Any] = {
             "model": resolved_model,
@@ -255,10 +255,22 @@ class AnthropicProvider(LLMProvider):
             for k, v in extra_payload.items():
                 if k not in kwargs:
                     kwargs[k] = v
+
+        encoded_tools = [_encode_tool_anthropic(t) for t in tools] if tools else []
+        system: Any = system_text
+        from .prompt_cache import anthropic_system_and_tools, prompt_cache_enabled
+
+        if prompt_cache_enabled():
+            system, encoded_tools = anthropic_system_and_tools(system_text, encoded_tools)
+        elif system_text:
+            from ..prompt_builder import strip_cache_marker
+
+            system = strip_cache_marker(system_text)
+
         if system:
             kwargs["system"] = system
-        if tools:
-            kwargs["tools"] = [_encode_tool_anthropic(t) for t in tools]
+        if encoded_tools:
+            kwargs["tools"] = encoded_tools
         return system, filtered, kwargs
 
     def _adapt_sdk_kwargs(

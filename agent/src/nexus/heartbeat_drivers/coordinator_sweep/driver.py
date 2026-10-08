@@ -36,11 +36,37 @@ Then output a concise digest in Markdown:
 - One line per project with anything new/changed/needed.
 - A short "Needs you" list with at most 3 items that genuinely need the \
 user (decisions, blocked work, forgotten threads).
-- Keep it under 150 words. If nothing meaningful changed since the last \
-sweep, output exactly: NOTHING_NEW.
+- Keep it under 150 words. If nothing meaningful changed, output exactly: \
+NOTHING_NEW.
 
 Rules: this is a read-only sweep — no session_dispatch, no writes, no \
-messages. Just observe and report."""
+messages. Just observe and report. Each sweep starts with a clean context, \
+so the previous digest below is your only memory of what you already told \
+the user; everything else you need, read with your tools."""
+
+_PREVIOUS_DIGEST_TEMPLATE = """
+
+--- Previous digest (what you already reported; do not repeat it) ---
+{digest}
+--- end previous digest ---"""
+
+
+def _build_seed() -> str:
+    """Sweep prompt plus the previous digest, which is the sweep's only memory.
+
+    Sweeps run ephemerally (no session history), so continuity comes from the
+    vault log rather than from an ever-growing transcript.
+    """
+    from nexus.coordinator_sweeps import load_last_digest
+
+    try:
+        previous = load_last_digest()
+    except Exception:  # noqa: BLE001 — a sweep without memory beats no sweep
+        log.debug("coordinator_sweep: could not load previous digest", exc_info=True)
+        previous = None
+    if not previous:
+        return _SWEEP_PROMPT
+    return _SWEEP_PROMPT + _PREVIOUS_DIGEST_TEMPLATE.format(digest=previous.strip())
 
 
 def _tg_config():
@@ -106,25 +132,59 @@ class Driver(HeartbeatDriver):
             global _sweep_in_flight
             _sweep_in_flight = True
             try:
+                from nexus.coordinator_sweeps import append_digest
                 from nexus.server.services.background_turn import run_background_turn
 
                 try:
                     with sweep_mode():
                         result = await run_background_turn(
                             session_id=sid,
-                            seed_message=_SWEEP_PROMPT,
-                            agent_=service.agent,
+                            seed_message=_build_seed(),
+                            # The restricted read-only registry: a sweep needs
+                            # inspection and vault reads, not the full ~15K
+                            # tokens of tool schemas.
+                            agent_=service.sweep_agent,
                             store=service.store,
+                            model_id=getattr(coord_cfg, "sweep_model", "") or None,
+                            # Fresh context, nothing written back. Persisting
+                            # sweeps made each one re-send every previous
+                            # sweep's prompt, tool calls and tool results.
+                            history_override=[],
+                            ephemeral=True,
                         )
                 except Exception:
                     log.exception("coordinator_sweep: sweep turn failed")
                     return
 
-                digest = (result.accumulated_text or "").strip()
+                usage = result.usage or {}
+                log.info(
+                    "coordinator_sweep: finished status=%s tokens=%s in / %s out "
+                    "(cache %s read / %s write) iterations=%s model=%s",
+                    result.status,
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                    usage.get("cache_read_tokens", 0),
+                    usage.get("cache_write_tokens", 0),
+                    usage.get("iterations", 0),
+                    usage.get("model", ""),
+                )
+
+                # The final assistant message, not every streamed delta —
+                # accumulated_text includes intermediate narration from each
+                # tool iteration, which both polluted the digest and broke
+                # the NOTHING_NEW check below.
+                digest = result.final_reply()
                 if not digest or digest.strip().strip("*`#").upper().startswith("NOTHING_NEW"):
                     log.debug("coordinator_sweep: nothing new, no delivery")
                     return
 
+                append_digest(
+                    digest,
+                    tokens_in=int(usage.get("input_tokens") or 0),
+                    tokens_out=int(usage.get("output_tokens") or 0),
+                    iterations=int(usage.get("iterations") or 0),
+                    model=str(usage.get("model") or ""),
+                )
                 await self._deliver(cfg, sid, digest)
             finally:
                 _sweep_in_flight = False

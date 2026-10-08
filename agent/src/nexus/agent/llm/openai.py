@@ -251,9 +251,20 @@ class OpenAIProvider(LLMProvider):
         stream: bool = False,
         extra_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # OpenAI-compatible providers cache long prefixes automatically and
+        # have no breakpoint field, so the prompt-cache marker is simply
+        # removed here. It must never reach a model.
+        from ..prompt_builder import strip_cache_marker
+
+        encoded = [_encode_msg(m) for m in prepared]
+        for msg in encoded:
+            content = msg.get("content")
+            if isinstance(content, str) and content:
+                msg["content"] = strip_cache_marker(content)
+
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": [_encode_msg(m) for m in prepared],
+            "messages": encoded,
             "temperature": self._temperature,
         }
         if stream:

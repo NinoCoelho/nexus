@@ -19,10 +19,11 @@ NEXUS_SESSIONS_TOOL = ToolSpec(
     name="nexus_sessions",
     description=(
         "Inspect projects and chat sessions across Nexus. Actions: "
-        "'projects' (every project with description, instructions, chat count, "
-        "latest chat), 'sessions' (recent chats, optionally filtered by "
-        "project_id or title substring q), 'read' (the tail of one session's "
-        "conversation by session_id)."
+        "'projects' (overview of every project — name, truncated description, "
+        "chat count, latest chat; pass project_id for one project's full "
+        "record including instructions), 'sessions' (recent chats, optionally "
+        "filtered by project_id, title substring q, or updated_since), 'read' "
+        "(the tail of one session's conversation by session_id)."
     ),
     parameters={
         "type": "object",
@@ -34,7 +35,10 @@ NEXUS_SESSIONS_TOOL = ToolSpec(
             },
             "project_id": {
                 "type": "string",
-                "description": "Filter sessions by project (for action='sessions').",
+                "description": (
+                    "For action='projects', return this one project in full "
+                    "(with instructions). For action='sessions', filter to it."
+                ),
             },
             "session_id": {
                 "type": "string",
@@ -44,9 +48,23 @@ NEXUS_SESSIONS_TOOL = ToolSpec(
                 "type": "string",
                 "description": "Title substring filter (for action='sessions').",
             },
+            "updated_since": {
+                "type": "string",
+                "description": (
+                    "ISO timestamp; for action='sessions', return only chats "
+                    "updated at or after it. Use this to see just what changed."
+                ),
+            },
             "tail": {
                 "type": "integer",
                 "description": "How many trailing messages to include when reading (default 20, max 50).",
+            },
+            "include_tools": {
+                "type": "boolean",
+                "description": (
+                    "For action='read', include tool-result messages. Off by "
+                    "default — tool JSON is bulky and rarely adds meaning."
+                ),
             },
         },
         "required": ["action"],
@@ -117,6 +135,8 @@ async def handle_nexus_sessions(args: dict[str, Any], current_session_id: str | 
         session_id=args.get("session_id", ""),
         q=args.get("q", ""),
         tail=int(args.get("tail", 20) or 20),
+        updated_since=args.get("updated_since", "") or "",
+        include_tools=bool(args.get("include_tools", False)),
     )
     return json.dumps(result)
 

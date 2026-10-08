@@ -183,10 +183,30 @@ class BedrockProvider(LLMProvider):
                 "maxTokens": int(max_tokens) if max_tokens else 4096,
             },
         }
+
+        encoded_tools = [_encode_tool_bedrock(t) for t in tools] if tools else []
+        from .prompt_cache import (
+            bedrock_supports_cache,
+            bedrock_system_and_tools,
+            prompt_cache_enabled,
+        )
+
+        if prompt_cache_enabled() and bedrock_supports_cache(resolved_model):
+            system, encoded_tools = bedrock_system_and_tools(system, encoded_tools)
+        elif system:
+            from ..prompt_builder import strip_cache_marker
+
+            system = [
+                {**b, "text": strip_cache_marker(str(b.get("text") or ""))}
+                if "text" in b
+                else b
+                for b in system
+            ]
+
         if system:
             kwargs["system"] = system
-        if tools:
-            kwargs["toolConfig"] = {"tools": [_encode_tool_bedrock(t) for t in tools]}
+        if encoded_tools:
+            kwargs["toolConfig"] = {"tools": encoded_tools}
         return kwargs
 
     async def chat(
@@ -301,6 +321,10 @@ class BedrockProvider(LLMProvider):
                 usage = Usage(
                     input_tokens=int(u.get("inputTokens", 0) or 0),
                     output_tokens=int(u.get("outputTokens", 0) or 0),
+                    # Converse reports cache hits here too; the streaming path
+                    # was dropping them, so a cache hit looked like a miss.
+                    cache_read_tokens=int(u.get("cacheReadInputTokens", 0) or 0),
+                    cache_write_tokens=int(u.get("cacheWriteInputTokens", 0) or 0),
                 )
                 continue
 

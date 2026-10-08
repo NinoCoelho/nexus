@@ -63,6 +63,34 @@ _DEFAULT_FALLBACK_WINDOW = DEFAULT_FALLBACK_WINDOW
 _DEFAULT_MAX_MESSAGES = DEFAULT_MAX_MESSAGES
 _TOOLS_AND_SYSTEM_OVERHEAD = TOOLS_AND_SYSTEM_OVERHEAD
 
+# Measured replacement for the constant above, set once the tool registry and
+# system prompt exist (see ``_builder.build_loom_agent``). The constant is a
+# guess that under-counted reality by ~10K on a default install; budgeting
+# against a guess means the remaining window is wrong in whichever direction
+# the guess errs.
+_measured_overhead: int | None = None
+
+
+def set_measured_overhead(tokens: int) -> None:
+    """Record the real system-prompt + tool-schema cost, in tokens."""
+    global _measured_overhead
+    if tokens and tokens > 0:
+        _measured_overhead = int(tokens)
+
+
+def invalidate_measured_overhead() -> None:
+    """Forget the measurement — call when the tool set or skills change."""
+    global _measured_overhead
+    _measured_overhead = None
+
+
+def tools_and_system_overhead() -> int:
+    """Per-call overhead to budget against: measured if known, else the floor.
+
+    Prefer this over reading ``TOOLS_AND_SYSTEM_OVERHEAD`` directly.
+    """
+    return _measured_overhead if _measured_overhead else TOOLS_AND_SYSTEM_OVERHEAD
+
 
 # ── attachment accounting ──────────────────────────────────────────────────
 # Per-attachment token surcharge, by ContentPart kind. These are deliberate
@@ -263,11 +291,18 @@ def usable_tokens(
     context_window: int,
     *,
     output_headroom: int = OUTPUT_HEADROOM_TOKENS,
-    tools_overhead: int = TOOLS_AND_SYSTEM_OVERHEAD,
+    tools_overhead: int | None = None,
 ) -> int:
-    """Tokens available for conversation history, after reply + tool overhead."""
+    """Tokens available for conversation history, after reply + tool overhead.
+
+    ``tools_overhead`` defaults to the measured value when one is available
+    (see :func:`tools_and_system_overhead`).
+    """
     window = context_window if context_window > 0 else DEFAULT_FALLBACK_WINDOW
-    return max(0, window - output_headroom - tools_overhead)
+    overhead = (
+        tools_and_system_overhead() if tools_overhead is None else tools_overhead
+    )
+    return max(0, window - output_headroom - overhead)
 
 
 @dataclass
@@ -284,7 +319,7 @@ def check_overflow(
     *,
     context_window: int,
     output_headroom: int = OUTPUT_HEADROOM_TOKENS,
-    tools_overhead: int = TOOLS_AND_SYSTEM_OVERHEAD,
+    tools_overhead: int | None = None,
 ) -> OverflowCheck:
     est = estimate_tokens(messages)
     effective_window = context_window if context_window > 0 else DEFAULT_FALLBACK_WINDOW

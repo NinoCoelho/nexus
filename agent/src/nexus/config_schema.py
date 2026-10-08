@@ -129,6 +129,13 @@ class AgentConfig(BaseModel):
     # Falls back to the turn's model automatically if this one errors or
     # returns nothing, so a misconfigured value can't lose a summary.
     compact_model: str = ""
+    # Request provider-side prompt caching for the stable prefix of the
+    # system prompt and the tool schemas (~15K tokens that are otherwise
+    # re-billed in full on every LLM call, including every iteration of a
+    # single turn). Anthropic and Bedrock take explicit cache breakpoints;
+    # OpenAI-compatible providers cache automatically and ignore this.
+    # Turn off if a gateway rejects the cache fields.
+    prompt_cache: bool = True
 
 
 class GraphRAGEmbeddingConfig(BaseModel):
@@ -390,6 +397,12 @@ class CoordinatorConfig(BaseModel):
     # session_dispatch tool names that run without asking (HITL) — empty
     # means every dispatch with side effects asks first.
     auto_approve: list[str] = Field(default_factory=list)
+    # Model id (matches a [[models]] entry) used for the periodic sweep.
+    # A sweep reads state and writes a <150-word digest, so it does not need
+    # the main reasoning model; it is also the most frequent LLM work in the
+    # app. Empty = use agent.default_model. Same pattern as
+    # [agent].compact_model and [tts].ack_model.
+    sweep_model: str = ""
 
 
 class NexusConfig(BaseModel):

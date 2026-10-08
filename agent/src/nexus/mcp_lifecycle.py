@@ -72,6 +72,8 @@ async def start_mcp(
         len(handlers),
     )
     manager._cached_handlers = handlers
+    if handlers:
+        _invalidate_overhead()
 
     if agent is not None:
         _wire_sampling(manager, agent)
@@ -101,8 +103,24 @@ async def refresh_mcp_tools(
         except Exception:
             log.exception("[mcp] failed to register tool %s", handler.tool.name)
     manager._cached_handlers = handlers
+    _invalidate_overhead()
     log.info("[mcp] refreshed: %d tools from %d servers", len(handlers), len(manager.connected_servers))
     return handlers
+
+
+def _invalidate_overhead() -> None:
+    """Drop the measured per-call overhead after the tool set changes.
+
+    MCP tools go into the same live registry as the builtin ones, so their
+    schemas add to the fixed cost of every LLM call. Without this, the budget
+    would keep using a measurement taken before they were registered.
+    """
+    try:
+        from .agent.loop.overflow import invalidate_measured_overhead
+
+        invalidate_measured_overhead()
+    except Exception:  # noqa: BLE001 — bookkeeping only
+        log.debug("[mcp] could not invalidate overhead measurement", exc_info=True)
 
 
 async def stop_mcp(manager: McpManager) -> None:
