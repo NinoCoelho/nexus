@@ -229,13 +229,21 @@ class AnthropicProvider(LLMProvider):
         tools: list[ToolSpec] | None,
         extra_payload: dict[str, Any] | None = None,
     ) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
-        system: Any = ""
+        # Anthropic takes the system prompt as a separate top-level parameter,
+        # so SYSTEM messages are pulled out of the message list. Multiple ones
+        # are *concatenated*: this used to assign, so a second SYSTEM message
+        # anywhere in the history silently replaced the entire system prompt
+        # with whatever it contained.
+        system_parts: list[str] = []
         filtered: list[dict[str, Any]] = []
         for m in prepared:
             if m.role == Role.SYSTEM:
-                system = m.content if isinstance(m.content, str) else (m.content or "")
+                text = m.content if isinstance(m.content, str) else (m.content or "")
+                if text:
+                    system_parts.append(text if isinstance(text, str) else str(text))
             else:
                 filtered.append(_encode_msg_anthropic(m))
+        system: Any = "\n\n".join(system_parts)
 
         kwargs: dict[str, Any] = {
             "model": resolved_model,

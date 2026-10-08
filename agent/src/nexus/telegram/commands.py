@@ -493,14 +493,42 @@ async def cmd_usage(deps: CommandDeps, info: MsgInfo, args: str) -> None:
         return
     model = row[0] or "(no model recorded)"
     in_tok, out_tok, tools = int(row[1] or 0), int(row[2] or 0), int(row[3] or 0)
-    await _reply(
-        deps,
-        info,
+    text = (
         f"<b>Usage</b> ({model})\n"
         f"input tokens: {in_tok:,}\n"
         f"output tokens: {out_tok:,}\n"
-        f"tool calls: {tools:,}",
+        f"tool calls: {tools:,}"
     )
+    # Telegram has no status bar, so /usage is the only place a context
+    # reading can surface on this surface.
+    try:
+        from ..agent.loop.overflow import (
+            effective_context_window,
+            estimate_tokens,
+            usable_tokens,
+        )
+        from ..agent.loop.zones import classify_zone
+        from ..config_file import load_cached
+
+        session = deps.store.get(binding.active_session_id)
+        history = (session.history if session else None) or []
+        cfg = load_cached()
+        configured = 0
+        for entry in cfg.models:
+            if entry.id == model or entry.model_name == model:
+                configured = int(entry.context_window or 0)
+                break
+        window = effective_context_window(model, configured)
+        usable = usable_tokens(window)
+        est = estimate_tokens(history) if history else 0
+        pct = round(est / usable * 100, 1) if usable else 0.0
+        text += (
+            f"\ncontext: {est:,} / {usable:,} usable ({pct}%)"
+            f"\nzone: {classify_zone(est, window)}"
+        )
+    except Exception:  # noqa: BLE001 — /usage must still answer
+        log.debug("telegram /usage: context reading failed", exc_info=True)
+    await _reply(deps, info, text)
 
 
 async def cmd_cancel(deps: CommandDeps, info: MsgInfo, args: str) -> None:

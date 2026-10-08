@@ -14,6 +14,10 @@ from ..prompt_builder import build_system_prompt
 from ...skills.registry import SkillRegistry
 from .compactor import NexusCompactor
 from .helpers import DEFAULT_MAX_TOOL_ITERATIONS, _AFFIRMATIVES, _NEGATIVES
+from .overflow import (
+    OUTPUT_HEADROOM_TOKENS as _OVERFLOW_OUTPUT_HEADROOM,
+    TOOLS_AND_SYSTEM_OVERHEAD as _OVERFLOW_TOOLS_OVERHEAD,
+)
 
 if TYPE_CHECKING:
     from loom.home import AgentHome
@@ -123,6 +127,28 @@ def build_loom_agent(
 
         if TOOL_BUDGET_EXCEEDED.get(False):
             sys_prompt += BUDGET_EXCEEDED_HINT
+
+        # History SYSTEM messages are dropped so stale prompts from earlier
+        # turns don't stack — but compaction stores its session-memory summary
+        # (and the hard-trim elision marker) as SYSTEM messages, and those are
+        # *carried context*, not prompts. Stripping them meant summarization
+        # shrank the history while the model never received the summary: from
+        # the model's side, compaction was silent truncation.
+        #
+        # They are folded into the single built prompt rather than passed
+        # through as extra SYSTEM messages, because the providers disagree on
+        # how to handle more than one (the Anthropic encoder keeps only the
+        # last, so a second SYSTEM message would replace the whole prompt).
+        from .compact import is_carried_context
+
+        carried = [
+            m.content
+            for m in messages
+            if m.role == lt.Role.SYSTEM and is_carried_context(m.content)
+        ]
+        if carried:
+            sys_prompt = sys_prompt + "\n\n" + "\n\n".join(carried)
+
         return [
             lt.ChatMessage(role=lt.Role.SYSTEM, content=sys_prompt),
             *[m for m in messages if m.role != lt.Role.SYSTEM],
@@ -143,15 +169,12 @@ def build_loom_agent(
                     cw = int(getattr(entry, "context_window", 0) or 0)
                     if cw > 0:
                         return cw
-        from .overflow import _DEFAULT_FALLBACK_WINDOW, known_context_window
+        from .overflow import effective_context_window
 
-        fallback = known_context_window(model_id)
-        # Return the fallback default (not 0) so loom's overflow detection
-        # still runs for models without an explicit window — mirroring the
-        # 32K fallback the old nexus pre-flight applied. ``known_context_window``
-        # covers all common models, so this default only touches truly-unknown
-        # ones, where a conservative 32K is safer than skipping detection.
-        return fallback if fallback > 0 else _DEFAULT_FALLBACK_WINDOW
+        # Never 0: loom's overflow detection must run for models without an
+        # explicit window. ``effective_context_window`` resolves the registry
+        # and the family-prefix fallbacks, then the conservative default.
+        return effective_context_window(model_id)
 
     loom_cfg = AgentConfig(
         max_iterations=max_iter,
@@ -167,8 +190,11 @@ def build_loom_agent(
         affirmatives=_AFFIRMATIVES,
         negatives=_NEGATIVES,
         context_window=_model_context_window,
-        overflow_output_headroom=8192,
-        overflow_tools_overhead=12_000,
+        # Single source of truth — nexus's own soft auto-compact trigger
+        # budgets against the same numbers, so the meter, the soft trigger and
+        # loom's hard limit all describe the same usable window.
+        overflow_output_headroom=_OVERFLOW_OUTPUT_HEADROOM,
+        overflow_tools_overhead=_OVERFLOW_TOOLS_OVERHEAD,
         compactor=NexusCompactor(nexus_provider),
         max_compaction_attempts=3,
     )

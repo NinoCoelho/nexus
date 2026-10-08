@@ -103,6 +103,10 @@ class NexusCompactor:
                 model_id=self._model_id,
                 provider=self._provider,
                 strategy=strategy,
+                # Final attempt must not be able to come back still
+                # overflowed: the deterministic trimmer forces a fit even
+                # when the summarizer is unavailable.
+                guarantee_fit=request.attempt >= 3,
             )
         except Exception:  # noqa: BLE001 — contract says degrading is OK
             log.warning(
@@ -123,6 +127,8 @@ class NexusCompactor:
             actions.append("tool_shrink")
         if report.summarized:
             actions.append("summarize")
+        if report.hard_trimmed:
+            actions.append("hard_trim")
         if not actions:
             actions.append("noop")
 

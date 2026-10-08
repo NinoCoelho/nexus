@@ -272,14 +272,48 @@ async def chat_stream_route(
             }) + "\n"
             return
 
-        # Context-window pre-check: estimate history + incoming message
-        # tokens and refuse early if they won't fit. The agent loop's own
-        # pre-flight check (overflow.py) runs after this, but this gate
-        # prevents the oversized message from being persisted.
+        # Resolve attachments BEFORE the context pre-check so their token
+        # cost is part of the budget. A ContentPart holds a vault path, not
+        # bytes — the provider base64-encodes at request time — so an image
+        # that costs ~1.6K tokens on the wire looks like a 40-char string
+        # here unless it is accounted for explicitly.
+        attachment_parts: list[Any] = []
+        try:
+            from ...agent.llm import ContentPart as _CP
+            from ...multimodal import sniff_mime as _sniff_mime
+
+            def _classify_kind(mime: str) -> str:
+                if mime.startswith("image/"):
+                    return "image"
+                if mime.startswith("audio/"):
+                    return "audio"
+                return "document"
+
+            for att in (req.attachments or []):
+                mime = att.mime_type or _sniff_mime(att.vault_path)
+                attachment_parts.append(
+                    _CP(
+                        kind=_classify_kind(mime),
+                        vault_path=att.vault_path,
+                        mime_type=mime,
+                    )
+                )
+        except Exception:  # noqa: BLE001 — best-effort; persist step re-raises
+            log.exception("attachment resolution failed")
+
+        # Context-window pre-check: make room for the incoming turn by
+        # compacting (and, as a last resort, trimming) the history. It only
+        # errors when the message itself cannot fit, so conversation length
+        # alone can no longer block a turn.
         # Shared with the Telegram gateway via services/turn_launcher.
         from ..services.turn_launcher import precheck_context_window
-        pre_turn_history, _ctx_err = precheck_context_window(
-            pre_turn_history, req.message, resolved_model_id
+        pre_turn_history, _ctx_err = await precheck_context_window(
+            pre_turn_history,
+            req.message,
+            resolved_model_id,
+            provider=getattr(a, "_nexus_provider", None),
+            session_id=session.id,
+            attachment_parts=attachment_parts,
         )
         if _ctx_err is not None:
             yield json.dumps({"type": "error", **_ctx_err}) + "\n"
@@ -300,27 +334,9 @@ async def chat_stream_route(
         # When the request carries attachments, persist a multipart
         # ``content`` list so reload-from-DB still shows the image/audio/
         # document refs alongside the text.
-        attachment_parts: list[Any] = []
         try:
             from ...agent.llm import ChatMessage as _CM, ContentPart as _CP, Role as _R
-            from ...multimodal import sniff_mime as _sniff_mime
 
-            def _classify_kind(mime: str) -> str:
-                if mime.startswith("image/"):
-                    return "image"
-                if mime.startswith("audio/"):
-                    return "audio"
-                return "document"
-
-            for att in (req.attachments or []):
-                mime = att.mime_type or _sniff_mime(att.vault_path)
-                attachment_parts.append(
-                    _CP(
-                        kind=_classify_kind(mime),
-                        vault_path=att.vault_path,
-                        mime_type=mime,
-                    )
-                )
             if attachment_parts:
                 user_content: Any = (
                     [_CP(kind="text", text=req.message)] if req.message else []

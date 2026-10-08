@@ -370,6 +370,38 @@ All phases implemented in 4 commits on `feat/skill-wizard`:
 
 ---
 
+## Addendum — 2026-10-08 audit
+
+A review of the shipped state found that two phases marked **Done** above were
+not actually in the code, and that the gate in front of every turn could still
+strand a session. Corrected in the "never-run-out" change set (see the
+contract in `CLAUDE.md` → Agent loop):
+
+| Claimed | Reality found | Resolution |
+|---|---|---|
+| Phase 2 message cap | `check_message_count` had **no call sites** — dead code | Wired as a compaction *trigger* (limit raised 80 → 240) in the pre-turn path and the precheck |
+| Phase 5 `fork_session` | Returned `instructions: "the backend should create a child session"`; nothing did | Really creates a child session (`create_child(hidden=False)`, inherits `project_id`, seeded with the session note) |
+| Phase 7 auto-fork | `auto_fork` existed **only in this document** | Superseded by `hard_trim`: a guaranteed fit is strictly better than moving the user to a new session. Not implemented as specified. |
+
+Also fixed, none of which were in the original plan:
+
+- `precheck_context_window` ran tool-shrink only, **discarded a partial
+  improvement**, hard-refused with `retryable: False`, and skipped itself
+  entirely when the model's window was unknown.
+- Compaction's session-memory summary never reached the model:
+  `_before_llm_call` strips history SYSTEM messages to stop stale prompts
+  stacking, which deleted the summary too. Summarization was therefore
+  equivalent to silent truncation from the model's point of view.
+- The Anthropic encoder *assigned* rather than concatenated the system
+  parameter, so a second SYSTEM message anywhere replaced the whole prompt.
+- Attachments were estimated as the length of their vault path.
+- `KNOWN_WINDOWS` had no entry for any current model, and a miss returned 0,
+  which callers read as "skip the check".
+- Budget constants were duplicated in five places with three different
+  fallback windows and two different headrooms.
+- `.tool-cache` / `.session-memory` had no retention and survived session
+  deletion, inside the Syncthing-replicated vault.
+
 ## Review & Verification
 
 After each phase:

@@ -412,6 +412,13 @@ def create_app(
     agent._notify_user_handler = NotifyUserHandler(session_store=sessions)
     agent._sessions = sessions
 
+    # fork_session creates a real child session, so the (sync, module-level)
+    # tool handler needs the live store — constructing its own would open a
+    # duplicate SQLite connection.
+    from ..tools.context_tool import set_session_store as _set_ctx_tool_store
+
+    _set_ctx_tool_store(sessions)
+
     # Trace callback routes every agent event (iter, tool_call,
     # tool_result, reply) into the SSE subscriber fanout for whichever
     # session is currently running the turn. Reads the session_id from

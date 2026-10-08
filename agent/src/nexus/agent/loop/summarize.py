@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -120,6 +121,37 @@ def _find_summary_index(messages: list[ChatMessage]) -> int | None:
 _EMBED_TEXT_CAP = 1500
 
 
+# Message embeddings are cached by content hash. Message bodies are immutable
+# (ChatMessage is frozen) and compaction re-scores the *same* history on every
+# pass, so without this the whole transcript is re-embedded each time — the
+# dominant cost of relevance scoring on a long session. Bounded FIFO; vectors
+# are a few hundred floats each.
+_EMBED_CACHE: dict[str, list[float]] = {}
+_EMBED_CACHE_MAX = 2_048
+
+
+def _embed_cache_key(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _embed_cache_put(key: str, vec: list[float]) -> None:
+    if key in _EMBED_CACHE:
+        return
+    if len(_EMBED_CACHE) >= _EMBED_CACHE_MAX:
+        # Drop the oldest ~10% in insertion order so this isn't O(n) per put.
+        for stale in list(_EMBED_CACHE)[: max(1, _EMBED_CACHE_MAX // 10)]:
+            _EMBED_CACHE.pop(stale, None)
+    _EMBED_CACHE[key] = vec
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    anorm = math.sqrt(sum(x * x for x in a)) or 1.0
+    bnorm = math.sqrt(sum(x * x for x in b)) or 1.0
+    dot = sum(x * y for x, y in zip(a, b))
+    # Negative cosine (anti-correlated) is "not relevant" → 0.
+    return max(0.0, min(1.0, dot / (anorm * bnorm)))
+
+
 async def _compute_semantic_sim(
     messages: list[ChatMessage],
     query: str,
@@ -132,6 +164,9 @@ async def _compute_semantic_sim(
     scoring. Pure math given an embedder; the ``knowledge``-feature gating and
     embedder acquisition live in :func:`summarize_older_turns` so this stays
     unit-testable with a fake embedder.
+
+    Per-message vectors are memoized by content hash, so a repeat compaction
+    on the same session only embeds what is new.
     """
     texts: list[str] = []
     idx_map: list[int] = []
@@ -143,25 +178,50 @@ async def _compute_semantic_sim(
     if not texts:
         return None
 
-    try:
-        vecs = await embedder.embed([query[:_EMBED_TEXT_CAP], *texts])  # type: ignore[attr-defined]
-    except Exception:
-        log.debug("semantic similarity embedding failed", exc_info=True)
+    query_text = query[:_EMBED_TEXT_CAP]
+    keys = [_embed_cache_key(t) for t in texts]
+    # The query embedding is request-specific; never served from cache.
+    missing_positions = [pos for pos, key in enumerate(keys) if key not in _EMBED_CACHE]
+
+    async def _embed(batch: list[str]) -> list[list[float]] | None:
+        try:
+            return await embedder.embed(batch)  # type: ignore[attr-defined]
+        except Exception:
+            log.debug("semantic similarity embedding failed", exc_info=True)
+            return None
+
+    to_embed = [query_text, *(texts[p] for p in missing_positions)]
+    vecs = await _embed(to_embed)
+    if not vecs:
         return None
-    if not vecs or len(vecs) != len(texts) + 1:
-        return None
+    if len(vecs) != len(to_embed):
+        # The embedder didn't return one vector per input. If we had asked for
+        # a partial batch, the cache is the only thing that could have made it
+        # partial, so retry once asking for everything before giving up.
+        if len(missing_positions) == len(texts):
+            return None
+        missing_positions = list(range(len(texts)))
+        to_embed = [query_text, *texts]
+        vecs = await _embed(to_embed)
+        if not vecs or len(vecs) != len(to_embed):
+            return None
 
     qv = vecs[0]
-    qnorm = math.sqrt(sum(x * x for x in qv)) or 1.0
+    for offset, pos in enumerate(missing_positions):
+        _embed_cache_put(keys[pos], vecs[offset + 1])
+
     out: dict[int, float] = {}
-    for k, idx in enumerate(idx_map):
-        mv = vecs[k + 1]
-        mnorm = math.sqrt(sum(x * x for x in mv)) or 1.0
-        dot = sum(a * b for a, b in zip(qv, mv))
-        cos = dot / (qnorm * mnorm)
-        # Negative cosine (anti-correlated) is "not relevant" → 0.
-        out[idx] = max(0.0, min(1.0, cos))
+    for pos, idx in enumerate(idx_map):
+        mv = _EMBED_CACHE.get(keys[pos])
+        if mv is None:
+            continue
+        out[idx] = _cosine(qv, mv)
     return out
+
+
+def reset_embedding_cache() -> None:
+    """Clear the memoized message embeddings (tests / embedder model change)."""
+    _EMBED_CACHE.clear()
 
 
 async def summarize_older_turns(
@@ -218,6 +278,15 @@ async def summarize_older_turns(
     summarize_msgs = [messages[i] for i in plan.summarize]
     kept_idx = plan.kept_indices()
 
+    # The drop bucket (scrape garbage) leaves the window without passing
+    # through the summary, so it needs its own journal entry — otherwise it is
+    # the one lossy path with no recovery record, and it takes the whole
+    # compaction unit with it, including the assistant's reasoning.
+    if session_id and plan.drop:
+        persist_summary_part(
+            session_id, [messages[i] for i in plan.drop], reason="dropped"
+        )
+
     # Nothing to summarize — but there may still be garbage drops to apply.
     if not summarize_msgs:
         return "", [messages[i] for i in kept_idx]
@@ -242,7 +311,7 @@ async def summarize_older_turns(
 
     if session_id:
         persist_session_summary(session_id, summary)
-        archive = persist_summary_part(session_id, summarize_msgs)
+        archive = persist_summary_part(session_id, summarize_msgs, reason="summarized")
         if archive:
             log.debug("archived %d summarized messages to %s", len(summarize_msgs), archive)
 
@@ -283,6 +352,22 @@ def _format_for_summarization(messages: list[ChatMessage]) -> str:
     return "\n\n".join(parts)
 
 
+def _compact_model() -> str:
+    """Optional ``[agent].compact_model`` — a cheap/fast model for summaries.
+
+    Summarization sits on the critical path of a user turn, so running it on
+    the main (often large, reasoning-capable) model costs seconds for a
+    1024-token structured note. Empty string means "use the turn's model".
+    """
+    try:
+        from ...config_file import load_cached
+
+        cfg = load_cached()
+        return str(getattr(getattr(cfg, "agent", None), "compact_model", "") or "")
+    except Exception:  # noqa: BLE001 — config problems must not block compaction
+        return ""
+
+
 async def _call_summarizer(
     provider: LLMProvider,
     conversation: str,
@@ -306,23 +391,40 @@ async def _call_summarizer(
         Msg(role=R.SYSTEM, content=system_prompt),
         Msg(role=R.USER, content=user_content),
     ]
-    try:
-        response = await provider.chat(
-            messages,
-            model=model_id,
-            max_tokens=1024,
-            tools=[],
-        )
+
+    # Try the dedicated compaction model first, then the turn's own model. The
+    # configured fast model may belong to a provider this one can't reach, so
+    # a failure there must fall through rather than lose the summary.
+    candidates: list[str | None] = []
+    fast = _compact_model()
+    if fast and fast != model_id:
+        candidates.append(fast)
+    candidates.append(model_id)
+
+    for attempt, candidate in enumerate(candidates):
+        try:
+            response = await provider.chat(
+                messages,
+                model=candidate,
+                max_tokens=1024,
+                tools=[],
+            )
+        except Exception as exc:
+            from ...error_classifier import is_budget_exceeded
+            if is_budget_exceeded(exc):
+                raise
+            log.warning(
+                "summarization LLM call failed for model=%s%s",
+                candidate,
+                " (falling back)" if attempt + 1 < len(candidates) else "",
+                exc_info=True,
+            )
+            continue
         content = (response.content or "").strip()
-        if not content:
-            log.warning("summarization returned empty content for model=%s", model_id)
-        return content
-    except Exception as exc:
-        from ...error_classifier import is_budget_exceeded
-        if is_budget_exceeded(exc):
-            raise
-        log.warning("summarization LLM call failed for model=%s", model_id, exc_info=True)
-        return ""
+        if content:
+            return content
+        log.warning("summarization returned empty content for model=%s", candidate)
+    return ""
 
 
 def persist_session_summary(session_id: str, summary: str, *, model_id: str | None = None) -> str | None:
@@ -372,15 +474,20 @@ def load_session_summary(session_id: str) -> str | None:
 
 
 def persist_summary_part(
-    session_id: str, summarized: list[ChatMessage]
+    session_id: str, summarized: list[ChatMessage], *, reason: str = "summarized"
 ) -> str | None:
-    """Append the verbatim messages being summarized to a recovery archive.
+    """Append the verbatim messages being removed to a recovery archive.
 
     Summarization is lossy by design, but it shouldn't be a black hole: every
     collapse is journaled as one JSONL record under
-    ``~/.nexus/session-memory/.parts/{session_id}.jsonl`` so a dropped detail
-    can always be recovered. Mirrors the ``.tool-cache`` reversibility the
-    tool-shrink path already provides.
+    ``~/.nexus/vault/.session-memory/.parts/{session_id}.jsonl`` so a dropped
+    detail can always be recovered. Mirrors the ``.tool-cache`` reversibility
+    the tool-shrink path already provides.
+
+    ``reason`` records *why* the messages left the window — ``summarized``
+    (folded into the session note), ``dropped`` (scored as scrape garbage) or
+    ``hard_trim`` (elided to force a fit) — so a recovery read can tell an
+    intentional compression from a capacity eviction.
 
     Returns the archive path (for logging) or ``None`` on failure — never
     raises, since a persistence hiccup must not abort summarization.
@@ -393,6 +500,7 @@ def persist_summary_part(
         path = parts_dir / f"{session_id}.jsonl"
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
+            "reason": reason,
             "count": len(summarized),
             "messages": [
                 m.model_dump(mode="json") if hasattr(m, "model_dump") else str(m)

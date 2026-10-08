@@ -280,6 +280,9 @@ class Agent:
         # growth so a history sitting near the threshold isn't re-summarized
         # every turn.
         self._soft_compact_watermark: dict[str, int] = {}
+        # Per-session estimator correction factor, learned from the provider's
+        # reported input_tokens. See ``_record_token_calibration``.
+        self._token_calibration: dict[str, float] = {}
 
         self._loom = build_loom_agent(
             nexus_provider=self._nexus_provider,
@@ -363,7 +366,11 @@ class Agent:
         resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)
         if cfg and resolved:
             for m in getattr(cfg, "models", []) or []:
-                if getattr(m, "id", None) == resolved:
+                # Match on either key — every other call site (the precheck,
+                # the usage/context-stats routes) matches both, so matching
+                # only on ``id`` here meant a configured context_window was
+                # ignored whenever the turn carried the upstream model_name.
+                if resolved in (getattr(m, "id", None), getattr(m, "model_name", None)):
                     cw = int(getattr(m, "context_window", 0) or 0)
                     if cw > 0:
                         return cw
@@ -612,6 +619,91 @@ class Agent:
                 if text:
                     yield {"type": "thinking", "text": text}
 
+    # Soft-compact hysteresis state. Bounded so a long-lived daemon that has
+    # seen thousands of sessions doesn't accumulate one entry per session
+    # forever, and keyed only on real session ids — every sessionless turn
+    # used to share the "" key, so unrelated turns suppressed each other's
+    # compaction.
+    _WATERMARK_MAX_ENTRIES = 256
+
+    def _watermark_for(self, session_id: str | None) -> int:
+        if not session_id:
+            return 0
+        return self._soft_compact_watermark.get(session_id, 0)
+
+    def _remember_watermark(self, session_id: str | None, tokens: int) -> None:
+        if not session_id:
+            return
+        wm = self._soft_compact_watermark
+        if (
+            session_id not in wm
+            and len(wm) >= self._WATERMARK_MAX_ENTRIES
+        ):
+            # Insertion-ordered: drop the oldest tracked sessions.
+            for stale in list(wm)[: max(1, self._WATERMARK_MAX_ENTRIES // 8)]:
+                wm.pop(stale, None)
+        wm[session_id] = max(tokens, wm.get(session_id, 0))
+
+    # ── estimator calibration ──────────────────────────────────────────────
+    # The token estimate is a chars/token heuristic, but the provider reports
+    # the *actual* input size with every turn. That number used to be read
+    # only for an empty-response diagnostic and then discarded, so estimator
+    # drift (dense languages, unusual tokenizers, tool-schema overhead above
+    # the flat 12K assumption) silently ate the safety margin.
+    #
+    # The correction is clamped to never go below 1.0: it can only make us
+    # compact *earlier*, never later. Under-compacting is the failure mode
+    # that costs a turn; over-compacting costs a summary.
+    _CALIBRATION_MIN = 1.0
+    _CALIBRATION_MAX = 2.0
+    # Exponential moving average weight for a new observation.
+    _CALIBRATION_ALPHA = 0.3
+
+    def _calibration_for(self, session_id: str | None) -> float:
+        if not session_id:
+            return 1.0
+        return self._token_calibration.get(session_id, 1.0)
+
+    def _record_token_calibration(
+        self, session_id: str | None, actual_input_tokens: int, working_messages: Any
+    ) -> None:
+        """Fold this turn's real input size into the session's correction factor."""
+        if not session_id or not actual_input_tokens or actual_input_tokens <= 0:
+            return
+        try:
+            from .overflow import TOOLS_AND_SYSTEM_OVERHEAD, estimate_tokens
+
+            # What our model *thought* the last call would cost: the working
+            # set plus the system-prompt/tool-schema overhead the provider
+            # also counts but our message estimate excludes.
+            modelled = estimate_tokens(working_messages or []) + TOOLS_AND_SYSTEM_OVERHEAD
+            if modelled <= 0:
+                return
+            observed = actual_input_tokens / modelled
+            ratio = max(self._CALIBRATION_MIN, min(self._CALIBRATION_MAX, observed))
+            prev = self._token_calibration.get(session_id)
+            new = (
+                ratio
+                if prev is None
+                else prev * (1 - self._CALIBRATION_ALPHA) + ratio * self._CALIBRATION_ALPHA
+            )
+            # Re-clamp: float rounding in the moving average can land a hair
+            # outside the band even when every input was inside it.
+            new = max(self._CALIBRATION_MIN, min(self._CALIBRATION_MAX, new))
+            cal = self._token_calibration
+            if session_id not in cal and len(cal) >= self._WATERMARK_MAX_ENTRIES:
+                for stale in list(cal)[: max(1, self._WATERMARK_MAX_ENTRIES // 8)]:
+                    cal.pop(stale, None)
+            cal[session_id] = new
+            if new > 1.05:
+                log.debug(
+                    "token calibration for %s: observed=%.2f factor=%.2f "
+                    "(actual=%d vs modelled=%d)",
+                    session_id, observed, new, actual_input_tokens, modelled,
+                )
+        except Exception:  # noqa: BLE001 — calibration is an optimization
+            log.debug("token calibration failed", exc_info=True)
+
     def _seed_session_notes(
         self, history: list[ChatMessage], session_id: str
     ) -> list[ChatMessage]:
@@ -707,6 +799,7 @@ class Agent:
         #       hard overflow; gated by a 15% growth watermark so it doesn't
         #       re-fire every turn once near the line.
         _trigger_reason = ""
+        _force_summarize = False
         if stripped_history:
             if _session_tool_budget > 0:
                 from .budget import estimate_session_tool_tokens
@@ -721,16 +814,33 @@ class Agent:
                 _pct = int(getattr(_agent_cfg, "auto_compact_threshold_pct", 0) or 0)
                 if _pct > 0:
                     from .budget import should_soft_compact
-                    from .overflow import _OUTPUT_HEADROOM_TOKENS, _TOOLS_AND_SYSTEM_OVERHEAD
-                    _usable = max(1, effective_window - _OUTPUT_HEADROOM_TOKENS - _TOOLS_AND_SYSTEM_OVERHEAD)
+                    from .overflow import usable_tokens
+                    _usable = max(1, usable_tokens(effective_window))
                     _est = check_overflow(loom_messages, context_window=effective_window).estimated_input_tokens
-                    _wm_key = session_id or ""
+                    # Correct the heuristic by what this session's provider
+                    # actually charged last turn (>= 1.0, so this can only
+                    # pull the trigger earlier).
+                    _cal = self._calibration_for(session_id)
+                    _est = int(_est * _cal)
                     if should_soft_compact(
-                        _est, _usable, _pct, self._soft_compact_watermark.get(_wm_key, 0)
+                        _est, _usable, _pct, self._watermark_for(session_id)
                     ):
                         _trigger_reason = (
-                            f"soft threshold {_pct}% crossed: ~{_est // 1024}K / {_usable // 1024}K usable tokens"
+                            f"soft threshold {_pct}% crossed: ~{_est // 1024}K / "
+                            f"{_usable // 1024}K usable tokens (calibration {_cal:.2f})"
                         )
+            if not _trigger_reason:
+                #   (c) message-count ceiling — hundreds of small turns stay
+                #       under the token budget while still degrading recall.
+                #       Forces the summary, since the zone is green and
+                #       nothing else would act; collapsing those turns is
+                #       what brings the count back down.
+                from .overflow import check_message_count
+                if check_message_count(stripped_history):
+                    _trigger_reason = (
+                        f"message-count ceiling reached: {len(stripped_history)} messages"
+                    )
+                    _force_summarize = True
         if _trigger_reason:
             log.info(
                 "Pre-turn compaction (%s) — triggering compact_and_summarize",
@@ -744,6 +854,7 @@ class Agent:
                 model_id=model_id or self._chosen_model,
                 provider=self._nexus_provider,
                 strategy="auto",
+                force_summarize=_force_summarize,
             )
             if _cs_report.compact_report.compacted > 0 or _cs_report.summarized:
                 log.info(
@@ -760,10 +871,7 @@ class Agent:
                     if nm.role == Role.ASSISTANT and nm.reasoning_content:
                         lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
                 loom_messages.append(_to_loom_message(user_msg))
-            self._soft_compact_watermark[session_id or ""] = max(
-                _cs_report.tokens_after,
-                self._soft_compact_watermark.get(session_id or "", 0),
-            )
+            self._remember_watermark(session_id, _cs_report.tokens_after)
 
         ctx_window = self._context_window_for(model_id or self._chosen_model)
         check = check_overflow(loom_messages, context_window=ctx_window)
@@ -1285,6 +1393,14 @@ class Agent:
             yield err
         if not st.tr.materialised_for_iter:
             st.reasoning.capture(st.adapter)
+
+        # Close the estimator loop: the provider just told us the real input
+        # size for this turn. Feed it back so the next turn's soft-compact
+        # decision is corrected for this model's actual tokenization instead
+        # of trusting the chars/token heuristic outright.
+        self._record_token_calibration(
+            st.session_id, ev.get("input_tokens") or 0, st.tr.working_messages
+        )
 
         persisted_messages = st.tr.build_persisted_messages(ev)
         st.reasoning.stamp_onto(persisted_messages, st.history_snapshot)

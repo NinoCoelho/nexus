@@ -47,6 +47,25 @@ DEFAULT_CSV_SAMPLE_ROWS = 5
 
 _COMPACT_MARKER = "nx:compacted"
 
+# SYSTEM messages that nexus itself injects into a session's history as
+# *carried context* rather than as a prompt: the rolling session-memory
+# summary and the hard-trim elision marker.
+#
+# This distinction matters because ``_builder._before_llm_call`` rebuilds the
+# system prompt on every LLM call and drops the history's SYSTEM messages, so
+# that stale prompts from earlier turns don't stack. Without a way to tell the
+# two apart, that strip also deleted the summary — compaction would shrink
+# the history and the model would never see the compressed version, making
+# summarization silent truncation from the model's point of view.
+_CARRIED_CONTEXT_PREFIXES: tuple[str, ...] = ("[Session Memory", "[nx:elided]")
+
+
+def is_carried_context(content: Any) -> bool:
+    """True when a SYSTEM message is carried context, not a system prompt."""
+    if not isinstance(content, str) or not content:
+        return False
+    return content.lstrip().startswith(_CARRIED_CONTEXT_PREFIXES)
+
 
 @dataclass
 class CompactionReport:
@@ -370,6 +389,9 @@ class CompactAndSummarizeReport:
     budget_exceeded: bool = False
     reinjected_paths: list[str] = field(default_factory=list)
     notes_path: str | None = None
+    # Set when the deterministic last-resort trimmer ran, with the number of
+    # whole messages it had to elide to force a fit.
+    hard_trimmed: int = 0
 
 
 # Tools whose ``path`` argument identifies a vault file. Post-compaction
@@ -399,6 +421,183 @@ def _recent_vault_paths(
     return paths
 
 
+# ── deterministic last-resort trimming ─────────────────────────────────────
+# Everything above this point is best-effort: ``auto_compact`` only rewrites
+# TOOL messages, and summarization needs a working LLM. When the summarizer
+# is unavailable (provider down, budget exceeded, empty reply) a history made
+# mostly of user/assistant prose could not be shrunk at all, so the turn died
+# with an overflow error and the session became permanently unusable. The
+# trimmer below closes that hole: it is LLM-free, deterministic, and
+# guaranteed to return a history that fits the target.
+
+# Head bytes kept when a long USER/ASSISTANT body has to be truncated.
+_HARD_TRIM_TEXT_KEEP = 1_500
+_ELISION_MARKER = "nx:elided"
+
+
+def _protected_indices(messages: list[ChatMessage]) -> set[int]:
+    """Indices the trimmer must never remove.
+
+    SYSTEM messages (the prompt and the ``[Session Memory`` summary) plus the
+    final USER message — dropping the user's actual question would make the
+    turn meaningless, and dropping the system prompt would change behaviour.
+    """
+    keep: set[int] = {i for i, m in enumerate(messages) if m.role == Role.SYSTEM}
+    last_user = max((i for i, m in enumerate(messages) if m.role == Role.USER), default=-1)
+    if last_user >= 0:
+        keep.add(last_user)
+    return keep
+
+
+def _truncate_text_body(msg: ChatMessage, head_keep: int) -> ChatMessage | None:
+    """Head-truncate a long str-content message, or None when not applicable."""
+    content = msg.content
+    if not isinstance(content, str) or len(content) <= head_keep:
+        return None
+    if _COMPACT_MARKER in content[:200] or _ELISION_MARKER in content[:200]:
+        return None
+    new_content = (
+        content[:head_keep]
+        + f"\n\n... [{_COMPACT_MARKER}] truncated; original_size={len(content)} bytes"
+    )
+    ref = _persist_to_vault(content, None)
+    if ref:
+        new_content += f"; full text saved to {ref}"
+    new_content += " ..."
+    return ChatMessage(
+        role=msg.role,
+        content=new_content,
+        tool_calls=msg.tool_calls,
+        tool_call_id=msg.tool_call_id,
+        name=msg.name,
+        reasoning_content=msg.reasoning_content,
+    )
+
+
+def hard_trim(
+    history: list[ChatMessage],
+    *,
+    target_tokens: int,
+    session_id: str | None = None,
+) -> tuple[list[ChatMessage], int]:
+    """Force ``history`` under ``target_tokens`` without calling an LLM.
+
+    Escalates in four deterministic stages, each preserving tool-pair
+    integrity by operating on whole compaction units:
+
+    1. stub every unprotected TOOL result (regardless of age or size),
+    2. head-truncate long unprotected USER/ASSISTANT bodies,
+    3. drop whole unprotected units, oldest first, leaving one elision
+       marker that records the count and the recovery archive,
+    4. as a final guard, truncate the protected tail message itself.
+
+    Returns ``(trimmed_history, messages_elided)``. Every removed message is
+    journaled to the session's ``.parts`` archive first, so this is lossy for
+    the context window but never for the record.
+    """
+    from .retention import _build_units
+
+    if target_tokens <= 0 or not history:
+        return list(history), 0
+
+    result = list(history)
+    if _estimate_for(result) <= target_tokens:
+        return result, 0
+
+    # Stage 1 — stub every unprotected tool result.
+    protected = _protected_indices(result)
+    staged: list[ChatMessage] = []
+    for idx, msg in enumerate(result):
+        if (
+            idx not in protected
+            and msg.role == Role.TOOL
+            and msg.content
+            and isinstance(msg.content, str)
+            and not _is_compacted(msg.content)
+        ):
+            ref = _persist_to_vault(msg.content, msg.tool_call_id)
+            stub = _stub_one(msg.content, msg.name)
+            if ref:
+                stub += f"\n\n[Full result saved to {ref}]"
+            staged.append(
+                ChatMessage(
+                    role=msg.role, content=stub, tool_call_id=msg.tool_call_id, name=msg.name
+                )
+            )
+        else:
+            staged.append(msg)
+    result = staged
+    if _estimate_for(result) <= target_tokens:
+        return result, 0
+
+    # Stage 2 — head-truncate long user/assistant prose.
+    protected = _protected_indices(result)
+    staged = []
+    for idx, msg in enumerate(result):
+        if idx not in protected and msg.role in (Role.USER, Role.ASSISTANT):
+            shrunk = _truncate_text_body(msg, _HARD_TRIM_TEXT_KEEP)
+            staged.append(shrunk if shrunk is not None else msg)
+        else:
+            staged.append(msg)
+    result = staged
+    if _estimate_for(result) <= target_tokens:
+        return result, 0
+
+    # Stage 3 — drop whole units, oldest first.
+    protected = _protected_indices(result)
+    units = _build_units(result)
+    droppable = [u for u in units if not protected.intersection(u)]
+    dropped_idx: set[int] = set()
+    elided: list[ChatMessage] = []
+    for unit in droppable:
+        dropped_idx.update(unit)
+        elided.extend(result[i] for i in unit)
+        survivors = [m for i, m in enumerate(result) if i not in dropped_idx]
+        # Reserve room for the elision marker this stage appends (~90 tokens).
+        if _estimate_for(survivors) + 128 <= target_tokens:
+            break
+
+    if dropped_idx:
+        if session_id:
+            from .summarize import persist_summary_part
+
+            persist_summary_part(session_id, elided, reason="hard_trim")
+        marker_text = (
+            f"[{_ELISION_MARKER}] {len(elided)} older message(s) were removed to fit "
+            "the context window. They are not lost: the full text is in this "
+            "session's recovery archive, and recent tool results are in "
+            "vault://.tool-cache/. Ask the user if you need detail from the "
+            "earlier part of this conversation."
+        )
+        first_drop = min(dropped_idx)
+        trimmed: list[ChatMessage] = []
+        for i, m in enumerate(result):
+            if i == first_drop:
+                trimmed.append(ChatMessage(role=Role.SYSTEM, content=marker_text))
+            if i not in dropped_idx:
+                trimmed.append(m)
+        result = trimmed
+
+    if _estimate_for(result) <= target_tokens:
+        return result, len(elided)
+
+    # Stage 4 — nothing unprotected left. The remainder is the system prompt,
+    # the summary and the user's own message; truncate those bodies too rather
+    # than hand back something that cannot be sent.
+    staged = []
+    for msg in result:
+        shrunk = _truncate_text_body(msg, max(512, _HARD_TRIM_TEXT_KEEP // 2))
+        staged.append(shrunk if shrunk is not None else msg)
+    result = staged
+    log.warning(
+        "hard_trim: fell through to protected-message truncation "
+        "(target=%d, final=%d tokens)",
+        target_tokens,
+        _estimate_for(result),
+    )
+    return result, len(elided)
+
+
 async def compact_and_summarize(
     history: list[ChatMessage],
     *,
@@ -408,9 +607,23 @@ async def compact_and_summarize(
     provider: LLMProvider | None = None,
     strategy: str = "auto",
     force_summarize: bool = False,
+    guarantee_fit: bool = False,
 ) -> tuple[list[ChatMessage], CompactAndSummarizeReport]:
+    """Shrink ``history`` to fit ``context_window``.
+
+    ``guarantee_fit`` adds the deterministic :func:`hard_trim` stage after
+    summarization, so the returned history is guaranteed to fit even when the
+    summarizer failed or was unavailable. ``strategy="aggressive"`` implies
+    it — that's the "make it fit" path the UI button and the final compaction
+    attempt both want.
+    """
     from .zones import classify_zone
     from .summarize import summarize_older_turns
+    from .overflow import (
+        DEFAULT_FALLBACK_WINDOW,
+        recent_k_for_window,
+        usable_tokens,
+    )
 
     report = CompactAndSummarizeReport(
         messages_before=len(history),
@@ -419,7 +632,7 @@ async def compact_and_summarize(
     est_tokens = _estimate_for(history)
     report.tokens_before = est_tokens
 
-    effective_window = context_window if context_window > 0 else 32_000
+    effective_window = context_window if context_window > 0 else DEFAULT_FALLBACK_WINDOW
 
     result = list(history)
 
@@ -466,6 +679,7 @@ async def compact_and_summarize(
                 result, provider,
                 model_id=model_id,
                 session_id=session_id,
+                keep_recent_n=recent_k_for_window(effective_window),
             )
         except Exception as exc:
             from ...error_classifier import is_budget_exceeded
@@ -481,7 +695,14 @@ async def compact_and_summarize(
                 # touched inside the summarized-away region, so the compacted
                 # model can re-read its working set on demand instead of
                 # losing it to the summary.
-                summarized_region = result[: max(0, len(result) - len(recent))]
+                #
+                # The region is computed by identity, NOT by slicing. Relevance
+                # retention keeps a *scattered* survivor set (protected system
+                # messages at the head, high-score old messages anywhere), so
+                # the old positional `result[:len(result)-len(recent)]` slice
+                # described the wrong messages entirely.
+                _kept_ids = {id(m) for m in recent}
+                summarized_region = [m for m in result if id(m) not in _kept_ids]
                 paths = _recent_vault_paths(summarized_region)
                 if paths:
                     summary += "\n\nRecently accessed files (re-read via vault_read):\n" + "\n".join(
@@ -507,32 +728,43 @@ async def compact_and_summarize(
                     report.summarized_messages, len(summary),
                 )
 
+    # Deterministic guarantee. Everything above can legitimately decline to
+    # act (nothing compactable, summarizer unavailable); this cannot. Only
+    # runs when asked, because it is lossy in a way summarization is not.
+    budget = usable_tokens(effective_window)
+    if (aggressive or guarantee_fit) and _estimate_for(result) > budget:
+        result, elided = hard_trim(
+            result, target_tokens=budget, session_id=session_id
+        )
+        report.hard_trimmed = elided
+        if elided:
+            log.warning(
+                "compact_and_summarize: hard_trim elided %d messages to fit "
+                "%d-token budget (session=%s)",
+                elided, budget, session_id,
+            )
+
     final_tokens = _estimate_for(result)
     final_zone = classify_zone(final_tokens, effective_window)
 
     report.messages_after = len(result)
     report.tokens_after = final_tokens
     report.zone_after = final_zone
-    from .overflow import _OUTPUT_HEADROOM_TOKENS
-    report.still_overflowed = final_tokens > effective_window - _OUTPUT_HEADROOM_TOKENS
+    report.still_overflowed = final_tokens > budget
 
     return result, report
 
 
 def _estimate_for(messages: list[ChatMessage]) -> int:
+    """Estimated input tokens for a nexus ChatMessage list.
+
+    Delegates to :func:`overflow.estimate_tokens`, which is attachment-aware —
+    ``ChatMessage`` already exposes the ``content``/``role``/``tool_calls``
+    attributes the estimator reads, so no shim objects are needed.
+    """
     from .overflow import estimate_tokens
 
-    class _Msg:
-        pass
-
-    compat = []
-    for m in messages:
-        o = _Msg()
-        o.content = m.content
-        o.role = m.role
-        o.tool_calls = getattr(m, "tool_calls", None)
-        compat.append(o)
-    return estimate_tokens(compat) if compat else 0
+    return estimate_tokens(messages) if messages else 0
 
 
 _FAILED_SCRAPE_PATTERNS = (

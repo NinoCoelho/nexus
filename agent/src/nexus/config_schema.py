@@ -122,6 +122,13 @@ class AgentConfig(BaseModel):
     # Claude Code's auto-compact does. A 15% token-growth hysteresis
     # prevents re-triggering every turn once near the line. 0 = disabled.
     auto_compact_threshold_pct: int = 85
+    # Model id (matches a [[models]] entry) used for context summarization.
+    # Summarization runs on the critical path of a user turn and only needs
+    # ~1024 structured output tokens, so a small fast model is a better fit
+    # than the main reasoning model. Empty = reuse the turn's own model.
+    # Falls back to the turn's model automatically if this one errors or
+    # returns nothing, so a misconfigured value can't lose a summary.
+    compact_model: str = ""
 
 
 class GraphRAGEmbeddingConfig(BaseModel):

@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
-from ...agent.loop.overflow import known_context_window as _known_context_window, KNOWN_WINDOWS as _KNOWN_WINDOWS
+from ...agent.loop.overflow import known_context_window as _known_context_window
 from ...i18n import t
 from ..deps import get_agent, get_locale, get_sessions
 from ..schemas import CompactRequest, TruncateRequest
@@ -274,6 +274,36 @@ async def get_session_trajectories(
 
 
 
+# Context-size estimate cache: session_id -> (updated_at, tokens). Keyed on
+# the row's ``updated_at`` so any history write invalidates it naturally.
+# Bounded; the UI only ever polls the session the user is looking at.
+_CTX_ESTIMATE_CACHE: dict[str, tuple[str, int]] = {}
+_CTX_ESTIMATE_CACHE_MAX = 128
+
+
+async def _cached_context_estimate(
+    store: SessionStore,
+    session_id: str,
+    updated_at: str,
+    estimate_tokens: Any,
+) -> int:
+    """Estimated context tokens for a session, memoized on ``updated_at``."""
+    cached = _CTX_ESTIMATE_CACHE.get(session_id)
+    if cached is not None and cached[0] == updated_at:
+        return cached[1]
+    session_obj = await asyncio.to_thread(store.get, session_id)
+    tokens = (
+        estimate_tokens(session_obj.history)
+        if session_obj and session_obj.history
+        else 0
+    )
+    if len(_CTX_ESTIMATE_CACHE) >= _CTX_ESTIMATE_CACHE_MAX:
+        for stale in list(_CTX_ESTIMATE_CACHE)[: _CTX_ESTIMATE_CACHE_MAX // 4]:
+            _CTX_ESTIMATE_CACHE.pop(stale, None)
+    _CTX_ESTIMATE_CACHE[session_id] = (updated_at, tokens)
+    return tokens
+
+
 @router.get("/sessions/{session_id}/usage")
 async def get_session_usage(
     session_id: str,
@@ -288,7 +318,7 @@ async def get_session_usage(
     """
     row = await asyncio.to_thread(
         store._loom._db.execute,
-        "SELECT model, input_tokens, output_tokens, tool_call_count "
+        "SELECT model, input_tokens, output_tokens, tool_call_count, updated_at "
         "FROM sessions WHERE id = ?",
         (session_id,),
     )
@@ -302,6 +332,7 @@ async def get_session_usage(
     in_tok = int(row[1] or 0)
     out_tok = int(row[2] or 0)
     tool_calls = int(row[3] or 0)
+    updated_at = row[4] or ""
     cost, cost_status = (None, "unknown")
     if model:
         cost, cost_status = estimate_cost(model, input_tokens=in_tok, output_tokens=out_tok)
@@ -312,10 +343,12 @@ async def get_session_usage(
     context_zone = "unknown"
     try:
         from ...config_file import load as load_config
-        from ...agent.loop.overflow import estimate_tokens
+        from ...agent.loop.overflow import (
+            effective_context_window,
+            estimate_tokens,
+        )
         from ...agent.loop.zones import classify_zone
 
-        _FALLBACK_WINDOW = 128_000
         cfg = load_config()
         for entry in cfg.models:
             if entry.id == model or entry.model_name == model:
@@ -323,19 +356,20 @@ async def get_session_usage(
                 break
         if context_window_tokens == 0:
             context_window_tokens = _known_context_window(model)
-        session_obj = await asyncio.to_thread(store.get, session_id)
-        if session_obj and session_obj.history:
-            estimated_context_tokens = estimate_tokens(session_obj.history)
-            effective_window = context_window_tokens if context_window_tokens > 0 else _FALLBACK_WINDOW
+        effective_window = effective_context_window(model, context_window_tokens)
+
+        # The UI polls this endpoint every 8s. Loading and re-scanning the
+        # whole transcript on each poll is the single most expensive thing a
+        # long session does while idle, so memoize on the session's
+        # ``updated_at`` — which changes on every history write.
+        estimated_context_tokens = await _cached_context_estimate(
+            store, session_id, updated_at, estimate_tokens
+        )
+        if estimated_context_tokens:
             context_pct = round(
                 min(estimated_context_tokens / effective_window, 1.0), 4
             )
-            if context_window_tokens > 0:
-                context_zone = classify_zone(estimated_context_tokens, context_window_tokens)
-            elif context_pct > 0.8:
-                context_zone = "red"
-            elif context_pct > 0.6:
-                context_zone = "orange"
+            context_zone = classify_zone(estimated_context_tokens, effective_window)
     except Exception:
         log.debug("context-zone enrichment failed", exc_info=True)
 
@@ -370,7 +404,16 @@ async def get_context_stats(
 
     history = session.history or []
 
-    from ...agent.loop.overflow import _chars_per_token
+    # Use the shared estimator, not a local re-implementation. This endpoint
+    # used to count tokens its own way against a 128K fallback window, so the
+    # percentage the user saw in the meter was not the percentage that
+    # triggered compaction, and attachments were counted as their vault path.
+    from ...agent.loop.overflow import (
+        OUTPUT_HEADROOM_TOKENS,
+        TOOLS_AND_SYSTEM_OVERHEAD,
+        effective_context_window,
+        estimate_tokens,
+    )
     from ...agent.loop.zones import classify_zone
     from ...config_file import load as load_config
 
@@ -392,13 +435,11 @@ async def get_context_stats(
             break
     if context_window_tokens == 0:
         context_window_tokens = _known_context_window(model)
-    effective_window = context_window_tokens if context_window_tokens > 0 else 128_000
+    effective_window = effective_context_window(model, context_window_tokens)
 
     role_tokens: dict[str, int] = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
     role_counts: dict[str, int] = {"user": 0, "assistant": 0, "tool": 0, "system": 0}
     tool_stats: dict[str, dict] = {}
-
-    import json as _json
 
     for msg in history:
         role_val = msg.role.value if hasattr(msg.role, "value") else str(msg.role)
@@ -406,23 +447,7 @@ async def get_context_stats(
         if role_key not in role_tokens:
             role_key = "system"
 
-        content = msg.content or ""
-        if not isinstance(content, str):
-            try:
-                content = _json.dumps(content, ensure_ascii=False)
-            except (TypeError, ValueError):
-                content = str(content)
-
-        chars_per = _chars_per_token(content) if content else 4
-        msg_tokens = (len(content) // chars_per + 4) if content else 4
-
-        tcs = getattr(msg, "tool_calls", None)
-        if tcs:
-            try:
-                tc_text = _json.dumps(tcs, default=str, ensure_ascii=False)
-            except (TypeError, ValueError):
-                tc_text = ""
-            msg_tokens += len(tc_text) // 3 if tc_text else 0
+        msg_tokens = estimate_tokens([msg])
 
         role_tokens[role_key] += msg_tokens
         role_counts[role_key] += 1
@@ -456,6 +481,12 @@ async def get_context_stats(
         "message_counts": role_counts,
         "tool_stats": sorted(tool_stats.values(), key=lambda x: x["estimated_tokens"], reverse=True),
         "compaction_hint": compaction_hint,
+        # What the engine actually budgets against, so the dropdown can
+        # explain why compaction fires before the bar looks full.
+        "usable_context_tokens": max(
+            0, effective_window - OUTPUT_HEADROOM_TOKENS - TOOLS_AND_SYSTEM_OVERHEAD
+        ),
+        "reserved_tokens": OUTPUT_HEADROOM_TOKENS + TOOLS_AND_SYSTEM_OVERHEAD,
     }
 
 
@@ -566,9 +597,14 @@ async def compact_session(
         cfg = getattr(request.app.state, "mutable_state", {}).get("cfg")
         model_id = getattr(getattr(cfg, "agent", None), "default_model", None) or None
     provider, upstream_model = agent._resolve_provider(model_id)
-    context_window = agent._context_window_for(upstream_model or model_id)
-    if context_window == 0 and (upstream_model or model_id) in _KNOWN_WINDOWS:
-        context_window = _KNOWN_WINDOWS[upstream_model or model_id]
+    from ...agent.loop.overflow import effective_context_window
+
+    # Never budget against 0 — resolve configured → registry → family →
+    # conservative fallback, the same ladder every other gate uses.
+    context_window = effective_context_window(
+        upstream_model or model_id or "",
+        agent._context_window_for(upstream_model or model_id),
+    )
 
     new_history, report = await compact_and_summarize(
         session.history,
@@ -589,9 +625,11 @@ async def compact_session(
         report.zone_after, report.still_overflowed,
     )
 
-    if report.compact_report.compacted > 0 or report.summarized:
+    if report.compact_report.compacted > 0 or report.summarized or report.hard_trimmed:
         new_history = _clear_partial_prefixes(new_history)
         await asyncio.to_thread(store.replace_history, session_id, new_history)
+        # The cached meter estimate is keyed on ``updated_at``, which the
+        # write above bumps, so no explicit invalidation is needed.
 
     return {
         "inspected_tool_messages": report.compact_report.inspected,
@@ -609,6 +647,7 @@ async def compact_session(
         "zone_after": report.zone_after,
         "still_overflowed": report.still_overflowed,
         "budget_exceeded": report.budget_exceeded,
+        "hard_trimmed": report.hard_trimmed,
     }
 
 

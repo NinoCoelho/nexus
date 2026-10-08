@@ -104,21 +104,37 @@ class SessionStore(PubSubMixin, QueryMixin):
         parent_session_id: str,
         title: str | None = None,
         hidden: bool = True,
+        context: str | None = None,
+        project_id: str | None = None,
     ) -> Session:
         """Create a new session linked to ``parent_session_id``.
 
         Used by the spawn_subagents tool: the child runs a fresh agent loop
         in isolation and its transcript is persisted under a real session
         id. Hidden child sessions are excluded from ``list()`` by default.
+
+        ``context`` and ``project_id`` support the ``fork_session`` tool, where
+        the child is user-visible and must stay inside the parent's project
+        (otherwise a forked chat vanishes from the Projects view).
         """
         sid = uuid.uuid4().hex
-        d = self._loom.get_or_create(sid, title=title or "Sub-agent", context=None)
+        d = self._loom.get_or_create(sid, title=title or "Sub-agent", context=context)
         self._loom._db.execute(
             "UPDATE sessions SET parent_session_id = ?, hidden = ? WHERE id = ?",
             (parent_session_id, 1 if hidden else 0, sid),
         )
+        if project_id:
+            self._loom._db.execute(
+                "UPDATE sessions SET project_id = ? WHERE id = ?",
+                (project_id, sid),
+            )
         self._loom._db.commit()
-        return Session(id=d["id"], title=d["title"] or "Sub-agent", context=None)
+        return Session(
+            id=d["id"],
+            title=d["title"] or "Sub-agent",
+            context=context,
+            project_id=project_id,
+        )
 
     def get_or_create(self, session_id: str | None, context: str | None = None, project_id: str | None = None) -> Session:
         if session_id is None:
@@ -474,6 +490,16 @@ class SessionStore(PubSubMixin, QueryMixin):
         )
         self._loom._db.commit()
         self._cancel_all_pending(session_id)
+        # Context artifacts live on the filesystem, inside the (Syncthing-
+        # replicated) vault, so deleting the rows alone left this session's
+        # rolling summary and the verbatim archive of its collapsed messages
+        # behind forever.
+        try:
+            from ...context_artifacts import purge_session_artifacts
+
+            purge_session_artifacts(session_id)
+        except Exception:  # noqa: BLE001 — tidying must not fail a delete
+            log.debug("delete: context artifact purge failed", exc_info=True)
 
     def cleanup_old_llm_errors(self, *, keep_days: int = 90) -> int:
         """Delete retained LLM error rows older than ``keep_days``.

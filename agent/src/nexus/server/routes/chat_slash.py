@@ -279,6 +279,44 @@ async def handle_title(
 # /usage
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _context_usage_rows(model: str, history: list[ChatMessage]) -> str:
+    """Extra `/usage` table rows describing context fill.
+
+    `/usage` reported cumulative tokens but never how full the window is,
+    which left the chat surfaces that have no status bar (Telegram in
+    particular) with no way to see that a compaction was imminent.
+    """
+    try:
+        from ...agent.loop.overflow import (
+            effective_context_window,
+            estimate_tokens,
+            usable_tokens,
+        )
+        from ...agent.loop.zones import classify_zone
+        from ...config_file import load_cached
+
+        cfg = load_cached()
+        configured = 0
+        for entry in cfg.models:
+            if entry.id == model or entry.model_name == model:
+                configured = int(entry.context_window or 0)
+                break
+        window = effective_context_window(model, configured)
+        usable = usable_tokens(window)
+        est = estimate_tokens(history) if history else 0
+        pct = round(est / usable * 100, 1) if usable else 0.0
+        zone = classify_zone(est, window)
+        return (
+            f"| Context used | {_format_int(est)} / {_format_int(usable)} "
+            f"usable ({pct}%) |\n"
+            f"| Context zone | {zone} |\n"
+            f"| Window | {_format_int(window)} |\n"
+        )
+    except Exception:  # noqa: BLE001 — /usage must never fail on this
+        log.debug("usage: context rows failed", exc_info=True)
+        return ""
+
+
 async def handle_usage(
     *,
     store: SessionStore,
@@ -309,6 +347,7 @@ async def handle_usage(
             f"| Tool calls | {_format_int(tool_calls)} |\n"
             f"| Messages in history | {_format_int(len(pre_turn_history))} |\n"
         )
+        status += _context_usage_rows(model, pre_turn_history)
 
     final_messages = list(pre_turn_history) + [
         ChatMessage(role=Role.USER, content=user_message),
