@@ -178,7 +178,10 @@ class TestScheduleDriverDue:
         import datetime as dt
 
         d = self._driver()
-        now = dt.datetime.now(dt.timezone.utc)
+        # Deterministic clock, deliberately mid-hour: a wall-clock `now`
+        # made this flaky — run within 5 min after the top of the hour and
+        # the missed `0 * * * *` slot is legitimately due (catch-up).
+        now = dt.datetime(2026, 10, 12, 14, 32, tzinfo=dt.timezone.utc)
         state: dict = {}
         key = "wf.md:t1"
         state[key] = (now - dt.timedelta(minutes=5)).isoformat()

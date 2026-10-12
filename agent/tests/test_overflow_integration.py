@@ -1,6 +1,7 @@
-"""End-to-end: pre-flight context_overflow short-circuits the turn before
-the LLM is dialed, and post-flight empty_response gets annotated when the
-request was already at >70% of the window."""
+"""End-to-end overflow behavior: an oversized history is *rescued*
+(compacted down and the turn proceeds — the never-run-out contract),
+while post-flight empty_response gets annotated when the request was
+already at >70% of the window."""
 
 from __future__ import annotations
 
@@ -29,6 +30,9 @@ class _SpyProvider(LLMProvider):
     def __init__(self) -> None:
         self.chat_calls = 0
         self.stream_calls = 0
+        # Last prompt seen by chat_stream, as a list of message dicts —
+        # lets rescue-path tests prove the blob was compacted away.
+        self.last_messages: list | None = None
 
     async def chat(self, messages, *, tools=None, model=None, max_tokens=None) -> ChatResponse:
         self.chat_calls += 1
@@ -38,6 +42,10 @@ class _SpyProvider(LLMProvider):
         self, messages, *, tools=None, model=None, max_tokens=None,
     ) -> AsyncIterator[StreamEvent]:
         self.stream_calls += 1
+        self.last_messages = [
+            {"role": getattr(m, "role", None), "content": getattr(m, "content", None)}
+            for m in messages
+        ]
         # Echo a tiny content delta + finish so a non-overflowing call still
         # completes a turn cleanly.
         yield {"type": "delta", "text": "ok"}
@@ -80,7 +88,10 @@ def agent_with_window(tmp_path: Path):
     return agent, spy
 
 
-async def test_preflight_aborts_before_llm_when_overflowed(agent_with_window) -> None:
+async def test_preflight_compacts_oversized_history_before_llm(agent_with_window) -> None:
+    """Never-run-out contract: an oversized history is compacted/rescued
+    and the turn proceeds — the provider is dialed with a prompt that no
+    longer carries the blob, instead of the turn being refused."""
     agent, spy = agent_with_window
     # 1.4 MB of history → ~350K tokens, way above the 200K window.
     blob = "x" * 1_400_000
@@ -96,21 +107,21 @@ async def test_preflight_aborts_before_llm_when_overflowed(agent_with_window) ->
     ):
         events.append(ev)
 
-    # The provider must NOT have been called — the whole point of the check.
-    assert spy.chat_calls == 0
-    assert spy.stream_calls == 0
+    # The rescue path compacted the history and dialed the provider once.
+    assert spy.chat_calls >= 1 or spy.stream_calls == 1
+    assert spy.stream_calls == 1
 
+    # The blob was summarized away — the prompt the provider saw is tiny.
+    assert spy.last_messages is not None
+    total = sum(len(str(m["content"] or "")) for m in spy.last_messages)
+    assert total < 100_000, f"prompt still carries the blob: {total} chars"
+
+    # And the turn completed normally instead of erroring out.
     error = next((e for e in events if e["type"] == "error"), None)
-    assert error is not None
-    assert error["reason"] == "context_overflow"
-    assert error["retryable"] is False
-    assert error["context_window"] == 200_000
-    assert error["estimated_input_tokens"] > 200_000
-    assert "compact_history" in (error["actions"] or [])
-
+    assert error is None
     done = next((e for e in events if e["type"] == "done"), None)
     assert done is not None
-    assert done["reply"] == ""
+    assert done["reply"] == "ok"
     await agent.aclose()
 
 
