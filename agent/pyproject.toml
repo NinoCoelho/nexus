@@ -71,6 +71,10 @@ dependencies = [
     # RSS/Atom feed parser for workflow rss triggers. Handles RSS 1.0/2.0,
     # Atom, and tolerates malformed feeds.
     "feedparser>=6.0",
+    # CDP websocket client for the managed-Chrome computer-use subsystem
+    # (nexus.browser) — was transitive via uvicorn[standard]; the browser
+    # manager imports it directly.
+    "websockets>=12",
 ]
 
 [tool.uv.sources]

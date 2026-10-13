@@ -26,7 +26,9 @@ export default function SiteLoginsSection() {
   const [newSite, setNewSite] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ site: string; username: string } | null>(
+    null,
+  );
 
   async function refresh() {
     setLoading(true);
@@ -58,8 +60,8 @@ export default function SiteLoginsSection() {
       return;
     }
     try {
-      await setSiteCredential(newSite.trim(), newUsername.trim(), newPassword);
-      toast.success(t("settings:siteLogins.toast.saved", { site: newSite.trim() }));
+      const savedSite = await setSiteCredential(newSite.trim(), newUsername.trim(), newPassword);
+      toast.success(t("settings:siteLogins.toast.saved", { site: savedSite }));
       setAddOpen(false);
       await refresh();
     } catch (e) {
@@ -69,11 +71,11 @@ export default function SiteLoginsSection() {
     }
   }
 
-  async function handleDeleteConfirmed(site: string) {
+  async function handleDeleteConfirmed(item: { site: string; username: string }) {
     setConfirmDelete(null);
     try {
-      await deleteSiteCredential(site);
-      toast.success(t("settings:siteLogins.toast.deleted", { site }));
+      await deleteSiteCredential(item.site, item.username);
+      toast.success(t("settings:siteLogins.toast.deleted", { site: item.site }));
       await refresh();
     } catch (e) {
       toast.error(t("settings:siteLogins.toast.deleteFailed"), {
@@ -113,23 +115,23 @@ export default function SiteLoginsSection() {
               </tr>
             </thead>
             <tbody>
-              {items.map((c) => (
-                <tr key={c.site}>
-                  <td>
-                    <code>{c.site}</code>
-                  </td>
-                  <td>{c.username}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="settings-btn"
-                      onClick={() => setConfirmDelete(c.site)}
-                    >
-                      {t("settings:siteLogins.deleteButton")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
+          {items.map((c) => (
+            <tr key={`${c.site}::${c.username}`}>
+              <td>
+                <code>{c.site}</code>
+              </td>
+              <td>{c.username}</td>
+              <td>
+                <button
+                  type="button"
+                  className="settings-btn"
+                  onClick={() => setConfirmDelete({ site: c.site, username: c.username })}
+                >
+                  {t("settings:siteLogins.deleteButton")}
+                </button>
+              </td>
+            </tr>
+          ))}
             </tbody>
           </table>
         )}
@@ -216,7 +218,9 @@ export default function SiteLoginsSection() {
         <Modal
           kind="confirm"
           danger
-          title={t("settings:siteLogins.deleteModalTitle", { site: confirmDelete })}
+          title={t("settings:siteLogins.deleteModalTitle", {
+            site: `${confirmDelete.site} (${confirmDelete.username})`,
+          })}
           message={t("settings:siteLogins.deleteModalMessage")}
           confirmLabel={t("settings:siteLogins.deleteModalCta")}
           onCancel={() => setConfirmDelete(null)}

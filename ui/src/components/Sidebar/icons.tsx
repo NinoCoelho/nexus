@@ -135,3 +135,15 @@ export function IconUpdate() {
     </svg>
   );
 }
+
+export function IconBrowser() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="16" height="14" rx="2" />
+      <line x1="2" y1="7" x2="18" y2="7" />
+      <circle cx="5" cy="5" r="0.5" fill="currentColor" stroke="none" />
+      <circle cx="7.5" cy="5" r="0.5" fill="currentColor" stroke="none" />
+      <path d="M7 14c0.8-2.5 4.2-2.5 5 0" />
+    </svg>
+  );
+}

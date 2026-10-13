@@ -405,6 +405,27 @@ class CoordinatorConfig(BaseModel):
     sweep_model: str = ""
 
 
+class BrowserConfig(BaseModel):
+    """The managed-Chrome computer-use subsystem (``browser`` tool).
+
+    One Chrome process per context: ``main`` (coordinator master chat +
+    unprojected sessions, on ``cdp_port`` with the legacy
+    ``~/.nexus/chrome-profile`` profile) and one per project (dedicated
+    profiles under ``~/.nexus/browser-profiles/``, ports allocated above
+    ``cdp_port``)."""
+
+    enabled: bool = True
+    # CDP port of the *main* instance. 9223 = the historical
+    # chrome-devtools port (see cdp_fill.DEFAULT_CDP_PORT) so saved
+    # logins and the site-credentials CDP fill keep working; project
+    # instances scan upward from here.
+    cdp_port: int = 9223
+    # Stop an idle Chrome process after this many minutes so N projects
+    # don't leave N Chromes running forever. 0 = keep alive (spec
+    # default; the profile persists so relaunch is cheap either way).
+    idle_shutdown_minutes: int = 30
+
+
 class NexusConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
@@ -422,6 +443,7 @@ class NexusConfig(BaseModel):
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     coordinator: CoordinatorConfig = Field(default_factory=CoordinatorConfig)
+    browser: BrowserConfig = Field(default_factory=BrowserConfig)
 
 
 # Fresh install starts with providers configured but NO models.

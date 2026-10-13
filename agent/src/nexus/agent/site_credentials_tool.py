@@ -31,6 +31,7 @@ SITE_CREDENTIALS_TOOL = ToolSpec(
     description=(
         "Manage saved site logins (username + password, Fernet-encrypted at "
         "rest in ~/.nexus/site_credentials.db) and fill them into browsers. "
+        "Multiple logins per site are supported (one entry per username). "
         "You NEVER see a password: 'save' opens a masked form for the user "
         "and stores the answer encrypted; 'fill' resolves the credential "
         "server-side and types it into the login form. Actions: "
@@ -38,7 +39,9 @@ SITE_CREDENTIALS_TOOL = ToolSpec(
         "login — pass a short reason), 'fill' (log into the current page: "
         "surface='cdp' targets the chrome-devtools debug Chrome on port "
         "9223, surface='page' targets the user's real tab via the Chrome "
-        "side panel), 'delete'. For browser login flows ALWAYS prefer this "
+        "side panel), 'delete'. Pass username= to pick a specific account "
+        "when a site has several (fill/delete) or to replace that account's "
+        "password (save). For browser login flows ALWAYS prefer this "
         "over asking the user to type a password into chat."
     ),
     parameters={
@@ -54,6 +57,16 @@ SITE_CREDENTIALS_TOOL = ToolSpec(
                 "description": (
                     "Site domain or URL, e.g. 'github.com' or "
                     "'https://github.com/login' — normalized to the bare host."
+                ),
+            },
+            "username": {
+                "type": "string",
+                "description": (
+                    "Pick/replace one specific account when the site has "
+                    "several saved logins (fill/delete: which one; save: "
+                    "replaces that account's entry). Without it, fill uses "
+                    "the most recently updated login and delete removes all "
+                    "logins for the site (after listing them when ambiguous)."
                 ),
             },
             "surface": {
@@ -142,14 +155,23 @@ class SiteCredentialsHandler:
         site = store.normalize_site(args.get("site") or "")
         if not site:
             return _json(False, error="'site' is required (domain or URL)")
-        if store.exists(site) and not args.get("overwrite"):
+        username_hint = args.get("username") if isinstance(args.get("username"), str) else None
+        # Overwrite gate is per (site, username): adding a *second account*
+        # to a site is always allowed; replacing an existing account's
+        # password needs overwrite=true.
+        if (
+            not args.get("overwrite")
+            and username_hint
+            and username_hint in store.usernames(site)
+        ):
             return _json(
                 False,
                 error=(
-                    f"a login for {site} is already saved — use action='fill', "
-                    "or pass overwrite=true to replace it"
+                    f"a login for {site} as {username_hint} is already saved — use "
+                    "action='fill', or pass overwrite=true to replace it"
                 ),
                 site=site,
+                username=username_hint,
             )
 
         session_id = CURRENT_SESSION_ID.get()
@@ -244,6 +266,23 @@ class SiteCredentialsHandler:
             return _json(False, error="missing username in form answer")
         if not isinstance(password, str) or not password:
             return _json(False, error="missing password in form answer")
+        # Post-answer gate: a *new* username for the site is always fine
+        # (that's how a second account is added); re-saving an existing
+        # username replaces its password, so it needs overwrite=true.
+        if (
+            not args.get("overwrite")
+            and username in store.usernames(site)
+            and username != username_hint
+        ):
+            return _json(
+                False,
+                error=(
+                    f"{site} already has a login as {username} — pass overwrite=true "
+                    "to replace its password"
+                ),
+                site=site,
+                username=username,
+            )
 
         saved = store.save(site, username, password)
         return _json(
@@ -261,8 +300,20 @@ class SiteCredentialsHandler:
         site = store.normalize_site(args.get("site") or "")
         if not site:
             return _json(False, error="'site' is required (domain or URL)")
-        cred = store.get(site)
+        username = args.get("username") if isinstance(args.get("username"), str) else None
+        cred = store.get(site, username)
         if cred is None:
+            known = store.usernames(site)
+            if username and known:
+                return _json(
+                    False,
+                    error=(
+                        f"no login for {site} as {username} — saved accounts: "
+                        f"{', '.join(known)}"
+                    ),
+                    site=site,
+                    usernames=known,
+                )
             return _json(
                 False,
                 error=f"no saved login for {site} — call action='save' first",
@@ -325,7 +376,7 @@ class SiteCredentialsHandler:
         if result.get("ok"):
             from .. import site_credentials as store
 
-            store.mark_used(cred.site)
+            store.mark_used(cred.site, cred.username)
         return json.dumps(result, ensure_ascii=False)
 
     async def _fill_via_cdp(
@@ -360,7 +411,7 @@ class SiteCredentialsHandler:
         if result.get("ok"):
             from .. import site_credentials as store
 
-            store.mark_used(cred.site)
+            store.mark_used(cred.site, cred.username)
         return json.dumps(result, ensure_ascii=False)
 
     # ── delete ───────────────────────────────────────────────────────────
@@ -371,16 +422,30 @@ class SiteCredentialsHandler:
         site = store.normalize_site(args.get("site") or "")
         if not site:
             return _json(False, error="'site' is required (domain or URL)")
-        cred = store.get(site)
-        if cred is None:
+        username = args.get("username") if isinstance(args.get("username"), str) else None
+        known = store.usernames(site)
+        if not known:
             return _json(False, error=f"no saved login for {site}", site=site)
+        if username is None and len(known) > 1:
+            # Several accounts: refuse to wipe them all in one shot — the
+            # agent must name the account (or retry per username).
+            return _json(
+                False,
+                error=(
+                    f"{site} has {len(known)} saved logins ({', '.join(known)}) — "
+                    "pass username= to delete a specific one"
+                ),
+                site=site,
+                usernames=known,
+            )
+        target = username or known[0]
 
         if self._ask_user is not None:
             result = await self._ask_user.invoke(
                 {
                     "prompt": (
                         f"Delete the saved login for {site} "
-                        f"({cred.username})? This cannot be undone."
+                        f"({target})? This cannot be undone."
                     ),
                     "kind": "confirm",
                 }
@@ -391,5 +456,6 @@ class SiteCredentialsHandler:
             if answer not in (True, "true", "True", "yes", "Yes"):
                 return _json(False, error="delete cancelled by user", site=site)
 
-        deleted = store.delete(site)
-        return _json(True, site=site, deleted=deleted)
+        deleted = store.delete(site, target)
+        remaining = store.usernames(site)
+        return _json(True, site=site, username=target, deleted=deleted, remaining=remaining)

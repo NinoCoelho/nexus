@@ -59,6 +59,7 @@ class AgentHandlers:
         page: Any | None = None,
         site_credentials: Any | None = None,
         coordinator_getter: Any | None = None,
+        browser: Any | None = None,
     ) -> None:
         self.ask_user = ask_user
         self.terminal = terminal
@@ -69,6 +70,7 @@ class AgentHandlers:
         self.page = page
         self.site_credentials = site_credentials
         self.coordinator_getter = coordinator_getter
+        self.browser = browser
 
 
 def build_tool_registry(
@@ -77,6 +79,7 @@ def build_tool_registry(
     handlers: AgentHandlers,
     search_cfg: Any | None = None,
     scrape_cfg: Any | None = None,
+    browser_cfg: Any | None = None,
     home: "AgentHome | None" = None,
     permissions: "AgentPermissions | None" = None,
     tool_allowlist: set[str] | None = None,
@@ -287,6 +290,20 @@ def build_tool_registry(
         return await h.invoke(args)
 
     registry.register(_SimpleToolHandler(SITE_CREDENTIALS_TOOL, _site_credentials))
+
+    # browser — computer-use over the per-context managed Chrome. Gated by
+    # [browser].enabled at build time (mirrors search/scrape); the handler
+    # is late-bound like the other HITL-adjacent tools.
+    if browser_cfg is None or getattr(browser_cfg, "enabled", True):
+        from nexus.browser.tool import BROWSER_TOOL
+
+        async def _browser(args: dict) -> str:
+            h = handlers.browser
+            if h is None:
+                return '{"ok": false, "error": "browser unavailable: handler not wired"}'
+            return await h.invoke(args)
+
+        registry.register(_SimpleToolHandler(BROWSER_TOOL, _browser))
 
     async def _notify_user(args: dict) -> str:
         h = handlers.notify_user

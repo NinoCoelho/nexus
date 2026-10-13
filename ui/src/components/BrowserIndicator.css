@@ -1,0 +1,283 @@
+/* BrowserIndicator — header icon (hover thumbnail + click popup) for the
+ * managed-Chrome subsystem. The thumb/popup render through a portal to
+ * document.body (.nxb-portal, position: fixed): header-anchored absolute
+ * panels lose hit-testing to the chat content under .app-main — the same
+ * reason GlobalSpinner portals its dropdown. z-index 190 keeps popups
+ * above app content but below modal backdrops (approval 200, missed 300). */
+
+.nxb-portal {
+  position: fixed;
+  z-index: 190;
+}
+
+.nxb-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* ── icon states ─────────────────────────────────────────────────────── */
+
+.nxb-btn {
+  color: var(--fg-dim);
+}
+
+.nxb-btn--running {
+  color: #2ea043;
+}
+
+/* A browser runs in a context OTHER than the open chat's — keep it visible
+ * (amber) so cross-context activity is never silently hidden. */
+.nxb-btn--other {
+  color: #d29922;
+}
+
+.nxb-btn--active {
+  color: #2ea043;
+  animation: nxb-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes nxb-blink {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.9);
+  }
+}
+
+/* ── hover thumbnail ─────────────────────────────────────────────────── */
+
+.nxb-thumb {
+  width: 300px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.nxb-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.nxb-thumb-empty {
+  padding: 22px 12px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+
+.nxb-thumb-title {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* ── popup panel ─────────────────────────────────────────────────────── */
+
+.nxb-panel {
+  width: 480px;
+  max-height: min(720px, calc(100vh - 120px));
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nxb-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nxb-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 11.5px;
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nxb-tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.nxb-tab.is-active {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.nxb-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--fg-faint);
+}
+
+.nxb-dot--on {
+  background: #2ea043;
+}
+
+.nxb-dot--idle {
+  background: #d29922;
+}
+
+.nxb-dot--off {
+  opacity: 0.5;
+}
+
+.nxb-shot {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-inset, var(--bg-panel));
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+}
+
+.nxb-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.nxb-shot-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+
+.nxb-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nxb-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nxb-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+}
+
+.nxb-mini-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.nxb-mini-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.nxb-mini-btn--danger:hover:not(:disabled) {
+  border-color: #b3413c;
+  color: #e5534b;
+}
+
+.nxb-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 7px;
+}
+
+.nxb-log-row {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  min-width: 0;
+  color: var(--fg);
+}
+
+.nxb-log-row.is-error {
+  color: #e5534b;
+}
+
+.nxb-log-key {
+  flex: none;
+  min-width: 52px;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-faint);
+}
+
+.nxb-log-action {
+  flex: none;
+  min-width: 62px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.nxb-log-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nxb-log-empty {
+  font-size: 11px;
+  color: var(--fg-faint);
+  margin: 2px 0;
+}
+
+.nxb-hint {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  opacity: 0.75;
+}

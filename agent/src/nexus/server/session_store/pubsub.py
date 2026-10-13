@@ -42,6 +42,10 @@ _GLOBAL_HITL_KINDS = frozenset({
     "settings_changed",
     "job_started",
     "job_done",
+    # Live-view feed for the Browser pane (screenshot refresh + event log).
+    # Fire-and-forget like calendar_alert; no bell/push treatment (the
+    # _on_global_hitl_event hook only acts on user_request* kinds).
+    "browser_event",
 })
 
 # Cap per-subscriber SSE queues. A backgrounded/throttled browser tab stops

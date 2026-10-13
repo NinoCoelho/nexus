@@ -21,11 +21,36 @@ class SiteCredentialIn(BaseModel):
     password: str
 
 
+class SiteCredentialCreate(BaseModel):
+    """Canonical create/replace payload — the site rides in the body, never
+    the path: user-typed sites are often full URLs, and unencoded ``/``
+    inside a path segment turns ``PUT /site-credentials/{site}`` into a
+    multi-segment path no route matches (405 before normalize_site could
+    ever run)."""
+
+    site: str
+    username: str
+    password: str
+
+
 @router.get("/site-credentials")
 async def list_site_credentials() -> list[dict[str, Any]]:
     from ... import site_credentials as _store
 
     return _store.list_sites()
+
+
+@router.post("/site-credentials")
+async def create_site_credential(body: SiteCredentialCreate) -> dict[str, str]:
+    from ... import site_credentials as _store
+
+    try:
+        entry = _store.save(body.site, body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return {"site": entry.site}
 
 
 @router.put("/site-credentials/{site}", status_code=status.HTTP_204_NO_CONTENT)
@@ -41,10 +66,12 @@ async def set_site_credential(site: str, body: SiteCredentialIn) -> None:
 
 
 @router.delete("/site-credentials/{site}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_site_credential(site: str) -> None:
+async def delete_site_credential(site: str, username: str | None = None) -> None:
+    """Delete one credential (site+username) or every credential for the
+    site when no username is given."""
     from ... import site_credentials as _store
 
-    _store.delete(site)
+    _store.delete(site, username)
 
 
 @router.get("/site-credentials/{site}/exists")

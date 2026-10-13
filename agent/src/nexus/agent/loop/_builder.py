@@ -152,6 +152,7 @@ def build_loom_agent(
         handlers=handlers,
         search_cfg=_init_cfg.search if _init_cfg else None,
         scrape_cfg=_init_cfg.scrape if _init_cfg else None,
+        browser_cfg=_init_cfg.browser if _init_cfg else None,
         home=home,
         permissions=permissions,
         tool_allowlist=tool_allowlist,

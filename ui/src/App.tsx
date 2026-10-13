@@ -47,6 +47,7 @@ import { useBackgroundSkillBuilds } from "./hooks/useBackgroundSkillBuilds";
 import { useGlobalSubscriptions } from "./hooks/useGlobalSubscriptions";
 import { useTranslation } from "react-i18next";
 import NotificationBell from "./components/NotificationBell";
+import BrowserIndicator from "./components/BrowserIndicator";
 import GlobalSpinner from "./components/GlobalSpinner";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useRunningJobs } from "./hooks/useRunningJobs";
@@ -341,11 +342,15 @@ export default function App() {
   }, [_handleSessionSelect, chatStates, pendingNewSession, openSessionLocation, setChatStates]);
 
   const handleNewChat = useCallback((projectId?: string | null) => {
-    _handleNewChat(projectId);
+    // Guard: some call sites hand this straight to onClick, whose first
+    // argument is the MouseEvent — coerce anything that isn't a string id
+    // to "unprojected" instead of storing the event as projectId.
+    const pid = typeof projectId === "string" && projectId ? projectId : null;
+    _handleNewChat(pid);
     clearPendingRequest();
-    if (projectId) {
-      setProjectsSelectedId(projectId);
-      setProjectsExpandedId(projectId);
+    if (pid) {
+      setProjectsSelectedId(pid);
+      setProjectsExpandedId(pid);
       setProjectsChatOpen(true);
       setView("projects");
     } else {
@@ -691,7 +696,7 @@ export default function App() {
 
       <div className="app-main">
         <Header
-          onReset={handleNewChat}
+          onReset={() => handleNewChat()}
           yoloMode={yoloMode}
           onOpenMobileDrawer={() => setMobileDrawerOpen(true)}
           onOpenSettings={handleOpenSettings}
@@ -711,6 +716,9 @@ export default function App() {
           }
           notificationSlot={
             <>
+              <BrowserIndicator
+                contextKey={activeProjectId ? `project:${activeProjectId}` : "main"}
+              />
               <GlobalSpinner jobs={runningJobs} downloads={activeDownloads} onKill={killJob} onGoTo={handleGoToJob} onCancelDownload={cancelDownload} />
               <NotificationBell
               history={notificationCenter.history}

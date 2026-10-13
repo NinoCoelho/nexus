@@ -42,6 +42,7 @@ from .config_schema import (  # noqa: F401
     McpConfig,
     BrokerConfig,
     TelegramConfig,
+    BrowserConfig,
     NexusConfig,
     default_config,
 )
@@ -223,6 +224,11 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "sweep_interval_minutes": cfg.coordinator.sweep_interval_minutes,
             "quiet_hours": cfg.coordinator.quiet_hours,
             "auto_approve": cfg.coordinator.auto_approve,
+        },
+        "browser": {
+            "enabled": cfg.browser.enabled,
+            "cdp_port": cfg.browser.cdp_port,
+            "idle_shutdown_minutes": cfg.browser.idle_shutdown_minutes,
         },
     }
     for m in cfg.models:
@@ -474,6 +480,7 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         broker=broker,
         telegram=telegram,
         coordinator=CoordinatorConfig(**dict(raw.get("coordinator", {}))),
+        browser=BrowserConfig(**dict(raw.get("browser", {}))),
     )
 
 

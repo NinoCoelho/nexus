@@ -187,9 +187,24 @@ async def test_save_requires_site_and_guards_existing(tmp_path: Path) -> None:
     assert "site" in result["error"]
 
     sc.save("example.com", "alice", "hunter2")
-    result = json.loads(await handler.invoke({"action": "save", "site": "example.com"}))
+
+    # Username hint matching a saved account → preemptive overwrite guard.
+    result = json.loads(
+        await handler.invoke(
+            {"action": "save", "site": "example.com", "username": "alice"}
+        )
+    )
     assert result["ok"] is False
     assert "already saved" in result["error"]
+    assert result["username"] == "alice"
+
+    # No username hint: saving a (possibly new) account goes to the HITL
+    # form — a second account for the same site is the feature, so there
+    # is no preemptive site-level guard anymore. Without a live session
+    # the form can't open, which is how we observe the new behavior here.
+    result = json.loads(await handler.invoke({"action": "save", "site": "example.com"}))
+    assert result["ok"] is False
+    assert "HITL" in result["error"]
 
 
 async def test_fill_via_page_surface(tmp_path: Path) -> None:
@@ -281,6 +296,59 @@ async def test_delete_with_confirm(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["deleted"] is True
     assert sc.exists("example.com") is False
+
+
+async def test_fill_picks_account_by_username(tmp_path: Path) -> None:
+    store = SessionStore(db_path=tmp_path / "s.sqlite")
+    page = _FakePage()
+    handler = _handler(store, page=page)
+    sc.save("example.com", "alice", "one")
+    sc.save("example.com", "bob", "two")
+
+    # Default: most recently updated (bob).
+    await handler.invoke({"action": "fill", "site": "example.com", "surface": "page"})
+    assert page.calls[-1]["username"] == "bob"
+    assert page.calls[-1]["password"] == "two"
+
+    # Explicit username picks that account.
+    await handler.invoke(
+        {"action": "fill", "site": "example.com", "surface": "page", "username": "alice"}
+    )
+    assert page.calls[-1]["username"] == "alice"
+    assert page.calls[-1]["password"] == "one"
+
+    # Unknown username → clean error listing the saved accounts.
+    result = json.loads(
+        await handler.invoke(
+            {"action": "fill", "site": "example.com", "surface": "page", "username": "carol"}
+        )
+    )
+    assert result["ok"] is False
+    assert "carol" in result["error"]
+    assert set(result["usernames"]) == {"bob", "alice"}
+
+
+async def test_delete_requires_username_when_multiple(tmp_path: Path) -> None:
+    store = SessionStore(db_path=tmp_path / "s.sqlite")
+    handler = _handler(store, ask_user=_FakeAskUser(answer="true"))
+    sc.save("example.com", "alice", "one")
+    sc.save("example.com", "bob", "two")
+
+    # Ambiguous delete is refused, not confirmed-and-wiped.
+    result = json.loads(await handler.invoke({"action": "delete", "site": "example.com"}))
+    assert result["ok"] is False
+    assert "username" in result["error"]
+    assert sc.usernames("example.com") == ["bob", "alice"]
+
+    # Named delete removes just that account.
+    result = json.loads(
+        await handler.invoke(
+            {"action": "delete", "site": "example.com", "username": "alice"}
+        )
+    )
+    assert result["ok"] is True
+    assert result["username"] == "alice"
+    assert sc.usernames("example.com") == ["bob"]
 
 
 async def test_delete_cancelled(tmp_path: Path) -> None:

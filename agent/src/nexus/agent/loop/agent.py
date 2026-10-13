@@ -363,6 +363,14 @@ class Agent:
     def _site_credentials_handler(self, value: Any) -> None:
         self._handlers.site_credentials = value
 
+    @property
+    def _browser_handler(self) -> Any:
+        return self._handlers.browser
+
+    @_browser_handler.setter
+    def _browser_handler(self, value: Any) -> None:
+        self._handlers.browser = value
+
     def _context_window_for(self, model_id: str | None) -> int:
         cfg = self._nexus_cfg
         resolved = model_id or getattr(getattr(cfg, "agent", None), "default_model", None)

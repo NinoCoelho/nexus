@@ -404,6 +404,19 @@ export type CalendarAlarmPayload = {
   occurrence_start: string;
 };
 
+/** One browser_event from the managed-Chrome computer-use subsystem. */
+export type BrowserEventPayload = {
+  /** Context key: "main" | "project:<id>". */
+  key: string;
+  action: string;
+  url?: string | null;
+  title?: string | null;
+  screenshot?: string;
+  x?: number;
+  y?: number;
+  error?: string;
+};
+
 export type SessionEvent =
   | { kind: "iter"; data: { n: number } }
   | { kind: "delta"; data: { text: string } }
@@ -425,6 +438,7 @@ export type SessionEvent =
   | { kind: "job_done"; data: { job_id: string; type: string } }
   | { kind: "turn_settled"; data: { session_id?: string } }
   | { kind: "settings_changed"; data: { yolo_mode?: boolean; auto_accept_members?: boolean; ui_mode?: string } }
+  | { kind: "browser_event"; data: BrowserEventPayload }
   | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */
@@ -589,6 +603,7 @@ function openGlobalNotifSource(): void {
     "settings_changed",
     "job_started",
     "job_done",
+    "browser_event",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {

@@ -1,24 +1,31 @@
 """Site login credentials (username + password per site), encrypted at rest.
 
-Used by browser-control flows (the chrome-devtools CDP skill, the ``page``
-tool): the agent asks the user for a site login once via a masked HITL
-form, stores it here, and later asks the *server* to fill it into a
-browser. The plaintext password is never returned to the LLM — the only
-readers are server-side fill code and the Settings UI (which only ever
+Used by browser-control flows (the ``browser`` tool, the chrome-devtools CDP
+skill, the ``page`` tool): the agent asks the user for a site login once via
+a masked HITL form, stores it here, and later asks the *server* to fill it
+into a browser. The plaintext password is never returned to the LLM — the
+only readers are server-side fill code and the Settings UI (which only ever
 sees usernames).
 
 Storage shape (Fernet-encrypted JSON at ``~/.nexus/site_credentials.db``,
-key at ``~/.nexus/keys/site_credentials.key``, both mode 0600)::
+key at ``~/.nexus/keys/site_credentials.key``, both mode 0600). **v2 —
+multiple logins per site** (one entry per ``(site, username)`` pair)::
 
     {
-      "github.com": {
-        "username": "user@example.com",
-        "password": "hunter2",
-        "created_at": "2026-09-28T...",
-        "updated_at": "2026-09-28T...",
-        "last_used_at": null
-      }
+      "github.com": [
+        {
+          "username": "user@example.com",
+          "password": "hunter2",
+          "created_at": "2026-09-28T...",
+          "updated_at": "2026-09-28T...",
+          "last_used_at": null
+        },
+        { "username": "second@example.com", ... }
+      ]
     }
+
+v1 files (``{site: {entry}}`` — one login per site) are migrated on load:
+the dict entry becomes a single-element list, persisted on the next save.
 
 The key file is generated on first use. Encryption protects the file at
 rest (backups, sync folders, accidental reads); like every local secret
@@ -110,13 +117,15 @@ def _fernet() -> Any:
     return Fernet(key)
 
 
-def _load() -> dict[str, dict[str, Any]]:
+def _load() -> dict[str, list[dict[str, Any]]]:
+    """Load the store; migrates v1 single-entry shape to the v2 list shape."""
     if not SITE_CREDS_PATH.exists():
         return {}
     try:
         decrypted = _fernet().decrypt(SITE_CREDS_PATH.read_bytes())
         data = json.loads(decrypted.decode("utf-8"))
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
     except Exception:
         # Wrong/rotated key or corrupt file — treat as empty but say so.
         # A subsequent save overwrites the store, so surface the loss.
@@ -125,9 +134,16 @@ def _load() -> dict[str, dict[str, Any]]:
             SITE_CREDS_PATH,
         )
         return {}
+    migrated: dict[str, list[dict[str, Any]]] = {}
+    for site, value in data.items():
+        if isinstance(value, dict):  # v1: one entry per site
+            migrated[site] = [value]
+        elif isinstance(value, list):  # v2: entry per (site, username)
+            migrated[site] = [e for e in value if isinstance(e, dict)]
+    return migrated
 
 
-def _save(data: dict[str, dict[str, Any]]) -> None:
+def _save(data: dict[str, list[dict[str, Any]]]) -> None:
     SITE_CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
     encrypted = _fernet().encrypt(json.dumps(data, indent=2).encode("utf-8"))
     fd, tmp = tempfile.mkstemp(dir=SITE_CREDS_PATH.parent)
@@ -157,8 +173,20 @@ def _entry_to_credential(site: str, entry: dict[str, Any]) -> SiteCredential:
     )
 
 
+def _pick_entry(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Default credential for a site with several: the most recently
+    updated (ISO-8601 strings sort lexicographically); ties → first."""
+    if not entries:
+        return None
+    return max(
+        enumerate(entries),
+        key=lambda pair: (pair[1].get("updated_at") or "", -pair[0]),
+    )[1]
+
+
 def save(site: str, username: str, password: str) -> SiteCredential:
-    """Store (or replace) the login for ``site``. Returns the saved entry."""
+    """Store (or replace, keyed by site+username) a login. A new username
+    for an existing site adds a second credential — that's the point."""
     key = normalize_site(site)
     if not key:
         raise ValueError(f"cannot normalize site {site!r}")
@@ -166,24 +194,46 @@ def save(site: str, username: str, password: str) -> SiteCredential:
         raise ValueError("username and password must be non-empty")
     now = datetime.now(timezone.utc).isoformat()
     data = _load()
-    existing = data.get(key) or {}
+    entries = data.get(key) or []
+    existing = next((e for e in entries if e.get("username") == username), None)
     entry = {
         "username": username,
         "password": password,
-        "created_at": existing.get("created_at") or now,
+        "created_at": (existing or {}).get("created_at") or now,
         "updated_at": now,
-        "last_used_at": existing.get("last_used_at"),
+        "last_used_at": (existing or {}).get("last_used_at"),
     }
-    data[key] = entry
+    if existing is not None:
+        entries[entries.index(existing)] = entry
+    else:
+        entries.append(entry)
+    data[key] = entries
     _save(data)
     return _entry_to_credential(key, entry)
 
 
-def get(site: str) -> SiteCredential | None:
+def usernames(site: str) -> list[str]:
+    """Saved usernames for a site, most recently updated first (so
+    disambiguation prompts lead with the default credential)."""
+    key = normalize_site(site)
+    if not key:
+        return []
+    entries = _load().get(key) or []
+    ordered = sorted(entries, key=lambda e: e.get("updated_at") or "", reverse=True)
+    return [str(e.get("username", "")) for e in ordered if e.get("username")]
+
+
+def get(site: str, username: str | None = None) -> SiteCredential | None:
+    """Resolve a credential. With ``username``: that exact entry. Without:
+    the site's default (most recently updated) — backward compatible."""
     key = normalize_site(site)
     if not key:
         return None
-    entry = _load().get(key)
+    entries = _load().get(key) or []
+    if username is not None:
+        entry = next((e for e in entries if e.get("username") == username), None)
+    else:
+        entry = _pick_entry(entries)
     if entry is None:
         return None
     return _entry_to_credential(key, entry)
@@ -193,45 +243,67 @@ def exists(site: str) -> bool:
     return get(site) is not None
 
 
-def delete(site: str) -> bool:
+def delete(site: str, username: str | None = None) -> bool:
+    """Delete one credential (site+username) or, without a username, every
+    credential for the site."""
     key = normalize_site(site)
     if not key:
         return False
     data = _load()
-    if key not in data:
+    entries = data.get(key)
+    if not entries:
         return False
-    del data[key]
+    if username is None:
+        del data[key]
+    else:
+        remaining = [e for e in entries if e.get("username") != username]
+        if len(remaining) == len(entries):
+            return False
+        if remaining:
+            data[key] = remaining
+        else:
+            del data[key]
     _save(data)
     return True
 
 
 def list_sites() -> list[dict[str, Any]]:
-    """Listing for the agent tool and Settings UI. Never returns passwords."""
+    """Listing for the agent tool and Settings UI — one row per credential
+    (site × username). Never returns passwords."""
     out: list[dict[str, Any]] = []
-    for key, entry in sorted(_load().items()):
-        out.append(
-            {
-                "site": key,
-                "username": entry.get("username", ""),
-                "created_at": entry.get("created_at"),
-                "updated_at": entry.get("updated_at"),
-                "last_used_at": entry.get("last_used_at"),
-            }
-        )
+    data = _load()
+    for key in sorted(data):
+        for entry in sorted(
+            data[key], key=lambda e: e.get("updated_at") or "", reverse=True
+        ):
+            out.append(
+                {
+                    "site": key,
+                    "username": entry.get("username", ""),
+                    "created_at": entry.get("created_at"),
+                    "updated_at": entry.get("updated_at"),
+                    "last_used_at": entry.get("last_used_at"),
+                }
+            )
     return out
 
 
-def mark_used(site: str) -> None:
+def mark_used(site: str, username: str | None = None) -> None:
     """Best-effort ``last_used_at`` update after a successful fill."""
     key = normalize_site(site)
     if not key:
         return
     data = _load()
-    entry = data.get(key)
+    entries = data.get(key)
+    if not entries:
+        return
+    if username is not None:
+        entry = next((e for e in entries if e.get("username") == username), None)
+    else:
+        entry = _pick_entry(entries)
     if entry is None:
         return
     entry["last_used_at"] = datetime.now(timezone.utc).isoformat()
-    data[key] = entry
     try:
         _save(data)
     except Exception:  # noqa: BLE001 — telemetry only, never fail the fill

@@ -82,6 +82,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/workflows",
     "/projects",
     "/credentials",
+    "/browser",
 )
 
 
@@ -384,6 +385,34 @@ def create_app(
     agent._ask_user_handler = ask_user_handler
     page_handler = PageHandler(session_store=sessions)
     agent._page_handler = page_handler
+    # browser — computer-use over per-context managed Chrome (``main`` for
+    # the coordinator + unprojected sessions, one dedicated-profile Chrome
+    # per project). Disabled in config ⇒ tool not registered (see
+    # build_tool_registry) and /browser/* routes 404 (manager never set).
+    browser_cfg = getattr(nexus_cfg, "browser", None)
+    browser_manager = None
+    if browser_cfg is None or getattr(browser_cfg, "enabled", True):
+        from ..browser.manager import BrowserManager, set_manager
+        from ..browser.tool import BrowserHandler
+
+        browser_manager = BrowserManager(
+            base_port=int(getattr(browser_cfg, "cdp_port", 0) or 9223),
+            idle_shutdown_minutes=int(getattr(browser_cfg, "idle_shutdown_minutes", 30)),
+        )
+
+        def _browser_event_sink(key: str, data: dict[str, Any]) -> None:
+            # Attribute browser activity to the session whose turn is
+            # running (contextvar, same as _trace); manual actions from the
+            # HTTP routes carry no session and land on the pseudo-session
+            # "*browser*". The global notifications channel carries both.
+            session_id = CURRENT_SESSION_ID.get() or "*browser*"
+            sessions.publish(
+                session_id, SessionEvent(kind="browser_event", data={"key": key, **data})
+            )
+
+        browser_manager.event_sink = _browser_event_sink
+        set_manager(browser_manager)
+        agent._browser_handler = BrowserHandler(manager=browser_manager, session_store=sessions)
     # site_credentials — masked HITL prompt + encrypted store + browser fill
     # (CDP debug Chrome / the page tool's real tab). Shares the ask_user and
     # page handlers so YOLO plumbing and panel round-trips stay consistent.
@@ -495,6 +524,8 @@ def create_app(
     app.state.ask_user_handler = ask_user_handler
     app.state.terminal_procs = _terminal_procs
     app.state.job_tracker = job_tracker
+    if browser_manager is not None:
+        app.state.browser_manager = browser_manager
 
     # Coordinator (master chat) — one session wired to nexus_sessions /
     # session_dispatch tools and the sweep heartbeat driver via the
@@ -559,6 +590,7 @@ def create_app(
     from .routes.ext import router as ext_router
     from .routes.workflows import router as workflows_router
     from .routes.projects import router as projects_router
+    from .routes.browser import router as browser_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -601,6 +633,7 @@ def create_app(
     app.include_router(ext_router)
     app.include_router(workflows_router)
     app.include_router(projects_router)
+    app.include_router(browser_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

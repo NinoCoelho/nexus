@@ -65,13 +65,93 @@ def test_overwrite_preserves_created_and_updates() -> None:
     sc.save("example.com", "alice", "one")
     first = sc.get("example.com")
     assert first is not None
-    sc.save("example.com", "bob", "two")
+    sc.save("example.com", "alice", "two")
     second = sc.get("example.com")
     assert second is not None
-    assert second.username == "bob"
+    assert second.username == "alice"
     assert second.password == "two"
     assert second.created_at == first.created_at
     assert second.updated_at != first.updated_at or first.updated_at is None
+
+
+# ── multiple credentials per site ──────────────────────────────────────────
+
+
+def test_second_username_adds_account_not_replaces() -> None:
+    sc.save("example.com", "alice", "one")
+    sc.save("example.com", "bob", "two")
+    assert sc.usernames("example.com") == ["bob", "alice"]  # newest updated first
+    alice = sc.get("example.com", "alice")
+    bob = sc.get("example.com", "bob")
+    assert alice is not None and alice.password == "one"
+    assert bob is not None and bob.password == "two"
+    # Default (no username) = most recently updated.
+    default = sc.get("example.com")
+    assert default is not None and default.username == "bob"
+
+
+def test_list_sites_one_row_per_credential() -> None:
+    sc.save("example.com", "alice", "one")
+    sc.save("example.com", "bob", "two")
+    sc.save("other.com", "carol", "three")
+    rows = sc.list_sites()
+    assert len(rows) == 3
+    by_pair = {(r["site"], r["username"]) for r in rows}
+    assert by_pair == {("example.com", "alice"), ("example.com", "bob"), ("other.com", "carol")}
+    assert "password" not in json.dumps(rows)
+
+
+def test_delete_one_username_keeps_the_other() -> None:
+    sc.save("example.com", "alice", "one")
+    sc.save("example.com", "bob", "two")
+    assert sc.delete("example.com", "alice") is True
+    assert sc.usernames("example.com") == ["bob"]
+    assert sc.delete("example.com", "alice") is False  # already gone
+    # Without a username: wipes the whole site.
+    assert sc.delete("example.com") is True
+    assert sc.exists("example.com") is False
+
+
+def test_get_unknown_username_lists_nothing() -> None:
+    sc.save("example.com", "alice", "one")
+    assert sc.get("example.com", "bob") is None
+    assert sc.get("example.com", "alice") is not None
+
+
+def test_mark_used_targets_username() -> None:
+    sc.save("example.com", "alice", "one")
+    sc.save("example.com", "bob", "two")
+    sc.mark_used("example.com", "alice")
+    alice = sc.get("example.com", "alice")
+    bob = sc.get("example.com", "bob")
+    assert alice is not None and alice.last_used_at is not None
+    assert bob is not None and bob.last_used_at is None
+
+
+def test_v1_single_entry_file_migrates_on_load() -> None:
+    """Old store shape {site: {entry}} becomes [entry] transparently."""
+    sc.save("example.com", "alice", "one")  # creates key + v2 file
+    # Hand-write a v1 file with the same key.
+    from cryptography.fernet import Fernet
+
+    key = Fernet(sc.SITE_CREDS_KEY_PATH.read_bytes().strip())
+    v1 = {
+        "legacy.com": {
+            "username": "old-user",
+            "password": "old-pass",
+            "created_at": "2025-01-01T00:00:00+00:00",
+            "updated_at": "2025-01-01T00:00:00+00:00",
+            "last_used_at": None,
+        }
+    }
+    sc.SITE_CREDS_PATH.write_bytes(key.encrypt(json.dumps(v1).encode()))
+    cred = sc.get("legacy.com")
+    assert cred is not None
+    assert cred.username == "old-user"
+    assert cred.password == "old-pass"
+    # A new save for the same site persists the migrated list shape.
+    sc.save("legacy.com", "new-user", "new-pass")
+    assert sc.usernames("legacy.com") == ["new-user", "old-user"]
 
 
 def test_delete() -> None:

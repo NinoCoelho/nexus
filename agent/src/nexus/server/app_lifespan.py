@@ -765,6 +765,21 @@ async def _shutdown_broker(app: FastAPI) -> None:
         log.exception("broker poller stop failed")
 
 
+async def _shutdown_browser(app: FastAPI) -> None:
+    """Stop managed-Chrome instances (idle reaper + open CDP sockets).
+
+    Best-effort: a Chrome left running is harmless — the next app start
+    probe-reuses it (crash-safe by design).
+    """
+    manager = getattr(app.state, "browser_manager", None)
+    if manager is None:
+        return
+    try:
+        await asyncio.wait_for(manager.stop_all(), timeout=10.0)
+    except Exception:
+        log.exception("browser manager shutdown failed")
+
+
 def create_lifespan(state: dict[str, Any]):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -811,6 +826,7 @@ def create_lifespan(state: dict[str, Any]):
             await _shutdown_workflows(app)
             await _shutdown_mcp(mcp_manager)
             await _shutdown_broker(app)
+            await _shutdown_browser(app)
             await _shutdown_telegram(app)
             await agent.aclose()
 

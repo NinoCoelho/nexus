@@ -128,6 +128,13 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "quiet_hours": coord.quiet_hours,
             "auto_approve": coord.auto_approve,
         }
+    bcfg = getattr(cfg, "browser", None)
+    if bcfg is not None:
+        out["browser"] = {
+            "enabled": bcfg.enabled,
+            "cdp_port": bcfg.cdp_port,
+            "idle_shutdown_minutes": bcfg.idle_shutdown_minutes,
+        }
     return out
 
 
@@ -266,6 +273,12 @@ async def patch_config(
         }
         clean = {k: v for k, v in patch.items() if k in ALLOWED_COORD}
         raw["coordinator"] = {**existing, **clean}
+    if "browser" in body:
+        existing = raw.get("browser", {}) or {}
+        patch = body["browser"] or {}
+        ALLOWED_BROWSER = {"enabled", "cdp_port", "idle_shutdown_minutes"}
+        clean = {k: v for k, v in patch.items() if k in ALLOWED_BROWSER}
+        raw["browser"] = {**existing, **clean}
     if "mcp" in body:
         existing = raw.get("mcp", {}) or {}
         patch = body["mcp"] or {}
