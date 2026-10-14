@@ -50,6 +50,8 @@ interface Props {
     delaySeconds: number;
     reason: string;
   };
+  /** Mention-routing attribution — reply authored by another bot. */
+  bot?: { id: string; handle: string; name: string } | null;
 }
 
 function fmt(d: Date) {
@@ -76,7 +78,7 @@ function inlineResourcesFromTrace(trace?: TraceEvent[]): { uri: string; toolResu
   return out;
 }
 
-function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting }: Props) {
+function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting, bot }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const tts = useTTS();
@@ -133,6 +135,9 @@ function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOp
         <span className="asst-name">{t("chat:assistant.name")}</span>
         {model && (
           <span className="asst-model-badge">{t("chat:assistant.via", { model: model.split("/").pop() })}</span>
+        )}
+        {bot && (
+          <span className="asst-bot-badge" title={`Reply from ${bot.name}`}>@{bot.handle} · {bot.name}</span>
         )}
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>

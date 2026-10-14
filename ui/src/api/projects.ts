@@ -5,6 +5,8 @@ export interface Project {
   name: string;
   description: string;
   instructions: string;
+  persona: string;
+  handle: string;
   vault_path: string;
   color: string;
   icon: string;
@@ -16,6 +18,8 @@ export interface ProjectSummary {
   id: string;
   name: string;
   description: string;
+  persona: string;
+  handle: string;
   color: string;
   icon: string;
   session_count: number;
@@ -33,6 +37,7 @@ export async function createProject(data: {
   name: string;
   description?: string;
   instructions?: string;
+  persona?: string;
   color?: string;
   icon?: string;
 }): Promise<Project> {
@@ -56,7 +61,7 @@ export async function getProject(id: string): Promise<Project> {
 
 export async function updateProject(
   id: string,
-  data: Partial<Pick<Project, "name" | "description" | "instructions" | "color" | "icon">>,
+  data: Partial<Pick<Project, "name" | "description" | "instructions" | "persona" | "color" | "icon">>,
 ): Promise<void> {
   const res = await fetch(`${BASE}/projects/${encodeURIComponent(id)}`, {
     method: "PATCH",

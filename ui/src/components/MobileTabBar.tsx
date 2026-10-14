@@ -1,11 +1,11 @@
 /**
  * MobileTabBar — bottom navigation for small screens. Mirrors the main
- * nav: Chat, Projects, Apps, Vault, Calendar, Workflows (+ menu drawer).
- * App-database selection happens inside the Apps view, not as tabs.
+ * nav: Bots, Apps, Vault, Calendar, Workflows (+ menu drawer). App-database
+ * selection happens inside the Apps view, not as tabs.
  */
 
 import type { ComponentType } from "react";
-import { IconChat, IconCalendar, IconVault, IconWorkflow, IconDatabase, IconProjects } from "./Sidebar/icons";
+import { IconCalendar, IconVault, IconWorkflow, IconDatabase, IconBot } from "./Sidebar/icons";
 import type { AnyView } from "../routes";
 
 interface Props {
@@ -15,8 +15,7 @@ interface Props {
 }
 
 const TABS: ReadonlyArray<{ id: AnyView; label: string; Icon: ComponentType }> = [
-  { id: "chat", label: "Chat", Icon: IconChat },
-  { id: "projects", label: "Projects", Icon: IconProjects },
+  { id: "bots", label: "Bots", Icon: IconBot },
   { id: "apps", label: "Apps", Icon: IconDatabase },
   { id: "vault", label: "Vault", Icon: IconVault },
   { id: "calendar", label: "Calendar", Icon: IconCalendar },

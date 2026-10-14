@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Volume2 } from "lucide-react";
+import { Archive, Volume2 } from "lucide-react";
 import { type KnowledgeStats, type Model } from "../../api";
 import CookiesSection from "./CookiesSection";
+import CleanupChatsSection from "./CleanupChatsSection";
 import ReindexModal from "../ReindexModal";
 import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
@@ -149,6 +150,26 @@ export default function FeaturesTab({ graphStats, models }: Props) {
       </SettingsSection>
 
       <SharingSection />
+
+      <SettingsSection
+        title="Cleanup old chats"
+        icon={<Archive size={16} />}
+        collapsible
+        defaultOpen={false}
+        help={{
+          title: "Chat cleanup",
+          body: (
+            <>
+              Bots accumulate side conversations. Cleanup archives all but the
+              most recent chat of each bot (plus unprojected chats — the
+              coordinator master chat always stays). Nothing is deleted:
+              archived chats can be restored from each bot&apos;s workspace.
+            </>
+          ),
+        }}
+      >
+        <CleanupChatsSection />
+      </SettingsSection>
 
       <TelegramSection />
 

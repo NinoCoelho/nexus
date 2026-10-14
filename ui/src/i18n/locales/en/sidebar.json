@@ -9,8 +9,7 @@
   "views": "Views",
   "settings": "Settings",
   "viewNames": {
-    "chat": "Chat",
-    "projects": "Projects",
+    "bots": "Bots",
     "apps": "Apps",
     "calendar": "Calendar",
     "kanban": "Kanban",

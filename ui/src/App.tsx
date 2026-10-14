@@ -11,7 +11,7 @@ import SettingsDrawer from "./components/SettingsDrawer";
 import { WizardModal } from "./components/ProviderWizard";
 import ApprovalDialog from "./components/ApprovalDialog";
 import AppsPane from "./components/views/AppsPane";
-import ProjectsPane from "./components/views/ProjectsPane";
+import BotsPane from "./components/views/BotsPane";
 import AdvancedPane from "./components/views/AdvancedPane";
 
 const CalendarView = lazy(() => import("./components/CalendarView"));
@@ -37,7 +37,8 @@ import { useCalendarAlarms } from "./hooks/useCalendarAlarms";
 import { useMissedTasks } from "./hooks/useMissedTasks";
 import AlarmNotification from "./components/AlarmNotification";
 import "./components/AlarmNotification.css";
-import CoordinatorBubble from "./components/CoordinatorBubble";
+import TeamChips from "./components/TeamChips";
+import TeamModal from "./components/Sidebar/TeamModal";
 import MissedTasksModal from "./components/MissedTasksModal";
 import "./components/MissedTasksModal.css";
 import { useNotificationCenter } from "./hooks/useNotificationCenter";
@@ -96,19 +97,14 @@ export default function App() {
   const [kanbanSelectedPath, setKanbanSelectedPath] = useState<string | null>(
     () => (route.view === "kanban" ? route.path ?? null : null),
   );
-  /** Selected project in the Projects view — shared by the sidebar list and the workspace pane. */
-  const [projectsSelectedId, setProjectsSelectedId] = useState<string | null>(
-    () => (route.view === "projects" ? route.path ?? null : null),
+  /** Selected bot in the Bots view — shared by the sidebar bots list and the
+   * workspace pane ("main" = the coordinator/main bot). */
+  const [botsSelectedId, setBotsSelectedId] = useState<string | null>(
+    () => (route.view === "bots" ? route.path ?? null : null),
   );
-  /** The single project whose chat list is expanded in the sidebar accordion.
-   * Only one project may be expanded at a time — expanding another collapses
-   * the current one. */
-  const [projectsExpandedId, setProjectsExpandedId] = useState<string | null>(
-    () => (route.view === "projects" ? route.path ?? null : null),
-  );
-  /** True while a project chat owns the main pane in the Projects view (the
-   * workspace is hidden behind it until the user goes back). */
-  const [projectsChatOpen, setProjectsChatOpen] = useState(false);
+  /** True while a bot chat owns the main pane in the Bots view (the
+   * workspace hides behind it until the user goes back). */
+  const [botsChatOpen, setBotsChatOpen] = useState(false);
   /** Selected app folder in the Apps view — shared by the sidebar list and the Apps pane. */
   const [appsSelectedFolder, setAppsSelectedFolder] = useState<string | null>(
     () => (route.view === "apps" ? route.path ?? null : null),
@@ -128,6 +124,7 @@ export default function App() {
   }, [sidebarCollapsed]);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [teamEditOpen, setTeamEditOpen] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
 
@@ -173,9 +170,9 @@ export default function App() {
     if (route.view === "calendar" && p && p !== lastRoutePathRef.current) {
       setCalendarSelectedPath(p);
     }
-    if (route.view === "projects" && p && p !== lastRoutePathRef.current) {
-      setProjectsSelectedId(p);
-      setProjectsExpandedId(p);
+    if (route.view === "bots" && p && p !== lastRoutePathRef.current) {
+      setBotsSelectedId(p);
+      setBotsChatOpen(false);
     }
     lastRoutePathRef.current = p;
   }, [route.view, route.path]);
@@ -201,11 +198,19 @@ export default function App() {
     handleNewChat: _handleNewChat,
     handleCompact: _handleCompact, handleRemoveLast,
     handleResumePaused,
-    sendToSession, stopSession, attachToSession, respondForSession, removeQueuedForSession,
   } = chatSession;
 
-  // The coordinator master chat lives in the floating bubble (mounted below)
-  // — the app no longer auto-lands on it.
+  // While a bot chat owns the Bots main pane, the workspace hides behind
+  // it. Requires the chat's bot to be the selected one — the active
+  // session's project is reliable post-load (loadSessionHistory +
+  // first-turn migration stamp it). Unprojected chats belong to "main".
+  const activeProjectId = activeState.projectId ?? null;
+  const activeBotId = activeProjectId ?? "main";
+  const chatInBots =
+    view === "bots" &&
+    botsChatOpen &&
+    activeBotId === botsSelectedId;
+  const chatPaneVisible = chatInBots;
 
   const handleCompact = useCallback(async (options?: { strategy?: string; force_summarize?: boolean }) => {
     try {
@@ -275,22 +280,15 @@ export default function App() {
   const push = usePushSubscription();
   const notificationCenter = useNotificationCenter();
 
-  // Project-chat routing: opening a session that belongs to a project keeps
-  // the user in the Projects view — the sidebar accordion expands that
-  // project (single-expanded) and the chat takes over the main pane.
-  // Unprojected chats open in the Chat view as before. The session's project
-  // comes from the caller's hint (accordion/ProjectsPane rows know it), the
-  // loaded chat state, or a one-off fetch for cross-surface jumps.
+  // Bot-chat routing: opening any chat keeps the user in the Bots view —
+  // the chat takes over the main pane and the sidebar highlights the owning
+  // bot. Unprojected chats belong to the "main" bot. The session's project
+  // comes from the caller's hint (bot rows/BotsPane know it), the loaded
+  // chat state, or a one-off fetch for cross-surface jumps.
   const openSessionLocation = useCallback((projectId: string | null) => {
-    if (projectId) {
-      setProjectsSelectedId(projectId);
-      setProjectsExpandedId(projectId);
-      setProjectsChatOpen(true);
-      setView("projects");
-    } else {
-      setProjectsChatOpen(false);
-      setView("chat");
-    }
+    setBotsSelectedId(projectId ?? "main");
+    setBotsChatOpen(true);
+    setView("bots");
   }, [setView]);
 
   const handleSessionSelect = useCallback((id: string, projectId?: string | null) => {
@@ -327,7 +325,7 @@ export default function App() {
         .catch(() => openSessionLocation(null));
       return;
     }
-    // Stamp the project onto the chat state immediately so the projects-view
+    // Stamp the project onto the chat state immediately so the bots-view
     // chat gate doesn't wait for the history load to land.
     if (pid) {
       setChatStates((prev) => {
@@ -348,31 +346,29 @@ export default function App() {
     const pid = typeof projectId === "string" && projectId ? projectId : null;
     _handleNewChat(pid);
     clearPendingRequest();
-    if (pid) {
-      setProjectsSelectedId(pid);
-      setProjectsExpandedId(pid);
-      setProjectsChatOpen(true);
-      setView("projects");
-    } else {
-      setProjectsChatOpen(false);
-      setView("chat");
-    }
+    setBotsSelectedId(pid ?? "main");
+    setBotsChatOpen(true);
+    setView("bots");
   }, [_handleNewChat, clearPendingRequest, setView]);
 
-  /** Selecting a project (sidebar header, grid card) shows its workspace and
-   * expands its chats — expanding another project collapses the current one. */
-  const handleProjectsSelect = useCallback((id: string | null) => {
-    setProjectsSelectedId(id);
-    setProjectsExpandedId(id);
-    setProjectsChatOpen(false);
-  }, []);
+  /** Opens a bot's workspace (`#/bots/<id>` or the sidebar ⚙ button) —
+   * the workspace, not a chat, owns the main pane. */
+  const handleOpenBot = useCallback((id: string | null) => {
+    setBotsSelectedId(id);
+    setBotsChatOpen(false);
+    setView("bots", id);
+  }, [setView]);
 
-  /** Clicking the header of an already-selected project toggles its chat
-   * list; the workspace (not a chat) keeps the main pane. */
-  const handleProjectsToggleExpand = useCallback((id: string) => {
-    setProjectsExpandedId((cur) => (cur === id ? null : id));
-    setProjectsChatOpen(false);
-  }, []);
+  /** Opens a hidden internal run session (bot activity) read-only. */
+  const handleOpenActivitySession = useCallback((sessionId: string) => {
+    setChatStates((prev) => {
+      const next = new Map(prev);
+      const cur = prev.get(sessionId);
+      next.set(sessionId, { ...(cur ?? { ...emptyState(), historyLoaded: false }), readOnly: true });
+      return next;
+    });
+    handleSessionSelect(sessionId);
+  }, [setChatStates, handleSessionSelect]);
 
   const handleOpenInVault = useCallback((path: string) => {
     setVaultOpenPath(path);
@@ -438,7 +434,7 @@ export default function App() {
   // background turns are heard even when the user has navigated away.
   const ackPlayer = useVoiceAckPlayer({
     activeSessionId: activeSession ?? null,
-    view,
+    view: chatPaneVisible ? "chat" : view,
     onJumpToSession: (sid) => handleSessionSelect(sid),
   });
 
@@ -497,9 +493,8 @@ export default function App() {
     onToggleSidebar: useCallback(() => setMobileDrawerOpen((v) => !v), []),
     onNewChat: handleNewChat,
     onFindInChat: useCallback(() => {
-      if (view !== "chat") setView("chat");
       setChatSearchOpen(true);
-    }, [view]),
+    }, []),
     onEscape: useCallback(() => {
       if (shortcutsOpen) setShortcutsOpen(false);
       else if (chatSearchOpen) setChatSearchOpen(false);
@@ -524,7 +519,7 @@ export default function App() {
       });
       return next;
     });
-    setView("chat");
+    setView("bots");
   }, [_handleNewChat, clearPendingRequest, setChatStates]);
 
   const handleStartGraphIndex = useCallback(async (path: string) => {
@@ -631,32 +626,6 @@ export default function App() {
 
   const masterSessionId = coordinator.enabled ? coordinator.sessionId : null;
 
-  // Where the user currently is — fed to the coordinator bubble so its
-  // messages can carry a <context> preamble ("this project", "this app").
-  // The master session itself is never the context target.
-  const bubbleLocation = useMemo(() => ({
-    view,
-    projectId: projectsSelectedId,
-    appFolder: appsSelectedFolder,
-    vaultPath: vaultSelectedPath,
-    kanbanPath: kanbanSelectedPath,
-    calendarPath: calendarSelectedPath,
-    activeSessionId: activeSession && activeSession !== masterSessionId ? activeSession : null,
-    activeProjectId: activeState.projectId ?? null,
-  }), [view, projectsSelectedId, appsSelectedFolder, vaultSelectedPath, kanbanSelectedPath, calendarSelectedPath, activeSession, activeState.projectId, masterSessionId]);
-
-  // While a project chat owns the Projects main pane, the workspace hides
-  // behind it. Requires the chat's project to be the selected one — the
-  // active session's project is reliable post-load (loadSessionHistory +
-  // first-turn migration stamp it).
-  const activeProjectId = activeState.projectId ?? null;
-  const chatInProjects =
-    view === "projects" &&
-    projectsChatOpen &&
-    activeProjectId != null &&
-    activeProjectId === projectsSelectedId;
-  const chatPaneVisible = view === "chat" || chatInProjects;
-
   return (
     <div className="app app--layout">
       <Sidebar
@@ -680,12 +649,11 @@ export default function App() {
         onVisualizeFolderGraph={handleVisualizeFolderGraph}
          onUpdateAvailable={handleUpdateAvailable}
          coordinatorSessionId={masterSessionId}
+         coordinatorName={coordinator.enabled ? coordinator.name : null}
          collapsed={sidebarCollapsed}
         onCollapsedChange={setSidebarCollapsed}
-         projectsSelectedId={projectsSelectedId}
-         onProjectsSelect={handleProjectsSelect}
-         projectsExpandedId={projectsExpandedId}
-         onProjectsToggleExpand={handleProjectsToggleExpand}
+         botsSelectedId={botsSelectedId}
+         onOpenBot={handleOpenBot}
         appSelectedFolder={appsSelectedFolder}
         onAppSelectFolder={setAppsSelectedFolder}
         kanbanSelectedPath={kanbanSelectedPath}
@@ -750,11 +718,14 @@ export default function App() {
 
         <main className="app-content">
           <div className="view-pane" style={{ display: chatPaneVisible ? "flex" : "none" }}>
-            {chatInProjects && (
+            {chatInBots && (
               <div className="project-chat-topbar">
-                <button className="project-chat-back" onClick={() => setProjectsChatOpen(false)} title="Back to the project workspace">
-                  <ArrowLeft size={13} /> Project workspace
+                <button className="project-chat-back" onClick={() => setBotsChatOpen(false)} title="Back to the bot workspace">
+                  <ArrowLeft size={13} /> Bot workspace
                 </button>
+                {activeState.team && (
+                  <TeamChips team={activeState.team} onEdit={() => setTeamEditOpen(true)} />
+                )}
               </div>
             )}
             <ChatView
@@ -780,24 +751,27 @@ export default function App() {
               onRemoveQueued={handleRemoveQueued}
               onRollback={handleRollback}
               onCompact={handleCompact}
-              onNewSession={() => handleNewChat(chatInProjects ? projectsSelectedId : null)}
+              onNewSession={() => handleNewChat(chatInBots && botsSelectedId !== "main" ? botsSelectedId : null)}
               onRemoveLast={handleRemoveLast}
               onResumePaused={handleResumePaused}
               models={availableModels}
               selectedModel={activeState.selectedModel}
               onModelChange={handleModelChange}
+              readOnly={activeState.readOnly ?? false}
             />
           </div>
-          <div className="view-pane" style={{ display: view === "projects" && !chatInProjects ? "flex" : "none" }}>
-            <KeepMounted active={view === "projects"}>
-              <ProjectsPane
+          <div className="view-pane" style={{ display: view === "bots" && !chatInBots ? "flex" : "none" }}>
+            <KeepMounted active={view === "bots"}>
+              <BotsPane
                 activeSessionId={activeSession}
-                selectedId={projectsSelectedId}
-                onSelectId={handleProjectsSelect}
+                selectedId={botsSelectedId}
+                onSelectId={handleOpenBot}
                 onSessionSelect={handleSessionSelect}
-                onNewChatInProject={handleNewChat}
+                onNewChatInBot={handleNewChat}
+                onOpenActivitySession={handleOpenActivitySession}
                 onOpenInVault={handleOpenInVault}
                 refreshKey={sessionsRevision}
+                onRefresh={handleSessionsRevisionBump}
               />
             </KeepMounted>
           </div>
@@ -880,6 +854,23 @@ export default function App() {
         onClose={() => { setSettingsOpen(false); bumpSettingsRevision(); }}
         onNavigateView={handleSettingsNavigate}
       />
+      <TeamModal
+        open={teamEditOpen}
+        editSessionId={activeSession}
+        editTeam={activeState.team ?? null}
+        onClose={() => setTeamEditOpen(false)}
+        onUpdated={(team) => {
+          if (activeSession) {
+            setChatStates((prev) => {
+              const next = new Map(prev);
+              const cur = next.get(activeSession);
+              if (cur) next.set(activeSession, { ...cur, team });
+              return next;
+            });
+          }
+          handleSessionsRevisionBump();
+        }}
+      />
       {hasModel === false && (
         <WizardModal
           mode="first-run"
@@ -927,24 +918,6 @@ export default function App() {
         onSnooze={snoozeAlarm}
         onOpen={handleOpenCalendar}
       />
-
-      {masterSessionId && (
-        <CoordinatorBubble
-          sessionId={masterSessionId}
-          name={coordinator.name}
-          state={chatStates.get(masterSessionId) ?? undefined}
-          location={bubbleLocation}
-          sendToSession={sendToSession}
-          stopSession={stopSession}
-          attachToSession={attachToSession}
-          respondForSession={respondForSession}
-          removeQueuedForSession={removeQueuedForSession}
-          sessionsRevision={sessionsRevision}
-          onMaximize={() => handleSessionSelect(masterSessionId)}
-          onHitlHandled={dropRequest}
-          onOpenInVault={handleOpenInVault}
-        />
-      )}
 
       {missed.length > 0 && (
         <MissedTasksModal

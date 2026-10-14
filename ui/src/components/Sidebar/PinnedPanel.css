@@ -31,6 +31,8 @@
 .sidebar-pinned-list {
   display: flex;
   flex-direction: column;
+  max-height: 28vh;
+  overflow-y: auto;
 }
 
 .sidebar-pinned-item {

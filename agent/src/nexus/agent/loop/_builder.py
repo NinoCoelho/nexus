@@ -203,8 +203,39 @@ def build_loom_agent(
                 coordinator = bool(svc is not None and svc.is_coordinator(session_id))
         except Exception:
             pass
+        # Mention routing: when the trailing user message @mentions another
+        # bot, that bot's persona drives this reply — any chat can become a
+        # group conversation. A mentioned bot overrides the chat's own bot
+        # (and the coordinator identity) for every iteration of the turn,
+        # because the trailing user message is stable across tool loops.
+        # @<coordinator-name> (e.g. @nico) pulls the coordinator's persona
+        # into any chat — except the master chat itself, where it is a
+        # self-mention.
+        coordinator_guest = False
+        try:
+            last_user = next(
+                (m for m in reversed(messages) if m.role == lt.Role.USER), None
+            )
+            if last_user is not None and isinstance(last_user.content, str) and last_user.content:
+                from ..bots import resolve_mention_target
+
+                target = resolve_mention_target(
+                    last_user.content, own_project_id=project.id if project else None
+                )
+                if target is not None:
+                    kind, val = target
+                    if kind == "coordinator" and not coordinator:
+                        project = None
+                        coordinator = True
+                        coordinator_guest = True
+                    elif kind == "bot":
+                        project = val
+                        coordinator = False
+        except Exception:
+            pass
         sys_prompt = build_system_prompt(
-            registry, home=home, language=language, project=project, coordinator=coordinator
+            registry, home=home, language=language, project=project,
+            coordinator=coordinator, coordinator_guest=coordinator_guest,
         )
         from ..context import TOOL_BUDGET_EXCEEDED
         from .budget import BUDGET_EXCEEDED_HINT

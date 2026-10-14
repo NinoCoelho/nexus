@@ -33,6 +33,7 @@ export default function ProjectEditModal({ open, projectId, onClose, onSaved }: 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [persona, setPersona] = useState("");
   const [color, setColor] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -45,9 +46,10 @@ export default function ProjectEditModal({ open, projectId, onClose, onSaved }: 
           setName(p.name);
           setDescription(p.description);
           setInstructions(p.instructions);
+          setPersona(p.persona ?? "");
           setColor(p.color);
         })
-        .catch(() => toast.error("Failed to load project"));
+        .catch(() => toast.error("Failed to load bot"));
       setTimeout(() => nameRef.current?.focus(), 50);
     }
     if (!open) {
@@ -73,28 +75,29 @@ export default function ProjectEditModal({ open, projectId, onClose, onSaved }: 
         name: name.trim(),
         description: description.trim(),
         instructions: instructions.trim(),
+        persona: persona.trim(),
         color,
       });
-      toast.success("Project updated");
+      toast.success("Bot updated");
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update project");
+      toast.error(e instanceof Error ? e.message : "Failed to update bot");
     } finally {
       setSubmitting(false);
     }
-  }, [projectId, name, description, instructions, color, toast, onSaved, onClose]);
+  }, [projectId, name, description, instructions, persona, color, toast, onSaved, onClose]);
 
   const handleDelete = useCallback(async () => {
     if (!projectId) return;
     setSubmitting(true);
     try {
       await deleteProject(projectId);
-      toast.success("Project deleted");
+      toast.success("Bot deleted");
       onSaved();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete project");
+      toast.error(e instanceof Error ? e.message : "Failed to delete bot");
     } finally {
       setSubmitting(false);
     }
@@ -109,7 +112,7 @@ export default function ProjectEditModal({ open, projectId, onClose, onSaved }: 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="reindex-header">
-          <span className="reindex-title">Edit Project</span>
+          <span className="reindex-title">Edit Bot</span>
           <button className="reindex-close" onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
@@ -137,7 +140,18 @@ export default function ProjectEditModal({ open, projectId, onClose, onSaved }: 
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What is this project about?"
+              placeholder="What is this bot about?"
+            />
+          </label>
+
+          <label className="project-create-label">
+            Persona — how this bot behaves
+            <textarea
+              className="project-create-textarea"
+              value={persona}
+              onChange={(e) => setPersona(e.target.value)}
+              placeholder="Character and voice of this bot — @mention it from any chat to bring it into the conversation..."
+              rows={3}
             />
           </label>
 
@@ -147,7 +161,7 @@ export default function ProjectEditModal({ open, projectId, onClose, onSaved }: 
               className="project-create-textarea"
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
-              placeholder="Custom instructions for the agent when working in this project..."
+              placeholder="Custom instructions for the agent when working on this bot's chats..."
               rows={3}
             />
           </label>

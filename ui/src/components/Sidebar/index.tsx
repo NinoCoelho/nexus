@@ -1,17 +1,23 @@
 /**
- * Sidebar — main nav/session panel. State flows from App via props;
- * session mutations bump sessionsRevision to refresh the list.
+ * Sidebar — main nav panel. State flows from App via props; session
+ * mutations bump sessionsRevision to refresh the list.
  *
- * Nav groups: primary (Chat, Projects) and content (Apps, Vault, Calendar,
- * Workflows). Advanced views (knowledge/heartbeat/dream) live behind
- * #/advanced/* routes and the Settings drawer — not here.
+ * Layout: an always-visible Bots list (coordinator "main" + every bot,
+ * each row opening its chat or workspace) above the content nav (Apps,
+ * Vault, Calendar, Kanban, Workflows). The per-view list panels (vault
+ * tree, app databases, boards, calendars, workflow files, pinned chats)
+ * render below the nav for the active view. Advanced views (knowledge/
+ * heartbeat/dream) live behind #/advanced/* routes and the Settings
+ * drawer — not here.
  */
 
-import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  getSessions, searchSessions,
-  type SessionSearchResult, type SessionSummary,
+  archiveSession,
+  getSessions,
+  type Bot,
+  type SessionSummary,
   type SessionsResponse,
 } from "../../api";
 import { listProjects, type ProjectSummary } from "../../api/projects";
@@ -19,16 +25,17 @@ import { useToast } from "../../toast/ToastProvider";
 import { checkUpdate as apiCheckUpdate, type UpdateCheckResult } from "../../api/update";
 import VaultTreePanel from "../VaultTreePanel";
 import WorkflowListPanel from "../WorkflowListPanel";
-import ProjectsListPanel from "./ProjectsListPanel";
+import BotsListPanel from "./BotsListPanel";
 import KanbanListPanel from "./KanbanListPanel";
 import CalendarListPanel from "./CalendarListPanel";
 import AppsListPanel from "./AppsListPanel";
-import { IconChat, IconCalendar, IconVault, IconKanban, IconWorkflow, IconCollapse, IconDatabase, IconProjects, IconUpdate } from "./icons";
-import SessionsPanel from "./SessionsPanel";
+import { IconCalendar, IconVault, IconKanban, IconWorkflow, IconCollapse, IconDatabase, IconUpdate } from "./icons";
 import PinnedPanel from "./PinnedPanel";
 import SessionContextMenu from "./SessionContextMenu";
 import ProjectCreateModal from "./ProjectCreateModal";
-import { loadStoredWidth, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./utils";
+import TeamModal from "./TeamModal";
+import DeleteBotModal from "./DeleteBotModal";
+import { loadStoredWidth, loadViewsCollapsed, SIDEBAR_WIDTH_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, VIEWS_COLLAPSED_KEY } from "./utils";
 import { useSessionActions } from "./useSessionActions";
 import { BrandMark } from "../BrandMark";
 import type { AnyView } from "../../routes";
@@ -58,19 +65,18 @@ interface Props {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   onUpdateAvailable?: (check: UpdateCheckResult) => void;
-  /** Coordinator master session id — excluded from the Chat list (it lives
-   * in the floating coordinator bubble). */
+  /** Coordinator master session id — badges its row in the bots list. */
   coordinatorSessionId?: string | null;
+  /** Coordinator display name (badges + synthesized main row). */
+  coordinatorName?: string | null;
   /** Collapsed (icon-rail) state — owned by App so the Header's maximize
    * button and the sidebar's own toggle stay in sync. */
   collapsed: boolean;
   onCollapsedChange: (v: boolean) => void;
-  /** Selected project in the Projects view (shared with ProjectsPane). */
-  projectsSelectedId?: string | null;
-  onProjectsSelect?: (id: string | null) => void;
-  /** The single project whose chat list is expanded in the sidebar accordion. */
-  projectsExpandedId?: string | null;
-  onProjectsToggleExpand: (id: string) => void;
+  /** Selected bot in the Bots view (shared with BotsPane). */
+  botsSelectedId?: string | null;
+  /** Opens a bot's workspace in the Bots view. */
+  onOpenBot?: (id: string) => void;
   /** Selected app folder in the Apps view (shared with AppsPane). */
   appSelectedFolder?: string | null;
   onAppSelectFolder?: (folder: string | null) => void;
@@ -90,12 +96,11 @@ function Sidebar({
   mobileOpen = false, onMobileClose,
   onUpdateAvailable,
   coordinatorSessionId = null,
+  coordinatorName = null,
   collapsed,
   onCollapsedChange,
-  projectsSelectedId = null,
-  onProjectsSelect,
-  projectsExpandedId = null,
-  onProjectsToggleExpand,
+  botsSelectedId = null,
+  onOpenBot,
   appSelectedFolder = null,
   onAppSelectFolder,
   kanbanSelectedPath = null,
@@ -104,19 +109,13 @@ function Sidebar({
   onCalendarSelect,
 }: Props) {
   const { t } = useTranslation("sidebar");
-  const NAV_GROUPS = {
-    primary: [
-      { id: "chat" as const,     label: t("sidebar:viewNames.chat"),     Icon: IconChat },
-      { id: "projects" as const, label: t("sidebar:viewNames.projects"), Icon: IconProjects },
-    ],
-    content: [
-      { id: "apps" as const,     label: t("sidebar:viewNames.apps"),     Icon: IconDatabase },
-      { id: "vault" as const,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
-      { id: "calendar" as const, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
-      { id: "kanban" as const, label: t("sidebar:viewNames.kanban"), Icon: IconKanban },
-      { id: "workflows" as const, label: "Workflows", Icon: IconWorkflow },
-    ],
-  };
+  const NAV_ITEMS = [
+    { id: "apps" as const,     label: t("sidebar:viewNames.apps"),     Icon: IconDatabase },
+    { id: "vault" as const,    label: t("sidebar:viewNames.vault"),    Icon: IconVault },
+    { id: "calendar" as const, label: t("sidebar:viewNames.calendar"), Icon: IconCalendar },
+    { id: "kanban" as const,   label: t("sidebar:viewNames.kanban"),   Icon: IconKanban },
+    { id: "workflows" as const, label: "Workflows",                    Icon: IconWorkflow },
+  ];
   const toast = useToast();
   const setCollapsed = onCollapsedChange;
   const [width, setWidth] = useState<number>(() => loadStoredWidth());
@@ -166,12 +165,6 @@ function Sidebar({
   };
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sessionsError, setSessionsError] = useState(false);
-  const [sessionsOffset, setSessionsOffset] = useState(0);
-  const [sessionsTotal, setSessionsTotal] = useState(0);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SessionSearchResult[]>([]);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   // Context menu — tracks the id + the anchor rect so we can render as a
@@ -185,6 +178,9 @@ function Sidebar({
 
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [showCreateProject, setShowCreateProject] = useState(false);
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [deleteBotTarget, setDeleteBotTarget] = useState<Bot | null>(null);
+  const [viewsCollapsed, setViewsCollapsed] = useState(loadViewsCollapsed);
 
   const refreshProjects = () => {
     listProjects().then(setProjects).catch(() => {});
@@ -197,52 +193,16 @@ function Sidebar({
   const SESSIONS_PAGE = 20;
 
   useEffect(() => {
-    setSessionsError(false);
     getSessions(SESSIONS_PAGE, 0)
-      .then(({ sessions: s, total }: SessionsResponse) => {
+      .then(({ sessions: s }: SessionsResponse) => {
         setSessions(s.sort((a, b) => {
           const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
           const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
           return bv - av;
         }));
-        setSessionsOffset(SESSIONS_PAGE);
-        setSessionsTotal(total);
-      })
-      .catch(() => setSessionsError(true));
-  }, [sessionsRevision]);
-
-  // "Has more" = more *ungrouped* pages exist. The endpoint returns ALL
-  // project sessions on every call and X-Total-Count counts ungrouped
-  // sessions only, so compare the ungrouped slice against that total.
-  const hasMoreSessions = sessions.filter((s) => !s.project_id).length < sessionsTotal;
-
-  const handleLoadMoreSessions = () => {
-    getSessions(SESSIONS_PAGE, sessionsOffset)
-      .then(({ sessions: newBatch, total }: SessionsResponse) => {
-        setSessions((prev) => {
-          const existing = new Set(prev.map((s) => s.id));
-          const added = newBatch.filter((s) => !existing.has(s.id));
-          return [...prev, ...added].sort((a, b) => {
-            const av = typeof a.updated_at === "number" ? a.updated_at : Date.parse(a.updated_at) / 1000;
-            const bv = typeof b.updated_at === "number" ? b.updated_at : Date.parse(b.updated_at) / 1000;
-            return bv - av;
-          });
-        });
-        setSessionsOffset((o) => o + SESSIONS_PAGE);
-        setSessionsTotal(total);
       })
       .catch(() => {});
-  };
-
-  // Debounced search
-  useEffect(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    if (!searchQuery.trim()) { setSearchResults([]); return; }
-    searchTimerRef.current = setTimeout(() => {
-      searchSessions(searchQuery).then(setSearchResults).catch(() => setSearchResults([]));
-    }, 300);
-    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
-  }, [searchQuery]);
+  }, [sessionsRevision]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -274,23 +234,6 @@ function Sidebar({
     ? [pendingNewSession, ...sessions]
     : sessions;
 
-  // Chat view shows only unprojected chats — project chats live in the
-  // Projects view. The coordinator master chat is deliberately absent: it
-  // lives in the floating coordinator bubble (its Maximize button is the
-  // route into the full ChatView).
-  const unprojected = displaySessions.filter((s) => !s.project_id && s.id !== coordinatorSessionId);
-  const chatSessions = unprojected;
-  const projectSessionIds = useMemo(
-    () => new Set(displaySessions.filter((s) => s.project_id).map((s) => s.id)),
-    [displaySessions],
-  );
-  // Project sessions feed the Projects sidebar accordion (one fetch — the
-  // /sessions endpoint returns every project session on each call).
-  const projectSessions = useMemo(
-    () => displaySessions.filter((s) => s.project_id),
-    [displaySessions],
-  );
-
   const renderNavItems = (items: ReadonlyArray<{ id: AnyView; label: string; Icon: React.ComponentType }>) =>
     items.map(({ id, label, Icon }) => (
       <button
@@ -303,6 +246,14 @@ function Sidebar({
         {!collapsed && <span className="sidebar-nav-label">{label}</span>}
       </button>
     ));
+
+  const lowerPanelActive =
+    (view === "bots") ||
+    (view === "apps" && !collapsed && !!onAppSelectFolder) ||
+    (view === "vault" && !collapsed) ||
+    (view === "calendar" && !collapsed) ||
+    (view === "kanban" && !collapsed) ||
+    (view === "workflows" && !collapsed);
 
   return (
     <>
@@ -355,34 +306,25 @@ function Sidebar({
         </div>
       </div>
 
-      {/* View switcher */}
-      <div className="sidebar-section">
-        {!collapsed && <div className="sidebar-section-label">{t("sidebar:views")}</div>}
-        <nav className="sidebar-nav">
-          {renderNavItems(NAV_GROUPS.primary)}
-          {!collapsed && <div className="sidebar-nav-divider" />}
-          {renderNavItems(NAV_GROUPS.content)}
-        </nav>
-      </div>
-
-      {/* Pinned + Sessions — only in Chat view */}
-      {view === "chat" && !collapsed && (
-        <PinnedPanel refreshKey={sessionsRevision} onOpenSession={onSessionSelect} />
-      )}
-      {view === "chat" && !collapsed && (
-        <SessionsPanel
-          sessions={chatSessions}
-          sessionsError={sessionsError}
+      {/* Bots list — always visible, scrolls independently when long */}
+      {!collapsed && onOpenBot && (
+        <BotsListPanel
+          refreshKey={sessionsRevision}
+          sessions={displaySessions}
           activeSessionId={activeSessionId}
-          searchQuery={searchQuery}
-          searchResults={searchResults}
+          selectedBotId={view === "bots" ? botsSelectedId : null}
+          coordinatorSessionId={coordinatorSessionId}
+          coordinatorName={coordinatorName}
+          capped={lowerPanelActive}
+          onSessionSelect={onSessionSelect}
+          onNewChat={onNewChat}
+          onOpenBot={onOpenBot}
+          onNewBot={() => setShowCreateProject(true)}
+          onNewTeam={() => setShowTeamModal(true)}
+          onDeleteBot={(bot) => setDeleteBotTarget(bot)}
           renamingId={renamingId}
           renameValue={renameValue}
           toVaultBusy={toVaultBusy}
-          hasMore={hasMoreSessions}
-          projectSessionIds={projectSessionIds}
-          onSearchChange={(q) => { setSearchQuery(q); if (!q) setSearchResults([]); }}
-          onSessionSelect={onSessionSelect}
           onContextMenu={(e, id) => { e.preventDefault(); setMenu({ id, x: e.clientX, y: e.clientY }); }}
           onMenuBtnClick={(e, id) => {
             e.stopPropagation();
@@ -393,25 +335,41 @@ function Sidebar({
           onRenameChange={setRenameValue}
           onRenameCommit={(id) => void sessionActions.handleRename(id)}
           onRenameCancel={() => setRenamingId(null)}
-          onLoadMore={handleLoadMoreSessions}
         />
       )}
 
-      {/* Projects list — only in Projects view */}
-      {view === "projects" && !collapsed && onProjectsSelect && (
-        <ProjectsListPanel
-          selectedId={projectsSelectedId}
-          expandedId={projectsExpandedId}
-          onSelect={onProjectsSelect}
-          onToggleExpand={onProjectsToggleExpand}
-          onNewProject={() => setShowCreateProject(true)}
-          onNewChat={onNewChat}
-          onSessionSelect={onSessionSelect}
-          activeSessionId={activeSessionId}
-          sessions={projectSessions}
-          refreshKey={sessionsRevision}
-          onChanged={onSessionsRevisionBump}
-        />
+      {/* View switcher */}
+      <div className={`sidebar-section${lowerPanelActive && !collapsed ? " sidebar-section--with-bots" : ""}`}>
+        {!collapsed ? (
+          <button
+            className="sidebar-section-head"
+            onClick={() => {
+              setViewsCollapsed((v) => {
+                try { localStorage.setItem(VIEWS_COLLAPSED_KEY, v ? "0" : "1"); } catch { /* ignore */ }
+                return !v;
+              });
+            }}
+            aria-expanded={!viewsCollapsed}
+            title={viewsCollapsed ? "Expand views" : "Collapse views"}
+          >
+            <span className="sidebar-section-label">{t("sidebar:views")}</span>
+            <svg
+              className={`sidebar-collapse-chevron${viewsCollapsed ? "" : " sidebar-collapse-chevron--open"}`}
+              width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            >
+              <path d="M6 4l4 4-4 4" />
+            </svg>
+          </button>
+        ) : null}
+        <nav className="sidebar-nav" style={viewsCollapsed && !collapsed ? { display: "none" } : undefined}>
+          {renderNavItems(NAV_ITEMS)}
+        </nav>
+      </div>
+
+      {/* Pinned — only in Bots view */}
+      {view === "bots" && !collapsed && (
+        <PinnedPanel refreshKey={sessionsRevision} onOpenSession={onSessionSelect} />
       )}
 
       {/* Apps list — only in Apps view */}
@@ -462,8 +420,7 @@ function Sidebar({
       )}
 
       {/* Spacer — only when no expandable section is active */}
-      {!(view === "chat" && !collapsed) &&
-        !(view === "projects" && !collapsed) &&
+      {!(view === "bots" && !collapsed) &&
         !(view === "apps" && !collapsed) &&
         !(view === "vault" && !collapsed) &&
         !(view === "calendar" && !collapsed) &&
@@ -506,6 +463,15 @@ function Sidebar({
             onExport={() => void sessionActions.handleExport(s.id)}
             onToVaultRaw={() => void sessionActions.handleToVault(s.id, "raw")}
             onToVaultSummary={() => void sessionActions.handleToVault(s.id, "summary")}
+            onArchive={() => {
+              setMenu(null);
+              archiveSession(s.id, true)
+                .then(() => {
+                  toast.success("Chat archived", { detail: "Restore it from the bot's workspace." });
+                  onSessionsRevisionBump();
+                })
+                .catch(() => toast.error("Couldn't archive the chat"));
+            }}
             onDelete={() => void sessionActions.handleDelete(s.id)}
             onClick={(e) => e.stopPropagation()}
             onMoveToProject={async (projectId) => {
@@ -532,6 +498,18 @@ function Sidebar({
         open={showCreateProject}
         onClose={() => setShowCreateProject(false)}
         onCreated={() => { refreshProjects(); onSessionsRevisionBump(); }}
+      />
+
+      <TeamModal
+        open={showTeamModal}
+        onClose={() => setShowTeamModal(false)}
+        onCreated={(sessionId, leadProjectId) => onSessionSelect(sessionId, leadProjectId)}
+      />
+
+      <DeleteBotModal
+        bot={deleteBotTarget}
+        onClose={() => setDeleteBotTarget(null)}
+        onDeleted={() => { refreshProjects(); onSessionsRevisionBump(); }}
       />
 
       {!collapsed && (

@@ -26,6 +26,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }: Props) 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [persona, setPersona] = useState("");
   const [color, setColor] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -35,6 +36,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }: Props) 
       setName("");
       setDescription("");
       setInstructions("");
+      setPersona("");
       setColor("");
       setSubmitting(false);
       setTimeout(() => nameRef.current?.focus(), 50);
@@ -58,17 +60,18 @@ export default function ProjectCreateModal({ open, onClose, onCreated }: Props) 
         name: name.trim(),
         description: description.trim(),
         instructions: instructions.trim(),
+        persona: persona.trim(),
         color,
       });
-      toast.success(`Project "${name.trim()}" created`);
+      toast.success(`Bot "${name.trim()}" created`);
       onCreated();
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create project");
+      toast.error(e instanceof Error ? e.message : "Failed to create bot");
     } finally {
       setSubmitting(false);
     }
-  }, [name, description, instructions, color, toast, onCreated, onClose]);
+  }, [name, description, instructions, persona, color, toast, onCreated, onClose]);
 
   if (!open) return null;
 
@@ -79,7 +82,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }: Props) 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="reindex-header">
-          <span className="reindex-title">New Project</span>
+          <span className="reindex-title">New Bot</span>
           <button className="reindex-close" onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
@@ -109,7 +112,18 @@ export default function ProjectCreateModal({ open, onClose, onCreated }: Props) 
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What is this project about?"
+              placeholder="What is this bot about?"
+            />
+          </label>
+
+          <label className="project-create-label">
+            Persona — how this bot behaves
+            <textarea
+              className="project-create-textarea"
+              value={persona}
+              onChange={(e) => setPersona(e.target.value)}
+              placeholder="Character and voice of this bot — @mention it from any chat to bring it into the conversation..."
+              rows={3}
             />
           </label>
 
@@ -119,7 +133,7 @@ export default function ProjectCreateModal({ open, onClose, onCreated }: Props) 
               className="project-create-textarea"
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
-              placeholder="Custom instructions for the agent when working in this project..."
+              placeholder="Custom instructions for the agent when working on this bot's chats..."
               rows={3}
             />
           </label>

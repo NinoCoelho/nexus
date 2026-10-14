@@ -33,6 +33,11 @@ export interface ChatState {
   queued?: QueuedMessage[];
   selectedModel?: string;
   projectId?: string | null;
+  /** Group-chat membership when this session is a team chat. */
+  team?: { name: string; members: string[]; mode: "lead" | "round" } | null;
+  /** True for hidden internal run sessions opened from a bot's activity
+   * list — the transcript renders but the composer refuses input. */
+  readOnly?: boolean;
 }
 
 export const NEW_KEY = "__new__";

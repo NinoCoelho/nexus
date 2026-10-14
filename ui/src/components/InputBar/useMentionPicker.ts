@@ -1,15 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { searchVaultMentions, type VaultNode } from "../../api";
+import { getBots, searchVaultMentions, type Bot, type VaultNode } from "../../api";
 
 export interface MentionState {
   start: number;
   query: string;
 }
 
+/** Lightweight bot reference for the mention picker. */
+export interface BotMentionRef {
+  id: string;
+  handle: string;
+  name: string;
+  kind: Bot["kind"];
+}
+
+// Bots change rarely — one fetch per tab, shared across InputBar mounts.
+let botsCache: BotMentionRef[] | null = null;
+let botsPromise: Promise<BotMentionRef[]> | null = null;
+
+function fetchBotMentions(): Promise<BotMentionRef[]> {
+  if (botsCache) return Promise.resolve(botsCache);
+  if (!botsPromise) {
+    botsPromise = getBots()
+      .then((bots) => {
+        botsCache = bots.map((b) => ({ id: b.id, handle: b.handle || b.id, name: b.name, kind: b.kind }));
+        return botsCache;
+      })
+      .catch(() => {
+        botsPromise = null;
+        return [] as BotMentionRef[];
+      });
+  }
+  return botsPromise;
+}
+
 export function useMentionPicker(value: string, onChange: (v: string) => void) {
   const [mentionResults, setMentionResults] = useState<VaultNode[]>([]);
   const [mentionLoading, setMentionLoading] = useState(false);
   const [mention, setMention] = useState<MentionState | null>(null);
+  const [bots, setBots] = useState<BotMentionRef[]>(botsCache ?? []);
   const mentionFetchSeq = useRef(0);
   const mentionDebounceRef = useRef<number | null>(null);
 
@@ -34,6 +63,16 @@ export function useMentionPicker(value: string, onChange: (v: string) => void) {
     }
     return null;
   }, []);
+
+  // Load the bot list once, lazily, on the first `@` mention.
+  useEffect(() => {
+    if (!mention || bots.length > 0) return;
+    let cancelled = false;
+    fetchBotMentions().then((list) => {
+      if (!cancelled) setBots(list);
+    });
+    return () => { cancelled = true; };
+  }, [mention, bots.length]);
 
   // Debounced server fetch keyed on the active mention query.
   useEffect(() => {
@@ -64,6 +103,18 @@ export function useMentionPicker(value: string, onChange: (v: string) => void) {
     };
   }, [mention]);
 
+  const focusCaret = (textareaRef: React.RefObject<HTMLTextAreaElement | null>, caret: number) => {
+    requestAnimationFrame(() => {
+      const e = textareaRef.current;
+      if (e) {
+        e.focus();
+        e.setSelectionRange(caret, caret);
+        e.style.height = "auto";
+        e.style.height = `${Math.min(e.scrollHeight, 144)}px`;
+      }
+    });
+  };
+
   const insertMention = useCallback((node: VaultNode, textareaRef: React.RefObject<HTMLTextAreaElement | null>) => {
     if (!mention) return;
     const el = textareaRef.current;
@@ -72,19 +123,24 @@ export function useMentionPicker(value: string, onChange: (v: string) => void) {
     const name = node.path.split("/").pop() || node.path;
     const link = `[${name}](vault://${node.path}) `;
     const next = text.slice(0, mention.start) + link + text.slice(caret);
-    const newCaret = mention.start + link.length;
     onChange(next);
     setMention(null);
-    requestAnimationFrame(() => {
-      const e = textareaRef.current;
-      if (e) {
-        e.focus();
-        e.setSelectionRange(newCaret, newCaret);
-        e.style.height = "auto";
-        e.style.height = `${Math.min(e.scrollHeight, 144)}px`;
-      }
-    });
+    focusCaret(textareaRef, mention.start + link.length);
   }, [mention, value, onChange]);
 
-  return { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention };
+  /** Accept a bot from the picker — completes to `@handle ` (plain text;
+   * the backend routes the mention server-side). */
+  const insertBotMention = useCallback((bot: BotMentionRef, textareaRef: React.RefObject<HTMLTextAreaElement | null>) => {
+    if (!mention) return;
+    const el = textareaRef.current;
+    const text = value;
+    const caret = el?.selectionStart ?? text.length;
+    const token = `@${bot.handle} `;
+    const next = text.slice(0, mention.start) + token + text.slice(caret);
+    onChange(next);
+    setMention(null);
+    focusCaret(textareaRef, mention.start + token.length);
+  }, [mention, value, onChange]);
+
+  return { mention, setMention, mentionResults, mentionLoading, bots, detectMention, insertMention, insertBotMention };
 }

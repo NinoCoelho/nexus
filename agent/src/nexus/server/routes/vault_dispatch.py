@@ -356,18 +356,33 @@ async def _dispatch_impl(
         context_str += f" (card {card_id})"
     elif event_id:
         context_str += f" (event {event_id})"
-    session = store.create(context=context_str)
 
+    # Background dispatches (calendar fires, kanban lane auto-runs) are
+    # *process executions*, not conversations the user typed into — a new
+    # one fires every recurrence, so visible sessions would flood the chat
+    # list. They stay out of every chat list (hidden) and carry structured
+    # origin metadata; the linked event/card keeps pointing at the latest
+    # run's session id, so runs remain monitorable from where they were
+    # triggered. Modes "chat" (user clicked "chat about this") and
+    # "chat-hidden" are user actions and keep their existing visibility.
+    origin: dict[str, Any] | None = None
+    if mode == "background":
+        origin = {
+            "kind": "calendar" if event_id else "kanban",
+            "source": path,
+            "run_id": event_id or card_id or "",
+        }
+    session = store.create(context=context_str, origin=origin)
 
     # ``chat-hidden`` sessions back the database chat bubble. The bubble owns
     # its own persistent session id (in _data.md), and the bubble UX is the
     # only intended way for the user to reach it — exposing it in the main
     # sidebar list would break the "single session per database" feel.
-    if mode == "chat-hidden":
+    if mode in ("chat-hidden", "background"):
         try:
             store.mark_hidden(session.id)
         except Exception:
-            log.exception("dispatch: chat-hidden mark hidden failed")
+            log.exception("dispatch: %s mark hidden failed", mode)
 
     try:
         store.rename(session.id, (seed_title or title).strip()[:60])

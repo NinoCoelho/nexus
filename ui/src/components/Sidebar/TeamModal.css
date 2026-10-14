@@ -1,0 +1,196 @@
+/* TeamModal + DeleteBotModal — custom dialogs on the modal primitives. */
+
+.team-modal,
+.delete-bot-modal {
+  width: min(460px, calc(100vw - 48px));
+  text-align: left;
+}
+
+.team-field {
+  display: block;
+  margin-top: 14px;
+}
+
+.team-field > span {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+  margin-bottom: 6px;
+}
+
+.team-field input[type="text"],
+.team-field input:not([type]) {
+  width: 100%;
+}
+
+.team-members {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.team-members-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.team-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.team-member:hover {
+  background: var(--hover, rgba(127, 127, 127, 0.12));
+}
+
+.team-member--on {
+  background: var(--hover, rgba(127, 127, 127, 0.1));
+}
+
+.team-member-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.team-member-name {
+  font-weight: 500;
+}
+
+.team-member-handle {
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.team-member-lead {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent, #7c6cf0);
+  color: var(--fg-on-accent, #fff);
+}
+
+.team-member-makelead {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: underline;
+}
+
+.team-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-mode {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.team-mode--on {
+  border-color: var(--accent, #7c6cf0);
+}
+
+.team-mode strong {
+  display: block;
+  font-size: 13px;
+}
+
+.team-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.team-cancel {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.team-save {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent, #7c6cf0);
+  color: var(--fg-on-accent, #fff);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.team-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-bot-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.delete-bot-option {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.delete-bot-option--on {
+  border-color: var(--bad, #e5534b);
+}
+
+.delete-bot-option strong {
+  display: block;
+  font-size: 13px;
+}
+
+.delete-bot-option em {
+  opacity: 0.65;
+  font-style: normal;
+}
+
+.delete-bot-confirm {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bad, #e5534b);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.delete-bot-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

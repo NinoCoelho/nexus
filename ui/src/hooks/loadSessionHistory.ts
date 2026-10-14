@@ -161,6 +161,9 @@ export async function loadSessionHistory(
       bubble.seq = m.seq;
       bubble.feedback = m.feedback ?? null;
       bubble.pinned = m.pinned ?? false;
+      // Mention-routing attribution rides the persisted rows; the whole
+      // bubble shares one routing (a new user message breaks the bubble).
+      if (m.bot) bubble.bot = m.bot;
       // A non-partial latest row means the turn finished cleanly even if an
       // earlier iteration was marked partial — drop the flag so the
       // Retry/Continue banner doesn't appear on a completed bubble.
@@ -200,6 +203,8 @@ export async function loadSessionHistory(
         attachments: cur?.attachments ?? [],
         selectedModel: seedModel,
         projectId: detail.project_id ?? null,
+        team: detail.team ?? null,
+        readOnly: cur?.readOnly ?? false,
       });
       return next;
     });

@@ -4,6 +4,30 @@ export const SIDEBAR_WIDTH_KEY = "sidebar-width";
 export const SIDEBAR_MIN_WIDTH = 180;
 export const SIDEBAR_MAX_WIDTH = 560;
 
+/** Views-nav collapse flag — collapsed by default (users live in the bots
+ * list; the content nav is occasional). */
+export const VIEWS_COLLAPSED_KEY = "sidebar-views-collapsed";
+
+export function loadViewsCollapsed(): boolean {
+  try {
+    return localStorage.getItem(VIEWS_COLLAPSED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/** Teams-section collapse flag — expanded by default (teams are meant to be
+ * seen; collapse is opt-in). */
+export const TEAMS_COLLAPSED_KEY = "sidebar-teams-collapsed";
+
+export function loadTeamsCollapsed(): boolean {
+  try {
+    return localStorage.getItem(TEAMS_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function loadStoredWidth(): number {
   try {
     const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);

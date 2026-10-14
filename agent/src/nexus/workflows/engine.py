@@ -122,7 +122,12 @@ async def _single_shot_llm(
     if system_prompt:
         history.append(ChatMessage(role=Role.SYSTEM, content=system_prompt))
 
-    session = store.create()
+    meta: dict[str, Any] = getattr(engine, "_current_wf_meta", {}) or {}
+    session = store.create(
+        project_id=meta.get("bot_id"),
+        origin={"kind": "workflow-llm", "source": meta.get("workflow_path") or "llm",
+                "run_id": meta.get("run_id")},
+    )
     store.mark_hidden(session.id)
     final_text = ""
     final_messages: list[Any] = []
@@ -154,6 +159,24 @@ class WorkflowEngine:
     def __init__(self, store: WorkflowStore) -> None:
         self._store = store
         self._running: dict[str, asyncio.Task] = {}
+        # Per-run metadata for the currently executing workflow (bot owner,
+        # path, run id) — read by steps that create sessions so internal
+        # chats can be tagged with their originating bot + process.
+        self._current_wf_meta: dict[str, Any] = {}
+
+    def _resolve_wf_bot_id(self, wf_bot: str) -> str | None:
+        """Resolve a workflow's ``bot`` frontmatter (id or handle) → bot id."""
+        if not wf_bot:
+            return None
+        try:
+            from ..server.project_store import ProjectStore
+            from ..home import sessions_db
+
+            ps = ProjectStore(sessions_db())
+            proj = ps.get(wf_bot) or ps.get_by_handle(wf_bot)
+            return proj.id if proj else None
+        except Exception:
+            return None
 
     @property
     def store(self) -> WorkflowStore:
@@ -199,6 +222,12 @@ class WorkflowEngine:
             started_at=now,
         )
         self._store.create_run(run)
+
+        self._current_wf_meta = {
+            "workflow_path": workflow_path,
+            "run_id": run.id,
+            "bot_id": self._resolve_wf_bot_id(getattr(wf_def, "bot", "")),
+        }
 
         task = asyncio.current_task()
         if task:

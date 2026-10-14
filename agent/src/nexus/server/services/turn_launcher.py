@@ -386,4 +386,24 @@ async def launch_turn(
     )
     runner.start()
 
+    # Team (group chat) round passes — same as the web route: queue a
+    # synthetic mention pass per non-lead member so each answers in turn.
+    try:
+        from ...agent.bots import TEAM_MARKER, team_followup_messages
+
+        _team = store.get_team(session.id)
+        for _follow in team_followup_messages(_team, message):
+            _fqid = runner.enqueue(_follow, origin="team")
+            if _fqid:
+                from ..events import SessionEvent as _SE
+
+                store.publish(session.id, _SE(kind="user_enqueued", data={
+                    "type": "user_enqueued",
+                    "qid": _fqid,
+                    "text": _follow.replace(TEAM_MARKER, "").strip(),
+                    "session_id": session.id,
+                }))
+    except Exception:  # noqa: BLE001 — team passes are best-effort
+        log.debug("team followup enqueue failed", exc_info=True)
+
     return LaunchOutcome(runner=runner, session_id=session.id, pre_turn_history=pre_turn_history)

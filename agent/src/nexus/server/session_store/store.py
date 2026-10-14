@@ -74,16 +74,70 @@ class SessionStore(PubSubMixin, QueryMixin):
 
     # ── persistence — delegate to loom ───────────────────────────────────────
 
-    def create(self, context: str | None = None, project_id: str | None = None) -> Session:
+    def create(self, context: str | None = None, project_id: str | None = None,
+               origin: dict[str, Any] | None = None) -> Session:
         sid = uuid.uuid4().hex
         d = self._loom.get_or_create(sid, title="New session", context=context)
-        if project_id:
+        if project_id or origin:
+            origin_json = json.dumps(origin) if origin else None
             self._loom._db.execute(
-                "UPDATE sessions SET project_id = ? WHERE id = ?",
-                (project_id, sid),
+                "UPDATE sessions SET project_id = ?, origin = ? WHERE id = ?",
+                (project_id, origin_json, sid),
             )
             self._loom._db.commit()
         return Session(id=d["id"], title=d["title"] or "New session", context=context, project_id=project_id)
+
+    def mark_archived(self, session_id: str, archived: bool = True) -> None:
+        """Toggle the ``archived`` flag — soft-hide, restorable.
+
+        Archived sessions are excluded from every default listing (``list``,
+        ``count``, the sidebar) but survive in full and can be restored.
+        """
+        self._loom._db.execute(
+            "UPDATE sessions SET archived = ? WHERE id = ?",
+            (1 if archived else 0, session_id),
+        )
+        self._loom._db.commit()
+
+    def set_origin(self, session_id: str, origin: dict[str, Any]) -> None:
+        """Tag a session with structured origin metadata (JSON)."""
+        self._loom._db.execute(
+            "UPDATE sessions SET origin = ? WHERE id = ?",
+            (json.dumps(origin), session_id),
+        )
+        self._loom._db.commit()
+
+    def set_team(self, session_id: str, team: dict[str, Any] | None) -> None:
+        """Set or clear the group-chat team on a session (JSON blob)."""
+        self._loom._db.execute(
+            "UPDATE sessions SET team = ? WHERE id = ?",
+            (json.dumps(team) if team else None, session_id),
+        )
+        self._loom._db.commit()
+
+    def get_team(self, session_id: str) -> dict[str, Any] | None:
+        row = self._loom._db.execute(
+            "SELECT team FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            parsed = json.loads(row[0])
+            return parsed if isinstance(parsed, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+    def get_origin(self, session_id: str) -> dict[str, Any] | None:
+        row = self._loom._db.execute(
+            "SELECT origin FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            parsed = json.loads(row[0])
+            return parsed if isinstance(parsed, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            return None
 
     def mark_hidden(self, session_id: str, hidden: bool = True) -> None:
         """Toggle the ``hidden`` flag on a session.
@@ -264,11 +318,16 @@ class SessionStore(PubSubMixin, QueryMixin):
         include_hidden: bool = False,
         project_id: str | None = None,
         has_project: bool | None = None,
+        archived: bool | None = False,
     ) -> list[SessionSummary]:
         clauses = []
         params: list[Any] = []
         if not include_hidden:
             clauses.append("COALESCE(s.hidden, 0) = 0")
+        if archived is True:
+            clauses.append("COALESCE(s.archived, 0) = 1")
+        elif archived is False:
+            clauses.append("COALESCE(s.archived, 0) = 0")
         if has_project is True:
             clauses.append("s.project_id IS NOT NULL")
         elif has_project is False:
@@ -283,7 +342,7 @@ class SessionStore(PubSubMixin, QueryMixin):
             f"""
             SELECT s.id, s.title, s.created_at, s.updated_at,
                    COUNT(m.seq) AS message_count,
-                   s.project_id
+                   s.project_id, s.archived, s.origin, s.team
             FROM sessions s
             LEFT JOIN messages m ON m.session_id = s.id
             {where}
@@ -301,6 +360,9 @@ class SessionStore(PubSubMixin, QueryMixin):
                 updated_at=_ts_to_int(r[3]),
                 message_count=r[4] or 0,
                 project_id=r[5],
+                archived=r[6] or 0,
+                origin=r[7],
+                team=r[8],
             )
             for r in rows
         ]
@@ -310,11 +372,16 @@ class SessionStore(PubSubMixin, QueryMixin):
         *,
         include_hidden: bool = False,
         has_project: bool | None = None,
+        archived: bool | None = False,
     ) -> int:
         clauses = []
         params: list[Any] = []
         if not include_hidden:
             clauses.append("COALESCE(hidden, 0) = 0")
+        if archived is True:
+            clauses.append("COALESCE(archived, 0) = 1")
+        elif archived is False:
+            clauses.append("COALESCE(archived, 0) = 0")
         if has_project is True:
             clauses.append("project_id IS NOT NULL")
         elif has_project is False:
@@ -327,6 +394,46 @@ class SessionStore(PubSubMixin, QueryMixin):
             params,
         ).fetchone()
         return row[0] if row else 0
+
+    def list_activity(self, project_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Hidden internal sessions belonging to a bot, newest first.
+
+        These are sessions created by workflows / schedulers / dispatched
+        operations tagged with the bot's ``project_id`` — never shown in chat
+        lists, but monitorable from the bot's activity view.
+        """
+        rows = self._loom._db.execute(
+            """
+            SELECT s.id, s.title, s.context, s.origin, s.created_at, s.updated_at,
+                   (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count
+            FROM sessions s
+            WHERE COALESCE(s.hidden, 0) = 1 AND s.project_id = ?
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            """,
+            (project_id, limit),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            origin: dict[str, Any] | None = None
+            if r[3]:
+                try:
+                    parsed = json.loads(r[3])
+                    origin = parsed if isinstance(parsed, dict) else None
+                except (TypeError, json.JSONDecodeError):
+                    origin = None
+            out.append(
+                {
+                    "id": r[0],
+                    "title": r[1] or "New session",
+                    "context": r[2],
+                    "origin": origin,
+                    "created_at": _ts_to_int(r[4]),
+                    "updated_at": _ts_to_int(r[5]),
+                    "message_count": r[6] or 0,
+                }
+            )
+        return out
 
     def list_hidden_by_context_prefix(
         self, prefix: str, *, limit: int = 200,

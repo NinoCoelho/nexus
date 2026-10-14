@@ -590,6 +590,7 @@ def create_app(
     from .routes.ext import router as ext_router
     from .routes.workflows import router as workflows_router
     from .routes.projects import router as projects_router
+    from .routes.bots import router as bots_router
     from .routes.browser import router as browser_router
 
     app.include_router(chat_router)
@@ -633,6 +634,7 @@ def create_app(
     app.include_router(ext_router)
     app.include_router(workflows_router)
     app.include_router(projects_router)
+    app.include_router(bots_router)
     app.include_router(browser_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────

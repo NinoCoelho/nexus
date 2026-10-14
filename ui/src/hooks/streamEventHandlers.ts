@@ -220,6 +220,29 @@ export function applyToolEvent(
   });
 }
 
+/** Mention-routing marker: the in-flight assistant bubble is answered by a
+ * different bot than the chat's owner — stamp it so the transcript renders
+ * the `@handle · Name` attribution chip. */
+export function applyTurnBotEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  bot: { id: string; handle: string; name: string } | null,
+) {
+  if (!bot) return;
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const msgs = [...cur.messages];
+    const lastIdx = msgs.length - 1;
+    if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
+      msgs[lastIdx] = { ...msgs[lastIdx], bot };
+      next.set(key, { ...cur, messages: msgs });
+      return next;
+    }
+    return prev;
+  });
+}
+
 export function applyDoneEvent(
   setChatStates: SetChatStates,
   setActiveSession: (id: string) => void,
@@ -259,6 +282,7 @@ export function applyDoneEvent(
         timestamp: new Date(),
         streaming: false,
         model: routedModel,
+        ...(lastMsg?.bot ? { bot: lastMsg.bot } : {}),
         ...(preservedPartial ? { partial: preservedPartial } : {}),
       };
       const msgs = fresh.messages.slice(0, -1).concat(finalAsst);
@@ -294,6 +318,7 @@ export function applyDoneEvent(
           timestamp: new Date(),
           streaming: false,
           model: routedModel,
+          ...(lastMsg.bot ? { bot: lastMsg.bot } : {}),
           ...(preservedPartial ? { partial: preservedPartial } : {}),
         };
       }

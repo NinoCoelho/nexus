@@ -128,6 +128,15 @@ class TurnAccumulator:
                 q_payload["reason"] = event.get("reason", "")
             sse_frames.append(_sse(etype, q_payload))
 
+        elif etype == "turn_bot":
+            # Mention routing marker: the reply to the current user message
+            # comes from a different bot than the chat's owner. Pure marker
+            # for UI attribution headers on the incoming assistant bubble.
+            sse_frames.append(_sse("turn_bot", {
+                "session_id": event.get("session_id", ""),
+                "bot": event.get("bot"),
+            }))
+
         return sse_frames
 
 

@@ -37,6 +37,7 @@ export type StreamEvent =
   | { type: "user_injected"; qid: string; text: string; session_id: string }
   | { type: "queue_removed"; qid: string; reason?: string; session_id?: string }
   | { type: "turn_settled"; session_id: string }
+  | { type: "turn_bot"; session_id: string; bot: { id: string; handle: string; name: string } | null }
   | { type: "subagent_start"; name: string; index: number; total: number; child_session_id: string }
   | { type: "subagent_delta"; child_session_id: string; text: string }
   | { type: "subagent_tool"; child_session_id: string; name: string; status: string; args_preview?: string; result_preview?: string; call_id?: string }
@@ -237,6 +238,12 @@ async function consumeSSEFrames(
           });
         } else if (eventName === "turn_settled") {
           onEvent({ type: "turn_settled", session_id: (parsed.session_id as string) ?? "" });
+        } else if (eventName === "turn_bot") {
+          onEvent({
+            type: "turn_bot",
+            session_id: (parsed.session_id as string) ?? "",
+            bot: (parsed.bot as { id: string; handle: string; name: string } | null) ?? null,
+          });
         }
       } catch { /* malformed frame — skip */ }
     }

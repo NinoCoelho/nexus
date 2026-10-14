@@ -1,9 +1,10 @@
 /**
  * MentionPicker — popover that appears when the user types `@` in the input.
  *
- * Receives pre-ranked vault entries from the server (`/vault/mention`) and
- * renders them. On selection the parent inserts a `[name](vault://path)`
- * markdown link.
+ * Two result groups, bots first: entries from `getBots()` (completing to a
+ * plain `@handle` mention that routes the turn to that bot) and vault
+ * entries from the server (`/vault/mention`, completing to a
+ * `[name](vault://path)` markdown link).
  *
  * Keyboard: ArrowUp/ArrowDown to move, Enter/Tab to select, Escape to close.
  * The parent owns keyboard handling via the imperative `handleKey` ref.
@@ -11,6 +12,7 @@
 
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import type { VaultNode } from "../api";
+import type { BotMentionRef } from "./InputBar/useMentionPicker";
 import "./MentionPicker.css";
 
 export interface MentionPickerHandle {
@@ -18,23 +20,34 @@ export interface MentionPickerHandle {
   handleKey: (e: React.KeyboardEvent) => boolean;
 }
 
+export type MentionItem =
+  | { kind: "bot"; bot: BotMentionRef }
+  | { kind: "vault"; node: VaultNode };
+
 interface Props {
   results: VaultNode[];
   loading: boolean;
-  onSelect: (node: VaultNode) => void;
+  bots?: BotMentionRef[];
+  activeQuery?: string;
+  onSelectItem: (item: MentionItem) => void;
   onClose: () => void;
 }
 
 const MentionPicker = forwardRef<MentionPickerHandle, Props>(function MentionPicker(
-  { results, loading, onSelect, onClose },
+  { results, loading, bots = [], activeQuery = "", onSelectItem, onClose },
   ref,
 ) {
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
+  const items: MentionItem[] = [
+    ...filterBots(bots, activeQuery).map((bot) => ({ kind: "bot" as const, bot })),
+    ...results.map((node) => ({ kind: "vault" as const, node })),
+  ];
+
   useEffect(() => {
     setActive(0);
-  }, [results]);
+  }, [activeQuery, results]);
 
   useEffect(() => {
     listRef.current?.querySelector(`[data-idx="${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -42,23 +55,23 @@ const MentionPicker = forwardRef<MentionPickerHandle, Props>(function MentionPic
 
   useImperativeHandle(ref, () => ({
     handleKey(e) {
-      if (results.length === 0) {
+      if (items.length === 0) {
         if (e.key === "Escape") { onClose(); return true; }
         return false;
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActive((i) => (i + 1) % results.length);
+        setActive((i) => (i + 1) % items.length);
         return true;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setActive((i) => (i - 1 + results.length) % results.length);
+        setActive((i) => (i - 1 + items.length) % items.length);
         return true;
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        onSelect(results[active]);
+        onSelectItem(items[active]);
         return true;
       }
       if (e.key === "Escape") {
@@ -68,29 +81,54 @@ const MentionPicker = forwardRef<MentionPickerHandle, Props>(function MentionPic
       }
       return false;
     },
-  }), [results, active, onSelect, onClose]);
+  }));
 
-  if (results.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="mention-picker">
-        <div className="mention-picker-empty">{loading ? "Searching…" : "No vault matches"}</div>
+        <div className="mention-picker-empty">{loading ? "Searching…" : "No matches"}</div>
       </div>
     );
   }
 
   return (
     <div className="mention-picker" ref={listRef}>
-      {results.map((n, i) => {
+      {items.map((item, i) => {
+        if (item.kind === "bot") {
+          const b = item.bot;
+          return (
+            <button
+              key={`bot-${b.id}`}
+              data-idx={i}
+              type="button"
+              className={`mention-picker-item${i === active ? " is-active" : ""}`}
+              onMouseEnter={() => setActive(i)}
+              onMouseDown={(e) => { e.preventDefault(); onSelectItem(item); }}
+            >
+              <span className="mention-picker-icon mention-picker-icon--bot">
+                <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="4" y="7" width="12" height="9" rx="2" />
+                  <path d="M8 7V4.5a2 2 0 0 1 4 0V7" />
+                  <circle cx="8" cy="11.5" r="0.6" fill="currentColor" stroke="none" />
+                  <circle cx="12" cy="11.5" r="0.6" fill="currentColor" stroke="none" />
+                </svg>
+              </span>
+              <span className="mention-picker-name">{b.name}</span>
+              <span className="mention-picker-dir">@{b.handle}</span>
+            </button>
+          );
+        }
+        const n = item.node;
         const name = n.path.split("/").pop() || n.path;
         const dir = n.path.includes("/") ? n.path.slice(0, -name.length - 1) : "";
         return (
           <button
-            key={n.path}
+            key={`vault-${n.path}`}
             data-idx={i}
             type="button"
             className={`mention-picker-item${i === active ? " is-active" : ""}`}
             onMouseEnter={() => setActive(i)}
-            onMouseDown={(e) => { e.preventDefault(); onSelect(n); }}
+            onMouseDown={(e) => { e.preventDefault(); onSelectItem(item); }}
           >
             <span className="mention-picker-icon">
               {n.type === "dir" ? (
@@ -112,5 +150,13 @@ const MentionPicker = forwardRef<MentionPickerHandle, Props>(function MentionPic
     </div>
   );
 });
+
+function filterBots(bots: BotMentionRef[], query: string): BotMentionRef[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return bots;
+  return bots.filter(
+    (b) => b.handle.toLowerCase().startsWith(q) || b.name.toLowerCase().includes(q),
+  );
+}
 
 export default MentionPicker;

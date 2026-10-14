@@ -10,6 +10,10 @@ export interface SessionSummary {
   updated_at: number | string;
   message_count: number;
   project_id?: string | null;
+  archived?: 0 | 1;
+  origin?: string | null;
+  /** Group-chat membership (JSON string from the list endpoint). */
+  team?: string | null;
 }
 
 export interface SessionMessage {
@@ -25,6 +29,9 @@ export interface SessionMessage {
   created_at: string;
   feedback?: "up" | "down" | null;
   pinned?: boolean;
+  /** Mention-routing attribution — set when this assistant reply came from a
+   * bot other than the chat's owner; null on the owner's own replies. */
+  bot?: { id: string; handle: string; name: string } | null;
 }
 
 export interface PinnedMessage {
@@ -63,6 +70,8 @@ export interface SessionDetail {
   title: string;
   context?: string;
   project_id?: string | null;
+  /** Group-chat membership (parsed object from the detail endpoint). */
+  team?: { name: string; members: string[]; mode: "lead" | "round" } | null;
   messages: SessionMessage[];
 }
 
@@ -109,8 +118,13 @@ export interface SessionsResponse {
   total: number;
 }
 
-export async function getSessions(limit = 50, offset = 0): Promise<SessionsResponse> {
-  const res = await fetch(`${BASE}/sessions?limit=${limit}&offset=${offset}`, { cache: "no-store" });
+export async function getSessions(
+  limit = 50,
+  offset = 0,
+  opts?: { archived?: boolean },
+): Promise<SessionsResponse> {
+  const archived = opts?.archived === true ? "&archived=true" : "";
+  const res = await fetch(`${BASE}/sessions?limit=${limit}&offset=${offset}${archived}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Sessions error: ${res.status}`);
   const sessions: SessionSummary[] = await res.json();
   const total = parseInt(res.headers.get("X-Total-Count") ?? "0", 10);
@@ -159,6 +173,16 @@ export async function patchSession(id: string, patch: { title?: string }): Promi
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Session patch error: ${res.status}`);
+}
+
+/** Set or clear the archived flag — archived chats vanish from active lists. */
+export async function archiveSession(sessionId: string, archived: boolean): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/archive`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived }),
+  });
+  if (!res.ok) throw new Error(`Archive error: ${res.status}`);
 }
 
 export interface SessionUsage {

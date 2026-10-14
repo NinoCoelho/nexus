@@ -407,6 +407,61 @@ async def chat_stream_route(
         # lands before the streamed reply quotes it.
         _maybe_sync_telegram(request, session.id)
 
+        # Mention routing marker: when this message @mentions another bot
+        # (or the coordinator by name), its persona answers. Published on the
+        # bus (replay-ordered after turn_started) so the UI can label the
+        # assistant bubble before the first delta arrives. The actual routing
+        # happens at LLM-call time in the prompt builder — this is only the
+        # UI hint.
+        try:
+            from ...agent.bots import resolve_mention_target
+
+            _target = resolve_mention_target(
+                req.message, own_project_id=session.project_id
+            )
+            _bot_info = None
+            if _target is not None:
+                _kind, _val = _target
+                if _kind == "bot":
+                    _bot_info = {"id": _val.id, "handle": _val.handle, "name": _val.name}
+                else:
+                    from ...coordinator import get_service as _get_coord_svc
+
+                    _svc = _get_coord_svc()
+                    if not (_svc and _svc.is_coordinator(session.id)):
+                        _bot_info = dict(_val)  # self-mention in master → no marker
+            if _bot_info is not None:
+                from ..events import SessionEvent as _SE
+
+                store.publish(session.id, _SE(kind="turn_bot", data={
+                    "type": "turn_bot",
+                    "session_id": session.id,
+                    "bot": _bot_info,
+                }))
+        except Exception:  # noqa: BLE001 — attribution hint is best-effort
+            log.debug("turn_bot marker publish failed", exc_info=True)
+
+        # Team (group chat) round passes: in round mode, every other member
+        # answers after the lead — queued on the runner so the existing
+        # inject/chain machinery delivers each synthetic mention pass.
+        try:
+            from ...agent.bots import TEAM_MARKER, team_followup_messages
+
+            _team = store.get_team(session.id)
+            for _follow in team_followup_messages(_team, req.message):
+                _fqid = runner.enqueue(_follow, origin="team")
+                if _fqid:
+                    from ..events import SessionEvent as _SE2
+
+                    store.publish(session.id, _SE2(kind="user_enqueued", data={
+                        "type": "user_enqueued",
+                        "qid": _fqid,
+                        "text": _follow.replace(TEAM_MARKER, "").strip(),
+                        "session_id": session.id,
+                    }))
+        except Exception:  # noqa: BLE001 — team passes are best-effort
+            log.debug("team followup enqueue failed", exc_info=True)
+
         # ── Subscribe to bus and forward events to SSE ───────────────────────
         acc_sub = TurnAccumulator()
         try:

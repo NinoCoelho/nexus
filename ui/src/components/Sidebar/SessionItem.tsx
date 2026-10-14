@@ -13,6 +13,10 @@ interface Props {
   isMaster?: boolean;
   /** Badge label (the coordinator's configured name). */
   masterLabel?: string;
+  /** Marks a secondary chat nested under a bot row. */
+  sideConversation?: boolean;
+  /** Group chat (team) — renders the team badge. */
+  isTeam?: boolean;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onMenuBtnClick: (e: React.MouseEvent) => void;
@@ -30,6 +34,8 @@ export default function SessionItem({
   toVaultBusy,
   isMaster = false,
   masterLabel = "Master",
+  sideConversation = false,
+  isTeam = false,
   onSelect,
   onContextMenu,
   onMenuBtnClick,
@@ -69,6 +75,12 @@ export default function SessionItem({
           </span>
           {isMaster && (
             <span className="sidebar-session-master" title="Coordinator master chat">{masterLabel}</span>
+          )}
+          {isTeam && (
+            <span className="sidebar-session-team" title="Group chat (team)">team</span>
+          )}
+          {sideConversation && !isMaster && (
+            <span className="sidebar-session-side" title="Side conversation">side</span>
           )}
           <span className="sidebar-session-time">{fmtRelative(session.updated_at)}</span>
           <button

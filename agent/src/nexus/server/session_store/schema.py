@@ -176,6 +176,8 @@ CREATE TABLE IF NOT EXISTS projects (
     name          TEXT NOT NULL,
     description   TEXT NOT NULL DEFAULT '',
     instructions  TEXT NOT NULL DEFAULT '',
+    persona       TEXT NOT NULL DEFAULT '',
+    handle        TEXT NOT NULL DEFAULT '',
     vault_path    TEXT NOT NULL,
     color         TEXT NOT NULL DEFAULT '',
     icon          TEXT NOT NULL DEFAULT '',
@@ -241,6 +243,98 @@ def _ensure_project_column(db) -> None:
         db.commit()
 
 
+def _ensure_session_archive_columns(db) -> None:
+    """Add ``archived``, ``origin`` and ``team`` to the loom-owned ``sessions`` table.
+
+    ``archived`` hides a session from every default listing while keeping it
+    restorable (delete is permanent, archive is the soft path). ``origin``
+    stores a JSON blob describing what created the session
+    (``{"kind": "workflow", "source": ..., "run_id": ...}``) so internal
+    sessions can be monitored from the owning bot's activity view. ``team``
+    holds a JSON blob (``{"name", "members", "mode"}``) for group chats —
+    sessions where several bots take turns answering.
+    """
+    cols = {r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()}
+    if not cols:
+        return
+    if "archived" not in cols:
+        db.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+    if "origin" not in cols:
+        db.execute("ALTER TABLE sessions ADD COLUMN origin TEXT")
+    if "team" not in cols:
+        db.execute("ALTER TABLE sessions ADD COLUMN team TEXT")
+        db.commit()
+
+
+def _ensure_bot_columns(db) -> None:
+    """Add ``persona``/``handle`` to ``projects`` (projects → bots rename).
+
+    Idempotent and self-healing: on every boot it backfills missing handles
+    (from the bot name, unique per store rules) and seeds ``persona`` from
+    description + instructions for pre-existing projects that never got one.
+    NOTE: ``db`` is loom's connection — no row_factory, so rows are plain
+    tuples and must be read positionally.
+    """
+    cols = {r[1] for r in db.execute("PRAGMA table_info(projects)").fetchall()}
+    if not cols:
+        return
+    if "persona" not in cols:
+        db.execute("ALTER TABLE projects ADD COLUMN persona TEXT NOT NULL DEFAULT ''")
+    if "handle" not in cols:
+        db.execute("ALTER TABLE projects ADD COLUMN handle TEXT NOT NULL DEFAULT ''")
+    db.commit()
+
+    import re as _re
+
+    def _slug(name: str) -> str:
+        slug = _re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+        return _re.sub(r"-+", "-", slug)[:32] or "bot"
+
+    # "main" and the coordinator's name-slug are reserved — @nico must
+    # always route to the coordinator, never to a project bot.
+    reserved = {"main"}
+    try:
+        from ...config_file import load_cached
+
+        _coord = getattr(load_cached(), "coordinator", None)
+        if _coord is not None and (_coord.name or "").strip():
+            _cslug = _re.sub(r"[^a-z0-9]+", "-", _coord.name.lower()).strip("-")
+            reserved.add(_re.sub(r"-+", "-", _cslug)[:32])
+    except Exception:
+        pass
+
+    # Positional: id, name, description, instructions, handle — loom's
+    # connection has no row_factory.
+    rows = db.execute(
+        "SELECT id, name, description, instructions, handle FROM projects"
+    ).fetchall()
+    taken = {r[4] for r in rows if r[4]}
+    for row in rows:
+        pid, name = row[0], row[1]
+        desc = (row[2] or "").strip()
+        instr = (row[3] or "").strip()
+        handle = row[4] or ""
+        if not handle:
+            base = _slug(name)
+            if base in reserved:
+                base = f"{base}-bot"
+            handle, n = base, 1
+            while handle in taken:
+                n += 1
+                handle = f"{base}-{n}"
+            taken.add(handle)
+            db.execute("UPDATE projects SET handle = ? WHERE id = ?", (handle, pid))
+        seed = desc
+        if instr:
+            seed = f"{seed}\n\n{instr}" if seed else instr
+        if seed:
+            db.execute(
+                "UPDATE projects SET persona = ? WHERE id = ? AND persona = ''",
+                (seed, pid),
+            )
+    db.commit()
+
+
 def _ensure_reasoning_content_column(db) -> None:
     """Add reasoning_content column to loom's messages table if missing.
 
@@ -274,6 +368,8 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
     _ensure_project_column(db)
+    _ensure_session_archive_columns(db)
+    _ensure_bot_columns(db)
     _ensure_reasoning_content_column(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:

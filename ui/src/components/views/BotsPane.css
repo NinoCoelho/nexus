@@ -1,0 +1,542 @@
+/*
+ * BotsPane workspace styles. Card grid / header / empty state come from
+ * views.css; the workspace column (header, chips, tabs, chat/activity
+ * rows, archived list) lives here.
+ */
+
+.bots-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.bots-workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.bots-workspace-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bots-workspace-title strong {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.bots-card-desc {
+  font-size: 12px;
+  color: var(--fg-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bots-handle-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-lo, var(--border-soft));
+  background: var(--accent-bg, transparent);
+  color: var(--accent, var(--fg-faint));
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bots-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.bots-icon-btn:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.bots-new-chat-btn {
+  padding: 5px 11px;
+  font-size: 12px;
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+  flex-shrink: 0;
+}
+
+.bots-new-chat-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.bots-new-chat-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bots-workspace-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px 0;
+}
+
+.bots-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--fg-faint);
+  background: transparent;
+  font-family: inherit;
+  letter-spacing: 0.02em;
+}
+
+button.bots-meta-chip {
+  cursor: pointer;
+}
+
+button.bots-meta-chip:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.bots-persona,
+.bots-instructions {
+  margin: 12px 16px 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  font-size: 12px;
+  background: var(--bg-panel);
+}
+
+.bots-persona summary,
+.bots-instructions summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--fg-faint);
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+
+.bots-persona pre,
+.bots-instructions pre {
+  margin: 0;
+  padding: 0 10px 10px;
+  white-space: pre-wrap;
+  font-family: inherit;
+  color: var(--fg-dim);
+}
+
+.bots-persona-note,
+.bots-readonly-note {
+  padding: 8px 16px 0;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+
+.bots-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 10px 16px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.bots-tab {
+  padding: 6px 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.bots-tab:hover {
+  color: var(--fg);
+}
+
+.bots-tab--active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.bots-workspace-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 16px 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+}
+
+.bots-workspace-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+
+.bots-chats-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 12px 16px 4px;
+}
+
+.bots-chats-toolbar-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.bots-cleanup-btn {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.bots-cleanup-btn:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.bots-cleanup-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bots-session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.bots-workspace-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: 12.5px;
+}
+
+.bots-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 120ms ease;
+}
+
+.bots-session-row:hover {
+  background: var(--bg-hover);
+}
+
+.bots-session-row--active {
+  background: var(--bg-hover);
+}
+
+.bots-session-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bots-session-title {
+  font-size: 12.5px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bots-session-date {
+  font-size: 10.5px;
+  color: var(--fg-faint);
+}
+
+.bots-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.bots-session-hit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg-faint);
+  flex: 1;
+}
+
+.bots-session-hit svg {
+  flex-shrink: 0;
+}
+
+.bots-session-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.bots-session-row:hover .bots-session-action,
+.bots-archived-row .bots-session-action {
+  opacity: 1;
+}
+
+.bots-session-action:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.bots-session-action--danger:hover {
+  color: var(--bad, var(--fg));
+  border-color: var(--bad, var(--border));
+}
+
+.bots-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 120ms ease;
+}
+
+.bots-activity-row:hover {
+  background: var(--bg-hover);
+}
+
+.bots-activity-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bots-activity-title {
+  font-size: 12.5px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bots-activity-sub {
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bots-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.bots-archived {
+  margin: 0 16px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.bots-archived summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--fg-faint);
+  user-select: none;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.bots-archived-rows {
+  padding: 2px 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.bots-archived-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius);
+}
+
+.bots-archived-row:hover {
+  background: var(--bg-hover);
+}
+
+.bots-archived-empty {
+  padding: 4px 10px 10px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+
+.bots-open-chat-cta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 0;
+}
+
+.bots-open-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent-lo, var(--border));
+  background: var(--accent-bg, transparent);
+  color: var(--accent, var(--fg));
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.bots-open-chat-btn:hover {
+  border-color: var(--accent);
+}
+
+.bots-open-chat-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Team tag on chat rows */
+.bots-team-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  vertical-align: 1px;
+  background: var(--accent, #7c6cf0);
+  color: var(--fg-on-accent, #fff);
+}
+
+/* Danger zone — delete bot */
+.bots-danger-zone {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bots-delete-bot-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--bad, #e5534b);
+  background: none;
+  color: var(--bad, #e5534b);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.bots-delete-bot-btn:hover:not(:disabled) {
+  background: var(--bad, #e5534b);
+  color: #fff;
+}
+
+.bots-delete-bot-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bots-danger-hint {
+  font-size: 11px;
+  opacity: 0.6;
+}

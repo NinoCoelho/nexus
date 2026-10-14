@@ -70,6 +70,7 @@ def parse(content: str) -> WorkflowDef:
         variables={str(k): str(v) for k, v in variables.items()},
         steps=steps,
         description="\n".join(description_lines).strip(),
+        bot=str(frontmatter.get("bot", "") or "").strip(),
     )
     return wf
 
@@ -77,6 +78,8 @@ def parse(content: str) -> WorkflowDef:
 def serialize(wf: WorkflowDef, original_content: str | None = None) -> str:
     fm: dict[str, Any] = {WORKFLOW_PLUGIN_KEY: "basic"}
     fm["enabled"] = wf.enabled
+    if wf.bot:
+        fm["bot"] = wf.bot
     if wf.triggers:
         fm["triggers"] = [t.to_dict() for t in wf.triggers]
     if wf.variables:

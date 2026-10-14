@@ -14,6 +14,7 @@ interface Props {
   onToVaultRaw: () => void;
   onToVaultSummary: () => void;
   onDelete: () => void;
+  onArchive?: () => void;
   onClick: (e: React.MouseEvent) => void;
   onMoveToProject?: (projectId: string) => void;
   onRemoveFromProject?: () => void;
@@ -30,6 +31,7 @@ export default function SessionContextMenu({
   onToVaultRaw,
   onToVaultSummary,
   onDelete,
+  onArchive,
   onClick,
   onMoveToProject,
   onRemoveFromProject,
@@ -72,12 +74,12 @@ export default function SessionContextMenu({
       <div className="sidebar-ctx-divider" />
       {session.project_id && onRemoveFromProject && (
         <button className="sidebar-ctx-item" onClick={onRemoveFromProject}>
-          Remove from project
+          Remove from bot
         </button>
       )}
       {onMoveToProject && projects.length > 0 && (
         <div className="sidebar-ctx-submenu">
-          <div className="sidebar-ctx-item sidebar-ctx-item--disabled">Move to project</div>
+          <div className="sidebar-ctx-item sidebar-ctx-item--disabled">Move to bot</div>
           {projects
             .filter((p) => p.id !== session.project_id)
             .map((p) => (
@@ -97,6 +99,11 @@ export default function SessionContextMenu({
       {(session.project_id && onRemoveFromProject) || (onMoveToProject && projects.length > 0) ? (
         <div className="sidebar-ctx-divider" />
       ) : null}
+      {onArchive && (
+        <button className="sidebar-ctx-item" onClick={onArchive} title="Hide this chat from active lists — restorable from the bot's workspace">
+          Archive
+        </button>
+      )}
       <button className="sidebar-ctx-item sidebar-ctx-item--danger" onClick={onDelete}>
         Delete
       </button>

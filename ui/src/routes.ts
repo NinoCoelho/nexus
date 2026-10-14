@@ -6,15 +6,18 @@
  *  - `navigate()` pushes history entries (so Back/Forward work),
  *  - `popstate`/`hashchange` listeners re-parse on external navigation.
  *
- * Legacy routes (`#/data`, `#/graph`, `#/heartbeat`, `#/dream` — plus the
- * first-load `?view=…&path=…` query) are redirected/mapped on parse so old
- * links keep working.
+ * Legacy routes (`#/chat`, `#/projects[/<id>]`, `#/data`, `#/graph`,
+ * `#/heartbeat`, `#/dream` — plus the first-load `?view=…&path=…` query)
+ * are redirected/mapped on parse so old links keep working.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-/** Views reachable from the main nav. */
-export type View = "chat" | "projects" | "apps" | "vault" | "calendar" | "kanban" | "workflows";
+/** Views reachable from the main nav. `bots` replaces the old chat/projects
+ * pair — every conversation lives on a bot (the coordinator "main" bot owns
+ * unprojected chats). The legacy `chat`/`projects` ids still resolve via
+ * LEGACY_MAP so old links keep working. */
+export type View = "bots" | "apps" | "vault" | "calendar" | "kanban" | "workflows";
 
 /** Advanced area views — reachable via `#/advanced/<area>` and the
  * Settings drawer, not from the main nav. */
@@ -24,15 +27,18 @@ export type AnyView = View | AdvancedArea;
 
 export interface AppRoute {
   view: AnyView;
-  /** Optional deep-link payload: vault file path, app folder, project id. */
+  /** Optional deep-link payload: vault file path, app folder, bot id. */
   path?: string | null;
 }
 
-const MAIN_VIEWS: ReadonlySet<string> = new Set(["chat", "projects", "apps", "vault", "calendar", "kanban", "workflows"]);
+const MAIN_VIEWS: ReadonlySet<string> = new Set(["bots", "apps", "vault", "calendar", "kanban", "workflows"]);
 const ADVANCED_AREAS: ReadonlySet<string> = new Set(["graph", "heartbeat", "dream"]);
 
-/** Old view ids → new routes (kept so shared/bookmarked links survive). */
+/** Old view ids → new routes (kept so shared/bookmarked links survive).
+ * `#/chat` lands on the main bot; `#/projects[/<id>]` maps onto `#/bots/<id>`. */
 const LEGACY_MAP: Record<string, { view: AnyView; path?: string | null }> = {
+  chat: { view: "bots", path: "main" },
+  projects: { view: "bots" },
   database: { view: "apps" },
   data: { view: "apps" },
   graph: { view: "graph" },
@@ -64,7 +70,11 @@ export function parseLocation(hash: string, search: string): AppRoute | null {
       const rest = seg.slice(1).map(decodeURIComponent).join("/");
       return { view: head as View, path: rest || null };
     }
-    if (LEGACY_MAP[head]) return { ...LEGACY_MAP[head] };
+    if (LEGACY_MAP[head]) {
+      // `#/projects/<id>` keeps its payload; `#/chat` carries none.
+      const rest = seg.slice(1).map(decodeURIComponent).join("/");
+      return { ...LEGACY_MAP[head], path: rest || LEGACY_MAP[head].path || null };
+    }
     return null;
   }
 
@@ -75,11 +85,13 @@ export function parseLocation(hash: string, search: string): AppRoute | null {
   if (!v) return null;
   const path = qs.get("path");
   if (MAIN_VIEWS.has(v)) return { view: v as View, path };
-  if (LEGACY_MAP[v]) return { ...LEGACY_MAP[v], path: v === "data" || v === "database" ? null : path };
+  if (LEGACY_MAP[v]) {
+    return { ...LEGACY_MAP[v], path: v === "data" || v === "database" ? null : (path ?? LEGACY_MAP[v].path ?? null) };
+  }
   return null;
 }
 
-const DEFAULT_ROUTE: AppRoute = { view: "chat", path: null };
+const DEFAULT_ROUTE: AppRoute = { view: "bots", path: null };
 
 function readCurrent(): AppRoute {
   return (
@@ -87,13 +99,18 @@ function readCurrent(): AppRoute {
   );
 }
 
-/** Redirect legacy hash URLs in place so the address bar heals itself. */
+/** Redirect legacy hash URLs in place so the address bar heals itself.
+ * Handles both bare (`#/chat`) and deep (`#/projects/<id>`) legacy links. */
 function maybeRedirectLegacy(): void {
   const h = window.location.hash;
-  const m = h.match(/^#\/(database|data|graph|heartbeat|dream)\/?$/);
+  const m = h.match(/^#\/(chat|projects|database|data|graph|heartbeat|dream)(?:\/([^/].*))?\/?$/);
   if (!m) return;
+  const rest = m[2] ? decodeURIComponent(m[2]) : null;
   const target = LEGACY_MAP[m[1]];
-  if (target) window.history.replaceState(null, "", serializeRoute(target.view, target.path ?? null));
+  if (target) {
+    const path = rest ?? target.path ?? null;
+    window.history.replaceState(null, "", serializeRoute(target.view, path));
+  }
 }
 
 export function useAppRoute(): {

@@ -28,7 +28,14 @@ async def execute_step(
     if agent is None or store is None:
         return {"result": prompt, "_simulated": True}
 
-    session = store.create()
+    # Tag the internal session with its originating process + owning bot so
+    # it stays out of chat lists but monitorable from the bot's activity view.
+    meta: dict[str, Any] = getattr(engine, "_current_wf_meta", {}) or {}
+    session = store.create(
+        project_id=meta.get("bot_id"),
+        origin={"kind": "workflow", "source": meta.get("workflow_path") or "workflow",
+                "run_id": meta.get("run_id")},
+    )
     store.mark_hidden(session.id)
     session_id = session.id
 

@@ -454,6 +454,7 @@ class WorkflowDef:
     variables: dict[str, str] = field(default_factory=dict)
     steps: list[StepConfig] = field(default_factory=list)
     description: str = ""
+    bot: str = ""  # owning bot id/handle — tags created sessions for monitoring
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -463,6 +464,7 @@ class WorkflowDef:
             "variables": dict(self.variables),
             "steps": [s.to_dict() for s in self.steps],
             "description": self.description,
+            "bot": self.bot,
         }
 
 

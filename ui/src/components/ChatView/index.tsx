@@ -27,6 +27,19 @@ function isAudioAttachment(path: string): boolean {
   return path.startsWith("uploads/voice/") && path.toLowerCase().endsWith(".webm");
 }
 
+/** Synthetic team round-pass marker — the server queues these to hand the
+ * conversation to the next bot in a group chat. Rendered as a subtle
+ * "passing to @handle" line, never as a full user bubble. */
+const TEAM_PASS_MARKER = "<!-- nx:team -->";
+
+function isTeamPass(content: string): boolean {
+  return typeof content === "string" && content.startsWith(TEAM_PASS_MARKER);
+}
+
+function teamPassHandle(content: string): string {
+  return content.slice(TEAM_PASS_MARKER.length).trim();
+}
+
 export interface SubTaskState {
   name: string;
   child_session_id: string;
@@ -99,6 +112,9 @@ export interface Message {
     delaySeconds: number;
     reason: string;
   };
+  /** Mention-routing attribution — the reply came from another bot than the
+   * chat's owner. Renders the `@handle · Name` chip on the bubble. */
+  bot?: { id: string; handle: string; name: string } | null;
 }
 
 /**
@@ -156,6 +172,8 @@ interface Props {
   activeSessionId?: string | null;
   onFeedbackChange?: (msgIndex: number, value: "up" | "down" | null) => void;
   onPinChange?: (msgIndex: number, pinned: boolean) => void;
+  /** Hidden internal run session — transcript renders, composer is locked. */
+  readOnly?: boolean;
 }
 
 function fmt(d: Date) {
@@ -191,6 +209,7 @@ export default function ChatView({
   activeSessionId,
   onFeedbackChange,
   onPinChange,
+  readOnly = false,
 }: Props) {
   const { t } = useTranslation(["chat", "common"]);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -281,6 +300,7 @@ export default function ChatView({
                   feedback={msg.feedback ?? null}
                   pinned={msg.pinned ?? false}
                   reconnecting={msg.reconnecting}
+                  bot={msg.bot}
                   msgIndex={idx}
                   onFeedbackChange={onFeedbackChange}
                   onPinChange={onPinChange}
@@ -314,6 +334,15 @@ export default function ChatView({
                   }
                 />
               )}
+            </div>
+          ) : isTeamPass(msg.content) ? (
+            <div key={idx} ref={setMsgRef(idx)} className="team-pass-row">
+              <span className="team-pass-chip">
+                <svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 10h11M11 6l4 4-4 4" />
+                </svg>
+                {teamPassHandle(msg.content)}
+              </span>
             </div>
           ) : (
             <div key={idx} ref={setMsgRef(idx)} className="user-msg">
@@ -416,11 +445,14 @@ export default function ChatView({
       <div className="bottom-region">
         <div className="bottom-inner">
           <div className="input-stack">
+            {readOnly && (
+              <div className="chat-readonly-note">Internal session — read only</div>
+            )}
             <InputBar
               value={input}
               onChange={onInputChange}
               onSend={onSend}
-              disabled={false}
+              disabled={readOnly}
               busy={thinking}
               onStop={onStop}
               attachments={attachments}

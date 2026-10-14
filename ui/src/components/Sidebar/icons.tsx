@@ -97,6 +97,17 @@ export function IconProjects() {
   );
 }
 
+export function IconBot() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="7.5" width="12" height="9" rx="2" />
+      <path d="M8 7.5V5a2 2 0 0 1 4 0v2.5" />
+      <circle cx="8" cy="12" r="0.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="0.7" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function IconHeartbeat() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
 import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, respondToUserRequestStream, type SessionSummary, type StreamEvent } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent, applyTurnBotEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -176,6 +176,8 @@ export function useChatSession(
   const send = useCallback(async (override?: unknown) => {
     const key = activeKey;
     const state = chatStates.get(key) ?? emptyState();
+    // Hidden internal run sessions (bot activity view) are read-only.
+    if (state.readOnly) return;
     // ``override`` can be a plain string OR ``{ text, inPlace, bypassSecretGuard }``.
     // ``inPlace`` resumes a partial assistant: no new user bubble,
     // no new placeholder — deltas stream into the existing last assistant.
@@ -364,6 +366,8 @@ export function useChatSession(
           applyUserInjectedEvent(setChatStates, streamKey, event.qid, event.text);
         } else if (event.type === "queue_removed") {
           applyQueueRemovedEvent(setChatStates, streamKey, event.qid);
+        } else if (event.type === "turn_bot") {
+          applyTurnBotEvent(setChatStates, streamKey, event.bot);
         }
       }, abortController.signal, sendModel, { bypassSecretGuard, attachments: attachmentsForRequest, inputMode, projectId: state.projectId });
 
@@ -411,6 +415,8 @@ export function useChatSession(
                   applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
                 } else if (event.type === "error") {
                   applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
+                } else if (event.type === "turn_bot") {
+                  applyTurnBotEvent(setChatStates, key, event.bot);
                 }
               }, resumeAbort.signal);
               if (!resumeDone && !resumeAbort.signal.aborted) {
@@ -551,6 +557,8 @@ export function useChatSession(
         applyUserInjectedEvent(setChatStates, key, event.qid, event.text);
       } else if (event.type === "queue_removed") {
         applyQueueRemovedEvent(setChatStates, key, event.qid);
+      } else if (event.type === "turn_bot") {
+        applyTurnBotEvent(setChatStates, key, event.bot);
       }
     },
     [persistUsedModel],
@@ -881,6 +889,8 @@ export function useChatSession(
               applyUserInjectedEvent(setChatStates, activeKey, event.qid, event.text);
             } else if (event.type === "queue_removed") {
               applyQueueRemovedEvent(setChatStates, activeKey, event.qid);
+            } else if (event.type === "turn_bot") {
+              applyTurnBotEvent(setChatStates, activeKey, event.bot);
             }
           },
           abortController.signal,

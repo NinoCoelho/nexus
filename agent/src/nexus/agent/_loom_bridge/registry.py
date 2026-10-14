@@ -318,10 +318,14 @@ def build_tool_registry(
     # and refuse to run outside the coordinator session.
     from nexus.agent.context import CURRENT_SESSION_ID as _SESSION_CTX
     from nexus.coordinator_tools import (
+        BOT_CONFIG_TOOL,
         NEXUS_SESSIONS_TOOL,
         SESSION_DISPATCH_TOOL,
+        TEAMS_TOOL,
+        handle_bot_config,
         handle_nexus_sessions,
         handle_session_dispatch,
+        handle_teams,
     )
 
     async def _nexus_sessions(args: dict) -> str:
@@ -330,8 +334,16 @@ def build_tool_registry(
     async def _session_dispatch(args: dict) -> str:
         return await handle_session_dispatch(args, _SESSION_CTX.get(None))
 
+    async def _bot_config(args: dict) -> str:
+        return await handle_bot_config(args, _SESSION_CTX.get(None))
+
+    async def _teams(args: dict) -> str:
+        return await handle_teams(args, _SESSION_CTX.get(None))
+
     registry.register(_SimpleToolHandler(NEXUS_SESSIONS_TOOL, _nexus_sessions))
     registry.register(_SimpleToolHandler(SESSION_DISPATCH_TOOL, _session_dispatch))
+    registry.register(_SimpleToolHandler(BOT_CONFIG_TOOL, _bot_config))
+    registry.register(_SimpleToolHandler(TEAMS_TOOL, _teams))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.

@@ -114,18 +114,19 @@ async def list_sessions(
     limit: int = 50,
     offset: int = 0,
     include_hidden: bool = False,
+    archived: bool | None = False,
     store: SessionStore = Depends(get_sessions),
     response: Response = None,
 ) -> list[dict]:
     response.headers["Cache-Control"] = "no-cache"
     project_sessions = await asyncio.to_thread(
-        store.list, 9999, 0, include_hidden=include_hidden, has_project=True
+        store.list, 9999, 0, include_hidden=include_hidden, archived=archived, has_project=True
     )
     ungrouped_sessions = await asyncio.to_thread(
-        store.list, limit, offset, include_hidden=include_hidden, has_project=False
+        store.list, limit, offset, include_hidden=include_hidden, archived=archived, has_project=False
     )
     total_ungrouped = await asyncio.to_thread(
-        store.count, include_hidden=include_hidden, has_project=False
+        store.count, include_hidden=include_hidden, archived=archived, has_project=False
     )
     response.headers["X-Total-Count"] = str(total_ungrouped)
     seen: set[str] = set()
@@ -143,6 +144,9 @@ async def list_sessions(
             "updated_at": s.updated_at,
             "message_count": s.message_count,
             "project_id": s.project_id,
+            "archived": s.archived,
+            "origin": s.origin,
+            "team": s.team,
         }
         for s in merged
     ]
@@ -185,24 +189,40 @@ async def get_session(
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     feedback_map = await asyncio.to_thread(store.get_feedback_map, session_id)
     pinned_set = await asyncio.to_thread(store.get_pinned_set, session_id)
+    messages = [
+        {
+            "seq": i,
+            "role": m.role,
+            "content": m.content,
+            "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
+            "tool_call_id": m.tool_call_id,
+            "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
+            "feedback": feedback_map.get(i),
+            "pinned": i in pinned_set,
+        }
+        for i, m in enumerate(session.history)
+    ]
+    from ...agent.bots import attribute_bot_replies
+
+    is_master = False
+    try:
+        from ...coordinator import get_service as _coord_svc
+
+        _svc = _coord_svc()
+        is_master = _svc is not None and _svc.is_coordinator(session_id)
+    except Exception:
+        pass
+    messages = attribute_bot_replies(
+        messages, own_project_id=session.project_id, is_master=is_master
+    )
+    team = await asyncio.to_thread(store.get_team, session_id)
     return {
         "id": session.id,
         "title": session.title,
         "context": session.context,
         "project_id": session.project_id,
-        "messages": [
-            {
-                "seq": i,
-                "role": m.role,
-                "content": m.content,
-                "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
-                "tool_call_id": m.tool_call_id,
-                "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
-                "feedback": feedback_map.get(i),
-                "pinned": i in pinned_set,
-            }
-            for i, m in enumerate(session.history)
-        ],
+        "team": team,
+        "messages": messages,
     }
 
 
@@ -223,6 +243,53 @@ async def delete_session(
     store: SessionStore = Depends(get_sessions),
 ) -> None:
     await asyncio.to_thread(store.delete, session_id)
+
+
+@router.patch("/sessions/{session_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
+async def archive_session(
+    session_id: str,
+    body: dict,
+    store: SessionStore = Depends(get_sessions),
+) -> None:
+    """Set or clear the archived flag. Body: ``{"archived": bool}``."""
+    if body.get("archived", True):
+        if await asyncio.to_thread(_is_coordinator_master, session_id):
+            raise HTTPException(
+                status_code=422, detail="the coordinator master chat cannot be archived"
+            )
+    await asyncio.to_thread(store.mark_archived, session_id, bool(body.get("archived", True)))
+
+
+@router.post("/sessions/archive-bulk", status_code=status.HTTP_200_OK)
+async def archive_sessions_bulk(
+    body: dict,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Bulk-archive sessions by id list. Body: ``{"session_ids": [...]}``.
+
+    Returns ``{"archived": n}`` (missing ids are ignored).
+    """
+    ids = body.get("session_ids") or []
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=422, detail="session_ids must be a list")
+    masters = {
+        sid for sid in map(str, ids[:500]) if await asyncio.to_thread(_is_coordinator_master, sid)
+    }
+    for sid in ids[:500]:
+        if str(sid) in masters:
+            continue
+        await asyncio.to_thread(store.mark_archived, str(sid), True)
+    return {"archived": len(ids) - len(masters)}
+
+
+def _is_coordinator_master(session_id: str) -> bool:
+    try:
+        from ...coordinator import get_service
+
+        svc = get_service()
+        return svc is not None and svc.is_coordinator(session_id)
+    except Exception:
+        return False
 
 
 @router.patch("/sessions/{session_id}/messages/{seq}/pin", status_code=status.HTTP_204_NO_CONTENT)

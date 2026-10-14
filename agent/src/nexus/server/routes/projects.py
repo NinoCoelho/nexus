@@ -39,6 +39,8 @@ async def list_projects(
             "description": s.description,
             "color": s.color,
             "icon": s.icon,
+            "persona": s.persona,
+            "handle": s.handle,
             "session_count": s.session_count,
             "created_at": s.created_at,
             "updated_at": s.updated_at,
@@ -62,6 +64,7 @@ async def create_project(
         instructions=body.get("instructions", ""),
         color=body.get("color", ""),
         icon=body.get("icon", ""),
+        persona=body.get("persona", ""),
     )
     return _project_to_dict(project)
 
@@ -133,6 +136,8 @@ def _project_to_dict(project: Any) -> dict:
         "name": project.name,
         "description": project.description,
         "instructions": project.instructions,
+        "persona": project.persona,
+        "handle": project.handle,
         "vault_path": project.vault_path,
         "color": project.color,
         "icon": project.icon,

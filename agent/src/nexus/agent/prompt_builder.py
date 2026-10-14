@@ -147,6 +147,11 @@ Working agreements:
   [coordinator].auto_approve: when a dispatch is refused with
   needs_confirmation, ask via ask_user, and only retry with
   confirmed=true after an explicit yes.
+- Bots and team chats are managed with the ``bot_config`` and ``teams``
+  tools (create/update/delete with the same needs_confirmation flow).
+  Never manage them by writing to the sessions database or other internal
+  files directly — the tools enforce the invariants (@handle uniqueness,
+  vault folders) that raw edits silently break.
 - Announce what you dispatched and where; when the reply matters, wait for
   it and summarize the outcome.
 - When a request would mutate something significant (delete, send, spend),
@@ -161,6 +166,81 @@ Working agreements:
   "create a chart here" while an app is open means dispatching the
   request into that app's chat session. Never echo the block back.
 {persona}"""
+
+
+def _bots_roster_block() -> str:
+    """The bots roster — every bot's identity, handles and a persona blurb.
+
+    Lives in the stable cache zone: it is identical for every session and only
+    changes when bots are created/edited (same cache-invalidation semantics as
+    the skills catalog). This is what makes bots *aware* of each other — any
+    bot can be @mentioned into any conversation, so each one needs to know who
+    else exists and what they do.
+    """
+    try:
+        from pathlib import Path as _Path
+
+        from ..server.project_store import ProjectStore
+
+        store = ProjectStore(_Path("~/.nexus/sessions.sqlite").expanduser())
+        summaries = store.list(limit=100)
+    except Exception:
+        return ""
+
+    entries: list[str] = []
+    try:
+        from ..agent.bots import coordinator_identity
+
+        coord = coordinator_identity()
+        if coord is not None:
+            from ..config_file import load_cached
+
+            persona_txt = ""
+            try:
+                persona_txt = (getattr(load_cached(), "coordinator", None).persona or "")
+            except Exception:
+                pass
+            blurb = _first_sentence(persona_txt or "the main assistant, coordinator of every bot.")
+            entries.append(f"- @{coord['handle']} **{coord['name']}** — {blurb}")
+    except Exception:
+        pass
+
+    for s in summaries:
+        blurb = _first_sentence(s.persona or s.description)
+        if not blurb:
+            blurb = "no persona configured yet"
+        entries.append(f"- @{s.handle} **{s.name}** — {blurb}")
+
+    if not entries:
+        return ""
+
+    return (
+        "## Bots\n\n"
+        "Chats in Nexus are organized around bots — specialized assistants, one "
+        "per domain, plus the main assistant. The user can @mention any bot in "
+        "any conversation to bring it in: the mentioned bot answers that "
+        "message in the same conversation, and its reply is attributed to it. "
+        "Replies from other bots may already be in the transcript with their "
+        "@handle — treat them as colleagues: build on what they said, don't "
+        "repeat it, and stay in your own persona.\n\n"
+        + "\n".join(entries)
+    )
+
+
+def _first_sentence(text: str, limit: int = 120) -> str:
+    """First sentence of a persona/description, capped, for roster blurbs."""
+    text = (text or "").strip().splitlines()[0].strip() if text else ""
+    if not text:
+        return ""
+    for sep in (". ", "! ", "? "):
+        idx = text.find(sep)
+        if idx != -1:
+            text = text[: idx + 1]
+            break
+    else:
+        if len(text) > limit:
+            text = text[:limit].rsplit(" ", 1)[0] + "…"
+    return text.strip()
 
 
 def _coordinator_block() -> str:
@@ -183,6 +263,38 @@ def _coordinator_block() -> str:
         else ""
     )
     return _COORDINATOR_BLOCK_TEMPLATE.format(name=name, persona=persona_block)
+
+
+def _coordinator_guest_block() -> str:
+    """Coordinator identity for a @mention into another bot's chat.
+
+    The persona answers, but the master-chat-only tools (nexus_sessions,
+    session_dispatch) don't work outside the master chat — the block says so
+    instead of letting the model advertise tools that would refuse.
+    """
+    name = "Main"
+    persona = ""
+    try:
+        from ..config_file import load_cached
+
+        coord = getattr(load_cached(), "coordinator", None)
+        if coord is not None:
+            name = (coord.name or "Main").strip() or "Main"
+            persona = (coord.persona or "").strip()
+    except Exception:
+        pass
+    persona_block = f"\n{persona}\n" if persona else ""
+    return (
+        f"## {name} — mentioned into this chat\n\n"
+        f"You are **{name}**, the user's main assistant and coordinator, "
+        "answering here because the user @mentioned you in this conversation "
+        "(another bot's chat). Stay in your own persona and answer directly. "
+        "Your coordinator-only tools (`nexus_sessions`, `session_dispatch`) "
+        "work only in your own master chat — here they are unavailable; if "
+        "the request needs cross-session work, say what you would dispatch "
+        "and suggest continuing it in your chat.\n"
+        f"{persona_block}"
+    )
 
 IDENTITY = """\
 You are Nexus. You're not a chatbot — you're a capable agent with tools, memory, \
@@ -489,6 +601,7 @@ def build_system_prompt(
     language: str | None = None,
     project: "Project | None" = None,
     coordinator: bool = False,
+    coordinator_guest: bool = False,
 ) -> str:
     _migrate_legacy_memory()
 
@@ -553,6 +666,11 @@ def build_system_prompt(
         parts.append("")
         parts.append(site_logins_block)
 
+    roster_block = _bots_roster_block()
+    if roster_block:
+        parts.append("")
+        parts.append(roster_block)
+
     # ── breakpoint ─────────────────────────────────────────────────────────
     parts.append("")
     parts.append(CACHE_BREAKPOINT_MARKER)
@@ -576,16 +694,24 @@ def build_system_prompt(
 
     if coordinator:
         parts.append("")
-        parts.append(_coordinator_block())
+        parts.append(
+            _coordinator_guest_block() if coordinator_guest else _coordinator_block()
+        )
 
     if context:
         parts.append("")
         parts.append(f"## Session context\n\n{context}")
 
     if project:
-        p_lines = [f"## Project: {project.name}", ""]
-        if project.description:
-            p_lines.append(f"{project.description}")
+        p_lines = [f"## You are bot: {project.name} (@{project.handle or 'bot'})", ""]
+        persona = (project.persona or "").strip()
+        if persona:
+            p_lines.append("### Persona")
+            p_lines.append("")
+            p_lines.append(persona)
+            p_lines.append("")
+        elif project.description:
+            p_lines.append(project.description)
             p_lines.append("")
         if project.instructions:
             p_lines.append("### Instructions")
@@ -593,8 +719,8 @@ def build_system_prompt(
             p_lines.append(project.instructions)
             p_lines.append("")
         p_lines.append(
-            f"This session is part of the **{project.name}** project. "
-            f"The project vault folder is at `~/.nexus/vault/{project.vault_path}/`. "
+            f"This conversation belongs to the bot **{project.name}**. "
+            f"The bot's vault folder is at `~/.nexus/vault/{project.vault_path}/`. "
             f"When writing notes, memory, or project files, prefer this folder over the global vault."
         )
         parts.append("")

@@ -10,9 +10,9 @@
  */
 
 export interface BubbleLocation {
-  /** Active route view (chat / projects / apps / vault / calendar / kanban / workflows / advanced). */
+  /** Active route view (bots / apps / vault / calendar / kanban / workflows / advanced). */
   view: string;
-  /** Selected project id in the Projects view, when any. */
+  /** Selected bot id in the Bots view, when any. */
   projectId?: string | null;
   /** Selected app folder in the Apps view. */
   appFolder?: string | null;
@@ -22,9 +22,9 @@ export interface BubbleLocation {
   kanbanPath?: string | null;
   /** Selected calendar path. */
   calendarPath?: string | null;
-  /** Active chat session id (only meaningful when view === "chat"). */
+  /** Active chat session id (only meaningful when a chat pane is open). */
   activeSessionId?: string | null;
-  /** Project id of the active chat session, when it is a project chat. */
+  /** Project id of the active chat session, when it is a bot's chat. */
   activeProjectId?: string | null;
 }
 
@@ -55,30 +55,30 @@ export function describeBubbleLocation(loc: BubbleLocation, projectName?: (id: s
   const projName = (id?: string | null) => (id ? projectName?.(id) || id : undefined);
 
   switch (loc.view) {
-    case "chat": {
-      if (loc.activeProjectId) {
-        const n = projName(loc.activeProjectId);
-        lines.push(`view: chat (inside project "${n ?? loc.activeProjectId}")`);
-        lines.push(`project_id: ${loc.activeProjectId}`);
-        label = `Chat · ${n ?? "project"}`;
-      } else {
-        lines.push("view: chat (unprojected)");
-        label = "Chat";
-      }
-      if (loc.activeSessionId && loc.activeSessionId !== "__new__") {
-        lines.push(`active_chat_session: ${loc.activeSessionId}`);
-      }
-      break;
-    }
+    case "bots":
+    case "chat":
     case "projects": {
-      if (loc.projectId) {
+      if (loc.activeProjectId || loc.activeSessionId) {
+        const n = projName(loc.activeProjectId);
+        if (loc.activeProjectId) {
+          lines.push(`view: bots (chat inside bot "${n ?? loc.activeProjectId}")`);
+          lines.push(`project_id: ${loc.activeProjectId}`);
+          label = `Chat · ${n ?? "bot"}`;
+        } else {
+          lines.push("view: bots (chat with the main bot)");
+          label = "Chat";
+        }
+        if (loc.activeSessionId && loc.activeSessionId !== "__new__") {
+          lines.push(`active_chat_session: ${loc.activeSessionId}`);
+        }
+      } else if (loc.projectId) {
         const n = projName(loc.projectId);
-        lines.push(`view: projects, selected project "${n ?? loc.projectId}"`);
+        lines.push(`view: bots, selected bot "${n ?? loc.projectId}"`);
         lines.push(`project_id: ${loc.projectId}`);
-        label = `Projects · ${n ?? "project"}`;
+        label = `Bots · ${n ?? "bot"}`;
       } else {
-        lines.push("view: projects (project list)");
-        label = "Projects";
+        lines.push("view: bots (bot list)");
+        label = "Bots";
       }
       break;
     }

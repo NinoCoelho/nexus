@@ -19,7 +19,7 @@ import { looksLikeSpeech } from "../../lib/speechDetect";
 import { findSecrets, type SecretMatch } from "../../lib/secretPatterns";
 import { unlockAudioForIOS } from "../../lib/iosAudioUnlock";
 import { useToast } from "../../toast/ToastProvider";
-import MentionPicker, { type MentionPickerHandle } from "../MentionPicker";
+import MentionPicker, { type MentionItem, type MentionPickerHandle } from "../MentionPicker";
 import SecretPicker, { type SecretPickerHandle } from "../SecretPicker";
 import SlashCommandPicker, { type SlashPickerHandle } from "../SlashCommandPicker";
 import "../InputBar.css";
@@ -188,7 +188,7 @@ export default function InputBar({
     setConversationMode(false);
   }, [cancelRecording]);
 
-  const { mention, setMention, mentionResults, mentionLoading, detectMention, insertMention } = useMentionPicker(draft, setDraft);
+  const { mention, setMention, mentionResults, mentionLoading, bots: mentionBots, detectMention, insertMention, insertBotMention } = useMentionPicker(draft, setDraft);
   const { secret, setSecret, secretResults, detectSecret, insertSecret } = useSecretPicker(draft, setDraft);
   const { slash, setSlash, commands: slashCommands } = useSlashPicker(draft);
 
@@ -568,7 +568,12 @@ export default function InputBar({
             ref={mentionRef}
             results={mentionResults}
             loading={mentionLoading}
-            onSelect={(node) => insertMention(node, textareaRef)}
+            bots={mentionBots}
+            activeQuery={mention.query}
+            onSelectItem={(item: MentionItem) => {
+              if (item.kind === "bot") insertBotMention(item.bot, textareaRef);
+              else insertMention(item.node, textareaRef);
+            }}
             onClose={() => setMention(null)}
           />
         )}

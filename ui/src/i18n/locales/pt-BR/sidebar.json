@@ -9,8 +9,7 @@
   "views": "Visualizações",
   "settings": "Configurações",
   "viewNames": {
-    "chat": "Conversa",
-    "projects": "Projetos",
+    "bots": "Bots",
     "apps": "Apps",
     "calendar": "Calendário",
     "kanban": "Kanban",

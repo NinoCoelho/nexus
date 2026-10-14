@@ -52,6 +52,22 @@
   color: var(--fg-faint);
 }
 
+/* Mention-routing attribution — reply authored by another bot. */
+.asst-bot-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-bg, var(--bg-inset));
+  border: 1px solid var(--accent-lo, var(--border-soft));
+  color: var(--accent, var(--fg-faint));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 .asst-card {
   background: var(--bubble-asst-bg);
   border: 1px solid var(--bubble-asst-border);

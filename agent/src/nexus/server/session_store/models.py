@@ -46,6 +46,9 @@ class SessionSummary:
     updated_at: int
     message_count: int
     project_id: str | None = None
+    archived: int = 0
+    origin: str | None = None
+    team: str | None = None  # JSON: {"name", "members": [bot_id], "mode"}
 
 
 # ── Type conversion helpers ───────────────────────────────────────────────────
