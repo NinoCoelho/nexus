@@ -45,6 +45,11 @@ class QueuedInput:
     # Surface the message came from ("web" | "telegram" | "coordinator") —
     # keeps its own identity through mid-turn injection and chained turns.
     origin: str = "web"
+    # Team/cascade passes must run as **chained turns**, never mid-turn
+    # injections: injected at a tool-batch boundary they collapse into the
+    # running turn and the last-mentioned persona wins, so the fan-out
+    # silently breaks (and a bot→bot cascade would loop inside one turn).
+    chain_only: bool = False
 
 
 @dataclass
@@ -79,6 +84,12 @@ class ChatTurnRunner:
     # turns when the current turn ends first (``_next_queued``).
     queue: list[QueuedInput] = field(default_factory=list)
     _finalized: bool = False
+    # ── Bot→bot cascade state (team sessions only) ─────────────────────
+    # Budget of team passes (round fan-out + mention cascade) this runner
+    # may still chain; when it hits 0 mid-cascade the cap event fires and
+    # the user can grant more rounds via POST /sessions/{sid}/team/continue.
+    _cascade_budget: int = 0
+    _cascade_capped: bool = False
 
     # ── Registry ────────────────────────────────────────────────────────
 
@@ -106,7 +117,7 @@ class ChatTurnRunner:
 
     # ── Queue (messages sent while this turn runs) ──────────────────────
 
-    def enqueue(self, text: str, origin: str = "web") -> str | None:
+    def enqueue(self, text: str, origin: str = "web", *, chain_only: bool = False) -> str | None:
         """Queue a follow-up message for mid-turn injection or chaining.
 
         Returns the queue id, or ``None`` when the runner already
@@ -119,7 +130,7 @@ class ChatTurnRunner:
         if self._finalized:
             return None
         qid = uuid4().hex[:12]
-        self.queue.append(QueuedInput(qid=qid, text=text, origin=origin))
+        self.queue.append(QueuedInput(qid=qid, text=text, origin=origin, chain_only=chain_only))
         return qid
 
     def remove_queued(self, qid: str) -> bool:
@@ -137,15 +148,19 @@ class ChatTurnRunner:
         return False
 
     def drain_pending(self) -> list[dict[str, str]]:
-        """Drain the whole queue for mid-turn injection.
+        """Drain the injectable queue for mid-turn injection.
 
         Called by the agent loop at tool-batch boundaries (via the
         ``drain_pending_inputs`` callback) — the drained messages are
-        appended to the working context as user messages.
+        appended to the working context as user messages. **Chain-only**
+        items (team/cascade passes) are deliberately left behind: they are
+        delivered by the chained-turn loop in ``_run`` so each pass gets
+        its own turn and persona.
         """
-        items = [{"qid": q.qid, "text": q.text, "origin": q.origin} for q in self.queue]
-        self.queue.clear()
-        return items
+        injectable = [q for q in self.queue if not q.chain_only]
+        if injectable:
+            self.queue = [q for q in self.queue if q.chain_only]
+        return [{"qid": q.qid, "text": q.text, "origin": q.origin} for q in injectable]
 
     def _drop_queue(self, reason: str) -> None:
         for item in self.queue:
@@ -186,11 +201,103 @@ class ChatTurnRunner:
         self.started_at = datetime.now(timezone.utc)
         self.origin = nxt.origin
 
+    # ── Bot→bot cascade (team sessions) ─────────────────────────────────
+    #
+    # After every settled turn, the runner scans the reply for @mentions of
+    # team colleagues and queues a chained marker turn per new mention —
+    # the mentioned bot answers in the same conversation, its reply is
+    # scanned in turn, and so on until a reply mentions nobody new, the
+    # budget runs out (cap event; the user can grant more rounds), or the
+    # user cancels (/cancel and Stop drop the queue including cascade
+    # passes).
+
+    def _queue_cascade_passes(self) -> None:
+        """Queue chained passes for team members @mentioned in the reply."""
+        if self._cascade_capped and self._cascade_budget <= 0:
+            return
+        try:
+            from ...agent.bots import TEAM_MARKER, cascade_mentions, turn_speaker_id
+
+            team = self.store.get_team(self.session_id)
+            if not team:
+                return
+            reply = (self.acc.accumulated_text or "").strip()
+            if not reply:
+                return
+            # Resolve bots against the runner's own sessions DB (the app's
+            # store in production, the test's tmp store in tests) — not the
+            # home default, which may point elsewhere.
+            from ...server.project_store import ProjectStore
+
+            pstore = ProjectStore(self.store._db_path)
+            session = self.store.get(self.session_id)
+            speaker = turn_speaker_id(
+                self.message,
+                team=team,
+                own_project_id=getattr(session, "project_id", None),
+                project_store=pstore,
+            )
+            targets = cascade_mentions(
+                reply, team=team, speaker_id=speaker, project_store=pstore
+            )
+            if not targets:
+                return
+            queued_texts = {q.text for q in self.queue}
+            for t in targets:
+                if self._cascade_budget <= 0:
+                    if not self._cascade_capped:
+                        self._cascade_capped = True
+                        self._publish({
+                            "type": "team_cascade_capped",
+                            "session_id": self.session_id,
+                            "max": self._cascade_max(),
+                            "pending": t["bot"]["handle"],
+                        })
+                    return
+                if t["marker"] in queued_texts:
+                    continue
+                qid = self.enqueue(t["marker"], origin="team", chain_only=True)
+                if qid:
+                    queued_texts.add(t["marker"])
+                    self._publish({
+                        "type": "user_enqueued",
+                        "qid": qid,
+                        "text": t["marker"].replace(TEAM_MARKER, "").strip(),
+                        "origin": "team",
+                        "session_id": self.session_id,
+                    })
+        except Exception:  # noqa: BLE001 — the cascade is best-effort
+            log.debug("bot cascade scan failed", exc_info=True)
+
+    def _cascade_max(self) -> int:
+        try:
+            from ...config_file import load_cached as _load_cfg
+
+            return int(_load_cfg().agent.bot_cascade_max)
+        except Exception:  # noqa: BLE001
+            return 15
+
+    def extend_cascade(self, extra: int | None = None) -> int:
+        """Grant more cascade rounds (user asked the team to keep going).
+        Returns the new budget. Uncaps so future scans queue again."""
+        add = extra if extra is not None else self._cascade_max()
+        self._cascade_budget += add
+        self._cascade_capped = False
+        return self._cascade_budget
+
     # ── Main loop ───────────────────────────────────────────────────────
 
     async def _run(self) -> None:
         token = CURRENT_SESSION_ID.set(self.session_id)
         self.store._trace_suppressed.add(self.session_id)
+        # Bot→bot cascade budget — counts every chained team pass (round
+        # fan-out + mention cascade), so a team can never run forever.
+        try:
+            from ...config_file import load_cached as _load_cfg
+
+            self._cascade_budget = int(_load_cfg().agent.bot_cascade_max)
+        except Exception:  # noqa: BLE001 — config hiccup shouldn't kill the turn
+            self._cascade_budget = 15
         try:
             await self._drive_loop()
             # Chained turns: queued messages that arrived during the turn
@@ -198,6 +305,17 @@ class ChatTurnRunner:
             # follow-up turns on the same runner, so the open SSE stream
             # keeps flowing past the first `done`.
             while True:
+                # Persist each completed turn BEFORE the next one chains —
+                # `_begin_chained_turn` re-reads history from the DB, and
+                # the old single-persist-at-the-end dropped every reply
+                # but the last (the lead's answer vanished from round
+                # fan-outs and bot→bot cascades).
+                self._persist()
+                # Bot→bot cascade: when the settled reply @mentions team
+                # colleagues, queue their turn so the conversation between
+                # bots continues until a reply mentions nobody new —
+                # bounded by the cascade budget (cap event when it ends).
+                self._queue_cascade_passes()
                 nxt = self._next_queued()
                 if nxt is None:
                     break
@@ -209,6 +327,8 @@ class ChatTurnRunner:
                     "session_id": self.session_id,
                 })
                 self._begin_chained_turn(nxt)
+                if nxt.origin == "team":
+                    self._cascade_budget = max(0, self._cascade_budget - 1)
                 await self._drive_loop()
         except asyncio.CancelledError:
             self.acc.partial_status = "cancelled"

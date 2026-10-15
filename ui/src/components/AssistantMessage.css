@@ -376,3 +376,64 @@
   overflow: hidden;
   max-width: 100%;
 }
+
+/* Bot-mention links (`@handle` → #nxb:<handle>) inside assistant bodies. */
+.asst-body a[href^="#nxb:"] {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  cursor: pointer;
+}
+.asst-body a[href^="#nxb:"]:hover {
+  border-bottom-style: solid;
+}
+
+/* Forward-to-bot dropdown in the bubble footer. */
+.asst-forward {
+  position: relative;
+  display: inline-flex;
+}
+.asst-forward-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 210px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.asst-forward-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+  padding: 2px 8px 6px;
+}
+.asst-forward-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.asst-forward-item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.asst-forward-handle {
+  font-size: 11px;
+  color: var(--fg-faint);
+}

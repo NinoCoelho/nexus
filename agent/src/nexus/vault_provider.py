@@ -32,7 +32,11 @@ class NexusVaultProvider:
 
     @property
     def root(self) -> Path:
-        return vault._VAULT_ROOT
+        # Lazy resolver, never the raw global: ``vault._VAULT_ROOT`` stays
+        # None until the vault module initializes, and loom's memory vault
+        # backend does ``root / path`` — a None root crashed memory_read
+        # with ``TypeError: NoneType / str``.
+        return vault._vault_root()
 
     async def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         rows = vault_search.search(query, limit=limit)

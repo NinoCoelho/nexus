@@ -9,6 +9,7 @@ Compact button, i.e. POST /sessions/{sid}/compact).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -21,7 +22,10 @@ from .formatting import split_for_telegram
 log = logging.getLogger(__name__)
 
 _HELP_TEXT = """<b>Nexus commands</b>
-<code>/project [name]</code> — attach this chat/topic to a project (or show binding)
+<code>/bots [name]</code> — attach this chat/topic to a bot (or show binding)
+<code>/team</code> — connect this chat to a team (group of bots)
+<code>/team new &lt;name&gt; @bot1 @bot2 [round]</code> — create + connect a team
+<code>/team off</code> — disconnect the team from this chat
 <code>/topics</code> — list every linked chat/topic
 <code>/vault [path]</code> — browse the vault; files arrive as documents
 <code>/new [title]</code> — start a new chat here
@@ -34,7 +38,9 @@ _HELP_TEXT = """<b>Nexus commands</b>
 <code>/id</code> — chat/thread/user ids (for config)
 
 Plain messages go to the active chat. Topics and groups work standalone —
-attach one to a project any time with /project."""
+attach one to a bot any time with /bots. In team chats, bots @mention each
+other to collaborate; reply <b>continuar</b> when the round limit is reached
+to let them keep going."""
 
 
 @dataclass
@@ -246,10 +252,10 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
 
     if args.strip().lower() in ("off", "none", "unbind"):
         if binding is None:
-            await _reply(deps, info, "This chat is not bound to a project.")
+            await _reply(deps, info, "This chat is not bound to a bot.")
             return
         deps.bindings.set_project(info.chat_id, info.thread_id, None)
-        # Release the active chat too so it stops showing under the project
+        # Release the active chat too so it stops showing under the bot
         # (get_or_create never un-stamps on its own). Best-effort.
         if binding.active_session_id:
             try:
@@ -259,37 +265,37 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
                     "telegram: failed to un-stamp session %s from project",
                     binding.active_session_id,
                 )
-        await _reply(deps, info, "Unbound. /project &lt;name&gt; to bind again.")
+        await _reply(deps, info, "Unbound. /bots &lt;name&gt; to bind again.")
         return
 
     if not args.strip():
-        # Show current binding + available projects as buttons.
+        # Show current binding + available bots as buttons.
         if binding and binding.project_id:
             p = pstore.get(binding.project_id)
             name = p.name if p else binding.project_id
-            await _reply(deps, info, f"This chat is bound to project <b>{name}</b>.")
+            await _reply(deps, info, f"This chat is bound to bot <b>{name}</b>.")
         else:
             text = (
-                "This chat is not bound to a project yet.\nUse /project &lt;name&gt; to bind one."
+                "This chat is not bound to a bot yet.\nUse /bots &lt;name&gt; to bind one."
             )
             projects = pstore.list(limit=20)
             kb = _project_keyboard(projects)
             if kb:
                 await deps.client.send_text_safe(
                     info.chat_id,
-                    text + "\n\nTap a project to bind:",
+                    text + "\n\nTap a bot to bind:",
                     thread_id=info.thread_id or None,
                     reply_markup=kb,
                 )
             else:
                 await _reply(
-                    deps, info, text + "\n(No projects exist yet — create one in the Nexus UI.)"
+                    deps, info, text + "\n(No bots exist yet — create one in the Nexus UI.)"
                 )
         return
 
     project = await _find_project(deps, args)
     if project is None:
-        await _reply(deps, info, f"No project matching <b>{args.strip()}</b>.")
+        await _reply(deps, info, f"No bot matching <b>{args.strip()}</b>.")
         return
 
     # Adopt the project's most recent chat as the "main chat" (continue where
@@ -318,10 +324,203 @@ async def cmd_project(deps: CommandDeps, info: MsgInfo, args: str) -> None:
     await _reply(
         deps,
         info,
-        f"Bound to project <b>{project.name}</b>.\n"
+        f"Bound to bot <b>{project.name}</b>.\n"
         f"Active chat: <b>{title}</b> — messages here go to it.\n"
         f"Use /new for another chat, /chats to list them.",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Teams (group chats of bots)
+
+
+def _team_dict(session_or_summary: Any) -> dict | None:
+    """A session's team as a dict — the raw ``team`` column is a JSON
+    *string* until ``SessionStore.get_team`` parses it, so every reader
+    goes through this."""
+    raw = getattr(session_or_summary, "team", None)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = None
+    return raw if isinstance(raw, dict) else None
+
+
+def _team_sessions(deps: CommandDeps, limit: int = 25) -> list[Any]:
+    """Visible sessions that carry a team, newest first."""
+    return [s for s in deps.store.list(limit=limit) if _team_dict(s)]
+
+
+def _team_keyboard(sessions: list[Any]) -> dict | None:
+    if not sessions:
+        return None
+    rows = [
+        [{"text": (_team_dict(s).get("name") or s.title or "Team")[:60], "callback_data": f"tm:{s.id}"}]
+        for s in sessions[:20]
+    ]
+    return {"inline_keyboard": rows}
+
+
+async def _bind_team_session(deps: CommandDeps, info: MsgInfo, session_id: str) -> Any:
+    """Point this chat/topic at a team session (and its lead's project)."""
+    session = deps.store.get(session_id)
+    if session is None or not _team_dict(session):
+        return None
+    team = _team_dict(session)
+    lead = (team.get("members") or [None])[0]
+    kind = _binding_kind(info)
+    binding = deps.bindings.get(info.chat_id, info.thread_id)
+    if binding is None:
+        deps.bindings.upsert(
+            chat_id=info.chat_id,
+            thread_id=info.thread_id,
+            kind=kind,
+            project_id=lead,
+            active_session_id=session_id,
+        )
+    else:
+        if lead:
+            deps.bindings.set_project(info.chat_id, info.thread_id, lead)
+        deps.bindings.set_active_session(info.chat_id, info.thread_id, session_id)
+    return session
+
+
+async def cmd_team(deps: CommandDeps, info: MsgInfo, args: str) -> None:
+    """Connect this chat/topic to a team (group chat of bots).
+
+    ``/team`` — list teams as buttons (or the current connection);
+    ``/team new <name> @bot1 @bot2 [round|lead]`` — create + connect;
+    ``/team off`` — disconnect (starts a fresh plain chat here).
+    """
+    binding = deps.bindings.get(info.chat_id, info.thread_id)
+    argv = args.split()
+
+    if argv and argv[0].lower() == "off":
+        if binding is None or not binding.active_session_id:
+            await _reply(deps, info, "This chat is not connected to a team.")
+            return
+        session = deps.store.get(binding.active_session_id)
+        name = (_team_dict(session) or {}).get("name", "team") if session else "team"
+        # Start a fresh plain chat here (same bot/project as the binding, if
+        # any) so subsequent messages stop going to the team session.
+        fresh = deps.store.create(
+            context=_context_for(info), project_id=binding.project_id
+        )
+        deps.bindings.set_active_session(info.chat_id, info.thread_id, fresh.id)
+        await _reply(
+            deps, info,
+            f"Disconnected from team <b>{name}</b> — new chat started.\n"
+            f"/team to connect another one.",
+        )
+        return
+
+    if argv and argv[0].lower() == "new":
+        if len(argv) < 3:
+            await _reply(
+                deps, info,
+                "Usage: <code>/team new &lt;name&gt; @bot1 @bot2 [round|lead]</code>",
+            )
+            return
+        # Name = the words between "new" and the first @member token.
+        name_parts: list[str] = []
+        for tok in argv[1:]:
+            if tok.startswith("@"):
+                break
+            name_parts.append(tok)
+        name = " ".join(name_parts) or "Team"
+        tokens = [t for t in argv[1 + len(name_parts):]]
+        mode = "lead"
+        if tokens and tokens[-1].lower() in ("round", "lead"):
+            mode = tokens[-1].lower()
+            tokens = tokens[:-1]
+        handles = [t.lstrip("@").lower() for t in tokens if t.startswith("@")]
+        if not handles:
+            await _reply(
+                deps, info,
+                "List at least one member by @handle: "
+                "<code>/team new &lt;name&gt; @bot1 @bot2</code>",
+            )
+            return
+        pstore = deps.projects
+        member_ids: list[str] = []
+        missing: list[str] = []
+        for h in handles:
+            try:
+                p = pstore.get_by_handle(h)
+            except Exception:  # noqa: BLE001
+                p = None
+            if p is None:
+                missing.append(f"@{h}")
+            elif p.id not in member_ids:
+                member_ids.append(p.id)
+        if missing:
+            await _reply(deps, info, f"No bot matching <b>{', '.join(missing)}</b>.")
+            return
+        try:
+            from ..server.routes.bots import _create_team_impl
+
+            result = await _create_team_impl(
+                deps.store, {"name": name, "members": member_ids, "mode": mode}
+            )
+        except Exception as exc:  # noqa: BLE001 — user-facing
+            detail = getattr(exc, "detail", None) or str(exc)
+            await _reply(deps, info, f"Couldn't create the team: {detail}")
+            return
+        session = await _bind_team_session(deps, info, result["session_id"])
+        if session is None:
+            await _reply(deps, info, "Team created but connecting failed — try /team again.")
+            return
+        members = ", ".join(f"@{h}" for h in handles)
+        await _reply(
+            deps, info,
+            f"Team <b>{name}</b> created and connected ({members}, mode {mode}).\n"
+            f"Messages here go to the team — @mention a member to address them.",
+        )
+        return
+
+    if not args.strip():
+        if binding and binding.active_session_id:
+            session = deps.store.get(binding.active_session_id)
+            team = _team_dict(session) if session is not None else None
+            if team:
+                await _reply(
+                    deps, info,
+                    f"This chat is connected to team <b>{team.get('name', 'Team')}</b> "
+                    f"(mode {team.get('mode', 'lead')}).\n/team off to disconnect.",
+                )
+                return
+        teams = _team_sessions(deps)
+        kb = _team_keyboard(teams)
+        if kb:
+            await deps.client.send_text_safe(
+                info.chat_id,
+                "Tap a team to connect this chat:",
+                thread_id=info.thread_id or None,
+                reply_markup=kb,
+            )
+        else:
+            await _reply(
+                deps, info,
+                "No teams yet.\nCreate one: <code>/team new &lt;name&gt; @bot1 @bot2</code>\n"
+                "(or in the Nexus UI — New team chat).",
+            )
+        return
+
+    # /team <name> — fuzzy match a team by name and connect.
+    q = args.strip().lower()
+    for s in _team_sessions(deps, limit=50):
+        tname = (_team_dict(s).get("name") or s.title or "").lower()
+        if q in tname:
+            session = await _bind_team_session(deps, info, s.id)
+            if session is not None:
+                await _reply(
+                    deps, info,
+                    f"Connected to team <b>{_team_dict(s).get('name', s.title)}</b>.\n"
+                    f"Messages here go to the team chat.",
+                )
+                return
+    await _reply(deps, info, f"No team matching <b>{args.strip()}</b>.")
 
 
 _KIND_ICON = {"dm": "✉️", "group": "👥", "topic": "🧵"}
@@ -336,7 +535,8 @@ async def cmd_topics(deps: CommandDeps, info: MsgInfo, args: str) -> None:
             deps,
             info,
             "No chats or topics are linked yet.\nSend a message anywhere to start "
-            "chatting — /project &lt;name&gt; attaches a topic to a project.",
+            "chatting — /bots &lt;name&gt; attaches a topic to a bot, /team connects a "
+            "group of bots.",
         )
         return
     projects = {p.id: p for p in deps.projects.list(limit=200)}
@@ -349,12 +549,16 @@ async def cmd_topics(deps: CommandDeps, info: MsgInfo, args: str) -> None:
         if b.project_id and b.project_id in projects:
             proj = projects[b.project_id].name
         else:
-            proj = b.project_id or "no project"
+            proj = b.project_id or "no bot"
         title = ""
         if b.active_session_id:
             s = deps.store.get(b.active_session_id)
-            if s is not None and s.title:
-                title = f" · {(s.title or '')[:40]}"
+            if s is not None:
+                if _team_dict(s):
+                    icon = "👥"
+                    title = f" · team {(_team_dict(s).get('name') or 'Team')[:32]}"
+                elif s.title:
+                    title = f" · {(s.title or '')[:40]}"
         here = " ✅" if b.chat_id == info.chat_id and b.thread_id == info.thread_id else ""
         lines.append(f"{icon} <b>{proj}</b> · {where}{title}{here}")
     await _reply(deps, info, "\n".join(lines))
@@ -609,7 +813,10 @@ COMMANDS: dict[str, Any] = {
     "help": cmd_help,
     "start": cmd_help,
     "id": cmd_id,
+    "bots": cmd_project,
+    # Pre-rename muscle memory: /project keeps working, hidden from help.
     "project": cmd_project,
+    "team": cmd_team,
     "topics": cmd_topics,
     "vault": cmd_vault,
     "new": cmd_new,

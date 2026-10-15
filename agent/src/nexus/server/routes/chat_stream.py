@@ -442,14 +442,18 @@ async def chat_stream_route(
             log.debug("turn_bot marker publish failed", exc_info=True)
 
         # Team (group chat) round passes: in round mode, every other member
-        # answers after the lead — queued on the runner so the existing
-        # inject/chain machinery delivers each synthetic mention pass.
+        # answers after the lead — queued **chain-only** on the runner so
+        # each pass runs as its own turn (persona switch per member) and is
+        # never collapsed into the lead's turn by a mid-turn injection.
         try:
             from ...agent.bots import TEAM_MARKER, team_followup_messages
+            from ..project_store import ProjectStore
 
             _team = store.get_team(session.id)
-            for _follow in team_followup_messages(_team, req.message):
-                _fqid = runner.enqueue(_follow, origin="team")
+            for _follow in team_followup_messages(
+                _team, req.message, project_store=ProjectStore(store._db_path)
+            ):
+                _fqid = runner.enqueue(_follow, origin="team", chain_only=True)
                 if _fqid:
                     from ..events import SessionEvent as _SE2
 

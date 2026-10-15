@@ -334,6 +334,43 @@ def _find_bot(store: Any, ref: str):
     return proj, None
 
 
+BOTS_LIST_TOOL = ToolSpec(
+    name="bots_list",
+    description=(
+        "List every bot in Nexus — id, @handle, name, and a persona preview. "
+        "Read-only and available in any chat: use it to discover which bots "
+        "exist and what each one does before @mentioning a colleague into "
+        "the conversation (a mentioned bot answers in the same chat). "
+        "Managing bots (create/update/delete) is the master chat's "
+        "`bot_config` tool."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {},
+    },
+)
+
+
+async def handle_bots_list(args: dict[str, Any]) -> str:
+    """Read-only bot discovery — no coordinator gate, any session may call."""
+    try:
+        store = _bot_store()
+        out = []
+        for s in store.list(limit=200):
+            out.append(
+                {
+                    "id": s.id,
+                    "handle": s.handle,
+                    "name": s.name,
+                    "description": (s.description or "")[:200],
+                    "persona_preview": (s.persona or "")[:200],
+                }
+            )
+        return json.dumps({"ok": True, "bots": out})
+    except Exception as exc:  # noqa: BLE001 — tool result, not a crash
+        return json.dumps({"ok": False, "error": f"bots_list failed: {exc}"})
+
+
 async def handle_bot_config(args: dict[str, Any], current_session_id: str | None) -> str:
     service = get_service()
     if service is None:

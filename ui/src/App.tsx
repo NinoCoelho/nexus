@@ -21,9 +21,11 @@ import {
   cancelGraphragIndexFile,
   cancelHitlRequest,
   getSession,
+  getSessions,
   graphragIndexFile,
   respondToUserRequest,
 } from "./api";
+import { fetchBotDirectory } from "./hooks/useBotDirectory";
 import { ArrowLeft } from "lucide-react";
 import { useToast } from "./toast/ToastProvider";
 import { NEW_KEY, emptyState, freshSessionId } from "./types/chat";
@@ -197,7 +199,7 @@ export default function App() {
     handleSessionSelect: _handleSessionSelect,
     handleNewChat: _handleNewChat,
     handleCompact: _handleCompact, handleRemoveLast,
-    handleResumePaused,
+    handleResumePaused, handleContinueTeam,
   } = chatSession;
 
   // While a bot chat owns the Bots main pane, the workspace hides behind
@@ -358,6 +360,70 @@ export default function App() {
     setBotsChatOpen(false);
     setView("bots", id);
   }, [setView]);
+
+  // ── Bot mentions & forwarding ─────────────────────────────────────────
+  //
+  // Clicking an @handle link in an assistant reply opens that bot's chat
+  // with the quoting message pre-filled; the forward button sends the
+  // quoted context straight into the bot's most recent chat (no view
+  // switch — the current conversation stays on screen).
+
+  const resolveBotChat = useCallback(async (botId: string): Promise<string | null> => {
+    try {
+      const { sessions } = await getSessions(200, 0);
+      return sessions.find((s) => s.project_id === botId)?.id ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const handleMentionBot = useCallback((handle: string, quote: string) => {
+    void (async () => {
+      const bots = await fetchBotDirectory();
+      const bot = bots.find((b) => b.handle.toLowerCase() === handle.toLowerCase());
+      if (!bot) return;
+      const sid = await resolveBotChat(bot.id);
+      if (sid) {
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(sid);
+          if (cur?.thinking) return prev; // don't fight an in-flight turn
+          next.set(sid, { ...(cur ?? emptyState()), input: cur?.input ? `${cur.input}\n\n> ${quote}` : `> ${quote}` });
+          return next;
+        });
+        handleSessionSelect(sid);
+      } else {
+        handleNewChat(bot.id);
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(NEW_KEY);
+          next.set(NEW_KEY, { ...(cur ?? emptyState()), input: `> ${quote}` });
+          return next;
+        });
+      }
+    })();
+  }, [resolveBotChat, handleSessionSelect, handleNewChat, setChatStates]);
+
+  const handleForwardToBot = useCallback((botId: string, handle: string, quote: string) => {
+    void (async () => {
+      const text = `Context forwarded from another conversation (cc @${handle}):\n\n> ${quote}`;
+      const sid = await resolveBotChat(botId);
+      if (sid) {
+        await chatSession.sendToSession(sid, text);
+        toast.success(`Forwarded to @${handle}`, { detail: "The bot got the quoted context in its latest chat." });
+      } else {
+        // No chat yet — open a fresh one pre-filled so the user just hits send.
+        handleNewChat(botId);
+        setChatStates((prev) => {
+          const next = new Map(prev);
+          const cur = next.get(NEW_KEY);
+          next.set(NEW_KEY, { ...(cur ?? emptyState()), input: text });
+          return next;
+        });
+        toast.info(`No open chat for @${handle} — started one, ready to send.`);
+      }
+    })();
+  }, [resolveBotChat, chatSession, handleNewChat, setChatStates, toast]);
 
   /** Opens a hidden internal run session (bot activity) read-only. */
   const handleOpenActivitySession = useCallback((sessionId: string) => {
@@ -758,6 +824,10 @@ export default function App() {
               selectedModel={activeState.selectedModel}
               onModelChange={handleModelChange}
               readOnly={activeState.readOnly ?? false}
+              cascadeCapped={activeState.cascadeCapped ?? null}
+              onContinueTeam={activeSession ? () => void handleContinueTeam(activeSession) : undefined}
+              onMentionBot={handleMentionBot}
+              onForwardToBot={handleForwardToBot}
             />
           </div>
           <div className="view-pane" style={{ display: view === "bots" && !chatInBots ? "flex" : "none" }}>

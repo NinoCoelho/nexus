@@ -11,9 +11,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, respondToUserRequestStream, type SessionSummary, type StreamEvent } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, respondToUserRequestStream, subscribeSessionEvents, continueTeamCascade, type SessionSummary, type StreamEvent } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
-import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent, applyTurnBotEvent } from "./streamEventHandlers";
+import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent, applyTurnBotEvent, applyTurnStartedEvent, applyCascadeCappedEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
 import { tryRecoverSession, appendConnectionErrorBanner } from "./sendHelpers";
 
@@ -136,10 +136,10 @@ export function useChatSession(
     [computeSeedModel, patchState],
   );
 
-  const handleSessionSelect = useCallback((id: string) => {
-    setActiveSession(id);
-    if (!chatStates.has(id) || !chatStates.get(id)!.historyLoaded) void loadSessionHistory(id);
-  }, [chatStates, loadSessionHistory]);
+  // Mirror of chatStates for event subscriptions — the effects below must
+  // not resubscribe on every state mutation, so they read through this ref.
+  const chatStatesRef = useRef(chatStates);
+  chatStatesRef.current = chatStates;
 
   const handleNewChat = useCallback((projectId?: string | null) => {
     setActiveSession(null);
@@ -286,6 +286,9 @@ export function useChatSession(
     const resumeInPlace = inPlace && lastIsAssistant;
     patchState(key, {
       input: "", thinking: true, attachments: [],
+      // A fresh user message supersedes a cap banner (if the bots keep
+      // mentioning each other, a new cap event re-fires).
+      cascadeCapped: null,
       messages: resumeInPlace
         ? state.messages.map((m, i) => i === state.messages.length - 1 ? { ...m, partial: undefined, streaming: true } : m)
         : isHidden ? [...state.messages, placeholderAsst] : [...state.messages, userMsg, placeholderAsst],
@@ -366,6 +369,8 @@ export function useChatSession(
           applyUserInjectedEvent(setChatStates, streamKey, event.qid, event.text);
         } else if (event.type === "queue_removed") {
           applyQueueRemovedEvent(setChatStates, streamKey, event.qid);
+        } else if (event.type === "team_cascade_capped") {
+          applyCascadeCappedEvent(setChatStates, streamKey, event.max);
         } else if (event.type === "turn_bot") {
           applyTurnBotEvent(setChatStates, streamKey, event.bot);
         }
@@ -557,6 +562,10 @@ export function useChatSession(
         applyUserInjectedEvent(setChatStates, key, event.qid, event.text);
       } else if (event.type === "queue_removed") {
         applyQueueRemovedEvent(setChatStates, key, event.qid);
+      } else if (event.type === "turn_started") {
+        applyTurnStartedEvent(setChatStates, key, event.message ?? "");
+      } else if (event.type === "team_cascade_capped") {
+        applyCascadeCappedEvent(setChatStates, key, event.max);
       } else if (event.type === "turn_bot") {
         applyTurnBotEvent(setChatStates, key, event.bot);
       }
@@ -627,6 +636,48 @@ export function useChatSession(
       attachingRef.current.delete(sessionId);
     }
   }, [chatStates, loadSessionHistory, reattachRunningTurn]);
+
+  const handleSessionSelect = useCallback((id: string) => {
+    setActiveSession(id);
+    // Loads history when needed AND attaches to a running turn (started by
+    // another tab / Telegram / a coordinator dispatch) so an opened chat
+    // never sits empty while its turn streams on another surface.
+    void attachToSession(id);
+  }, [attachToSession]);
+
+  // ── Live follow of the active session ─────────────────────────────────
+  //
+  // A turn can be launched into the open chat from a surface whose SSE
+  // response this page never sees (second tab, Telegram, coordinator
+  // dispatch). Without this, the chat sits frozen on stale history while
+  // the global voice-ack plays the completion sound — "the reply sound
+  // played but the chat stayed empty". The session events channel carries
+  // the turn lifecycle; use it to attach to the live stream (replayed
+  // from turn start) or to pull the persisted result once it settles.
+  useEffect(() => {
+    const sid = activeSession;
+    if (!sid) return;
+    const sub = subscribeSessionEvents(sid, (event) => {
+      const st = chatStatesRef.current.get(sid);
+      const ownStream = abortControllersRef.current.has(sid) || st?.thinking;
+      if (event.kind === "turn_started") {
+        if (ownStream) return; // our POST's own response is the stream
+        if (attachingRef.current.has(sid)) return;
+        attachingRef.current.add(sid);
+        void reattachRunningTurn(sid, sid, st?.selectedModel)
+          .catch(() => {})
+          .finally(() => attachingRef.current.delete(sid));
+      } else if (event.kind === "team_cascade_capped") {
+        applyCascadeCappedEvent(setChatStates, sid, event.data.max ?? 0);
+      } else if (event.kind === "turn_settled") {
+        if (ownStream) return; // done already applied the reply
+        if (!st?.historyLoaded) return;
+        patchState(sid, { historyLoaded: false });
+        void loadSessionHistory(sid);
+      }
+    });
+    return () => sub.close();
+  }, [activeSession, reattachRunningTurn, loadSessionHistory, patchState]);
 
   /** Send a message into a fixed session (coordinator bubble). Enqueues on
    * the server when a turn is already running — same queue-then-inject
@@ -764,6 +815,15 @@ export function useChatSession(
     });
     void deleteQueuedMessage(sessionId, qid);
   }, []);
+
+  /** Grant a capped team cascade more rounds (banner button). Best-effort:
+   * a 422 ("nothing to continue") just drops the banner. */
+  const handleContinueTeam = useCallback(async (sessionId: string) => {
+    try {
+      await continueTeamCascade(sessionId);
+    } catch { /* nothing to continue */ }
+    patchState(sessionId, { cascadeCapped: null });
+  }, [patchState]);
 
   const handleContinuePartial = useCallback((_visibleIdx: number) => {
     // Continue **in place** — no "continue" user bubble. The existing
@@ -924,5 +984,6 @@ export function useChatSession(
     handleNewChat, loadSessionHistory, patchState, computeSeedModel,
     handleCompact, handleRemoveLast, handleResumePaused,
     sendToSession, stopSession, attachToSession, respondForSession, removeQueuedForSession,
+    handleContinueTeam,
   };
 }

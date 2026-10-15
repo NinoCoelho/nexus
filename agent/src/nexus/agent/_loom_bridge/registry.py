@@ -318,11 +318,13 @@ def build_tool_registry(
     # and refuse to run outside the coordinator session.
     from nexus.agent.context import CURRENT_SESSION_ID as _SESSION_CTX
     from nexus.coordinator_tools import (
+        BOTS_LIST_TOOL,
         BOT_CONFIG_TOOL,
         NEXUS_SESSIONS_TOOL,
         SESSION_DISPATCH_TOOL,
         TEAMS_TOOL,
         handle_bot_config,
+        handle_bots_list,
         handle_nexus_sessions,
         handle_session_dispatch,
         handle_teams,
@@ -344,6 +346,10 @@ def build_tool_registry(
     registry.register(_SimpleToolHandler(SESSION_DISPATCH_TOOL, _session_dispatch))
     registry.register(_SimpleToolHandler(BOT_CONFIG_TOOL, _bot_config))
     registry.register(_SimpleToolHandler(TEAMS_TOOL, _teams))
+
+    # Read-only bot discovery — unlike bot_config/teams this is available in
+    # every session: any bot can look up its colleagues to @mention them.
+    registry.register(_SimpleToolHandler(BOTS_LIST_TOOL, handle_bots_list))
 
     # edit_profile — gated by AgentPermissions. Default Loom permissions allow
     # USER.md updates only; SOUL/IDENTITY return permission_denied.

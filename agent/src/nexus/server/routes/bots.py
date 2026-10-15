@@ -11,6 +11,7 @@ to a single conversation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -237,6 +238,141 @@ async def update_team(
     if "name" in body:
         await asyncio.to_thread(store.rename, session_id, team["name"])
     return {"team": team}
+
+
+@router.get("/teams")
+async def list_teams(
+    store: SessionStore = Depends(get_sessions),
+) -> list[dict]:
+    """Every visible team (group chat) session, newest first.
+
+    Members are enriched with ``{id, handle, name}`` so consumers (Telegram
+    ``/team``, the UI) can render them without a second round-trip.
+    """
+    sessions = await asyncio.to_thread(store.list, 200)
+    pstore = _project_store()
+    out: list[dict] = []
+    for s in sessions:
+        # ``SessionSummary.team`` is the raw column — a JSON *string* until
+        # ``get_team`` parses it. Parse defensively; skip non-dicts.
+        raw_team = getattr(s, "team", None)
+        if isinstance(raw_team, str):
+            try:
+                raw_team = json.loads(raw_team)
+            except (TypeError, ValueError):
+                raw_team = None
+        if not isinstance(raw_team, dict):
+            continue
+        members: list[dict] = []
+        for mid in [str(m) for m in (raw_team.get("members") or [])]:
+            try:
+                p = await asyncio.to_thread(pstore.get, mid)
+            except Exception:  # noqa: BLE001
+                p = None
+            if p is not None:
+                members.append({"id": p.id, "handle": p.handle, "name": p.name})
+        out.append({
+            "session_id": s.id,
+            "title": s.title,
+            "mode": raw_team.get("mode", "lead"),
+            "name": raw_team.get("name", s.title),
+            "members": members,
+            "updated_at": s.updated_at,
+        })
+    return out
+
+
+async def _team_continue_core(
+    agent: Any,
+    store: SessionStore,
+    tracker: Any,
+    session: Any,
+) -> dict:
+    """Shared team-cascade continuation core (HTTP route + Telegram).
+
+    Returns ``{"continued": True, "mode": …}`` or raises ``ValueError``
+    with a user-facing message when there is nothing to continue.
+    """
+    from ...agent.bots import cascade_mentions, turn_speaker_id
+    from ..services.chat_turn_runner import get_running_turn
+
+    team = store.get_team(session.id)
+    if team is None:
+        raise ValueError("Session has no team")
+
+    runner = get_running_turn(session.id)
+    if runner is not None:
+        budget = runner.extend_cascade()
+        return {"continued": True, "mode": "extended", "budget": budget}
+
+    reply = ""
+    last_user = ""
+    for m in reversed(session.history or []):
+        role = str(getattr(m.role, "value", m.role) or "").lower()
+        if not reply and role == "assistant":
+            content = m.content
+            if isinstance(content, str):
+                reply = content
+        elif role == "user":
+            content = m.content
+            last_user = content if isinstance(content, str) else ""
+            break
+    pstore = ProjectStore(store._db_path)
+    speaker = turn_speaker_id(
+        last_user, team=team, own_project_id=session.project_id, project_store=pstore
+    )
+    targets = cascade_mentions(
+        reply, team=team, speaker_id=speaker, project_store=pstore
+    )
+    if not targets:
+        raise ValueError(
+            "No team member is @mentioned in the last reply — nothing to continue."
+        )
+
+    from ..services.turn_launcher import launch_turn
+
+    queued: list[str] = []
+    for t in targets:
+        outcome = await launch_turn(
+            agent=agent,
+            store=store,
+            tracker=tracker,
+            session=session,
+            message=t["marker"],
+            origin="team",
+            chain_only=True,
+        )
+        if outcome.error is None:
+            queued.append(t["bot"]["handle"])
+    return {"continued": True, "mode": "relaunched", "queued": queued}
+
+
+@router.post("/sessions/{session_id}/team/continue")
+async def team_continue(
+    request: Request,
+    session_id: str,
+    store: SessionStore = Depends(get_sessions),
+) -> dict:
+    """Grant the team's bot→bot conversation more rounds.
+
+    Two paths, one endpoint:
+    - a runner is still alive → extend its cascade budget in place;
+    - the runner settled (the usual case — the cap ended it) → relaunch a
+      chained marker turn for each team member @mentioned in the last
+      assistant reply, on a fresh runner with a fresh budget.
+
+    ``422`` when the session has no team or the last reply mentions no
+    teammate (nothing to continue).
+    """
+    session = await asyncio.to_thread(store.get, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        return await _team_continue_core(
+            request.app.state.agent, store, request.app.state.job_tracker, session
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/bots/{bot_id}/activity")

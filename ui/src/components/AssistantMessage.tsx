@@ -1,9 +1,10 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../api";
 import { setMessageFeedback, setMessagePin } from "../api";
 import type { TimelineStep } from "./ChatView";
 import MarkdownView from "./MarkdownView";
+import { useBotDirectory, type BotRef } from "../hooks/useBotDirectory";
 
 /**
  * AssistantMessage — renders a single assistant response in the chat.
@@ -52,10 +53,25 @@ interface Props {
   };
   /** Mention-routing attribution — reply authored by another bot. */
   bot?: { id: string; handle: string; name: string } | null;
+  /** @handle tokens in the body that match a known bot render as links —
+   * clicking opens that bot's chat with this message quoted. */
+  onMentionBot?: (handle: string, quote: string) => void;
+  /** Forward this message's context straight into another bot's chat. */
+  onForwardToBot?: (botId: string, handle: string, quote: string) => void;
 }
 
 function fmt(d: Date) {
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Short plain-text excerpt of a message — the quote that rides into the
+ * target bot's composer when the user clicks a mention or forwards. */
+function excerptOf(text: string, max = 480): string {
+  const t = (text ?? "").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut}…`;
 }
 
 const INLINE_TOOLS = new Set(["show_kanban", "show_dashboard_widget", "show_data_table"]);
@@ -78,7 +94,7 @@ function inlineResourcesFromTrace(trace?: TraceEvent[]): { uri: string; toolResu
   return out;
 }
 
-function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting, bot }: Props) {
+function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting, bot, onMentionBot, onForwardToBot }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const tts = useTTS();
@@ -86,10 +102,62 @@ function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOp
   const [localFeedback, setLocalFeedback] = useState<"up" | "down" | null>(feedback ?? null);
   const [localPinned, setLocalPinned] = useState<boolean>(!!pinned);
   const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const forwardRef = useRef<HTMLDivElement | null>(null);
+  const bots = useBotDirectory();
   useEffect(() => { setLocalFeedback(feedback ?? null); }, [feedback]);
   useEffect(() => { setLocalPinned(!!pinned); }, [pinned]);
 
-  const processed = useMemo(() => content, [content]);
+  // Linkify @handle tokens that match a known bot — they render as
+  // markdown links (`#nxb:<handle>`) intercepted by the click delegate
+  // below, so the renderer itself stays untouched.
+  const botHandleSet = useMemo(() => new Set(bots.map((b) => b.handle.toLowerCase())), [bots]);
+  const processed = useMemo(() => {
+    if (!onMentionBot || botHandleSet.size === 0 || !content) return content;
+    return content.replace(
+      /(^|[\s(>])@([a-z0-9][a-z0-9-]{0,31})/gi,
+      (m, pre: string, handle: string) =>
+        botHandleSet.has(handle.toLowerCase())
+          ? `${pre}[@${handle}](#nxb:${handle})`
+          : m,
+    );
+  }, [content, botHandleSet, onMentionBot]);
+
+  const handleBodyClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onMentionBot) return;
+    const anchor = (e.target as HTMLElement).closest("a");
+    if (!anchor) return;
+    const href = anchor.getAttribute("href") ?? "";
+    if (!href.startsWith("#nxb:")) return;
+    e.preventDefault();
+    onMentionBot(href.slice(5), excerptOf(content));
+  };
+
+  // Close the forward dropdown on outside clicks.
+  useEffect(() => {
+    if (!forwardOpen) return;
+    const onDoc = (ev: MouseEvent) => {
+      if (forwardRef.current && !forwardRef.current.contains(ev.target as Node)) {
+        setForwardOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [forwardOpen]);
+
+  const forwardTargets: BotRef[] = useMemo(() => {
+    if (!onForwardToBot) return [];
+    const mentioned = new Set(
+      Array.from(content?.matchAll(/@([a-z0-9][a-z0-9-]{0,31})/gi) ?? [])
+        .map((m) => m[1].toLowerCase()),
+    );
+    // Bots the reply mentions come first; the rest follow alphabetically.
+    return [...bots].sort((a, b) => {
+      const am = mentioned.has(a.handle.toLowerCase()) ? 0 : 1;
+      const bm = mentioned.has(b.handle.toLowerCase()) ? 0 : 1;
+      return am - bm || a.name.localeCompare(b.name);
+    });
+  }, [bots, content, onForwardToBot]);
 
   async function handleCopy() {
     try {
@@ -175,7 +243,7 @@ function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOp
             <InternalResourceRenderer resourceUri={r.uri} toolResult={r.toolResult} />
           </div>
         ))}
-        <div className="asst-body">
+        <div className="asst-body" onClick={handleBodyClick}>
           <MarkdownView
             linkifyVaultPaths
             onVaultLinkPreview={setPreviewPath}
@@ -256,6 +324,42 @@ function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOp
                 </svg>
               )}
             </button>
+          )}
+          {onForwardToBot && forwardTargets.length > 0 && !streaming && (
+            <div className="asst-forward" ref={forwardRef}>
+              <button
+                className="bubble-action-btn"
+                onClick={() => setForwardOpen((v) => !v)}
+                title="Forward to a bot"
+                aria-label="Forward this message to a bot"
+                aria-expanded={forwardOpen}
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 8h11" />
+                  <path d="M8 4l4 4-4 4" />
+                  <path d="M13 3v10" />
+                </svg>
+              </button>
+              {forwardOpen && (
+                <div className="asst-forward-menu" role="menu">
+                  <div className="asst-forward-title">Forward to</div>
+                  {forwardTargets.slice(0, 12).map((b) => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      className="asst-forward-item"
+                      onClick={() => {
+                        setForwardOpen(false);
+                        onForwardToBot(b.id, b.handle, excerptOf(content));
+                      }}
+                    >
+                      <span className="asst-forward-name">{b.name}</span>
+                      <span className="asst-forward-handle">@{b.handle}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           <button
             className="bubble-action-btn"

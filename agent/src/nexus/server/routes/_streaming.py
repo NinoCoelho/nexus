@@ -137,6 +137,15 @@ class TurnAccumulator:
                 "bot": event.get("bot"),
             }))
 
+        elif etype == "team_cascade_capped":
+            # The bot→bot cascade ran out of rounds. The UI shows a
+            # "keep the team talking" banner; Telegram sends a bubble.
+            sse_frames.append(_sse("team_cascade_capped", {
+                "session_id": event.get("session_id", ""),
+                "max": event.get("max", 0),
+                "pending": event.get("pending", ""),
+            }))
+
         return sse_frames
 
 

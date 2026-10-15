@@ -104,6 +104,62 @@ export function applyQueueRemovedEvent(
   });
 }
 
+/** Turn-start marker on a *replayed* stream (reattach to a turn launched by
+ * another surface). Seeds the turn's user bubble + streaming assistant
+ * placeholder when they're missing — the history load may have raced the
+ * eager persist and show no trace of the running turn. Idempotent: skip
+ * whenever the turn's user message is already represented, i.e. a user
+ * message sits after the last settled assistant bubble (optimistic send,
+ * replayed injection, HITL-answer continuation). */
+export function applyTurnStartedEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  text: string,
+) {
+  if (!text) return;
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    const msgs = [...cur.messages];
+    // The trailing streaming assistant belongs to this turn — the user
+    // message must come after the last *settled* bubble to count.
+    let lastSettledAsst = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "assistant" && !msgs[i].streaming) { lastSettledAsst = i; break; }
+    }
+    const hasTurnUserMsg = msgs.some(
+      (m, i) => m.role === "user" && m.content === text && i > lastSettledAsst,
+    );
+    if (hasTurnUserMsg) return prev;
+    const lastIdx = msgs.length - 1;
+    const lastIsStreamingAsst =
+      lastIdx >= 0 && msgs[lastIdx].role === "assistant" && msgs[lastIdx].streaming;
+    const insertBefore = lastIsStreamingAsst ? lastIdx : msgs.length;
+    msgs.splice(insertBefore, 0, { role: "user", content: text, timestamp: new Date() });
+    if (!lastIsStreamingAsst) {
+      msgs.push({ role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true });
+    }
+    next.set(key, { ...cur, messages: msgs, thinking: true });
+    return next;
+  });
+}
+
+/** Team cascade hit its round cap — show the "keep the team talking"
+ * banner. Cleared when the user continues (banner button / Telegram
+ * "continuar") or sends a new message. */
+export function applyCascadeCappedEvent(
+  setChatStates: SetChatStates,
+  key: string,
+  max: number,
+) {
+  setChatStates((prev) => {
+    const next = new Map(prev);
+    const cur = next.get(key) ?? emptyState();
+    next.set(key, { ...cur, cascadeCapped: { max } });
+    return next;
+  });
+}
+
 export function applyDeltaEvent(
   setChatStates: SetChatStates,
   key: string,

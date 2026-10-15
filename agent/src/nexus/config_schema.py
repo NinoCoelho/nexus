@@ -122,6 +122,14 @@ class AgentConfig(BaseModel):
     # Claude Code's auto-compact does. A 15% token-growth hysteresis
     # prevents re-triggering every turn once near the line. 0 = disabled.
     auto_compact_threshold_pct: int = 85
+    # Bot→bot cascade budget for team (group) chats: how many chained team
+    # passes (round fan-out + mention cascade) one runner may chain. When a
+    # bot's reply @mentions a colleague, the colleague answers in turn —
+    # this cap keeps bots from conversing forever; when it's reached the
+    # chat shows a cap note and the user can grant more rounds
+    # (POST /sessions/{sid}/team/continue, or replying "continuar" on
+    # Telegram). 0 disables the cascade entirely.
+    bot_cascade_max: int = 15
     # Model id (matches a [[models]] entry) used for context summarization.
     # Summarization runs on the critical path of a user turn and only needs
     # ~1024 structured output tokens, so a small fast model is a better fit

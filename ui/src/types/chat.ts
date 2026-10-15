@@ -35,6 +35,9 @@ export interface ChatState {
   projectId?: string | null;
   /** Group-chat membership when this session is a team chat. */
   team?: { name: string; members: string[]; mode: "lead" | "round" } | null;
+  /** Set when the team's bot→bot conversation hit its round cap — drives
+   * the "keep the team talking" banner above the composer. */
+  cascadeCapped?: { max: number } | null;
   /** True for hidden internal run sessions opened from a bot's activity
    * list — the transcript renders but the composer refuses input. */
   readOnly?: boolean;
@@ -272,4 +275,5 @@ export interface UseChatSessionResult {
   attachToSession: (sessionId: string) => Promise<void>;
   respondForSession: (sessionId: string, requestId: string, answer: string | Record<string, unknown>) => Promise<void>;
   removeQueuedForSession: (sessionId: string, qid: string) => void;
+  handleContinueTeam: (sessionId: string) => Promise<void>;
 }

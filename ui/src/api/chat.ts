@@ -36,6 +36,8 @@ export type StreamEvent =
   | { type: "user_enqueued"; qid: string; text: string; session_id: string }
   | { type: "user_injected"; qid: string; text: string; session_id: string }
   | { type: "queue_removed"; qid: string; reason?: string; session_id?: string }
+  | { type: "turn_started"; session_id: string; origin?: string; message?: string }
+  | { type: "team_cascade_capped"; session_id: string; max: number; pending?: string }
   | { type: "turn_settled"; session_id: string }
   | { type: "turn_bot"; session_id: string; bot: { id: string; handle: string; name: string } | null }
   | { type: "subagent_start"; name: string; index: number; total: number; child_session_id: string }
@@ -236,8 +238,22 @@ async function consumeSSEFrames(
             reason: parsed.reason as string | undefined,
             session_id: parsed.session_id as string | undefined,
           });
+        } else if (eventName === "turn_started") {
+          onEvent({
+            type: "turn_started",
+            session_id: (parsed.session_id as string) ?? "",
+            origin: parsed.origin as string | undefined,
+            message: (parsed.message as string) ?? "",
+          });
         } else if (eventName === "turn_settled") {
           onEvent({ type: "turn_settled", session_id: (parsed.session_id as string) ?? "" });
+        } else if (eventName === "team_cascade_capped") {
+          onEvent({
+            type: "team_cascade_capped",
+            session_id: (parsed.session_id as string) ?? "",
+            max: (parsed.max as number) ?? 0,
+            pending: (parsed.pending as string) ?? "",
+          });
         } else if (eventName === "turn_bot") {
           onEvent({
             type: "turn_bot",
@@ -443,6 +459,8 @@ export type SessionEvent =
   | { kind: "subagent_done"; data: { child_session_id: string; result_preview?: string; error?: string } }
   | { kind: "job_started"; data: { id: string; type: string; label: string; session_id?: string; started_at?: number; extra?: Record<string, unknown> } }
   | { kind: "job_done"; data: { job_id: string; type: string } }
+  | { kind: "turn_started"; data: { session_id?: string; origin?: string; message?: string } }
+  | { kind: "team_cascade_capped"; data: { session_id?: string; max?: number; pending?: string } }
   | { kind: "turn_settled"; data: { session_id?: string } }
   | { kind: "settings_changed"; data: { yolo_mode?: boolean; auto_accept_members?: boolean; ui_mode?: string } }
   | { kind: "browser_event"; data: BrowserEventPayload }
@@ -484,6 +502,8 @@ export function subscribeSessionEvents(
     "user_request_cancelled",
     "voice_ack",
     "op_done",
+    "turn_started",
+    "team_cascade_capped",
     "turn_settled",
     "subagent_start",
     "subagent_delta",

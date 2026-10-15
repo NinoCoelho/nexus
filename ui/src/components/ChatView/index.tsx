@@ -174,6 +174,14 @@ interface Props {
   onPinChange?: (msgIndex: number, pinned: boolean) => void;
   /** Hidden internal run session — transcript renders, composer is locked. */
   readOnly?: boolean;
+  /** Team cascade hit its round cap — drives the "keep talking" banner. */
+  cascadeCapped?: { max: number } | null;
+  onContinueTeam?: () => void;
+  /** @handle links in assistant replies — open the bot's chat with the
+   * quoting message as pre-filled context. */
+  onMentionBot?: (handle: string, quote: string) => void;
+  /** Forward this message's context straight into another bot's chat. */
+  onForwardToBot?: (botId: string, handle: string, quote: string) => void;
 }
 
 function fmt(d: Date) {
@@ -210,6 +218,10 @@ export default function ChatView({
   onFeedbackChange,
   onPinChange,
   readOnly = false,
+  cascadeCapped,
+  onContinueTeam,
+  onMentionBot,
+  onForwardToBot,
 }: Props) {
   const { t } = useTranslation(["chat", "common"]);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -304,6 +316,8 @@ export default function ChatView({
                   msgIndex={idx}
                   onFeedbackChange={onFeedbackChange}
                   onPinChange={onPinChange}
+                  onMentionBot={onMentionBot}
+                  onForwardToBot={onForwardToBot}
                 />
               )}
               {msg.partial && !thinking && (
@@ -447,6 +461,20 @@ export default function ChatView({
           <div className="input-stack">
             {readOnly && (
               <div className="chat-readonly-note">Internal session — read only</div>
+            )}
+            {cascadeCapped && onContinueTeam && (
+              <div className="team-cascade-banner" role="status">
+                <span className="team-cascade-text">
+                  👥 The team reached this conversation&apos;s round limit ({cascadeCapped.max}).
+                </span>
+                <button
+                  type="button"
+                  className="team-cascade-continue"
+                  onClick={() => void onContinueTeam()}
+                >
+                  Keep them talking (+{cascadeCapped.max})
+                </button>
+              </div>
             )}
             <InputBar
               value={input}

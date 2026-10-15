@@ -414,15 +414,15 @@ class TelegramRouter:
                 else:
                     binding = await self._create_binding(info, project_id=None)
             else:
-                # Forum topic or plain group — standalone chat, no project
-                # needed. Topics chat right away (silent); /project can
+                # Forum topic or plain group — standalone chat, no bot
+                # needed. Topics chat right away (silent); /bots can
                 # attach one later. Plain groups keep the one-time notice.
                 binding = await self._create_binding(info, project_id=None)
                 if not info.thread_id:
                     await self.client.send_text_safe(
                         info.chat_id,
-                        "This group isn't bound to a project — messages go to a "
-                        "standalone chat. Use /project <name> to bind one.",
+                        "This group isn't bound to a bot — messages go to a "
+                        "standalone chat. Use /bots <name> to bind one.",
                     )
 
         session = self.store.get_or_create(
@@ -430,6 +430,30 @@ class TelegramRouter:
             context=self._session_context(info),
             project_id=binding.project_id,
         )
+
+        # "Continuar" in a team chat = grant the bot→bot cascade more
+        # rounds (it stopped at the cascade cap). Anything else — including
+        # a team without a capped cascade — falls through to a normal turn.
+        if not media and text.strip().lower() in (
+            "continuar", "continuem", "continue", "keep going", "go on",
+        ) and getattr(session, "team", None):
+            try:
+                from ..server.routes.bots import _team_continue_core
+
+                await _team_continue_core(
+                    self.agent, self.store, self.tracker, session
+                )
+            except ValueError as exc:
+                # Nothing to continue — treat the message as plain text.
+                log.debug("telegram: team continue rejected: %s", exc)
+            else:
+                self._track_ack(session.id, info)
+                if self.cfg.ack_reaction:
+                    await self.client.set_message_reaction(
+                        info.chat_id, info.message_id, self.cfg.ack_reaction
+                    )
+                self._ensure_streamer(session.id, info.chat_id, info.thread_id)
+                return
 
         # Media ingestion: download → vault → ContentParts. On total failure
         # the turn isn't started (the user got a ⚠️ bubble per file).
@@ -925,6 +949,17 @@ class TelegramRouter:
                                 )
                         turn_errored = False
 
+                elif etype == "team_cascade_capped":
+                    # The bot→bot conversation hit its round limit — tell
+                    # the user how to let the team keep going.
+                    await self.client.send_text_safe(
+                        chat_id,
+                        "👥 The team reached this conversation's round limit "
+                        f"({ev.get('max', 0)}). Reply <b>continuar</b> to give "
+                        "them more rounds, or just move on.",
+                        thread_id=thread_id or None,
+                    )
+
                 elif etype == "error":
                     if suppress_turn:
                         continue
@@ -1115,6 +1150,32 @@ class TelegramRouter:
             from .commands import cmd_project
 
             await cmd_project(self.deps, info, data[3:])
+        elif data.startswith("tm:"):
+            info = MsgInfo(
+                chat_id=chat_id,
+                thread_id=thread_id,
+                chat_type=msg.get("chat", {}).get("type", ""),
+                user_id=user_id,
+                user_label="",
+            )
+            await self.client.answer_callback_query(cq.get("id", ""), "Connecting…")
+            from .commands import _bind_team_session
+
+            session = await _bind_team_session(self.deps, info, data[3:])
+            if session is None:
+                await self.client.answer_callback_query(
+                    cq.get("id", ""), "Team not found"
+                )
+            else:
+                from .commands import _team_dict
+
+                team = _team_dict(session) or {}
+                await self.client.send_text_safe(
+                    chat_id,
+                    f"👥 Connected to team <b>{team.get('name', 'Team')}</b> — "
+                    f"messages here go to the team chat.",
+                    thread_id=thread_id or None,
+                )
         elif data.startswith("hb:"):
             await self._on_hitl_answer(data[3:], cq)
         elif data.startswith("vf:"):

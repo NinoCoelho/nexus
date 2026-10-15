@@ -1557,7 +1557,12 @@ async def test_voice_message_reply_condensed_with_question(
 ) -> None:
     from nexus.config_schema import TTSConfig
 
-    h = Harness(tmp_path, FakeProvider([_final("full report text")]))
+    # Complex reply (markdown table) → the question-aware condensation
+    # summarizes what was done instead of reading the table aloud.
+    h = Harness(
+        tmp_path,
+        FakeProvider([_final("| task | status |\n|---|---|\n| a | done |\n\nfull report text")]),
+    )
     monkeypatch.setattr(
         "nexus.multimodal.transcribe_bytes",
         lambda data, mime: _async_value("hello from voice"),
@@ -1594,6 +1599,53 @@ async def test_voice_message_reply_condensed_with_question(
     # the condensation prompt saw the transcribed question.
     assert any("hello from voice" in p for p in llm_prompts)
     assert any("full report text" in p for p in llm_prompts)
+
+
+async def test_voice_message_simple_reply_spoken_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simple short prose replies skip the condensation LLM entirely —
+    the voice note says exactly what the chat bubble says."""
+    from nexus.config_schema import TTSConfig
+
+    h = Harness(tmp_path, FakeProvider([_final("full report text")]))
+    monkeypatch.setattr(
+        "nexus.multimodal.transcribe_bytes",
+        lambda data, mime: _async_value("hello from voice"),
+    )
+
+    from nexus.tts import SynthResult
+
+    synth_texts: list[str] = []
+
+    async def fake_synth(text, *, voice=None, speed=None, cfg=None):
+        synth_texts.append(text)
+        return SynthResult(b"RIFFWAV", "audio/wav")
+
+    llm_prompts: list[str] = []
+
+    async def fake_llm(agent, cfg, prompt, **kwargs):
+        llm_prompts.append(prompt)
+        return "should not be used"
+
+    monkeypatch.setattr("nexus.tts.synthesize", fake_synth)
+    monkeypatch.setattr("nexus.voice_ack._generate_text", fake_llm)
+    monkeypatch.setattr("nexus.telegram.voice.wav_to_ogg_opus", lambda w: b"OGGBYTES")
+    h.router._tts_cfg = lambda: TTSConfig(enabled=True)
+
+    msg = _msg("")
+    msg.pop("text")
+    msg["voice"] = {"file_id": "vf1", "duration": 3, "mime_type": "audio/ogg"}
+    await h.router.handle_update({"update_id": 3, "message": msg})
+    await h.wait_turns_done()
+
+    for _ in range(100):
+        if h.client.voices:
+            break
+        await asyncio.sleep(0.02)
+    assert h.client.voices, "voice reply was not sent"
+    assert llm_prompts == [], "simple reply must skip the condensation LLM"
+    assert synth_texts and synth_texts[0] == "full report text"
 
 
 async def test_topics_lists_bindings(tmp_path: Path) -> None:

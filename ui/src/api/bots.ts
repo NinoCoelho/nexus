@@ -113,6 +113,20 @@ export async function updateTeam(
   return res.json();
 }
 
+/** Grant the team's bot→bot conversation more rounds after the cascade cap. */
+export async function continueTeamCascade(
+  sessionId: string,
+): Promise<{ continued: boolean; mode?: string; queued?: string[] }> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/team/continue`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error((detail as { detail?: string }).detail ?? `Continue team error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getBotActivity(botId: string, limit = 100): Promise<BotActivity[]> {
   const res = await fetch(`${BASE}/bots/${encodeURIComponent(botId)}/activity?limit=${limit}`);
   if (!res.ok) throw new Error(`Bot activity error: ${res.status}`);

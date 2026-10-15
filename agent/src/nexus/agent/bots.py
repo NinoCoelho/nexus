@@ -119,11 +119,11 @@ def team_followup_messages(
     In ``round`` mode every member answers a message that addresses nobody:
     the lead answers normally (the session belongs to it), then each other
     member gets a synthetic ``TEAM_MARKER@handle`` user message — queued on
-    the turn runner, so the existing queue-then-inject machinery delivers it
-    as a mid-turn injection or a chained turn, and the mention routing in
-    the prompt builder does the actual persona switch. Returns ``[]`` when
-    the user already @mentioned a member (a directed message goes to that
-    member only) or the team isn't in round mode.
+    the turn runner as **chain-only** turns, so each member's reply is its
+    own turn with its own persona (mid-turn injection would collapse every
+    pass into one turn routed to the last-mentioned handle). Returns ``[]``
+    when the user already @mentioned a member (a directed message goes to
+    that member only) or the team isn't in round mode.
     """
     if not team or team.get("mode") != "round":
         return []
@@ -148,6 +148,77 @@ def team_followup_messages(
         if proj is None or not proj.handle:
             continue
         out.append(f"{TEAM_MARKER}@{proj.handle}")
+    return out
+
+
+def turn_speaker_id(
+    message: str,
+    *,
+    team: dict | None,
+    own_project_id: str | None,
+    project_store: Any = None,
+) -> str | None:
+    """The bot that answered a turn: the @mentioned bot when the (possibly
+    synthetic-marker) message routes elsewhere, else the team lead / chat
+    owner. Used to exclude the replying bot itself from the bot→bot
+    cascade (a bot @mentioning itself must not loop its own turn)."""
+    own = own_project_id
+    if own is None and team:
+        members = [str(m) for m in (team.get("members") or [])]
+        own = members[0] if members else None
+    text = message or ""
+    if text.startswith(TEAM_MARKER):
+        text = text[len(TEAM_MARKER):]
+    target = resolve_mention_target(
+        text, own_project_id=own, project_store=project_store, coordinator=False
+    )
+    if target is not None and target[0] == "bot":
+        return target[1].id
+    return own
+
+
+def cascade_mentions(
+    reply: str,
+    *,
+    team: dict | None,
+    speaker_id: str | None,
+    project_store: Any = None,
+) -> list[dict]:
+    """Team-member bots @mentioned in an assistant reply, in order of first
+    appearance — the fuel of the bot→bot cascade.
+
+    Excludes the replying bot itself (``speaker_id``) and non-members (the
+    cascade only runs inside teams). Each entry is ``{"bot": {id, handle,
+    name}, "marker": TEAM_MARKER + "@handle"}``; the runner queues one
+    chained turn per entry, and the conversation continues until a reply
+    mentions nobody new or the cascade budget ends.
+    """
+    if not team or not (reply or "").strip():
+        return []
+    members = {str(m) for m in (team.get("members") or [])}
+    if not members:
+        return []
+    if project_store is None:
+        from ..home import sessions_db
+        from ..server.project_store import ProjectStore
+
+        project_store = ProjectStore(sessions_db())
+    out: list[dict] = []
+    seen: set[str] = set()
+    for handle in parse_mentions(reply):
+        if handle in seen:
+            continue
+        seen.add(handle)
+        try:
+            proj = project_store.get_by_handle(handle)
+        except Exception:
+            proj = None
+        if proj is None or proj.id == speaker_id or proj.id not in members:
+            continue
+        out.append({
+            "bot": {"id": proj.id, "handle": proj.handle, "name": proj.name},
+            "marker": f"{TEAM_MARKER}@{proj.handle}",
+        })
     return out
 
 

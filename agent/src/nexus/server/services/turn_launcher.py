@@ -259,10 +259,13 @@ async def launch_turn(
     is_voice: bool = False,
     autotitle_message: str | None = None,
     origin: str = "web",
+    chain_only: bool = False,
 ) -> LaunchOutcome:
     """Run one chat turn on ``session`` outside of HTTP.
 
     Mirrors the /chat/stream route's pre-turn pipeline; see module docstring.
+    ``chain_only`` marks the message as a team/cascade pass when the session
+    already has a running turn (its own turn, never a mid-turn injection).
     """
     from .chat_turn_runner import ChatTurnRunner, get_running_turn
 
@@ -284,7 +287,7 @@ async def launch_turn(
     # Active-turn queueing — never start a parallel loop on one session.
     active = get_running_turn(session.id)
     if active is not None:
-        qid = active.enqueue(message, origin=origin)
+        qid = active.enqueue(message, origin=origin, chain_only=chain_only)
         if qid is not None:
             return LaunchOutcome(runner=active, queued=True, session_id=session.id)
         # Runner finalized between check and enqueue — fall through.
@@ -388,12 +391,16 @@ async def launch_turn(
 
     # Team (group chat) round passes — same as the web route: queue a
     # synthetic mention pass per non-lead member so each answers in turn.
+    # Chain-only: each pass is its own turn, never a mid-turn injection.
     try:
         from ...agent.bots import TEAM_MARKER, team_followup_messages
+        from ..project_store import ProjectStore
 
         _team = store.get_team(session.id)
-        for _follow in team_followup_messages(_team, message):
-            _fqid = runner.enqueue(_follow, origin="team")
+        for _follow in team_followup_messages(
+            _team, message, project_store=ProjectStore(store._db_path)
+        ):
+            _fqid = runner.enqueue(_follow, origin="team", chain_only=True)
             if _fqid:
                 from ..events import SessionEvent as _SE
 

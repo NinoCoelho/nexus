@@ -21,9 +21,6 @@ interface Props {
   selectedBotId: string | null;
   coordinatorSessionId: string | null;
   coordinatorName?: string | null;
-  /** True when a per-view panel shares the sidebar below the nav — caps the
-   * list's height so both sections stay usable. */
-  capped?: boolean;
   onSessionSelect: (id: string, projectId?: string | null) => void;
   onNewChat: (projectId?: string | null) => void;
   onOpenBot: (id: string) => void;
@@ -68,7 +65,6 @@ export default function BotsListPanel({
   selectedBotId,
   coordinatorSessionId,
   coordinatorName,
-  capped = false,
   onSessionSelect,
   onNewChat,
   onOpenBot,
@@ -197,7 +193,7 @@ export default function BotsListPanel({
   };
 
   return (
-    <div className={`sidebar-section sidebar-bots-section${capped ? " sidebar-bots-section--capped" : ""}`}>
+    <div className="sidebar-section sidebar-bots-section">
       <div className="sidebar-sessions-header">
         <div className="sidebar-section-label">Bots</div>
       </div>

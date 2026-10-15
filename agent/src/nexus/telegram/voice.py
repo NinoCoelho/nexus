@@ -45,8 +45,10 @@ _MESSY_RE = re.compile(
 
 # Question-aware condensation (voice_reply_mode="answer"): the chat
 # bubble already carries the full reply, so the voice note should ANSWER
-# the user's original question derived from the agent's result, not
-# read the screen-oriented text aloud.
+# the user's original question derived from the agent's result — but only
+# for complex results. Simple answers are spoken as written (see
+# ``is_simple_reply``); complex ones (tables, lists, code, artifacts) get
+# a short spoken summary of what was done plus a pointer to the message.
 _ANSWER_PROMPTS = {
     "pt": (
         "O usuário fez uma pergunta por voz. O assistente já processou tudo "
@@ -55,9 +57,11 @@ _ANSWER_PROMPTS = {
         "Com base nesse resultado, responda diretamente à pergunta do "
         "usuário, para ser lido em voz alta:\n"
         "- Frases corridas, sem markdown, listas, emojis ou parênteses.\n"
-        "- Mantenha os fatos, números e conclusões essenciais; seja conciso.\n"
-        "- Se o resultado contiver links, código ou arquivos, apenas "
-        "mencione que estão no chat.\n"
+        "- O resultado é complexo (tabelas, listas, código, arquivos, ações "
+        "executadas): NÃO os leia. Diga em 1 a 3 frases o que foi feito ou "
+        "a conclusão principal, e informe que os detalhes estão na "
+        "mensagem do chat.\n"
+        "- Mantenha os fatos e números essenciais; seja conciso.\n"
         "- Responda no mesmo idioma da pergunta.\n"
         "Responda APENAS com o texto a ser falado, sem comentários.\n\n"
         "Pergunta do usuário:\n{question}\n\n"
@@ -70,9 +74,11 @@ _ANSWER_PROMPTS = {
         "Based on that result, answer the user's question directly, to be "
         "read aloud:\n"
         "- Flowing sentences, no markdown, lists, emojis, or parentheses.\n"
-        "- Keep the essential facts, numbers, and conclusions; stay concise.\n"
-        "- If the result contains links, code, or files, just mention they "
-        "are in the chat.\n"
+        "- The result is complex (tables, lists, code, files, actions "
+        "taken): do NOT read those out. Say in 1–3 sentences what was done "
+        "or the main conclusion, and tell the user the details are in the "
+        "chat message.\n"
+        "- Keep the essential facts and numbers; stay concise.\n"
         "- Answer in the same language as the question.\n"
         "Reply with ONLY the text to be spoken, no commentary.\n\n"
         "User question:\n{question}\n\n"
@@ -113,6 +119,30 @@ _SPEECHIFY_PROMPTS = {
 
 def needs_speechify(text: str) -> bool:
     return bool(_MESSY_RE.search(text or ""))
+
+
+# A "simple" reply is spoken exactly as written — no condensation LLM call
+# at all. Anything structured (tables, lists, code, headings, links,
+# vault refs) or long counts as complex and goes through the
+# question-aware condensation, which summarizes instead of reading.
+_SIMPLE_MAX_CHARS = 380
+_COMPLEX_RE = re.compile(
+    r"\|"  # markdown table rows
+    r"|^#{1,6}\s"  # headings
+    r"|^[-*+]\s|^\d+[.)]\s"  # list items
+    r"|```"  # code fences
+    r"|https?://|vault://"  # links / vault refs
+    r"|^\s*>\s",  # blockquotes
+    re.MULTILINE | re.UNICODE,
+)
+
+
+def is_simple_reply(text: str) -> bool:
+    """True when the reply is short, plain prose — speak it as written."""
+    t = (text or "").strip()
+    if not t or len(t) > _SIMPLE_MAX_CHARS:
+        return False
+    return not _COMPLEX_RE.search(t)
 
 
 async def speechify(agent: Any, text: str, *, timeout: float = _SPEECHIFY_TIMEOUT) -> str:
@@ -256,14 +286,20 @@ async def deliver_voice_note(
     if not getattr(tts_cfg, "enabled", False):
         return False
 
+    # Simple replies are spoken as written — the condensation LLM would
+    # only paraphrase what's already short plain prose (slower + costlier
+    # + drift). Complex replies get the question-aware spoken summary.
     if agent is not None and reply_mode == "answer" and question:
-        try:
-            text = await condense_for_speech(agent, question, text)
-        except Exception:
-            log.debug(
-                "telegram: condense failed — falling back to read-aloud",
-                exc_info=True,
-            )
+        if is_simple_reply(text):
+            log.debug("telegram: simple reply — speaking as written (no condensation)")
+        else:
+            try:
+                text = await condense_for_speech(agent, question, text)
+            except Exception:
+                log.debug(
+                    "telegram: condense failed — falling back to read-aloud",
+                    exc_info=True,
+                )
 
     if agent is not None and speechify_mode in ("auto", "always"):
         if speechify_mode == "always" or needs_speechify(text):

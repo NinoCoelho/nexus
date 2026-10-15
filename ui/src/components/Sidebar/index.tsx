@@ -243,17 +243,9 @@ function Sidebar({
         title={collapsed ? label : undefined}
       >
         <span className="sidebar-nav-icon"><Icon /></span>
-        {!collapsed && <span className="sidebar-nav-label">{label}</span>}
+         {!collapsed && <span className="sidebar-nav-label">{label}</span>}
       </button>
     ));
-
-  const lowerPanelActive =
-    (view === "bots") ||
-    (view === "apps" && !collapsed && !!onAppSelectFolder) ||
-    (view === "vault" && !collapsed) ||
-    (view === "calendar" && !collapsed) ||
-    (view === "kanban" && !collapsed) ||
-    (view === "workflows" && !collapsed);
 
   return (
     <>
@@ -285,6 +277,9 @@ function Sidebar({
         </button>
       </div>
 
+      {/* Scrollable content — the sidebar scrolls as ONE unit (bots, times,
+          views, per-view panels); no nested scrolls in the bots area. */}
+      <div className="sidebar-scroll">
       {/* New chat + Import */}
       <div className="sidebar-section">
         <div className={collapsed ? undefined : "sidebar-new-chat-row"}>
@@ -306,7 +301,7 @@ function Sidebar({
         </div>
       </div>
 
-      {/* Bots list — always visible, scrolls independently when long */}
+      {/* Bots list — always visible above the nav */}
       {!collapsed && onOpenBot && (
         <BotsListPanel
           refreshKey={sessionsRevision}
@@ -315,7 +310,6 @@ function Sidebar({
           selectedBotId={view === "bots" ? botsSelectedId : null}
           coordinatorSessionId={coordinatorSessionId}
           coordinatorName={coordinatorName}
-          capped={lowerPanelActive}
           onSessionSelect={onSessionSelect}
           onNewChat={onNewChat}
           onOpenBot={onOpenBot}
@@ -339,7 +333,7 @@ function Sidebar({
       )}
 
       {/* View switcher */}
-      <div className={`sidebar-section${lowerPanelActive && !collapsed ? " sidebar-section--with-bots" : ""}`}>
+      <div className="sidebar-section">
         {!collapsed ? (
           <button
             className="sidebar-section-head"
@@ -419,15 +413,7 @@ function Sidebar({
         </div>
       )}
 
-      {/* Spacer — only when no expandable section is active */}
-      {!(view === "bots" && !collapsed) &&
-        !(view === "apps" && !collapsed) &&
-        !(view === "vault" && !collapsed) &&
-        !(view === "calendar" && !collapsed) &&
-        !(view === "kanban" && !collapsed) &&
-        !(view === "workflows" && !collapsed) && (
-        <div className="sidebar-spacer" />
-      )}
+      </div>
 
       {/* Update notice — pinned at the bottom; Settings lives in the Header gear */}
       {updateAvailable && updateCheck && (
