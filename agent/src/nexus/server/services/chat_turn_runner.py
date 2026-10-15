@@ -466,9 +466,10 @@ class ChatTurnRunner:
             reason: str | None = None
             retryable: bool | None = None
             status_code = getattr(exc, "status_code", None)
+            rate_limit_reset: str | None = None
             try:
                 from ...error_classifier import (
-                    classify_api_error,
+                    classify_with_reset,
                     is_budget_exceeded,
                     budget_exceeded_detail,
                 )
@@ -480,19 +481,25 @@ class ChatTurnRunner:
                     if bd:
                         detail = bd
                 else:
-                    _reason = classify_api_error(exc).reason.value
+                    _classified = classify_with_reset(exc)
+                    _reason = _classified.reason.value
                     if _reason == "timeout":
                         self.acc.partial_status = "upstream_timeout"
+                    # Capture rate limit reset time if available
+                    if _reason == "rate_limit":
+                        rate_limit_reset = _classified.error_context.get("rate_limit_reset")
             except Exception:
                 pass
             if reason is None:
                 try:
-                    from ...error_classifier import classify_api_error
-                    classified = classify_api_error(exc)
+                    from ...error_classifier import classify_with_reset
+                    classified = classify_with_reset(exc)
                     reason = classified.reason.value
                     retryable = classified.retryable
                     if classified.user_facing_summary:
                         detail = f"{classified.user_facing_summary} ({detail})"
+                    if reason == "rate_limit":
+                        rate_limit_reset = classified.error_context.get("rate_limit_reset")
                 except Exception:
                     pass
             try:
@@ -510,6 +517,7 @@ class ChatTurnRunner:
                 reason=reason,
                 retryable=retryable,
                 status_code=status_code,
+                rate_limit_reset=rate_limit_reset,
             )
 
     # ── Publishing helpers ──────────────────────────────────────────────
@@ -528,15 +536,19 @@ class ChatTurnRunner:
         reason: str | None = None,
         retryable: bool | None = None,
         status_code: int | None = None,
+        rate_limit_reset: str | None = None,
     ) -> None:
         """Publish an error event followed by a synthetic done event."""
-        self._publish({
+        payload: dict[str, Any] = {
             "type": "error",
             "detail": detail,
             "reason": reason,
             "retryable": retryable,
             "status_code": status_code,
-        })
+        }
+        if rate_limit_reset:
+            payload["rate_limit_reset"] = rate_limit_reset
+        self._publish(payload)
         self._publish({
             "type": "done",
             "session_id": self.session_id,

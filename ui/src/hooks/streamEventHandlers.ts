@@ -414,29 +414,67 @@ export function applyLimitReachedEvent(
   });
 }
 
+interface StreamErrorEvent {
+  reason?: string;
+  detail: string;
+  actions?: string[];
+  rate_limit_reset?: string;
+}
+
+/** Friendly, local-timezone rate-limit message from a reset timestamp. */
+export function rateLimitDetail(retryAfter: string): string | null {
+  try {
+    const resetDate = new Date(retryAfter);
+    if (isNaN(resetDate.getTime())) return null;
+    const localTime = resetDate.toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    const localDate = resetDate.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    return `Rate limit reached — resets ${localDate} at ${localTime} (your local time).`;
+  } catch {
+    return null;
+  }
+}
+
 export function applyErrorEvent(
   setChatStates: SetChatStates,
   key: string,
-  reason: string | undefined,
-  detail: string,
-  actions?: string[],
+  event: StreamErrorEvent,
 ) {
+  const { reason, detail, actions, rate_limit_reset } = event;
   const knownStatuses: NonNullable<Message["partial"]>["status"][] = [
     "interrupted", "cancelled", "iteration_limit",
     "empty_response", "llm_error", "crashed",
     "length", "upstream_timeout", "rate_limited",
     "context_overflow", "message_too_large", "budget_exceeded",
   ];
-  const mapped = reason && (knownStatuses as string[]).includes(reason)
-    ? (reason as NonNullable<Message["partial"]>["status"])
+  // Backend sends "rate_limit" but frontend status key is "rate_limited"
+  const normalizedReason = reason === "rate_limit" ? "rate_limited" : reason;
+  const mapped = normalizedReason && (knownStatuses as string[]).includes(normalizedReason)
+    ? (normalizedReason as NonNullable<Message["partial"]>["status"])
     : "llm_error";
+
+  // For rate_limit errors with a reset time, create a friendly message with local time
+  let friendlyDetail: string;
+  if (mapped === "rate_limited" && rate_limit_reset) {
+    friendlyDetail = rateLimitDetail(rate_limit_reset) ?? prettifyStreamError(detail, reason);
+  } else {
+    friendlyDetail = prettifyStreamError(detail, reason);
+  }
+
   setChatStates((prev) => {
     const next = new Map(prev);
     const cur = next.get(key) ?? emptyState();
     const msgs = [...cur.messages];
     const lastIdx = msgs.length - 1;
-    const partial: NonNullable<Message["partial"]> = { status: mapped, detail: prettifyStreamError(detail, reason) };
+    const partial: NonNullable<Message["partial"]> = { status: mapped, detail: friendlyDetail };
     if (actions) partial.actions = actions;
+    if (rate_limit_reset) partial.retryAfter = rate_limit_reset;
     if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
       msgs[lastIdx] = { ...msgs[lastIdx], streaming: false, reconnecting: undefined, partial };
     } else {
@@ -453,6 +491,7 @@ export function applyPausedForCooldownEvent(
   retryAfter: string,
   estimatedSeconds: number,
 ) {
+  const friendly = rateLimitDetail(retryAfter);
   setChatStates((prev) => {
     const next = new Map(prev);
     const cur = next.get(key) ?? emptyState();
@@ -460,7 +499,7 @@ export function applyPausedForCooldownEvent(
     const lastIdx = msgs.length - 1;
     const partial: NonNullable<Message["partial"]> = {
       status: "rate_limited",
-      detail: "Rate limit hit — the turn has been paused. Resume after the cooldown.",
+      detail: friendly ?? "Rate limit hit — the turn has been paused. Resume after the cooldown.",
       retryAfter,
       estimatedSeconds,
     };

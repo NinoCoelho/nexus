@@ -1317,8 +1317,16 @@ class Agent:
         if error_reason == "rate_limit" and st.session_id and self._sessions is not None:
             try:
                 from datetime import datetime, timezone, timedelta
-                cooldown = 60
-                retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+
+                # Use provider's reset time if available, otherwise default to 60s
+                rate_limit_reset = ev.get("rate_limit_reset")
+                if rate_limit_reset:
+                    retry_after = datetime.fromisoformat(rate_limit_reset)
+                    cooldown = max(1, int((retry_after - datetime.now(timezone.utc)).total_seconds()))
+                else:
+                    cooldown = 60
+                    retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+
                 wm_json = json.dumps(
                     [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
                       "content": m.content if isinstance(m.content, str) else json.dumps(m.content, default=str),

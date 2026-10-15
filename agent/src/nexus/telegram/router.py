@@ -507,9 +507,11 @@ class TelegramRouter:
         )
 
         if outcome.error is not None:
+            from ..error_classifier import friendly_error_text
+
             await self.client.send_text_safe(
                 info.chat_id,
-                f"⚠️ {outcome.error}",
+                f"⚠️ {friendly_error_text(outcome.error, outcome.error_payload.get('reason') if outcome.error_payload else None)}",
                 thread_id=info.thread_id or None,
             )
             return
@@ -855,6 +857,10 @@ class TelegramRouter:
         # web_sync off: skip rendering this web-originated turn entirely.
         suppress_turn = False
         turn_errored = False  # error seen in the current turn — keep its 👀 ack
+        # A cooldown notice was already sent for this turn — the rate-limit
+        # error event that immediately follows is suppressed to avoid a
+        # duplicate bubble.
+        cooldown_announced = False
         # The user message of the turn in flight (every origin carries it
         # on turn_started). Paired with the settled reply for the
         # question-aware voice note (voice_reply_mode="answer").
@@ -903,6 +909,7 @@ class TelegramRouter:
                         await self._finalize_reply(chat_id, thread_id, msg_id, acc)
                     acc, msg_id, echo_msg_id = "", 0, 0
                     suppress_turn = False
+                    cooldown_announced = False
                     turn_question = ev.get("message", "")
                     if ev.get("origin") == "web":
                         if getattr(self.cfg, "web_sync", True):
@@ -960,11 +967,40 @@ class TelegramRouter:
                         thread_id=thread_id or None,
                     )
 
+                elif etype == "paused_for_cooldown":
+                    # Rate-limited mid-turn: the turn is parked and the
+                    # provider told us when the quota resets. Announce it in
+                    # the user's timezone; the error event that follows is
+                    # suppressed (cooldown_announced) so no raw JSON leaks.
+                    if suppress_turn:
+                        continue
+                    cooldown_announced = True
+                    turn_errored = True
+                    from ..error_classifier import format_cooldown_notice
+
+                    await self.client.send_text_safe(
+                        chat_id,
+                        format_cooldown_notice(ev.get("retry_after", "")),
+                        thread_id=thread_id or None,
+                    )
+                    # Keep any partial reply in ``acc`` — turn_settled
+                    # finalizes it as its own bubble after the notice.
+
                 elif etype == "error":
                     if suppress_turn:
                         continue
-                    detail = ev.get("detail") or "unexpected error"
                     turn_errored = True
+                    if cooldown_announced and ev.get("reason") == "rate_limit":
+                        # The cooldown bubble already said everything; the
+                        # duplicate error would just repeat it (or leak raw JSON).
+                        continue
+                    from ..error_classifier import friendly_error_text
+
+                    detail = friendly_error_text(
+                        ev.get("detail") or "unexpected error",
+                        ev.get("reason"),
+                        ev.get("rate_limit_reset"),
+                    )
                     acc = f"{acc}\n\n⚠️ {detail}" if acc.strip() else f"⚠️ {detail}"
 
                 # user_request / tool / queue events are handled elsewhere

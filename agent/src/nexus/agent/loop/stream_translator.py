@@ -172,13 +172,16 @@ class StreamTranslator:
         return out
 
     def format_error(self, ev: dict[str, Any]) -> dict[str, Any]:
-        return {
+        payload = {
             "type": "error",
             "detail": ev.get("message", ""),
             "reason": ev.get("reason"),
             "retryable": bool(ev.get("retryable", False)),
             "status_code": ev.get("status_code"),
         }
+        if ev.get("rate_limit_reset"):
+            payload["rate_limit_reset"] = ev["rate_limit_reset"]
+        return payload
 
     def _handle_tool_exec_start(self, ev: dict[str, Any]) -> list[dict[str, Any]]:
         tool_name = ev.get("name", "")

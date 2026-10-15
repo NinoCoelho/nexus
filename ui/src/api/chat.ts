@@ -31,7 +31,7 @@ export type StreamEvent =
   | { type: "limit_reached"; iterations: number }
   | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
   | { type: "paused_for_cooldown"; retry_after: string; estimated_seconds: number; reason: string }
-  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[] }
+  | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[]; rate_limit_reset?: string }
   | { type: "queued"; qid: string; session_id: string }
   | { type: "user_enqueued"; qid: string; text: string; session_id: string }
   | { type: "user_injected"; qid: string; text: string; session_id: string }

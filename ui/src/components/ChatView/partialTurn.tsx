@@ -81,10 +81,15 @@ export function PartialTurnActions({
     onCompact().finally(() => setCompacting(false));
   }, [compacting, onCompact]);
 
-  const fmtCountdown = (secs: number) => {
-    const m = Math.floor(secs / 60);
+  // Human-readable remaining time: 11h 59m / 42m 10s / 0:45 — the old
+  // m:ss format rendered multi-hour cooldowns as "719:20".
+  const fmtDuration = (secs: number) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
+    if (h > 0) return `${h}h ${m.toString().padStart(2, "0")}m`;
+    if (m > 0) return `${m}m ${s.toString().padStart(2, "0")}s`;
+    return `0:${s.toString().padStart(2, "0")}`;
   };
 
   if (isRateLimited) {
@@ -92,10 +97,14 @@ export function PartialTurnActions({
     return (
       <div className="limit-banner" style={{ marginTop: 4 }}>
         <div className="limit-banner-text">
-          {t("chat:partial.rateLimited")}
+          {partial?.detail || t("chat:partial.rateLimited")}
           {remaining !== null && remaining > 0 && (
-            <span className="rate-limit-countdown" style={{ marginLeft: 8, fontFamily: "monospace" }}>
-              {fmtCountdown(remaining)}
+            <span
+              className="rate-limit-countdown"
+              style={{ marginLeft: 8, fontFamily: "monospace" }}
+              title={t("chat:partial.resetsIn", { time: fmtDuration(remaining) })}
+            >
+              {t("chat:partial.resetsIn", { time: fmtDuration(remaining) })}
             </span>
           )}
         </div>
@@ -126,7 +135,9 @@ export function PartialTurnActions({
 
   return (
     <div className="limit-banner" style={{ marginTop: 4 }}>
-      <div className="limit-banner-text">{t(PARTIAL_KEY[status])} {t("chat:partial.proceed")}</div>
+      <div className="limit-banner-text">
+        {partial?.detail || t(PARTIAL_KEY[status])} {t("chat:partial.proceed")}
+      </div>
       <div className="limit-banner-actions">
         {isContextIssue ? (
           <>

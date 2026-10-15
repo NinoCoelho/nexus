@@ -360,7 +360,7 @@ export function useChatSession(
         } else if (event.type === "paused_for_cooldown") {
           applyPausedForCooldownEvent(setChatStates, streamKey, event.retry_after, event.estimated_seconds);
         } else if (event.type === "error") {
-          applyErrorEvent(setChatStates, streamKey, event.reason, event.detail, event.actions);
+          applyErrorEvent(setChatStates, streamKey, event);
         } else if (event.type === "queued") {
           applyQueuedAckEvent(setChatStates, streamKey, event.qid);
         } else if (event.type === "user_enqueued") {
@@ -419,7 +419,7 @@ export function useChatSession(
                 } else if (event.type === "paused_for_cooldown") {
                   applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
                 } else if (event.type === "error") {
-                  applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
+                  applyErrorEvent(setChatStates, key, event);
                 } else if (event.type === "turn_bot") {
                   applyTurnBotEvent(setChatStates, key, event.bot);
                 }
@@ -553,7 +553,7 @@ export function useChatSession(
       } else if (event.type === "paused_for_cooldown") {
         applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
       } else if (event.type === "error") {
-        applyErrorEvent(setChatStates, key, event.reason, event.detail, event.actions);
+        applyErrorEvent(setChatStates, key, event);
       } else if (event.type === "queued") {
         applyQueuedAckEvent(setChatStates, key, event.qid);
       } else if (event.type === "user_enqueued") {
@@ -940,7 +940,7 @@ export function useChatSession(
             } else if (event.type === "paused_for_cooldown") {
               applyPausedForCooldownEvent(setChatStates, activeKey, event.retry_after, event.estimated_seconds);
             } else if (event.type === "error") {
-              applyErrorEvent(setChatStates, activeKey, event.reason, event.detail, event.actions);
+              applyErrorEvent(setChatStates, activeKey, event);
             } else if (event.type === "queued") {
               applyQueuedAckEvent(setChatStates, activeKey, event.qid);
             } else if (event.type === "user_enqueued") {

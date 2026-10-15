@@ -59,6 +59,7 @@
     "length": "Resposta truncada — o modelo atingiu seu limite de saída.",
     "upstreamTimeout": "O modelo não respondeu a tempo.",
     "rateLimited": "Limite de requisições atingido — o turno foi pausado. Retome após o cooldown.",
+    "resetsIn": "renova em {{time}}",
     "proceed": "Como deseja prosseguir?",
     "continue": "Continuar",
     "retry": "Tentar novamente"

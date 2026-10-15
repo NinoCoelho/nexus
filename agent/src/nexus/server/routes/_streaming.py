@@ -109,7 +109,10 @@ class TurnAccumulator:
                 "retryable": event.get("retryable"),
                 "status_code": event.get("status_code"),
             }
-            for k in ("likely_cause", "estimated_input_tokens", "context_window", "actions"):
+            for k in (
+                "likely_cause", "estimated_input_tokens", "context_window",
+                "actions", "rate_limit_reset",
+            ):
                 if k in event:
                     err_payload[k] = event[k]
             sse_frames.append(_sse("error", err_payload))
