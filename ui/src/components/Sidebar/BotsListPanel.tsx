@@ -1,9 +1,12 @@
 /**
  * BotsListPanel — the sidebar's always-visible bots section. Coordinator
  * ("main") pinned topmost (its chats are the unprojected ones), then every
- * bot sorted by updated_at desc. Row click: 1 active session → open it,
- * 0 → fresh composer for that bot, >1 → expandable nested session rows.
- * The ⚙ button opens the bot's workspace without expanding chats.
+ * bot sorted by updated_at desc. Row click always opens the bot's own most
+ * recent chat (or a fresh composer when it has none) — team/group sessions
+ * live under the lead bot's project but never hijack the primary click.
+ * The chevron is a separate toggle that expands the nested session rows
+ * (side conversations + the bot's groups). The ⚙ button opens the bot's
+ * workspace without expanding chats.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -182,13 +185,13 @@ export default function BotsListPanel({
     return [main, ...projectBots];
   }, [bots, coordinatorName, sessionsByBot]);
 
-  const handleClick = (bot: Bot, botSessions: SessionSummary[]) => {
-    if (botSessions.length === 1) {
-      onSessionSelect(botSessions[0].id, bot.kind === "coordinator" ? null : bot.id);
-    } else if (botSessions.length === 0) {
-      onNewChat(bot.kind === "coordinator" ? null : bot.id);
+  const handleClick = (bot: Bot, ownSessions: SessionSummary[]) => {
+    // The bot's own chat always wins the primary click — a team session
+    // living under this bot's project must never hijack it.
+    if (ownSessions.length > 0) {
+      onSessionSelect(ownSessions[0].id, bot.kind === "coordinator" ? null : bot.id);
     } else {
-      setExpandedId((cur) => (cur === bot.id ? null : bot.id));
+      onNewChat(bot.kind === "coordinator" ? null : bot.id);
     }
   };
 
@@ -201,25 +204,28 @@ export default function BotsListPanel({
       <div className="sidebar-bot-list">
         {rows.map((bot) => {
           const botSessions = sessionsByBot.get(bot.id) ?? [];
+          // Team/group sessions live under the lead bot's project — the
+          // bot's own (non-team) chats drive the primary click.
+          const ownSessions = botSessions.filter((s) => !s.team);
+          const primaryOwnId = ownSessions.length > 0 ? ownSessions[0].id : null;
+          // Nested rows the chevron reveals: everything except the primary
+          // own chat the row click opens (side conversations + groups).
+          const nestedCount = botSessions.length - (primaryOwnId ? 1 : 0);
           const expanded = expandedId === bot.id;
-          const hasMany = botSessions.length > 1;
           return (
             <div key={bot.id} className="sidebar-bot-item">
               <div className="sidebar-bot-item-row">
-                <button
-                  className={`sidebar-bot-header${selectedBotId === bot.id ? " sidebar-bot-header--active" : ""}`}
-                  onClick={() => handleClick(bot, botSessions)}
-                  onContextMenu={(e) => {
-                    if (bot.kind !== "bot") return;
-                    e.preventDefault();
-                    setBotMenu({ bot, x: e.clientX, y: e.clientY });
-                  }}
-                  title={bot.kind === "coordinator" ? `${bot.name} — your main chat` : `${bot.name} @${bot.handle}`}
-                  aria-expanded={hasMany ? expanded : undefined}
-                >
-                  {hasMany ? (
+                {nestedCount > 0 ? (
+                  <button
+                    className={`sidebar-bot-chevron-btn${expanded ? " sidebar-bot-chevron-btn--open" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedId((cur) => (cur === bot.id ? null : bot.id));
+                    }}
+                    aria-expanded={expanded}
+                    title={expanded ? "Collapse chats" : "Expand chats"}
+                  >
                     <svg
-                      className={`sidebar-project-chevron${expanded ? " sidebar-project-chevron--open" : ""}`}
                       width="10"
                       height="10"
                       viewBox="0 0 16 16"
@@ -231,15 +237,26 @@ export default function BotsListPanel({
                     >
                       <path d="M6 4l4 4-4 4" />
                     </svg>
-                  ) : (
-                    <span className="sidebar-bot-chevron-spacer" />
-                  )}
+                  </button>
+                ) : (
+                  <span className="sidebar-bot-chevron-spacer" />
+                )}
+                <button
+                  className={`sidebar-bot-header${selectedBotId === bot.id ? " sidebar-bot-header--active" : ""}`}
+                  onClick={() => handleClick(bot, ownSessions)}
+                  onContextMenu={(e) => {
+                    if (bot.kind !== "bot") return;
+                    e.preventDefault();
+                    setBotMenu({ bot, x: e.clientX, y: e.clientY });
+                  }}
+                  title={bot.kind === "coordinator" ? `${bot.name} — your main chat` : `${bot.name} @${bot.handle}`}
+                >
                   <BotAvatar color={bot.color} />
                   <span className="sidebar-bot-names">
                     <span className="sidebar-bot-name">{bot.name}</span>
                     <span className="sidebar-bot-handle">@{bot.handle || bot.id}</span>
                   </span>
-                  {hasMany && <span className="sidebar-bot-count">{botSessions.length}</span>}
+                  {botSessions.length > 1 && <span className="sidebar-bot-count">{botSessions.length}</span>}
                 </button>
                 <button
                   className="sidebar-bot-settings"
@@ -256,9 +273,9 @@ export default function BotsListPanel({
                   </svg>
                 </button>
               </div>
-              {expanded && hasMany && (
+              {expanded && nestedCount > 0 && (
                 <div className="sidebar-bot-sessions">
-                  {botSessions.map((s, i) => (
+                  {botSessions.map((s) => (
                     <SessionItem
                       key={s.id}
                       session={s}
@@ -275,7 +292,7 @@ export default function BotsListPanel({
                       onRenameChange={onRenameChange}
                       onRenameCommit={() => onRenameCommit(s.id)}
                       onRenameCancel={onRenameCancel}
-                      sideConversation={i > 0}
+                      sideConversation={!!primaryOwnId && s.id !== primaryOwnId}
                     />
                   ))}
                 </div>
