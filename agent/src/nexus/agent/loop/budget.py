@@ -28,18 +28,26 @@ class BudgetCheck:
     call_limit_exceeded: tuple[str, int] | None = None
 
 
-def estimate_tool_result_tokens(text: str) -> int:
-    """Estimate tokens in a single tool result string.
+def estimate_tool_result_tokens(text: str | list) -> int:
+    """Estimate tokens in a single tool result.
 
     Uses the same heuristic as overflow.py: ~4 chars/token for ASCII,
-    ~3 chars/token for dense/non-ASCII content.
+    ~3 chars/token for dense/non-ASCII content. Multipart content
+    (``list[ContentPart]`` — a tool result carrying attachments) collapses
+    to its text parts plus the shared per-attachment surcharge; the
+    char-scanner must never see a raw ContentPart.
     """
+    surcharge = 0
+    if isinstance(text, list):
+        from .overflow import _flatten_multipart
+
+        text, surcharge = _flatten_multipart(text)
     if not text:
-        return 0
+        return surcharge
     sample = text[:512]
     non_ascii = sum(1 for c in sample if ord(c) > 127)
     ratio = 3 if (non_ascii / max(1, len(sample)) > 0.05 or sample.lstrip()[:1] in ("[", "{")) else 4
-    return len(text) // ratio
+    return len(text) // ratio + surcharge
 
 
 def check_tool_budget(

@@ -98,6 +98,40 @@ def test_estimate_session_tool_tokens_no_tools() -> None:
     assert estimate_session_tool_tokens(history) == 0
 
 
+def test_estimate_session_tool_tokens_multipart_tool_result() -> None:
+    # Regression: a TOOL message whose content is list[ContentPart] used to
+    # crash the char-scanner with "ord() expected string of length 1, but
+    # ContentPart found".
+    from nexus.agent.llm.types import ContentPart
+
+    history = [
+        ChatMessage(
+            role=Role.TOOL,
+            content=[
+                ContentPart(kind="text", text="result text " * 100),
+                ContentPart(kind="image", vault_path="uploads/img.png", mime_type="image/png"),
+            ],
+            tool_call_id="t1",
+            name="vault_read",
+        ),
+    ]
+    tokens = estimate_session_tool_tokens(history)
+    assert tokens >= 1_600  # image surcharge alone
+    assert tokens > 1_600 + 0  # plus the text part's estimate
+
+
+def test_estimate_tool_result_tokens_multipart_only_attachments() -> None:
+    from nexus.agent.llm.types import ContentPart
+    from nexus.agent.loop.budget import estimate_tool_result_tokens
+
+    assert (
+        estimate_tool_result_tokens(
+            [ContentPart(kind="audio", vault_path="a.ogg", mime_type="audio/ogg")]
+        )
+        == 2_000
+    )
+
+
 def test_budget_exceeded_hint_is_critical() -> None:
     assert "CRITICAL" in BUDGET_EXCEEDED_HINT
     assert "MUST NOT" in BUDGET_EXCEEDED_HINT
