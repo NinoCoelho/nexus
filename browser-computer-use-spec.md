@@ -37,6 +37,19 @@ identical.)
   `chromium` → `which`. Poll `/json/version` every 250ms up to 10s.
 - **Port choice**: 9223 (9222 is Chrome's conventional devtools port; using a
   non-default port avoids hijacking a user's own debug session).
+- **Deterministic port per context**: the allocated port is persisted to the
+  registry *before* launching. A launch that outlives the in-turn wait leaves
+  a booting Chrome on that port; every retry must land on the SAME
+  port/profile pair — a fresh port would exec a second Chrome against the
+  same user-data-dir, which the profile singleton absorbs (instant exit) and
+  the boot loops forever (the "second bot fails" bug).
+- **Launch wait + adoption**: wait ~10s in-turn; on timeout, a background
+  task keeps probing (~60s) and connects when DevTools answers. The action
+  returns a retryable "still starting" error; the next call self-heals. If
+  adoption fails entirely, kill the profile's processes and drop the
+  registry entry (clean slate). If the exec'd child exits immediately, fail
+  fast with "profile already in use" — that's the singleton handoff, not a
+  slow boot.
 - The Chrome process is **left running** across app restarts (probe reuses it);
   kill it explicitly if your product wants hermetic cleanup.
 
@@ -132,6 +145,13 @@ stream. Manual (human) actions emit with a pseudo-session `*browser*`.
 GET  /browser/status            → {connected, cdp_port, url?, title?} | {connected:false, error}
 POST /browser/action            body = action params (same as §4) → action result JSON
 GET  /browser/screenshot        → image/png (captures one first if none); 503 on failure
+GET  (SSE) /browser/stream?key= → live view: {type:"frame", data:<base64 jpeg>} from
+                                  Page.startScreencast (ack-paced ~4fps), {type:"info",
+                                  url,title}, {type:"heartbeat"} every 15s, terminal
+                                  {type:"error"}. Watch-only by design — the desktop
+                                  Chrome window is the interaction surface. The cast
+                                  stops when the last subscriber disconnects; watchers
+                                  count as activity for the idle reaper.
 GET  (SSE) /notifications/events → filter kind == "browser_event"
 ```
 

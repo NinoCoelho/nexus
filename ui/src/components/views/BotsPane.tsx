@@ -27,6 +27,7 @@ import {
 } from "../../api";
 import ProjectEditModal from "../Sidebar/ProjectEditModal";
 import DeleteBotModal from "../Sidebar/DeleteBotModal";
+import BotBrowserPanel from "../BotBrowserPanel";
 import Modal, { type ModalProps } from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
 import "./BotsPane.css";
@@ -83,7 +84,7 @@ export default function BotsPane({
   const [editId, setEditId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [messageHits, setMessageHits] = useState<SessionSearchResult[]>([]);
-  const [tab, setTab] = useState<"chats" | "activity">("chats");
+  const [tab, setTab] = useState<"chats" | "activity" | "browser">("chats");
   const [activity, setActivity] = useState<BotActivity[] | null>(null);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [cleanupConfirm, setCleanupConfirm] = useState<ModalProps | null>(null);
@@ -497,6 +498,12 @@ export default function BotsPane({
           >
             Activity
           </button>
+          <button
+            className={`bots-tab${tab === "browser" ? " bots-tab--active" : ""}`}
+            onClick={() => setTab("browser")}
+          >
+            Browser
+          </button>
         </div>
 
         {tab === "chats" ? (
@@ -575,7 +582,7 @@ export default function BotsPane({
                 ))}
             </div>
           </>
-        ) : (
+        ) : tab === "activity" ? (
           <div className="bots-session-list">
             {activity == null && <div className="bots-workspace-empty">Loading activity…</div>}
             {activity != null && activity.length === 0 && (
@@ -604,6 +611,8 @@ export default function BotsPane({
               </button>
             ))}
           </div>
+        ) : (
+          <BotBrowserPanel contextKey={`project:${selectedId}`} />
         )}
 
         {archivedSection}

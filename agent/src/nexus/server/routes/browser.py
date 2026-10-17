@@ -4,6 +4,7 @@
 ``GET  /browser/status?key=``          → one instance's status
 ``POST /browser/action``               → run an action (manual takeover etc.)
 ``GET  /browser/screenshot?key=``      → live PNG (captures fresh)
+``GET  /browser/stream?key=``          → SSE live view (screencast frames)
 ``POST /browser/stop``                 → kill one instance's Chrome
 
 When ``[browser] enabled = false`` the manager is never wired onto
@@ -13,10 +14,11 @@ from the registry).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ...browser.manager import ACTIONS, BrowserError, BrowserManager
@@ -102,6 +104,31 @@ async def browser_screenshot(request: Request, key: str = "main") -> FileRespons
     except BrowserError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/browser/stream")
+async def browser_stream(request: Request, key: str = "main") -> StreamingResponse:
+    """SSE live view of one context's browser (CDP screencast).
+
+    Events: ``frame`` (base64 JPEG), ``info`` (url/title), ``heartbeat``,
+    ``error`` (terminal — e.g. Chrome still starting; the client may
+    reconnect to retry). Watch-only by design: the desktop Chrome window
+    is the interaction surface.
+    """
+    manager = _manager(request)
+
+    async def gen():
+        try:
+            async for ev in manager.stream(key):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except BrowserError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/browser/stop")

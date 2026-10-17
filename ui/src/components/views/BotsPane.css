@@ -540,3 +540,68 @@ button.bots-meta-chip:hover {
   font-size: 11px;
   opacity: 0.6;
 }
+
+/* BotBrowserPanel — watch-only live view of the bot's managed Chrome. */
+.bot-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bot-browser-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.bot-browser-url {
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 6px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.bot-browser-view {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.bot-browser-view img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.bot-browser-error {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--bad);
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.bot-browser-sub {
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+.bot-browser-note {
+  font-size: 11px;
+  color: var(--fg-faint);
+}

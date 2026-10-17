@@ -68,3 +68,8 @@ export async function stopBrowser(key: string): Promise<{ key: string; stopped: 
 export function browserScreenshotUrl(key: string, ts: number): string {
   return `${BASE}/browser/screenshot?key=${encodeURIComponent(key)}&t=${ts}`;
 }
+
+/** SSE live-view stream URL (screencast frames; watch-only). */
+export function browserStreamUrl(key: string): string {
+  return `${BASE}/browser/stream?key=${encodeURIComponent(key)}`;
+}

@@ -30,7 +30,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,13 @@ WINDOW_H = 900
 PROBE_TIMEOUT = 1.5
 LAUNCH_POLL_INTERVAL = 0.25
 LAUNCH_TIMEOUT = 10.0
+# A cold Chrome (fresh profile, first exec of the app bundle, busy machine)
+# can outlive the in-turn wait without being dead: a background task keeps
+# probing for ADOPT_TIMEOUT and connects, so the next action self-heals onto
+# the SAME port instead of orphaning the Chrome and climbing the port ladder.
+ADOPT_TIMEOUT = 60.0
+ADOPT_POLL_INTERVAL = 1.0
+CONNECT_ATTEMPTS = 2
 CALL_TIMEOUT = 30.0
 NAVIGATE_POLL_INTERVAL = 0.25
 NAVIGATE_TIMEOUT = 10.0
@@ -51,6 +58,15 @@ WAIT_FOR_INTERVAL = 0.25
 CLICK_SETTLE_SECONDS = 0.6
 SCREENSHOT_RETENTION = 20
 MAX_PORTS_ABOVE_BASE = 64
+
+# Live-view stream (CDP Page.startScreencast → SSE). Frames are ack-paced:
+# Chrome withholds the next frame until the previous one is acknowledged, so
+# the cap is enforced by delaying the ack, never by dropping un-acked frames.
+STREAM_HEARTBEAT_SECONDS = 15.0
+STREAM_MIN_FRAME_INTERVAL = 0.25  # ~4 fps cap
+STREAM_MAX_WIDTH = 1280
+STREAM_MAX_HEIGHT = 800
+STREAM_JPEG_QUALITY = 60
 
 # Event sink signature: (context_key, event_payload_dict). Wired by the
 # server to publish SessionEvent(kind="browser_event") — the manager
@@ -60,6 +76,15 @@ EventSink = Callable[[str, dict[str, Any]], None]
 
 class BrowserError(RuntimeError):
     """A browser action failed. Rendered to the LLM as {ok: false, …}."""
+
+
+class BrowserStillStarting(BrowserError):
+    """Launch exceeded the in-turn wait without the child exiting.
+
+    The spawned Chrome may still be booting; a background adoption task
+    keeps probing and connects when it comes up. Retryable by contract —
+    callers should surface "retry shortly", not treat it as fatal.
+    """
 
 
 def find_chrome_binary() -> str | None:
@@ -163,6 +188,15 @@ class BrowserInstance:
         self._pending: dict[int, asyncio.Future] = {}
         self._next_id = 0
         self._lock = asyncio.Lock()
+        # our exec handle (None when probe-adopting an existing Chrome) —
+        # a fast exit means the per-profile singleton handed off to another
+        # process, which would otherwise hang the launch wait for nothing.
+        self._proc: subprocess.Popen | None = None
+        # background adoption task (set by the manager, cancelled in close()).
+        self.adopt_task: asyncio.Task | None = None
+        # CDP event fan-out: method name → subscriber queues (live stream).
+        self._event_subs: dict[str, set[asyncio.Queue]] = {}
+        self._screencast_on = False
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -186,12 +220,17 @@ class BrowserInstance:
             "about:blank",
         ]
         log.info("browser[%s]: launching %s on port %d", self.key, binary, self.port)
-        subprocess.Popen(  # noqa: S603 — fixed argv, discovered binary
+        self._proc = subprocess.Popen(  # noqa: S603 — fixed argv, discovered binary
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+
+    def proc_exited(self) -> bool:
+        """True when our exec'd Chrome has already terminated (singleton
+        handoff: the profile's existing Chrome absorbed us and we exited)."""
+        return self._proc is not None and self._proc.poll() is not None
 
     async def ensure(self) -> None:
         """Lazy connect with transparent reconnect. Safe to call per action."""
@@ -203,19 +242,54 @@ class BrowserInstance:
                 return
             await self._close_ws()
             if await _probe(self.port) is None:
+                if self.adopt_task and not self.adopt_task.done():
+                    # Adoption already owns this boot — exec'ing again would
+                    # singleton-handoff against the booting Chrome.
+                    raise BrowserStillStarting(
+                        f"Chrome on port {self.port} is still starting — "
+                        "retry in a few seconds"
+                    )
                 self._launch()
                 deadline = time.monotonic() + LAUNCH_TIMEOUT
                 while time.monotonic() < deadline:
                     await asyncio.sleep(LAUNCH_POLL_INTERVAL)
+                    if self.proc_exited():
+                        # The profile's singleton absorbed our exec — another
+                        # Chrome already runs on this user-data-dir (twin
+                        # daemon, manual launch). Fail fast, not after 10s.
+                        raise BrowserError(
+                            "Chrome exited immediately after launch — the "
+                            "profile is already in use by another Chrome "
+                            "process; stop it first"
+                        )
                     if await _probe(self.port) is not None:
                         break
                 else:
-                    raise BrowserError(
-                        f"Chrome did not expose its DevTools endpoint on port "
-                        f"{self.port} within {LAUNCH_TIMEOUT:.0f}s"
+                    # Still booting. The manager starts an adoption task;
+                    # the port is already persisted, so the next action
+                    # probes the SAME port and connects instead of
+                    # allocating a new one (which would singleton-handoff
+                    # against the booting Chrome and fail forever).
+                    raise BrowserStillStarting(
+                        f"Chrome on port {self.port} is still starting — "
+                        "retry in a few seconds"
                     )
-            target = await self._pick_target()
-            await self._connect(target)
+            await self._connect_with_retry()
+
+    async def _connect_with_retry(self) -> None:
+        """Pick a target + connect; one retry for the fresh-profile race
+        where /json/list briefly reports no pages mid-setup."""
+        last: BrowserError | None = None
+        for _ in range(CONNECT_ATTEMPTS):
+            try:
+                target = await self._pick_target()
+                await self._connect(target)
+                return
+            except BrowserError as exc:
+                last = exc
+                await self._close_ws()
+                await asyncio.sleep(0.5)
+        raise last if last is not None else BrowserError("connect failed")
 
     async def _pick_target(self) -> dict[str, Any]:
         """Prefer an about:blank page (avoids fighting a restored tab), else
@@ -257,6 +331,19 @@ class BrowserInstance:
         self._reader = asyncio.create_task(
             self._read_loop(ws), name=f"browser-cdp-reader[{self.key}]"
         )
+        if self._screencast_on:
+            # Reconnect dropped the page session — restart the cast on the
+            # new connection (outside the lock: start_screencast sends).
+            asyncio.create_task(
+                self._rearm_screencast(), name=f"browser-screencast-rearm[{self.key}]"
+            )
+
+    async def _rearm_screencast(self) -> None:
+        if self.ws_open() and self._screencast_on:
+            try:
+                await self.start_screencast()
+            except BrowserError:
+                log.debug("browser[%s]: screencast re-arm failed", self.key, exc_info=True)
 
     async def _read_loop(self, ws: Any) -> None:
         try:
@@ -267,6 +354,10 @@ class BrowserInstance:
                     fut = self._pending.pop(mid)
                     if not fut.done():
                         fut.set_result(data)
+                    continue
+                method = data.get("method")
+                if method:
+                    self._dispatch_event(method, data)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -278,6 +369,68 @@ class BrowserInstance:
             self._pending.clear()
             if self._ws is ws:
                 self._ws = None
+
+    # ── CDP event fan-out (live stream) ──────────────────────────────────────
+
+    def _dispatch_event(self, method: str, data: dict[str, Any]) -> None:
+        subs = self._event_subs.get(method)
+        if not subs:
+            return
+        for q in list(subs):
+            try:
+                q.put_nowait(data)
+            except asyncio.QueueFull:
+                # Slow consumer: keep the newest. Screencast is ack-paced so
+                # this should not fire; if it does, the stale frame is the
+                # one to drop — never the ack trigger.
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    q.put_nowait(data)
+                except asyncio.QueueFull:
+                    pass
+
+    def subscribe(self, methods: list[str]) -> asyncio.Queue:
+        """Receive CDP events (raw frames) on a bounded queue."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=16)
+        for m in methods:
+            self._event_subs.setdefault(m, set()).add(q)
+        self.last_active = time.monotonic()
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        for subs in self._event_subs.values():
+            subs.discard(q)
+
+    def screencast_subscribers(self) -> int:
+        return len(self._event_subs.get("Page.screencastFrame") or ())
+
+    async def start_screencast(self) -> None:
+        if self._screencast_on:
+            return
+        await self._send(
+            "Page.startScreencast",
+            {
+                "format": "jpeg",
+                "quality": STREAM_JPEG_QUALITY,
+                "maxWidth": STREAM_MAX_WIDTH,
+                "maxHeight": STREAM_MAX_HEIGHT,
+                "everyNthFrame": 1,
+            },
+        )
+        self._screencast_on = True
+
+    async def stop_screencast(self) -> None:
+        if not self._screencast_on:
+            return
+        self._screencast_on = False
+        if self.ws_open():
+            try:
+                await self._send("Page.stopScreencast")
+            except BrowserError:
+                pass
 
     async def _close_ws(self) -> None:
         reader, ws = self._reader, self._ws
@@ -292,6 +445,9 @@ class BrowserInstance:
                 pass
 
     async def close(self) -> None:
+        task, self.adopt_task = self.adopt_task, None
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
         async with self._lock:
             await self._close_ws()
 
@@ -594,6 +750,10 @@ class BrowserManager:
 
     async def _alloc_port(self) -> int:
         used = {inst.port for inst in self._instances.values()}
+        # Registry entries reserve their ports even when the Chrome is down:
+        # handing key B a port recorded for key A would let B's Chrome answer
+        # A's next probe — A would silently drive B's browser.
+        used |= {int(e.get("port") or 0) for e in self._load_registry().values()}
         for offset in range(1, MAX_PORTS_ABOVE_BASE + 1):
             port = self.base_port + offset
             if port in used:
@@ -607,28 +767,43 @@ class BrowserManager:
     async def ensure(self, key: str) -> BrowserInstance:
         async with self._ensure_lock:
             inst = self._instances.get(key)
-            if inst is not None:
-                return inst
-            registry = self._load_registry()
-            entry = registry.get(key) or {}
-            if key == "main":
-                port = self.base_port
-            else:
-                port = int(entry.get("port") or 0) or await self._alloc_port()
-            inst = BrowserInstance(
-                key=key,
-                port=port,
-                profile_dir=Path(entry.get("profile_dir") or self.profile_dir(key)),
-                shots_dir=self.shots_dir(key),
-            )
+            if inst is None:
+                registry = self._load_registry()
+                entry = registry.get(key) or {}
+                if key == "main":
+                    port = self.base_port
+                else:
+                    port = int(entry.get("port") or 0) or await self._alloc_port()
+                profile_dir = Path(entry.get("profile_dir") or self.profile_dir(key))
+                if key != "main":
+                    # Persist BEFORE launching: a launch that outlives the
+                    # in-turn wait leaves a booting Chrome on this port, and
+                    # every retry must land on the SAME port/profile pair —
+                    # a fresh port would exec a second Chrome against the
+                    # same user-data-dir, which the profile singleton
+                    # absorbs (instant exit) → permanent failure loop.
+                    registry[key] = {"port": port, "profile_dir": str(profile_dir)}
+                    self._registry = registry
+                    self._save_registry()
+                inst = BrowserInstance(
+                    key=key,
+                    port=port,
+                    profile_dir=profile_dir,
+                    shots_dir=self.shots_dir(key),
+                )
+                # Cache before the first ensure() so concurrent acts share
+                # one boot (and _alloc_port sees the port as taken).
+                self._instances[key] = inst
             try:
                 await inst.ensure()
-            except Exception:
+            except BrowserStillStarting:
+                # Late-booting Chrome — adopt it in the background so the
+                # next action (or the agent's retry) connects.
+                self._start_adoption(key, inst)
                 raise
-            registry[key] = {"port": port, "profile_dir": str(inst.profile_dir)}
-            self._registry = registry
-            self._save_registry()
-            self._instances[key] = inst
+            except BrowserError as exc:
+                log.warning("browser[%s]: ensure failed on port %d: %s", key, inst.port, exc)
+                raise
             self._start_reaper()
             return inst
 
@@ -661,19 +836,135 @@ class BrowserManager:
         except Exception:  # noqa: BLE001 — events are best-effort
             log.debug("browser: event sink failed", exc_info=True)
 
+    # ── background adoption of late-booting Chromes ──────────────────────────
+
+    def _start_adoption(self, key: str, inst: BrowserInstance) -> None:
+        if inst.adopt_task and not inst.adopt_task.done():
+            return
+        inst.adopt_task = asyncio.create_task(
+            self._adopt(key, inst), name=f"browser-adopt[{key}]"
+        )
+
+    async def _adopt(self, key: str, inst: BrowserInstance) -> None:
+        """Keep probing a still-booting Chrome and connect when it's up.
+
+        Without this, a Chrome that missed the in-turn window becomes an
+        untracked orphan holding the port — invisible to the manager and
+        sitting on the user's desktop forever.
+        """
+        deadline = time.monotonic() + ADOPT_TIMEOUT
+        while time.monotonic() < deadline:
+            await asyncio.sleep(ADOPT_POLL_INTERVAL)
+            if await _probe(inst.port) is None:
+                if inst.proc_exited():
+                    break  # child died; nothing to adopt
+                continue
+            try:
+                async with inst._lock:
+                    if _ws_open(inst._ws):
+                        return
+                    await inst._close_ws()
+                    await inst._connect_with_retry()
+                log.info("browser[%s]: adopted late-starting Chrome on port %d", key, inst.port)
+                self._emit(key, {"action": "adopted", "port": inst.port})
+                return
+            except BrowserError:
+                continue
+        log.warning(
+            "browser[%s]: no DevTools endpoint on port %d within %.0fs — resetting",
+            key, inst.port, ADOPT_TIMEOUT,
+        )
+        await self._reset_instance(key, inst)
+
+    async def _reset_instance(self, key: str, inst: BrowserInstance) -> None:
+        """Drop an unusable instance + kill its profile's processes so the
+        next attempt starts clean (no orphan holding the profile/port)."""
+        if self._instances.get(key) is inst:
+            self._instances.pop(key, None)
+        await inst.close()
+        profile = str(inst.profile_dir)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pkill", "-f", "--", f"--user-data-dir={profile}",
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            await proc.wait()
+        except FileNotFoundError:
+            pass
+        registry = self._load_registry()
+        if key != "main":  # main's port is fixed, not allocated
+            registry.pop(key, None)
+            self._registry = registry
+            self._save_registry()
+
     async def screenshot(self, key: str) -> Path:
         result = await self.act(key, "screenshot", {})
         return Path(result["screenshot"])
 
+    async def stream(self, key: str) -> AsyncIterator[dict[str, Any]]:
+        """Live view for one context: SSE-ready event dicts.
+
+        Yields ``{"type": "frame", "data": <base64 jpeg>}`` from CDP
+        screencast (ack-paced, ~4 fps cap), ``{"type": "info", url/title}``
+        periodically, and heartbeats. Watchers count as activity for the
+        idle reaper. The generator ends (route closes the SSE stream) when
+        Chrome dies; the client reconnects.
+        """
+        inst = await self.ensure(key)
+        q = inst.subscribe(["Page.screencastFrame"])
+        last_emit = 0.0
+        frames = 0
+        try:
+            await inst.start_screencast()
+            if inst.last_page:
+                yield {"type": "info", **inst.last_page}
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=STREAM_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    inst.last_active = time.monotonic()
+                    yield {"type": "heartbeat"}
+                    continue
+                params = ev.get("params") or {}
+                data = params.get("data")
+                session_id = params.get("sessionId")
+                if not data or session_id is None:
+                    continue
+                # Throttle by delaying the ack — Chrome withholds the next
+                # frame until this one is acknowledged, so pacing here caps
+                # the rate without ever dropping an un-acked frame.
+                delay = STREAM_MIN_FRAME_INTERVAL - (time.monotonic() - last_emit)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                try:
+                    await inst._send("Page.screencastFrameAck", {"sessionId": session_id})
+                except BrowserError:
+                    continue  # reconnect in flight; the re-armed cast resyncs
+                last_emit = time.monotonic()
+                inst.last_active = last_emit
+                frames += 1
+                yield {"type": "frame", "data": data}
+                if frames % 8 == 0 and inst.last_page:
+                    yield {"type": "info", **inst.last_page}
+        finally:
+            inst.unsubscribe(q)
+            if inst.screencast_subscribers() == 0:
+                await inst.stop_screencast()
+
     async def status(self, key: str) -> dict[str, Any]:
         inst = self._instances.get(key)
         if inst is not None:
+            connected = inst.ws_open()
+            # A cached-but-disconnected instance may be mid-boot (adoption
+            # pending) — probe before claiming "not running".
+            running = connected or await _probe(inst.port) is not None
             return {
                 "key": key,
-                "connected": inst.ws_open(),
-                "running": True,
+                "connected": connected,
+                "running": running,
                 "port": inst.port,
-                **inst.last_page,
+                **({"url": inst.last_page.get("url"), "title": inst.last_page.get("title")}
+                   if inst.last_page else {}),
             }
         entry = self._load_registry().get(key)
         if key == "main":

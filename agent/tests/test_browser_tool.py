@@ -22,6 +22,7 @@ from nexus.browser.manager import (
     BrowserError,
     BrowserInstance,
     BrowserManager,
+    BrowserStillStarting,
     _prune_screenshots,
     _sanitize,
 )
@@ -40,6 +41,9 @@ class StubInstance:
         self.calls: list[tuple[str, dict]] = []
         self.last_active = time.monotonic()
         self.last_page: dict = {}
+
+    async def ensure(self) -> None:
+        return None
 
     async def act(self, action: str, args: dict) -> dict:
         self.calls.append((action, dict(args)))
@@ -324,3 +328,254 @@ def test_find_chrome_binary_returns_path_or_none() -> None:
 
     result = find_chrome_binary()
     assert result is None or Path(result).is_file()
+
+
+# ── multi-bot boot reliability (regression: the port ladder) ────────────────
+
+
+class FakeProc:
+    def __init__(self, exited: bool = False) -> None:
+        self._exited = exited
+
+    def poll(self) -> int | None:
+        return 0 if self._exited else None
+
+
+def _no_launch(self) -> None:  # noqa: ANN001 — stub
+    self._proc = FakeProc(exited=False)  # booting forever, never exits
+
+
+async def test_launch_timeout_persists_port_and_caches_instance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The regression: a launch that outlives the in-turn wait must leave
+    the port persisted + the instance cached, so retries land on the SAME
+    port (old behavior allocated a new port, exec'd a second Chrome
+    against the same profile → singleton handoff → permanent failure)."""
+    import nexus.browser.manager as bm
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    async def dead_probe(port: int, timeout: float = 1.5):
+        return None
+
+    monkeypatch.setattr(bm, "_probe", dead_probe)
+    monkeypatch.setattr(bm.BrowserInstance, "_launch", _no_launch)
+    monkeypatch.setattr(bm, "LAUNCH_TIMEOUT", 0.3)
+    monkeypatch.setattr(bm, "LAUNCH_POLL_INTERVAL", 0.05)
+    monkeypatch.setattr(bm, "ADOPT_TIMEOUT", 0.2)
+    monkeypatch.setattr(bm, "ADOPT_POLL_INTERVAL", 0.05)
+
+    resets: list[str] = []
+
+    async def record_reset(self, key: str, inst) -> None:  # noqa: ANN001 — stub
+        resets.append(key)
+
+    monkeypatch.setattr(BrowserManager, "_reset_instance", record_reset)
+
+    alloc_calls = 0
+    orig_alloc = BrowserManager._alloc_port
+
+    async def counting_alloc(self: BrowserManager) -> int:
+        nonlocal alloc_calls
+        alloc_calls += 1
+        return await orig_alloc(self)
+
+    monkeypatch.setattr(BrowserManager, "_alloc_port", counting_alloc)
+
+    manager = BrowserManager(idle_shutdown_minutes=0)
+    try:
+        await manager.ensure("project:p1")
+        raise AssertionError("expected BrowserStillStarting")
+    except BrowserStillStarting:
+        pass
+
+    # Port persisted BEFORE launch success, instance cached for retries.
+    entry = manager._load_registry().get("project:p1")
+    assert entry and entry["port"] == manager.base_port + 1
+    assert "project:p1" in manager._instances
+    port1 = manager._instances["project:p1"].port
+
+    # Retry while adoption is in flight: no new port, no second exec.
+    try:
+        await manager.ensure("project:p1")
+        raise AssertionError("expected BrowserStillStarting")
+    except BrowserStillStarting:
+        pass
+    assert alloc_calls == 1
+    assert manager._instances["project:p1"].port == port1
+    assert entry == manager._load_registry().get("project:p1")
+
+    # Let the adoption task finish its window: probe stays dead → it gives
+    # up and resets the key (clean slate for the next attempt).
+    inst = manager._instances.get("project:p1")
+    if inst and inst.adopt_task:
+        await asyncio.wait_for(inst.adopt_task, timeout=2)
+    assert resets == ["project:p1"]
+
+
+async def test_second_bot_gets_its_own_port_and_instance(tmp_path: Path, monkeypatch) -> None:
+    """Two bots booted concurrently: distinct ports, distinct instances,
+    both registered — the original 'second bot fails' scenario."""
+    import nexus.browser.manager as bm
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    launched: set[int] = set()
+
+    async def probe(port: int, timeout: float = 1.5):
+        return {"Browser": "Chrome/155"} if port in launched else None
+
+    monkeypatch.setattr(bm, "_probe", probe)
+
+    def launch(self) -> None:  # noqa: ANN001 — stub
+        launched.add(self.port)
+
+    monkeypatch.setattr(bm.BrowserInstance, "_launch", launch)
+
+    async def connect_ok(self) -> None:  # noqa: ANN001 — stub
+        return None
+
+    monkeypatch.setattr(bm.BrowserInstance, "_connect_with_retry", connect_ok)
+
+    manager = BrowserManager(idle_shutdown_minutes=0)
+    a = await manager.ensure("project:a")
+    b = await manager.ensure("project:b")
+    assert a.port != b.port
+    assert manager._instances["project:a"] is a
+    assert manager._instances["project:b"] is b
+    registry = manager._load_registry()
+    assert registry["project:a"]["port"] == a.port
+    assert registry["project:b"]["port"] == b.port
+
+
+async def test_singleton_handoff_fails_fast(tmp_path: Path, monkeypatch) -> None:
+    """A child that exits immediately (profile absorbed by an existing
+    Chrome) must fail fast with a clear error, not after the full wait."""
+    import nexus.browser.manager as bm
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(bm, "LAUNCH_POLL_INTERVAL", 0.05)
+
+    async def dead_probe(port: int, timeout: float = 1.5):
+        return None
+
+    monkeypatch.setattr(bm, "_probe", dead_probe)
+
+    def launch(self) -> None:  # noqa: ANN001 — stub
+        self._proc = FakeProc(exited=True)  # singleton handoff: instant exit
+
+    monkeypatch.setattr(bm.BrowserInstance, "_launch", launch)
+
+    inst = BrowserInstance(
+        key="project:p1", port=9230,
+        profile_dir=tmp_path / "p1", shots_dir=tmp_path / "s1",
+    )
+    try:
+        await inst.ensure()
+        raise AssertionError("expected BrowserError")
+    except BrowserStillStarting:
+        raise AssertionError("handoff must fail fast, not report still-starting")
+    except BrowserError as exc:
+        assert "already in use" in str(exc)
+
+
+def test_alloc_port_skips_registry_ports(tmp_path: Path, monkeypatch) -> None:
+    """Alloc must not hand key B a port recorded for key A (A's next probe
+    would find B's Chrome and drive it)."""
+    import nexus.browser.manager as bm
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    async def dead_probe(port: int, timeout: float = 1.5):
+        return None
+
+    monkeypatch.setattr(bm, "_probe", dead_probe)
+    manager = BrowserManager()
+    manager._root.mkdir(parents=True, exist_ok=True)
+    manager._registry_path.write_text(json.dumps({
+        "project:a": {"port": manager.base_port + 5, "profile_dir": "/tmp/a"},
+    }))
+    port = asyncio.run(manager._alloc_port())
+    assert port == manager.base_port + 1  # skipped over 9228 (base+5)
+
+
+# ── CDP event fan-out + live stream ─────────────────────────────────────────
+
+
+async def test_event_dispatch_reaches_subscriber() -> None:
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/x"), shots_dir=Path("/tmp/y")
+    )
+    q = inst.subscribe(["Page.screencastFrame"])
+    inst._dispatch_event("Page.screencastFrame", {
+        "method": "Page.screencastFrame",
+        "params": {"data": "abc", "sessionId": 1},
+    })
+    inst._dispatch_event("Page.unrelated", {"method": "Page.unrelated"})
+    assert q.get_nowait()["params"]["data"] == "abc"
+    assert q.qsize() == 0  # unsubscribed methods never enqueued
+    inst.unsubscribe(q)
+    inst._dispatch_event("Page.screencastFrame", {
+        "method": "Page.screencastFrame", "params": {"data": "late", "sessionId": 1}
+    })
+    assert q.qsize() == 0
+    assert inst.screencast_subscribers() == 0
+
+
+async def test_stream_yields_frames_and_acks(tmp_path: Path, monkeypatch) -> None:
+    """manager.stream: buffered screencast frames come out as SSE dicts,
+    each acked; the cast stops when the last subscriber leaves."""
+    import nexus.browser.manager as bm
+
+    monkeypatch.setattr(bm, "STREAM_MIN_FRAME_INTERVAL", 0.0)
+    monkeypatch.setattr(bm, "STREAM_HEARTBEAT_SECONDS", 5.0)
+
+    inst = BrowserInstance(
+        key="main", port=9223,
+        profile_dir=tmp_path / "p", shots_dir=tmp_path / "s",
+    )
+    sent: list[tuple[str, dict | None]] = []
+
+    async def fake_send(method: str, params: dict | None = None, **kw) -> dict:
+        sent.append((method, params))
+        return {}
+
+    inst._send = fake_send  # type: ignore[method-assign]
+
+    manager = BrowserManager()
+
+    async def ensure_inst(key: str) -> BrowserInstance:
+        return inst
+
+    manager.ensure = ensure_inst  # type: ignore[method-assign]
+
+    async def dispatcher() -> None:
+        # Wait for the stream to subscribe, then push three frames.
+        await asyncio.sleep(0.05)
+        for i in range(3):
+            inst._dispatch_event("Page.screencastFrame", {
+                "method": "Page.screencastFrame",
+                "params": {"data": f"frm{i}", "sessionId": "s1"},
+            })
+
+    task = asyncio.create_task(dispatcher())
+
+    out = []
+    gen = manager.stream("main")
+    async for ev in gen:
+        out.append(ev)
+        if len([e for e in out if e["type"] == "frame"]) == 3:
+            break
+    await gen.aclose()
+    await task
+
+    frames = [e for e in out if e["type"] == "frame"]
+    assert [f["data"] for f in frames] == ["frm0", "frm1", "frm2"]
+    acks = [p for m, p in sent if m == "Page.screencastFrameAck"]
+    assert acks == [{"sessionId": "s1"}] * 3
+    # The cast started with the stream and stopped with it (no subscribers
+    # left; with no open ws the stop is flag-only — the re-arm covers the
+    # next connection).
+    assert sent[0][0] == "Page.startScreencast"
+    assert inst._screencast_on is False
+    assert inst.screencast_subscribers() == 0
