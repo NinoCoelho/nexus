@@ -94,7 +94,12 @@ jobs:
           if [[ -n "$NEXUS_SIGN_IDENTITY" && -n "$NOTARY_APPLE_ID" ]]; then
             ARGS+=(--notarize)
           fi
-          bash packaging/build.sh "${ARGS[@]}"
+          if ! bash packaging/build.sh "${ARGS[@]}"; then
+            # Fallback: retry signed-but-unnotarized so a notary outage (e.g.
+            # expired Apple agreement → 403) never ships a macOS-less release.
+            echo '::warning::Notarization failed — retrying signed but unnotarized'
+            bash packaging/build.sh
+          fi
 
       - name: Zip Nexus.app
         working-directory: nexus/dist
