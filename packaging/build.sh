@@ -311,7 +311,10 @@ m = re.search(r"version\s*=\s*\"([^\"]+)\"", open(sys.argv[1]).read())
 print(m.group(1) if m else "0.0.0")
 ' "$REPO_ROOT/agent/pyproject.toml")"
 echo "    version: $NEXUS_VERSION"
-sed -i '' "s|<string>0.1.0</string>|<string>${NEXUS_VERSION}</string>|" "$PACKAGING/macos/Info.plist"
+# plutil is fail-loud and doesn't depend on the template's placeholder value
+# staying in sync (the old <string>0.1.0</string> sed stopped matching when the
+# template drifted to 0.10.1, silently stamping every build with a stale version).
+plutil -replace CFBundleShortVersionString -string "$NEXUS_VERSION" "$PACKAGING/macos/Info.plist"
 cp "$PACKAGING/macos/Info.plist" "$APP/Contents/Info.plist"
 cp "$PACKAGING/macos/Nexus.icns" "$APP/Contents/Resources/Nexus.icns"
 
