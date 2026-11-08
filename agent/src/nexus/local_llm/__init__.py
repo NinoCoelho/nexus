@@ -12,11 +12,13 @@ from .manager import (
     is_running,
     list_running,
     remove_from_config,
+    slug_for,
     slugify,
     start,
     stop,
     stop_all,
 )
+from .shards import group_files, parse_shard, shard_base
 
 __all__ = [
     "probe",
@@ -34,7 +36,11 @@ __all__ = [
     "is_running",
     "list_running",
     "remove_from_config",
+    "slug_for",
     "slugify",
+    "group_files",
+    "parse_shard",
+    "shard_base",
     "start",
     "stop",
     "stop_all",

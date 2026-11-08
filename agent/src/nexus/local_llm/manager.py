@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .shards import expected_parts, parse_shard, shard_base
+
 log = logging.getLogger(__name__)
 
 
@@ -336,6 +338,16 @@ def slugify(name: str) -> str:
     return s.strip("-") or "model"
 
 
+def slug_for(filename: str) -> str:
+    """Slug for a GGUF filename, shard-aware.
+
+    Sharded models slug from the group base so the provider id stays clean
+    (``local-qwen3-coder-next-q5_k_m`` instead of …``-00001-of-00004``) and
+    stays stable regardless of which part file it was derived from.
+    """
+    return slugify(shard_base(filename))
+
+
 def is_running(filename: str) -> bool:
     """Return True iff a llama-server is currently up for this GGUF filename."""
     h = _servers.get(filename)
@@ -433,6 +445,32 @@ def _parse_build_version(binary: Path) -> int:
     return ver
 
 
+def _validate_shard_set(model_path: Path) -> None:
+    """Ensure ``model_path`` is a loadable (complete, first) shard of its set.
+
+    llama.cpp loads part 1 and stitches the remaining parts from the same
+    directory; a missing middle part aborts the load only after a long
+    startup. Fail fast instead, naming the missing pieces.
+    """
+    parsed = parse_shard(model_path.name)
+    if parsed is None:
+        return
+    _base, index, count = parsed
+    parts = expected_parts(model_path.name) or []
+    if index != 1:
+        raise RuntimeError(
+            f"{model_path.name} is part {index} of {count} — a sharded model "
+            f"must be started from its first part: {parts[0] if parts else model_path.name}"
+        )
+    missing = [p for p in parts if not (model_path.parent / p).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"Incomplete sharded model: {count} parts expected, missing "
+            f"{', '.join(missing)}. Download the remaining parts into the same "
+            f"folder ({model_path.parent})."
+        )
+
+
 def start(
     model_path: Path,
     ctx_size: int = 16384,
@@ -469,8 +507,10 @@ def start(
             "llama.cpp, or place the binary under ~/.nexus/llama/.",
         )
 
+    _validate_shard_set(model_path)
+
     port = _pick_free_port()
-    slug = slugify(model_path.stem)
+    slug = slug_for(model_path.name)
     is_emb = is_embedding_model(model_path)
 
     mtp_layers = _gguf_mtp_draft_layers(model_path) if not is_emb else 0
@@ -952,7 +992,14 @@ def restart_local_models(models_dir: Path | None = None) -> int:
         if mdir.is_dir()
         else []
     )
-    by_slug = {slugify(p.stem): p for p in ggufs}
+    # Sharded sets map to one base slug, keyed by their first part;
+    # parts 2..N are covered by whichever part-1 file sorts under the base.
+    by_slug: dict[str, Path] = {}
+    for p in ggufs:
+        parsed = parse_shard(p.name)
+        if parsed is not None and parsed[1] != 1:
+            continue
+        by_slug.setdefault(slug_for(p.name), p)
 
     started = 0
     for slug, ctx, model_spec_type, model_spec_n in targets:

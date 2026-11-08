@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ...browser.manager import ACTIONS, BrowserError, BrowserManager
+from ...browser.manager import ACTIONS, CONTROL_ACTIONS, BrowserError, BrowserManager
 
 router = APIRouter()
 
@@ -42,6 +42,12 @@ class BrowserActionBody(BaseModel):
     text: str | None = None
     x: float | None = None
     y: float | None = None
+    # Normalized (0..1) viewport fractions — the remote-control coordinate
+    # space (see BrowserInstance._act_tap).
+    x_norm: float | None = None
+    y_norm: float | None = None
+    # Special key name for action="key" (enter/backspace/arrowup/…).
+    key_name: str | None = None
     delta_y: float | None = None
     expression: str | None = None
     timeout_seconds: float | None = None
@@ -59,6 +65,30 @@ def _check_action(action: str) -> None:
         )
 
 
+def _require_remote_control(request: Request, action: str) -> None:
+    """Gate state-changing actions from non-loopback clients.
+
+    The live stream stays watch-only; ``POST /browser/action`` is the
+    sanctioned control channel for paired native clients — but only when
+    ``[browser].remote_control`` is opted in. Loopback clients (the desktop
+    UI, CLI) are never restricted.
+    """
+    if action not in CONTROL_ACTIONS:
+        return
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        return
+    cfg = request.app.state.mutable_state["cfg"]
+    if not getattr(getattr(cfg, "browser", None), "remote_control", False):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "remote browser control is disabled on this server — enable it "
+                "with [browser] remote_control = true in ~/.nexus/config.toml"
+            ),
+        )
+
+
 @router.get("/browser/instances")
 async def browser_instances(request: Request) -> list[dict[str, Any]]:
     return await _manager(request).list_instances()
@@ -72,6 +102,7 @@ async def browser_status(request: Request, key: str = "main") -> dict[str, Any]:
 @router.post("/browser/action")
 async def browser_action(request: Request, body: BrowserActionBody) -> dict[str, Any]:
     _check_action(body.action)
+    _require_remote_control(request, body.action)
     args = {
         k: v
         for k, v in {
@@ -80,6 +111,9 @@ async def browser_action(request: Request, body: BrowserActionBody) -> dict[str,
             "text": body.text,
             "x": body.x,
             "y": body.y,
+            "x_norm": body.x_norm,
+            "y_norm": body.y_norm,
+            "key": body.key_name,
             "delta_y": body.delta_y,
             "expression": body.expression,
             "timeout_seconds": body.timeout_seconds,
@@ -110,10 +144,13 @@ async def browser_screenshot(request: Request, key: str = "main") -> FileRespons
 async def browser_stream(request: Request, key: str = "main") -> StreamingResponse:
     """SSE live view of one context's browser (CDP screencast).
 
-    Events: ``frame`` (base64 JPEG), ``info`` (url/title), ``heartbeat``,
-    ``error`` (terminal — e.g. Chrome still starting; the client may
-    reconnect to retry). Watch-only by design: the desktop Chrome window
-    is the interaction surface.
+    Events: ``frame`` (base64 JPEG), ``info`` (url/title + viewport
+    width/height for remote tap mapping), ``heartbeat``, ``error``
+    (terminal — e.g. Chrome still starting; the client may reconnect to
+    retry). The stream itself stays watch-only by design; interaction goes
+    through ``POST /browser/action`` (``tap``/``scroll``/``type``/``key``),
+    which loopback may always use and remote clients only with
+    ``[browser].remote_control``.
     """
     manager = _manager(request)
 
@@ -133,4 +170,6 @@ async def browser_stream(request: Request, key: str = "main") -> StreamingRespon
 
 @router.post("/browser/stop")
 async def browser_stop(request: Request, body: BrowserStopBody) -> dict[str, Any]:
+    # Killing a bot's browser is a control action — same remote gate.
+    _require_remote_control(request, "click")
     return await _manager(request).stop(body.key)

@@ -26,7 +26,7 @@ export interface ChatResponse {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; args?: unknown; result_preview?: string; call_id?: string }
+  | { type: "tool"; name: string; args?: unknown; result_preview?: string; result?: string; call_id?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
   | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
@@ -173,6 +173,7 @@ async function consumeSSEFrames(
             name: parsed.name as string,
             args: parsed.args,
             result_preview: parsed.result_preview as string | undefined,
+            result: parsed.result as string | undefined,
             call_id: parsed.call_id as string | undefined,
           });
         } else if (eventName === "done") {
@@ -444,7 +445,7 @@ export type SessionEvent =
   | { kind: "iter"; data: { n: number } }
   | { kind: "delta"; data: { text: string } }
   | { kind: "tool_call"; data: { name: string; args: unknown } }
-  | { kind: "tool_result"; data: { name: string; preview: string } }
+  | { kind: "tool_result"; data: { name: string; preview?: string; result_preview?: string; result?: string } }
   | { kind: "reply"; data: { text: string } }
   | { kind: "terminal_output"; data: { stdout: string; stderr: string; call_id: string } }
   | { kind: "user_request"; data: UserRequestPayload }

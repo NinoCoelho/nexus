@@ -602,24 +602,66 @@ class PubSubMixin:
         self._hitl_db().commit()
         return (cur.rowcount or 0) > 0
 
+    # ── APNs devices (native iOS app) ─────────────────────────────────────
+
+    def list_apns_devices(self) -> list[dict[str, Any]]:
+        cur = self._hitl_db().execute(
+            "SELECT token, bundle_id, environment FROM apns_devices"
+        )
+        return [
+            {"token": r[0], "bundle_id": r[1], "environment": r[2]}
+            for r in cur.fetchall()
+        ]
+
+    def upsert_apns_device(
+        self,
+        *,
+        token: str,
+        bundle_id: str | None = None,
+        environment: str = "production",
+    ) -> None:
+        self._hitl_db().execute(
+            "INSERT INTO apns_devices (token, bundle_id, environment) VALUES (?, ?, ?) "
+            "ON CONFLICT(token) DO UPDATE SET bundle_id=excluded.bundle_id, "
+            "environment=excluded.environment, "
+            "last_seen_at=CURRENT_TIMESTAMP",
+            (token, bundle_id, environment),
+        )
+        self._hitl_db().commit()
+
+    def delete_apns_device(self, token: str) -> bool:
+        cur = self._hitl_db().execute("DELETE FROM apns_devices WHERE token=?", (token,))
+        self._hitl_db().commit()
+        return (cur.rowcount or 0) > 0
+
     def _schedule_push(self, session_id: str, data: dict[str, Any]) -> None:
         try:
+            from ...push import apns as push_apns
             from ...push import sender as push_sender
         except Exception:  # noqa: BLE001
             return
-        if not push_sender.is_configured():
+        if not push_sender.is_configured() and not push_apns.is_configured():
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # publish called outside a loop (test/sync context)
-        loop.create_task(
-            push_sender.fan_out(
-                store=self,
-                session_id=session_id,
-                request_data=data,
+        if push_sender.is_configured():
+            loop.create_task(
+                push_sender.fan_out(
+                    store=self,
+                    session_id=session_id,
+                    request_data=data,
+                )
             )
-        )
+        if push_apns.is_configured():
+            loop.create_task(
+                push_apns.fan_out_apns(
+                    store=self,
+                    session_id=session_id,
+                    request_data=data,
+                )
+            )
 
     async def subscribe(self, session_id: str) -> AsyncIterator[SessionEvent]:
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)

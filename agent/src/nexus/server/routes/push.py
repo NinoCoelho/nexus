@@ -1,6 +1,6 @@
-"""Web Push subscription management.
+"""Push subscription management (Web Push + APNs).
 
-Three endpoints for the browser service worker:
+Browser service-worker endpoints:
 
 * ``GET /push/vapid-public-key`` — public key the SW needs to call
   ``pushManager.subscribe``.
@@ -9,6 +9,14 @@ Three endpoints for the browser service worker:
   to it later.
 * ``DELETE /push/subscribe`` — removes a subscription (called from the
   SW on ``pushsubscriptionchange`` or when permission is revoked).
+
+Native iOS app (APNs):
+
+* ``POST /push/apns/register`` — upserts the Apple-issued device token.
+  The app re-registers on every launch (tokens rotate); delivery only
+  happens when ``[push].apns`` is fully configured server-side.
+* ``DELETE /push/apns/register`` — removes the device token (logout /
+  notifications off).
 """
 
 from __future__ import annotations
@@ -38,6 +46,18 @@ class SubscribePayload(BaseModel):
 
 class UnsubscribePayload(BaseModel):
     endpoint: str = Field(min_length=10)
+
+
+class ApnsRegisterPayload(BaseModel):
+    # 64-hex (or longer, future-proof) Apple device token from
+    # UIApplication didRegisterForRemoteNotifications / modern equivalent.
+    token: str = Field(min_length=32)
+    bundle_id: str | None = None
+    environment: str = Field(default="production", pattern="^(production|sandbox)$")
+
+
+class ApnsUnregisterPayload(BaseModel):
+    token: str = Field(min_length=32)
 
 
 @router.get("/vapid-public-key")
@@ -70,4 +90,32 @@ def unsubscribe(
     removed = store.delete_push_subscription(payload.endpoint)
     if not removed:
         raise HTTPException(status_code=404, detail="subscription not found")
+    return {"ok": True}
+
+
+@router.post("/apns/register")
+def apns_register(
+    payload: ApnsRegisterPayload,
+    store: SessionStore = Depends(get_sessions),
+) -> dict[str, bool]:
+    store.upsert_apns_device(
+        token=payload.token,
+        bundle_id=payload.bundle_id,
+        environment=payload.environment,
+    )
+    # Surface whether the server can actually deliver — lets the app show
+    # "notifications need server setup" instead of failing silently.
+    from ...push import apns as push_apns
+
+    return {"ok": True, "deliverable": push_apns.is_configured()}
+
+
+@router.delete("/apns/register")
+def apns_unregister(
+    payload: ApnsUnregisterPayload,
+    store: SessionStore = Depends(get_sessions),
+) -> dict[str, bool]:
+    removed = store.delete_apns_device(payload.token)
+    if not removed:
+        raise HTTPException(status_code=404, detail="device not registered")
     return {"ok": True}

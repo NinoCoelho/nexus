@@ -45,6 +45,10 @@ export default function LocalModels({ onRefresh }: Props) {
   const [confirmModal, setConfirmModal] = useState<ModalProps | null>(null);
   const [binStatus, setBinStatus] = useState<BinaryStatus | null>(null);
   const [binUpdating, setBinUpdating] = useState(false);
+  // Tasks the user asked to cancel; the server confirms within ~1s (watchdog
+  // aborts the transfer). Kept client-side so the row shows "Cancelling…"
+  // instead of vanishing and reappearing on the next poll.
+  const [cancelling, setCancelling] = useState<Set<string>>(new Set());
 
   const refreshLocal = useCallback(async () => {
     try {
@@ -114,15 +118,30 @@ export default function LocalModels({ onRefresh }: Props) {
   }, [refreshLocal, onRefresh, toast]);
 
   const onCancelDownload = useCallback(async (taskId: string, filename: string) => {
-    setDownloads((prev) => prev.filter((t) => t.task_id !== taskId));
+    setCancelling((prev) => new Set(prev).add(taskId));
     try {
       await cancelDownload(taskId);
-      toast.info(`Cancelled ${filename}`);
+      toast.info(`Cancelling ${filename}…`);
     } catch (e) {
+      // 404 = already finished server-side; stop showing "Cancelling…".
+      setCancelling((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
       toast.error(e instanceof Error ? e.message : "Cancel failed");
       refreshLocal();
     }
   }, [refreshLocal, toast]);
+
+  // Forget cancel markers for tasks the server no longer reports.
+  useEffect(() => {
+    setCancelling((prev) => {
+      const live = new Set(downloads.map((t) => t.task_id));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [downloads]);
 
   const onStopAll = useCallback(async () => {
     setBusy("__stop_all__");
@@ -142,10 +161,11 @@ export default function LocalModels({ onRefresh }: Props) {
     }
   }, [refreshLocal, onRefresh, toast]);
 
-  const onDelete = useCallback((filename: string, isRunning: boolean) => {
+  const onDelete = useCallback((filename: string, isRunning: boolean, partCount = 1) => {
+    const partNote = partCount > 1 ? ` All ${partCount} parts will be deleted.` : "";
     const message = isRunning
-      ? `Stop and remove ${filename}? The model will be stopped and the file deleted from disk.`
-      : `Remove ${filename}? The file will be deleted from disk.`;
+      ? `Stop and remove ${filename}? The model will be stopped and its file(s) deleted from disk.${partNote}`
+      : `Remove ${filename}? The file(s) will be deleted from disk.${partNote}`;
     setConfirmModal({
       kind: "confirm",
       title: "Remove model",
@@ -267,12 +287,19 @@ export default function LocalModels({ onRefresh }: Props) {
               <span className="local-row-name">{m.filename}</span>
               <span className="local-row-meta">
                 {fmtBytes(m.size_bytes)}
+                {m.is_shard_group ? ` · ${m.parts?.length ?? "?"} parts` : ""}
                 {m.is_running ? ` · running on :${m.port}` : " · stopped"}
               </span>
               {m.has_mamba_layers && !m.is_running && (
                 <span className="local-row-warn">
                   Hybrid Mamba model — not supported by this llama.cpp build.
                   Use a standard (non-UD) variant.
+                </span>
+              )}
+              {m.is_shard_group && m.complete === false && (
+                <span className="local-row-warn">
+                  Incomplete sharded model — some parts are missing.
+                  Re-download the full set from Hugging Face.
                 </span>
               )}
             </div>
@@ -289,9 +316,17 @@ export default function LocalModels({ onRefresh }: Props) {
               ) : (
                 <button
                   className="settings-btn"
-                  disabled={busy === m.filename || !!m.has_mamba_layers}
+                  disabled={
+                    busy === m.filename || !!m.has_mamba_layers || m.complete === false
+                  }
                   onClick={() => onStart(m.filename)}
-                  title={m.has_mamba_layers ? "Not compatible with llama.cpp" : "Spin up llama-server and register for chat / extraction"}
+                  title={
+                    m.has_mamba_layers
+                      ? "Not compatible with llama.cpp"
+                      : m.complete === false
+                        ? "Some parts of this sharded model are missing"
+                        : "Spin up llama-server and register for chat / extraction"
+                  }
                 >
                   Start
                 </button>
@@ -299,7 +334,7 @@ export default function LocalModels({ onRefresh }: Props) {
               <button
                 className="settings-btn settings-btn--danger"
                 disabled={busy === m.filename || busy === "__stop_all__"}
-                onClick={() => onDelete(m.filename, m.is_running)}
+                onClick={() => onDelete(m.filename, m.is_running, m.parts?.length ?? 1)}
               >
                 Remove
               </button>
@@ -308,12 +343,16 @@ export default function LocalModels({ onRefresh }: Props) {
         ))}
       </div>
 
-      {downloads.filter((t) => t.status === "downloading" || t.status === "pending").length > 0 && (
-        <div className="local-downloads">
-          <div className="local-subhead">Downloading</div>
-          {downloads
-            .filter((t) => t.status === "downloading" || t.status === "pending")
-            .map((t) => {
+      {(() => {
+        const active = downloads.filter(
+          (t) => t.status === "downloading" || t.status === "pending" || cancelling.has(t.task_id),
+        );
+        if (active.length === 0) return null;
+        return (
+          <div className="local-downloads">
+            <div className="local-subhead">Downloading</div>
+            {active.map((t) => {
+              const isCancelling = cancelling.has(t.task_id);
               const pct = t.total_bytes > 0
                 ? Math.min(100, (t.downloaded_bytes / t.total_bytes) * 100)
                 : 0;
@@ -324,20 +363,24 @@ export default function LocalModels({ onRefresh }: Props) {
                     <div className="local-dl-fill" style={{ width: `${pct}%` }} />
                   </div>
                   <div className="local-dl-meta">
-                    {fmtBytes(t.downloaded_bytes)} / {fmtBytes(t.total_bytes)} ({pct.toFixed(0)}%)
+                    {isCancelling
+                      ? "Cancelling…"
+                      : `${fmtBytes(t.downloaded_bytes)} / ${fmtBytes(t.total_bytes)} (${pct.toFixed(0)}%)`}
                     <button
                       type="button"
                       className="settings-btn settings-btn--danger local-dl-cancel"
+                      disabled={isCancelling}
                       onClick={() => onCancelDownload(t.task_id, t.filename)}
                     >
-                      Cancel
+                      {isCancelling ? "Cancelling…" : "Cancel"}
                     </button>
                   </div>
                 </div>
               );
             })}
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       <div className="local-more">
         <button

@@ -102,10 +102,10 @@ export default function StepDetailModal({ group, trace, onClose }: Props) {
                       <span className="sdm-log-status">{statusText(step.status)}</span>
                     </div>
                     <ToolArgsSummary tool={group.tool} args={step.args} />
-                    {(step.result_preview ?? step.result) != null && (
+                    {(step.result ?? step.result_preview) != null && (
                       <FormattedResult
                         tool={group.tool}
-                        result={step.result_preview ?? step.result}
+                        result={step.result ?? step.result_preview}
                         trace={trace}
                         stepIdx={currentIdx}
                       />

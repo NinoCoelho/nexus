@@ -70,6 +70,8 @@ class TurnAccumulator:
                 payload["args"] = event["args"]
             if "result_preview" in event:
                 payload["result_preview"] = event["result_preview"]
+            if "result" in event:
+                payload["result"] = event["result"]
             if "call_id" in event:
                 payload["call_id"] = event["call_id"]
             if etype == "tool_exec_start":
@@ -83,6 +85,7 @@ class TurnAccumulator:
                     if t.get("name") == event.get("name") and t.get("status") == "pending":
                         t["status"] = "done"
                         t["result_preview"] = event.get("result_preview")
+                        t["result"] = event.get("result")
                         break
             sse_frames.append(_sse("tool", payload))
 

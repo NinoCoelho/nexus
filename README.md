@@ -16,6 +16,7 @@
 - **Git-backed vault history (opt-in)** — flip on in Settings → Features and every vault write/delete/move commits into a private `~/.nexus/.vault-history` work-tree. Right-click any file or folder → "Undo last change" steps that path back one commit at a time.
 - **Human-in-the-loop** — `ask_user` and `terminal` tools gate actions behind SSE approval dialogs; YOLO mode for unattended runs. Web Push delivers prompts when the tab is closed.
 - **Public tunnel, no account** — `nexus tunnel start` exposes the server through a Cloudflare Quick Tunnel with an 8-character access code. No signup, no secrets in URLs.
+- **Native iOS client** — a SwiftUI app that pairs by QR (`nexus pair`), connects over your tailnet (Tailscale), and gives you every bot's chats, human-in-the-loop prompts, the vault, push notifications, and a live view + remote control of each bot's browser.
 - **Workflows** — visual flow-based automation with a React-flow graph editor, seven step types, five trigger types (webhook, schedule, fs_watch, event, manual), template autocomplete, and per-step run history.
 - **Nexus in Chrome** — a side-panel extension that puts the agent on the page you're actually looking at: per-tab conversations, a color-coded tab group for shared context, and a `page` tool that lets the agent read, click, type, scroll, navigate, and pull YouTube transcripts natively from your real browser tab.
 - **MCP integration** — connect to external MCP servers (stdio, HTTP, SSE) and use their tools natively, or expose Nexus tools to external hosts via server mode. One-box paste wizard in the Integrations tab makes setup trivial.
@@ -124,6 +125,27 @@ bash packaging/build.sh                 # → dist/Nexus.app
 ```
 
 Tagged GitHub Releases are built automatically by `.github/workflows/release.yml`: publishing a release triggers parallel macOS and Windows runners that build their bundle and attach the zip as a release asset.
+
+---
+
+## iOS Client (tailnet)
+
+A native SwiftUI app lives in [`ios/`](ios/README.md) — bots and chats with live streaming + HITL prompts, read-only vault, APNs push, and a live view of each bot's browser (CDP screencast) with optional remote control. It's built for **same-tailnet access**: your phone runs Tailscale, the server binds only its Tailscale IP, and the app authenticates with a QR-delivered pairing token.
+
+```bash
+# 1. Bind to the tailnet (once) — ~/.nexus/config.toml:
+#    [server]
+#    bind = "tailscale"
+nexus daemon restart
+
+# 2. Show the pairing QR (terminal or Settings → Native app pairing)
+nexus pair
+
+# Revoke paired devices at any time
+nexus pair --rotate
+```
+
+The listener is unreachable from the LAN or public internet — only authenticated tailnet devices can connect, and they still need the token (fail-closed 401 without it). Transport encryption is WireGuard; the token handles authentication and revocation. Browser remote control is a separate opt-in (`[browser] remote_control = true`) — watching stays open to any paired client.
 
 ---
 
@@ -830,6 +852,7 @@ Nexus can run an LLM entirely on the user's machine via llama.cpp:
 
 - Bundled default: **Qwen2.5-3B-Instruct** in the macOS app.
 - `/local/*` API to inspect hardware, search Hugging Face, list/download GGUFs, activate / start / stop a local server.
+- Sharded GGUFs (`<base>-00001-of-00004.gguf` …) are treated as one model everywhere: one row in the HF browser with a summed size, one download that fetches every part (flattened into `~/.nexus/models/llm/`), one installed tile with Start/Stop/Remove covering the whole set, and a clean `local-<base>` provider slug.
 - Integrates as just another OpenAI-compatible provider in the registry.
 
 ### Public Tunnel (Sharing)
@@ -846,10 +869,11 @@ Nexus can run an LLM entirely on the user's machine via llama.cpp:
 
 #### Network model
 
-Nexus **always** binds to `127.0.0.1`. There is no `--host` flag and no way to expose the listener on `0.0.0.0` from the CLI. Remote access is exclusively via a tunnel that runs as a local client connecting *to* the loopback bind:
+Nexus binds to `127.0.0.1` by default, and there is still deliberately no `0.0.0.0` option from the CLI. Remote access is either a tunnel that runs as a local client connecting *to* the loopback bind, or — for owned devices on the same tailnet — the direct tailnet bind:
 
 - `nexus tunnel start` — managed Cloudflare Quick Tunnel with the auth flow described above (auto-downloads `cloudflared`, no signup).
 - Tailscale, ssh `-L`, etc. — same idea, bring-your-own.
+- `[server] bind = "tailscale"` (or `nexus serve --bind tailscale`) — listen **only** on the machine's Tailscale IPv4 (100.64.0.0/10). Unreachable from the LAN or public internet; tailnet peers must additionally present the pairing token (`nexus pair`, see the iOS Client section). Fail-closed 401 without it.
 
 The middleware separates **direct loopback** (no proxy headers → bundled UI on the user's own machine, zero-config bypass) from **tunnel-proxied** (proxy headers present → cookie required). Tunnel-public surface is a strict allowlist:
 
@@ -1638,6 +1662,28 @@ max_iterations = 32
 # Per-model `max_output_tokens` (below) wins when > 0.
 default_max_output_tokens = 0
 
+# HTTP server bind + machine identity (see "iOS Client" above).
+# "loopback" (default) | "tailscale" (bind only the 100.x Tailscale IP —
+# paired native apps connect directly over the tailnet) | an IP literal.
+[server]
+bind = "loopback"
+machine_name = ""          # empty = OS hostname
+
+# Let paired native clients (tailnet) drive bots' browsers through
+# /browser/action — click/tap, type, scroll, navigate. Watching the live
+# view needs no flag; control does. Loopback is never restricted.
+[browser]
+remote_control = false
+
+# APNs push for the native iOS app (all four fields required to activate).
+# key_path points at the .p8 auth key from your Apple developer account.
+# [push.apns]
+# key_path = "~/keys/AuthKey_ABC123.p8"
+# key_id = "ABC123"
+# team_id = "TEAM12345"
+# bundle_id = "com.nexus.app"
+# environment = "production"   # "sandbox" for Xcode debug builds
+
 [providers.openai]
 type = "openai_compat"
 base_url = "https://api.openai.com/v1"
@@ -1667,8 +1713,7 @@ model_name = "claude-sonnet-4-20250514"
 tags = ["reasoning", "coding"]
 
 # GraphRAG over the vault. Enabled by default — set `enabled = false` to skip.
-[graphrag]
-enabled = true
+[graphrag]enabled = true
 
 # Web search tool. Provider list is iterated in order; DDGS needs no key.
 [search]

@@ -130,6 +130,20 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 """
 
+# Native iOS devices (APNs). The device token is issued by Apple and
+# rotated by the OS; the app re-registers on every launch, so upsert on
+# token is enough. ``bundle_id`` records what the token belongs to (the
+# app can be installed under a dev bundle id in sandbox builds).
+_APNS_DEVICES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS apns_devices (
+    token        TEXT PRIMARY KEY,
+    bundle_id    TEXT,
+    environment  TEXT NOT NULL DEFAULT 'production',
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 # LLM error log — tracks rate limits, timeouts, context overflows, empty
 # responses, auth failures, etc. per session for observability and the
 # future error dashboard.
@@ -361,6 +375,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_HITL_EVENTS_SCHEMA)
     db.executescript(_HITL_PENDING_SCHEMA)
     db.executescript(_PUSH_SUBS_SCHEMA)
+    db.executescript(_APNS_DEVICES_SCHEMA)
     db.executescript(_LLM_ERRORS_SCHEMA)
     db.executescript(_PAUSED_TURNS_SCHEMA)
     db.executescript(_PROJECTS_SCHEMA)

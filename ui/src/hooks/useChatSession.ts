@@ -340,7 +340,7 @@ export function useChatSession(
         } else if (event.type === "thinking") {
           applyThinkingEvent(setChatStates, streamKey, event.text);
         } else if (event.type === "tool") {
-          applyToolEvent(setChatStates, streamKey, { name: event.name, args: event.args, result_preview: event.result_preview });
+          applyToolEvent(setChatStates, streamKey, { name: event.name, args: event.args, result_preview: event.result_preview, result: event.result });
         } else if (event.type === "done") {
           sawDone = true;
           applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, streamKey, streamActiveSession, state.selectedModel, event);
@@ -408,7 +408,7 @@ export function useChatSession(
                 } else if (event.type === "thinking") {
                   applyThinkingEvent(setChatStates, key, event.text);
                 } else if (event.type === "tool") {
-                  applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview });
+                  applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview, result: event.result });
                 } else if (event.type === "done") {
                   resumeDone = true;
                   applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, key, activeSession, state.selectedModel, event);

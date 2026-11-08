@@ -28,6 +28,8 @@ _MODELS_DIR = Path.home() / ".nexus" / "models" / "llm"
 class DownloadRequest(BaseModel):
     repo_id: str
     filename: str
+    """All files to download (shard parts). Defaults to ``[filename]``."""
+    filenames: list[str] | None = None
 
 
 class FilenameRequest(BaseModel):
@@ -85,7 +87,8 @@ async def start_download(body: DownloadRequest) -> dict[str, str]:
     from ...local_llm.downloader import start_download as _start
 
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    task = _start(body.repo_id, body.filename, _MODELS_DIR)
+    filenames = body.filenames or [body.filename]
+    task = _start(body.repo_id, filenames, _MODELS_DIR)
     return {"task_id": task.task_id}
 
 
@@ -98,6 +101,7 @@ async def list_downloads() -> list[dict[str, Any]]:
             "task_id": t.task_id,
             "repo_id": t.repo_id,
             "filename": t.filename,
+            "parts": list(t.parts),
             "total_bytes": t.total_bytes,
             "downloaded_bytes": t.downloaded_bytes,
             "status": t.status,
@@ -164,23 +168,33 @@ async def binary_update() -> dict[str, Any]:
 
 @router.get("/local/installed")
 async def list_installed() -> list[dict[str, Any]]:
-    """List GGUF files installed in ~/.nexus/models/llm/.
+    """List GGUF models installed in ~/.nexus/models/llm/.
+
+    Sharded models (``<base>-00001-of-00004.gguf`` …) are collapsed into a
+    single entry: ``filename`` is the first present part, ``size_bytes`` the
+    sum of all parts, ``slug`` is derived from the shard base, and
+    ``complete`` tells whether every part is on disk. Non-first parts and
+    mmproj sidecars are never listed as standalone models.
 
     Each entry includes ``is_running`` and (when running) the ``port`` of
     its llama-server. ``is_active`` is kept as an alias of ``is_running``
     for older UI builds.
     """
     from ...local_llm import manager
+    from ...local_llm.shards import group_files
 
     if not _MODELS_DIR.is_dir():
         return []
 
     running = {info["filename"]: info for info in manager.list_running()}
 
+    files = sorted(_MODELS_DIR.glob("*.gguf"))
     results = []
-    for p in sorted(_MODELS_DIR.glob("*.gguf")):
+    for group in group_files([p.name for p in files]):
+        p = _MODELS_DIR / group.first
         info = running.get(p.name)
         is_mmproj = manager.is_mmproj_file(p)
+        is_shard_group = manager.parse_shard(p.name) is not None
         has_mamba = False
         has_mtp = False
         mtp_draft_n = 0
@@ -194,17 +208,25 @@ async def list_installed() -> list[dict[str, Any]]:
                 has_mtp = mtp_draft_n > 0
             except Exception:
                 log.debug("mtp probe failed for %s", p.name, exc_info=True)
+        size_bytes = sum(
+            (_MODELS_DIR / part).stat().st_size
+            for part in group.parts
+            if (_MODELS_DIR / part).is_file()
+        )
         results.append({
             "filename": p.name,
-            "size_bytes": p.stat().st_size,
+            "size_bytes": size_bytes,
             "is_mmproj": is_mmproj,
             "is_running": info is not None and not is_mmproj,
             "is_active": info is not None and not is_mmproj,
             "port": info["port"] if info else None,
-            "slug": info["slug"] if info else manager.slugify(p.stem),
+            "slug": info["slug"] if info else manager.slug_for(p.name),
             "has_mamba_layers": has_mamba,
             "has_mtp": has_mtp,
             "mtp_draft_n": mtp_draft_n,
+            "is_shard_group": is_shard_group,
+            "parts": list(group.parts),
+            "complete": group.complete,
         })
     return results
 
@@ -231,7 +253,7 @@ async def start_model(
     # Look up any user-configured context_window for this model in the
     # current config so the spawned llama-server uses it. 0 = default.
     cfg = app_state.get("cfg")
-    expected_slug = manager.slugify(model_path.stem)
+    expected_slug = manager.slug_for(model_path.name)
     expected_id = f"local-{expected_slug}/{expected_slug}"
     ctx_size = 0
     spec_type: str | None = None
@@ -300,7 +322,7 @@ async def stop_model(
     if not manager.is_running(body.filename):
         raise HTTPException(status_code=404, detail="No server running for that file.")
 
-    slug = manager.slugify(Path(body.filename).stem)
+    slug = manager.slug_for(body.filename)
     manager.stop(body.filename)
     manager.remove_from_config(slug)
 
@@ -336,7 +358,7 @@ async def stop_all_models(
 
     slugs = []
     for info in running:
-        slug = manager.slugify(Path(info["filename"]).stem)
+        slug = manager.slug_for(info["filename"])
         slugs.append(slug)
         manager.stop(info["filename"])
 
@@ -376,8 +398,13 @@ async def delete_installed(
     app_state: dict[str, Any] = Depends(get_app_state),
     agent: Any = Depends(get_agent),
 ) -> dict[str, str]:
-    """Delete an installed GGUF file. Stops the server first if running."""
+    """Delete an installed GGUF model. Stops the server first if running.
+
+    For a sharded model every part of the set is deleted, not just the
+    first-part filename the UI passes.
+    """
     from ...local_llm import manager
+    from ...local_llm.shards import expected_parts
     from .config import _rebuild_registry
 
     model_path = _MODELS_DIR / filename
@@ -385,7 +412,7 @@ async def delete_installed(
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
     if manager.is_running(filename):
-        slug = manager.slugify(Path(filename).stem)
+        slug = manager.slug_for(filename)
         manager.stop(filename)
         manager.remove_from_config(slug)
 
@@ -403,9 +430,16 @@ async def delete_installed(
             import logging
             logging.getLogger(__name__).warning("registry rebuild after stop-for-delete failed: %s", exc)
 
+    deleted = [filename]
     try:
         model_path.unlink()
+        for part in expected_parts(filename) or []:
+            part_path = _MODELS_DIR / part
+            if part == filename or not part_path.is_file():
+                continue
+            part_path.unlink()
+            deleted.append(part)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"deleted": filename}
+    return {"deleted": ", ".join(sorted(deleted))}

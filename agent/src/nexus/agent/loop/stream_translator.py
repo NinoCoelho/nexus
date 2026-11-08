@@ -19,7 +19,7 @@ import loom.types as lt
 
 from ..ask_user_tool import parse_parked_sentinel
 from ..llm import ChatMessage, Role
-from .helpers import _from_loom_message
+from .helpers import _from_loom_message, tool_result_fields
 from .reasoning import ReasoningTracker
 
 log = logging.getLogger(__name__)
@@ -224,7 +224,8 @@ class StreamTranslator:
         out: list[dict[str, Any]] = []
         tool_name = ev.get("name", "")
         result_text = ev.get("text") or ""
-        preview = result_text[:200]
+        fields = tool_result_fields(result_text)
+        preview = fields["result_preview"]
 
         parked_request_id = parse_parked_sentinel(result_text)
         if parked_request_id:
@@ -296,11 +297,11 @@ class StreamTranslator:
             )
         )
         self.reset_iteration()
-        self._on_event("tool_result", {"name": tool_name, "preview": preview})
+        self._on_event("tool_result", {"name": tool_name, "preview": preview, **fields})
         out.append({
             "type": "tool_exec_result",
             "name": tool_name,
-            "result_preview": preview,
+            **fields,
         })
         return out
 

@@ -11,6 +11,7 @@ from .cookies_cmd import cookies_app
 from .daemon_cmd import daemon_app
 from .graphrag_cmd import graphrag_app
 from .models_cmd import models_app
+from .pair_cmd import pair as _pair_fn
 from .providers_cmd import providers_app
 from .sessions_cmd import sessions_app
 from .skills_cmd import skills_app
@@ -67,6 +68,11 @@ from .doctor_cmd import doctor as _doctor_fn, version as _version_fn  # noqa: E4
 
 app.command()(_version_fn)
 app.command()(_doctor_fn)
+
+
+# ── pair (native app) ──────────────────────────────────────────────────────────
+
+app.command()(_pair_fn)
 
 
 if __name__ == "__main__":

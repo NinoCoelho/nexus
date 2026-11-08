@@ -132,6 +132,7 @@ async def run_background_turn(
                             ):
                                 t["status"] = "done"
                                 t["result_preview"] = event.get("result_preview")
+                                t["result"] = event.get("result")
                                 break
                 elif etype == "done":
                     result.final_messages = event.get("messages")

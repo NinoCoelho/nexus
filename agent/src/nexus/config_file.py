@@ -43,6 +43,9 @@ from .config_schema import (  # noqa: F401
     BrokerConfig,
     TelegramConfig,
     BrowserConfig,
+    ServerConfig,
+    PushConfig,
+    ApnsSettings,
     NexusConfig,
     default_config,
 )
@@ -229,6 +232,20 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "enabled": cfg.browser.enabled,
             "cdp_port": cfg.browser.cdp_port,
             "idle_shutdown_minutes": cfg.browser.idle_shutdown_minutes,
+            "remote_control": cfg.browser.remote_control,
+        },
+        "server": {
+            "bind": cfg.server.bind,
+            "machine_name": cfg.server.machine_name,
+        },
+        "push": {
+            "apns": {
+                "key_path": cfg.push.apns.key_path,
+                "key_id": cfg.push.apns.key_id,
+                "team_id": cfg.push.apns.team_id,
+                "bundle_id": cfg.push.apns.bundle_id,
+                "environment": cfg.push.apns.environment,
+            },
         },
     }
     for m in cfg.models:
@@ -481,6 +498,8 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         telegram=telegram,
         coordinator=CoordinatorConfig(**dict(raw.get("coordinator", {}))),
         browser=BrowserConfig(**dict(raw.get("browser", {}))),
+        server=ServerConfig(**dict(raw.get("server", {}))),
+        push=PushConfig(**dict(raw.get("push", {}))),
     )
 
 

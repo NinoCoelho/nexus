@@ -1,0 +1,338 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A100000000000000000000A01 /* NexusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B01 /* NexusApp.swift */; };
+		A100000000000000000000A02 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B02 /* Models.swift */; };
+		A100000000000000000000A03 /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B03 /* Keychain.swift */; };
+		A100000000000000000000A04 /* ServerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B04 /* ServerStore.swift */; };
+		A100000000000000000000A05 /* NexusClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B05 /* NexusClient.swift */; };
+		A100000000000000000000A06 /* SSE.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B06 /* SSE.swift */; };
+		A100000000000000000000A11 /* Lenient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B12 /* Lenient.swift */; };
+		A100000000000000000000A07 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B07 /* RootView.swift */; };
+		A100000000000000000000A08 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B08 /* PairingView.swift */; };
+		A100000000000000000000A09 /* BotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B09 /* BotsView.swift */; };
+		A100000000000000000000A0A /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0A /* ChatView.swift */; };
+		A100000000000000000000A0B /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0B /* MarkdownText.swift */; };
+		A100000000000000000000A0C /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0C /* BrowserView.swift */; };
+		A100000000000000000000A0D /* VaultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0D /* VaultView.swift */; };
+		A100000000000000000000A0E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0E /* SettingsView.swift */; };
+		A100000000000000000000A0F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0F /* Theme.swift */; };
+		A100000000000000000000A10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B10 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A100000000000000000000C01 /* Nexus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nexus.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000B01 /* NexusApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusApp.swift; sourceTree = "<group>"; };
+		A100000000000000000000B02 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A100000000000000000000B03 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
+		A100000000000000000000B04 /* ServerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerStore.swift; sourceTree = "<group>"; };
+		A100000000000000000000B05 /* NexusClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusClient.swift; sourceTree = "<group>"; };
+		A100000000000000000000B06 /* SSE.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSE.swift; sourceTree = "<group>"; };
+		A100000000000000000000B12 /* Lenient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Lenient.swift; sourceTree = "<group>"; };
+		A100000000000000000000B07 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B08 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B09 /* BotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotsView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B0A /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B0B /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
+		A100000000000000000000B0C /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B0D /* VaultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B0E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B0F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A100000000000000000000B10 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A100000000000000000000B11 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A100000000000000000000E01 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A100000000000000000000F01 = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000F02 /* Nexus */,
+				A100000000000000000000F06 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A100000000000000000000F02 /* Nexus */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B01 /* NexusApp.swift */,
+				A100000000000000000000B11 /* Info.plist */,
+				A100000000000000000000B10 /* Assets.xcassets */,
+				A100000000000000000000F03 /* Core */,
+				A100000000000000000000F04 /* Features */,
+				A100000000000000000000F05 /* Support */,
+			);
+			path = Nexus;
+			sourceTree = "<group>";
+		};
+		A100000000000000000000F03 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B02 /* Models.swift */,
+				A100000000000000000000B03 /* Keychain.swift */,
+				A100000000000000000000B04 /* ServerStore.swift */,
+				A100000000000000000000B05 /* NexusClient.swift */,
+				A100000000000000000000B06 /* SSE.swift */,
+				A100000000000000000000B12 /* Lenient.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		A100000000000000000000F04 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B07 /* RootView.swift */,
+				A100000000000000000000B08 /* PairingView.swift */,
+				A100000000000000000000B09 /* BotsView.swift */,
+				A100000000000000000000B0A /* ChatView.swift */,
+				A100000000000000000000B0B /* MarkdownText.swift */,
+				A100000000000000000000B0C /* BrowserView.swift */,
+				A100000000000000000000B0D /* VaultView.swift */,
+				A100000000000000000000B0E /* SettingsView.swift */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A100000000000000000000F05 /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B0F /* Theme.swift */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
+		A100000000000000000000F06 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000C01 /* Nexus.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A100000000000000000000D01 /* Nexus */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000010D /* Build configuration list for PBXNativeTarget "Nexus" */;
+			buildPhases = (
+				A100000000000000000000E02 /* Sources */,
+				A100000000000000000000E01 /* Frameworks */,
+				A100000000000000000000E03 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Nexus;
+			productName = Nexus;
+			productReference = A100000000000000000000C01 /* Nexus.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A100000000000000000000F00 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					A100000000000000000000D01 = {
+						CreatedOnToolsVersion = 26.0;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000010E /* Build configuration list for PBXProject "Nexus" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A100000000000000000000F01;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A100000000000000000000F06 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A100000000000000000000D01 /* Nexus */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A100000000000000000000E03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000A10 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A100000000000000000000E02 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000A01 /* NexusApp.swift in Sources */,
+				A100000000000000000000A02 /* Models.swift in Sources */,
+				A100000000000000000000A03 /* Keychain.swift in Sources */,
+				A100000000000000000000A04 /* ServerStore.swift in Sources */,
+				A100000000000000000000A05 /* NexusClient.swift in Sources */,
+				A100000000000000000000A06 /* SSE.swift in Sources */,
+				A100000000000000000000A11 /* Lenient.swift in Sources */,
+				A100000000000000000000A07 /* RootView.swift in Sources */,
+				A100000000000000000000A08 /* PairingView.swift in Sources */,
+				A100000000000000000000A09 /* BotsView.swift in Sources */,
+				A100000000000000000000A0A /* ChatView.swift in Sources */,
+				A100000000000000000000A0B /* MarkdownText.swift in Sources */,
+				A100000000000000000000A0C /* BrowserView.swift in Sources */,
+				A100000000000000000000A0D /* VaultView.swift in Sources */,
+				A100000000000000000000A0E /* SettingsView.swift in Sources */,
+				A100000000000000000000A0F /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000011A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A10000000000000000000011B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A10000000000000000000011C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 75YZ6UK4Y6;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Nexus/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nexus.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000011D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 75YZ6UK4Y6;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Nexus/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nexus.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000010D /* Build configuration list for PBXNativeTarget "Nexus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000011C /* Debug */,
+				A10000000000000000000011D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000010E /* Build configuration list for PBXProject "Nexus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000011A /* Debug */,
+				A10000000000000000000011B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A100000000000000000000F00 /* Project object */;
+}

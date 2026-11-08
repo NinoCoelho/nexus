@@ -432,6 +432,64 @@ class BrowserConfig(BaseModel):
     # don't leave N Chromes running forever. 0 = keep alive (spec
     # default; the profile persists so relaunch is cheap either way).
     idle_shutdown_minutes: int = 30
+    # Let *non-loopback* authenticated clients (paired native app over
+    # the tailnet) drive browsers through POST /browser/action — click,
+    # type, scroll, navigate. The live stream stays watch-only either
+    # way; this gates the control channel. Loopback clients are never
+    # restricted.
+    remote_control: bool = False
+
+
+class ApnsSettings(BaseModel):
+    """APNs credentials for the native iOS app (token-based .p8 auth).
+
+    All four fields are required for the channel to activate; any missing
+    field means "not configured" and the app falls back to foreground-only
+    notifications. The .p8 key never leaves the machine.
+    """
+
+    # Path to the APNs auth key downloaded from apple.com (e.g. ~/keys/AuthKey_ABC123.p8).
+    key_path: str = ""
+    # Key ID from the developer account (10 chars, printed on the .p8 page).
+    key_id: str = ""
+    # Apple Developer Team ID (10 chars).
+    team_id: str = ""
+    # The app's bundle identifier — becomes the apns-topic header.
+    bundle_id: str = ""
+    # "production" (App Store/TestFlight) or "sandbox" (Xcode debug builds).
+    environment: str = "production"
+
+
+class PushConfig(BaseModel):
+    """Push notification delivery channels.
+
+    Web Push (VAPID) needs no config — keys are auto-generated at
+    ``~/.nexus/push.json``. APNs (native iOS) is configured here.
+    """
+
+    apns: ApnsSettings = Field(default_factory=ApnsSettings)
+
+
+class ServerConfig(BaseModel):
+    """HTTP server bind + machine identity.
+
+    ``bind`` selects where uvicorn listens:
+
+    * ``"loopback"`` (default) — 127.0.0.1 only; remote access via tunnels,
+      exactly the pre-existing security model.
+    * ``"tailscale"`` — the machine's Tailscale IPv4 (100.64.0.0/10) only.
+      Unreachable from the LAN/public internet; tailnet devices must still
+      present the pairing token (``~/.nexus/client_token``, see pairing.py).
+    * an IP/hostname literal — power users; the token gate still applies.
+
+    Resolution lives in ``nexus.server.bind`` (tailscale CLI + interface
+    scan). Takes effect on the next serve/daemon start.
+    """
+
+    bind: str = "loopback"
+    # Friendly machine name surfaced in the pairing QR and /status (empty =
+    # OS hostname).
+    machine_name: str = ""
 
 
 class NexusConfig(BaseModel):
@@ -452,6 +510,8 @@ class NexusConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     coordinator: CoordinatorConfig = Field(default_factory=CoordinatorConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
+    push: PushConfig = Field(default_factory=PushConfig)
 
 
 # Fresh install starts with providers configured but NO models.

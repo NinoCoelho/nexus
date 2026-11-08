@@ -29,12 +29,17 @@ export interface HfFile {
   size_bytes: number;
   quant_label: string;
   fits_in_ram: boolean;
+  /** True when this entry is a sharded GGUF set collapsed into one row. */
+  is_shard_group?: boolean;
+  /** Repo-relative paths of every shard part (single files: `[filename]`). */
+  parts?: string[];
 }
 
 export interface DownloadTask {
   task_id: string;
   repo_id: string;
   filename: string;
+  parts?: string[];
   total_bytes: number;
   downloaded_bytes: number;
   status: "pending" | "downloading" | "done" | "error" | "cancelled";
@@ -54,6 +59,12 @@ export interface InstalledModel {
    *  but hidden from the user-facing tile list. */
   is_mmproj?: boolean;
   has_mamba_layers?: boolean;
+  /** True when this entry is a sharded GGUF set collapsed into one tile. */
+  is_shard_group?: boolean;
+  /** Filenames of all parts on disk (first part first). */
+  parts?: string[];
+  /** False when some part of the shard set is missing — Start is disabled. */
+  complete?: boolean;
 }
 
 export async function getHardware(): Promise<HardwareProbe> {
@@ -78,11 +89,17 @@ export async function listRepoFiles(repoId: string): Promise<HfFile[]> {
   return res.json();
 }
 
-export async function startDownload(repoId: string, filename: string): Promise<{ task_id: string }> {
+export async function startDownload(
+  repoId: string,
+  filename: string,
+  parts?: string[],
+): Promise<{ task_id: string }> {
   const res = await fetch(`${BASE}/local/download`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repo_id: repoId, filename }),
+    body: JSON.stringify(
+      parts && parts.length > 1 ? { repo_id: repoId, filename, filenames: parts } : { repo_id: repoId, filename },
+    ),
   });
   if (!res.ok) throw new Error(`Download start error: ${res.status}`);
   return res.json();

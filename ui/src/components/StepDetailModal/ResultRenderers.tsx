@@ -261,6 +261,28 @@ function resolveResult(stepResult: unknown, tool: string, trace?: TraceEvent[], 
   return stepResult;
 }
 
+/**
+ * Salvage key/value pairs from a result string that was truncated mid-JSON
+ * (legacy 200-char previews) so the modal can still show the important
+ * fields — exit code, stdout, error — instead of a raw partial dump.
+ */
+function salvageTruncatedJson(src: string): Record<string, string> | null {
+  if (!src.trimStart().startsWith("{")) return null;
+  const out: Record<string, string> = {};
+  const re = /"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*("(?:[^"\\]|\\.)*"?|-?\d+(?:\.\d+)?|true|false|null)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) && Object.keys(out).length < 20) {
+    let val = m[2];
+    if (val.startsWith('"')) {
+      // Strip surrounding quotes (tolerating a missing closing quote from
+      // the truncation) and unescape the common escapes.
+      val = val.replace(/^"|"$/g, "").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"');
+    }
+    out[m[1]] = val;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function FormattedResult({ tool, result, trace, stepIdx }: { tool?: string; result: unknown; trace?: TraceEvent[]; stepIdx?: number }) {
   const resolved = resolveResult(result, tool ?? "", trace, stepIdx);
   const parsed = tryParseJson(resolved);
@@ -339,6 +361,20 @@ export function FormattedResult({ tool, result, trace, stepIdx }: { tool?: strin
   // Generic JSON object — KV table
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     return <KvTable data={parsed as Record<string, unknown>} />;
+  }
+
+  // Truncated JSON (legacy 200-char previews cut mid-payload) — salvage the
+  // fields we can instead of dumping raw partial JSON.
+  if (!parsed && typeof resolved === "string") {
+    const salvaged = salvageTruncatedJson(asStr);
+    if (salvaged) {
+      return (
+        <div className="sdm-log-result">
+          <div className="sdm-truncated-note">Result was truncated — partial fields:</div>
+          <KvTable data={salvaged} />
+        </div>
+      );
+    }
   }
 
   // Plain text fallback

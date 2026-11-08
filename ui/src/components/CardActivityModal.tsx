@@ -58,10 +58,10 @@ export default function CardActivityModal({ sessionId, cardTitle, status, onClos
             const resultsByPos: string[] = [];
             let j = i + 1;
             while (j < raw.length && raw[j].role === "tool") {
-              const preview = (raw[j].content ?? "").slice(0, 200);
+              const full = raw[j].content ?? "";
               const tid = raw[j].tool_call_id ?? "";
-              if (tid) resultsById.set(tid, preview);
-              resultsByPos.push(preview);
+              if (tid) resultsById.set(tid, full);
+              resultsByPos.push(full);
               j++;
             }
             if (content.length > 0) {
@@ -71,14 +71,15 @@ export default function CardActivityModal({ sessionId, cardTitle, status, onClos
             toolCalls.forEach((tc, idx) => {
               const name = tc.name ?? "";
               if (!name) return;
-              const preview = resultsById.get(tc.id ?? "") ?? resultsByPos[idx];
+              const fullResult = resultsById.get(tc.id ?? "") ?? resultsByPos[idx];
               timeline.push({
                 id: `h-c-${stepCounter.current++}`,
                 type: "tool",
                 tool: name,
                 args: tc.arguments,
-                result_preview: preview,
-                status: preview != null ? "done" : isPartial ? "pending" : "done",
+                result: fullResult,
+                result_preview: fullResult?.slice(0, 200),
+                status: fullResult != null ? "done" : isPartial ? "pending" : "done",
               });
             });
             i = j - 1;
@@ -120,13 +121,15 @@ export default function CardActivityModal({ sessionId, cardTitle, status, onClos
         return;
       }
       if (event.kind === "tool_result") {
-        const { name, preview } = event.data;
+        const { name } = event.data;
+        const full = event.data.result ?? event.data.result_preview ?? event.data.preview;
+        const short = event.data.result_preview ?? (typeof full === "string" ? full.slice(0, 200) : undefined);
         setLive((prev) => {
           const next = [...prev.timeline];
           for (let i = next.length - 1; i >= 0; i--) {
             const s = next[i];
             if (s.type === "tool" && s.tool === name && s.status === "pending") {
-              next[i] = { ...s, status: "done", result_preview: preview };
+              next[i] = { ...s, status: "done", result: full, result_preview: short };
               break;
             }
           }

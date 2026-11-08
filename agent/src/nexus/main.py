@@ -6,15 +6,15 @@ import atexit
 import logging
 from pathlib import Path
 
-import uvicorn
 from loom.home import AgentHome
 from loom.permissions import AgentPermissions
 
-from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, PORT, SKILLS_DIR
-from .config_file import load as load_config, apply_env_overlay
 from .agent.llm import OpenAIProvider, StaticBearerAuth
 from .agent.loop import Agent
 from .agent.registry import build_registry
+from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, PORT, SKILLS_DIR
+from .config_file import apply_env_overlay
+from .config_file import load as load_config
 from .redact import install_redaction
 from .server.app import create_app
 from .skills.registry import SkillRegistry
@@ -136,12 +136,38 @@ def main() -> None:
         _run_dream()
         return
     _write_port_file()
-    uvicorn.run("nexus.main:app", host="127.0.0.1", port=PORT, reload=False)
+
+    # Bind host from [server].bind (loopback default). "tailscale" serves
+    # loopback ALWAYS plus the machine's Tailscale IPv4 when it exists —
+    # the tailnet listener is supervised across disconnects/reconnects and
+    # never affects loopback (see server/serve_runner.py). A pairing token
+    # is minted up front so the non-loopback gate can authenticate native
+    # clients.
+    bind_spec = "loopback"
+    try:
+        from .config_file import load as load_config
+
+        bind_spec = load_config().server.bind
+    except Exception:
+        log.debug("bind-spec resolution fell back to loopback", exc_info=True)
+
+    if bind_spec.strip().lower() not in ("", "loopback", "localhost"):
+        from .pairing import get_or_create_token
+
+        get_or_create_token()
+        log.info("bind %r: loopback + tailnet listener; pair devices with `nexus pair`", bind_spec)
+
+    import asyncio
+
+    from .server.serve_runner import run_servers
+
+    asyncio.run(run_servers("nexus.main:app", port=PORT, bind_spec=bind_spec))
 
 
 def _run_dream() -> None:
     import asyncio
-    from .dream.engine import run_dream, close_store
+
+    from .dream.engine import close_store, run_dream
 
     cfg = apply_env_overlay(load_config())
     dream_cfg = getattr(cfg, "dream", None)
@@ -163,8 +189,8 @@ def _run_dream() -> None:
 
 
 def _resolve_dream_provider(cfg):
-    from .agent.registry import build_registry
     from .agent.llm import OpenAIProvider, StaticBearerAuth
+    from .agent.registry import build_registry
     from .config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
     registry = build_registry(cfg)

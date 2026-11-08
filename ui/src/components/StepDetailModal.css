@@ -217,6 +217,12 @@
   margin-right: 4px;
 }
 
+.sdm-truncated-note {
+  font-style: italic;
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
+
 /* ── Terminal result ── */
 
 .sdm-result-terminal {

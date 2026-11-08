@@ -226,8 +226,19 @@ export function applyThinkingEvent(
 export function applyToolEvent(
   setChatStates: SetChatStates,
   key: string,
-  event: { name: string; args?: unknown; result_preview?: string | null; call_id?: string },
+  event: { name: string; args?: unknown; result_preview?: string | null; result?: string | null; call_id?: string },
 ) {
+  // Full result (bounded server-side) for detail modals; the short preview
+  // only feeds compact surfaces (circle subtitle). Fall back gracefully
+  // when an older server sends previews only.
+  const full = event.result ?? event.result_preview;
+  const hasResult = full != null;
+  const shortPreview =
+    event.result_preview != null
+      ? event.result_preview
+      : typeof full === "string"
+        ? full.slice(0, 200)
+        : undefined;
   setChatStates((prev) => {
     const next = new Map(prev);
     const cur = next.get(key) ?? emptyState();
@@ -240,29 +251,29 @@ export function applyToolEvent(
     const prevMsg = msgs[lastIdx];
     const prevTrace = prevMsg.trace ?? [];
     let newTrace: TraceEvent[];
-    if (event.result_preview != null) {
+    if (hasResult) {
       const matchIdx = [...prevTrace].reverse().findIndex(
         (e) => e.tool === event.name && e.result == null,
       );
       if (matchIdx !== -1) {
         const realIdx = prevTrace.length - 1 - matchIdx;
-        newTrace = prevTrace.map((e, i) => i === realIdx ? { ...e, result: event.result_preview } : e);
+        newTrace = prevTrace.map((e, i) => i === realIdx ? { ...e, result: full } : e);
       } else {
-        newTrace = [...prevTrace, { iter: 0, tool: event.name, args: event.args, result: event.result_preview } as TraceEvent];
+        newTrace = [...prevTrace, { iter: 0, tool: event.name, args: event.args, result: full } as TraceEvent];
       }
     } else {
       newTrace = [...prevTrace, { iter: 0, tool: event.name, args: event.args } as TraceEvent];
     }
     const tl = [...(prevMsg.timeline ?? [])];
-    if (event.result_preview != null) {
+    if (hasResult) {
       const toolIdx = [...tl].reverse().findIndex(
         (s) => s.type === "tool" && s.tool === event.name && s.status === "pending",
       );
       if (toolIdx !== -1) {
         const realIdx = tl.length - 1 - toolIdx;
-        tl[realIdx] = { ...tl[realIdx], result: event.result_preview, result_preview: typeof event.result_preview === "string" ? event.result_preview : undefined, status: "done" as const };
+        tl[realIdx] = { ...tl[realIdx], result: full, result_preview: shortPreview, status: "done" as const };
       } else {
-        tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, result: event.result_preview, result_preview: typeof event.result_preview === "string" ? event.result_preview : undefined, status: "done" });
+        tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, result: full, result_preview: shortPreview, status: "done" });
       }
     } else {
       tl.push({ id: `t${tl.length}`, type: "tool", tool: event.name, args: event.args, status: "pending", call_id: event.call_id });

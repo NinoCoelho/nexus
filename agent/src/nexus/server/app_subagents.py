@@ -98,6 +98,8 @@ def create_subagent_runner(
                         else:
                             tool_data["name"] = event.get("name", "")
                             tool_data["result_preview"] = _truncate_preview(event.get("result_preview"))
+                            if event.get("result") is not None:
+                                tool_data["result"] = event["result"]
                             tool_data["status"] = "done"
                         parent_store.publish(
                             parent_session_id,

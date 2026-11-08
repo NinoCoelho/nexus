@@ -9,6 +9,7 @@ import SearchSection from "../SearchSection";
 import TranscriptionSection from "../TranscriptionSection";
 import VaultHistorySection from "../VaultHistorySection";
 import SharingSection from "./SharingSection";
+import PairingSection from "./PairingSection";
 import TelegramSection from "./TelegramSection";
 import CoordinatorSection from "./CoordinatorSection";
 import SettingsSection from "./SettingsSection";
@@ -150,6 +151,8 @@ export default function FeaturesTab({ graphStats, models }: Props) {
       </SettingsSection>
 
       <SharingSection />
+
+      <PairingSection />
 
       <SettingsSection
         title="Cleanup old chats"

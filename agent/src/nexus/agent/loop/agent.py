@@ -20,6 +20,7 @@ from .helpers import (
     _build_user_message,
     _from_loom_message,
     _to_loom_message,
+    tool_result_fields,
 )
 from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
 from .budget import check_tool_budget
@@ -1031,7 +1032,7 @@ class Agent:
                 yield {
                     "type": "tool_exec_result",
                     "name": tool_name,
-                    "result_preview": result_text[:200],
+                    **tool_result_fields(result_text),
                 }
                 for item in pending:
                     st.tr.working_messages.append(
@@ -1124,12 +1125,14 @@ class Agent:
         st.tr.reset_iteration()
         st.retry_mgr.delta_emitted = False
         st.retry_mgr.reset_all()
-        preview = result_text[:200]
-        self._on_event("tool_result", {"name": tool_name, "preview": preview})
+        fields = tool_result_fields(result_text)
+        # ``preview`` kept for legacy trace consumers (AssistantMessage,
+        # SkillWizard); new clients read ``result_preview``/``result``.
+        self._on_event("tool_result", {"name": tool_name, "preview": fields["result_preview"], **fields})
         yield {
             "type": "tool_exec_result",
             "name": tool_name,
-            "result_preview": preview,
+            **fields,
         }
 
     async def _handle_context_overflow(

@@ -83,6 +83,7 @@ TUNNEL_PROTECTED_PREFIXES = (
     "/projects",
     "/credentials",
     "/browser",
+    "/status",
 )
 
 
@@ -149,12 +150,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
     """Auth gate combining the legacy access-token flow with the tunnel-token flow.
 
-    Two independent token sources are accepted:
+    Three independent token sources are accepted:
 
     1. ``NEXUS_ACCESS_TOKEN`` (env, set at startup): protects the server when
        running on a non-loopback bind. This is the back-compat path; empty/unset
        means no enforcement for *direct* clients.
-    2. The dynamic tunnel token (``nexus.tunnel.manager``): generated when the
+    2. The pairing client token (``~/.nexus/client_token``, minted by
+       ``nexus pair`` / ``GET /pair`` — see :mod:`nexus.pairing`): the
+       credential for owned devices on the tailnet. Read lazily (mtime-checked)
+       so first mint and ``--rotate`` apply without a restart.
+    3. The dynamic tunnel token (``nexus.tunnel.manager``): generated when the
        user activates sharing. Required on every request that arrived via the
        tunnel (detected by proxy headers — see ``_is_proxied``).
 
@@ -162,9 +167,10 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
     bundled UI on the user's own machine keeps working with zero config.
     """
 
-    def __init__(self, app, access_token: str) -> None:
+    def __init__(self, app, access_token: str, client_store=None) -> None:
         super().__init__(app)
         self._access_token = access_token
+        self._client_store = client_store
 
     async def dispatch(self, request: Request, call_next):
         from ..tunnel import get_manager  # local import to avoid cycles
@@ -230,22 +236,38 @@ class LoopbackOrTokenMiddleware(BaseHTTPMiddleware):
         if is_loopback and not proxied:
             return await call_next(request)
 
-        # Legacy NEXUS_ACCESS_TOKEN gate for non-loopback binds.
-        # Timing-safe compares — same discipline as the tunnel token path.
+        # Static-token gate for non-loopback direct clients (e.g. the paired
+        # native app over the tailnet bind). Accepted credentials: the
+        # packaged-app env token and the pairing client token. Timing-safe
+        # compares — same discipline as the tunnel token path.
+        static_tokens: list[str] = []
         if self._access_token:
+            static_tokens.append(self._access_token)
+        if self._client_store is not None:
+            pairing_token = self._client_store.current()
+            if pairing_token:
+                static_tokens.append(pairing_token)
+        if static_tokens:
             import hmac as _hmac
 
-            if not _hmac.compare_digest(provided.encode(), self._access_token.encode()):
-                # Fall back to the legacy ?token= flow only on the non-tunnel
-                # path; tunnel traffic should never carry secrets in the URL.
-                qp_token = request.query_params.get("token", "")
-                if not _hmac.compare_digest(qp_token.encode(), self._access_token.encode()):
-                    return JSONResponse(
-                        {"detail": "unauthorized"},
-                        status_code=401,
-                        headers={"Cache-Control": "no-store"},
-                    )
-            return await call_next(request)
+            def _matches(candidate: str) -> bool:
+                return any(
+                    _hmac.compare_digest(candidate.encode(), tok.encode())
+                    for tok in static_tokens
+                )
+
+            if _matches(provided):
+                return await call_next(request)
+            # Fall back to the legacy ?token= flow only on the non-tunnel
+            # path; tunnel traffic should never carry secrets in the URL.
+            qp_token = request.query_params.get("token", "")
+            if _matches(qp_token):
+                return await call_next(request)
+            return JSONResponse(
+                {"detail": "unauthorized"},
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
 
         # Non-loopback request, tunnel inactive, no access token configured →
         # close it down rather than silently allowing it.
@@ -504,7 +526,11 @@ def create_app(
     # auth path must remain reachable on every request so it can enforce the
     # token on traffic that traversed the public tunnel.
     _access_token = os.environ.get("NEXUS_ACCESS_TOKEN", "")
-    app.add_middleware(LoopbackOrTokenMiddleware, access_token=_access_token)
+    from ..pairing import ClientTokenStore
+
+    app.add_middleware(
+        LoopbackOrTokenMiddleware, access_token=_access_token, client_store=ClientTokenStore()
+    )
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -592,6 +618,7 @@ def create_app(
     from .routes.projects import router as projects_router
     from .routes.bots import router as bots_router
     from .routes.browser import router as browser_router
+    from .routes.pair import router as pair_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -636,6 +663,7 @@ def create_app(
     app.include_router(projects_router)
     app.include_router(bots_router)
     app.include_router(browser_router)
+    app.include_router(pair_router)
 
     # ── wire the dispatch_card agent tool ──────────────────────────────────────
     # The dispatch_card tool needs to call _dispatch_impl with the live agent

@@ -27,6 +27,12 @@ interface Props {
   onDownloadStarted: () => void;
 }
 
+/** Repo paths may be nested (`Qwen3-Coder-Next-Q5_K_M/…-00001-of-00004.gguf`);
+ *  installed files are flat basenames. */
+function baseName(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
 export default function SearchModal({
   open,
   onClose,
@@ -61,13 +67,24 @@ export default function SearchModal({
 
   const installedByFilename = useMemo(() => {
     const m = new Map<string, InstalledModel>();
-    for (const i of installed) m.set(i.filename, i);
+    for (const i of installed) {
+      // Installed names are flat basenames; group entries carry all parts.
+      m.set(i.filename, i);
+      for (const part of i.parts ?? []) m.set(part, i);
+    }
     return m;
   }, [installed]);
 
   const downloadByKey = useMemo(() => {
     const m = new Map<string, DownloadTask>();
-    for (const t of downloads) m.set(`${t.repo_id}/${t.filename}`, t);
+    for (const t of downloads) {
+      // Key by repo + basename so nested repo paths match flat tasks.
+      const base = t.filename.split("/").pop() ?? t.filename;
+      m.set(`${t.repo_id}/${base}`, t);
+      for (const part of t.parts ?? []) {
+        m.set(`${t.repo_id}/${part.split("/").pop() ?? part}`, t);
+      }
+    }
     return m;
   }, [downloads]);
 
@@ -133,12 +150,17 @@ export default function SearchModal({
     }
   }, [expanded, toast]);
 
-  const onDownload = useCallback(async (repoId: string, filename: string) => {
-    const key = `${repoId}/${filename}`;
+  const onDownload = useCallback(async (repoId: string, file: HfFile) => {
+    const key = `${repoId}/${file.filename}`;
     setBusy(key);
     try {
-      await startDownload(repoId, filename);
-      toast.info(`Downloading ${filename}…`);
+      await startDownload(repoId, file.filename, file.parts);
+      const n = file.parts?.length ?? 1;
+      toast.info(
+        n > 1
+          ? `Downloading ${n} parts of ${baseName(file.filename)}…`
+          : `Downloading ${baseName(file.filename)}…`,
+      );
       onDownloadStarted();
       refreshData();
     } catch (e) {
@@ -224,13 +246,15 @@ export default function SearchModal({
                       const dlKey = `${r.id}/${f.filename}`;
                       const dl = downloadByKey.get(dlKey);
                       const inProgress = dl && (dl.status === "downloading" || dl.status === "pending");
-                      const alreadyInstalled = installedByFilename.has(f.filename);
+                      const alreadyInstalled = installedByFilename.has(baseName(f.filename));
+                      const partCount = f.parts?.length ?? 1;
                       return (
                         <div key={f.filename} className="search-file">
                           <div className="search-file-info">
-                            <span className="search-file-name">{f.filename}</span>
+                            <span className="search-file-name">{baseName(f.filename)}</span>
                             <span className="search-file-meta">
                               {fmtBytes(f.size_bytes)} · {f.quant_label}
+                              {partCount > 1 && ` · ${partCount} parts`}
                               {!f.fits_in_ram && (
                                 <span className="search-file-warn"> · won't fit RAM</span>
                               )}
@@ -240,13 +264,15 @@ export default function SearchModal({
                             type="button"
                             className="settings-btn"
                             disabled={busy === dlKey || !!inProgress || alreadyInstalled}
-                            onClick={() => onDownload(r.id, f.filename)}
+                            onClick={() => onDownload(r.id, f)}
                           >
                             {alreadyInstalled
                               ? "Installed"
                               : inProgress
                                 ? "Downloading…"
-                                : "Download"}
+                                : partCount > 1
+                                  ? `Download ${partCount} parts`
+                                  : "Download"}
                           </button>
                         </div>
                       );

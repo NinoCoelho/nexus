@@ -10,6 +10,6 @@ Keys live in ``~/.nexus/push.json`` (auto-generated on first use) so
 they survive across restarts. Subscriptions live in the sessions DB.
 """
 
-from . import keys, sender
+from . import apns, keys, sender
 
-__all__ = ["keys", "sender"]
+__all__ = ["apns", "keys", "sender"]

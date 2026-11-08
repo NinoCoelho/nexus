@@ -80,7 +80,14 @@ def test_resolve_mention_target_routes_coordinator_by_name(tmp_path: Path) -> No
     ) is None
 
 
-def test_attribute_marks_coordinator_replies_except_in_master(tmp_path: Path) -> None:
+def test_attribute_marks_coordinator_replies_except_in_master(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # coordinator_identity() reads the developer's real ~/.nexus/config.toml
+    # (the configured name changes per machine) — pin it for determinism.
+    monkeypatch.setattr(
+        "nexus.agent.bots.coordinator_identity", lambda: _NICO
+    )
     ps = _ps(tmp_path)
     other = ps.create(name="Other Bot")
     msgs = [

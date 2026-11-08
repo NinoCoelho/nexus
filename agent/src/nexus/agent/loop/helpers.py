@@ -17,6 +17,24 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_TOOL_ITERATIONS = 32
 
+# Tool results travel to clients in two fields: a short ``result_preview``
+# for compact surfaces (step circles, subtitles) and a bounded-full
+# ``result`` so detail modals can render rich output (terminal stdout/stderr,
+# HTTP bodies, KV tables) without a refetch. The replay bus keeps up to 500
+# events per session in memory, so the full copy is capped to keep the
+# worst-case replay footprint sane.
+TOOL_RESULT_PREVIEW_CHARS = 200
+TOOL_RESULT_MAX_CHARS = 50_000
+
+
+def tool_result_fields(result_text: str | None) -> dict[str, Any]:
+    """Shared shape for ``tool_exec_result`` events and their trace entries."""
+    text = result_text or ""
+    return {
+        "result_preview": text[:TOOL_RESULT_PREVIEW_CHARS],
+        "result": text[:TOOL_RESULT_MAX_CHARS],
+    }
+
 SKILL_MANAGE_TOOL = ToolSpec(
     name="skill_manage",
     description=(

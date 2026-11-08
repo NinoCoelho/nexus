@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .shards import group_files, parse_shard
+
 
 class HfSearchError(Exception):
     """Raised when a HuggingFace Hub API call fails."""
@@ -65,11 +67,18 @@ def search_gguf_repos(query: str, limit: int = 20) -> list[dict[str, Any]]:
 def list_repo_ggufs(repo_id: str) -> list[dict[str, Any]]:
     """List GGUF files available in a HuggingFace repository.
 
+    Sharded uploads (``<base>-00001-of-00004.gguf`` …) are collapsed into a
+    single entry: ``filename`` is the repo-relative path of the first part,
+    ``size_bytes`` the sum of all parts, ``is_shard_group`` is True, and
+    ``parts`` lists every part's repo-relative path so a download can fetch
+    them all. Non-sharded files pass through with ``parts = [filename]``.
+
     Args:
         repo_id: Repository identifier (e.g. ``"owner/model-name"``).
 
     Returns:
-        List of dicts with keys: filename, size_bytes, quant_label.
+        List of dicts with keys: filename, size_bytes, quant_label,
+        is_shard_group, parts.
     """
     try:
         from huggingface_hub import HfApi
@@ -90,13 +99,18 @@ def list_repo_ggufs(repo_id: str) -> list[dict[str, Any]]:
                 size_map[info.path] = int(size)
 
         results = []
-        for filename in gguf_files:
-            size_bytes = size_map.get(filename, 0)
-            quant_label = _extract_quant_label(filename)
+        for group in group_files(gguf_files):
+            size_bytes = sum(size_map.get(part, 0) for part in group.parts)
+            quant_label = _extract_quant_label(group.first)
+            # A lone uploaded part still belongs to a shard set — the UI
+            # shows it as such even though only one part is downloadable.
+            is_shard_group = parse_shard(group.first) is not None
             results.append({
-                "filename": filename,
+                "filename": group.first,
                 "size_bytes": size_bytes,
                 "quant_label": quant_label,
+                "is_shard_group": is_shard_group,
+                "parts": list(group.parts),
             })
         return results
     except Exception as exc:

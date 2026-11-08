@@ -613,6 +613,82 @@ class BrowserInstance:
         )
         return await self._act_info({})
 
+    async def viewport(self) -> dict[str, float]:
+        """CSS-pixel viewport size — the coordinate space of Input.* events.
+
+        Screencast frames are downscaled (max 1280×800) and the window is a
+        fixed 1440×900, so remote clients need the true viewport to map taps.
+        """
+        try:
+            size = await self.evaluate("({ w: innerWidth, h: innerHeight })", timeout=5.0)
+        except BrowserError:
+            return {"width": float(WINDOW_W), "height": float(WINDOW_H)}
+        if not isinstance(size, dict) or not size.get("w") or not size.get("h"):
+            return {"width": float(WINDOW_W), "height": float(WINDOW_H)}
+        return {"width": float(size["w"]), "height": float(size["h"])}
+
+    async def _act_tap(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Tap at *normalized* (0..1) viewport coordinates.
+
+        The remote client stays coordinate-math-free: it divides the touch
+        point by its rendered frame size; the server scales through the true
+        CSS viewport (which differs from both the window and the downscaled
+        screencast frame).
+        """
+        x_norm, y_norm = args.get("x_norm"), args.get("y_norm")
+        if x_norm is None or y_norm is None:
+            raise BrowserError("tap requires x_norm/y_norm (0..1 viewport fractions)")
+        try:
+            x_norm, y_norm = float(x_norm), float(y_norm)
+        except (TypeError, ValueError) as exc:
+            raise BrowserError("tap coordinates must be numeric") from exc
+        if not (0.0 <= x_norm <= 1.0 and 0.0 <= y_norm <= 1.0):
+            raise BrowserError("tap coordinates must be within 0..1")
+        vp = await self.viewport()
+        x, y = x_norm * vp["width"], y_norm * vp["height"]
+        for evt_type in ("mousePressed", "mouseReleased"):
+            await self._send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": evt_type,
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+        await asyncio.sleep(CLICK_SETTLE_SECONDS)
+        return await self._act_info({})
+
+    async def _act_key(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Press one special key (Enter/Backspace/arrows/Tab/Escape).
+
+        Text input goes through ``type`` (Input.insertText, IME-safe);
+        this action covers the keys insertText cannot express.
+        """
+        name = str(args.get("key") or "").strip().lower()
+        desc = _SPECIAL_KEYS.get(name)
+        if desc is None:
+            raise BrowserError(
+                f"unsupported key {name!r}; expected one of {sorted(_SPECIAL_KEYS)}"
+            )
+        for evt_type in ("rawKeyDown", "keyUp"):
+            payload: dict[str, Any] = {
+                "type": evt_type,
+                "key": desc["key"],
+                "code": desc["code"],
+                "windowsVirtualKeyCode": desc["vk"],
+                "nativeVirtualKeyCode": desc["vk"],
+            }
+            # Enter generates a char via keyDown's text field (the classic
+            # puppeteer recipe) — without it, form submits don't fire.
+            if name == "enter" and evt_type == "rawKeyDown":
+                payload["type"] = "keyDown"
+                payload["text"] = "\r"
+            await self._send("Input.dispatchKeyEvent", payload)
+        return await self._act_info({})
+
+
     async def _act_screenshot(self, args: dict[str, Any]) -> dict[str, Any]:
         res = await self._send("Page.captureScreenshot", {"format": "png"})
         data = res.get("data")
@@ -658,13 +734,39 @@ ACTIONS = (
     "read",
     "dom_text",
     "click",
+    "tap",
     "type",
+    "key",
     "scroll",
     "screenshot",
     "js",
     "wait_for",
     "info",
 )
+
+# Remote-control actions (state-changing): gated for non-loopback clients by
+# [browser].remote_control. Read-only actions (read/dom_text/info/screenshot/
+# wait_for) stay open to any authenticated client — watching is not driving.
+CONTROL_ACTIONS = frozenset(
+    {"navigate", "click", "tap", "type", "key", "scroll", "js"}
+)
+
+# Input.dispatchKeyEvent descriptors for _act_key. vk = windowsVirtualKeyCode.
+_SPECIAL_KEYS: dict[str, dict[str, Any]] = {
+    "enter": {"key": "Enter", "code": "Enter", "vk": 13},
+    "tab": {"key": "Tab", "code": "Tab", "vk": 9},
+    "escape": {"key": "Escape", "code": "Escape", "vk": 27},
+    "backspace": {"key": "Backspace", "code": "Backspace", "vk": 8},
+    "delete": {"key": "Delete", "code": "Delete", "vk": 46},
+    "arrowup": {"key": "ArrowUp", "code": "ArrowUp", "vk": 38},
+    "arrowdown": {"key": "ArrowDown", "code": "ArrowDown", "vk": 40},
+    "arrowleft": {"key": "ArrowLeft", "code": "ArrowLeft", "vk": 37},
+    "arrowright": {"key": "ArrowRight", "code": "ArrowRight", "vk": 39},
+    "home": {"key": "Home", "code": "Home", "vk": 36},
+    "end": {"key": "End", "code": "End", "vk": 35},
+    "pageup": {"key": "PageUp", "code": "PageUp", "vk": 33},
+    "pagedown": {"key": "PageDown", "code": "PageDown", "vk": 34},
+}
 
 
 def _prune_screenshots(shots_dir: Path, keep: int = SCREENSHOT_RETENTION) -> None:
@@ -914,10 +1016,20 @@ class BrowserManager:
         q = inst.subscribe(["Page.screencastFrame"])
         last_emit = 0.0
         frames = 0
+
+        async def _info_event() -> dict[str, Any]:
+            """info frame with viewport metrics — remote clients (native app)
+            use width/height to map taps through normalized coordinates."""
+            payload: dict[str, Any] = {"type": "info", **(inst.last_page or {})}
+            try:
+                payload.update(await inst.viewport())
+            except BrowserError:
+                pass
+            return payload
+
         try:
             await inst.start_screencast()
-            if inst.last_page:
-                yield {"type": "info", **inst.last_page}
+            yield await _info_event()
             while True:
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=STREAM_HEARTBEAT_SECONDS)
@@ -944,8 +1056,8 @@ class BrowserManager:
                 inst.last_active = last_emit
                 frames += 1
                 yield {"type": "frame", "data": data}
-                if frames % 8 == 0 and inst.last_page:
-                    yield {"type": "info", **inst.last_page}
+                if frames % 8 == 0:
+                    yield await _info_event()
         finally:
             inst.unsubscribe(q)
             if inst.screencast_subscribers() == 0:

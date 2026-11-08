@@ -98,14 +98,16 @@ export async function loadSessionHistory(
       const content = isPartial ? rawContent.slice(partialMatch![0].length) : rawContent;
 
       // Pair tool-result rows immediately following this assistant.
+      // Full content is kept for detail modals; the short preview is derived
+      // only for compact surfaces (circle subtitles).
       const resultsById = new Map<string, string>();
       const resultsByPos: string[] = [];
       let j = i + 1;
       while (j < raw.length && raw[j].role === "tool") {
-        const preview = (raw[j].content ?? "").slice(0, 200);
+        const full = raw[j].content ?? "";
         const tid = raw[j].tool_call_id ?? "";
-        if (tid) resultsById.set(tid, preview);
-        resultsByPos.push(preview);
+        if (tid) resultsById.set(tid, full);
+        resultsByPos.push(full);
         j++;
       }
 
@@ -140,17 +142,18 @@ export async function loadSessionHistory(
         const name = tc.name ?? "";
         if (!name) return;
         const args = tc.arguments;
-        const preview = resultsById.get(tc.id ?? "") ?? resultsByPos[tcIdx];
-        const status: "pending" | "done" = preview != null ? "done" : isPartial ? "pending" : "done";
+        const fullResult = resultsById.get(tc.id ?? "") ?? resultsByPos[tcIdx];
+        const status: "pending" | "done" = fullResult != null ? "done" : isPartial ? "pending" : "done";
         timeline.push({
           id: `h-c-${bubbleIdx}-${timeline.length}`,
           type: "tool",
           tool: name,
           args,
-          result_preview: preview,
+          result: fullResult,
+          result_preview: fullResult?.slice(0, 200),
           status,
         });
-        trace.push({ iter: 0, tool: name, args, result: preview } as TraceEvent);
+        trace.push({ iter: 0, tool: name, args, result: fullResult } as TraceEvent);
       });
 
       bubble.timeline = timeline;
