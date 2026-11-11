@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shlex
 import threading
@@ -59,6 +60,8 @@ from ..agent.llm import ToolSpec
 from ..agent.context import CURRENT_SESSION_ID
 from ..home import vault_tool_cache
 from ..secrets_substitute import resolve as resolve_secrets
+
+log = logging.getLogger(__name__)
 
 AGENT_DELEGATE_TOOL = ToolSpec(
     name="agent_delegate",
@@ -337,13 +340,17 @@ async def handle_agent_delegate(
     job_tracker: Any | None = None,
     publish_fn: Any | None = None,
     session_id: str | None = None,
+    on_complete: Any | None = None,
 ) -> str:
     """Run one configured delegate agent headlessly.
 
     Never raises across the agent boundary — every failure surfaces as a
     JSON ``{"ok": false, ...}`` result, matching the ``acp_call`` contract.
     Async mode (default) registers a :class:`~nexus.server.job_tracker.Job`
-    and returns ``{job_id, log_ref}`` immediately.
+    and returns ``{job_id, log_ref}`` immediately; when the job finishes,
+    ``on_complete`` (a late-bound coroutine callable taking one event dict)
+    is awaited with ``{session_id, job_id, agent, status, exit_code, ...}``
+    so the app can notify the originating session and chain a report turn.
     """
     cfg = _delegate_cfg()
 
@@ -383,7 +390,7 @@ async def handle_agent_delegate(
     return await _run_async(
         cfg, agent=agent, task=task, argv=argv, cwd=cwd, env=env,
         timeout_s=timeout_s, job_tracker=job_tracker, publish_fn=publish_fn,
-        session_id=session_id,
+        session_id=session_id, on_complete=on_complete,
     )
 
 
@@ -455,6 +462,7 @@ async def _run_async(
     job_tracker: Any | None,
     publish_fn: Any | None,
     session_id: str | None,
+    on_complete: Any | None = None,
 ) -> str:
     """Fire-and-monitor mode: return immediately, run in a tracked job.
 
@@ -605,6 +613,25 @@ async def _run_async(
         )
         if job_tracker is not None:
             job_tracker.done(job_id, publish_fn=publish_fn)
+
+        # Terminal-observer hook: notify the originating session (event +
+        # follow-up report turn). Never fatal — a broken hook must not take
+        # the job's result down with it.
+        if on_complete is not None and session_id:
+            try:
+                await on_complete({
+                    "session_id": session_id,
+                    "job_id": job_id,
+                    "agent": agent,
+                    "task": task[:200],
+                    "status": result["status"],
+                    "exit_code": result.get("exit_code"),
+                    "duration_s": result.get("duration_s"),
+                    "error": result.get("error"),
+                    "log_ref": log_ref,
+                })
+            except Exception:  # noqa: BLE001 — notification is best-effort
+                log.exception("agent_delegate on_complete hook failed")
 
     asyncio.ensure_future(_job())
 

@@ -465,7 +465,8 @@ export type SessionEvent =
   | { kind: "turn_settled"; data: { session_id?: string } }
   | { kind: "settings_changed"; data: { yolo_mode?: boolean; auto_accept_members?: boolean; ui_mode?: string } }
   | { kind: "browser_event"; data: BrowserEventPayload }
-  | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } };
+  | { kind: "op_done"; data: { status: "done" | "failed"; error?: string | null } }
+  | { kind: "delegate_done"; data: { session_id?: string; job_id: string; agent: string; status: string; exit_code?: number | null; duration_s?: number; error?: string | null; log_ref?: string; task?: string } };
 
 /** Returned from subscribeSessionEvents; close() ends the subscription. */
 export interface SessionSubscription {
@@ -510,6 +511,7 @@ export function subscribeSessionEvents(
     "subagent_delta",
     "subagent_tool",
     "subagent_done",
+    "delegate_done",
   ];
   for (const kind of kinds) {
     es.addEventListener(kind, (evt) => {

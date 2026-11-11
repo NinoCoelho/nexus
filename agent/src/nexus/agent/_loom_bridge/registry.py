@@ -56,6 +56,7 @@ class AgentHandlers:
         subagent_runner: Any | None = None,
         delegate_job_tracker: Any | None = None,
         delegate_publish: Any | None = None,
+        delegate_on_complete: Any | None = None,
         notify_user: Any | None = None,
         hb_manager_getter: Any | None = None,
         page: Any | None = None,
@@ -70,6 +71,7 @@ class AgentHandlers:
         self.subagent_runner = subagent_runner
         self.delegate_job_tracker = delegate_job_tracker
         self.delegate_publish = delegate_publish
+        self.delegate_on_complete = delegate_on_complete
         self.hb_manager_getter = hb_manager_getter
         self.page = page
         self.site_credentials = site_credentials
@@ -338,6 +340,7 @@ def build_tool_registry(
                 handlers.ask_user,
                 job_tracker=handlers.delegate_job_tracker,
                 publish_fn=handlers.delegate_publish,
+                on_complete=handlers.delegate_on_complete,
             )
 
         registry.register(_SimpleToolHandler(AGENT_DELEGATE_TOOL, _agent_delegate))

@@ -693,6 +693,17 @@ def create_app(
     agent._handlers.delegate_job_tracker = job_tracker
     agent._handlers.delegate_publish = _publish_job_event
 
+    # Completion hook: publish delegate_done on the originating session and
+    # chain a report turn so the agent announces the outcome unprompted.
+    from .services.delegate_follow_up import wire_delegate_follow_up
+
+    agent._handlers.delegate_on_complete = wire_delegate_follow_up(
+        sessions=sessions,
+        agent=agent,
+        tracker=job_tracker,
+        publish_job_event=_publish_job_event,
+    )
+
     # Lane-change hook: any cross-lane move (UI drag-drop via PATCH, agent
     # tool via kanban_manage, external API client) auto-dispatches the
     # destination lane's prompt if one is set. Cycle and depth guards via

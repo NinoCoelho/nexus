@@ -295,6 +295,66 @@ async def test_delegate_status_unknown_job() -> None:
     assert "unknown job_id" in result["error"]
 
 
+# ── on_complete hook (session notification + report turn) ───────────────────
+
+
+async def test_on_complete_fires_with_payload() -> None:
+    seen: list[dict] = []
+
+    async def hook(event: dict) -> None:
+        seen.append(event)
+
+    tracker = JobTracker()
+    r = json.loads(
+        await ad.handle_agent_delegate(
+            {"agent": "echo", "task": "report me", "wait": False},
+            None,
+            job_tracker=tracker,
+            session_id="sess-1",
+            on_complete=hook,
+        )
+    )
+    await _poll_status(r["job_id"], tracker)
+    assert len(seen) == 1
+    ev = seen[0]
+    assert ev["session_id"] == "sess-1"
+    assert ev["job_id"] == r["job_id"]
+    assert ev["agent"] == "echo"
+    assert ev["status"] == "done"
+    assert ev["exit_code"] == 0
+    assert ev["log_ref"] == r["log_ref"]
+
+
+async def test_on_complete_not_fired_for_sync() -> None:
+    seen: list[dict] = []
+
+    async def hook(event: dict) -> None:
+        seen.append(event)
+
+    await ad.handle_agent_delegate(
+        {"agent": "echo", "task": "x", "wait": True}, None, on_complete=hook
+    )
+    assert seen == []
+
+
+async def test_on_complete_failure_never_breaks_result() -> None:
+    async def broken(event: dict) -> None:
+        raise RuntimeError("hook exploded")
+
+    tracker = JobTracker()
+    r = json.loads(
+        await ad.handle_agent_delegate(
+            {"agent": "echo", "task": "x", "wait": False},
+            None,
+            job_tracker=tracker,
+            session_id="sess-1",
+            on_complete=broken,
+        )
+    )
+    status = await _poll_status(r["job_id"], tracker)
+    assert status["status"] == "done"  # result intact despite the hook raising
+
+
 def test_save_roundtrip_preserves_delegate_section(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: save() used to drop [delegate] entirely, silently wiping
     the user's configured agents on every settings save (and unregistering

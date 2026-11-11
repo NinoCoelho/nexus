@@ -397,6 +397,11 @@ class DelegateConfig(BaseModel):
     # when a run genuinely exceeds this many seconds; the turn is never
     # blocked. Per-call `timeout_s` overrides it.
     max_run_seconds: int = 1800
+    # What happens when an async delegate job finishes: "report" publishes a
+    # delegate_done event on the originating session and chains a follow-up
+    # turn so the agent reads the result and reports in chat (queued if a
+    # turn is already running). "silent" keeps the poll-only behavior.
+    on_complete: Literal["report", "silent"] = "report"
     # Inline-output cap. Full transcripts larger than this are written to
     # ``vault/.tool-cache/delegate-<agent>-<ts>.md`` and returned as a
     # ``vault://`` pointer, matching the microcompaction contract.
