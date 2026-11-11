@@ -41,6 +41,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera scans the pairing QR code shown by your Nexus server.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hold the mic button in a chat to record a voice memo and send it to your Nexus server. Recording only happens while the button is held.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The server is reached over the tailnet at http://100.x.y.z —

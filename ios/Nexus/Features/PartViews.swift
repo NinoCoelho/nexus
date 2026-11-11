@@ -329,59 +329,153 @@ struct AudioPartView: View {
     @State private var fileURL: URL?
     @State private var failed = false
     @State private var attempt = 0
+    // Transcript (Phase 3): fetched from GET /vault/transcribe on first
+    // expand, cached on disk by AudioTranscriber. Any failure just hides
+    // the section — the player keeps working.
+    @State private var transcript: String?
+    @State private var transcriptFailed = false
+    @State private var showTranscript = false
+    @State private var loadingTranscript = false
+
+    /// Transcription needs the server copy: staged (optimistic) parts
+    /// have no vault file yet, and parts without a client can't fetch.
+    private var canTranscribe: Bool {
+        localData == nil && client != nil
+            && !(part.vaultPath ?? "").isEmpty && !failed
+    }
 
     var body: some View {
-        Group {
-            if failed {
-                PartErrorChip(label: part.fileName, onRetry: { attempt += 1 })
-            } else if let fileURL {
-                HStack(spacing: 10) {
-                    Button {
-                        player.toggle()
-                    } label: {
-                        Image(systemName: player.playing ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 30))
-                            .foregroundStyle(Theme.accent)
-                    }
-                    .disabled(!player.loaded)
-                    .accessibilityLabel(player.playing ? "Pause" : "Play")
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "waveform")
-                                .font(.caption)
-                                .foregroundStyle(Theme.subtleText)
-                            Text(part.fileName)
-                                .font(.caption)
-                                .foregroundStyle(Theme.subtleText)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        ProgressView(value: player.progress)
-                            .tint(Theme.accent)
-                        Text(player.timeLabel)
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(Theme.subtleText)
-                    }
-                }
-                .padding(10)
-                .frame(minWidth: 210, alignment: .leading)
-                .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
-            } else {
-                // Downloading the audio file — same cache as images.
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Label(part.fileName, systemImage: "waveform")
-                        .font(.caption)
-                        .foregroundStyle(Theme.subtleText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .padding(10)
-                .frame(minWidth: 210, alignment: .leading)
-                .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
+        VStack(alignment: .leading, spacing: 8) {
+            playerRow
+            if canTranscribe, !transcriptFailed {
+                transcriptSection
             }
         }
         .task(id: "\(part.vaultPath ?? "")#\(attempt)") { await load() }
+    }
+
+    @ViewBuilder
+    private var playerRow: some View {
+        if failed {
+            PartErrorChip(label: part.fileName, onRetry: { attempt += 1 })
+        } else if let fileURL {
+            HStack(spacing: 10) {
+                Button {
+                    player.toggle()
+                } label: {
+                    Image(systemName: player.playing ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(Theme.accent)
+                }
+                .disabled(!player.loaded)
+                .accessibilityLabel(player.playing ? "Pause" : "Play")
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "waveform")
+                            .font(.caption)
+                            .foregroundStyle(Theme.subtleText)
+                        Text(part.fileName)
+                            .font(.caption)
+                            .foregroundStyle(Theme.subtleText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    ProgressView(value: player.progress)
+                        .tint(Theme.accent)
+                    Text(player.timeLabel)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(Theme.subtleText)
+                }
+            }
+            .padding(10)
+            .frame(minWidth: 210, alignment: .leading)
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
+        } else {
+            // Downloading the audio file — same cache as images.
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Label(part.fileName, systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(Theme.subtleText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(10)
+            .frame(minWidth: 210, alignment: .leading)
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    /// Collapsible transcript: a small toggle below the player; expanding
+    /// the first time runs the transcription (spinner while waiting).
+    @ViewBuilder
+    private var transcriptSection: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { showTranscript.toggle() }
+            if showTranscript, transcript == nil, !loadingTranscript {
+                loadTranscript()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "text.bubble")
+                    .font(.caption2)
+                Text("Transcript")
+                    .font(.caption)
+                if loadingTranscript {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: showTranscript ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                }
+            }
+            .foregroundStyle(Theme.subtleText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Theme.panel.opacity(0.7), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Toggle transcript")
+
+        if showTranscript {
+            if let transcript, !transcript.isEmpty {
+                ScrollView {
+                    Text(transcript)
+                        .font(.caption)
+                        .foregroundStyle(Theme.subtleText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 120)
+            } else if !loadingTranscript {
+                // Transcription ran but produced no text — nothing more
+                // to show; collapse back so only the toggle remains.
+                EmptyView()
+            }
+        }
+    }
+
+    private func loadTranscript() {
+        guard let client, let path = part.vaultPath, !path.isEmpty else {
+            transcriptFailed = true
+            return
+        }
+        loadingTranscript = true
+        Task {
+            do {
+                let text = try await AudioTranscriber.shared.transcript(for: path, client: client)
+                await MainActor.run {
+                    loadingTranscript = false
+                    transcript = text
+                    // Empty result → nothing to reveal; hide the toggle.
+                    transcriptFailed = text.isEmpty
+                }
+            } catch {
+                await MainActor.run {
+                    loadingTranscript = false
+                    transcriptFailed = true
+                    showTranscript = false
+                }
+            }
+        }
     }
 
     private func load() async {

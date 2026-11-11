@@ -52,6 +52,9 @@ struct ChatView: View {
     @State private var attachmentUploading = false
     /// Composer text view height (grows with content, caps at max lines).
     @State private var composerHeight: CGFloat = 22
+    // Voice memo (hold-to-talk): the recorder is app-wide single-use but
+    // the button lives in this composer.
+    @StateObject private var recorder = VoiceMemoRecorder()
 
     // Scroll: the transcript is a full (non-lazy) VStack; these track
     // whether the viewport sits at the end (drives autoScroll and the
@@ -541,6 +544,10 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 6) {
+            if recorder.recording {
+                RecordingIndicator(elapsed: recorder.elapsed)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if !stagedAttachments.isEmpty {
                 stagedStrip
             }
@@ -576,8 +583,8 @@ struct ChatView: View {
 
                 ComposerTextView(
                     text: $input,
-                    placeholder: isStreaming ? "Queue a message…" : "Message",
-                    disabled: pendingRequest != nil,
+                    placeholder: recorder.recording ? "Recording…" : (isStreaming ? "Queue a message…" : "Message"),
+                    disabled: pendingRequest != nil || recorder.recording,
                     onPasteAttachment: { pasteFromClipboard(menu: false) },
                     onSubmit: { send() },
                     onHeightChange: { composerHeight = $0 }
@@ -585,6 +592,14 @@ struct ChatView: View {
                 .frame(height: composerHeight)
                 .padding(10)
                 .background(Theme.panel, in: RoundedRectangle(cornerRadius: 18))
+
+                VoiceMemoButton(
+                    recorder: recorder,
+                    disabled: pendingRequest != nil || isStreaming
+                        || attachmentUploading || composerHasContent,
+                    onSend: { name, data in sendVoiceMemo(name: name, data: data) }
+                )
+
                 Button {
                     send()
                 } label: {
@@ -598,6 +613,7 @@ struct ChatView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
+        .animation(.easeInOut(duration: 0.2), value: recorder.recording)
         .sheet(isPresented: $showCamera) {
             CameraPicker { data in
                 stage(name: nil, data: data)
@@ -712,6 +728,15 @@ struct ChatView: View {
     private func stage(name: String?, data: Data) {
         let staged = Staging.attachment(name: name ?? Staging.photoName(), data: data)
         stagedAttachments.append(staged)
+    }
+
+    /// A finished hold-to-talk take: stage the .m4a through the regular
+    /// attachment flow and send immediately (input is guaranteed empty —
+    /// the mic is disabled while the draft has content).
+    private func sendVoiceMemo(name: String, data: Data) {
+        guard !isStreaming else { return }
+        stage(name: name, data: data)
+        send()
     }
     private func pasteFromClipboard(menu: Bool) {
         let pasteboard = UIPasteboard.general
@@ -1122,7 +1147,16 @@ struct MessageBubble: View {
     /// upload has even reached the vault.
     var localData: [String: Data] = [:]
 
+    // TTS availability/playback state lives on the shared speaker; being
+    // observed here is what re-hides the Speak item the moment a server
+    // without TTS is detected.
+    @ObservedObject private var tts = TTSSpeaker.shared
+
     private var isUser: Bool { message.role == "user" }
+    private var speakable: Bool {
+        !isUser && message.role != "tool" && !message.content.displayText.isEmpty
+    }
+    private var speakKey: String { "\(message.seq)" }
 
     /// User bubbles are plain text; highlight by wrapping in an
     /// AttributedString when a search term is active.
@@ -1161,7 +1195,22 @@ struct MessageBubble: View {
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
-            // Future message actions (Speak, 👍/👎 feedback) plug in here.
+            if speakable, !tts.unavailable {
+                Button {
+                    tts.toggle(
+                        key: speakKey,
+                        text: message.content.displayText,
+                        client: client
+                    )
+                } label: {
+                    if tts.speakingKey == speakKey {
+                        Label("Stop", systemImage: "stop.circle.fill")
+                    } else {
+                        Label("Speak", systemImage: "speaker.wave.2")
+                    }
+                }
+            }
+            // Future message actions (👍/👎 feedback) plug in here.
         }
     }
 

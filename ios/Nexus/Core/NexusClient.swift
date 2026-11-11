@@ -389,6 +389,36 @@ final class NexusClient {
         return Int(http.expectedContentLength)
     }
 
+    // MARK: - TTS / transcription
+
+    /// Body of POST /tts/synthesize — voice/speed stay at the server
+    /// defaults on iOS, so only `text` is sent (synthesized Codable
+    /// omits nils, but none exist here).
+    struct SynthesizeSpeechBody: Encodable {
+        var text: String
+    }
+
+    /// POST /tts/synthesize → raw audio bytes (Piper WAV). Synthesis of
+    /// long texts can take a while on the server, so this rides a
+    /// generous timeout instead of the REST session's fast-fail 15s.
+    func ttsAudio(text: String) async throws -> Data {
+        var req = request("tts/synthesize", method: "POST", body: SynthesizeSpeechBody(text: text))
+        req.timeoutInterval = 120
+        req.setValue("audio/*", forHTTPHeaderField: "Accept")
+        return try await run(req)
+    }
+
+    /// GET /vault/transcribe?path=… → {"text": str} — lazily transcribes
+    /// a vault audio file (faster-whisper or the configured remote).
+    /// Whisper on a long memo is slow; same budget as TTS synthesis.
+    func transcribeVaultAudio(path: String) async throws -> String {
+        struct Reply: Decodable { var text: String? }
+        var req = request("vault/transcribe", query: ["path": path])
+        req.timeoutInterval = 120
+        let data = try await run(req)
+        return (try? decoder.decode(Reply.self, from: data)).flatMap(\.text) ?? ""
+    }
+
     // MARK: - Push registration
 
     struct ApnsRegisterBody: Encodable {

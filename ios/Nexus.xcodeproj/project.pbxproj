@@ -26,6 +26,7 @@
 		A100000000000000000000A13 /* Attachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B13 /* Attachments.swift */; };
 		A100000000000000000000A14 /* ComposerTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B14 /* ComposerTextView.swift */; };
 		A100000000000000000000A15 /* PartViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B15 /* PartViews.swift */; };
+		A100000000000000000000A16 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B16 /* Voice.swift */; };
 		A100000000000000000000A10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B10 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -52,6 +53,7 @@
 		A100000000000000000000B13 /* Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachments.swift; sourceTree = "<group>"; };
 		A100000000000000000000B14 /* ComposerTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTextView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B15 /* PartViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartViews.swift; sourceTree = "<group>"; };
+		A100000000000000000000B16 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,6 +111,7 @@
 				A100000000000000000000B13 /* Attachments.swift */,
 				A100000000000000000000B14 /* ComposerTextView.swift */,
 				A100000000000000000000B15 /* PartViews.swift */,
+				A100000000000000000000B16 /* Voice.swift */,
 				A100000000000000000000B0B /* MarkdownText.swift */,
 				A100000000000000000000B0C /* BrowserView.swift */,
 				A100000000000000000000B0D /* VaultView.swift */,
@@ -218,6 +221,7 @@
 				A100000000000000000000A13 /* Attachments.swift in Sources */,
 				A100000000000000000000A14 /* ComposerTextView.swift in Sources */,
 				A100000000000000000000A15 /* PartViews.swift in Sources */,
+				A100000000000000000000A16 /* Voice.swift in Sources */,
 				A100000000000000000000A0B /* MarkdownText.swift in Sources */,
 				A100000000000000000000A0C /* BrowserView.swift in Sources */,
 				A100000000000000000000A0D /* VaultView.swift in Sources */,
