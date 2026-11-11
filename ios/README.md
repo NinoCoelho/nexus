@@ -25,7 +25,10 @@ pairing token delivered by QR code.
 - **Attachments** — camera, photo library, Files picker, or clipboard paste
   (screenshot, video, files; a mixed image+text clipboard stages the image
   and keeps its text for the draft). Staged files upload to the vault when
-  the turn is sent and the message references them by path.
+  the turn is sent and the message references them by path. Attachment
+  parts render richly in the transcript: inline images with a fullscreen
+  tap-to-zoom viewer, compact audio players, and share-sheet document
+  chips — all fetched with the pairing token and disk-cached.
 - **Browser** — watch every bot's dedicated Chrome live (CDP screencast over
   SSE) and drive it: tap, scroll, type, special keys, navigate. Requires
   `[browser] remote_control = true` on the server (off by default).
@@ -38,9 +41,6 @@ pairing token delivered by QR code.
 
 Documented so they aren't mistaken for shipped features:
 
-- **Rich content-part rendering** — inline images, PDFs and audio inside
-  chat bubbles. Multi-part messages currently render as plain
-  `📎 <path>` text lines; the parts model exists server-side.
 - **Voice** — speech input and spoken playback of messages.
 
 ## Setup (server side, once)

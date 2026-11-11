@@ -354,6 +354,31 @@ final class NexusClient {
         try await get("vault/search", query: ["q": q, "limit": "30"])
     }
 
+    /// GET /vault/raw?path=… — raw bytes of any vault file (images,
+    /// audio, PDFs…). Same budget as uploads: attachments ride the
+    /// tailnet link, and the REST session's fast-fail 15s would cut big
+    /// files off mid-transfer.
+    func vaultRawData(path: String) async throws -> Data {
+        var req = request("vault/raw", query: ["path": path])
+        req.timeoutInterval = 120
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        return try await run(req)
+    }
+
+    /// HEAD /vault/raw — best-effort file size for the document chip's
+    /// label. Decorative, so it never throws: any failure just means
+    /// "size unknown" (nil).
+    func vaultRawLength(path: String) async -> Int? {
+        var req = request("vault/raw", query: ["path": path])
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 15
+        guard let (_, response) = try? await session.data(for: req),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              http.expectedContentLength > 0 else { return nil }
+        return Int(http.expectedContentLength)
+    }
+
     // MARK: - Push registration
 
     struct ApnsRegisterBody: Encodable {

@@ -36,6 +36,11 @@ struct ChatView: View {
     // Attachment staging: files picked here are uploaded to the vault when
     // the turn is sent, and the outgoing message references them by path.
     @State private var stagedAttachments: [StagedAttachment] = []
+    /// Bytes for parts of the optimistic bubble that are still only
+    /// staged locally (upload in flight) — keyed by the part's
+    /// vaultPath as displayed. Images/audio/docs render straight from
+    /// here until the server truth (real vault paths) replaces them.
+    @State private var pendingLocalData: [String: Data] = [:]
     @State private var showCamera = false
     @State private var showLibrary = false
     @State private var showFileImporter = false
@@ -145,8 +150,13 @@ struct ChatView: View {
                         ScrollView {
                             VStack(spacing: 10) {
                                 ForEach(displayMessages) { message in
-                                    MessageBubble(message: message, highlight: highlightTerm)
-                                        .id(message.seq)
+                                    MessageBubble(
+                                        message: message,
+                                        highlight: highlightTerm,
+                                        client: servers.client,
+                                        localData: pendingLocalData
+                                    )
+                                    .id(message.seq)
                                 }
                                 if searchNoResults {
                                     Text("No matches")
@@ -688,6 +698,12 @@ struct ChatView: View {
                 ContentPart(kind: Staging.contentKind(mime: s.mimeType), vaultPath: s.name, text: nil)
             }
             optimisticContent = .parts(parts)
+            // Rich rendering for the optimistic bubble: the parts carry
+            // the staged names, so index the bytes by exactly those keys
+            // (moved under the real vault paths as each upload lands).
+            for s in staged {
+                pendingLocalData[s.name] = s.data
+            }
         }
         let optimistic = ChatMessage(
             seq: optimisticSeq,
@@ -710,6 +726,19 @@ struct ChatView: View {
                 do {
                     let path = try await client.uploadFile(data: s.data, filename: s.name, mimeType: s.mimeType)
                     attachments.append(ChatAttachment(vaultPath: path, mimeType: s.mimeType))
+                    // Upgrade the optimistic bubble to real vault paths;
+                    // staged bytes move under the new key so image /
+                    // audio / document parts keep rendering instantly.
+                    await MainActor.run {
+                        pendingLocalData[path] = s.data
+                        pendingLocalData.removeValue(forKey: s.name)
+                        if let idx = messages.firstIndex(where: { $0.seq == optimisticSeq }),
+                           case .parts(var parts) = messages[idx].content,
+                           let i = parts.firstIndex(where: { $0.vaultPath == s.name }) {
+                            parts[i].vaultPath = path
+                            messages[idx].content = .parts(parts)
+                        }
+                    }
                 } catch {
                     failure = error.localizedDescription
                     break
@@ -721,6 +750,7 @@ struct ChatView: View {
                     // Nothing leaked to the server — restore the draft.
                     self.error = failure
                     messages.removeAll { $0.seq == optimisticSeq }
+                    pendingLocalData = [:]
                     input = text
                     stagedAttachments = staged
                     return
@@ -858,6 +888,9 @@ struct ChatView: View {
         if let session = try? await client.session(sid) {
             messages = session.messages
             title = session.title
+            // Server truth replaces the optimistic bubble — the staged
+            // bytes are no longer referenced by any part.
+            pendingLocalData = [:]
         }
     }
 
@@ -985,6 +1018,13 @@ struct MessageBubble: View {
     let message: ChatMessage
     /// Search term to highlight inside the bubble, if a search is active.
     var highlight: String? = nil
+    /// Authenticated client for fetching attachment parts (nil → parts
+    /// fall back to the 📎 text line).
+    var client: NexusClient? = nil
+    /// Staged bytes for optimistic parts, keyed by the part's vaultPath
+    /// as displayed — lets image/audio/document parts render before the
+    /// upload has even reached the vault.
+    var localData: [String: Data] = [:]
 
     private var isUser: Bool { message.role == "user" }
 
@@ -1006,6 +1046,9 @@ struct MessageBubble: View {
                     .font(.caption2)
                     .foregroundStyle(Theme.subtleText)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            } else if case .parts(let parts) = message.content,
+                      parts.contains(where: { $0.renderKind != "text" }) {
+                partsBubble(parts)
             } else {
                 (isUser
                     ? AnyView(userText)
@@ -1023,6 +1066,57 @@ struct MessageBubble: View {
                 Label("Copy", systemImage: "doc.on.doc")
             }
             // Future message actions (Speak, 👍/👎 feedback) plug in here.
+        }
+    }
+
+    // MARK: Parts rendering
+
+    /// Multipart bubble: text segments render exactly as a text bubble
+    /// would; image parts show inline, audio parts get a player, and
+    /// documents a share chip — all inside the same bubble background.
+    /// Unknown kinds keep the "📎 <path>" fallback line.
+    private func partsBubble(_ parts: [ContentPart]) -> some View {
+        VStack(alignment: isUser ? .trailing : .leading, spacing: 10) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                partSurface(part)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        .background(isUser ? Theme.bubbleUser : Theme.bubbleBot, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    @ViewBuilder
+    private func partSurface(_ part: ContentPart) -> some View {
+        let staged = part.vaultPath.flatMap { localData[$0] }
+        switch part.renderKind {
+        case "text":
+            partText(part)
+        case "image":
+            ImagePartView(part: part, client: client, localData: staged)
+        case "audio":
+            AudioPartView(part: part, client: client, localData: staged)
+        case "document":
+            DocumentPartView(part: part, client: client, localData: staged)
+        default:
+            Text(part.text ?? "📎 \(part.vaultPath ?? part.kind)")
+                .font(.callout)
+                .foregroundStyle(Theme.subtleText)
+        }
+    }
+
+    /// One text segment of a multipart message — same rendering rules
+    /// as a single-part bubble (user → plain text, bot → markdown).
+    @ViewBuilder
+    private func partText(_ part: ContentPart) -> some View {
+        let raw = part.text ?? ""
+        if isUser {
+            let attr = highlight.map {
+                MarkdownText.applyingHighlight($0, to: AttributedString(raw))
+            } ?? AttributedString(raw)
+            Text(attr)
+        } else {
+            MarkdownText(markdown: raw, highlight: highlight)
         }
     }
 }
