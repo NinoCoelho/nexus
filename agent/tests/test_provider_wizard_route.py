@@ -420,3 +420,325 @@ async def test_test_endpoint_returns_latency_ms(
     assert "ok" in body
     assert "latency_ms" in body
     assert isinstance(body["latency_ms"], int)
+
+
+# ── keyless (anonymous) openai_compat providers ─────────────────────────────
+
+
+class _FakeCompatServer:
+    """Minimal OpenAI-compatible server that records Authorization headers.
+
+    Serves ``{"data": [...]}`` on any GET so ``GET {base}/models`` works
+    for discovery and the wizard's connection test. With ``html=True`` it
+    answers 200 with a web page instead — mimicking an unrelated local
+    app that must NOT be adopted by the port healer.
+    """
+
+    def __init__(self, *, html: bool = False) -> None:
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        seen_auth: list[str | None] = []
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                seen_auth.append(self.headers.get("Authorization"))
+                if html:
+                    body = b"<!DOCTYPE html><html><body>hello</body></html>"
+                    ctype = "text/html"
+                else:
+                    body = json.dumps({"data": [{"id": "qwen3-32b"}]}).encode()
+                    ctype = "application/json"
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.port = int(server.server_address[1])
+        self.seen_auth = seen_auth
+        self._server = server
+        self._thread = thread
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+
+async def test_anonymous_openai_compat_discovers_models_without_key(
+    client: httpx.AsyncClient,
+) -> None:
+    """LM Studio / Bionic / vLLM style providers: anonymous auth, no key.
+
+    Discovery and the wizard's "Test connection" must both succeed without
+    an Authorization header instead of failing with "no API key
+    configured" — the runtime registry already accepts these providers.
+    """
+    fake = _FakeCompatServer()
+    try:
+        res = await client.post(
+            "/providers/wizard",
+            json={
+                "name": "lmstudio",
+                "catalog_id": "lmstudio",
+                "auth_method_id": "anonymous",
+                "runtime_kind": "openai_compat",
+                "base_url": f"http://127.0.0.1:{fake.port}/v1",
+                "credential_ref": None,
+                "credentials": {},
+                "models": ["qwen3-32b"],
+            },
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["auth_kind"] == "anonymous"
+
+        models = await client.get("/providers/lmstudio/models")
+        assert models.status_code == 200
+        body = models.json()
+        assert body["ok"] is True, body["error"]
+        assert body["models"] == ["qwen3-32b"]
+
+        test = await client.post("/providers/lmstudio/test")
+        assert test.status_code == 200
+        assert test.json()["ok"] is True, test.json()["error"]
+
+        # Anonymous probing must not leak an Authorization header —
+        # once for the discovery call, once for the connection test.
+        assert len(fake.seen_auth) >= 2
+        assert all(h is None for h in fake.seen_auth)
+    finally:
+        fake.stop()
+
+
+async def test_api_auth_openai_compat_without_resolvable_key_errors(
+    client: httpx.AsyncClient,
+) -> None:
+    """An api-auth provider whose credential stopped resolving keeps the
+    explicit "no API key configured" error — anonymous treatment must not
+    mask a broken credential binding (e.g. after vault cleanup)."""
+    from nexus import secrets as _s
+
+    res = await client.post(
+        "/providers/wizard",
+        json={
+            "name": "broken",
+            "auth_method_id": "api",
+            "runtime_kind": "openai_compat",
+            "base_url": "http://127.0.0.1:9/v1",
+            "credential_ref": "GONE_API_KEY",
+            "credentials": {"GONE_API_KEY": "sk-gone"},
+            "models": ["m1"],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    # Simulate the credential being deleted after setup.
+    _s.delete("GONE_API_KEY")
+
+    models = await client.get("/providers/broken/models")
+    assert models.status_code == 200
+    body = models.json()
+    assert body["ok"] is False
+    assert "no API key configured" in body["error"]
+
+    test = await client.post("/providers/broken/test")
+    assert test.status_code == 200
+    assert test.json()["ok"] is False
+
+
+async def test_wizard_empty_models_test_preserves_saved_models(
+    client: httpx.AsyncClient,
+) -> None:
+    """A "Test connection" click at the credentials step submits before any
+    model is picked (models=[]). That probe must not wipe models a previous
+    run saved for the same provider."""
+    res = await client.post(
+        "/providers/wizard",
+        json={
+            "name": "lmstudio",
+            "catalog_id": "lmstudio",
+            "auth_method_id": "anonymous",
+            "runtime_kind": "openai_compat",
+            "base_url": "http://localhost:1235/v1",
+            "credential_ref": None,
+            "credentials": {},
+            "models": ["qwen3-32b"],
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["models"] == ["qwen3-32b"]
+
+    # Mid-wizard probe: same provider, models not picked yet.
+    res = await client.post(
+        "/providers/wizard",
+        json={
+            "name": "lmstudio",
+            "catalog_id": "lmstudio",
+            "auth_method_id": "anonymous",
+            "runtime_kind": "openai_compat",
+            "base_url": "http://localhost:1235/v1",
+            "credential_ref": None,
+            "credentials": {},
+            "models": [],
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["models"] == ["qwen3-32b"], "probe wiped saved models"
+
+    # A real (non-empty) submission still replaces the list.
+    res = await client.post(
+        "/providers/wizard",
+        json={
+            "name": "lmstudio",
+            "catalog_id": "lmstudio",
+            "auth_method_id": "anonymous",
+            "runtime_kind": "openai_compat",
+            "base_url": "http://localhost:1235/v1",
+            "credential_ref": None,
+            "credentials": {},
+            "models": ["gemma-4-12b"],
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["models"] == ["gemma-4-12b"]
+
+
+async def test_dead_local_port_heals_to_live_server(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saving with a stale local port (the wizard's catalog default) probes
+    the well-known local LLM ports and adopts the first one serving an
+    OpenAI model list — so the dead port is never persisted and chat works
+    right after the wizard. Ports answering with HTML (unrelated local web
+    apps) are skipped."""
+    from nexus.server.routes import providers as providers_route
+
+    good = _FakeCompatServer()
+    bad = _FakeCompatServer(html=True)
+    # Restrict the healer's port list to our two fakes so a stray service
+    # on the real 1234/8000/etc can't make the test flaky. The HTML server
+    # sorts first to prove it gets probed and rejected.
+    monkeypatch.setattr(
+        providers_route, "_LOCAL_LLM_FALLBACK_PORTS", (bad.port, good.port)
+    )
+    try:
+        # Provider saved against a dead port — the wizard heals at save
+        # time so the runtime never sees the dead endpoint.
+        res = await client.post(
+            "/providers/wizard",
+            json={
+                "name": "lmstudio",
+                "catalog_id": "lmstudio",
+                "auth_method_id": "anonymous",
+                "runtime_kind": "openai_compat",
+                "base_url": "http://127.0.0.1:9/v1",
+                "credential_ref": None,
+                "credentials": {},
+                "models": ["qwen3-32b"],
+            },
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["base_url"] == f"http://127.0.0.1:{good.port}/v1", body
+        assert "auto-corrected" in (body.get("note") or ""), body
+
+        # Healed URL persisted for the runtime registry + later requests.
+        provs = {p["name"]: p for p in (await client.get("/providers")).json()}
+        assert provs["lmstudio"]["base_url"] == f"http://127.0.0.1:{good.port}/v1"
+
+        # Discovery and test hit the healed URL directly — green, no note.
+        models = (await client.get("/providers/lmstudio/models")).json()
+        assert models["ok"] is True, models["error"]
+        assert models["models"] == ["qwen3-32b"]
+        test = (await client.post("/providers/lmstudio/test")).json()
+        assert test["ok"] is True
+        assert not test.get("note")
+    finally:
+        good.stop()
+        bad.stop()
+
+
+async def test_dead_local_port_no_heal_for_api_auth(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Port healing is anonymous-only: an api-auth provider with a dead
+    base_url keeps its explicit connection error instead of being silently
+    repointed."""
+    from nexus.server.routes import providers as providers_route
+
+    good = _FakeCompatServer()
+    monkeypatch.setattr(
+        providers_route, "_LOCAL_LLM_FALLBACK_PORTS", (good.port,)
+    )
+    try:
+        res = await client.post(
+            "/providers/wizard",
+            json={
+                "name": "remote-gw",
+                "auth_method_id": "api",
+                "runtime_kind": "openai_compat",
+                "base_url": "http://127.0.0.1:9/v1",
+                "credential_ref": "GW_API_KEY",
+                "credentials": {"GW_API_KEY": "sk-gw"},
+                "models": ["m1"],
+            },
+        )
+        assert res.status_code == 200, res.text
+
+        body = (await client.get("/providers/remote-gw/models")).json()
+        assert body["ok"] is False
+        assert "healed_base_url" not in body
+    finally:
+        good.stop()
+
+
+async def test_discovery_heals_hand_edited_dead_port(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead port written by hand (config PATCH, manual edit) — not via the
+    wizard — still heals on the next discovery/test call."""
+    from nexus.server.routes import providers as providers_route
+
+    good = _FakeCompatServer()
+    monkeypatch.setattr(
+        providers_route, "_LOCAL_LLM_FALLBACK_PORTS", (good.port,)
+    )
+    try:
+        res = await client.post(
+            "/providers/wizard",
+            json={
+                "name": "lmstudio",
+                "catalog_id": "lmstudio",
+                "auth_method_id": "anonymous",
+                "runtime_kind": "openai_compat",
+                "base_url": f"http://127.0.0.1:{good.port}/v1",
+                "credential_ref": None,
+                "credentials": {},
+                "models": ["qwen3-32b"],
+            },
+        )
+        assert res.status_code == 200, res.text
+
+        # Simulate a hand edit that points the provider at a dead port.
+        res = await client.patch(
+            "/config",
+            json={"providers": {"lmstudio": {"base_url": "http://127.0.0.1:9/v1"}}},
+        )
+        assert res.status_code == 200, res.text
+
+        test = (await client.post("/providers/lmstudio/test")).json()
+        assert test["ok"] is True, test
+        assert "auto-corrected" in (test.get("note") or "")
+    finally:
+        good.stop()

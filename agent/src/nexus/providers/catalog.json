@@ -398,6 +398,40 @@
     "docs_url": "https://api-docs.deepseek.com"
   },
   {
+    "id": "zai-coding-plan",
+    "display_name": "Z.AI Coding Plan",
+    "category": "open",
+    "runtime_kind": "openai_compat",
+    "base_url": "https://api.z.ai/api/coding/paas/v4",
+    "env_var_names": ["ZHIPU_API_KEY"],
+    "auth_methods": [
+      {
+        "id": "api",
+        "label": "API key",
+        "priority": 100,
+        "prompts": [
+          {
+            "name": "ZHIPU_API_KEY",
+            "label": "API key",
+            "kind": "password",
+            "secret": true,
+            "required": true,
+            "help": "Coding Plan subscription key. Plan keys only work against the coding endpoint, not the pay-as-you-go API.",
+            "help_url": "https://z.ai/manage-apikey/apikey-list"
+          }
+        ]
+      }
+    ],
+    "default_models": [
+      {"id": "glm-5.3", "capabilities": ["chat", "tools", "reasoning"]},
+      {"id": "glm-5.3-flash", "capabilities": ["chat", "tools", "reasoning", "vision"]},
+      {"id": "glm-5.2", "capabilities": ["chat", "tools", "reasoning"]},
+      {"id": "glm-5-turbo", "capabilities": ["chat", "tools", "reasoning"]},
+      {"id": "glm-4.7", "capabilities": ["chat", "tools", "reasoning"]}
+    ],
+    "docs_url": "https://docs.z.ai/devpack/overview"
+  },
+  {
     "id": "moonshot",
     "display_name": "Moonshot (Kimi)",
     "category": "open",
@@ -691,6 +725,7 @@
             "label": "Base URL",
             "kind": "text",
             "default": "http://localhost:1234/v1",
+            "help": "Copy this from LM Studio / Bionic's local server settings. Classic LM Studio defaults to port 1234, but Bionic installs often use a different port (e.g. 1235) — the port must match exactly.",
             "required": true
           }
         ]

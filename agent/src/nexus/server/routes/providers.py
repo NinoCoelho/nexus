@@ -47,6 +47,130 @@ _LOCAL_API_AUTH_METHODS = {"local_codex"}
 # default chain. Bedrock ships in PR 5; Vertex + Azure are stubs.
 _IAM_AUTH_METHODS = {"iam_aws", "iam_gcp", "iam_azure"}
 
+# Ports probed when an anonymous *local* provider's configured port is
+# dead. Ordered by likelihood: LM Studio classic (1234), LM Studio Bionic
+# (1235), vLLM (8000), common dev ports, Ollama's OpenAI-compat surface
+# (11434). A candidate is only adopted when it answers ``GET /models``
+# with an OpenAI-shaped JSON list, so unrelated local web apps (which
+# return HTML) are never mistaken for a model server.
+_LOCAL_LLM_FALLBACK_PORTS = (1234, 1235, 8000, 8080, 11434)
+
+
+def _parse_openai_models(payload: Any) -> list[str] | None:
+    """Return model ids when ``payload`` looks like an OpenAI ``/models``
+    response, else ``None``. Guards the port healer against unrelated
+    local HTTP apps that answer 200 with HTML."""
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    ids: list[str] = []
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return None
+        ids.append(item["id"])
+    return ids
+
+
+def _split_local_base(base_url: str) -> tuple[str, str, int, str] | None:
+    """Decompose a localhost base URL into (scheme, host, port, path).
+
+    Returns ``None`` for non-local hosts so the port healer never touches
+    remote endpoints.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit((base_url or "").strip())
+    if parts.hostname not in ("localhost", "127.0.0.1", "::1"):
+        return None
+    scheme = parts.scheme or "http"
+    host = parts.hostname or "127.0.0.1"
+    port = parts.port or (443 if scheme == "https" else 80)
+    path = parts.path or "/v1"
+    return scheme, host, port, path
+
+
+async def probe_local_models(
+    client: Any,
+    base_url: str,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, list[str]] | None:
+    """When ``base_url`` is a localhost URL, probe the well-known local LLM
+    ports and return ``(live_base, model_ids)`` for the first one serving an
+    OpenAI-style model list. The configured port is never re-probed.
+
+    Returns ``None`` when the URL isn't local or no alternative answers.
+    """
+    from urllib.parse import urlunsplit
+
+    import httpx as _httpx
+
+    decomposed = _split_local_base(base_url)
+    if decomposed is None:
+        return None
+    scheme, host, current_port, path = decomposed
+    headers = headers or {}
+
+    for port in _LOCAL_LLM_FALLBACK_PORTS:
+        if port == current_port:
+            continue
+        cand = urlunsplit((scheme, f"{host}:{port}", path, "", "")).rstrip("/")
+        try:
+            r = await client.get(f"{cand}/models", headers=headers)
+        except _httpx.ConnectError:
+            continue
+        except _httpx.TimeoutException:
+            continue
+        if r.status_code != 200:
+            continue
+        try:
+            ids = _parse_openai_models(r.json())
+        except ValueError:
+            continue
+        if ids is None:
+            continue
+        return cand, ids
+    return None
+
+
+async def _heal_local_base_url(
+    client: Any,
+    name: str,
+    p: Any,
+    headers: dict[str, str],
+    app_state: dict[str, Any],
+    agent: Any,
+) -> dict[str, Any] | None:
+    """Probe well-known local LLM ports and adopt the first live one.
+
+    Only fires for anonymous providers on localhost whose configured port
+    just refused the connection. On success the corrected ``base_url`` is
+    persisted to config.toml and the provider registry is rebuilt, so the
+    runtime uses the healed URL immediately — not just this probe.
+    """
+    if getattr(p, "auth_kind", "api") != "anonymous":
+        return None
+    found = await probe_local_models(client, p.base_url or "", headers)
+    if found is None:
+        return None
+    cand, ids = found
+
+    # Adopt: persist the corrected URL and rebuild the registry.
+    from ...config_file import load as load_cfg, save as save_cfg
+
+    cfg = load_cfg()
+    if name in cfg.providers:
+        cfg.providers[name].base_url = cand
+        save_cfg(cfg)
+        _rebuild_registry(cfg, app_state, agent)
+    return {
+        "models": ids,
+        "ok": True,
+        "error": None,
+        "healed_base_url": cand,
+    }
+
 
 @router.get("/providers")
 async def list_providers(app_state: dict[str, Any] = Depends(get_app_state)) -> list[dict[str, Any]]:
@@ -58,7 +182,10 @@ async def list_providers(app_state: dict[str, Any] = Depends(get_app_state)) -> 
     for name, p in cfg.providers.items():
         key_source: str | None = None
         cred_ref = getattr(p, "credential_ref", None)
-        if p.type == "ollama":
+        if p.type == "ollama" or getattr(p, "auth_kind", "api") == "anonymous":
+            # Keyless providers (Ollama, LM Studio / Bionic, vLLM, generic
+            # "No auth") deliberately have no credential; report that as a
+            # source rather than an absence.
             key_source = "anonymous"
         elif cred_ref and secrets_resolve(cred_ref):
             key_source = "credential"
@@ -82,6 +209,7 @@ async def list_providers(app_state: dict[str, Any] = Depends(get_app_state)) -> 
 async def list_provider_models(
     name: str,
     app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
 ) -> dict[str, Any]:
     import httpx as _httpx
     from ...secrets import get as secrets_get
@@ -155,11 +283,28 @@ async def list_provider_models(
                     api_key = secrets_get(name) or ""
                 if not api_key and p.api_key_env:
                     api_key = os.environ.get(p.api_key_env, "")
-                if not api_key:
+                # Keyless providers (LM Studio / Bionic, vLLM, llama.cpp, and
+                # the generic OpenAI-compatible entry with "No auth") are
+                # registered with auth_kind="anonymous". Probe them without
+                # demanding a credential; only api-auth providers error out.
+                if not api_key and getattr(p, "auth_kind", "api") != "anonymous":
                     return {"models": [], "ok": False, "error": f"no API key configured — set {p.api_key_env or 'an API key'} or use nexus providers set-key"}
-                headers: dict[str, str] = {"Authorization": f"Bearer {api_key}"}
+                # A resolved key is still sent when one exists so local
+                # servers that opted into token auth keep working; anonymous
+                # providers get no Authorization header at all.
+                headers: dict[str, str] = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                 base = p.base_url.rstrip("/")
-                r = await client.get(f"{base}/models", headers=headers)
+                try:
+                    r = await client.get(f"{base}/models", headers=headers)
+                except _httpx.ConnectError:
+                    # Local servers (LM Studio / Bionic, vLLM) move between
+                    # ports across restarts and the wizard's catalog default
+                    # is frequently stale. Probe the well-known ports and
+                    # adopt the first one that serves a model list.
+                    healed = await _heal_local_base_url(client, name, p, headers, app_state, a)
+                    if healed is None:
+                        raise
+                    return healed
                 if r.status_code != 200:
                     return {"models": [], "ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
                 data = r.json()
@@ -572,6 +717,28 @@ async def wizard_apply(
             detail="models must be an array of strings",
         )
 
+    # Keyless local provider saved with the wizard's prefilled (catalog
+    # default) port — Bionic/vLLM commonly live elsewhere. Probe before
+    # persisting so config never ends up pointing at a dead port, which
+    # would only surface later as a chat-time connection failure.
+    base_url_note: str | None = None
+    if auth_kind == "anonymous" and runtime_kind == "openai_compat" and base_url:
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient(timeout=3.0) as probe_client:
+            try:
+                alive = await probe_client.get(f"{base_url.rstrip('/')}/models")
+            except _httpx.ConnectError:
+                alive = None
+            except _httpx.TimeoutException:
+                alive = None
+            if alive is None:
+                found = await probe_local_models(probe_client, base_url)
+                if found is not None:
+                    healed, _ids = found
+                    base_url_note = f"port auto-corrected → {healed}"
+                    base_url = healed
+
     # 1. Snapshot secrets we're about to overwrite, then write the new values.
     snap = _snapshot_secrets(list(credentials_in.keys()))
     try:
@@ -595,7 +762,13 @@ async def wizard_apply(
             iam_extra=iam_extra,
             type_for_legacy=runtime_kind,
         )
-        _wizard_apply_models(cfg, name, [str(m) for m in models])
+        # An empty models list means the wizard's "Test connection" button
+        # fired at the credentials step (models not picked yet). Applying it
+        # verbatim would wipe models saved by a previous run — preserve them
+        # unless the submission actually carries a (non-empty) replacement.
+        existing_models = [m for m in cfg.models if m.provider == name]
+        if models or not existing_models:
+            _wizard_apply_models(cfg, name, [str(m) for m in models])
 
         save_cfg(cfg)
     except HTTPException:
@@ -623,6 +796,7 @@ async def wizard_apply(
         "credential_ref": p.credential_ref,
         "oauth_token_ref": p.oauth_token_ref,
         "models": [m.model_name for m in cfg.models if m.provider == name],
+        **({"note": base_url_note} if base_url_note else {}),
     }
 
 
@@ -630,11 +804,12 @@ async def wizard_apply(
 async def test_provider_connection(
     name: str,
     app_state: dict[str, Any] = Depends(get_app_state),
+    a=Depends(get_agent),
 ) -> dict[str, Any]:
     """Live round-trip against the provider's model-list endpoint.
 
     A green response from this endpoint means the configured credential
-    successfully authenticates. Returns ``{ok, error, latency_ms}``.
+    successfully authenticates. Returns ``{ok, error, latency_ms, note?}``.
 
     Reuses the discovery code in ``list_provider_models`` rather than
     duplicating per-runtime probing — anything that lets us list models
@@ -647,10 +822,14 @@ async def test_provider_connection(
         return {"ok": False, "error": f"provider {name!r} not found", "latency_ms": 0}
 
     t0 = time.monotonic()
-    res = await list_provider_models(name, app_state=app_state)
+    res = await list_provider_models(name, app_state=app_state, a=a)
     latency_ms = int((time.monotonic() - t0) * 1000)
-    return {
+    out: dict[str, Any] = {
         "ok": bool(res.get("ok")),
         "error": res.get("error"),
         "latency_ms": latency_ms,
     }
+    healed = res.get("healed_base_url")
+    if healed:
+        out["note"] = f"port auto-corrected → {healed}"
+    return out

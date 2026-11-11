@@ -47,7 +47,7 @@ async def test_catalog_endpoint_returns_entries(client: httpx.AsyncClient) -> No
     assert isinstance(body, list)
     assert len(body) >= 20
     ids = {entry["id"] for entry in body}
-    for known in ("openai", "anthropic", "ollama", "groq", "openrouter"):
+    for known in ("openai", "anthropic", "ollama", "groq", "openrouter", "zai-coding-plan"):
         assert known in ids
 
 

@@ -185,9 +185,9 @@ def providers_fetch_models(name: str = typer.Argument(...)) -> None:
                     api_key = _secrets.get(name) or ""
                 if not api_key and p.api_key_env:
                     api_key = os.environ.get(p.api_key_env, "")
-                if not api_key:
+                if not api_key and getattr(p, "auth_kind", "api") != "anonymous":
                     return {"models": [], "ok": False, "error": "no API key configured"}
-                headers: dict[str, str] = {"Authorization": f"Bearer {api_key}"}
+                headers: dict[str, str] = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                 base = p.base_url.rstrip("/")
                 r = await client.get(f"{base}/models", headers=headers)
                 if r.status_code != 200:
