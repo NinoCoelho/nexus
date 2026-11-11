@@ -30,6 +30,10 @@ dependencies = [
     # Keep <19 until faster-whisper ships av-19 support.
     "av>=11,<19",
     "loom-framework[anthropic,acp,mcp,tui,graphrag,search,scrape]",
+    # loom's MCP server bridge is written against the 1.x SDK API
+    # (mcp.server.fastmcp); mcp 2.x renamed FastMCP → MCPServer with a
+    # breaking API — pin <2 until loom migrates.
+    "mcp>=1,<2",
     "huggingface_hub>=0.24",
     "duckdb>=1.0",
     # DuckDB needs pytz at runtime to materialize TIMESTAMP WITH TIME ZONE

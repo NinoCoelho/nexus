@@ -206,6 +206,32 @@ MCP_READ_ONLY_EXPOSE = frozenset({
 })
 
 
+def _shim_fastmcp_version_kwarg() -> None:
+    """Make loom's ``McpServerBridge`` work on any released ``mcp`` SDK.
+
+    Loom constructs ``FastMCP(name, version=...)``, but no released version
+    of the ``mcp`` package accepts a ``version`` constructor kwarg — the
+    bridge crashes with ``TypeError`` on the first ``tools/list``. Shim
+    ``FastMCP.__init__`` to drop the kwarg (idempotent, no-op if the SDK
+    someday accepts it or the import fails).
+    """
+    try:
+        from mcp.server import fastmcp
+
+        orig = fastmcp.FastMCP.__init__
+        if getattr(orig, "_nexus_version_shim", False):
+            return
+
+        def _init(self: Any, *args: Any, **kwargs: Any) -> None:
+            kwargs.pop("version", None)
+            orig(self, *args, **kwargs)
+
+        _init._nexus_version_shim = True  # type: ignore[attr-defined]
+        fastmcp.FastMCP.__init__ = _init  # type: ignore[method-assign]
+    except Exception:
+        log.debug("[mcp-server] FastMCP version shim skipped", exc_info=True)
+
+
 class _ServerFilteredRegistry:
     """Wraps the live ToolRegistry for the MCP server bridge.
 
@@ -279,6 +305,8 @@ def start_mcp_server(
             expose = [t for t in expose if t not in MCP_SERVER_FORBIDDEN_TOOLS]
 
     port = getattr(mcp_cfg, "server_port", 18990)
+
+    _shim_fastmcp_version_kwarg()
 
     bridge = McpServerBridge(
         _ServerFilteredRegistry(tool_registry, forbidden=MCP_SERVER_FORBIDDEN_TOOLS, expose=expose),
