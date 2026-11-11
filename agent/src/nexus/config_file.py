@@ -40,6 +40,8 @@ from .config_schema import (  # noqa: F401
     CoordinatorConfig,
     McpServerEntry,
     McpConfig,
+    DelegateAgentConfig,
+    DelegateConfig,
     BrokerConfig,
     TelegramConfig,
     BrowserConfig,
@@ -467,12 +469,30 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
     location = LocationConfig(**dict(raw.get("location", {})))
     dream = DreamConfig(**dict(raw.get("dream", {})))
     mcp_raw = dict(raw.get("mcp", {}))
+    # Scalar fields (server_enabled/port/expose/auth_token) must survive the
+    # parse — they used to be dropped, silently disabling MCP server mode on
+    # every restart even when the config enabled it.
+    servers_field = mcp_raw.pop("servers", {}) or {}
+    if isinstance(servers_field, list):
+        # README-documented array-of-tables shape: [[mcp.servers]] with an
+        # inline `name` key. Normalize to the dict shape the schema expects.
+        servers_field = {
+            entry.pop("name"): entry
+            for entry in servers_field
+            if isinstance(entry, dict) and entry.get("name")
+        }
     mcp_servers: dict[str, McpServerEntry] = {}
-    for sname, sdata in mcp_raw.get("servers", {}).items():
+    for sname, sdata in servers_field.items():
         sdata = dict(sdata)
         sdata.setdefault("enabled", True)
         mcp_servers[sname] = McpServerEntry(**sdata)
-    mcp = McpConfig(servers=mcp_servers)
+    mcp = McpConfig(servers=mcp_servers, **mcp_raw)
+    delegate_raw = dict(raw.get("delegate", {}))
+    delegate_agents_raw = dict(delegate_raw.pop("agents", {}) or {})
+    delegate_agents: dict[str, DelegateAgentConfig] = {}
+    for aname, adata in delegate_agents_raw.items():
+        delegate_agents[aname] = DelegateAgentConfig(**adata)
+    delegate = DelegateConfig(agents=delegate_agents, **delegate_raw)
     broker = BrokerConfig(**dict(raw.get("broker", {})))
     telegram_raw = dict(raw.get("telegram", {}))
     if isinstance(telegram_raw.get("allowed_user_ids"), list):
@@ -494,6 +514,7 @@ def _parse(raw: dict[str, Any]) -> NexusConfig:
         location=location,
         dream=dream,
         mcp=mcp,
+        delegate=delegate,
         broker=broker,
         telegram=telegram,
         coordinator=CoordinatorConfig(**dict(raw.get("coordinator", {}))),

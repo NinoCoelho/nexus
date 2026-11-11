@@ -314,6 +314,23 @@ def build_tool_registry(
 
     registry.register(_SimpleToolHandler(NOTIFY_USER_TOOL, _notify_user))
 
+    # agent_delegate — external coding-agent CLIs (claude/codex/opencode).
+    # Only advertised when [delegate.agents.*] is actually configured
+    # (mirrors acp_call); handlers.ask_user is late-bound so bypass-flag
+    # confirmations work without a registry rebuild.
+    from nexus.tools.agent_delegate import (
+        AGENT_DELEGATE_TOOL,
+        agent_delegate_is_configured,
+        handle_agent_delegate,
+    )
+
+    if agent_delegate_is_configured():
+
+        async def _agent_delegate(args: dict) -> str:
+            return await handle_agent_delegate(args, handlers.ask_user)
+
+        registry.register(_SimpleToolHandler(AGENT_DELEGATE_TOOL, _agent_delegate))
+
     # Coordinator (master chat) tools — the handlers resolve the current
     # session from CURRENT_SESSION_ID (nexus.agent.context re-exports loom's)
     # and refuse to run outside the coordinator session.

@@ -135,6 +135,21 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
             "cdp_port": bcfg.cdp_port,
             "idle_shutdown_minutes": bcfg.idle_shutdown_minutes,
         }
+    dlg = getattr(cfg, "delegate", None)
+    if dlg is not None:
+        out["delegate"] = {
+            "agents": {
+                name: {
+                    "command": entry.command,
+                    "env": entry.env,
+                    "timeout_s": entry.timeout_s,
+                    "default_model": entry.default_model,
+                }
+                for name, entry in dlg.agents.items()
+            },
+            "max_inline_chars": dlg.max_inline_chars,
+            "dangerous_flags": dlg.dangerous_flags,
+        }
     return out
 
 
@@ -300,6 +315,22 @@ async def patch_config(
         if "server_expose" in patch:
             merged_mcp["server_expose"] = patch["server_expose"]
         raw["mcp"] = merged_mcp
+    if "delegate" in body:
+        existing = raw.get("delegate", {}) or {}
+        patch = body["delegate"] or {}
+        merged_delegate: dict[str, Any] = {**existing}
+        if "agents" in patch:
+            merged_agents = {**(merged_delegate.get("agents") or {})}
+            for aname, adata in (patch["agents"] or {}).items():
+                if adata is None:
+                    merged_agents.pop(aname, None)
+                else:
+                    merged_agents[aname] = {**(merged_agents.get(aname) or {}), **adata}
+            merged_delegate["agents"] = merged_agents
+        for scalar_key in ("max_inline_chars", "dangerous_flags"):
+            if scalar_key in patch:
+                merged_delegate[scalar_key] = patch[scalar_key]
+        raw["delegate"] = merged_delegate
     new_cfg = NexusConfig(**raw)
     save_cfg(new_cfg)
     _rebuild_registry(new_cfg, app_state, a)

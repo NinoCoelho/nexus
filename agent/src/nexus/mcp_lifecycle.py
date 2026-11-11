@@ -175,6 +175,70 @@ async def test_mcp_connection(config: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(e), "tool_count": 0, "tools": []}
 
 
+# Tools that must never be advertised by the MCP server bridge. They are
+# interactive by design (HITL approval, page/browser ownership, self-
+# modification) and an external MCP client invoking them would bypass the
+# approval flow or mutate agent state with no session context.
+MCP_SERVER_FORBIDDEN_TOOLS = frozenset({
+    "terminal",
+    "ask_user",
+    "page",
+    "browser",
+    "site_credentials",
+    "skill_manage",
+    "notify_user",
+    "edit_profile",
+})
+
+# Curated read-only preset for ``[mcp].server_expose = ["read-only"]`` — the
+# recommended surface for external coding agents (Claude Code, Codex,
+# OpenCode) that should consume vault/board knowledge but not mutate it.
+MCP_READ_ONLY_EXPOSE = frozenset({
+    "vault_read",
+    "vault_search",
+    "vault_list",
+    "vault_semantic_search",
+    "nexus_kb_search",
+    "kanban_query",
+    "history_recall",
+    "context_status",
+    "memory_read",
+})
+
+
+class _ServerFilteredRegistry:
+    """Wraps the live ToolRegistry for the MCP server bridge.
+
+    Loom's ``McpServerBridge`` iterates ``registry.list_handlers()`` and
+    expects handler *objects* (``handler.tool`` / ``handler.invoke``), while
+    loom's ``ToolRegistry.list_handlers()`` returns names — passing the raw
+    registry crashes on the first ``tools/list``. This wrapper returns
+    filtered handler objects and fixes that mismatch in the process.
+
+    Filters: forbidden (HITL-adjacent) tools are always dropped; when
+    ``expose`` is set, only those names are advertised.
+    """
+
+    def __init__(self, registry: Any, *, forbidden: frozenset[str], expose: list[str] | None) -> None:
+        self._registry = registry
+        self._forbidden = forbidden
+        self._expose = set(expose) if expose is not None else None
+
+    def list_handlers(self) -> list[Any]:
+        handlers = getattr(self._registry, "_handlers", {}) or {}
+        out: list[Any] = []
+        for name, handler in handlers.items():
+            if name in self._forbidden:
+                continue
+            if self._expose is not None and name not in self._expose:
+                continue
+            out.append(handler)
+        return out
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._registry, attr)
+
+
 def start_mcp_server(
     nexus_cfg: Any,
     tool_registry: Any,
@@ -183,6 +247,11 @@ def start_mcp_server(
 
     Returns the bridge instance if started, None otherwise.
     The bridge runs in a background thread serving Streamable HTTP.
+
+    Exposure goes through :class:`_ServerFilteredRegistry`: HITL-adjacent
+    tools (``terminal``, ``ask_user``, …) are dropped unconditionally — an
+    external MCP client calling them would bypass the approval flow — and
+    ``server_expose = ["read-only"]` expands to the curated read-only preset.
     """
     mcp_cfg = getattr(nexus_cfg, "mcp", None)
     if mcp_cfg is None or not getattr(mcp_cfg, "server_enabled", False):
@@ -193,13 +262,32 @@ def start_mcp_server(
         log.warning("[mcp-server] mcp package not installed — skipping MCP server mode")
         return None
 
-    expose = getattr(mcp_cfg, "server_expose", None) or None
+    raw_expose = getattr(mcp_cfg, "server_expose", None) or []
+    if "read-only" in raw_expose:
+        expose: list[str] | None = [t for t in MCP_READ_ONLY_EXPOSE if t not in raw_expose]
+        expose += [t for t in raw_expose if t != "read-only"]
+    elif raw_expose:
+        expose = list(raw_expose)
+    else:
+        expose = None  # all tools, minus the forbidden set (filtered below)
+
+    blocked = sorted(MCP_SERVER_FORBIDDEN_TOOLS)
+    if expose is not None:
+        dropped = [t for t in expose if t in MCP_SERVER_FORBIDDEN_TOOLS]
+        if dropped:
+            log.warning("[mcp-server] refusing to expose HITL-adjacent tools: %s", dropped)
+            expose = [t for t in expose if t not in MCP_SERVER_FORBIDDEN_TOOLS]
+
     port = getattr(mcp_cfg, "server_port", 18990)
 
     bridge = McpServerBridge(
-        tool_registry,
+        _ServerFilteredRegistry(tool_registry, forbidden=MCP_SERVER_FORBIDDEN_TOOLS, expose=expose),
         name="nexus",
-        expose=expose,
+    )
+    log.info(
+        "[mcp-server] exposure: %s (always forbidden: %s)",
+        "preset+explicit" if raw_expose and "read-only" in raw_expose else (expose or "all-minus-forbidden"),
+        blocked,
     )
     import threading
 
@@ -211,7 +299,7 @@ def start_mcp_server(
 
     thread = threading.Thread(target=_run, daemon=True, name="mcp-server")
     thread.start()
-    log.info("[mcp-server] started on 127.0.0.1:%d (expose=%s)", port, expose or "all")
+    log.info("[mcp-server] started on 127.0.0.1:%d (expose=%s)", port, expose or "all-minus-forbidden")
     return bridge
 
 

@@ -365,6 +365,46 @@ class DreamConfig(BaseModel):
     write_mode: Literal["direct", "stage"] = "direct"
 
 
+class DelegateAgentConfig(BaseModel):
+    """Headless command template for one external coding agent CLI.
+
+    ``command`` supports ``{task}`` (required) and ``{model}`` placeholders,
+    replaced at dispatch. Values in ``env`` are ``$NAME``-resolved through
+    ``secrets.resolve`` (env-first) at the subprocess boundary — never
+    inlined into the command string.
+    """
+
+    command: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    timeout_s: int = 900
+    default_model: str = ""
+
+
+class DelegateConfig(BaseModel):
+    """External agent delegation (``[delegate]`` config section).
+
+    Agents are configured under ``[delegate.agents.<name>]``. Empty by
+    default — the ``agent_delegate`` tool is only registered when at least
+    one agent is configured (same pattern as ``acp_call``).
+    """
+
+    agents: dict[str, DelegateAgentConfig] = Field(default_factory=dict)
+    # Inline-output cap. Full transcripts larger than this are written to
+    # ``vault/.tool-cache/delegate-<agent>-<ts>.md`` and returned as a
+    # ``vault://`` pointer, matching the microcompaction contract.
+    max_inline_chars: int = 8000
+    # Substrings that mark a bypass-permissions invocation; such calls go
+    # through HITL confirm first (YOLO mode auto-approves).
+    dangerous_flags: list[str] = Field(
+        default_factory=lambda: [
+            "--dangerously-skip-permissions",
+            "--yolo",
+            "--full-auto",
+            "--auto-accept",
+        ]
+    )
+
+
 class McpServerEntry(BaseModel):
     transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
     command: list[str] = Field(default_factory=list)
@@ -542,6 +582,7 @@ class NexusConfig(BaseModel):
     location: LocationConfig = Field(default_factory=LocationConfig)
     dream: DreamConfig = Field(default_factory=DreamConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
+    delegate: DelegateConfig = Field(default_factory=DelegateConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     coordinator: CoordinatorConfig = Field(default_factory=CoordinatorConfig)

@@ -912,7 +912,47 @@ graph LR
     S1 & S2 -->|"elicitation request"| BRIDGE
 ```
 
-**Server mode** (`[mcp].server_enabled = true`) exposes Nexus's own agent tools to external hosts via a Streamable HTTP MCP bridge on a background thread (`127.0.0.1:<port>`, default 18990). Tool exposure can be filtered via `server_expose`.
+**Server mode** (`[mcp].server_enabled = true`) exposes Nexus's own agent tools to external hosts via a Streamable HTTP MCP bridge on a background thread (`127.0.0.1:<port>`, default 18990). Tool exposure can be filtered via `server_expose`, and `["read-only"]` expands to a curated preset (vault/board/knowledge reads). HITL-adjacent tools (`terminal`, `ask_user`, `page`, `browser`, `skill_manage`, …) are never advertised in server mode — an external MCP client invoking them would bypass the approval flow.
+
+This makes the loop **bidirectional with coding agents**: point Claude Code, Codex, or OpenCode at the bridge and they can read your vault, boards, and knowledge graph while they work:
+
+```bash
+# Claude Code
+claude mcp add --transport http nexus http://127.0.0.1:18990/mcp
+
+# Codex (~/.codex/config.toml)
+# [mcp_servers.nexus]
+# url = "http://127.0.0.1:18990/mcp"
+
+# OpenCode (opencode.json)
+# { "mcp": { "nexus": { "type": "http", "url": "http://127.0.0.1:18990/mcp" } } }
+```
+
+### External agent delegation (`agent_delegate`)
+
+Nexus can hand self-contained tasks to external coding-agent CLIs running headlessly — Claude Code, Codex, OpenCode, or any other command that accepts a prompt. Configure one agent per `[delegate.agents.<name>]` section:
+
+```toml
+[delegate.agents.claude]
+command = ["claude", "-p", "{task}", "--output-format", "json"]
+# env = { ANTHROPIC_API_KEY = "$ANTHROPIC_API_KEY" }   # $NAME → secrets.resolve (env-first)
+timeout_s = 900
+# default_model = "claude-sonnet-4-5"                 # fills a {model} placeholder
+
+[delegate.agents.opencode]
+command = ["opencode", "run", "{task}"]
+
+[delegate.agents.codex]
+command = ["codex", "exec", "{task}"]
+```
+
+The tool is registered only when at least one agent is configured (a daemon restart picks up new sections). Behavior:
+
+- **Placeholders** — `{task}` is required in the template and always injected as a *single argv element* (no shell interpolation); `{model}` is replaced from the `model` arg or `default_model`.
+- **Token discipline** — transcripts larger than `[delegate].max_inline_chars` (default 8000) are written to `vault/.tool-cache/delegate-<agent>-<ts>.md` and returned as a short excerpt plus a `vault://.tool-cache/...` pointer, matching the microcompaction contract.
+- **Bypass flags are gated** — templates containing flags from `[delegate].dangerous_flags` (default: `--dangerously-skip-permissions`, `--yolo`, `--full-auto`, `--auto-accept`) go through a HITL confirm card first; YOLO mode auto-approves for unattended runs.
+- **Isolation** — one process per (agent, working directory) at a time, global cap of 3 concurrent delegates, hard timeout with kill.
+- **Fallback** — without config, the bundled `coding-agents` skill still teaches the agent to delegate through the `terminal` tool (`claude -p`, `codex exec`, `opencode run`).
 
 **MCP Apps** — sandboxed `<iframe sandbox="allow-scripts">` renders interactive HTML from MCP servers inline in chat. Communication is via `postMessage` using the MCP Apps JSON-RPC protocol. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML:
 
@@ -1758,17 +1798,31 @@ daily_token_budget = 500000           # cumulative token spend limit
 # MCP (Model Context Protocol) — connect to external MCP servers and/or
 # expose Nexus tools as an MCP server.
 [mcp]
-server_enabled = false                 # expose Nexus tools to external hosts
-server_port = 18990                    # MCP server bind port (loopback only)
+server_enabled = false                 # expose Nexus tools to external hosts (loopback only)
+server_port = 18990                    # MCP server bind port
+# server_expose = ["read-only"]        # or an explicit tool-name list; ["read-only"] = curated preset
+                                       # HITL-adjacent tools (terminal, ask_user, …) are never exposed
 
-[[mcp.servers]]
-name = "my-server"                     # friendly name
-transport = "stdio"                    # "stdio" | "http" | "sse"
-command = "npx"                        # for stdio
-args = ["-y", "@example/mcp-server"]   # for stdio
-# url = "http://localhost:3000/mcp"    # for http/sse
-# env = { API_KEY = "$MY_SERVER_KEY" } # environment variables ($VAR resolved from shell)
-# headers = { Authorization = "Bearer ..." } # for http/sse
+[mcp.servers.my-server]
+transport = "stdio"                    # "stdio" | "sse" | "streamable-http"
+command = ["npx", "-y", "@example/mcp-server"]   # for stdio (single argv list)
+# url = "http://localhost:3000/mcp"    # for sse / streamable-http
+# env = { API_KEY = "$MY_SERVER_KEY" } # $NAME resolved from shell env or secrets store
+# headers = { Authorization = "Bearer $TOKEN" }
+
+# External coding-agent delegation (agent_delegate tool). {task} placeholder
+# is required; {model} optional. Bypass-permission flags trigger a confirm card.
+[delegate.agents.claude]
+command = ["claude", "-p", "{task}", "--output-format", "json"]
+timeout_s = 900
+
+[delegate.agents.codex]
+command = ["codex", "exec", "{task}"]
+timeout_s = 900
+
+[delegate.agents.opencode]
+command = ["opencode", "run", "{task}"]
+timeout_s = 900
 
 # Voice output (TTS via bundled Piper). Acks are spoken confirmations
 # for voice-input turns (start + completion).
