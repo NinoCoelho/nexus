@@ -68,6 +68,34 @@ struct StatusInfo: Codable, Equatable {
     }
 }
 
+// MARK: - Model routing (/routing)
+
+/// GET /routing — read-only snapshot for the chat model picker. iOS never
+/// calls putRouting: per-request overrides ride the chat body and the
+/// persisted choice stays local (UserDefaults, keyed per server).
+struct RoutingInfo: Decodable {
+    var defaultModel: String?
+    var lastUsedModel: String?
+    var availableModels: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case defaultModel = "default_model"
+        case lastUsedModel = "last_used_model"
+        case availableModels = "available_models"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        defaultModel = try? c.decodeIfPresent(String.self, forKey: .defaultModel)
+        lastUsedModel = try? c.decodeIfPresent(String.self, forKey: .lastUsedModel)
+        // Element-wise decode: one weird entry must never blank the picker.
+        availableModels = []
+        if let raw = try? c.decode([JSONValue].self, forKey: .availableModels) {
+            availableModels = raw.compactMap { $0.stringValue }
+        }
+    }
+}
+
 // MARK: - Bots
 
 struct Bot: Codable, Identifiable, Equatable, Hashable {

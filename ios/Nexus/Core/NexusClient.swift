@@ -121,6 +121,10 @@ final class NexusClient {
 
     func status() async throws -> StatusInfo { try await get("status") }
 
+    /// GET /routing — default/last-used model plus the ids the server can
+    /// currently serve. Read-only; iOS never PUTs routing state back.
+    func routing() async throws -> RoutingInfo { try await get("routing") }
+
     func bots() async throws -> [Bot] { try await get("bots") }
 
     func sessions(limit: Int = 100, projectId: String? = nil) async throws -> [SessionSummary] {
@@ -147,9 +151,13 @@ final class NexusClient {
         var message: String
         var attachments: [ChatAttachment]?
         var projectId: String?
+        /// Per-request model override. Synthesized encoding omits it when
+        /// nil (no "model": null on the wire) — omission means "use the
+        /// server's default routing".
+        var model: String?
 
         enum CodingKeys: String, CodingKey {
-            case message, attachments
+            case message, attachments, model
             case sessionId = "session_id"
             case projectId = "project_id"
         }
@@ -161,10 +169,12 @@ final class NexusClient {
         sessionId: String?,
         message: String,
         attachments: [ChatAttachment]? = nil,
-        projectId: String? = nil
+        projectId: String? = nil,
+        model: String? = nil
     ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         var req = request("chat/stream", method: "POST", body: SendMessageBody(
-            sessionId: sessionId, message: message, attachments: attachments, projectId: projectId
+            sessionId: sessionId, message: message, attachments: attachments,
+            projectId: projectId, model: model
         ))
         req.timeoutInterval = 60 * 30
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")

@@ -23,6 +23,11 @@ struct ChatView: View {
     @State private var isStreaming = false
     @State private var queuedMessages: [QueuedMessage] = []
     @State private var pendingRequest: PendingRequest?
+    // Model picker: ids come from GET /routing (best-effort, fail-silent).
+    // selectedModel = nil → server default; the "model" key is then omitted
+    // from the chat body entirely (never "auto").
+    @State private var models: [String] = []
+    @State private var selectedModel: String?
     @State private var formValues: [String: String] = [:]
     @State private var error: String?
     /// False until the initial batch populate has been laid out AND the
@@ -99,6 +104,11 @@ struct ChatView: View {
         .navigationTitle(title.isEmpty ? (bot?.name ?? "Chat") : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if !models.isEmpty {
+                    modelMenu
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     toggleSearch()
@@ -125,6 +135,9 @@ struct ChatView: View {
         .task {
             await initialLoad()
             startEventsChannel()
+            // Best-effort model list for the picker — a routing failure
+            // just degrades/hides the menu, it never blocks the chat.
+            await loadRouting()
         }
         .onDisappear {
             eventsTask?.cancel()
@@ -134,6 +147,86 @@ struct ChatView: View {
             if phase == .active {
                 Task { await resyncAfterBackground() }
             }
+        }
+    }
+
+    // MARK: - Model picker
+
+    /// Toolbar menu: "Default (server)" plus the real ids /routing offers.
+    /// The button shows the active choice truncated; a routing failure or
+    /// empty list degrades gracefully (menu hidden — never blocks chat).
+    private var modelMenu: some View {
+        Menu {
+            Button {
+                selectModel(nil)
+            } label: {
+                if selectedModel == nil {
+                    Label("Default (server)", systemImage: "checkmark")
+                } else {
+                    Text("Default (server)")
+                }
+            }
+            Section("Model") {
+                ForEach(models, id: \.self) { id in
+                    Button {
+                        selectModel(id)
+                    } label: {
+                        if selectedModel == id {
+                            Label(id, systemImage: "checkmark")
+                        } else {
+                            Text(id)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text(selectedModel ?? "Default")
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 120)
+                .foregroundStyle(Theme.subtleText)
+        }
+        .accessibilityLabel("Chat model")
+    }
+
+    private func selectModel(_ id: String?) {
+        selectedModel = id
+        storeModel(id)
+    }
+
+    /// Per-server persistence: the app supports multiple paired servers,
+    /// so the key embeds the active profile's id (`chat.model.<profile-id>`).
+    private var modelStorageKey: String? {
+        servers.active.map { "chat.model.\($0.id.uuidString)" }
+    }
+
+    private var storedModel: String? {
+        guard let key = modelStorageKey else { return nil }
+        return UserDefaults.standard.string(forKey: key)
+    }
+
+    private func storeModel(_ value: String?) {
+        guard let key = modelStorageKey else { return }
+        if let value {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    private func loadRouting() async {
+        guard let client = servers.client else { return }
+        guard let info = try? await client.routing() else { return }
+        // "auto" is a web-only concept here: iOS offers Default (omitted
+        // key) + real ids, so filter it defensively.
+        let ids = info.availableModels.filter { !$0.isEmpty && $0.lowercased() != "auto" }
+        models = ids
+        // Pre-select the stored choice — but only if this server still
+        // offers it. Otherwise fall back to the default silently WITHOUT
+        // clearing storage (the model may reappear after a reconnect).
+        if let stored = storedModel, ids.contains(stored) {
+            selectedModel = stored
         }
     }
 
@@ -715,7 +808,7 @@ struct ChatView: View {
         messages.append(optimistic)
 
         guard !staged.isEmpty else {
-            startStream(client: client, message: text, sessionId: effectiveSessionId)
+            startStream(client: client, message: text, sessionId: effectiveSessionId, model: selectedModel)
             return
         }
         attachmentUploading = true
@@ -759,7 +852,8 @@ struct ChatView: View {
                     client: client,
                     message: text,
                     attachments: attachments,
-                    sessionId: effectiveSessionId
+                    sessionId: effectiveSessionId,
+                    model: selectedModel
                 )
             }
         }
@@ -769,7 +863,8 @@ struct ChatView: View {
         client: NexusClient,
         message: String,
         attachments: [ChatAttachment]? = nil,
-        sessionId: String?
+        sessionId: String?,
+        model: String? = nil
     ) {
         isStreaming = true
         streamingText = ""
@@ -780,7 +875,8 @@ struct ChatView: View {
         streamTask = Task {
             do {
                 for try await event in client.chatStream(
-                    sessionId: sessionId, message: message, attachments: attachments, projectId: bot.map(\.id)
+                    sessionId: sessionId, message: message, attachments: attachments,
+                    projectId: bot.map(\.id), model: model
                 ) {
                     await MainActor.run { handle(event) }
                 }
