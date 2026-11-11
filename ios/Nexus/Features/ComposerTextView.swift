@@ -22,7 +22,17 @@ struct ComposerTextView: UIViewRepresentable {
     /// Current ideal height, pushed up so SwiftUI can size the frame.
     var onHeightChange: (CGFloat) -> Void
 
-    static let maxLinesHeight: CGFloat = 128
+    /// Growth ceiling for the composer: ~38% of the screen (capped at
+    /// 420pt). A fixed 128pt cap turned long drafts into a tiny window
+    /// with internal scrolling almost immediately; an adaptive ceiling
+    /// keeps the transcript visible while still bounding the composer.
+    static func maxLinesHeight(for tv: UITextView) -> CGFloat {
+        // The view's window is the reliable screen source (UIScreen.main
+        // is deprecated); fall back to a common portrait height when the
+        // view isn't attached yet — the next fit pass corrects it.
+        let screenHeight = tv.window?.windowScene?.screen.bounds.height ?? 844
+        return min(screenHeight * 0.38, 420)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -94,13 +104,20 @@ struct ComposerTextView: UIViewRepresentable {
             label?.isHidden = !tv.text.isEmpty
         }
 
-        /// Grow with content up to maxLinesHeight, then scroll internally.
+        /// Grow with content up to the adaptive ceiling, then scroll
+        /// internally — always keeping the caret visible in scroll mode.
         func fitHeight(_ tv: UITextView) {
             let fit = tv.sizeThatFits(
                 CGSize(width: tv.bounds.width, height: .greatestFiniteMagnitude)
             ).height
-            let target = min(max(fit, 22), ComposerTextView.maxLinesHeight)
+            let target = min(max(fit, 22), ComposerTextView.maxLinesHeight(for: tv))
             tv.isScrollEnabled = fit > target + 1
+            // Once internal scrolling kicks in, keep the caret on screen:
+            // without this the cursor can drift above the visible frame
+            // while typing near the bottom of the scroll view.
+            if tv.isScrollEnabled {
+                tv.scrollRangeToVisible(tv.selectedRange)
+            }
             parent.onHeightChange(target)
         }
     }
