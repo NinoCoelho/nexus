@@ -946,13 +946,14 @@ command = ["opencode", "run", "{task}"]
 command = ["codex", "exec", "{task}"]
 ```
 
-The tool is registered only when at least one agent is configured (a daemon restart picks up new sections). Behavior:
+The tool is registered only when at least one agent is configured (a daemon restart picks up new sections). Both `agent_delegate` and `delegate_status` are core tools (always visible, no `tool_search` needed). Behavior:
 
+- **Async by default** — the call returns immediately with `{job_id, log_ref}`; the delegate runs as a background job (visible in the running-tasks indicator, killable there or via `POST /jobs/{id}/kill`). Output streams **live** into `vault/.tool-cache/delegate-<agent>-<ts>.md` — follow progress with `vault_read`, poll completion with `delegate_status {job_id}` (running / done / failed / killed / timed_out, exit code, log tail). A watchdog (`[delegate].max_run_seconds`, default 1800) kills a run only when it genuinely overruns; the turn is never blocked. Pass `wait: true` (or set `[delegate].default_wait = true`) for the old blocking behavior — only sensible for quick queries.
 - **Placeholders** — `{task}` is required in the template and always injected as a *single argv element* (no shell interpolation); `{model}` is replaced from the `model` arg or `default_model`.
-- **Token discipline** — transcripts larger than `[delegate].max_inline_chars` (default 8000) are written to `vault/.tool-cache/delegate-<agent>-<ts>.md` and returned as a short excerpt plus a `vault://.tool-cache/...` pointer, matching the microcompaction contract.
+- **Token discipline** — transcripts larger than `[delegate].max_inline_chars` (default 8000) are returned as a short excerpt plus a `vault://.tool-cache/...` pointer, matching the microcompaction contract.
 - **Bypass flags are gated** — templates containing flags from `[delegate].dangerous_flags` (default: `--dangerously-skip-permissions`, `--yolo`, `--full-auto`, `--auto-accept`) go through a HITL confirm card first; YOLO mode auto-approves for unattended runs.
-- **Isolation** — one process per (agent, working directory) at a time, global cap of 3 concurrent delegates, hard timeout with kill.
-- **Fallback** — without config, the bundled `coding-agents` skill still teaches the agent to delegate through the `terminal` tool (`claude -p`, `codex exec`, `opencode run`).
+- **Isolation** — one process per (agent, working directory) at a time, global cap of 3 concurrent delegates.
+- **Fallback** — without config, the bundled `coding-agents` skill still teaches the agent to delegate through the `terminal` tool (`claude -p`, `codex exec`, `opencode run`, launched detached with a log file and polled — never synchronously).
 
 **MCP Apps** — sandboxed `<iframe sandbox="allow-scripts">` renders interactive HTML from MCP servers inline in chat. Communication is via `postMessage` using the MCP Apps JSON-RPC protocol. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML:
 

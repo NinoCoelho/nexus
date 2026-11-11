@@ -104,6 +104,9 @@ _DEFAULT_CORE = frozenset({
     "spawn_subagents",
     "context_status", "fork_session",
     "history_recall", "tool_search",
+    # External agent delegation (registered only when [delegate] is
+    # configured, so these names are inert otherwise).
+    "agent_delegate", "delegate_status",
 })
 
 _INSTALLED_REGISTRY: Any = None

@@ -389,6 +389,14 @@ class DelegateConfig(BaseModel):
     """
 
     agents: dict[str, DelegateAgentConfig] = Field(default_factory=dict)
+    # Async-by-default: agent_delegate returns immediately with a job id and
+    # a live log reference; completion is polled via delegate_status. Set
+    # true to restore the old blocking-turn behavior.
+    default_wait: bool = False
+    # Watchdog for async (wait=false) delegations — kills the subprocess only
+    # when a run genuinely exceeds this many seconds; the turn is never
+    # blocked. Per-call `timeout_s` overrides it.
+    max_run_seconds: int = 1800
     # Inline-output cap. Full transcripts larger than this are written to
     # ``vault/.tool-cache/delegate-<agent>-<ts>.md`` and returned as a
     # ``vault://`` pointer, matching the microcompaction contract.

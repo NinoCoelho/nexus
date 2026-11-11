@@ -204,6 +204,25 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "server_expose": cfg.mcp.server_expose,
             "server_auth_token": cfg.mcp.server_auth_token,
         },
+        # Persisted — a save() that drops [delegate] silently wipes the
+        # user's configured agents and unregisters agent_delegate on the
+        # next restart (this actually happened: a settings save erased the
+        # section and the tool vanished).
+        "delegate": {
+            "agents": {
+                name: {
+                    "command": entry.command,
+                    "env": entry.env,
+                    "timeout_s": entry.timeout_s,
+                    "default_model": entry.default_model,
+                }
+                for name, entry in cfg.delegate.agents.items()
+            },
+            "default_wait": cfg.delegate.default_wait,
+            "max_run_seconds": cfg.delegate.max_run_seconds,
+            "max_inline_chars": cfg.delegate.max_inline_chars,
+            "dangerous_flags": cfg.delegate.dangerous_flags,
+        },
         "broker": {
             "url": cfg.broker.url,
             "poll_interval_seconds": cfg.broker.poll_interval_seconds,

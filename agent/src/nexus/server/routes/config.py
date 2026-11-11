@@ -148,6 +148,8 @@ def _redact_cfg(cfg: Any) -> dict[str, Any]:
                 for name, entry in dlg.agents.items()
             },
             "max_inline_chars": dlg.max_inline_chars,
+            "default_wait": dlg.default_wait,
+            "max_run_seconds": dlg.max_run_seconds,
             "dangerous_flags": dlg.dangerous_flags,
         }
     return out
@@ -327,7 +329,7 @@ async def patch_config(
                 else:
                     merged_agents[aname] = {**(merged_agents.get(aname) or {}), **adata}
             merged_delegate["agents"] = merged_agents
-        for scalar_key in ("max_inline_chars", "dangerous_flags"):
+        for scalar_key in ("max_inline_chars", "default_wait", "max_run_seconds", "dangerous_flags"):
             if scalar_key in patch:
                 merged_delegate[scalar_key] = patch[scalar_key]
         raw["delegate"] = merged_delegate

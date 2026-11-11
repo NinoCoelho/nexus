@@ -54,6 +54,8 @@ class AgentHandlers:
         terminal: Any | None = None,
         dispatcher: Any | None = None,
         subagent_runner: Any | None = None,
+        delegate_job_tracker: Any | None = None,
+        delegate_publish: Any | None = None,
         notify_user: Any | None = None,
         hb_manager_getter: Any | None = None,
         page: Any | None = None,
@@ -66,6 +68,8 @@ class AgentHandlers:
         self.notify_user = notify_user
         self.dispatcher = dispatcher
         self.subagent_runner = subagent_runner
+        self.delegate_job_tracker = delegate_job_tracker
+        self.delegate_publish = delegate_publish
         self.hb_manager_getter = hb_manager_getter
         self.page = page
         self.site_credentials = site_credentials
@@ -320,16 +324,28 @@ def build_tool_registry(
     # confirmations work without a registry rebuild.
     from nexus.tools.agent_delegate import (
         AGENT_DELEGATE_TOOL,
+        DELEGATE_STATUS_TOOL,
         agent_delegate_is_configured,
         handle_agent_delegate,
+        handle_delegate_status,
     )
 
     if agent_delegate_is_configured():
 
         async def _agent_delegate(args: dict) -> str:
-            return await handle_agent_delegate(args, handlers.ask_user)
+            return await handle_agent_delegate(
+                args,
+                handlers.ask_user,
+                job_tracker=handlers.delegate_job_tracker,
+                publish_fn=handlers.delegate_publish,
+            )
 
         registry.register(_SimpleToolHandler(AGENT_DELEGATE_TOOL, _agent_delegate))
+
+        async def _delegate_status(args: dict) -> str:
+            return await handle_delegate_status(args, handlers.delegate_job_tracker)
+
+        registry.register(_SimpleToolHandler(DELEGATE_STATUS_TOOL, _delegate_status))
 
     # Coordinator (master chat) tools — the handlers resolve the current
     # session from CURRENT_SESSION_ID (nexus.agent.context re-exports loom's)

@@ -689,6 +689,10 @@ def create_app(
         publish_job_event=_publish_job_event,
     )
 
+    # ── wire agent_delegate async jobs (running-tasks indicator + kill) ──────
+    agent._handlers.delegate_job_tracker = job_tracker
+    agent._handlers.delegate_publish = _publish_job_event
+
     # Lane-change hook: any cross-lane move (UI drag-drop via PATCH, agent
     # tool via kanban_manage, external API client) auto-dispatches the
     # destination lane's prompt if one is set. Cycle and depth guards via
