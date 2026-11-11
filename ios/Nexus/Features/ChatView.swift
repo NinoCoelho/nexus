@@ -25,7 +25,10 @@ struct ChatView: View {
     @State private var pendingRequest: PendingRequest?
     @State private var formValues: [String: String] = [:]
     @State private var error: String?
-    @State private var loading = true
+    /// False until the initial batch populate has been laid out AND the
+    /// viewport has landed on the newest message — gates the reveal so the
+    /// user never sees the top-of-transcript flash before the jump.
+    @State private var initialSettled = false
     @State private var eventsTask: Task<Void, Never>?
     @State private var streamTask: Task<Void, Never>?
     @State private var autoScroll = true
@@ -40,6 +43,19 @@ struct ChatView: View {
     /// Composer text view height (grows with content, caps at max lines).
     @State private var composerHeight: CGFloat = 22
 
+    // Scroll: the transcript is a full (non-lazy) VStack; these track
+    // whether the viewport sits at the end (drives autoScroll and the
+    // jump-to-bottom button) and carry the one-shot scroll after load.
+    @State private var isAtBottom = true
+    @State private var initialScrollToken = 0
+
+    // In-chat search (local, over the in-memory transcript).
+    @State private var showSearch = false
+    @State private var searchText = ""
+    @State private var searchMatches: [Int] = []   // seqs, oldest → newest
+    @State private var searchCursor = 0            // index into searchMatches
+    @FocusState private var searchFocused: Bool
+
     struct QueuedMessage: Identifiable, Equatable {
         let id: String
         var text: String
@@ -49,9 +65,6 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let error, messages.isEmpty {
-                ErrorBanner(message: error)
-            }
             transcript
             if !queuedMessages.isEmpty {
                 queueStrip
@@ -67,9 +80,28 @@ struct ChatView: View {
             }
             composer
         }
+        // Toast: any network/upload error must surface even when history is
+        // already on screen — not only on a blank transcript.
+        .overlay(alignment: .top) {
+            if let error {
+                ErrorBanner(message: error) { self.error = nil }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: error)
         .navigationTitle(title.isEmpty ? (bot?.name ?? "Chat") : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    toggleSearch()
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("Search in chat")
+            }
             if let bot {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: BotsView.BotHistory(bot: bot)) {
@@ -104,53 +136,279 @@ struct ChatView: View {
 
     private var transcript: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    if loading {
-                        ProgressView().padding(.top, 40)
-                    }
-                    ForEach(messages) { message in
-                        MessageBubble(message: message)
-                            .id(message.seq)
-                    }
-                    if !thinkingText.isEmpty {
-                        ThinkingBlock(text: thinkingText).id("thinking")
-                    }
-                    if isStreaming {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let streamingBot {
-                                Badge(text: "@\(streamingBot)")
+            VStack(spacing: 0) {
+                if showSearch {
+                    searchBar(proxy: proxy)
+                }
+                GeometryReader { viewport in
+                    ZStack {
+                        ScrollView {
+                            VStack(spacing: 10) {
+                                ForEach(displayMessages) { message in
+                                    MessageBubble(message: message, highlight: highlightTerm)
+                                        .id(message.seq)
+                                }
+                                if searchNoResults {
+                                    Text("No matches")
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.subtleText)
+                                        .padding(.top, 40)
+                                }
+                                if !thinkingText.isEmpty {
+                                    ThinkingBlock(text: thinkingText).id("thinking")
+                                }
+                                if isStreaming {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        if let streamingBot {
+                                            Badge(text: "@\(streamingBot)")
+                                        }
+                                        if streamingText.isEmpty {
+                                            TypingDots()
+                                        } else {
+                                            MarkdownText(markdown: streamingText)
+                                        }
+                                    }
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Theme.bubbleBot, in: RoundedRectangle(cornerRadius: 14))
+                                    .id("streaming")
+                                }
+                                if let toolActivity {
+                                    Label(toolActivity, systemImage: "wrench.and.screwdriver")
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.subtleText)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id("tool")
+                                }
                             }
-                            if streamingText.isEmpty {
-                                TypingDots()
-                            } else {
-                                MarkdownText(markdown: streamingText)
+                            .padding(12)
+                            .background(bottomSentinel)
+                        }
+                        .overlay(alignment: .bottom) {
+                            jumpToBottom(proxy: proxy)
+                        }
+                        // Hidden (but laid out, so heights are real) until
+                        // the initial populate has been scrolled to the
+                        // bottom — kills the open-at-top flash.
+                        .opacity(initialSettled ? 1 : 0)
+                        if !initialSettled {
+                            ProgressView()
+                        }
+                    }
+                    .coordinateSpace(name: "chatScroll")
+                    .onPreferenceChange(ChatBottomKey.self) { bottomY in
+                        // Distance between the transcript's bottom edge and
+                        // the viewport bottom — small (≤64pt) means the user
+                        // is at the end. Streaming only keeps the view pinned
+                        // while this holds; scrolling up releases it.
+                        let distance = bottomY - viewport.size.height
+                        let atBottom = distance <= 64
+                        if atBottom != isAtBottom {
+                            isAtBottom = atBottom
+                            autoScroll = atBottom
+                        }
+                    }
+                    // The keyboard shrinks the scroll view without moving
+                    // the offset — re-land on the bottom if we were there.
+                    .onReceive(NotificationCenter.default.publisher(for: UIApplication.keyboardWillShowNotification)) { _ in
+                        guard autoScroll, !showSearch else { return }
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(0.3))
+                            if autoScroll, let last = messages.last {
+                                proxy.scrollTo(last.seq, anchor: .bottom)
                             }
                         }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.bubbleBot, in: RoundedRectangle(cornerRadius: 14))
-                        .id("streaming")
                     }
-                    if let toolActivity {
-                        Label(toolActivity, systemImage: "wrench.and.screwdriver")
-                            .font(.caption)
-                            .foregroundStyle(Theme.subtleText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id("tool")
+                    .onChange(of: initialScrollToken) { _, _ in
+                        // Explicit landing after the initial batch populate:
+                        // every row of the (non-lazy) stack is realized, so
+                        // the offset is computed against true heights.
+                        if let last = messages.last {
+                            proxy.scrollTo(last.seq, anchor: .bottom)
+                        }
                     }
+                    .onChange(of: messages.count) { _, _ in
+                        if showSearch { computeSearchMatches() }
+                        guard autoScroll else { return }
+                        if isStreaming {
+                            withAnimation { proxy.scrollTo("streaming", anchor: .bottom) }
+                        } else if let last = messages.last {
+                            withAnimation { proxy.scrollTo(last.seq, anchor: .bottom) }
+                        }
+                    }
+                    .onChange(of: streamingText) { _, _ in
+                        if autoScroll, isStreaming {
+                            proxy.scrollTo("streaming", anchor: .bottom)
+                        }
+                    }
+                    .onTapGesture { hideKeyboard() }
                 }
-                .padding(12)
             }
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: messages.count) { _, _ in
-                if autoScroll { withAnimation { proxy.scrollTo("streaming", anchor: .bottom) } }
-            }
-            .onChange(of: streamingText) { _, _ in
-                if autoScroll { proxy.scrollTo("streaming", anchor: .bottom) }
-            }
-            .onTapGesture { hideKeyboard() }
         }
+    }
+
+    /// Reports the content's bottom edge position in the scroll coordinate
+    /// space (consumed by onPreferenceChange above).
+    private var bottomSentinel: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: ChatBottomKey.self,
+                value: geo.frame(in: .named("chatScroll")).maxY
+            )
+        }
+    }
+
+    /// Floating "go to end" button — visible whenever the viewport is away
+    /// from the transcript's bottom.
+    private func jumpToBottom(proxy: ScrollViewProxy) -> some View {
+        Group {
+            if !isAtBottom {
+                Button {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(messages.last?.seq, anchor: .bottom)
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(10)
+                        .background(Theme.panel, in: Circle())
+                        .overlay(Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                }
+                .accessibilityLabel("Jump to latest message")
+                .padding(.bottom, 10)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isAtBottom)
+    }
+
+    private struct ChatBottomKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = nextValue()
+        }
+    }
+
+    // MARK: - In-chat search
+
+    /// Messages actually rendered: unfiltered when no search is running;
+    /// only the search hits (seqs preserved, so scrolling by id still
+    /// works); empty when the query matched nothing.
+    private var displayMessages: [ChatMessage] {
+        guard showSearch, !searchQuery.isEmpty else { return messages }
+        guard !searchMatches.isEmpty else { return [] }
+        let hits = Set(searchMatches)
+        return messages.filter { hits.contains($0.seq) }
+    }
+
+    private var searchQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var searchNoResults: Bool {
+        showSearch && !searchQuery.isEmpty && searchMatches.isEmpty
+    }
+
+    private var highlightTerm: String? {
+        showSearch && !searchQuery.isEmpty ? searchQuery : nil
+    }
+
+    private func searchBar(proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(Theme.subtleText)
+            TextField("Search in chat", text: $searchText)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .onSubmit { stepSearch(+1, proxy: proxy) }
+            if !searchQuery.isEmpty {
+                Text(searchCounter)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(Theme.subtleText)
+                    .fixedSize()
+            }
+            Button {
+                stepSearch(-1, proxy: proxy)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(searchMatches.isEmpty)
+            Button {
+                stepSearch(+1, proxy: proxy)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(searchMatches.isEmpty)
+            Button {
+                toggleSearch()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .accessibilityLabel("Close search")
+        }
+        .font(.subheadline)
+        .foregroundStyle(Theme.subtleText)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Theme.panel)
+        .onAppear { searchFocused = true }
+        .onChange(of: searchText) { _, _ in
+            computeSearchMatches()
+            if let newest = searchMatches.last {
+                withAnimation { proxy.scrollTo(newest, anchor: .center) }
+            }
+        }
+    }
+
+    private var searchCounter: String {
+        searchMatches.isEmpty ? "No matches" : "\(searchCursor + 1)/\(searchMatches.count)"
+    }
+
+    private func toggleSearch() {
+        withAnimation(.easeInOut(duration: 0.2)) { showSearch.toggle() }
+        if showSearch {
+            searchFocused = true
+        } else {
+            searchFocused = false
+            clearSearch()
+        }
+    }
+
+    /// Local filter over the in-memory transcript — case- and
+    /// diacritic-insensitive. Cursor lands on the newest match.
+    private func computeSearchMatches() {
+        guard !searchQuery.isEmpty else {
+            searchMatches = []
+            searchCursor = 0
+            return
+        }
+        searchMatches = messages
+            .filter {
+                $0.content.displayText.range(
+                    of: searchQuery,
+                    options: [.caseInsensitive, .diacriticInsensitive]
+                ) != nil
+            }
+            .map(\.seq)
+        searchCursor = searchMatches.isEmpty ? 0 : searchMatches.count - 1
+    }
+
+    private func stepSearch(_ direction: Int, proxy: ScrollViewProxy) {
+        guard !searchMatches.isEmpty else { return }
+        searchCursor = (searchCursor + direction + searchMatches.count) % searchMatches.count
+        withAnimation { proxy.scrollTo(searchMatches[searchCursor], anchor: .center) }
+    }
+
+    private func clearSearch() {
+        searchText = ""
+        searchMatches = []
+        searchCursor = 0
     }
 
     private var queueStrip: some View {
@@ -312,15 +570,23 @@ struct ChatView: View {
 
     private func initialLoad() async {
         guard let client = servers.client, let sid = effectiveSessionId else {
-            loading = false
+            initialSettled = true
             return
         }
         do {
             let session = try await client.session(sid)
             messages = session.messages
             title = session.title
-            loading = false
             error = nil
+            // The transcript is a static (non-lazy) VStack holding the whole
+            // history: give it one layout pass so every row is realized,
+            // then land the viewport explicitly on the newest message —
+            // revealing the content only after the jump (no top-flash). The
+            // old .defaultScrollAnchor(.bottom) estimated heights for rows
+            // that hadn't been realized yet and opened on a blank viewport.
+            try? await Task.sleep(for: .seconds(0.12))
+            initialScrollToken += 1
+            initialSettled = true
             if let pending = try await client.pendingRequest(sessionId: sid) {
                 self.pendingRequest = pending
                 seedFormValues(pending)
@@ -334,7 +600,7 @@ struct ChatView: View {
             }
         } catch {
             self.error = error.localizedDescription
-            loading = false
+            initialSettled = true
         }
     }
 
@@ -346,10 +612,12 @@ struct ChatView: View {
     }
     private func pasteFromClipboard(menu: Bool) {
         let pasteboard = UIPasteboard.general
-        // Screenshot / copied image → attachment.
-        if let image = pasteboard.image, let data = image.jpegData(compressionQuality: 1.0) {
+        var stagedAttachment = false
+        // Screenshot / copied image → attachment. A mixed clipboard (image +
+        // text) stages the image *and* keeps its text for the draft below.
+        if let image = pasteboard.image, let data = image.jpegData(compressionQuality: 0.85) {
             stage(name: nil, data: data)
-            return
+            stagedAttachment = true
         }
         // Videos / files copied in the Files app land as item providers.
         let providers = pasteboard.itemProviders.filter {
@@ -357,6 +625,7 @@ struct ChatView: View {
             $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
         }
         if !providers.isEmpty {
+            stagedAttachment = true
             Task {
                 let medias = await PasteboardLoader.load(providers)
                 await MainActor.run {
@@ -368,13 +637,16 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+        // Text: the menu always inserts it; a paste gesture only reaches
+        // here when the clipboard also carried an attachment (which consumed
+        // the stock insertion path), so the text still goes into the draft.
+        if let text = pasteboard.string, !text.isEmpty, menu || stagedAttachment {
+            input += (input.isEmpty ? "" : " ") + text
             return
         }
-        // Text (menu path; pasting text into the box uses the system
-        // insertion untouched).
-        if let text = pasteboard.string, !text.isEmpty, menu {
-            input += (input.isEmpty ? "" : " ") + text
-        } else if menu {
+        if stagedAttachment { return }
+        if menu {
             error = "The clipboard is empty."
         }
     }
@@ -703,10 +975,7 @@ struct ChatView: View {
     private func cancelPrompt() async {
         guard let sid = effectiveSessionId, let request = pendingRequest, let client = servers.client else { return }
         pendingRequest = nil
-        var urlReq = URLRequest(url: client.profile.baseURL.appendingPathComponent("chat/\(sid)/hitl/\(request.requestId)/cancel"))
-        urlReq.httpMethod = "POST"
-        urlReq.setValue("Bearer \(client.profile.token)", forHTTPHeaderField: "Authorization")
-        _ = try? await URLSession.shared.data(for: urlReq)
+        try? await client.hitlCancel(sessionId: sid, requestId: request.requestId)
     }
 }
 
@@ -714,8 +983,18 @@ struct ChatView: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
+    /// Search term to highlight inside the bubble, if a search is active.
+    var highlight: String? = nil
 
     private var isUser: Bool { message.role == "user" }
+
+    /// User bubbles are plain text; highlight by wrapping in an
+    /// AttributedString when a search term is active.
+    private var userText: Text {
+        let raw = message.content.displayText
+        guard let highlight else { return Text(raw) }
+        return Text(MarkdownText.applyingHighlight(highlight, to: AttributedString(raw)))
+    }
 
     var body: some View {
         VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
@@ -728,11 +1007,22 @@ struct MessageBubble: View {
                     .foregroundStyle(Theme.subtleText)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                (isUser ? AnyView(Text(message.content.displayText)) : AnyView(MarkdownText(markdown: message.content.displayText)))
+                (isUser
+                    ? AnyView(userText)
+                    : AnyView(MarkdownText(markdown: message.content.displayText, highlight: highlight)))
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
                     .background(isUser ? Theme.bubbleUser : Theme.bubbleBot, in: RoundedRectangle(cornerRadius: 14))
             }
+        }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = message.content.displayText
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            // Future message actions (Speak, 👍/👎 feedback) plug in here.
         }
     }
 }

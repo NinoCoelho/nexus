@@ -10,7 +10,22 @@ pairing token delivered by QR code.
 - **Bots & chats** — full roster (coordinator + every bot), read/send with
   live streaming deltas, thinking/tool activity, message queueing while a
   turn is running, and human-in-the-loop prompts (confirm / choice / text /
-  form) exactly like the web UI.
+  form, dismissible without answering) exactly like the web UI.
+- **Chat UX** — the transcript is a full (non-lazy) stack that opens pinned
+  to the newest message (the content is revealed only after the initial
+  scroll lands — no blank viewport, no top-of-transcript flash). Auto-scroll
+  follows the stream only while you are at the bottom; scrolling up releases
+  it, and a floating ⌄ button returns to the latest message. Long-press any
+  message to copy it (with success haptic). Errors surface as a dismissible
+  toast even when history is already on screen.
+- **In-chat search** — 🔍 in the toolbar opens a local search over the
+  in-memory transcript: case- and diacritic-insensitive filter, a hit
+  counter (`3/12`), prev/next arrows that scroll to each match, and the
+  term highlighted inside the bubbles (markdown-aware).
+- **Attachments** — camera, photo library, Files picker, or clipboard paste
+  (screenshot, video, files; a mixed image+text clipboard stages the image
+  and keeps its text for the draft). Staged files upload to the vault when
+  the turn is sent and the message references them by path.
 - **Browser** — watch every bot's dedicated Chrome live (CDP screencast over
   SSE) and drive it: tap, scroll, type, special keys, navigate. Requires
   `[browser] remote_control = true` on the server (off by default).
@@ -18,6 +33,15 @@ pairing token delivered by QR code.
   search.
 - **Push** — `ask_user` prompts arrive as APNs notifications when the app is
   closed (needs `[push].apns` configured server-side).
+
+## Roadmap (planned, not yet implemented)
+
+Documented so they aren't mistaken for shipped features:
+
+- **Rich content-part rendering** — inline images, PDFs and audio inside
+  chat bubbles. Multi-part messages currently render as plain
+  `📎 <path>` text lines; the parts model exists server-side.
+- **Voice** — speech input and spoken playback of messages.
 
 ## Setup (server side, once)
 
@@ -77,7 +101,7 @@ Nexus/
 │   ├── RootView.swift    # tabs / pairing gate
 │   ├── PairingView.swift # QR scanner + manual entry + confirm
 │   ├── BotsView.swift    # roster → bot workspace → chats
-│   ├── ChatView.swift    # transcript, streaming, queue chips, HITL sheets
+│   ├── ChatView.swift    # transcript, streaming, search, queue chips, HITL sheets
 │   ├── MarkdownText.swift# dependency-free markdown renderer
 │   ├── BrowserView.swift # live screencast + touch control
 │   ├── VaultView.swift   # tree / reader / search

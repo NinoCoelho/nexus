@@ -131,6 +131,15 @@ final class NexusClient {
 
     func session(_ id: String) async throws -> ChatSession { try await get("sessions/\(id)") }
 
+    /// PATCH /sessions/{id}/archive — hide a chat from the roster and
+    /// history lists. Fire-and-forget on the call sites, but the client
+    /// method surfaces transport/auth errors instead of duplicating the
+    /// auth header by hand.
+    func archiveSession(id: String) async throws {
+        struct EmptyBody: Encodable {}
+        _ = try await run(request("sessions/\(id)/archive", method: "PATCH", body: EmptyBody()))
+    }
+
     // MARK: - Chat
 
     struct SendMessageBody: Encodable {
@@ -267,6 +276,12 @@ final class NexusClient {
     func respond(sessionId: String, requestId: String, answer: String) async throws {
         struct OK: Decodable { var ok: Bool? }
         let _: OK = try await send("chat/\(sessionId)/respond", method: "POST", body: RespondBody(requestId: requestId, answer: answer))
+    }
+
+    /// POST /chat/{sid}/hitl/{request_id}/cancel — dismiss a pending
+    /// human-in-the-loop prompt without answering it.
+    func hitlCancel(sessionId: String, requestId: String) async throws {
+        _ = try await run(request("chat/\(sessionId)/hitl/\(requestId)/cancel", method: "POST"))
     }
 
     // MARK: - Browser

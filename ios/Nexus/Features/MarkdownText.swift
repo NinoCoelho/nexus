@@ -5,6 +5,8 @@ import SwiftUI
 /// through `AttributedString(markdown:)`. No external dependencies.
 struct MarkdownText: View {
     let markdown: String
+    /// Chat-search term to highlight (case/diacritic-insensitive), if any.
+    var highlight: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -202,13 +204,54 @@ struct MarkdownText: View {
 
     @ViewBuilder
     private func inline(_ text: String) -> some View {
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
+        if let attributed = highlightedAttributed(text) {
             Text(attributed)
         } else {
             Text(text)
         }
+    }
+
+    /// Markdown-resolved attributed string with the optional search
+    /// highlight applied; nil when the markdown can't be parsed.
+    private func highlightedAttributed(_ text: String) -> AttributedString? {
+        guard var attributed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) else { return nil }
+        if let highlight {
+            attributed = MarkdownText.applyingHighlight(highlight, to: attributed)
+        }
+        return attributed
+    }
+}
+
+// MARK: - Search highlight
+
+extension MarkdownText {
+    /// Paints every case- and diacritic-insensitive occurrence of `term`
+    /// with the accent color behind the glyphs.
+    ///
+    /// Matching runs on the resolved characters (plain string mirror of the
+    /// attributed string), so markdown markers already stripped by the
+    /// renderer can't skew the offsets; the String.Index ranges are then
+    /// mapped back onto the attributed string 1:1.
+    static func applyingHighlight(_ term: String, to source: AttributedString) -> AttributedString {
+        var attributed = source
+        let plain = String(attributed.characters)
+        var searchStart = plain.startIndex
+        while let found = plain.range(
+            of: term,
+            options: [.caseInsensitive, .diacriticInsensitive],
+            range: searchStart..<plain.endIndex,
+            locale: nil
+        ) {
+            let startOffset = plain.distance(from: plain.startIndex, to: found.lowerBound)
+            let length = plain.distance(from: found.lowerBound, to: found.upperBound)
+            let aStart = attributed.index(attributed.startIndex, offsetByCharacters: startOffset)
+            let aEnd = attributed.index(aStart, offsetByCharacters: length)
+            attributed[aStart..<aEnd].backgroundColor = Theme.accent.opacity(0.35)
+            searchStart = found.upperBound
+        }
+        return attributed
     }
 }

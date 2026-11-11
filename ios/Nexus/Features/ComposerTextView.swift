@@ -127,8 +127,11 @@ final class AttachPasteTextView: UITextView {
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(paste(_:)) {
             // Make Paste selectable even when the clipboard holds only a
-            // media file (stock logic only checks text).
-            return (UIPasteboard.general.string != nil) || clipboardHasAttachment
+            // media file (stock logic only checks text). `hasStrings` reads
+            // pasteboard metadata only — touching `.string` here would trip
+            // the system paste-permission prompt on every long-press,
+            // before the user pastes anything.
+            return UIPasteboard.general.hasStrings || clipboardHasAttachment
         }
         return super.canPerformAction(action, withSender: sender)
     }

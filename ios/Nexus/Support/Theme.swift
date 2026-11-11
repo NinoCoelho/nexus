@@ -39,12 +39,30 @@ struct Badge: View {
 
 struct ErrorBanner: View {
     let message: String
+    /// nil → plain banner (list sections). Non-nil → toast form: the chat
+    /// screen shows errors even when history is on screen, with a close
+    /// button that clears the error.
+    var onDismiss: (() -> Void)? = nil
+
     var body: some View {
-        Label(message, systemImage: "wifi.exclamationmark")
-            .font(.footnote)
-            .foregroundStyle(.red)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        HStack(alignment: .top, spacing: 8) {
+            Label(message, systemImage: "wifi.exclamationmark")
+                .font(.footnote)
+                .foregroundStyle(.red)
+            Spacer(minLength: 0)
+            if let onDismiss {
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+                .accessibilityLabel("Dismiss error")
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }

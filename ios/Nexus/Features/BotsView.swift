@@ -232,11 +232,6 @@ struct BotDetailView: View {
 
     private func archive(_ session: SessionSummary) async {
         guard let client = servers.client else { return }
-        var req = URLRequest(url: client.profile.baseURL.appendingPathComponent("sessions/\(session.id)/archive"))
-        req.httpMethod = "PATCH"
-        req.setValue("Bearer \(client.profile.token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = Data("{}".utf8)
-        _ = try? await URLSession.shared.data(for: req)
+        try? await client.archiveSession(id: session.id)
     }
 }
