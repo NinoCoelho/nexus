@@ -205,53 +205,39 @@ MCP_READ_ONLY_EXPOSE = frozenset({
     "memory_read",
 })
 
-
-def _shim_fastmcp_version_kwarg() -> None:
-    """Make loom's ``McpServerBridge`` work on any released ``mcp`` SDK.
-
-    Loom constructs ``FastMCP(name, version=...)``, but no released version
-    of the ``mcp`` package accepts a ``version`` constructor kwarg — the
-    bridge crashes with ``TypeError`` on the first ``tools/list``. Shim
-    ``FastMCP.__init__`` to drop the kwarg (idempotent, no-op if the SDK
-    someday accepts it or the import fails).
-    """
-    try:
-        from mcp.server import fastmcp
-
-        orig = fastmcp.FastMCP.__init__
-        if getattr(orig, "_nexus_version_shim", False):
-            return
-
-        def _init(self: Any, *args: Any, **kwargs: Any) -> None:
-            kwargs.pop("version", None)
-            orig(self, *args, **kwargs)
-
-        _init._nexus_version_shim = True  # type: ignore[attr-defined]
-        fastmcp.FastMCP.__init__ = _init  # type: ignore[method-assign]
-    except Exception:
-        log.debug("[mcp-server] FastMCP version shim skipped", exc_info=True)
+# Running bridge handle (module-level so a double lifespan invocation
+# reuses it instead of double-binding the port).
+_MCP_SERVER_BRIDGE: Any = None
 
 
-class _ServerFilteredRegistry:
-    """Wraps the live ToolRegistry for the MCP server bridge.
+class _NexusMcpBridge:
+    """Streamable-HTTP MCP server over the (filtered) live ToolRegistry.
 
-    Loom's ``McpServerBridge`` iterates ``registry.list_handlers()`` and
-    expects handler *objects* (``handler.tool`` / ``handler.invoke``), while
-    loom's ``ToolRegistry.list_handlers()`` returns names — passing the raw
-    registry crashes on the first ``tools/list``. This wrapper returns
-    filtered handler objects and fixes that mismatch in the process.
+    Replaces loom's ``McpServerBridge``, which is written against an
+    older/imagined FastMCP API and crashes on every released ``mcp``
+    version (``version=`` kwarg, underscore tool-fn params, dict-shaped
+    tool functions — each fatal at ``tools/list`` time). Uses the SDK's
+    low-level ``Server`` + ``StreamableHTTPSessionManager`` directly so the
+    advertised ``inputSchema`` is exactly the tool's JSON schema.
 
-    Filters: forbidden (HITL-adjacent) tools are always dropped; when
-    ``expose`` is set, only those names are advertised.
+    The handler set is snapshotted at build time, mirroring loom's bridge.
     """
 
-    def __init__(self, registry: Any, *, forbidden: frozenset[str], expose: list[str] | None) -> None:
-        self._registry = registry
+    def __init__(
+        self,
+        registry: Any,
+        *,
+        name: str = "nexus",
+        forbidden: frozenset[str] = frozenset(),
+        expose: list[str] | None = None,
+    ) -> None:
+        self._name = name
         self._forbidden = forbidden
         self._expose = set(expose) if expose is not None else None
+        self._handlers = self._filter_handlers(registry)
 
-    def list_handlers(self) -> list[Any]:
-        handlers = getattr(self._registry, "_handlers", {}) or {}
+    def _filter_handlers(self, registry: Any) -> list[Any]:
+        handlers = getattr(registry, "_handlers", {}) or {}
         out: list[Any] = []
         for name, handler in handlers.items():
             if name in self._forbidden:
@@ -261,8 +247,58 @@ class _ServerFilteredRegistry:
             out.append(handler)
         return out
 
-    def __getattr__(self, attr: str) -> Any:
-        return getattr(self._registry, attr)
+    def _build_asgi(self) -> Any:
+        import contextlib
+
+        from mcp.server.lowlevel import Server
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from mcp.types import TextContent, Tool
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+
+        server = Server(self._name)
+        handlers = list(self._handlers)
+
+        @server.list_tools()
+        async def _list_tools() -> list[Tool]:
+            return [
+                Tool(
+                    name=h.tool.name,
+                    description=h.tool.description or "",
+                    inputSchema=h.tool.parameters or {"type": "object", "properties": {}},
+                )
+                for h in handlers
+            ]
+
+        @server.call_tool()
+        async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> list[TextContent]:
+            handler = next((h for h in handlers if h.tool.name == tool_name), None)
+            if handler is None:
+                raise ValueError(f"Unknown tool: {tool_name}")
+            result = await handler.invoke(arguments or {})
+            return [TextContent(type="text", text=result.text)]
+
+        # Stateless + JSON responses: simple request/response per call —
+        # the right shape for loopback tool clients (Claude Code, Codex,
+        # OpenCode) and easy to probe with curl.
+        session_manager = StreamableHTTPSessionManager(
+            app=server, json_response=True, stateless=True
+        )
+
+        @contextlib.asynccontextmanager
+        async def _lifespan(app: Any) -> Any:
+            async with session_manager.run():
+                yield
+
+        return Starlette(
+            routes=[Mount("/mcp", app=session_manager.handle_request)],
+            lifespan=_lifespan,
+        )
+
+    def run(self, *, host: str = "127.0.0.1", port: int = 18990) -> None:
+        import uvicorn
+
+        uvicorn.run(self._build_asgi(), host=host, port=port, log_level="warning")
 
 
 def start_mcp_server(
@@ -272,20 +308,31 @@ def start_mcp_server(
     """Optionally start an MCP server exposing Nexus tools to external hosts.
 
     Returns the bridge instance if started, None otherwise.
-    The bridge runs in a background thread serving Streamable HTTP.
+    The bridge runs in a background thread serving Streamable HTTP on
+    ``127.0.0.1:<port>/mcp``.
 
-    Exposure goes through :class:`_ServerFilteredRegistry`: HITL-adjacent
-    tools (``terminal``, ``ask_user``, …) are dropped unconditionally — an
-    external MCP client calling them would bypass the approval flow — and
-    ``server_expose = ["read-only"]` expands to the curated read-only preset.
+    Exposure: HITL-adjacent tools (``terminal``, ``ask_user``, …) are
+    dropped unconditionally — an external MCP client calling them would
+    bypass the approval flow — and ``server_expose = ["read-only"]``
+    expands to the curated read-only preset (optionally mixed with extra
+    explicit tool names).
+
+    Idempotent: the lifespan can run more than once in some deployments
+    (supervisor/reloader patterns) — a second call returns the running
+    bridge instead of crashing on the already-bound port.
     """
+    global _MCP_SERVER_BRIDGE
     mcp_cfg = getattr(nexus_cfg, "mcp", None)
     if mcp_cfg is None or not getattr(mcp_cfg, "server_enabled", False):
         return None
+    if _MCP_SERVER_BRIDGE is not None:
+        log.debug("[mcp-server] already running — reusing the existing bridge")
+        return _MCP_SERVER_BRIDGE
     try:
-        from loom.mcp.server_bridge import McpServerBridge
+        import mcp.server.lowlevel  # noqa: F401 — SDK availability probe
+        import starlette  # noqa: F401
     except ImportError:
-        log.warning("[mcp-server] mcp package not installed — skipping MCP server mode")
+        log.warning("[mcp-server] mcp/starlette packages not installed — skipping MCP server mode")
         return None
 
     raw_expose = getattr(mcp_cfg, "server_expose", None) or []
@@ -297,7 +344,6 @@ def start_mcp_server(
     else:
         expose = None  # all tools, minus the forbidden set (filtered below)
 
-    blocked = sorted(MCP_SERVER_FORBIDDEN_TOOLS)
     if expose is not None:
         dropped = [t for t in expose if t in MCP_SERVER_FORBIDDEN_TOOLS]
         if dropped:
@@ -306,16 +352,17 @@ def start_mcp_server(
 
     port = getattr(mcp_cfg, "server_port", 18990)
 
-    _shim_fastmcp_version_kwarg()
-
-    bridge = McpServerBridge(
-        _ServerFilteredRegistry(tool_registry, forbidden=MCP_SERVER_FORBIDDEN_TOOLS, expose=expose),
+    bridge = _NexusMcpBridge(
+        tool_registry,
         name="nexus",
+        forbidden=MCP_SERVER_FORBIDDEN_TOOLS,
+        expose=expose,
     )
     log.info(
-        "[mcp-server] exposure: %s (always forbidden: %s)",
-        "preset+explicit" if raw_expose and "read-only" in raw_expose else (expose or "all-minus-forbidden"),
-        blocked,
+        "[mcp-server] exposing %d tool(s): %s (always forbidden: %s)",
+        len(bridge._handlers),
+        sorted(h.tool.name for h in bridge._handlers),
+        sorted(MCP_SERVER_FORBIDDEN_TOOLS),
     )
     import threading
 
@@ -327,7 +374,8 @@ def start_mcp_server(
 
     thread = threading.Thread(target=_run, daemon=True, name="mcp-server")
     thread.start()
-    log.info("[mcp-server] started on 127.0.0.1:%d (expose=%s)", port, expose or "all-minus-forbidden")
+    _MCP_SERVER_BRIDGE = bridge
+    log.info("[mcp-server] started on 127.0.0.1:%d/mcp (expose=%s)", port, expose or "all-minus-forbidden")
     return bridge
 
 
