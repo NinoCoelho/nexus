@@ -19,6 +19,7 @@ import {
   setProviderKey,
   clearProviderKey,
   setProviderCredential,
+  deleteProvider,
   type Provider,
 } from "../../api";
 import CredentialPicker from "../settings/CredentialPicker";
@@ -106,7 +107,10 @@ export default function ProvidersSection({ providers, onRefresh }: Props) {
 
   async function removeProvider(name: string) {
     try {
-      await patchConfig({ providers: { [name]: { has_key: false } } });
+      // DELETE /providers/{name} — a config patch with `has_key:false`
+      // merges to a no-op (the backend filters that field), so removal
+      // must go through the providers route.
+      await deleteProvider(name);
       setConfirmRemove(null);
       toast.success(t("providers:toast.removed", { name }));
       onRefresh();

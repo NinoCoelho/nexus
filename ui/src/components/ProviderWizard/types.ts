@@ -28,7 +28,7 @@ export interface WizardState {
   values: Record<string, string>;
   /** Selected models for step 4. */
   models: string[];
-  testResult: { ok: boolean; error: string | null; latency_ms: number } | null;
+  testResult: { ok: boolean; error: string | null; latency_ms: number; note?: string | null } | null;
   /** Set after the OAuth flow completes — the credential name in the
    *  secret store that the wizard then binds via ``oauth_token_ref``. */
   oauthCredentialRef: string | null;

@@ -23,6 +23,8 @@
 		A100000000000000000000A0D /* VaultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0D /* VaultView.swift */; };
 		A100000000000000000000A0E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0E /* SettingsView.swift */; };
 		A100000000000000000000A0F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0F /* Theme.swift */; };
+		A100000000000000000000A13 /* Attachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B13 /* Attachments.swift */; };
+		A100000000000000000000A14 /* ComposerTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B14 /* ComposerTextView.swift */; };
 		A100000000000000000000A10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B10 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -46,6 +48,8 @@
 		A100000000000000000000B0F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		A100000000000000000000B10 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000B11 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A100000000000000000000B13 /* Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachments.swift; sourceTree = "<group>"; };
+		A100000000000000000000B14 /* ComposerTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTextView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +104,8 @@
 				A100000000000000000000B08 /* PairingView.swift */,
 				A100000000000000000000B09 /* BotsView.swift */,
 				A100000000000000000000B0A /* ChatView.swift */,
+				A100000000000000000000B13 /* Attachments.swift */,
+				A100000000000000000000B14 /* ComposerTextView.swift */,
 				A100000000000000000000B0B /* MarkdownText.swift */,
 				A100000000000000000000B0C /* BrowserView.swift */,
 				A100000000000000000000B0D /* VaultView.swift */,
@@ -206,6 +212,8 @@
 				A100000000000000000000A08 /* PairingView.swift in Sources */,
 				A100000000000000000000A09 /* BotsView.swift in Sources */,
 				A100000000000000000000A0A /* ChatView.swift in Sources */,
+				A100000000000000000000A13 /* Attachments.swift in Sources */,
+				A100000000000000000000A14 /* ComposerTextView.swift in Sources */,
 				A100000000000000000000A0B /* MarkdownText.swift in Sources */,
 				A100000000000000000000A0C /* BrowserView.swift in Sources */,
 				A100000000000000000000A0D /* VaultView.swift in Sources */,

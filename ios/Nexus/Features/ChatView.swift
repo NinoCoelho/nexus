@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// One chat: transcript + composer with live streaming, message queueing,
 /// and human-in-the-loop prompts.
@@ -28,6 +30,15 @@ struct ChatView: View {
     @State private var streamTask: Task<Void, Never>?
     @State private var autoScroll = true
     @State private var lastSentText = ""
+    // Attachment staging: files picked here are uploaded to the vault when
+    // the turn is sent, and the outgoing message references them by path.
+    @State private var stagedAttachments: [StagedAttachment] = []
+    @State private var showCamera = false
+    @State private var showLibrary = false
+    @State private var showFileImporter = false
+    @State private var attachmentUploading = false
+    /// Composer text view height (grows with content, caps at max lines).
+    @State private var composerHeight: CGFloat = 22
 
     struct QueuedMessage: Identifiable, Equatable {
         let id: String
@@ -168,26 +179,133 @@ struct ChatView: View {
     // MARK: - Composer
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField(isStreaming ? "Queue a message…" : "Message", text: $input, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
+        VStack(spacing: 6) {
+            if !stagedAttachments.isEmpty {
+                stagedStrip
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    Button {
+                        showCamera = true
+                    } label: {
+                        Label("Take photo", systemImage: "camera")
+                    }
+                    Button {
+                        showLibrary = true
+                    } label: {
+                        Label("Photo library", systemImage: "photo")
+                    }
+                    Button {
+                        pasteFromClipboard(menu: true)
+                    } label: {
+                        Label("Paste", systemImage: "doc.on.clipboard")
+                    }
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label("Files…", systemImage: "folder")
+                    }
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.subtleText)
+                }
+                .disabled(pendingRequest != nil || attachmentUploading)
+                .accessibilityLabel("Attach")
+
+                ComposerTextView(
+                    text: $input,
+                    placeholder: isStreaming ? "Queue a message…" : "Message",
+                    disabled: pendingRequest != nil,
+                    onPasteAttachment: { pasteFromClipboard(menu: false) },
+                    onSubmit: { send() },
+                    onHeightChange: { composerHeight = $0 }
+                )
+                .frame(height: composerHeight)
                 .padding(10)
                 .background(Theme.panel, in: RoundedRectangle(cornerRadius: 18))
-                .onSubmit { send() }
-                .disabled(pendingRequest != nil)
-            Button {
-                send()
-            } label: {
-                Image(systemName: isStreaming ? "plus.circle" : "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.subtleText : Theme.accent)
+                Button {
+                    send()
+                } label: {
+                    Image(systemName: isStreaming ? "plus.circle" : "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(composerHasContent ? Theme.accent : Theme.subtleText)
+                }
+                .disabled(!composerHasContent)
             }
-            .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
+        .sheet(isPresented: $showCamera) {
+            CameraPicker { data in
+                stage(name: nil, data: data)
+            } onCancel: {}
+            .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showLibrary) {
+            PhotoLibraryPicker { medias in
+                for media in medias {
+                    stage(name: media.name, data: media.data)
+                }
+            } onOversized: { name in
+                error = "\"\(name)\" is too large to attach (limit ~300 MB)."
+            } onCancel: {}
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            handleFileSelection(result)
+        }
+    }
+
+    private var composerHasContent: Bool {
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !stagedAttachments.isEmpty
+    }
+
+    /// Chips of files waiting to upload — thumbnail for images, icon for
+    /// documents. Remove button un-stages the file.
+    private var stagedStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if attachmentUploading {
+                    ProgressView()
+                    Text("Uploading…").font(.caption).foregroundStyle(Theme.subtleText)
+                }
+                ForEach(stagedAttachments) { staged in
+                    HStack(spacing: 4) {
+                        if let thumb = staged.thumbnail {
+                            Image(uiImage: thumb)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 36, height: 36)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            Image(systemName: staged.icon)
+                                .font(.caption)
+                        }
+                        Text(staged.name)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .frame(maxWidth: 90)
+                        Button {
+                            stagedAttachments.removeAll { $0.id == staged.id }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                                .foregroundStyle(Theme.subtleText)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(6)
+                    .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            .padding(.horizontal, 12)
+        }
     }
 
     // MARK: - Data flow
@@ -220,23 +338,137 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - Attachment staging
+
+    private func stage(name: String?, data: Data) {
+        let staged = Staging.attachment(name: name ?? Staging.photoName(), data: data)
+        stagedAttachments.append(staged)
+    }
+    private func pasteFromClipboard(menu: Bool) {
+        let pasteboard = UIPasteboard.general
+        // Screenshot / copied image → attachment.
+        if let image = pasteboard.image, let data = image.jpegData(compressionQuality: 1.0) {
+            stage(name: nil, data: data)
+            return
+        }
+        // Videos / files copied in the Files app land as item providers.
+        let providers = pasteboard.itemProviders.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ||
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
+        if !providers.isEmpty {
+            Task {
+                let medias = await PasteboardLoader.load(providers)
+                await MainActor.run {
+                    for media in medias {
+                        stage(name: media.name, data: media.data)
+                    }
+                    if medias.count < providers.count {
+                        error = "Some clipboard items couldn't be read."
+                    }
+                }
+            }
+            return
+        }
+        // Text (menu path; pasting text into the box uses the system
+        // insertion untouched).
+        if let text = pasteboard.string, !text.isEmpty, menu {
+            input += (input.isEmpty ? "" : " ") + text
+        } else if menu {
+            error = "The clipboard is empty."
+        }
+    }
+
+    private func handleFileSelection(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            if let data = try? Data(contentsOf: url) {
+                stage(name: url.lastPathComponent, data: data)
+            }
+        }
+    }
+
+    // MARK: - Send
+
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let client = servers.client, !isStreaming else { return }
+        guard let client = servers.client, !isStreaming else { return }
+        guard !text.isEmpty || !stagedAttachments.isEmpty else { return }
+        let staged = stagedAttachments
         input = ""
-        // Optimistic user bubble (new chat: becomes seq 0; server truth replaces it on done).
+        stagedAttachments = []
+
+        // Optimistic user bubble (new chat: becomes seq 0; server truth
+        // replaces it on done). With attachments, show a parts bubble —
+        // vault paths are filled in server-side; 📎 names here are display
+        // only.
+        let optimisticSeq = (messages.last?.seq ?? 0) + 1
+        let optimisticContent: MessageContent
+        if staged.isEmpty {
+            optimisticContent = .text(text)
+        } else {
+            var parts: [ContentPart] = text.isEmpty
+                ? []
+                : [ContentPart(kind: "text", vaultPath: nil, text: text)]
+            parts += staged.map { s in
+                ContentPart(kind: Staging.contentKind(mime: s.mimeType), vaultPath: s.name, text: nil)
+            }
+            optimisticContent = .parts(parts)
+        }
         let optimistic = ChatMessage(
-            seq: (messages.last?.seq ?? 0) + 1,
+            seq: optimisticSeq,
             role: "user",
-            content: .text(text),
+            content: optimisticContent,
             toolCalls: nil, toolCallId: nil, createdAt: nil,
             feedback: nil, pinned: nil, bot: nil
         )
         messages.append(optimistic)
-        startStream(client: client, message: text, sessionId: effectiveSessionId)
+
+        guard !staged.isEmpty else {
+            startStream(client: client, message: text, sessionId: effectiveSessionId)
+            return
+        }
+        attachmentUploading = true
+        Task {
+            var attachments: [ChatAttachment] = []
+            var failure: String?
+            for s in staged {
+                do {
+                    let path = try await client.uploadFile(data: s.data, filename: s.name, mimeType: s.mimeType)
+                    attachments.append(ChatAttachment(vaultPath: path, mimeType: s.mimeType))
+                } catch {
+                    failure = error.localizedDescription
+                    break
+                }
+            }
+            await MainActor.run {
+                attachmentUploading = false
+                if let failure {
+                    // Nothing leaked to the server — restore the draft.
+                    self.error = failure
+                    messages.removeAll { $0.seq == optimisticSeq }
+                    input = text
+                    stagedAttachments = staged
+                    return
+                }
+                startStream(
+                    client: client,
+                    message: text,
+                    attachments: attachments,
+                    sessionId: effectiveSessionId
+                )
+            }
+        }
     }
 
-    private func startStream(client: NexusClient, message: String, sessionId: String?) {
+    private func startStream(
+        client: NexusClient,
+        message: String,
+        attachments: [ChatAttachment]? = nil,
+        sessionId: String?
+    ) {
         isStreaming = true
         streamingText = ""
         thinkingText = ""
@@ -245,7 +477,9 @@ struct ChatView: View {
         lastSentText = message
         streamTask = Task {
             do {
-                for try await event in client.chatStream(sessionId: sessionId, message: message, projectId: bot.map(\.id)) {
+                for try await event in client.chatStream(
+                    sessionId: sessionId, message: message, attachments: attachments, projectId: bot.map(\.id)
+                ) {
                     await MainActor.run { handle(event) }
                 }
                 // Server closed the stream — settle whatever we have.

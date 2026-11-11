@@ -174,6 +174,22 @@ struct TeamInfo: Codable, Equatable, Hashable {
     var mode: String?
 }
 
+/// One file attached to an outgoing chat message.
+///
+/// The flow mirrors the web UI: bytes are uploaded to
+/// ``~/.nexus/vault/uploads/`` (via ``POST /vault/upload``) and the turn is
+/// sent referencing the vault path. The chat route resolves each entry into
+/// a ``ContentPart`` (image / audio / document).
+struct ChatAttachment: Codable, Equatable {
+    var vaultPath: String
+    var mimeType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case vaultPath = "vault_path"
+        case mimeType = "mime_type"
+    }
+}
+
 /// One part of a multipart message (attachment / text segment).
 struct ContentPart: Codable, Equatable {
     var kind: String

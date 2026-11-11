@@ -136,10 +136,11 @@ final class NexusClient {
     struct SendMessageBody: Encodable {
         var sessionId: String?
         var message: String
+        var attachments: [ChatAttachment]?
         var projectId: String?
 
         enum CodingKeys: String, CodingKey {
-            case message
+            case message, attachments
             case sessionId = "session_id"
             case projectId = "project_id"
         }
@@ -147,8 +148,15 @@ final class NexusClient {
 
     /// POST /chat/stream → decoded SSE events. A long request timeout is
     /// used so a running turn never hits it.
-    func chatStream(sessionId: String?, message: String, projectId: String? = nil) -> AsyncThrowingStream<ChatStreamEvent, Error> {
-        var req = request("chat/stream", method: "POST", body: SendMessageBody(sessionId: sessionId, message: message, projectId: projectId))
+    func chatStream(
+        sessionId: String?,
+        message: String,
+        attachments: [ChatAttachment]? = nil,
+        projectId: String? = nil
+    ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+        var req = request("chat/stream", method: "POST", body: SendMessageBody(
+            sessionId: sessionId, message: message, attachments: attachments, projectId: projectId
+        ))
         req.timeoutInterval = 60 * 30
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         return decoded(streamSession.sseEvents(for: req)) { ev in
@@ -197,6 +205,44 @@ final class NexusClient {
 
     func cancelTurn(sessionId: String) async throws {
         _ = try await run(request("chat/\(sessionId)/cancel", method: "POST"))
+    }
+
+    // MARK: - Vault upload
+
+    /// POST /vault/upload (multipart) → vault-relative path of the stored
+    /// file. Raw multipart encoding by hand — URLSession has no multipart
+    /// encoder and we only need the single `files` field the server reads.
+    func uploadFile(data: Data, filename: String, mimeType: String) async throws -> String {
+        let boundary = UUID().uuidString
+        var req = request("vault/upload", method: "POST")
+        // Photos/PDFs over Tailscale can be a few MB — give it room beyond
+        // the REST session's fast-fail 15s default.
+        req.timeoutInterval = 60
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        func append(_ s: String) { body.append(Data(s.utf8)) }
+        append("\r\n--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"files\"; filename=\"\(filename)\"\r\n")
+        append("Content-Type: \(mimeType)\r\n\r\n")
+        body.append(data)
+        append("\r\n--\(boundary)--\r\n")
+        req.httpBody = body
+
+        let data = try await run(req)
+        struct UploadResult: Decodable {
+            struct Uploaded: Decodable { var path: String }
+            var uploaded: [Uploaded]
+        }
+        let result: UploadResult
+        do {
+            result = try decoder.decode(UploadResult.self, from: data)
+        } catch {
+            throw APIError.decode("upload reply: \(String(describing: error).prefix(300))")
+        }
+        guard let path = result.uploaded.first?.path, !path.isEmpty else {
+            throw APIError.decode("upload reply stored no file")
+        }
+        return path
     }
 
     // MARK: - HITL

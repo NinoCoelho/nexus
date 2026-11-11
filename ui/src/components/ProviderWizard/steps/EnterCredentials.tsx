@@ -22,11 +22,11 @@ interface Props {
     selectedCredentialRef: string | null,
   ) => void;
   onTest: () => Promise<void>;
-  testResult: { ok: boolean; error: string | null; latency_ms: number } | null;
+  testResult: { ok: boolean; error: string | null; latency_ms: number; note?: string | null } | null;
   testing: boolean;
 }
 
-function friendlyTestError(raw: string | null | undefined): string {
+function friendlyTestError(raw: string | null | undefined, baseUrl: string): string {
   if (!raw) return "Connection failed.";
   const lower = raw.toLowerCase();
   const httpMatch = raw.match(/^HTTP\s*(\d{3})/);
@@ -36,7 +36,18 @@ function friendlyTestError(raw: string | null | undefined): string {
   if (code === 404) return "Endpoint not found — check the Base URL.";
   if (code === 429) return "Rate limited by the provider — wait a moment and retry.";
   if (code && code >= 500) return "Provider returned a server error — try again in a minute.";
-  if (lower.includes("connection refused") || lower.includes("could not reach")) {
+  if (
+    lower.includes("connection refused") ||
+    lower.includes("could not reach") ||
+    lower.includes("all connection attempts failed") ||
+    lower.includes("connect error")
+  ) {
+    // Local servers: nearly always a wrong port (LM Studio classic defaults
+    // to 1234, Bionic installs often differ) or the server not running.
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(baseUrl.trim());
+    if (isLocal) {
+      return "Could not reach the local server — is it running, and does the port in the Base URL match the one shown in its settings?";
+    }
     return "Could not reach the provider — check the Base URL and your network.";
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
@@ -234,6 +245,7 @@ export default function EnterCredentials({
         {testResult && testResult.ok && (
           <span className="provider-wizard-test-status provider-wizard-test-status--ok">
             ✓ Connected ({testResult.latency_ms} ms)
+            {testResult.note ? <em className="provider-wizard-test-note"> — {testResult.note}</em> : null}
           </span>
         )}
         {testResult && !testResult.ok && (
@@ -241,7 +253,7 @@ export default function EnterCredentials({
             className="provider-wizard-test-status provider-wizard-test-status--err"
             title={testResult.error ?? undefined}
           >
-            {friendlyTestError(testResult.error)}
+            {friendlyTestError(testResult.error, baseUrl)}
           </span>
         )}
       </div>

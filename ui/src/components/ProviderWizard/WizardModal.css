@@ -308,6 +308,10 @@
 .provider-wizard-test-status--err {
   color: var(--bad);
 }
+.provider-wizard-test-note {
+  font-style: normal;
+  opacity: 0.85;
+}
 
 /* ── step 4: models ──────────────────────────────────────────────────── */
 

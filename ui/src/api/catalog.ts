@@ -155,6 +155,9 @@ export interface ProviderTestResult {
   ok: boolean;
   error: string | null;
   latency_ms: number;
+  /** Present when the backend auto-corrected the provider's base URL
+   *  (e.g. healed a stale local port). */
+  note?: string | null;
 }
 
 export async function testProviderConnection(

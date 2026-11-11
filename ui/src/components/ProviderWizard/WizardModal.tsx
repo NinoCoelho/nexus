@@ -113,13 +113,21 @@ export default function WizardModal({
           const m =
             editPrefill.authMethod ??
             (c ? c.auth_methods.find((am) => SUPPORTED_AUTH_METHODS.includes(am.id)) ?? null : null);
+          const seeded = m ? seedValues(m) : {};
+          // Prefill the base_url prompt with the provider's SAVED URL.
+          // seedValues() injects the catalog default (e.g. LM Studio on
+          // :1234), which would silently overwrite the user's customized
+          // port on save/test when they never touched the field.
+          if (editPrefill.baseUrl && m?.prompts.some((p) => p.name === "base_url")) {
+            seeded.base_url = editPrefill.baseUrl;
+          }
           setState({
             step: "enter-credentials",
             catalog: c,
             authMethod: m,
             providerName: editPrefill.providerName,
             baseUrl: editPrefill.baseUrl,
-            values: m ? seedValues(m) : {},
+            values: seeded,
             models: editPrefill.models,
             testResult: null,
             oauthCredentialRef: editPrefill.credentialRef,
