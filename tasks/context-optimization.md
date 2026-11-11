@@ -106,3 +106,74 @@ Each change is independently revertible. To fully rollback:
 ## Lessons
 
 _To be filled after implementation and testing._
+
+---
+
+## Implementation Status (2026-11-11 — researched follow-up, shipped)
+
+The follow-up research (Anthropic cookbook compaction/memory, Codex 0.153.4
+experimental context management, MemGPT/Letta archival memory, RAG-MCP/
+ScaleMCP tool retrieval) converged on three techniques, all now implemented
+behind `[agent]` config flags (defaults ON — "lowest possible budget"):
+
+### 1. `history_recall` — all-history recall (config: `history_recall`, default true)
+
+- `tools/history_recall_tool.py` — agent tool with `search` (BM25 over live
+  `messages_fts` + archive `parts_fts`, all sessions by default), `get`
+  (verbatim message by ref), `recent` (verbatim tail of this session).
+- `agent/loop/parts_index.py` — FTS5 index over the `.parts` compaction
+  archives. Ref formats: `live:{sid}:{seq}` (messages table, 0-based seq) and
+  `part:{sid}:{line}:{idx}` (1-based JSONL line). Archive JSONL stays the
+  source of truth; the index is derived and swept alongside the files
+  (`context_artifacts.py` gained an `on_removed` sweep callback).
+- Wired in `server/app.py` (store injection), `session_store/schema.py`
+  (`_ARCHIVE_PARTS_SCHEMA`), `summarize.persist_summary_part` (index-on-append),
+  `compact.py` (elision/stub hints now say "use history_recall"),
+  `prompt_builder.py` (recall-first Context-Management section).
+
+### 2. Progressive tool discovery (config: `tool_discovery` default true,
+`tool_advertisement` = "sticky"|"pure" (default sticky), `tool_discovery_sticky_max` 28,
+`core_tools` list override)
+
+- `agent/tool_discovery.py` — patches `registry.specs()` (loom calls it live
+  per request) to advertise only the ~16-tool core set; registers `tool_search`
+  which returns hidden tools' full JSON schemas as result text.
+- Invariants: hidden tools stay dispatchable (only `specs()` is patched);
+  coordinator allowlisted registries never install discovery; the prompt's
+  "More tools (on demand)" catalog (stable cache zone) lists ALL non-core
+  tools regardless of stickiness so sticky discoveries never rewrite the
+  cached prefix.
+- `overflow.TOOLS_AND_SYSTEM_OVERHEAD` floor lowered 12,000 → 7,000 (the
+  measured value with discovery ≈ 13K vs ≈ 24K without).
+
+### 3. Week-scale session lifecycle (config: `idle_compact_hours`, default 12)
+
+- `turn_launcher.precheck_context_window` gained an **idle checkpoint**:
+  resuming after ≥ idle hours with history at yellow+ zone compacts before the
+  turn (Claude Code's idle compaction). `chat_stream.py` computes
+  `idle_seconds` via `store.get_session_timestamps`; the Telegram gateway
+  inherits it through the shared launcher.
+
+### Telemetry
+
+`GET /sessions/{id}/context-stats` now returns `tool_discovery` (mode, core/
+hidden counts, sticky state) and `history_recall` (armed or not) blocks, and
+computes `usable_context_tokens`/`reserved_tokens` from the measured overhead.
+
+### Tests
+
+- `tests/test_history_recall.py` (12), `tests/test_tool_discovery.py` (8),
+  `tests/test_tool_discovery_integration.py` (2, real registry end-to-end).
+- `tests/test_overflow_integration.py::test_preflight_uses_fallback_when_window_unconfigured`
+  was rewritten: it used to pass only because the full registry's measured
+  overhead (~24K) left ~0 usable tokens on the 32K fallback window, so every
+  turn refused. With discovery, the compactor genuinely rescues; the test now
+  pins "gate must act — rescue or clean refusal, never silently stream the blob".
+
+### Known follow-ups
+
+- `tool_advertisement = "pure"` is off by default; validate provider
+  pass-through of undeclared tool names before flipping.
+- Pre-discovery installs (full registry) can still measure overhead that
+  crowds out the 32K fallback window on unknown models — discovery is the fix,
+  but a hard guard on measured-vs-fallback ratio would be belt-and-braces.

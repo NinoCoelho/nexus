@@ -138,12 +138,48 @@ class AgentConfig(BaseModel):
     # returns nothing, so a misconfigured value can't lose a summary.
     compact_model: str = ""
     # Request provider-side prompt caching for the stable prefix of the
-    # system prompt and the tool schemas (~15K tokens that are otherwise
-    # re-billed in full on every LLM call, including every iteration of a
-    # single turn). Anthropic and Bedrock take explicit cache breakpoints;
-    # OpenAI-compatible providers cache automatically and ignore this.
-    # Turn off if a gateway rejects the cache fields.
+    # system prompt and the tool schemas (the advertised tool set + stable
+    # prompt prefix that is otherwise re-billed in full on every LLM call,
+    # including every iteration of a single turn). Anthropic and Bedrock take
+    # explicit cache breakpoints; OpenAI-compatible providers cache
+    # automatically and ignore this. Turn off if a gateway rejects the cache
+    # fields.
     prompt_cache: bool = True
+    # Agent-facing recall over conversation history (history_recall tool):
+    # full-text search across ALL sessions plus the compaction archive, with
+    # verbatim fetch by ref. This is what makes summarization/elision safe —
+    # removed detail stays reachable. 0-risk toggle: off = tool not
+    # registered.
+    history_recall: bool = True
+    # Progressive tool disclosure: advertise only a core tool set to the LLM
+    # and serve everything else through a single tool_search tool (RAG-MCP /
+    # ScaleMCP pattern — cuts the ~15K-token per-call tool-schema block to a
+    # fraction and improves selection accuracy at scale). Hidden tools remain
+    # fully dispatchable; their schemas arrive as tool_search result text.
+    tool_discovery: bool = True
+    # How discovered tools become callable. ADVANCED.
+    #   "sticky" — discovered tools are appended to the advertised set for
+    #       the rest of the session. Works on every provider (including ones
+    #       that constrain generation to declared tool names). Costs ~300
+    #       tokens per discovered tool and one prompt-cache re-write each.
+    #   "pure" — the advertised set never changes after session start: zero
+    #       overhead, byte-identical cached prefix. Relies on the provider
+    #       passing through tool calls to names that were not declared
+    #       (Anthropic does; some OpenAI-compat servers do not).
+    tool_advertisement: Literal["sticky", "pure"] = "sticky"
+    # Cap on total advertised tools in sticky mode (core + discovered).
+    # Beyond the cap, further discoveries are served result-only.
+    tool_discovery_sticky_max: int = 28
+    # Override the always-advertised core tool set. Empty = built-in default
+    # (ask_user, notify_user, page, terminal, vault_read/write/list/search,
+    # skills_list, skill_view, spawn_subagents, context_status, fork_session,
+    # history_recall, tool_search). Unknown names are warned and dropped.
+    core_tools: list[str] = Field(default_factory=list)
+    # Idle checkpoint: when a session resumes after this many idle hours AND
+    # its history is at least in the yellow zone, compact_and_summarize runs
+    # before the turn so days-old chats resume in a fresh, cheap window
+    # (Claude Code's idle compaction). 0 = disabled.
+    idle_compact_hours: float = 12.0
 
 
 class GraphRAGEmbeddingConfig(BaseModel):

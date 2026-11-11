@@ -470,6 +470,12 @@ def create_app(
 
     _set_ctx_tool_store(sessions)
 
+    # history_recall reads live history through the same store and arms the
+    # compaction-archive FTS index (parts_fts) for cross-session recall.
+    from ..tools.history_recall_tool import set_session_store as _set_history_store
+
+    _set_history_store(sessions)
+
     # Trace callback routes every agent event (iter, tool_call,
     # tool_result, reply) into the SSE subscriber fanout for whichever
     # session is currently running the turn. Reads the session_id from

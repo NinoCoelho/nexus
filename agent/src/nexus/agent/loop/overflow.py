@@ -52,10 +52,12 @@ DEFAULT_FALLBACK_WINDOW = 32_000
 # small messages still costs per-message overhead and degrades recall.
 DEFAULT_MAX_MESSAGES = 240
 # Approximate token cost of system prompt + all tool JSON Schema definitions
-# sent with every request. With ~46 tools, the tool payloads alone consume
-# ~10-12K tokens; the system prompt adds another ~2-3K. MCP servers push this
-# higher, which is why it's a floor, not a measurement.
-TOOLS_AND_SYSTEM_OVERHEAD = 12_000
+# sent with every request. Floor used only before the first measurement
+# (``_builder._measure_call_overhead`` replaces it once the real prompt and
+# registry exist). With progressive tool disclosure the advertised set is
+# ~16 tools + the hidden-tools catalog, so ~7K covers tools + prompt; without
+# disclosure, measurement corrects it upward within one process.
+TOOLS_AND_SYSTEM_OVERHEAD = 7_000
 
 # Historical private aliases — kept so existing imports keep working.
 _OUTPUT_HEADROOM_TOKENS = OUTPUT_HEADROOM_TOKENS

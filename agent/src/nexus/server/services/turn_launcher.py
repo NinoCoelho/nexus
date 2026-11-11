@@ -82,6 +82,7 @@ async def precheck_context_window(
     provider: Any | None = None,
     session_id: str | None = None,
     attachment_parts: list[Any] | None = None,
+    idle_seconds: float | None = None,
 ) -> tuple[list[Any], dict[str, Any] | None]:
     """Make room for the incoming turn; only error if the *message* can't fit.
 
@@ -97,11 +98,16 @@ async def precheck_context_window(
     no longer block a turn:
 
     1. estimate history + message + attachments against the usable window,
-    2. if over budget (or the history is simply too long), run
+    2. **idle checkpoint** — when ``idle_seconds`` exceeds
+       ``[agent].idle_compact_hours`` and the history is at least in the
+       yellow zone, checkpoint it into a summary before anything else (a
+       days-old session resumes in a fresh, cheap window instead of paying a
+       full uncached prefill on message one),
+    3. if over budget (or the history is simply too long), run
        ``compact_and_summarize`` and keep the result whenever it is smaller,
        even if it didn't fully solve the problem,
-    3. if still over, ``hard_trim`` to force a fit (LLM-free, guaranteed),
-    4. error only when the incoming message *by itself* doesn't fit, which
+    4. if still over, ``hard_trim`` to force a fit (LLM-free, guaranteed),
+    5. error only when the incoming message *by itself* doesn't fit, which
        the user can act on by shortening it.
 
     Best-effort: any internal failure degrades to "no error" so a bug here
@@ -132,6 +138,44 @@ async def precheck_context_window(
         # A long tail of small messages can stay under budget while still
         # carrying hundreds of stale turns, so message count is a trigger too.
         too_many = check_message_count(pre_turn_history)
+
+        # Idle checkpoint — see docstring step 2.
+        if pre_turn_history and idle_seconds is not None and idle_seconds > 0:
+            idle_hours = float(
+                getattr(load_config().agent, "idle_compact_hours", 12.0) or 0
+            )
+            if idle_hours > 0 and idle_seconds >= idle_hours * 3600:
+                from ...agent.loop.zones import classify_zone
+
+                zone = classify_zone(total_est, budget)
+                if zone in ("yellow", "orange", "red"):
+                    log.info(
+                        "precheck: idle checkpoint (%.1fh idle, zone=%s) before turn on session %s",
+                        idle_seconds / 3600, zone, session_id,
+                    )
+                    try:
+                        from ...agent.loop.compact import compact_and_summarize
+
+                        checkpointed, report = await compact_and_summarize(
+                            list(pre_turn_history),
+                            context_window=ctx_window,
+                            session_id=session_id,
+                            model_id=effective_model,
+                            provider=provider,
+                            strategy="auto",
+                        )
+                        new_tokens = _est_tok(checkpointed) if checkpointed else 0
+                        if checkpointed and new_tokens < history_tokens:
+                            pre_turn_history = checkpointed
+                            history_tokens = new_tokens
+                            total_est = history_tokens + incoming_tokens
+                            if report is not None:
+                                log.info(
+                                    "precheck: idle checkpoint compacted %d→%d tokens",
+                                    report.tokens_before, report.tokens_after,
+                                )
+                    except Exception:  # noqa: BLE001 — checkpoint is best-effort
+                        log.warning("precheck: idle checkpoint failed", exc_info=True)
 
         if pre_turn_history and (total_est > budget or too_many):
             from ...agent.loop.compact import compact_and_summarize, hard_trim
@@ -303,6 +347,18 @@ async def launch_turn(
 
     pre_turn_history = list(session.history)
 
+    # Idle seconds since the last write on this session — feeds the idle
+    # checkpoint inside precheck (Claude Code's idle compaction). Best-effort.
+    idle_seconds: float | None = None
+    try:
+        import time as _time
+
+        _created, _updated = store.get_session_timestamps(session.id)
+        if _updated:
+            idle_seconds = max(0.0, _time.time() - _updated)
+    except Exception:  # noqa: BLE001
+        pass
+
     pre_turn_history, ctx_err = await precheck_context_window(
         pre_turn_history,
         message,
@@ -310,6 +366,7 @@ async def launch_turn(
         provider=getattr(agent, "_nexus_provider", None),
         session_id=session.id,
         attachment_parts=attachment_parts,
+        idle_seconds=idle_seconds,
     )
     if ctx_err is not None:
         # Non-HTTP gateways only render ``error`` as text, so fold the

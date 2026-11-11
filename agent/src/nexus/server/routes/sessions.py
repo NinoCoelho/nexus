@@ -477,9 +477,9 @@ async def get_context_stats(
     # triggered compaction, and attachments were counted as their vault path.
     from ...agent.loop.overflow import (
         OUTPUT_HEADROOM_TOKENS,
-        TOOLS_AND_SYSTEM_OVERHEAD,
         effective_context_window,
         estimate_tokens,
+        tools_and_system_overhead,
     )
     from ...agent.loop.zones import classify_zone
     from ...config_file import load as load_config
@@ -539,6 +539,24 @@ async def get_context_stats(
     else:
         compaction_hint = "none_needed"
 
+    tools_overhead = tools_and_system_overhead()
+
+    # Context-optimization telemetry: progressive tool disclosure state and
+    # archive-recall readiness, so the UI can explain what is advertising
+    # what and whether cross-session recall is armed for this session.
+    try:
+        from ...agent.tool_discovery import discovery_stats
+
+        discovery = discovery_stats()
+    except Exception:  # noqa: BLE001 — telemetry must never break the endpoint
+        discovery = {"installed": False}
+    try:
+        from ...tools.history_recall_tool import _STORE_REF as _recall_store
+
+        history_recall = {"enabled": _recall_store is not None}
+    except Exception:  # noqa: BLE001
+        history_recall = {"enabled": False}
+
     return {
         "context_window_tokens": context_window_tokens,
         "estimated_context_tokens": total_tokens,
@@ -549,11 +567,12 @@ async def get_context_stats(
         "tool_stats": sorted(tool_stats.values(), key=lambda x: x["estimated_tokens"], reverse=True),
         "compaction_hint": compaction_hint,
         # What the engine actually budgets against, so the dropdown can
-        # explain why compaction fires before the bar looks full.
-        "usable_context_tokens": max(
-            0, effective_window - OUTPUT_HEADROOM_TOKENS - TOOLS_AND_SYSTEM_OVERHEAD
-        ),
-        "reserved_tokens": OUTPUT_HEADROOM_TOKENS + TOOLS_AND_SYSTEM_OVERHEAD,
+        # explain why compaction fires before the bar looks full. Uses the
+        # measured per-call overhead when one exists, not the static floor.
+        "usable_context_tokens": max(0, effective_window - OUTPUT_HEADROOM_TOKENS - tools_overhead),
+        "reserved_tokens": OUTPUT_HEADROOM_TOKENS + tools_overhead,
+        "tool_discovery": discovery,
+        "history_recall": history_recall,
     }
 
 

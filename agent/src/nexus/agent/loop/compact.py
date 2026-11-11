@@ -305,7 +305,10 @@ def _stub_one(content: str, tool_name: str | None) -> str:
         "tool": tool_name or "",
         "original_size": len(content),
         "first_line": first_line[:_STUB_FIRST_LINE_CHARS],
-        "hint": "Old tool result stubbed to save context; re-call the tool if needed.",
+        "hint": (
+            "Old tool result stubbed to save context. Re-call the tool, read "
+            "the vault:// link above, or search it with history_recall."
+        ),
     }
     return json.dumps(obj, ensure_ascii=False)
 
@@ -564,10 +567,10 @@ def hard_trim(
             persist_summary_part(session_id, elided, reason="hard_trim")
         marker_text = (
             f"[{_ELISION_MARKER}] {len(elided)} older message(s) were removed to fit "
-            "the context window. They are not lost: the full text is in this "
-            "session's recovery archive, and recent tool results are in "
-            "vault://.tool-cache/. Ask the user if you need detail from the "
-            "earlier part of this conversation."
+            "the context window. They are not lost: use history_recall to search "
+            "or fetch them verbatim (search also covers older chats), and recent "
+            "tool results live in vault://.tool-cache/. Don't guess at what they "
+            "said — recall it."
         )
         first_drop = min(dropped_idx)
         trimmed: list[ChatMessage] = []

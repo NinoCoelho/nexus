@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .home import vault_session_memory, vault_tool_cache
@@ -66,6 +67,13 @@ def purge_session_artifacts(session_id: str) -> int:
                 removed += 1
         except OSError:
             log.debug("purge_session_artifacts: failed to remove %s", candidate, exc_info=True)
+    # Keep the derived archive index consistent with the files.
+    try:
+        from .agent.loop.parts_index import remove_session as _remove_index_rows
+
+        _remove_index_rows(session_id)
+    except Exception:  # noqa: BLE001 — cleanup is never fatal
+        log.debug("purge_session_artifacts: parts index cleanup failed", exc_info=True)
     if removed:
         log.info("purged %d context artifact(s) for session %s", removed, session_id)
     return removed
@@ -76,6 +84,7 @@ def _sweep_dir(
     *,
     max_age_seconds: float,
     max_total_bytes: int | None,
+    on_removed: Callable[[Path], None] | None = None,
 ) -> tuple[int, int]:
     """Age- then size-bounded cleanup of one directory. Returns (files, bytes)."""
     if not directory.is_dir():
@@ -104,6 +113,8 @@ def _sweep_dir(
                 path.unlink()
                 removed_files += 1
                 removed_bytes += stat.st_size
+                if on_removed is not None:
+                    on_removed(path)
             except OSError:
                 log.debug("sweep: failed to unlink %s", path, exc_info=True)
             continue
@@ -121,6 +132,8 @@ def _sweep_dir(
                     path.unlink()
                     removed_files += 1
                     removed_bytes += size
+                    if on_removed is not None:
+                        on_removed(path)
                     total -= size
                 except OSError:
                     log.debug("sweep: failed to unlink %s", path, exc_info=True)
@@ -140,6 +153,15 @@ def sweep_context_artifacts(
     logging. Never raises.
     """
     stats = {"files_removed": 0, "bytes_removed": 0}
+
+    def _remove_parts_index_rows(path: Path) -> None:
+        try:
+            from .agent.loop.parts_index import remove_file_rows
+
+            remove_file_rows(path)
+        except Exception:  # noqa: BLE001 — cleanup is never fatal
+            log.debug("sweep: parts index cleanup failed", exc_info=True)
+
     try:
         cache_files, cache_bytes = _sweep_dir(
             vault_tool_cache(),
@@ -156,6 +178,9 @@ def sweep_context_artifacts(
             vault_session_memory() / ".parts",
             max_age_seconds=parts_max_age_days * 86_400,
             max_total_bytes=None,
+            # Drop the archive index rows whose backing JSONL just left, so
+            # history_recall never points at swept-away files.
+            on_removed=_remove_parts_index_rows,
         )
         stats["files_removed"] += parts_files
         stats["bytes_removed"] += parts_bytes

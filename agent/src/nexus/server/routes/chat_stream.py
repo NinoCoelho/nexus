@@ -307,6 +307,16 @@ async def chat_stream_route(
         # alone can no longer block a turn.
         # Shared with the Telegram gateway via services/turn_launcher.
         from ..services.turn_launcher import precheck_context_window
+
+        idle_seconds: float | None = None
+        try:
+            import time as _time
+
+            _created, _updated = store.get_session_timestamps(session.id)
+            if _updated:
+                idle_seconds = max(0.0, _time.time() - _updated)
+        except Exception:  # noqa: BLE001 — idle checkpoint is best-effort
+            pass
         pre_turn_history, _ctx_err = await precheck_context_window(
             pre_turn_history,
             req.message,
@@ -314,6 +324,7 @@ async def chat_stream_route(
             provider=getattr(a, "_nexus_provider", None),
             session_id=session.id,
             attachment_parts=attachment_parts,
+            idle_seconds=idle_seconds,
         )
         if _ctx_err is not None:
             yield json.dumps({"type": "error", **_ctx_err}) + "\n"

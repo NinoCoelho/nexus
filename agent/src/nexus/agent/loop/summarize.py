@@ -509,6 +509,16 @@ def persist_summary_part(
         }
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        # Index the record for history_recall (the agent-facing reader over
+        # this archive). Best-effort: indexing must never break compaction.
+        try:
+            from .parts_index import index_record
+
+            with path.open("rb") as fh:
+                line_no = sum(1 for _ in fh)
+            index_record(session_id, path, line_no, record)
+        except Exception:  # noqa: BLE001
+            log.debug("parts index: failed to index record", exc_info=True)
         return str(path)
     except Exception:
         log.debug("failed to persist summary part", exc_info=True)

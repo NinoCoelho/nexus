@@ -73,19 +73,22 @@ def handle_context_status(args: dict[str, Any]) -> str:
         "green": "Context is healthy. Continue as normal.",
         "yellow": (
             "Context is filling up. The user can compact from the context "
-            "indicator in the status bar. Consider using spawn_subagents for "
-            "independent tasks, or vault_write to persist intermediate results."
+            "indicator in the status bar. Prefer spawn_subagents for "
+            "independent tasks and vault_write for large results; removed "
+            "detail stays reachable via history_recall."
         ),
         "orange": (
             "Context is running low. Inform the user that they can compact "
             "from the context indicator. Use fork_session to start a new "
-            "phase, or spawn_subagents for remaining work."
+            "phase (persist key state with vault_write first), or "
+            "spawn_subagents for remaining work."
         ),
         "red": (
             "Context is critically full. Older turns will be summarized or "
-            "trimmed automatically to keep the chat working, which loses "
-            "detail. Persist anything important with vault_write, then use "
-            "fork_session or ask the user to start a new chat."
+            "trimmed automatically to keep the chat working — that content "
+            "stays searchable via history_recall. Persist anything important "
+            "with vault_write, then use fork_session or ask the user to "
+            "start a new chat."
         ),
     }
 
@@ -110,8 +113,10 @@ FORK_SESSION_TOOL = ToolSpec(
         "task boundaries: a new feature, a new debugging target, a new phase "
         "of work, or when context is getting large. The new session starts "
         "with a structured summary of goals, decisions, entities and open "
-        "TODOs instead of the full transcript. Tell the user the new chat "
-        "exists and what it is called; this conversation stays intact."
+        "TODOs instead of the full transcript. Persist anything you must keep "
+        "verbatim to the vault first; removed detail stays reachable from the "
+        "new session via history_recall. Tell the user the new chat exists "
+        "and what it is called; this conversation stays intact."
     ),
     parameters={
         "type": "object",

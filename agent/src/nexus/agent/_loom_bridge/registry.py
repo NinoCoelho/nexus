@@ -114,6 +114,7 @@ def build_tool_registry(
     from nexus.tools.datatable_tool import DATATABLE_MANAGE_TOOL, handle_datatable_tool
     from nexus.tools.dispatch_card_tool import DISPATCH_CARD_TOOL, handle_dispatch_card_tool
     from nexus.tools.heartbeat_tool import HEARTBEAT_MANAGE_TOOL, handle_heartbeat_manage_tool
+    from nexus.tools.history_recall_tool import HISTORY_RECALL_TOOL, handle_history_recall
     from nexus.tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
     from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
@@ -451,6 +452,7 @@ def build_tool_registry(
         (NEXUS_KB_TOOL, _nexus_kb_search),
         (CONTEXT_STATUS_TOOL, handle_context_status),
         (FORK_SESSION_TOOL, handle_fork_session),
+        (HISTORY_RECALL_TOOL, handle_history_recall),
     ]
 
     for spec, fn in _TOOL_TABLE:
@@ -458,6 +460,17 @@ def build_tool_registry(
 
     if tool_allowlist is not None:
         _apply_tool_allowlist(registry, tool_allowlist)
+
+    # Progressive tool disclosure — only for unrestricted registries. The
+    # coordinator sweep's allowlisted registry is already minimal and must
+    # advertise exactly what it was allowlisted with.
+    if tool_allowlist is None:
+        try:
+            from nexus.agent.tool_discovery import install_tool_discovery
+
+            install_tool_discovery(registry)
+        except Exception:  # noqa: BLE001 — never block agent construction
+            log.warning("tool discovery install failed; full registry stays advertised", exc_info=True)
 
     _install_skill_redirect(registry, skill_registry)
     _install_unknown_tool_helper(registry)

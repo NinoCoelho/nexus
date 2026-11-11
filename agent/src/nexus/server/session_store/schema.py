@@ -362,6 +362,23 @@ def _ensure_reasoning_content_column(db) -> None:
         db.commit()
 
 
+_ARCHIVE_PARTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts USING fts5(
+    content,
+    session_id UNINDEXED,
+    line_no UNINDEXED,
+    msg_idx UNINDEXED,
+    role UNINDEXED,
+    ts UNINDEXED,
+    reason UNINDEXED
+);
+CREATE TABLE IF NOT EXISTS parts_meta (
+    session_id TEXT PRIMARY KEY,
+    line_count INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
 def init_fts(loom_store: LoomSessionStore) -> None:
     """Create the FTS5 virtual table + sync triggers if missing."""
     db = loom_store._db
@@ -380,6 +397,9 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     db.executescript(_PAUSED_TURNS_SCHEMA)
     db.executescript(_PROJECTS_SCHEMA)
     db.executescript(_TELEGRAM_SCHEMA)
+    # Compaction-archive search index (nexus.agent.loop.parts_index owns it;
+    # created here so sweeps and searches never race its creation).
+    db.executescript(_ARCHIVE_PARTS_SCHEMA)
     _ensure_feedback_pinned_column(db)
     _ensure_subagent_columns(db)
     _ensure_project_column(db)

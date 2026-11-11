@@ -147,7 +147,19 @@ async def test_preflight_passes_when_history_fits(agent_with_window) -> None:
 
 async def test_preflight_uses_fallback_when_window_unconfigured(tmp_path: Path) -> None:
     """A model without ``context_window`` falls back to the 32K default and
-    still catches obvious overflows (gigantic history)."""
+    the overflow gate still *acts* on a gigantic history.
+
+    It used to pass by refusing: with the full ~46-tool registry the measured
+    tools+prompt overhead (~24K) ate the entire 32K fallback budget, leaving
+    ~0 usable tokens, so compaction could never fit anything and every turn
+    died with ``context_overflow``. With progressive tool discovery the
+    advertised set measures far less, leaving real usable budget — the
+    compactor then genuinely rescues the history (LLM-free hard_trim) and the
+    turn proceeds, matching the never-run-out contract this file pins.
+
+    Either outcome is correct; what must never happen is the provider being
+    dialed with the 5MB blob still in the prompt.
+    """
     cfg = _cfg_with_window(window=0)  # disabled → uses _DEFAULT_FALLBACK_WINDOW
     spy = _SpyProvider()
     agent = Agent(
@@ -161,13 +173,23 @@ async def test_preflight_uses_fallback_when_window_unconfigured(tmp_path: Path) 
         "go", history=history, context=None, session_id="s3", model_id="test/model",
     ):
         events.append(ev)
-    # Provider should NOT be dialed — overflow was caught by the pre-flight.
-    assert spy.stream_calls == 0
-    overflow = next(
-        (e for e in events if e.get("type") == "error" and e.get("reason") == "context_overflow"),
-        None,
-    )
-    assert overflow is not None
+
+    if spy.stream_calls == 0:
+        # Refused — but then it must be a clean context_overflow error.
+        error = next(
+            (e for e in events if e.get("type") == "error" and e.get("reason") == "context_overflow"),
+            None,
+        )
+        assert error is not None, "refusal without a context_overflow error"
+    else:
+        # Rescued — dialed exactly once, with the blob compacted away,
+        # and the turn completed normally.
+        assert spy.stream_calls == 1
+        assert spy.last_messages is not None
+        total = sum(len(str(m["content"] or "")) for m in spy.last_messages)
+        assert total < 100_000, f"prompt still carries the blob: {total} chars"
+        error = next((e for e in events if e.get("type") == "error"), None)
+        assert error is None
     await agent.aclose()
 
 

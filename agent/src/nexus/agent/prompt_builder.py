@@ -8,6 +8,7 @@ internal actions, careful on external ones, and to skip performative filler.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
     from loom.home import AgentHome
 
     from ..server.project_store import Project
+
+log = logging.getLogger(__name__)
 
 # Separates the prompt's stable prefix from its volatile tail so providers can
 # place a prompt-cache breakpoint between them. An HTML comment so that if a
@@ -456,41 +459,45 @@ changes, and keep them current.
 
 ## Context Management
 
-Your conversation context is finite, but it will never cut a turn off. When \
-the window fills, Nexus automatically shrinks old tool results, summarizes \
-older turns into a session memory note, and — as a last resort — trims whole \
-old messages to force a fit. Full tool results stay readable at \
-`vault://.tool-cache/`, and trimmed messages are archived, so nothing is \
-truly lost. What you *do* lose is detail you can recall without re-reading. \
-So manage context for quality, not for survival:
+Your context window is managed automatically: old tool results are stubbed, \
+older turns are summarized into a session-memory note, and — as a last resort \
+— whole old messages are trimmed. Nothing is destroyed. Stubbed tool results \
+stay readable under `vault://.tool-cache/`, and every summarized or elided \
+message is searchable. So the working rule is: **don't hoard context, and \
+don't guess at what was removed — recall it.**
 
+- **`history_recall`** — search across ALL past conversations (this chat and \
+every older chat) plus everything compaction summarized or trimmed away, and \
+fetch verbatim messages by `ref`. Use it before re-asking the user or redoing \
+research that may already have happened. `action="recent"` re-reads the tail \
+of this session verbatim.
 - **`context_status`** — check how full your context window is and get \
-recommendations. Call this before starting complex multi-step operations.
+recommendations. Call this before complex multi-step operations.
 - **`fork_session`** — really creates a new chat, seeded with a summary of \
 this one, and returns its id. Use at natural boundaries: new feature, new \
-debugging target, new phase of work. Tell the user the new chat exists; don't \
-claim you have done any work in it.
+debugging target, new phase of work. Persist state with `vault_write` first; \
+the archive makes old detail recallable from the new session too. Tell the \
+user the new chat exists; don't claim you have done any work in it.
 - **`spawn_subagents`** — run independent subtasks in isolated sessions. Use \
 for parallel work (research, analysis, file operations).
-- **`vault_write`** — persist intermediate results to the vault instead of \
-keeping them in context. This is the single most effective habit: a vault \
-path survives every compaction, a long tool result does not.
+- **`vault_write`** — persist results you must keep verbatim. A vault path \
+survives every compaction; a long tool result does not.
 
 ### Planning rules
 
 When planning a task with 3+ steps:
 1. Consider whether independent steps can run as sub-agents.
-2. At phase boundaries, fork to a fresh session with a summary.
+2. At phase boundaries, persist key state to the vault, then fork to a fresh \
+session with a summary.
 3. Use `vault_write` for large outputs — don't keep them in chat.
 4. Check `context_status` if you've been running many tool calls.
 
-If you see a `[nx:elided]` marker in this conversation, older messages were \
-removed to fit the window: don't guess at what they said, re-read the \
-relevant file or ask the user.
-
-If context is high, say so once and keep going. The user can also compact \
-from the context indicator in the status bar. Never refuse to work, and never \
-stall, because of context pressure.
+If you see an `[nx:elided]` marker or a `[nx:compacted]` stub in this \
+conversation, that content was removed to fit the window — it is archived and \
+searchable: use `history_recall` to get it back rather than guessing at what \
+it said. If context is high, say so once and keep going. The user can also \
+compact from the context indicator in the status bar. Never refuse to work, \
+and never stall, because of context pressure.
 """
 
 
@@ -666,6 +673,20 @@ def build_system_prompt(
         parts.append(
             "_No skills are currently loaded. Author one with `skill_manage` after you complete something non-trivial._"
         )
+
+    # Progressive tool disclosure: list every non-core tool as discoverable.
+    # Sits in the stable zone — it changes only when the registry itself
+    # changes (MCP connect/disconnect), which is already a cache-invalidating
+    # event. Sticky discoveries never rewrite this section.
+    try:
+        from .tool_discovery import catalog_markdown
+
+        catalog = catalog_markdown()
+        if catalog:
+            parts.append("")
+            parts.append(catalog)
+    except Exception:  # noqa: BLE001 — prompt building must never fail here
+        log.debug("tool discovery catalog unavailable", exc_info=True)
 
     creds_block = _credentials_block()
     if creds_block:
