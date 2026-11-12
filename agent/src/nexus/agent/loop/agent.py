@@ -393,7 +393,11 @@ class Agent:
     def _select_fallback_model(self, current_model: str | None, error_msg: str) -> str | None:
         """Select a fallback model when the current one is unavailable.
 
-        Returns a different model ID from the registry, or None if no fallback available.
+        Preference order: the configured ``agent.default_model`` (when it
+        isn't the model that just failed and is actually available), else
+        the first available model from the provider registry. Returns a
+        different model ID from the registry, or None if no fallback is
+        available.
         """
         if not self._provider_registry:
             return None
@@ -402,37 +406,62 @@ class Agent:
         if not available:
             return None
 
-        # Filter out the current model
-        current = current_model or getattr(getattr(self._nexus_cfg, "agent", None), "default_model", None)
-        candidates = [m for m in available if m != current]
+        # The effective model of this turn: an empty model_id means the
+        # default was used, so the default IS the model that failed —
+        # falling back to it again would just retry the dead model.
+        default_model = getattr(getattr(self._nexus_cfg, "agent", None), "default_model", None)
+        current = current_model or default_model
 
-        if not candidates:
-            return None
+        if default_model and default_model != current and default_model in available:
+            return default_model
 
-        # Prefer models from the same provider first (likely same API shape)
-        if current:
-            current_provider = current.split("/")[0] if "/" in current else None
-            same_provider = [m for m in candidates if m.startswith(f"{current_provider}/")]
-            if same_provider:
-                return same_provider[0]
+        # Otherwise the first available model other than the failed one.
+        for m in available:
+            if m != current:
+                return m
+        return None
 
-        return candidates[0]
+    # Reasons that are transient by definition (loom's taxonomy): the turn
+    # must keep the existing retry/cooldown behaviour instead of switching
+    # models. ``server_error`` is deliberately absent — some providers
+    # answer a dead model with a 500 whose body carries the unavailable
+    # markers below, and that case should still fall back.
+    _TRANSIENT_NO_FALLBACK_REASONS = frozenset({"rate_limit", "overloaded", "timeout"})
 
     def _is_model_unavailable_error(self, error_msg: str, reason: str) -> bool:
         """Check if the error indicates the model itself is unavailable (not just rate limited)."""
+        # Never switch models on transient errors — the retry manager and
+        # the rate-limit cooldown own those.
+        if reason in self._TRANSIENT_NO_FALLBACK_REASONS:
+            return False
+        # Loom's own classification: 404s (and 400s carrying a model-name
+        # pattern) classify as ``model_not_found`` (retryable=False). Trust
+        # it before string-matching — the message alone misses variants
+        # like "model 'x' does not exist" / "unknown model".
+        if reason == "model_not_found":
+            return True
         if not error_msg:
             return False
         msg = error_msg.lower()
-        # z.ai "No deployments available" and similar provider messages
+        # z.ai "No deployments available", plus loom's _MODEL_NOT_FOUND_
+        # PATTERNS — a stale model id (removed from the catalog, or the
+        # provider renamed it) must fall back instead of blocking the turn.
         unavailable_indicators = [
             "no deployments available",
             "model not found",
+            "model_not_found",
             "model unavailable",
             "deployment not found",
             "no capacity",
             "insufficient capacity",
             "model not deployed",
             "not available for this model",
+            "is not a valid model",
+            "invalid model",
+            "does not exist",
+            "no such model",
+            "unknown model",
+            "unsupported model",
         ]
         return any(indicator in msg for indicator in unavailable_indicators)
 
@@ -1276,7 +1305,10 @@ class Agent:
                 return
 
         # Model fallback: if the error indicates the model itself is unavailable
-        # (not just rate limited), and we haven't tried a fallback yet, switch models.
+        # (not just rate limited), and we haven't tried a fallback yet, switch
+        # models and let the turn continue on the fallback model. One attempt
+        # only — if the fallback ALSO fails, the error below surfaces as usual
+        # (partial-turn banner) instead of looping.
         error_msg = ev.get("message") or ""
         error_reason = ev.get("reason") or ""
         if (not st._fallback_attempted
@@ -1284,10 +1316,25 @@ class Agent:
                 and self._provider_registry):
             fallback_model = self._select_fallback_model(st.model_id, error_msg)
             if fallback_model and fallback_model != st.model_id:
+                failed_model = (
+                    st.model_id
+                    or getattr(getattr(self._nexus_cfg, "agent", None), "default_model", None)
+                    or ""
+                )
                 st._fallback_attempted = True
                 log.warning(
                     "Model unavailable (%s), falling back from %s to %s",
                     error_reason, st.model_id, fallback_model,
+                )
+                # Record the ORIGINAL failure before switching — the fallback
+                # must not silence it; llm_errors is the audit trail.
+                self._log_llm_error(
+                    session_id=st.session_id,
+                    error_type=error_reason or "model_not_found",
+                    message=(error_msg or "")[:2000],
+                    retryable=False,
+                    model_id=failed_model,
+                    ctx_window=st.ctx_window,
                 )
                 st.model_id = fallback_model
                 # Update context window for new model
@@ -1302,6 +1349,12 @@ class Agent:
                     "max_attempts": 1,
                     "delay_seconds": 0,
                     "reason": f"model_fallback:{fallback_model}",
+                    "failed_model": failed_model,
+                    "fallback_model": fallback_model,
+                    # Human-readable non-blocking notice; the UI shows it on
+                    # the reconnecting status line instead of blocking with
+                    # a HITL prompt.
+                    "notice": f"⚠️ model {failed_model} unavailable — using {fallback_model}",
                 }
                 return
 

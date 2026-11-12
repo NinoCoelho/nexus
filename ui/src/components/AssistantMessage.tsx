@@ -50,6 +50,10 @@ interface Props {
     maxAttempts: number;
     delaySeconds: number;
     reason: string;
+    /** Server-composed non-blocking notice (e.g. dead-model fallback). */
+    notice?: string;
+    failedModel?: string;
+    fallbackModel?: string;
   };
   /** Mention-routing attribution — reply authored by another bot. */
   bot?: { id: string; handle: string; name: string } | null;
@@ -227,13 +231,14 @@ function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOp
           <div className="asst-reconnecting" role="status" aria-live="polite">
             <span className="asst-reconnecting-spinner" aria-hidden="true" />
             <span className="asst-reconnecting-text">
-              {t("chat:assistant.reconnecting", {
-                attempt: reconnecting.attempt,
-                max: reconnecting.maxAttempts,
-                reason: reconnecting.reason || "transient error",
-                delay: Math.round(reconnecting.delaySeconds),
-                defaultValue: "Reconnecting after {{reason}}… (attempt {{attempt}}/{{max}}, retrying in {{delay}}s)",
-              })}
+              {reconnecting.notice
+                || t("chat:assistant.reconnecting", {
+                  attempt: reconnecting.attempt,
+                  max: reconnecting.maxAttempts,
+                  reason: reconnecting.reason || "transient error",
+                  delay: Math.round(reconnecting.delaySeconds),
+                  defaultValue: "Reconnecting after {{reason}}… (attempt {{attempt}}/{{max}}, retrying in {{delay}}s)",
+                })}
             </span>
           </div>
         )}

@@ -29,7 +29,7 @@ export type StreamEvent =
   | { type: "tool"; name: string; args?: unknown; result_preview?: string; result?: string; call_id?: string }
   | { type: "done"; session_id: string; reply: string; trace: TraceEvent[]; skills_touched: string[]; model?: string }
   | { type: "limit_reached"; iterations: number }
-  | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }
+  | { type: "reconnecting"; attempt: number; maxAttempts: number; delaySeconds: number; reason: string; notice?: string; failedModel?: string; fallbackModel?: string }
   | { type: "paused_for_cooldown"; retry_after: string; estimated_seconds: number; reason: string }
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[]; rate_limit_reset?: string }
   | { type: "queued"; qid: string; session_id: string }
@@ -195,6 +195,9 @@ async function consumeSSEFrames(
             maxAttempts: (parsed.max_attempts as number) ?? 1,
             delaySeconds: (parsed.delay_seconds as number) ?? 0,
             reason: (parsed.reason as string) ?? "",
+            notice: (parsed.notice as string) || undefined,
+            failedModel: (parsed.failed_model as string) || undefined,
+            fallbackModel: (parsed.fallback_model as string) || undefined,
           });
         } else if (eventName === "paused_for_cooldown") {
           onEvent({

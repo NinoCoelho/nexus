@@ -111,6 +111,10 @@ export interface Message {
     maxAttempts: number;
     delaySeconds: number;
     reason: string;
+    /** Server-composed non-blocking notice (e.g. dead-model fallback). */
+    notice?: string;
+    failedModel?: string;
+    fallbackModel?: string;
   };
   /** Mention-routing attribution — the reply came from another bot than the
    * chat's owner. Renders the `@handle · Name` chip on the bubble. */
