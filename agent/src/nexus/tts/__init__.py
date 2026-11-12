@@ -10,6 +10,7 @@ from __future__ import annotations
 from .base import SynthResult, TTSError
 from .dispatch import (
     DEFAULT_VOICES,
+    is_available,
     list_voices,
     resolve_voice_for_text,
     synthesize,
@@ -19,6 +20,7 @@ __all__ = [
     "DEFAULT_VOICES",
     "SynthResult",
     "TTSError",
+    "is_available",
     "list_voices",
     "resolve_voice_for_text",
     "synthesize",

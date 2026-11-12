@@ -43,6 +43,9 @@ struct ServerFeatures: Codable, Equatable {
     var coordinator: Bool?
     var telegram: Bool?
     var pushApns: Bool?
+    /// TTS pipeline (POST /tts/synthesize) is operational — hide the Speak
+    /// option when false instead of probing the endpoint.
+    var tts: Bool?
 
     enum CodingKeys: String, CodingKey {
         case browser
@@ -50,6 +53,7 @@ struct ServerFeatures: Codable, Equatable {
         case coordinator
         case telegram
         case pushApns = "push_apns"
+        case tts
     }
 }
 

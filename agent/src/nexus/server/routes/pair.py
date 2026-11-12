@@ -12,6 +12,8 @@ Three endpoints, three auth surfaces:
 * ``GET  /status`` — any authenticated client (loopback bypass, pairing
   token, or tunnel cookie). The native app's connect-time handshake:
   confirms the token is valid and reports machine identity + capabilities.
+  ``features.tts`` says whether the TTS pipeline (POST /tts/synthesize)
+  is operational, so clients can hide the Speak option without probing.
   No secrets in the response.
 """
 
@@ -110,6 +112,20 @@ def _server_port(request: Request) -> int:
     return 18989
 
 
+def _tts_available(cfg: Any) -> bool:
+    """Whether the TTS pipeline is operational — i.e. a POST
+    /tts/synthesize right now would get past its gates (enabled in
+    settings AND the Piper engine importable). Voice files don't gate:
+    they lazy-download on first use. Best-effort: any failure reads as
+    False rather than taking /status down."""
+    try:
+        from ...tts.dispatch import is_available
+
+        return is_available(getattr(cfg, "tts", None))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _feature_flags(cfg: Any) -> dict[str, bool]:
     browser = getattr(cfg, "browser", None)
     from ...push import apns as push_apns
@@ -120,6 +136,7 @@ def _feature_flags(cfg: Any) -> dict[str, bool]:
         "coordinator": bool(getattr(getattr(cfg, "coordinator", None), "enabled", False)),
         "telegram": bool(getattr(getattr(cfg, "telegram", None), "enabled", False)),
         "push_apns": push_apns.is_configured(),
+        "tts": _tts_available(cfg),
     }
 
 

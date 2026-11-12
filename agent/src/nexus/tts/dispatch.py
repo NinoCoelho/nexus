@@ -8,6 +8,7 @@ falls back to English. No manual override knobs in the UI.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 
 from ..config_file import TTSConfig, load as load_config
@@ -85,6 +86,27 @@ async def synthesize(
     chosen_speed = speed if speed is not None else _VOICE_SPEEDS.get(chosen_voice, _DEFAULT_SPEED)
     spoken_text = normalize_for_speech(text, lang=lang_code)
     return await _piper.synthesize(spoken_text.strip(), chosen_voice, chosen_speed, cfg)
+
+
+def is_available(cfg: TTSConfig | None = None) -> bool:
+    """True when the TTS pipeline is configured/operational — i.e. a
+    ``POST /tts/synthesize`` right now would get past the two gates this
+    module owns: TTS enabled in settings AND the Piper engine importable.
+    Voice files don't count as a gate (they lazy-download on first use).
+
+    ``cfg=None`` loads the on-disk config, mirroring :func:`synthesize`.
+    Consumers that already hold a config object (e.g. ``GET /status``)
+    pass it explicitly. Never raises — unavailability reads as False.
+    """
+    try:
+        if cfg is None:
+            cfg = load_config().tts
+        if not cfg.enabled:
+            return False
+        # Mirrors piper._load_voice_cached's import gate.
+        return importlib.util.find_spec("piper") is not None
+    except Exception:  # noqa: BLE001 — availability probe is best-effort
+        return False
 
 
 async def list_voices(
