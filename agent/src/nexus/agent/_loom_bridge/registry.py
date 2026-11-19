@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from loom.tools.base import ToolHandler, ToolResult
 from loom.tools.registry import ToolRegistry
@@ -122,6 +122,12 @@ def build_tool_registry(
     from nexus.tools.heartbeat_tool import HEARTBEAT_MANAGE_TOOL, handle_heartbeat_manage_tool
     from nexus.tools.history_recall_tool import HISTORY_RECALL_TOOL, handle_history_recall
     from nexus.tools.http_call import HTTP_CALL_TOOL, HttpCallHandler
+    from nexus.tools.trigger_tool import (
+        DELETE_TRIGGER_TOOL,
+        TRIGGER_INFO_TOOL,
+        TRIGGER_TOOL,
+        get_engine_getter,
+    )
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
     from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
@@ -469,6 +475,19 @@ def build_tool_registry(
     async def _nexus_kb_search(args: dict) -> str:
         return json.dumps(handle_nexus_kb_search(args))
 
+    _engine_getter: Callable[[], Any] | None = (
+        lambda: (get_engine_getter() or (lambda: None))()
+    )
+
+    async def _trigger_info(args: dict) -> str:
+        return await handle_trigger_info(args, _engine_getter)
+
+    async def _trigger(args: dict) -> str:
+        return await handle_trigger(args, _engine_getter)
+
+    async def _delete_trigger(args: dict) -> str:
+        return await handle_delete_trigger(args, _engine_getter)
+
     _TOOL_TABLE: list[tuple[Any, Any]] = [
         (HTTP_CALL_TOOL, _http_call),
         (VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search),
@@ -477,6 +496,9 @@ def build_tool_registry(
         (CALENDAR_MANAGE_TOOL, handle_calendar_tool),
         (DISPATCH_CARD_TOOL, _dispatch_card),
         (HEARTBEAT_MANAGE_TOOL, _manage_heartbeat),
+        (TRIGGER_INFO_TOOL, _trigger_info),
+        (TRIGGER_TOOL, _trigger),
+        (DELETE_TRIGGER_TOOL, _delete_trigger),
         (DATATABLE_MANAGE_TOOL, handle_datatable_tool),
         (DASHBOARD_MANAGE_TOOL, _dashboard),
         (SHOW_KANBAN_TOOL, handle_show_kanban),

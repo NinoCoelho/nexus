@@ -507,6 +507,15 @@ async def _startup_workflows(app: FastAPI, agent: Any, sessions: Any) -> None:
         app.state.workflow_store = wf_store
         app.state.workflow_engine = wf_engine
 
+        # Wire the workflow engine into the agent-facing trigger tools so
+        # bots can run_now triggers from inside a turn.
+        try:
+            from nexus.tools.trigger_tool import set_engine_getter
+
+            set_engine_getter(lambda: wf_engine)
+        except Exception:
+            log.debug("trigger tools: engine getter not wired", exc_info=True)
+
         reconciled = wf_store.reconcile_stale_runs()
         if reconciled:
             log.info("reconciled %d stale workflow runs", reconciled)
