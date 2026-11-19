@@ -39,6 +39,29 @@ def test_schema(isolated_vault: Path) -> None:
     assert out["file_size"] > 0
 
 
+# Excel-BR exports: `;` delimiter + UTF-8 BOM. Neither may leak into the
+# header (the old parser returned one giant "\ufeffa;b;c" column).
+SEMICOLON_BOM_SAMPLE = "﻿upn;nome;ativa\na@x.com;Ana;Sim\nb@x.com;Beto;Não\n"
+
+
+def test_read_page_semicolon_and_bom(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "licencas.csv", SEMICOLON_BOM_SAMPLE)
+    out = vault_csv.csv_read_page(p)
+    assert out["columns"] == ["upn", "nome", "ativa"]
+    assert out["total_rows"] == 2
+    assert out["rows"][0] == {"upn": "a@x.com", "nome": "Ana", "ativa": "Sim"}
+
+
+def test_roundtrip_preserves_semicolon_dialect(isolated_vault: Path) -> None:
+    p = _seed(isolated_vault, "licencas.csv", SEMICOLON_BOM_SAMPLE)
+    vault_csv.csv_append_row(p, {"upn": "c@x.com", "nome": "Cris", "ativa": "Sim"})
+    raw = (isolated_vault / "licencas.csv").read_text(encoding="utf-8")
+    assert raw.count(";") >= 8  # dialect kept on write-back
+    out = vault_csv.csv_read_page(p)
+    assert out["total_rows"] == 3
+    assert out["rows"][-1]["nome"] == "Cris"
+
+
 def test_sample_modes(isolated_vault: Path) -> None:
     p = _seed(isolated_vault, "people.csv", SAMPLE)
     head = vault_csv.csv_sample(p, mode="head", n=2)

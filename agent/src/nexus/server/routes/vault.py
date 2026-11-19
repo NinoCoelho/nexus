@@ -502,7 +502,9 @@ async def vault_csv_read(
     from ... import vault_csv
 
     try:
-        return await asyncio.to_thread(vault_csv.csv_read_page, path, offset, limit, sort, sort_dir)
+        return await asyncio.to_thread(
+            vault_csv.csv_read_page, path, offset=offset, limit=limit, sort=sort, sort_dir=sort_dir
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:

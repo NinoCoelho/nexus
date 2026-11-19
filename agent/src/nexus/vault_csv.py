@@ -527,7 +527,24 @@ def _row_to_dict(columns: list[str], row: tuple) -> dict[str, Any]:
 
 
 def _delim_for(path: Path) -> str:
-    return "\t" if path.suffix.lower() == ".tsv" else ","
+    if path.suffix.lower() == ".tsv":
+        return "\t"
+    # Sniff the real delimiter from the header line — Excel-BR exports use
+    # `;`, and guessing `,` collapses everything into one column. Counting
+    # candidates on the first line is deterministic and cheap; ties fall
+    # back to comma. _write_all uses the same sniff, so round-trips keep
+    # the file's original dialect.
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            first = f.readline()
+    except OSError:
+        return ","
+    best, best_count = ",", first.count(",")
+    for cand in (";", "\t"):
+        n = first.count(cand)
+        if n > best_count:
+            best, best_count = cand, n
+    return best
 
 
 def _ensure_editable(full: Path) -> None:
@@ -539,7 +556,9 @@ def _ensure_editable(full: Path) -> None:
 
 
 def _read_all(full: Path) -> tuple[list[str], list[list[str]]]:
-    with full.open("r", encoding="utf-8", newline="") as f:
+    # utf-8-sig strips a leading BOM (Excel exports) so it never leaks into
+    # the first column name.
+    with full.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f, delimiter=_delim_for(full))
         try:
             header = next(reader)
