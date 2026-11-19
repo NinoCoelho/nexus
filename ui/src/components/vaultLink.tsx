@@ -25,15 +25,15 @@ export function asVaultPath(href: string): string | null {
   if (m) return decode(m[1].replace(/^\/+/, ""));
   if (/^https?:\/\//i.test(href)) return null;
   if (href.startsWith("#") || href.startsWith("mailto:")) return null;
-  if (/\.mdx?$/i.test(href)) return decode(href.replace(/^\/+/, ""));
+  if (/\.mdx?$/i.test(href) || /\.(?:csv|tsv)$/i.test(href)) return decode(href.replace(/^\/+/, ""));
   return null;
 }
 
-/** Auto-wrap bare vault paths (e.g. `notes/foo.md`) as proper markdown links. */
+/** Auto-wrap bare vault paths (e.g. `notes/foo.md`, `data/planilha.csv`) as proper markdown links. */
 export function linkifyVaultPaths(content: string): string {
   if (!content) return "";
   return content.replace(
-    /(^|[\s("])([a-z0-9][a-z0-9_\-./]*\/[a-z0-9][a-z0-9_\-. ]*\.mdx?)(?=$|[\s.,;:)!"])/gi,
+    /(^|[\s("])([a-z0-9][a-z0-9_\-./]*\/[a-z0-9][a-z0-9_\-. ]*\.(?:mdx?|csv|tsv))(?=$|[\s.,;:)!"])/gi,
     (_match, pre, path) => `${pre}[${path}](vault://${path})`,
   );
 }
