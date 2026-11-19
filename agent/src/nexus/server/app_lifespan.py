@@ -589,8 +589,10 @@ async def _startup_mcp_manager(nexus_cfg: Any, agent: Any, app: FastAPI) -> Any:
     return mcp_manager
 
 
-def _startup_mcp_server_mode(nexus_cfg: Any, agent: Any, store: Any, job_tracker: Any) -> None:
+def _startup_mcp_server_mode(nexus_cfg: Any, agent: Any, store: Any, job_tracker: Any, main_loop: Any) -> None:
     try:
+        import asyncio
+
         from ..mcp_lifecycle import start_mcp_server
         tool_reg = getattr(agent._loom, "_tools", None)
         if tool_reg is not None:
@@ -605,6 +607,7 @@ def _startup_mcp_server_mode(nexus_cfg: Any, agent: Any, store: Any, job_tracker
                     "store": store,
                     "tracker": job_tracker,
                     "project_store": ProjectStore(sessions_db()),
+                    "main_loop": main_loop,
                 },
             )
     except Exception:
@@ -802,6 +805,7 @@ def create_lifespan(state: dict[str, Any]):
         sessions = state["sessions"]
         job_tracker = state["job_tracker"]
         publish_job_event = state["publish_job_event"]
+        main_loop = asyncio.get_running_loop()
 
         log.info("Lifespan starting (graphrag_cfg=%s)", "present" if graphrag_cfg is not None else "None")
 
@@ -821,7 +825,7 @@ def create_lifespan(state: dict[str, Any]):
         )
         await _startup_workflows(app, agent, sessions)
         mcp_manager = await _startup_mcp_manager(nexus_cfg, agent, app)
-        _startup_mcp_server_mode(nexus_cfg, agent, sessions, job_tracker)
+        _startup_mcp_server_mode(nexus_cfg, agent, sessions, job_tracker, main_loop)
         _startup_broker_poller(app, agent)
         _startup_telegram(app, agent, sessions, job_tracker, publish_job_event)
 

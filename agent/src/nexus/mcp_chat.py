@@ -223,6 +223,13 @@ async def _nexus_chat(args: dict[str, Any], deps: dict[str, Any]) -> dict[str, A
     tracker = deps["tracker"]
     agent = deps["agent"]
     project_store = deps.get("project_store") or ProjectStore(sessions_db())
+    main_loop = deps.get("main_loop")
+
+    if main_loop is None:
+        log.warning(
+            "[mcp-chat] main_loop not in chat_deps — falling back to thread-local loop "
+            "(turn will not survive MCP request disconnect); wire main_loop in app_lifespan"
+        )
 
     session, _project_id, err = _pick_session(
         bot=bot,
@@ -236,7 +243,7 @@ async def _nexus_chat(args: dict[str, Any], deps: dict[str, Any]) -> dict[str, A
 
     # --- synchronous ---------------------------------------------------------
     if wait:
-        return await _run_turn(
+        coro = _run_turn(
             agent=agent,
             store=store,
             tracker=tracker,
@@ -245,6 +252,12 @@ async def _nexus_chat(args: dict[str, Any], deps: dict[str, Any]) -> dict[str, A
             wait=True,
             timeout_s=timeout_s,
         )
+        if main_loop is not None:
+            # Run the turn on the *main* event loop (where the Nexus server
+            # lives) so it survives disconnect of this MCP request thread.
+            future = asyncio.run_coroutine_threadsafe(coro, main_loop)
+            return await asyncio.wait_for(asyncio.wrap_future(future), timeout=timeout_s)
+        return await coro
 
     # --- asynchronous: register job, run in background ----------------------
     job_id = uuid.uuid4().hex[:12]
@@ -282,7 +295,12 @@ async def _nexus_chat(args: dict[str, Any], deps: dict[str, Any]) -> dict[str, A
                 entry["status"] = "failed"
                 entry["error"] = str(exc)
 
-    asyncio.create_task(_run())
+    if main_loop is not None:
+        # Run the background turn on the *main* event loop so it survives
+        # disconnect of this MCP request thread and of the MCP bridge itself.
+        asyncio.run_coroutine_threadsafe(_run(), main_loop)
+    else:
+        asyncio.create_task(_run())
     return {"ok": True, "job_id": job_id, "status": "running", "session_id": session.id}
 
 
