@@ -955,6 +955,34 @@ The tool is registered only when at least one agent is configured (a daemon rest
 - **Isolation** — one process per (agent, working directory) at a time, global cap of 3 concurrent delegates.
 - **Fallback** — without config, the bundled `coding-agents` skill still teaches the agent to delegate through the `terminal` tool (`claude -p`, `codex exec`, `opencode run`, launched detached with a log file and polled — never synchronously).
 
+### Agent bootstrap (`/bootstrap`) — connect an external coding agent to Nexus
+
+The reverse direction of `agent_delegate`: instead of Nexus calling out to a coding agent, *hand Nexus to the agent*. One URL does it:
+
+```
+http://127.0.0.1:18989/bootstrap
+```
+
+Paste the URL — or the sentence *"Connect to Nexus: read http://127.0.0.1:18989/bootstrap and follow the instructions."* — into Claude Code, OpenCode, or Codex. The agent fetches the living markdown doc (current version, real bot roster, links to the Nexus skills), picks what its task needs, self-installs each skill in its host's native format (`~/.claude/skills/<name>/SKILL.md` for Claude Code, `AGENTS.md` for OpenCode/Codex), and verifies with `nexus bots list --json`. From then on it orchestrates: `nexus run @handle "task" --json` hands work to a bot, which executes with its own persona, memory, and skills.
+
+Served skills (progressive disclosure — the entry doc stays small; each skill is a self-contained document at `/bootstrap/skills/{name}.md`):
+
+| Skill | Purpose |
+|---|---|
+| `nexus-delegation` | delegate tasks to bots via `nexus run` / `nexus bots` |
+| `nexus-vault` | read/search/write vault notes via `nexus vault` |
+| `nexus-kanban` | manage task boards via `nexus kanban` |
+| `nexus-tables` | DuckDB SQL over data tables via `nexus table` |
+
+Companion surfaces:
+
+- **Guided page** — `GET /ext/delegate` renders copy buttons for the bootstrap URL, the offline skill block, and per-agent install notes.
+- **Offline copy** — `nexus skill print` prints the self-configuring delegation skill for hosts without loopback access to the server.
+- **UI** — Settings → Integrations (MCP tab) shows the bootstrap URL with copy buttons ("Connect your coding agent"), so the handoff is two clicks away.
+- **Auth** — same loopback-or-token gate as every route: local agents need no token; remote agents go through the tunnel/pairing token.
+
+Implementation: `agent/src/nexus/server/routes/bootstrap.py` (doc + skill routes) and `agent/src/nexus/ext_skill.py` (the skill documents).
+
 **MCP Apps** — sandboxed `<iframe sandbox="allow-scripts">` renders interactive HTML from MCP servers inline in chat. Communication is via `postMessage` using the MCP Apps JSON-RPC protocol. Three built-in `ui://nexus/*` resources render kanban boards, dashboard chart widgets, and data tables as self-contained HTML:
 
 | Resource URI | Tool | Renders |

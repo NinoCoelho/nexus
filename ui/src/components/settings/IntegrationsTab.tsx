@@ -16,6 +16,7 @@ import {
   type McpTestResult,
 } from "../../api/mcp";
 import { getConfig, patchConfig, type McpConfig } from "../../api/config";
+import { BASE } from "../../api/base";
 import { setCredential } from "../../api/credentials";
 import Modal from "../Modal";
 import { useToast } from "../../toast/ToastProvider";
@@ -53,6 +54,28 @@ export default function IntegrationsTab() {
   const [testResult, setTestResult] = useState<McpTestResult | null>(null);
   const [testIdx, setTestIdx] = useState(0);
   const [existingCreds, setExistingCreds] = useState<Set<string>>(new Set());
+
+  // Agent bootstrap — loopback URL handed to external coding agents
+  // (Claude Code / OpenCode / Codex); they fetch it and self-install.
+  const bootstrapUrl = `http://127.0.0.1:${
+    (() => {
+      try {
+        return new URL(BASE).port || "18989";
+      } catch {
+        return "18989";
+      }
+    })()
+  }/bootstrap`;
+  const agentPrompt = `Connect to Nexus: read ${bootstrapUrl} and follow the instructions.`;
+
+  const copyText = async (text: string, what: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${what} copied`);
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -383,6 +406,52 @@ export default function IntegrationsTab() {
             </div>
           );
         })}
+      </SettingsSection>
+
+      {/* ── Agent bootstrap (hand Nexus to an external coding agent) ──── */}
+      <SettingsSection
+        title={t("integrations.bootstrap.title", { defaultValue: "Connect your coding agent" })}
+        description={t("integrations.bootstrap.description", {
+          defaultValue:
+            "Let Claude Code, OpenCode, or Codex delegate work to your bots. Send the agent the URL below — it fetches the setup doc (your real bot roster + latest skills), self-installs the Nexus skills, and verifies with `nexus bots list`.",
+        })}
+      >
+        <div className="mcp-server-card">
+          <div className="mcp-server-card__row">
+            <code style={{ fontSize: "12px", wordBreak: "break-all" }}>{bootstrapUrl}</code>
+            <div className="mcp-server-card__actions">
+              <button
+                type="button"
+                className="settings-btn settings-btn--ghost"
+                onClick={() => void copyText(bootstrapUrl, "Bootstrap URL")}
+              >
+                Copy URL
+              </button>
+              <a
+                className="settings-btn settings-btn--ghost"
+                style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                href={`${BASE}/ext/delegate`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Guided page
+              </a>
+            </div>
+          </div>
+          <div className="mcp-server-card__tools">
+            Or paste this one-liner into the agent's chat — it does the rest:
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.35rem" }}>
+              <code style={{ fontSize: "12px", wordBreak: "break-all", flex: 1 }}>{agentPrompt}</code>
+              <button
+                type="button"
+                className="settings-btn settings-btn--ghost"
+                onClick={() => void copyText(agentPrompt, "Agent prompt")}
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        </div>
       </SettingsSection>
 
       {/* ── Add Server Wizard ────────────────────────────────────────── */}
