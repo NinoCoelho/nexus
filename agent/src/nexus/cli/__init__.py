@@ -13,6 +13,7 @@ from .graphrag_cmd import graphrag_app
 from .models_cmd import models_app
 from .pair_cmd import pair as _pair_fn
 from .providers_cmd import providers_app
+from .run_cmd import bots_app, run_app
 from .sessions_cmd import sessions_app
 from .skills_cmd import skills_app
 from .trajectories_cmd import trajectories_app
@@ -34,6 +35,13 @@ app.add_typer(backup_app, name="backup")
 app.add_typer(cookies_app, name="cookies")
 app.add_typer(tunnel_app, name="tunnel")
 app.add_typer(chrome_app, name="chrome")
+app.add_typer(bots_app, name="bots")
+
+# ── run (headless bot turn for scripts/CI) ────────────────────────────
+
+from .run_cmd import run as _run_fn  # noqa: E402
+
+app.command("run")(_run_fn)
 
 
 @app.callback()
