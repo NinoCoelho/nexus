@@ -14,11 +14,16 @@ pre-check lives here so both paths share one source of truth.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+# Team auto-router (mode="auto"): local fastembed routing, zero new deps.
+from ...agent.bots import TEAM_MARKER, team_followup_messages
+from ...agent.team_router import RECENT_LINES, route_team_decision
 from ...config_file import load_cached as load_config
 from ..events import SessionEvent
+from ..project_store import ProjectStore
 from ..session_store import SessionStore
 
 if TYPE_CHECKING:
@@ -44,7 +49,7 @@ class LaunchOutcome:
     - ``error`` set — the message was rejected before persisting.
     """
 
-    runner: "ChatTurnRunner | None" = None
+    runner: ChatTurnRunner | None = None
     queued: bool = False
     error: str | None = None
     # Structured form of ``error`` when one is available (reason / actions /
@@ -116,8 +121,10 @@ async def precheck_context_window(
     try:
         from ...agent.loop.overflow import (
             check_message_count,
-            estimate_tokens as _est_tok,
             usable_tokens,
+        )
+        from ...agent.loop.overflow import (
+            estimate_tokens as _est_tok,
         )
 
         effective_model, ctx_window = _resolve_context_window(model_id)
@@ -174,7 +181,7 @@ async def precheck_context_window(
                                     "precheck: idle checkpoint compacted %d→%d tokens",
                                     report.tokens_before, report.tokens_after,
                                 )
-                    except Exception:  # noqa: BLE001 — checkpoint is best-effort
+                    except Exception:
                         log.warning("precheck: idle checkpoint failed", exc_info=True)
 
         if pre_turn_history and (total_est > budget or too_many):
@@ -199,7 +206,7 @@ async def precheck_context_window(
                     # turns is what brings the count back down.
                     force_summarize=too_many and total_est <= budget,
                 )
-            except Exception:  # noqa: BLE001 — fall through to hard_trim
+            except Exception:
                 log.warning("precheck: compact_and_summarize failed", exc_info=True)
                 compacted, report = list(pre_turn_history), None
 
@@ -292,9 +299,9 @@ def _default_publish_job_event(store: SessionStore) -> Callable[[str, dict], Non
 
 async def launch_turn(
     *,
-    agent: "Agent",
+    agent: Agent,
     store: SessionStore,
-    tracker: "JobTracker",
+    tracker: JobTracker,
     session: Any,
     message: str,
     model_id: str = "",
@@ -383,7 +390,8 @@ async def launch_turn(
     # Eagerly persist the user message so a crash before the first delta
     # doesn't lose the prompt. Multipart content when attachments ride along.
     try:
-        from ...agent.llm import ChatMessage as _CM, Role as _R
+        from ...agent.llm import ChatMessage as _CM
+        from ...agent.llm import Role as _R
 
         if attachment_parts:
             from ...agent.llm import ContentPart as _CP
@@ -395,13 +403,14 @@ async def launch_turn(
         else:
             user_msg = _CM(role=_R.USER, content=message)
         store.replace_history(session.id, pre_turn_history + [user_msg])
-    except Exception:  # noqa: BLE001 — best-effort
+    except Exception:
         log.exception("pre-turn user message persist failed")
 
     # LLM autotitle on the first user turn, concurrent with the loop.
     if not pre_turn_history and getattr(agent, "_provider_registry", None) is not None:
-        from ..routes.chat_stream_helpers import maybe_autotitle_via_llm
         import asyncio
+
+        from ..routes.chat_stream_helpers import maybe_autotitle_via_llm
 
         asyncio.create_task(
             maybe_autotitle_via_llm(
@@ -428,11 +437,48 @@ async def launch_turn(
 
     store.clear_replay(session.id)
 
+    # ── Team auto-router (mode="auto") ──────────────────────────────────
+    # Routes a no-mention message to the most relevant member via fastembed
+    # cosine similarity (local CPU, ~15-30 ms). Fails open → lead answers.
+    # Runs before runner creation so the modified message enters the turn.
+    _auto_prefix = ""
+    _auto_extra_passes: list[str] = []
+    try:
+        _team = store.get_team(session.id)
+        if _team and _team.get("mode") == "auto":
+            _recent: list[str] = []
+            for _m in reversed(pre_turn_history[-RECENT_LINES * 2 :]):
+                _c = getattr(_m, "content", _m) if not isinstance(_m, str) else _m
+                if isinstance(_c, str) and _c.strip():
+                    _recent.append(_c.strip())
+                if len(_recent) >= RECENT_LINES:
+                    break
+            _recent = list(reversed(_recent))
+
+            _decision, _handles = await route_team_decision(
+                team=_team,
+                message=message,
+                recent_lines=_recent,
+                project_store=ProjectStore(store._db_path),
+            )
+            if _decision.mode == "single" and _decision.chosen:
+                _handle = _handles.get(_decision.chosen, "")
+                if _handle and _decision.chosen != getattr(session, "project_id", None):
+                    _auto_prefix = f"{TEAM_MARKER}@{_handle}\n"
+            elif _decision.mode == "several" and _decision.several:
+                _second = _handles.get(_decision.several[1], "")
+                if _second:
+                    _auto_extra_passes = [f"{TEAM_MARKER}@{_second}"]
+    except Exception:
+        log.debug("team auto-router failed", exc_info=True)
+
+    _effective_message = _auto_prefix + message
+
     runner = ChatTurnRunner(
         agent=agent,
         store=store,
         session_id=session.id,
-        message=message,
+        message=_effective_message,
         context=session.context or "",
         model_id=model_id,
         pre_turn_history=pre_turn_history,
@@ -449,10 +495,8 @@ async def launch_turn(
     # Team (group chat) round passes — same as the web route: queue a
     # synthetic mention pass per non-lead member so each answers in turn.
     # Chain-only: each pass is its own turn, never a mid-turn injection.
+    # Also handles mode="auto" + several → pass to the second member.
     try:
-        from ...agent.bots import TEAM_MARKER, team_followup_messages
-        from ..project_store import ProjectStore
-
         _team = store.get_team(session.id)
         for _follow in team_followup_messages(
             _team, message, project_store=ProjectStore(store._db_path)
@@ -467,7 +511,21 @@ async def launch_turn(
                     "text": _follow.replace(TEAM_MARKER, "").strip(),
                     "session_id": session.id,
                 }))
-    except Exception:  # noqa: BLE001 — team passes are best-effort
+
+        # Team auto-router extra passes: mode="auto" + several → pass to
+        # the second chosen member after the lead answers.
+        for _follow in _auto_extra_passes:
+            _fqid = runner.enqueue(_follow, origin="team", chain_only=True)
+            if _fqid:
+                from ..events import SessionEvent as _SE3
+
+                store.publish(session.id, _SE3(kind="user_enqueued", data={
+                    "type": "user_enqueued",
+                    "qid": _fqid,
+                    "text": _follow.replace(TEAM_MARKER, "").strip(),
+                    "session_id": session.id,
+                }))
+    except Exception:
         log.debug("team followup enqueue failed", exc_info=True)
 
     return LaunchOutcome(runner=runner, session_id=session.id, pre_turn_history=pre_turn_history)

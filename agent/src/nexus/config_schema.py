@@ -181,6 +181,18 @@ class AgentConfig(BaseModel):
     # (Claude Code's idle compaction). 0 = disabled.
     idle_compact_hours: float = 12.0
 
+    # Team (group-chat) auto-router: when a team session has mode="auto" and
+    # a message @mentions nobody, an embedding router (fastembed, local CPU,
+    # ~15-30 ms) picks the most relevant member — single, several, or fail-open
+    # to the lead. Off = teams behave as today (lead / round only).
+    team_router: bool = True
+    # Minimum cosine for a member to be considered (calibrated from eval
+    # fixtures; MiniLM cosseno gira ~0.42 para "relevante").
+    team_router_threshold: float = 0.42
+    # Min gap between top-1 and top-2 for a single pick; below it → several
+    # members answer (top-2 both above threshold).
+    team_router_margin: float = 0.10
+
 
 class GraphRAGEmbeddingConfig(BaseModel):
     provider: str = "builtin"

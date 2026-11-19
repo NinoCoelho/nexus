@@ -17,15 +17,19 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from ..deps import get_agent, get_sessions, get_job_tracker
-from ..schemas import ChatRequest
-from ._sse import keepalive
-from ._streaming import TurnAccumulator
+# Team auto-router (mode="auto"): local fastembed routing, zero new deps.
+from ...agent.bots import TEAM_MARKER, team_followup_messages
 from ...agent.context import CURRENT_SESSION_ID
 from ...agent.loop import Agent
+from ...agent.team_router import RECENT_LINES, route_team_decision
 from ...redact import redact_sensitive_text
-from ..session_store import SessionStore
+from ..deps import get_agent, get_job_tracker, get_sessions
 from ..job_tracker import JobTracker
+from ..project_store import ProjectStore
+from ..schemas import ChatRequest
+from ..session_store import SessionStore
+from ._sse import keepalive
+from ._streaming import TurnAccumulator
 
 # Shared with chat.py — the cancel endpoint in chat.py mutates these same dicts
 # at runtime (imported once at module load; Python module objects are singletons).
@@ -61,7 +65,8 @@ async def chat_stream_route(
     store: SessionStore = Depends(get_sessions),
     tracker: JobTracker = Depends(get_job_tracker),
 ) -> StreamingResponse:
-    from fastapi import HTTPException, status as _status
+    from fastapi import HTTPException
+    from fastapi import status as _status
 
     def _publish_job_event(kind: str, data: dict[str, Any]) -> None:
         from ..events import SessionEvent
@@ -114,8 +119,8 @@ async def chat_stream_route(
     # a follow-up turn when the current turn ends first. The response here
     # is a short SSE carrying a single ``queued`` ack; the running turn's
     # own stream delivers ``user_injected`` / chained-turn events.
-    from .chat_slash import is_slash_command as _is_slash_command
     from ..services.chat_turn_runner import get_running_turn as _get_running_turn
+    from .chat_slash import is_slash_command as _is_slash_command
     _active_runner = _get_running_turn(session.id)
     if _active_runner is not None:
         if _is_slash_command(req.message) or req.attachments:
@@ -168,7 +173,8 @@ async def chat_stream_route(
 
     _resume_loom_msgs: list | None = None
     if req.resume_working_messages_json:
-        from ...agent.llm import ChatMessage as _LCM, Role as _LR
+        from ...agent.llm import ChatMessage as _LCM
+        from ...agent.llm import Role as _LR
         _resume_loom_msgs = []
         for _rm in json.loads(req.resume_working_messages_json):
             _tcs = None
@@ -219,7 +225,8 @@ async def chat_stream_route(
         # /help (and any future commands in the SLASH_COMMANDS registry)
         # without spinning up the agent loop. The handler streams its own
         # delta + done events and replaces the session history.
-        from .chat_slash import is_slash_command, dispatch as _slash_dispatch
+        from .chat_slash import dispatch as _slash_dispatch
+        from .chat_slash import is_slash_command
         slash = is_slash_command(req.message)
         handler = _slash_dispatch(slash) if slash else None
         if handler is not None:
@@ -298,7 +305,7 @@ async def chat_stream_route(
                         mime_type=mime,
                     )
                 )
-        except Exception:  # noqa: BLE001 — best-effort; persist step re-raises
+        except Exception:
             log.exception("attachment resolution failed")
 
         # Context-window pre-check: make room for the incoming turn by
@@ -340,13 +347,53 @@ async def chat_stream_route(
             }) + "\n"
             return
 
+        # ── Team auto-router (mode="auto") ──────────────────────────────
+        # Routes a no-mention message to the most relevant member via
+        # fastembed cosine similarity (local CPU, ~15-30 ms). Fails open:
+        # on any error / low confidence / timeout → lead answers as today.
+        # Runs before persistence so the modified message lands in history.
+        _auto_prefix = ""
+        _auto_extra_passes: list[str] = []
+        try:
+            _team = store.get_team(session.id)
+            if _team and _team.get("mode") == "auto":
+                _recent: list[str] = []
+                for _m in reversed(pre_turn_history[-RECENT_LINES * 2 :]):
+                    _c = getattr(_m, "content", _m) if not isinstance(_m, str) else _m
+                    if isinstance(_c, str) and _c.strip():
+                        _recent.append(_c.strip())
+                    if len(_recent) >= RECENT_LINES:
+                        break
+                _recent = list(reversed(_recent))
+
+                _decision, _handles = await route_team_decision(
+                    team=_team,
+                    message=req.message,
+                    recent_lines=_recent,
+                    project_store=ProjectStore(store._db_path),
+                )
+                if _decision.mode == "single" and _decision.chosen:
+                    _handle = _handles.get(_decision.chosen, "")
+                    if _handle and _decision.chosen != session.project_id:
+                        _auto_prefix = f"{TEAM_MARKER}@{_handle}\n"
+                elif _decision.mode == "several" and _decision.several:
+                    _second = _handles.get(_decision.several[1], "")
+                    if _second:
+                        _auto_extra_passes = [f"{TEAM_MARKER}@{_second}"]
+        except Exception:
+            log.debug("team auto-router failed", exc_info=True)
+
+        _effective_message = _auto_prefix + req.message
+
         # Eagerly persist the user message so a crash between POST
         # and the first delta doesn't lose the prompt the user typed.
         # When the request carries attachments, persist a multipart
         # ``content`` list so reload-from-DB still shows the image/audio/
         # document refs alongside the text.
         try:
-            from ...agent.llm import ChatMessage as _CM, ContentPart as _CP, Role as _R
+            from ...agent.llm import ChatMessage as _CM
+            from ...agent.llm import ContentPart as _CP
+            from ...agent.llm import Role as _R
 
             if attachment_parts:
                 user_content: Any = (
@@ -354,9 +401,9 @@ async def chat_stream_route(
                 ) + attachment_parts
                 user_msg = _CM(role=_R.USER, content=user_content)
             else:
-                user_msg = _CM(role=_R.USER, content=req.message)
+                user_msg = _CM(role=_R.USER, content=_effective_message)
             store.replace_history(session.id, pre_turn_history + [user_msg])
-        except Exception:  # noqa: BLE001 — best-effort
+        except Exception:
             log.exception("pre-turn user message persist failed")
 
         # Schedule LLM autotitle **concurrent** with the agent loop on the
@@ -400,7 +447,7 @@ async def chat_stream_route(
             agent=a,
             store=store,
             session_id=session.id,
-            message=req.message,
+            message=_effective_message,
             context=session.context or "",
             model_id=resolved_model_id,
             pre_turn_history=pre_turn_history,
@@ -428,7 +475,7 @@ async def chat_stream_route(
             from ...agent.bots import resolve_mention_target
 
             _target = resolve_mention_target(
-                req.message, own_project_id=session.project_id
+                _effective_message, own_project_id=session.project_id
             )
             _bot_info = None
             if _target is not None:
@@ -449,7 +496,7 @@ async def chat_stream_route(
                     "session_id": session.id,
                     "bot": _bot_info,
                 }))
-        except Exception:  # noqa: BLE001 — attribution hint is best-effort
+        except Exception:
             log.debug("turn_bot marker publish failed", exc_info=True)
 
         # Team (group chat) round passes: in round mode, every other member
@@ -457,9 +504,6 @@ async def chat_stream_route(
         # each pass runs as its own turn (persona switch per member) and is
         # never collapsed into the lead's turn by a mid-turn injection.
         try:
-            from ...agent.bots import TEAM_MARKER, team_followup_messages
-            from ..project_store import ProjectStore
-
             _team = store.get_team(session.id)
             for _follow in team_followup_messages(
                 _team, req.message, project_store=ProjectStore(store._db_path)
@@ -474,7 +518,22 @@ async def chat_stream_route(
                         "text": _follow.replace(TEAM_MARKER, "").strip(),
                         "session_id": session.id,
                     }))
-        except Exception:  # noqa: BLE001 — team passes are best-effort
+
+            # Team auto-router extra passes: mode="auto" + several → pass to
+            # the second chosen member after the lead answers (chain-only,
+            # same machinery as round mode, subset of members).
+            for _follow in _auto_extra_passes:
+                _fqid = runner.enqueue(_follow, origin="team", chain_only=True)
+                if _fqid:
+                    from ..events import SessionEvent as _SE3
+
+                    store.publish(session.id, _SE3(kind="user_enqueued", data={
+                        "type": "user_enqueued",
+                        "qid": _fqid,
+                        "text": _follow.replace(TEAM_MARKER, "").strip(),
+                        "session_id": session.id,
+                    }))
+        except Exception:
             log.debug("team followup enqueue failed", exc_info=True)
 
         # ── Subscribe to bus and forward events to SSE ───────────────────────
