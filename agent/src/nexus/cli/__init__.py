@@ -11,12 +11,14 @@ from .cookies_cmd import cookies_app
 from .daemon_cmd import daemon_app
 from .ext_skill_cmd import skill_app
 from .graphrag_cmd import graphrag_app
+from .kanban_cli import kanban_app
 from .models_cmd import models_app
 from .pair_cmd import pair as _pair_fn
 from .providers_cmd import providers_app
 from .run_cmd import bots_app, run_app
 from .sessions_cmd import sessions_app
 from .skills_cmd import skills_app
+from .table_cli import table_app
 from .trajectories_cmd import trajectories_app
 from .tunnel_cmd import tunnel_app
 from .vault_cmd import vault_app
@@ -38,6 +40,8 @@ app.add_typer(tunnel_app, name="tunnel")
 app.add_typer(chrome_app, name="chrome")
 app.add_typer(bots_app, name="bots")
 app.add_typer(skill_app, name="skill")
+app.add_typer(kanban_app, name="kanban")
+app.add_typer(table_app, name="table")
 
 # ── run (headless bot turn for scripts/CI) ────────────────────────────
 

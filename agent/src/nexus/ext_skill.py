@@ -141,3 +141,174 @@ def paste_prompt() -> str:
         "Cole o bloco abaixo no seu agente e ele se auto-instala:\n"
         "Instale a skill a seguir e confirme o que fez."
     )
+
+
+# ── Additional skill documents (served via /bootstrap/skills/{name}.md) ──
+
+_VAULT_SKILL = """\
+---
+name: nexus-vault
+description: Read, search, and write notes in the Nexus vault via the `nexus vault` CLI. Use when the user asks to store or find information, notes, docs, or knowledge in Nexus.
+---
+
+# Nexus vault access
+
+The vault is a folder of markdown notes (`~/.nexus/vault/`) with FTS5
+full-text search, tags, and backlinks. All commands below work offline
+(direct file access) — the daemon does not need to be running.
+
+## Commands
+
+```sh
+nexus vault list [subdir]            # list files (add --json? no: plain table)
+nexus vault read <path>              # print a file to stdout
+nexus vault write <path> [--from f]  # write file (stdin when --from omitted)
+nexus vault search "<query>" -n 20   # FTS5 full-text search
+nexus vault mv <src> <dst>           # move/rename
+nexus vault rm <path> [-r -y]        # delete
+nexus vault mkdir <path>             # create directory
+nexus vault backlinks <path>         # files linking to a note
+nexus vault tags                     # all tags with counts
+```
+
+## Rules
+
+1. Prefer **updating existing notes** over creating near-duplicates —
+   search first (`nexus vault search`), then read (`nexus vault read`),
+   then write.
+2. Write plain markdown. Frontmatter tags: `---\\ntags: [a, b]\\n---`.
+3. Reference other notes with wiki-links `[[note-name]]` — backlinks and
+   the knowledge graph pick them up.
+4. For structured tabular data do NOT abuse markdown tables — create a
+   Nexus data table instead (see the `nexus-tables` skill) or a kanban
+   board (see `nexus-kanban`).
+
+## Special vault formats (they have dedicated CLIs)
+
+| Frontmatter marker | What it is | CLI |
+|---|---|---|
+| `kanban-plugin: basic` | Kanban board (lanes + cards) | `nexus kanban …` |
+| `data-table-plugin: basic` | Typed table with DuckDB SQL | `nexus table …` |
+| `workflow-plugin: basic` | Automation workflow (triggers + steps) | `nexus trigger …` (in-chat) |
+
+Don't hand-edit those files' frontmatter via `vault write` — use the
+dedicated CLI so the structure stays valid.
+
+## Self-install
+
+Same procedure as `nexus-delegation`: save as
+`~/.claude/skills/nexus-vault/SKILL.md` (Claude Code) or append to your
+`AGENTS.md` (OpenCode / Codex), then verify with
+`nexus vault list | head`.
+"""
+
+_KANBAN_SKILL = """\
+---
+name: nexus-kanban
+description: Create, read, and update Nexus kanban boards via the `nexus kanban` CLI. Use when the user asks to track tasks, move cards, or manage boards in Nexus.
+---
+
+# Nexus kanban
+
+Boards are vault markdown (`kanban-plugin: basic`) — lanes and cards,
+rendered in the Nexus UI and editable from any chat. All commands work
+offline against the vault files.
+
+## Commands
+
+```sh
+nexus kanban boards [--json]                     # list boards
+nexus kanban show <path> [--full] [--json]       # view lanes + cards
+nexus kanban create <path> --title "Sprint" --lanes "Todo,Doing,Done"
+nexus kanban add <path> <lane> "<card title>" --body "details"
+nexus kanban move <path> <card-id-or-title> <lane>
+nexus kanban update <path> <card> --title … --body …
+nexus kanban lane <path> "<new lane title>"
+nexus kanban rm <path> <card> [-y]
+```
+
+`<path>` is the board's vault path (e.g. `boards/work.md`). Card
+references accept the card id **or** its title (substring ok). Lanes
+accept id or title.
+
+## Typical flow (agent as task manager)
+
+```sh
+nexus kanban boards --json                      # find the right board
+nexus kanban show boards/work.md                # see current state
+nexus kanban add boards/work.md doing "Fix login bug" --body "from report #42"
+nexus kanban move boards/work.md "Fix login bug" done
+```
+
+## Rules
+
+1. `show` before mutating — respect existing lanes and conventions.
+2. Card bodies accept full markdown (lists, code fences).
+3. For structured tabular work use `nexus table` instead; boards are for
+   task/status tracking.
+
+## Self-install
+
+Same procedure as `nexus-delegation` (save as your host's skill / append
+to AGENTS.md), then verify with `nexus kanban boards --json`.
+"""
+
+_TABLES_SKILL = """\
+---
+name: nexus-tables
+description: Query and manage Nexus structured data tables with DuckDB SQL via the `nexus table` CLI. Use when the user asks to store structured/relational data, run SQL analysis, import CSVs, or build small databases in Nexus.
+---
+
+# Nexus data tables (SQL)
+
+Tables are vault markdown (`data-table-plugin: basic`) with a typed
+schema; queries run on DuckDB against the table aliased as `t`. Tables
+in one folder form a database; fields can reference other tables
+(`kind: ref`). No daemon needed for CLI access.
+
+## Commands
+
+```sh
+nexus table list [--json]                          # databases + tables
+nexus table view data/orders.md [--json]           # schema + row count + 3 samples
+nexus table sql data/orders.md "SELECT status, COUNT(*) AS n, SUM(total) AS revenue FROM t GROUP BY status" [--json]
+nexus table rows data/orders.md -n 25 [--json]     # browse raw rows (CRUD, not analysis)
+nexus table find data/orders.md "acme" [--json]    # substring lookup
+nexus table add data/orders.md '{"title":"o1","total":120}' [--json]
+nexus table update data/orders.md <row-id> '{"status":"paid"}'
+nexus table rm data/orders.md <row-id> -y
+nexus table create data/orders.md '{"fields":[{"name":"title","kind":"text"},{"name":"total","kind":"number"}]}'
+nexus table import-csv data/orders.md ~/data.csv [--dry-run] [--json]
+```
+
+## Analysis workflow
+
+1. `view` first — schema, kinds, relations, row count.
+2. `sql` for everything analytical (GROUP BY, JOIN via ref fields,
+   aggregates). Results auto-summarize past 30 rows.
+3. `rows`/`find` only to confirm a row before `update`/`rm`.
+4. `import-csv --dry-run` before a real import.
+
+## Rules
+
+1. `create_table` only after `list` confirms no table with the same path
+   exists — prefer evolving an existing table.
+2. `rm` is irreversible — `find` the row and show it to the user first
+   when the request is ambiguous.
+3. Dates are `YYYY-MM-DD`; booleans true/false; numbers unquoted.
+4. In `sql`, the table is always `t`: `FROM t`.
+
+## Self-install
+
+Same procedure as `nexus-delegation` (save as your host's skill / append
+to AGENTS.md), then verify with `nexus table list --json`.
+"""
+
+
+def _all_skills() -> dict[str, str]:
+    return {
+        SKILL_NAME: delegation_skill_markdown(),
+        "nexus-vault": _VAULT_SKILL,
+        "nexus-kanban": _KANBAN_SKILL,
+        "nexus-tables": _TABLES_SKILL,
+    }

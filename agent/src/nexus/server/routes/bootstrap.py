@@ -22,14 +22,33 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
-from ...ext_skill import SKILL_NAME, delegation_skill_markdown
+from ...ext_skill import SKILL_NAME, _all_skills
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_SKILLS = {
-    SKILL_NAME: delegation_skill_markdown,
+_SKILLS = _all_skills()
+
+
+_SKILL_DESCRIPTIONS = {
+    SKILL_NAME: (
+        "delegate tasks to Nexus bots via `nexus run`. Install when the "
+        'user wants you to hand work to bots ("ask @swe to…", "run this '
+        'on Nexus")'
+    ),
+    "nexus-vault": (
+        "read/search/write notes in the Nexus vault via `nexus vault`. "
+        "Install for knowledge storage and retrieval work"
+    ),
+    "nexus-kanban": (
+        "manage task boards via `nexus kanban` (add/move/update cards). "
+        "Install for task tracking work"
+    ),
+    "nexus-tables": (
+        "structured tables + DuckDB SQL via `nexus table` (create tables, "
+        "query, import CSV). Install for structured-data and analysis work"
+    ),
 }
 
 
@@ -86,6 +105,7 @@ def _render_bootstrap(request: Request) -> str:
         for b in roster
     ) or "- (no bots configured yet — create them in the Nexus UI)"
     roster_handles = ", ".join(f"@{b['handle']}" for b in roster) or "(none yet)"
+    skills_block = _skills_block(base)
 
     return f"""# Nexus agent bootstrap
 
@@ -124,9 +144,7 @@ Fetch and install only what your task needs (each document is
 self-contained, with self-install steps for Claude Code / OpenCode /
 Codex):
 
-- [`{SKILL_NAME}`]({base}/bootstrap/skills/{SKILL_NAME}.md) — delegate
-  tasks to Nexus bots via `nexus run`. Install this when the user wants
-  you to hand work to bots ("ask @swe to…", "run this on Nexus").
+{skills_block}
 
 ## The 30-second version
 
@@ -139,6 +157,14 @@ Exit codes: `0` ok · `1` turn failed · `2` bot not found.
 """
 
 
+def _skills_block(base: str) -> str:
+    lines = []
+    for name in _SKILLS:
+        desc = _SKILL_DESCRIPTIONS.get(name, "Nexus skill")
+        lines.append(f"- [`{name}`]({base}/bootstrap/skills/{name}.md) — {desc}.")
+    return "\n".join(lines)
+
+
 @router.get("/bootstrap", response_class=PlainTextResponse)
 async def bootstrap_doc(request: Request) -> PlainTextResponse:
     return PlainTextResponse(
@@ -148,18 +174,18 @@ async def bootstrap_doc(request: Request) -> PlainTextResponse:
 
 @router.get("/bootstrap/skills/{name}.md", response_class=PlainTextResponse)
 async def bootstrap_skill(name: str) -> PlainTextResponse:
-    generator = _SKILLS.get(name)
-    if generator is None:
+    body = _SKILLS.get(name)
+    if body is None:
         return PlainTextResponse(
             f"# Unknown skill: {name}\n\nAvailable: {', '.join(_SKILLS) or '(none)'}\n",
             status_code=404,
             media_type="text/markdown; charset=utf-8",
         )
-    body = generator()
     header = (
         f"# Nexus skill: {name}\n\n"
         "Install this into your own configuration (steps at the end of the "
-        "document), then verify with `nexus bots list --json`.\n\n---\n\n"
+        "document), then verify with the verification command inside the "
+        "document.\n\n---\n\n"
     )
     return PlainTextResponse(
         header + body, media_type="text/markdown; charset=utf-8"
