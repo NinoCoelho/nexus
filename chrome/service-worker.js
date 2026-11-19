@@ -215,13 +215,16 @@ async function handleGetState(msg) {
   if (!tab) throw new Error("no active tab");
   const map = await getMap(SESSION_MAP_KEY);
   if (!map[tab.id]) {
-    map[tab.id] = { sessionId: newSessionId() };
+    // projectId binds a fresh chat to a bot; POST /chat/stream applies it
+    // via ChatRequest.project_id on the first message.
+    map[tab.id] = { sessionId: newSessionId(), projectId: msg.projectId || null };
     await setMap(SESSION_MAP_KEY, map);
   }
   return {
     tabId: tab.id,
     windowId: tab.windowId,
     sessionId: map[tab.id].sessionId,
+    projectId: map[tab.id].projectId || null,
     url: tab.url || "",
     title: tab.title || "",
   };
@@ -229,9 +232,18 @@ async function handleGetState(msg) {
 
 async function handleNewSession(msg) {
   const map = await getMap(SESSION_MAP_KEY);
-  map[msg.tabId] = { sessionId: newSessionId() };
+  map[msg.tabId] = { sessionId: newSessionId(), projectId: msg.projectId || null };
   await setMap(SESSION_MAP_KEY, map);
-  return { ok: true, sessionId: map[msg.tabId].sessionId };
+  return { ok: true, sessionId: map[msg.tabId].sessionId, projectId: map[msg.tabId].projectId || null };
+}
+
+// Rebind the tab to an existing (server-known) session — used when the
+// panel switches to a bot's recent chat or a team session.
+async function handleSetSession(msg) {
+  const map = await getMap(SESSION_MAP_KEY);
+  map[msg.tabId] = { sessionId: msg.sessionId, projectId: msg.projectId || null };
+  await setMap(SESSION_MAP_KEY, map);
+  return { ok: true };
 }
 
 async function handleRemoveSession(tabId) {
@@ -701,6 +713,21 @@ async function handleGroupInfo(msg) {
   return { ok: true, ...info };
 }
 
+// Origin of the resolved target tab (current tab, or a grouped tab when
+// msg.tab is set) — the panel uses it for per-site auto-allow of js/navigate.
+async function handleTargetOrigin(msg) {
+  const tabId = await resolveTargetTabId(msg);
+  const tab = await chrome.tabs.get(tabId);
+  let origin = "";
+  let host = "";
+  try {
+    const u = new URL(tab.url || "");
+    origin = u.origin;
+    host = u.host;
+  } catch (_) {}
+  return { ok: true, origin, host, url: tab.url || "" };
+}
+
 async function handleGroupAdd(msg) {
   const tab = await chrome.tabs.get(msg.tabId);
   const existing = await findNexusGroup(tab.windowId);
@@ -738,12 +765,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await handleExtractContext(msg));
       } else if (msg.type === "GROUP_INFO") {
         sendResponse(await handleGroupInfo(msg));
+      } else if (msg.type === "TARGET_ORIGIN") {
+        sendResponse(await handleTargetOrigin(msg));
       } else if (msg.type === "GROUP_ADD") {
         sendResponse(await handleGroupAdd(msg));
       } else if (msg.type === "PAGE_ACT") {
         sendResponse(await handlePageAct(msg));
       } else if (msg.type === "NEW_SESSION") {
         sendResponse(await handleNewSession(msg));
+      } else if (msg.type === "SET_SESSION") {
+        sendResponse(await handleSetSession(msg));
       } else {
         sendResponse({ error: "unknown message type" });
       }
