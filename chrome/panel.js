@@ -24,6 +24,8 @@ const els = {
   groupBadge: document.getElementById("groupBadge"),
   btnSend: document.getElementById("btnSend"),
   btnForward: document.getElementById("btnForward"),
+  modelChip: document.getElementById("modelChip"),
+  modelPop: document.getElementById("modelPop"),
   mentionPop: document.getElementById("mentionPop"),
   msgs: document.getElementById("msgs"),
   input: document.getElementById("input"),
@@ -41,6 +43,11 @@ const state = {
   // chats (coordinator-adjacent) and team sessions.
   projectId: null,
   team: null,
+  // Model ids exposed by the server (GET /routing) and the chosen one —
+  // "" means Auto (the server's configured default). "" is also the
+  // fallback when a stored choice no longer exists server-side.
+  models: [],
+  modelId: "",
   url: "",
   title: "",
   closed: false,
@@ -176,6 +183,102 @@ function sessionsForBot(botId) {
 function handleFor(botId) {
   const b = botsCache.find((x) => x.id === botId);
   return b ? b.handle : botId;
+}
+
+// ── Model selector ───────────────────────────────────────────────────────
+// Every turn sends `model` (null server-side = configured default). The
+// list comes from GET /routing — the same source the web UI uses — and the
+// choice persists in chrome.storage.local so every panel/tab shares it.
+// The chip stays hidden while the server exposes one model or fewer.
+
+function modelShortName(id) {
+  // `provider/model` or `provider:model` ids render as the bare model
+  // name; the full id stays in the title tooltip.
+  const parts = String(id || "").split(/[/:]/);
+  return parts[parts.length - 1] || id || "";
+}
+
+function resolveModel() {
+  return state.modelId || null;
+}
+
+function updateModelChip() {
+  const has = state.models.length > 1;
+  els.modelChip.hidden = !has;
+  if (!has) {
+    closeModelPop();
+    return;
+  }
+  els.modelChip.innerHTML = "";
+  els.modelChip.appendChild(el("span", "model-chip-label", state.modelId ? modelShortName(state.modelId) : "Auto"));
+  els.modelChip.appendChild(el("span", "chip-caret", "▾"));
+  els.modelChip.title = state.modelId || "Auto — server default model";
+}
+
+async function refreshRouting() {
+  try {
+    const res = await fetch(`${apiBase()}/routing`);
+    if (!res.ok) {
+      els.modelChip.hidden = true;
+      return;
+    }
+    const r = await res.json();
+    state.models = Array.isArray(r.available_models) ? r.available_models : [];
+    // A choice that no longer exists on this server falls back to Auto.
+    if (state.modelId && !state.models.includes(state.modelId)) state.modelId = "";
+    updateModelChip();
+  } catch (_) {
+    els.modelChip.hidden = true;
+  }
+}
+
+function onDocClickModel(e) {
+  if (!e.target.closest("#modelPop") && !e.target.closest("#modelChip")) closeModelPop();
+}
+
+function onModelKey(e) {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeModelPop();
+  }
+}
+
+function closeModelPop() {
+  if (els.modelPop.hidden) return;
+  els.modelPop.hidden = true;
+  els.modelPop.innerHTML = "";
+  document.removeEventListener("click", onDocClickModel, true);
+  document.removeEventListener("keydown", onModelKey, true);
+}
+
+function openModelPop() {
+  if (els.modelChip.hidden || !els.modelPop.hidden) return;
+  els.modelPop.innerHTML = "";
+  const rows = [
+    { id: "", label: "Auto", desc: "server default model" },
+    ...state.models.map((m) => ({ id: m, label: modelShortName(m), desc: m })),
+  ];
+  for (const r of rows) {
+    const row = el("div", "mention-row" + (state.modelId === r.id ? " active" : ""));
+    row.appendChild(el("span", "model-check", state.modelId === r.id ? "✔" : ""));
+    row.appendChild(el("span", "mention-handle", r.label));
+    row.appendChild(el("span", "mention-name", r.desc));
+    row.title = r.id || "Auto — server default model";
+    row.addEventListener("click", () => {
+      state.modelId = r.id;
+      chrome.storage.local.set({ nexusModel: r.id });
+      updateModelChip();
+      closeModelPop();
+    });
+    els.modelPop.appendChild(row);
+  }
+  els.modelPop.hidden = false;
+  // Capture-phase outside-click + Escape close (same pattern as the
+  // activity popover), deferred so the opening click can't close it.
+  setTimeout(() => {
+    document.addEventListener("click", onDocClickModel, true);
+    document.addEventListener("keydown", onModelKey, true);
+  }, 0);
 }
 
 function isHexColor(v) {
@@ -1407,7 +1510,7 @@ function send() {
       body: JSON.stringify({
         message: full,
         session_id: state.sessionId,
-        model: null,
+        model: resolveModel(),
         project_id: state.projectId,
       }),
       signal: chat.ctrl.signal,
@@ -1449,7 +1552,7 @@ function sendQueued(text) {
   fetch(`${apiBase()}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: text, session_id: state.sessionId, model: null }),
+    body: JSON.stringify({ message: text, session_id: state.sessionId, model: resolveModel() }),
   }).then(async (res) => {
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
@@ -1943,7 +2046,7 @@ async function runForward({ bot, sessionId, projectId, text }) {
       body: JSON.stringify({
         message: preamble,
         session_id: targetSid,
-        model: null,
+        model: resolveModel(),
         project_id: state.projectId,
       }),
       signal: chat.ctrl.signal,
@@ -2130,13 +2233,25 @@ async function init() {
   const win = await chrome.windows.getCurrent();
   state.windowId = win.id;
   try {
-    const data = await chrome.storage.local.get("nexusPort");
+    const data = await chrome.storage.local.get(["nexusPort", "nexusModel"]);
     apiPort = Number(data.nexusPort) || 18989;
+    state.modelId = typeof data.nexusModel === "string" ? data.nexusModel : "";
   } catch (_) {}
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.nexusPort) {
       apiPort = Number(changes.nexusPort.newValue) || 18989;
       status(`server port set to ${apiPort}`);
+      // A different server exposes different models — refresh the list
+      // (refreshRouting also drops a choice the new server doesn't know).
+      refreshRouting();
+    }
+    // Keep panels in sync when the choice is made from another panel.
+    if (area === "local" && changes.nexusModel) {
+      const next = typeof changes.nexusModel.newValue === "string" ? changes.nexusModel.newValue : "";
+      if (next !== state.modelId) {
+        state.modelId = next;
+        updateModelChip();
+      }
     }
   });
   const st = await chrome.runtime.sendMessage({ type: "GET_STATE", windowId: state.windowId });
@@ -2162,6 +2277,7 @@ async function init() {
     updateBotChip();
     renderAll();
   }).catch(() => {});
+  refreshRouting().catch(() => {});
   els.btnSend.addEventListener("click", send);
   els.btnNew.addEventListener("click", () => newChatWith(state.projectId));
   els.btnStop.addEventListener("click", stopTurn);
@@ -2169,6 +2285,10 @@ async function init() {
   els.btnGroup.addEventListener("click", addToGroup);
   els.btnForward.addEventListener("click", openForward);
   els.botChip.addEventListener("click", openBotPicker);
+  els.modelChip.addEventListener("click", () => {
+    if (els.modelPop.hidden) openModelPop();
+    else closeModelPop();
+  });
   // vault:// links (and .vp-backlink buttons inside the preview) open the
   // in-panel preview popup instead of navigating.
   els.msgs.addEventListener("click", (e) => {

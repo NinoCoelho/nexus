@@ -1056,6 +1056,61 @@ details.think[open] summary::before { transform: rotate(90deg); }
 #composerBtns { display: flex; gap: 6px; flex-shrink: 0; }
 #btnForward { padding: 4px 11px; font-size: 14px; }
 
+/* ── Model selector ────────────────────────────────────────────────────── */
+
+/* The chip floats over the textarea's bottom-right corner — tiny tag, not
+   a full button row. */
+#inputWrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+#inputWrap #input { flex: 1; width: 100%; }
+
+#modelChip {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  max-width: 110px;
+  padding: 1px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  border-radius: 999px;
+  background: var(--bg-panel);
+}
+#modelChip:hover { border-color: var(--accent-lo); color: var(--fg); }
+.model-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#modelChip .chip-caret { font-size: 8px; }
+
+/* Popover uses the same slot above the composer as the mention list. */
+#modelPop {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  margin-bottom: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.model-check {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 11px;
+  text-align: center;
+}
+
 /* ── Overlays: picker + dialogs ────────────────────────────────────────── */
 
 .nx-overlay {
