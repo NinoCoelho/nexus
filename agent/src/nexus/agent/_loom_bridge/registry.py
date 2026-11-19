@@ -128,6 +128,7 @@ def build_tool_registry(
         TRIGGER_TOOL,
         get_engine_getter,
     )
+    from nexus.tools.team_package import TEAM_PACKAGE_TOOL, handle_team_package
     from nexus.tools.kanban_query_tool import KANBAN_QUERY_TOOL, handle_kanban_query_tool
     from nexus.tools.kanban_tool import KANBAN_MANAGE_TOOL, handle_kanban_tool
     from nexus.tools.memory_tool import MEMORY_READ_TOOL, MEMORY_WRITE_TOOL, MemoryHandler
@@ -488,6 +489,9 @@ def build_tool_registry(
     async def _delete_trigger(args: dict) -> str:
         return await handle_delete_trigger(args, _engine_getter)
 
+    async def _team_package(args: dict) -> str:
+        return await handle_team_package(args, _engine_getter)
+
     _TOOL_TABLE: list[tuple[Any, Any]] = [
         (HTTP_CALL_TOOL, _http_call),
         (VAULT_SEMANTIC_SEARCH_TOOL, _vault_semantic_search),
@@ -499,6 +503,7 @@ def build_tool_registry(
         (TRIGGER_INFO_TOOL, _trigger_info),
         (TRIGGER_TOOL, _trigger),
         (DELETE_TRIGGER_TOOL, _delete_trigger),
+        (TEAM_PACKAGE_TOOL, _team_package),
         (DATATABLE_MANAGE_TOOL, handle_datatable_tool),
         (DASHBOARD_MANAGE_TOOL, _dashboard),
         (SHOW_KANBAN_TOOL, handle_show_kanban),
