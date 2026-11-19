@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -296,6 +296,8 @@ def _ensure_bot_columns(db) -> None:
         db.execute("ALTER TABLE projects ADD COLUMN persona TEXT NOT NULL DEFAULT ''")
     if "handle" not in cols:
         db.execute("ALTER TABLE projects ADD COLUMN handle TEXT NOT NULL DEFAULT ''")
+    if "model" not in cols:
+        db.execute("ALTER TABLE projects ADD COLUMN model TEXT NOT NULL DEFAULT ''")
     db.commit()
 
     import re as _re
@@ -484,7 +486,7 @@ def migrate_legacy_schema(db_path: Path) -> None:
             conn.close()
 
         def _int_to_iso(ts: Any) -> str:
-            return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            return datetime.fromtimestamp(int(ts), tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
         def _col(row: sqlite3.Row, name: str, default: Any = None) -> Any:
             try:

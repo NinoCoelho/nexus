@@ -31,6 +31,10 @@ class Project:
     updated_at: int
     persona: str = ""
     handle: str = ""
+    # Per-bot model override (a [[models]] entry id or provider model id).
+    # Empty = use [agent].default_model. Respected at LLM-call time in
+    # loop/_builder._choose_model (per-bot > default).
+    model: str = ""
 
 
 @dataclass
@@ -45,6 +49,7 @@ class ProjectSummary:
     updated_at: int
     persona: str = ""
     handle: str = ""
+    model: str = ""
 
 
 def _slugify(name: str) -> str:
@@ -123,6 +128,7 @@ class ProjectStore:
         color: str = "",
         icon: str = "",
         persona: str = "",
+        model: str = "",
     ) -> Project:
         pid = uuid.uuid4().hex
         conn = self._connect()
@@ -131,8 +137,8 @@ class ProjectStore:
             handle = self._unique_handle(conn, name)
             conn.execute(
                 "INSERT INTO projects (id, name, description, instructions, persona, handle, "
-                "vault_path, color, icon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (pid, name, description, instructions, persona, handle, vault_path, color, icon),
+                "vault_path, color, icon, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (pid, name, description, instructions, persona, handle, vault_path, color, icon, model),
             )
             conn.commit()
             row = conn.execute(
@@ -198,7 +204,10 @@ class ProjectStore:
         ]
 
     def update(self, project_id: str, **fields: Any) -> None:
-        allowed = {"name", "description", "instructions", "color", "icon", "persona"}
+        allowed = {
+            "name", "description", "instructions", "color", "icon",
+            "persona", "model",
+        }
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return
@@ -268,6 +277,10 @@ class ProjectStore:
         return self._row_to_project(row)
 
     def _row_to_project(self, row: Any) -> Project:
+        try:
+            model = row["model"] or ""
+        except (KeyError, IndexError):
+            model = ""
         return Project(
             id=row["id"],
             name=row["name"],
@@ -280,4 +293,5 @@ class ProjectStore:
             updated_at=_ts_to_int(row["updated_at"]),
             persona=row["persona"] or "",
             handle=row["handle"] or "",
+            model=model,
         )

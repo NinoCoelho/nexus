@@ -9,14 +9,17 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
-from loom.loop import Agent as LoomAgent, AgentConfig
+from loom.loop import Agent as LoomAgent
+from loom.loop import AgentConfig
 
-from ..prompt_builder import build_system_prompt
 from ...skills.registry import SkillRegistry
+from ..prompt_builder import build_system_prompt
 from .compactor import NexusCompactor
-from .helpers import DEFAULT_MAX_TOOL_ITERATIONS, _AFFIRMATIVES, _NEGATIVES
+from .helpers import _AFFIRMATIVES, _NEGATIVES, DEFAULT_MAX_TOOL_ITERATIONS
 from .overflow import (
     OUTPUT_HEADROOM_TOKENS as _OVERFLOW_OUTPUT_HEADROOM,
+)
+from .overflow import (
     TOOLS_AND_SYSTEM_OVERHEAD as _OVERFLOW_TOOLS_OVERHEAD,
 )
 
@@ -43,8 +46,12 @@ def _measure_call_overhead(tool_reg: Any, skill_registry: Any, home: Any) -> Non
     """
     import json
 
-    from .overflow import estimate_tokens, set_measured_overhead, tools_and_system_overhead
-    from .overflow import TOOLS_AND_SYSTEM_OVERHEAD
+    from .overflow import (
+        TOOLS_AND_SYSTEM_OVERHEAD,
+        estimate_tokens,
+        set_measured_overhead,
+        tools_and_system_overhead,
+    )
 
     # Measure once per process. Every sub-agent and the sweep agent construct
     # their own Agent, and re-walking the prompt files on each one is pure
@@ -55,7 +62,7 @@ def _measure_call_overhead(tool_reg: Any, skill_registry: Any, home: Any) -> Non
 
     try:
         specs = tool_reg.specs()
-    except Exception:  # noqa: BLE001 — no specs(), keep the constant
+    except Exception:
         log.debug("overhead measurement: registry exposes no specs()", exc_info=True)
         return
     try:
@@ -83,14 +90,14 @@ def _measure_call_overhead(tool_reg: Any, skill_registry: Any, home: Any) -> Non
             "per-call overhead measured: ~%d tokens (%d tool schemas, prompt %d chars)",
             total, len(specs), len(prompt),
         )
-    except Exception:  # noqa: BLE001 — never block agent construction
+    except Exception:
         log.debug("overhead measurement failed; keeping the default", exc_info=True)
 
 
 class _OverheadProbe:
     """Minimal message-shaped object for the token estimator."""
 
-    __slots__ = ("content", "tool_calls", "role")
+    __slots__ = ("content", "role", "tool_calls")
 
     def __init__(self, content: str) -> None:
         self.content = content
@@ -108,8 +115,8 @@ def build_loom_agent(
     get_chosen_model: Any,
     get_turn_trace: Any,
     on_trace_event: Any,
-    home: "AgentHome | None" = None,
-    permissions: "AgentPermissions | None" = None,
+    home: AgentHome | None = None,
+    permissions: AgentPermissions | None = None,
     tool_allowlist: set[str] | None = None,
 ) -> LoomAgent:
     """Build and return the configured loom.Agent.
@@ -176,8 +183,21 @@ def build_loom_agent(
         chosen = get_chosen_model()
         if chosen:
             return chosen
+        # Per-bot model override: the bot whose persona drives this turn
+        # (chat owner or @mentioned bot) may pin its own model. Resolved in
+        # _before_llm_call, which runs before the first LLM call of every
+        # iteration. Empty/None falls through to the configured default.
+        project = _current_project[0]
+        if project is not None:
+            bot_model = (getattr(project, "model", "") or "").strip()
+            if bot_model:
+                return bot_model
         default = getattr(nexus_cfg.agent, "default_model", None)
         return default
+
+    # The project (bot) whose persona drives the current turn — set by
+    # _before_llm_call after mention routing, read by _choose_model.
+    _current_project: list[Any] = [None]
 
     _iter_counter: list[int] = [0]
 
@@ -189,9 +209,9 @@ def build_loom_agent(
         project = None
         coordinator = False
         try:
-            from ..context import CURRENT_SESSION_ID
-            from ...server.project_store import ProjectStore
             from ...home import sessions_db
+            from ...server.project_store import ProjectStore
+            from ..context import CURRENT_SESSION_ID
 
             session_id = CURRENT_SESSION_ID.get()
             if session_id:
@@ -233,6 +253,9 @@ def build_loom_agent(
                         coordinator = False
         except Exception:
             pass
+        # Publish the resolved project for _choose_model: a bot with its own
+        # ``model`` pinned gets that model for every iteration of this turn.
+        _current_project[0] = project
         sys_prompt = build_system_prompt(
             registry, home=home, language=language, project=project,
             coordinator=coordinator, coordinator_guest=coordinator_guest,

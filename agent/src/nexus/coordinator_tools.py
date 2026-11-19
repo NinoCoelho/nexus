@@ -158,6 +158,14 @@ BOT_CONFIG_TOOL = ToolSpec(
                 "type": "string",
                 "description": "Short description (create/update).",
             },
+            "model": {
+                "type": "string",
+                "description": (
+                    "Model id (a [[models]] entry) this bot always uses — "
+                    "overrides [agent].default_model for its turns. Empty "
+                    "string clears the override (create/update)."
+                ),
+            },
             "chats": {
                 "type": "string",
                 "enum": ["archive", "delete", "keep"],
@@ -488,12 +496,12 @@ async def handle_bot_config(args: dict[str, Any], current_session_id: str | None
                 return json.dumps({"ok": False, "error": err})
             fields = {
                 k: args[k]
-                for k in ("persona", "instructions", "name", "description")
+                for k in ("persona", "instructions", "name", "description", "model")
                 if isinstance(args.get(k), str) and args[k].strip()
             }
             if not fields:
                 return json.dumps(
-                    {"ok": False, "error": "nothing to update: pass persona/instructions/name/description"}
+                    {"ok": False, "error": "nothing to update: pass persona/instructions/name/description/model"}
                 )
             confirmed = bool(args.get("confirmed", False))
             if not confirmed and not service._dispatch_approved(proj.id):
