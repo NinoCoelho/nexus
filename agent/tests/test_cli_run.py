@@ -33,25 +33,34 @@ def no_exit(monkeypatch):
 
 
 def test_resolve_bot_by_handle(monkeypatch):
-    bots = {
-        "bots": [
-            {"id": "abc123", "handle": "research", "name": "Research", "kind": "bot"},
-            {"id": "main", "handle": "nico", "name": "Nico", "kind": "coordinator"},
-        ]
-    }
-    monkeypatch.setattr(run_cmd, "_request", lambda m, p: bots)
+    bots = [
+        {"id": "abc123", "handle": "research", "name": "Research", "kind": "bot"},
+        {"id": "main", "handle": "nico", "name": "Nico", "kind": "coordinator"},
+    ]
+    monkeypatch.setattr(run_cmd, "_request", lambda m, p: bots)  # bare list, real shape
     found = _resolve_bot("@research")
     assert found["id"] == "abc123"
 
 
+def test_resolve_bot_tolerates_dict_wrapper(monkeypatch):
+    monkeypatch.setattr(
+        run_cmd, "_request", lambda m, p: {"bots": [{"id": "abc123", "handle": "research", "name": "Research"}]}
+    )
+    assert _resolve_bot("abc123")["handle"] == "research"
+
+
+def test_bot_rows_malformed(monkeypatch):
+    monkeypatch.setattr(run_cmd, "_request", lambda m, p: {"unexpected": 1})
+    assert run_cmd._bot_rows() == []
+
+
 def test_resolve_bot_by_id(monkeypatch):
-    bots = {"bots": [{"id": "abc123", "handle": "research", "name": "Research"}]}
-    monkeypatch.setattr(run_cmd, "_request", lambda m, p: bots)
+    monkeypatch.setattr(run_cmd, "_request", lambda m, p: [{"id": "abc123", "handle": "research", "name": "Research"}])
     assert _resolve_bot("abc123")["handle"] == "research"
 
 
 def test_resolve_bot_missing(monkeypatch):
-    monkeypatch.setattr(run_cmd, "_request", lambda m, p: {"bots": []})
+    monkeypatch.setattr(run_cmd, "_request", lambda m, p: [])
     assert _resolve_bot("@nope") == {}
 
 
@@ -132,26 +141,22 @@ def test_run_new_skips_session_reuse(monkeypatch, no_exit, capsys):
 
 
 def test_bots_list_json(monkeypatch, capsys):
-    bots = {
-        "bots": [
-            {"id": "abc123", "handle": "research", "name": "Research", "kind": "bot", "description": "d"},
-            {"id": "main", "handle": "nico", "name": "Nico", "kind": "coordinator", "description": ""},
-        ]
-    }
-    monkeypatch.setattr(run_cmd, "_request", lambda m, p: bots)
+    rows = [
+        {"id": "abc123", "handle": "research", "name": "Research", "kind": "bot", "description": "d"},
+        {"id": "main", "handle": "nico", "name": "Nico", "kind": "coordinator", "description": ""},
+    ]
+    monkeypatch.setattr(run_cmd, "_request", lambda m, p: rows)  # bare list
     bots_list(json_out=True)
-    rows = json.loads(capsys.readouterr().out)
-    assert len(rows) == 2
-    assert rows[0]["handle"] == "research"
+    out = json.loads(capsys.readouterr().out)
+    assert len(out) == 2
+    assert out[0]["handle"] == "research"
 
 
 def test_bots_list_table(monkeypatch, capsys):
-    bots = {
-        "bots": [
-            {"id": "abc123def456", "handle": "research", "name": "Research", "kind": "bot", "description": "finds info"},
-        ]
-    }
-    monkeypatch.setattr(run_cmd, "_request", lambda m, p: bots)
+    rows = [
+        {"id": "abc123def456", "handle": "research", "name": "Research", "kind": "bot", "description": "finds info"},
+    ]
+    monkeypatch.setattr(run_cmd, "_request", lambda m, p: rows)
     bots_list(json_out=False)
     out = capsys.readouterr().out
     assert "@research" in out

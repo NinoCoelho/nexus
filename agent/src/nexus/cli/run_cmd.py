@@ -59,11 +59,22 @@ def _request(method: str, path: str, body: dict | None = None, timeout: int = 12
         raise typer.Exit(code=1)
 
 
+def _bot_rows() -> list[dict]:
+    """GET /bots normalised: the route returns a bare list; tolerate a
+    ``{"bots": [...]}`` wrapper too (older/other deployments)."""
+    data = _request("GET", "/bots")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        rows = data.get("bots")
+        return rows if isinstance(rows, list) else []
+    return []
+
+
 def _resolve_bot(ref: str) -> dict:
     """Find a bot by id or @handle via GET /bots (loopback, no auth)."""
-    bots = _request("GET", "/bots")
     want = ref.strip().lstrip("@").lower()
-    for b in bots.get("bots", []):
+    for b in _bot_rows():
         if str(b.get("id", "")).lower() == want or str(b.get("handle", "")).lower() == want:
             return b
     return {}
@@ -134,8 +145,7 @@ def bots_list(
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """List every bot (id, @handle, name, persona preview)."""
-    bots = _request("GET", "/bots")
-    rows = bots.get("bots", [])
+    rows = _bot_rows()
     if json_out:
         typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
         return
