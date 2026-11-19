@@ -589,12 +589,24 @@ async def _startup_mcp_manager(nexus_cfg: Any, agent: Any, app: FastAPI) -> Any:
     return mcp_manager
 
 
-def _startup_mcp_server_mode(nexus_cfg: Any, agent: Any) -> None:
+def _startup_mcp_server_mode(nexus_cfg: Any, agent: Any, store: Any, job_tracker: Any) -> None:
     try:
         from ..mcp_lifecycle import start_mcp_server
         tool_reg = getattr(agent._loom, "_tools", None)
         if tool_reg is not None:
-            start_mcp_server(nexus_cfg, tool_reg)
+            from ..home import sessions_db
+            from ..server.project_store import ProjectStore
+
+            start_mcp_server(
+                nexus_cfg,
+                tool_reg,
+                chat_deps={
+                    "agent": agent,
+                    "store": store,
+                    "tracker": job_tracker,
+                    "project_store": ProjectStore(sessions_db()),
+                },
+            )
     except Exception:
         log.exception("MCP server mode failed")
 
@@ -809,7 +821,7 @@ def create_lifespan(state: dict[str, Any]):
         )
         await _startup_workflows(app, agent, sessions)
         mcp_manager = await _startup_mcp_manager(nexus_cfg, agent, app)
-        _startup_mcp_server_mode(nexus_cfg, agent)
+        _startup_mcp_server_mode(nexus_cfg, agent, sessions, job_tracker)
         _startup_broker_poller(app, agent)
         _startup_telegram(app, agent, sessions, job_tracker, publish_job_event)
 

@@ -221,6 +221,11 @@ class _NexusMcpBridge:
     advertised ``inputSchema`` is exactly the tool's JSON schema.
 
     The handler set is snapshotted at build time, mirroring loom's bridge.
+    ``extra_handlers`` are ad-hoc MCP tools that live outside the live
+    registry (e.g. ``nexus_chat`` / ``nexus_chat_status``) — they are
+    appended after the registry filter so they can't collide with a
+    registered tool name, and they are never subject to ``expose``
+    filtering (their exposure is decided here, in ``start_mcp_server``).
     """
 
     def __init__(
@@ -230,11 +235,17 @@ class _NexusMcpBridge:
         name: str = "nexus",
         forbidden: frozenset[str] = frozenset(),
         expose: list[str] | None = None,
+        extra_handlers: list[Any] | None = None,
     ) -> None:
         self._name = name
         self._forbidden = forbidden
         self._expose = set(expose) if expose is not None else None
         self._handlers = self._filter_handlers(registry)
+        for h in extra_handlers or []:
+            if h.tool.name in {x.tool.name for x in self._handlers}:
+                log.warning("[mcp-server] extra handler %r collides with a registered tool — skipped", h.tool.name)
+                continue
+            self._handlers.append(h)
 
     def _filter_handlers(self, registry: Any) -> list[Any]:
         handlers = getattr(registry, "_handlers", {}) or {}
@@ -304,6 +315,7 @@ class _NexusMcpBridge:
 def start_mcp_server(
     nexus_cfg: Any,
     tool_registry: Any,
+    chat_deps: dict[str, Any] | None = None,
 ) -> Any | None:
     """Optionally start an MCP server exposing Nexus tools to external hosts.
 
@@ -315,7 +327,12 @@ def start_mcp_server(
     dropped unconditionally — an external MCP client calling them would
     bypass the approval flow — and ``server_expose = ["read-only"]``
     expands to the curated read-only preset (optionally mixed with extra
-    explicit tool names).
+    explicit tool names). ``server_expose = ["chat"]`` (mixable, e.g.
+    ``["read-only", "chat"]``) adds the two ad-hoc conversation tools
+    ``nexus_chat`` / ``nexus_chat_status`` so external agents can talk to
+    Nexus bots. They require ``chat_deps`` (agent, store, tracker,
+    project_store) — wired from the lifespan — otherwise ``chat`` is a
+    no-op with a warning.
 
     Idempotent: the lifespan can run more than once in some deployments
     (supervisor/reloader patterns) — a second call returns the running
@@ -335,6 +352,7 @@ def start_mcp_server(
         log.warning("[mcp-server] mcp/starlette packages not installed — skipping MCP server mode")
         return None
 
+    # ---- compute exposure (registry tools) -------------------------------
     raw_expose = getattr(mcp_cfg, "server_expose", None) or []
     if "read-only" in raw_expose:
         expose: list[str] | None = [t for t in MCP_READ_ONLY_EXPOSE if t not in raw_expose]
@@ -350,6 +368,24 @@ def start_mcp_server(
             log.warning("[mcp-server] refusing to expose HITL-adjacent tools: %s", dropped)
             expose = [t for t in expose if t not in MCP_SERVER_FORBIDDEN_TOOLS]
 
+    # ---- ad-hoc conversation tools (never collide with registry names) ----
+    extra_handlers: list[Any] = []
+    if "chat" in (raw_expose or []):
+        if chat_deps is None:
+            log.warning(
+                "[mcp-server] 'chat' in server_expose but no chat_deps — nexus_chat / nexus_chat_status will not be available"
+            )
+        else:
+            from .mcp_chat import NEXUS_CHAT_TOOLS, wire_chat_deps
+
+            wire_chat_deps(chat_deps)
+            extra_handlers = list(NEXUS_CHAT_TOOLS)
+            log.info(
+                "[mcp-server] adding %d ad-hoc chat tool(s): %s",
+                len(extra_handlers),
+                sorted(h.tool.name for h in extra_handlers),
+            )
+
     port = getattr(mcp_cfg, "server_port", 18990)
 
     bridge = _NexusMcpBridge(
@@ -357,6 +393,7 @@ def start_mcp_server(
         name="nexus",
         forbidden=MCP_SERVER_FORBIDDEN_TOOLS,
         expose=expose,
+        extra_handlers=extra_handlers,
     )
     log.info(
         "[mcp-server] exposing %d tool(s): %s (always forbidden: %s)",
@@ -364,7 +401,9 @@ def start_mcp_server(
         sorted(h.tool.name for h in bridge._handlers),
         sorted(MCP_SERVER_FORBIDDEN_TOOLS),
     )
+    import socket
     import threading
+    import time
 
     def _run() -> None:
         try:
@@ -374,9 +413,34 @@ def start_mcp_server(
 
     thread = threading.Thread(target=_run, daemon=True, name="mcp-server")
     thread.start()
-    _MCP_SERVER_BRIDGE = bridge
-    log.info("[mcp-server] started on 127.0.0.1:%d/mcp (expose=%s)", port, expose or "all-minus-forbidden")
-    return bridge
+
+    # "started" used to be logged right after thread.start() — before uvicorn
+    # bound the port, or after the thread had already crashed. That once
+    # claimed a live server that never came up (mcp 2.x API break), so confirm
+    # the listener before declaring victory. The bridge global is only set on
+    # a confirmed bind: a dead bridge leaves it unset so a later lifespan can
+    # retry instead of reusing a corpse.
+    def _port_open() -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.25)
+            try:
+                s.connect(("127.0.0.1", port))
+                return True
+            except OSError:
+                return False
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if not thread.is_alive():
+            # crashed before binding — the traceback is already in the log
+            return None
+        if _port_open():
+            _MCP_SERVER_BRIDGE = bridge
+            log.info("[mcp-server] started on 127.0.0.1:%d/mcp (expose=%s)", port, expose or "all-minus-forbidden")
+            return bridge
+        time.sleep(0.1)
+    log.error("[mcp-server] listener on 127.0.0.1:%d never opened within 10s — bridge not registered", port)
+    return None
 
 
 def _wire_sampling(manager: McpManager, agent: Any) -> None:
