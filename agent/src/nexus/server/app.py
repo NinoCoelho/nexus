@@ -19,9 +19,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, RedirectResponse
 
 from ..agent.ask_user_tool import AskUserHandler
-from ..agent.page_tool import PageHandler
 from ..agent.context import CURRENT_SESSION_ID
 from ..agent.loop import Agent
+from ..agent.page_tool import PageHandler
 from ..skills.registry import SkillRegistry
 from .app_lifespan import create_lifespan
 from .app_subagents import create_subagent_runner
@@ -29,7 +29,6 @@ from .events import SessionEvent
 from .job_tracker import JobTracker
 from .session_store import SessionStore
 from .settings import SettingsStore
-
 
 _AUTH_FREE_PATHS = {"/health"}
 # Cookie name used to carry the tunnel token. HttpOnly + SameSite=Strict so
@@ -581,50 +580,52 @@ def create_app(
     log.info("kanban queue initialised")
 
     # ── mount routers ──────────────────────────────────────────────────────────
+    from .routes.bootstrap import router as bootstrap_router
+    from .routes.bots import router as bots_router
+    from .routes.broker import router as broker_router
+    from .routes.browser import router as browser_router
+    from .routes.catalog import router as catalog_router
     from .routes.chat import router as chat_router
     from .routes.chat_slash import router as chat_slash_router
     from .routes.chat_stream import router as chat_stream_router
-    from .routes.settings import router as settings_router
+    from .routes.config import router as config_router
+    from .routes.cookies import router as cookies_router
+    from .routes.credentials import router as credentials_router
+    from .routes.dream import router as dream_router
+    from .routes.ext import router as ext_router
+    from .routes.ext_delegate import router as ext_delegate_router
+    from .routes.graph import router as graph_router
+    from .routes.heartbeat import router as heartbeat_router
+    from .routes.jobs import router as jobs_router
+    from .routes.local_creds import router as local_creds_router
+    from .routes.local_llm import router as local_llm_router
+    from .routes.mcp import router as mcp_router
+    from .routes.models import router as models_router
+    from .routes.notifications import router as notifications_router
+    from .routes.oauth import router as oauth_router
+    from .routes.pair import router as pair_router
+    from .routes.projects import router as projects_router
+    from .routes.providers import router as providers_router
+    from .routes.push import router as push_router
     from .routes.sessions import router as sessions_router
     from .routes.sessions_vault import router as sessions_vault_router
-    from .routes.graph import router as graph_router
-    from .routes.vault import router as vault_router
-    from .routes.vault_kanban import router as vault_kanban_router
-    from .routes.vault_calendar import router as vault_calendar_router
-    from .routes.vault_datatable import router as vault_datatable_router
-    from .routes.vault_dashboard import router as vault_dashboard_router
-    from .routes.vault_dispatch import router as vault_dispatch_router
-    from .routes.vault_history import router as vault_history_router
-    from .routes.config import router as config_router
-    from .routes.catalog import router as catalog_router
-    from .routes.local_creds import router as local_creds_router
-    from .routes.oauth import router as oauth_router
-    from .routes.providers import router as providers_router
-    from .routes.credentials import router as credentials_router
+    from .routes.settings import router as settings_router
     from .routes.site_credentials import router as site_credentials_router
-    from .routes.models import router as models_router
-    from .routes.local_llm import router as local_llm_router
-    from .routes.notifications import router as notifications_router
-    from .routes.push import router as push_router
     from .routes.skill_wizard import router as skill_wizard_router
-    from .routes.tunnel import router as tunnel_router
     from .routes.telegram import router as telegram_router
     from .routes.tts import router as tts_router
-    from .routes.webhook import router as webhook_router
-    from .routes.broker import router as broker_router
-    from .routes.heartbeat import router as heartbeat_router
-    from .routes.cookies import router as cookies_router
-    from .routes.dream import router as dream_router
-    from .routes.mcp import router as mcp_router
-    from .routes.jobs import router as jobs_router
-    from .routes.vault_import import router as vault_import_router
+    from .routes.tunnel import router as tunnel_router
     from .routes.update import router as update_router
-    from .routes.ext import router as ext_router
+    from .routes.vault import router as vault_router
+    from .routes.vault_calendar import router as vault_calendar_router
+    from .routes.vault_dashboard import router as vault_dashboard_router
+    from .routes.vault_datatable import router as vault_datatable_router
+    from .routes.vault_dispatch import router as vault_dispatch_router
+    from .routes.vault_history import router as vault_history_router
+    from .routes.vault_import import router as vault_import_router
+    from .routes.vault_kanban import router as vault_kanban_router
+    from .routes.webhook import router as webhook_router
     from .routes.workflows import router as workflows_router
-    from .routes.projects import router as projects_router
-    from .routes.bots import router as bots_router
-    from .routes.browser import router as browser_router
-    from .routes.pair import router as pair_router
 
     app.include_router(chat_router)
     app.include_router(chat_slash_router)
@@ -665,6 +666,8 @@ def create_app(
     app.include_router(jobs_router)
     app.include_router(update_router)
     app.include_router(ext_router)
+    app.include_router(ext_delegate_router)
+    app.include_router(bootstrap_router)
     app.include_router(workflows_router)
     app.include_router(projects_router)
     app.include_router(bots_router)
@@ -709,6 +712,7 @@ def create_app(
     # destination lane's prompt if one is set. Cycle and depth guards via
     # the DISPATCH_CHAIN contextvar prevent runaway cascades.
     import asyncio
+
     from ..agent.context import DISPATCH_CHAIN
 
     MAX_DISPATCH_DEPTH = 5
@@ -768,7 +772,7 @@ def create_app(
     return app
 
 
-def _resolve_ui_dist() -> "Any | None":
+def _resolve_ui_dist() -> Any | None:
     """Locate a built UI (``ui/dist``) — env override or sibling of frontend_dir."""
     import os
     from pathlib import Path

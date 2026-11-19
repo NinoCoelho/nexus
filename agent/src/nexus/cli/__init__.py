@@ -9,6 +9,7 @@ from .chrome_cmd import chrome_app
 from .config_cmd import config_app
 from .cookies_cmd import cookies_app
 from .daemon_cmd import daemon_app
+from .ext_skill_cmd import skill_app
 from .graphrag_cmd import graphrag_app
 from .models_cmd import models_app
 from .pair_cmd import pair as _pair_fn
@@ -36,10 +37,11 @@ app.add_typer(cookies_app, name="cookies")
 app.add_typer(tunnel_app, name="tunnel")
 app.add_typer(chrome_app, name="chrome")
 app.add_typer(bots_app, name="bots")
+app.add_typer(skill_app, name="skill")
 
 # ── run (headless bot turn for scripts/CI) ────────────────────────────
 
-from .run_cmd import run as _run_fn  # noqa: E402
+from .run_cmd import run as _run_fn
 
 app.command("run")(_run_fn)
 
@@ -58,21 +60,22 @@ def _global_setup() -> None:
 
 # ── serve ──────────────────────────────────────────────────────────────────────
 
-from .serve import serve as _serve_fn  # noqa: E402
+from .serve import serve as _serve_fn
 
 app.command()(_serve_fn)
 
 
 # ── chat ───────────────────────────────────────────────────────────────────────
 
-from .chat import chat as _chat_fn  # noqa: E402
+from .chat import chat as _chat_fn
 
 app.command()(_chat_fn)
 
 
 # ── version + doctor ──────────────────────────────────────────────────────────
 
-from .doctor_cmd import doctor as _doctor_fn, version as _version_fn  # noqa: E402
+from .doctor_cmd import doctor as _doctor_fn
+from .doctor_cmd import version as _version_fn
 
 app.command()(_version_fn)
 app.command()(_doctor_fn)
