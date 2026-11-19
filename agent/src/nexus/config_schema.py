@@ -190,8 +190,9 @@ class AgentConfig(BaseModel):
     # fixtures; MiniLM cosseno gira ~0.42 para "relevante").
     team_router_threshold: float = 0.42
     # Min gap between top-1 and top-2 for a single pick; below it → several
-    # members answer (top-2 both above threshold).
-    team_router_margin: float = 0.10
+    # members answer (top-2 both above threshold). Calibrated on ~90 real
+    # labelled messages: 0 wrong routings at 0.06-0.08.
+    team_router_margin: float = 0.08
 
 
 class GraphRAGEmbeddingConfig(BaseModel):

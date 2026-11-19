@@ -10,6 +10,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from nexus.agent.team_router import (
     MARGIN,
     THRESHOLD,
@@ -19,6 +21,17 @@ from nexus.agent.team_router import (
 )
 from nexus.server.project_store import ProjectStore
 from nexus.server.session_store import SessionStore
+
+
+@pytest.fixture(autouse=True)
+def _pin_thresholds(monkeypatch):
+    """Pin router thresholds so tests don't depend on the local config.toml."""
+
+    def _fixed():
+        return THRESHOLD, MARGIN, True
+
+    monkeypatch.setattr("nexus.agent.team_router._configured_thresholds", _fixed)
+
 
 # ── Fake embedder ──────────────────────────────────────────────────────
 
@@ -267,3 +280,54 @@ def test_route_decision_dataclass_fields():
 def test_thresholds_sensible():
     assert 0.0 < THRESHOLD < 1.0
     assert 0.0 < MARGIN < THRESHOLD
+
+
+# ── Config wiring ─────────────────────────────────────────────────────
+
+
+async def test_config_gate_off_disables_routing(monkeypatch, tmp_path):
+    """[agent].team_router=false → router returns lead without embedding."""
+    ps = _ps(tmp_path)
+    lead = _bot(ps, "Lead", "lead", "general help")
+    writer = _bot(ps, "Writer", "writer", "creative writing")
+
+    def _boom():
+        raise AssertionError("embedder must not be called when router is off")
+
+    monkeypatch.setattr("nexus.agent.team_router.get_builtin_embedder", _boom)
+
+    def _off():
+        return THRESHOLD, MARGIN, False
+
+    monkeypatch.setattr("nexus.agent.team_router._configured_thresholds", _off)
+
+    decision = await route_team_message(
+        team=_team(lead.id, writer.id), message="write a poem", project_store=ps
+    )
+    assert decision.mode == "lead"
+
+
+async def test_config_custom_thresholds_respected(monkeypatch, tmp_path):
+    """A very high configured threshold routes everything to lead."""
+    ps = _ps(tmp_path)
+    lead = _bot(ps, "Lead", "lead", "general help")
+    writer = _bot(ps, "Writer", "writer", "creative writing")
+
+    # Message aligns with the writer persona at cosine ≈ 0.71 — above the
+    # default 0.42 but below a configured 0.99 threshold.
+    vectors = {
+        _pt("Lead", "lead", "general help"): [1.0, 0.0],
+        _pt("Writer", "writer", "creative writing"): [0.0, 1.0],
+        "write a poem": [0.5, 0.5],
+    }
+    _install_fake(monkeypatch, vectors)
+
+    def _high():
+        return 0.99, 0.08, True  # cosine ≈ 0.71 never reaches 0.99
+
+    monkeypatch.setattr("nexus.agent.team_router._configured_thresholds", _high)
+
+    decision = await route_team_message(
+        team=_team(lead.id, writer.id), message="write a poem", project_store=ps
+    )
+    assert decision.mode == "lead"

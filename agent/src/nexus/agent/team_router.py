@@ -26,13 +26,40 @@ from .builtin_embedder import get_builtin_embedder
 
 log = logging.getLogger(__name__)
 
-# ── Calibrated thresholds (tune from tests/test_team_router.py fixtures) ──
+# ── Calibrated thresholds (from agent/scripts/calibrate_team_router.py) ──
+# Grid search over ~90 labelled user messages from real project chats
+# (5 bots, pt-BR): threshold 0.42 / margin 0.08 routed 0 messages to the
+# wrong bot (wrong routing is the expensive failure — lead fallback is
+# cheap). Raw embedder top-1 accuracy was 49% vs 20% chance; the threshold
+# keeps the router conservative and fails open to the lead the rest.
 THRESHOLD: float = 0.42   # min cosine for a member to be considered
-MARGIN: float = 0.10      # min gap between top-1 and top-2 for a single pick
+MARGIN: float = 0.08      # min gap between top-1 and top-2 for a single pick
 MAX_LATENCY_SECONDS: float = 1.5  # hard budget; never blocks the turn
 RECENT_LINES: int = 6     # chat lines appended as context
 
 ROUTER_DIR = Path.home() / ".nexus" / "team-router"
+
+
+def _configured_thresholds() -> tuple[float, float, bool]:
+    """Thresholds/gate from config ([agent].team_router*), best-effort.
+
+    Falls back to the module constants when config is unavailable (tests).
+    Returns (threshold, margin, enabled).
+    """
+    try:
+        from ..config_file import load_cached
+
+        cfg = load_cached()
+        agent = getattr(cfg, "agent", None)
+        if agent is None:
+            return THRESHOLD, MARGIN, True
+        return (
+            float(getattr(agent, "team_router_threshold", THRESHOLD) or THRESHOLD),
+            float(getattr(agent, "team_router_margin", MARGIN) or MARGIN),
+            bool(getattr(agent, "team_router", True)),
+        )
+    except Exception:  # noqa: BLE001 — calibration is best-effort
+        return THRESHOLD, MARGIN, True
 
 
 @dataclass(frozen=True)
@@ -122,6 +149,9 @@ async def route_team_message(
         score=None, margin=None, latency_ms=None,
     )
 
+    threshold, margin, enabled = _configured_thresholds()
+    if not enabled:
+        return _lead_only
     if not team or team.get("mode") != "auto":
         return _lead_only
 
@@ -174,7 +204,7 @@ async def route_team_message(
 
         top_score, top_bot = ranked[0]
         second_score = ranked[1][0] if len(ranked) > 1 else 0.0
-        margin = top_score - second_score
+        gap = top_score - second_score
 
         latency_ms = (time.monotonic() - start) * 1000
 
@@ -182,26 +212,26 @@ async def route_team_message(
             f"{team_id}|{input_text[:200]}".encode()
         ).hexdigest()[:16]
 
-        if top_score >= THRESHOLD and margin >= MARGIN:
+        if top_score >= threshold and gap >= margin:
             decision: RouteDecision = RouteDecision(
                 mode="single",
                 chosen=str(top_bot.id),
                 several=None,
                 score=top_score,
-                margin=margin,
+                margin=gap,
                 latency_ms=latency_ms,
             )
         elif (
-            top_score >= THRESHOLD
-            and second_score >= THRESHOLD
-            and margin < MARGIN
+            top_score >= threshold
+            and second_score >= threshold
+            and gap < margin
         ):
             decision = RouteDecision(
                 mode="several",
                 chosen=None,
                 several=(str(top_bot.id), str(ranked[1][1].id)),
                 score=top_score,
-                margin=margin,
+                margin=gap,
                 latency_ms=latency_ms,
             )
         else:
@@ -210,7 +240,7 @@ async def route_team_message(
                 chosen=None,
                 several=None,
                 score=top_score,
-                margin=margin,
+                margin=gap,
                 latency_ms=latency_ms,
             )
 
