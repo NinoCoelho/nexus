@@ -705,6 +705,34 @@ async function resolveTargetTabId(msg) {
   return match.tabId;
 }
 
+// Actions whose effect the agent otherwise can't see without a re-read:
+// diff the page signature before/after (same contract as the CDP surface's
+// _verified — url_changed/state_changed/dialogs/page_signature).
+const VERIFY_ACTIONS = new Set(["click", "type", "scroll"]);
+
+// Settle-poll: clicks/types often kick off async SPA navigation, so the
+// immediate post-signature can be mid-flight. Poll until it stops moving
+// (≤1s) — same policy as the CDP surface.
+async function withVerificationDiff(tabId, before, result) {
+  let after = await runProbe(tabId, "page_signature", {});
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 150));
+    const latest = await runProbe(tabId, "page_signature", {});
+    if (JSON.stringify(latest) === JSON.stringify(after)) break;
+    after = latest;
+  }
+  return {
+    ...result,
+    url_changed: Boolean(before && before.ok !== false && before.url !== after.url),
+    state_changed: Boolean(
+      before && before.ok !== false && before.textHash !== after.textHash
+    ),
+    dialogs: (after && after.dialogs) || [],
+    page_signature: after,
+  };
+}
+
 async function handlePageAct(msg) {
   const params = msg.params || {};
   const tabId = await resolveTargetTabId(msg);
@@ -789,13 +817,19 @@ async function handlePageAct(msg) {
   }
   const spec = PAGE_ACTIONS[msg.action];
   if (!spec) return { ok: false, error: `unknown action: ${msg.action}` };
+  const verify = VERIFY_ACTIONS.has(msg.action);
+  const before = verify ? await runProbe(tabId, "page_signature", {}) : null;
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },
       func: spec.func,
       args: spec.args.map((k) => (params[k] === undefined ? null : params[k])),
     });
-    return res && res.result ? res.result : { ok: false, error: "no result" };
+    const result = res && res.result ? res.result : { ok: false, error: "no result" };
+    if (verify && result.ok !== false) {
+      return await withVerificationDiff(tabId, before, result);
+    }
+    return result;
   } catch (err) {
     return { ok: false, error: friendlyInjectError(err) };
   }
