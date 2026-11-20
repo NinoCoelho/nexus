@@ -609,13 +609,35 @@ const PROBE_ARGS = {
   interactive_map: (p) => ({ limit: p.limit }),
 };
 
+// Chrome revokes the activeTab grant on cross-origin navigations — SSO
+// flows (Microsoft/Google login bouncing between origins) silently drop
+// it, and every injection then fails with cryptic internal errors.
+// Recognize them and tell the agent how to recover.
+function friendlyInjectError(err) {
+  const raw = String(err && err.message ? err.message : err);
+  if (/cannot access contents|has not been invoked|cannot access a chrome|no host permission|permission/i.test(raw)) {
+    return (
+      raw +
+      " [no scripting access to this tab — the activeTab grant was lost " +
+      "(cross-origin navigations revoke it, e.g. SSO logins). Ask the user " +
+      "to either click the Nexus icon on the tab again, or use the panel's " +
+      "'Grant page access' button (persists across navigations), then retry.]"
+    );
+  }
+  return raw;
+}
+
 async function runProbe(tabId, name, params) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: self.__nexus_probes,
-    args: [name, (PROBE_ARGS[name] || (() => ({})))((params || {}))],
-  });
-  return res && res.result ? res.result : { ok: false, error: "no result" };
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: self.__nexus_probes,
+      args: [name, (PROBE_ARGS[name] || (() => ({})))((params || {}))],
+    });
+    return res && res.result ? res.result : { ok: false, error: "no result" };
+  } catch (err) {
+    return { ok: false, error: friendlyInjectError(err) };
+  }
 }
 
 const readCache = new Map();
@@ -674,7 +696,7 @@ async function handlePageAct(msg) {
         title: t.title || "",
       };
     } catch (err) {
-      return { ok: false, error: String(err) };
+      return { ok: false, error: friendlyInjectError(err) };
     }
   }
   if (msg.action === "js") {
@@ -687,7 +709,7 @@ async function handlePageAct(msg) {
       });
       return res && res.result ? res.result : { ok: false, error: "no result" };
     } catch (err) {
-      return { ok: false, error: String(err) };
+      return { ok: false, error: friendlyInjectError(err) };
     }
   }
   if (msg.action === "transcript") {
@@ -709,15 +731,19 @@ async function handlePageAct(msg) {
   // Default read (text mode, no selector) uses the shared readPage probe
   // so CDP and the extension return an identical perception contract.
   if (msg.action === "read" && !params.selector && (!params.mode || params.mode === "text")) {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: self.__nexus_probes,
-      args: [
-        "readPage",
-        { maxChars: params.full ? 40000 : 12000, maxLinks: 80, maxFields: 40 },
-      ],
-    });
-    return res && res.result ? res.result : { ok: false, error: "extraction failed" };
+    try {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: self.__nexus_probes,
+        args: [
+          "readPage",
+          { maxChars: params.full ? 40000 : 12000, maxLinks: 80, maxFields: 40 },
+        ],
+      });
+      return res && res.result ? res.result : { ok: false, error: "extraction failed" };
+    } catch (err) {
+      return { ok: false, error: friendlyInjectError(err) };
+    }
   }
   const spec = PAGE_ACTIONS[msg.action];
   if (!spec) return { ok: false, error: `unknown action: ${msg.action}` };
@@ -729,7 +755,7 @@ async function handlePageAct(msg) {
     });
     return res && res.result ? res.result : { ok: false, error: "no result" };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, error: friendlyInjectError(err) };
   }
 }
 
