@@ -64,7 +64,7 @@ PAGE_TOOL = ToolSpec(
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["read", "click", "type", "scroll", "navigate", "js", "transcript", "find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map", "screenshot"],
+                "enum": ["read", "click", "type", "scroll", "navigate", "js", "transcript", "find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map", "screenshot", "extract"],
                 "description": "The page action to perform.",
             },
             "selector": {

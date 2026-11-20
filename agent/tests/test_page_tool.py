@@ -158,10 +158,16 @@ async def test_page_tool_spec_new_actions() -> None:
         "page_signature",
         "interactive_map",
         "screenshot",
+        "extract",
     ):
         assert action in enum, action
+    # every dispatchable action except fill_login (server-driven via
+    # site_credentials) must be in the LLM-facing enum
+    from nexus.agent.page_tool import _ACTIONS
+
+    assert set(enum) == set(_ACTIONS) - {"fill_login"}, (set(enum), set(_ACTIONS))
     props = PAGE_TOOL.parameters["properties"]
-    for prop in ("role", "aria_label", "tag", "visible", "limit"):
+    for prop in ("role", "aria_label", "tag", "visible", "limit", "question"):
         assert prop in props, prop
 
 
