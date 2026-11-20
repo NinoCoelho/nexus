@@ -109,6 +109,19 @@ _PROBES_JS = r"""self.__nexus_probes = function __nexus_probes(name, args) {
     };
   };
 
+  // Overlap with the viewport. Size alone is not visibility: portals shift
+  // the page BEHIND an open flyout off-screen (negative coords) while it
+  // keeps its size — those elements are dead and must rank below what the
+  // user actually sees. Partial overlap (scrolled-out halves) still counts.
+  const inViewport = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const vh = window.innerHeight || 0;
+    const vw = window.innerWidth || 0;
+    return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+  };
+
   const visible = (el) => {
     if (!el || el.disabled || el.readOnly) return false;
     const r = el.getBoundingClientRect();
@@ -238,6 +251,35 @@ _PROBES_JS = r"""self.__nexus_probes = function __nexus_probes(name, args) {
     };
     if (!root) return empty;
 
+    // Dialog-first: when a modal/flyout is open it IS what the user sees.
+    // Portals park the background page off-screen and append the flyout at
+    // the END of the DOM — in DOM order the dead background would eat the
+    // whole budget and the dialog would be truncated away. Extract visible
+    // dialogs first (labeled section), then the page under the remaining
+    // budget. The combined text feeds contentHash, so cache-hit and
+    // post-action verification become dialog-aware.
+    let dialogPrefix = "";
+    const dialogEls = $$("[role='dialog'], [role='alertdialog'], [aria-modal='true']")
+      .filter(visible)
+      .slice(0, 2);
+    for (const d of dialogEls) {
+      const dTexts = [];
+      let dTotal = 0;
+      for (const node of TEXT_NODES(d)) {
+        const val = node.nodeValue.trim();
+        if (!val) continue;
+        dTexts.push(val);
+        dTotal += val.length + 1;
+        if (dTotal > maxChars) break;
+      }
+      const dt = dTexts.join(" ").replace(/[ \t]+/g, " ").trim();
+      if (dt) dialogPrefix += (dialogPrefix ? "\n" : "") + dt;
+    }
+    if (dialogPrefix) dialogPrefix = "[dialog]\n" + dialogPrefix + "\n\n[page]\n";
+    const pageBudget = dialogPrefix
+      ? Math.max(500, maxChars - dialogPrefix.length)
+      : maxChars;
+
     const texts = [];
     let total = 0;
     for (const node of TEXT_NODES(root)) {
@@ -245,16 +287,17 @@ _PROBES_JS = r"""self.__nexus_probes = function __nexus_probes(name, args) {
       if (!val) continue;
       texts.push(val);
       total += val.length + 1;
-      if (total > maxChars + 200) break;
+      if (total > pageBudget + 200) break;
     }
-    let text = texts
+    let pageText = texts
       .join(" ")
       .replace(/[ \t]+/g, " ")
       .replace(/ ?\n ?/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
-    const complete = text.length <= maxChars;
-    if (!complete) text = text.slice(0, maxChars) + "\n\u2026[truncated]";
+    let complete = pageText.length <= pageBudget;
+    if (!complete) pageText = pageText.slice(0, pageBudget) + "\n\u2026[truncated]";
+    const text = dialogPrefix + pageText;
 
     const links = $$("a[href]")
       .filter((a) => /^https?:/.test(a.href))
@@ -323,22 +366,28 @@ _PROBES_JS = r"""self.__nexus_probes = function __nexus_probes(name, args) {
       }
       return true;
     };
-    const elements = $$deep("button, a, input, select, textarea, summary, [role]")
+    // Decorate → stable sort → slice: in-viewport matches rank ahead of
+    // off-screen ones (open flyouts park the background page off-viewport
+    // with size intact — those matches are dead). DOM order is preserved
+    // within each group; off-screen elements stay reachable (scroll flows).
+    const matched = $$deep("button, a, input, select, textarea, summary, [role]")
       .filter(match)
-      .slice(0, limit)
-      .map((el) => ({
-        selector: bestSelector(el),
-        tag: el.tagName.toLowerCase(),
-        role: roleOf(el),
-        name: nameOf(el),
-        text: cap(trim(el.innerText || el.textContent || ""), 60),
-        box: boxOf(el),
-        enabled: !el.disabled && visible(el),
-        // Elements inside an open shadow root: their CSS selector is
-        // relative to that root (document.querySelector cannot reach it) —
-        // act on them by text or via js, not by selector.
-        shadow: !!(el.getRootNode && el.getRootNode() !== document),
-      }));
+      .map((el) => ({ el, iv: inViewport(el) }));
+    matched.sort((a, b) => (b.iv ? 1 : 0) - (a.iv ? 1 : 0));
+    const elements = matched.slice(0, limit).map(({ el, iv }) => ({
+      selector: bestSelector(el),
+      tag: el.tagName.toLowerCase(),
+      role: roleOf(el),
+      name: nameOf(el),
+      text: cap(trim(el.innerText || el.textContent || ""), 60),
+      box: boxOf(el),
+      enabled: !el.disabled && visible(el),
+      inViewport: iv,
+      // Elements inside an open shadow root: their CSS selector is
+      // relative to that root (document.querySelector cannot reach it) —
+      // act on them by text or via js, not by selector.
+      shadow: !!(el.getRootNode && el.getRootNode() !== document),
+    }));
     return { ok: true, elements, count: elements.length };
   };
 
@@ -392,31 +441,38 @@ _PROBES_JS = r"""self.__nexus_probes = function __nexus_probes(name, args) {
 
   // ---------- interactiveMap (JS accessibility-tree approximation) ----------
   const interactiveMap = ({ limit = 200 } = {}) => {
+    // Compact ARIA-snapshot lines (Playwright ariaSnapshot format — the
+    // industry-standard token-efficient representation): one line per
+    // interactive element, role + name + optional box + state flags,
+    // numbered refs the agent can reference while the page state holds.
+    // Only interactive elements get lines (labeling everything is what
+    // makes the verbose variants 50-80% bigger).
     const nodes = $$deep("button, a, input, select, textarea, summary, [role]")
       .filter(visible)
-      .slice(0, limit)
-      .map((el) => {
-        const type = (el.getAttribute("type") || "").toLowerCase();
-        const isPassword = type === "password";
-        return {
-          selector: bestSelector(el),
-          tag: el.tagName.toLowerCase(),
-          role: roleOf(el),
-          name: nameOf(el),
-          text: cap(trim(el.innerText || el.textContent || ""), 80),
-          box: boxOf(el),
-          checked:
-            el.type === "checkbox" || el.type === "radio" ? el.checked === true : undefined,
-          selected: el.selected === true,
-          disabled: el.disabled === true,
-          expanded: el.getAttribute("aria-expanded"),
-          pressed: el.getAttribute("aria-pressed"),
-          currentValue: isPassword
-            ? "\u2022\u2022\u2022\u2022\u2022"
-            : el.value || "",
-        };
-      });
-    return { ok: true, nodes, count: nodes.length };
+      .map((el) => ({ el, iv: inViewport(el) }));
+    nodes.sort((a, b) => (b.iv ? 1 : 0) - (a.iv ? 1 : 0));
+    const lines = nodes.slice(0, limit).map(({ el, iv }, i) => {
+      const role = roleOf(el) || el.tagName.toLowerCase();
+      const name = cap(nameOf(el) || trim(el.innerText || el.textContent || ""), 60);
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      const box = boxOf(el);
+      let line = `- ${role}`;
+      if (name) line += ` "${name.replace(/\s+/g, " ")}"`;
+      if (type && type !== "text") line += ` [type=${type}]`;
+      if (box) line += ` [box=${box.x},${box.y},${box.w},${box.h}]`;
+      if (!iv) line += " [offscreen]";
+      if (el.disabled === true) line += " [disabled]";
+      if (el.type === "checkbox" || el.type === "radio") line += el.checked ? " [checked]" : " [unchecked]";
+      if (el.selected === true) line += " [selected]";
+      const expanded = el.getAttribute("aria-expanded");
+      if (expanded != null) line += ` [expanded=${expanded}]`;
+      const pressed = el.getAttribute("aria-pressed");
+      if (pressed != null) line += ` [pressed=${pressed}]`;
+      const value = type === "password" ? "\u2022\u2022\u2022\u2022\u2022" : el.value || "";
+      if (value) line += ` [value=${cap(String(value), 40)}]`;
+      return `${line} [ref=${i + 1}]`;
+    });
+    return { ok: true, format: "compact", lines, count: lines.length };
   };
 
   // ---------- pageSignature (cheap post-action verification fingerprint) ----------

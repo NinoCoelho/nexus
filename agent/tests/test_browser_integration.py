@@ -125,7 +125,7 @@ async def test_nbie_integration_cycle(site: str, manager: BrowserManager) -> Non
     assert "s3cret-not-leak" not in json.dumps(read1)
 
     # ── ax_tree: native a11y, compact shape, password never leaks ────────
-    ax = await manager.act(key, "ax_tree", {})
+    ax = await manager.act(key, "ax_tree", {"format": "json"})
     axj = json.dumps(ax)
     assert "s3cret-not-leak" not in axj  # hard invariant on every platform
     assert ax["nodes"] and ax["count"] >= 5
@@ -134,6 +134,11 @@ async def test_nbie_integration_cycle(site: str, manager: BrowserManager) -> Non
     pw_nodes = [n for n in ax["nodes"] if n["name"] == "Password"]
     assert pw_nodes, axj  # the password field is in the tree (by label)
     assert not any(n["value"] == "s3cret-not-leak" for n in ax["nodes"])
+    # compact default: one ARIA line per node with refs
+    axc = await manager.act(key, "ax_tree", {})
+    assert axc["format"] == "compact" and axc["lines"]
+    assert all("[ref=" in ln for ln in axc["lines"][:5])
+    assert "s3cret-not-leak" not in json.dumps(axc)
 
     # ── cache-hit metric on an identical re-read ─────────────────────────
     read2 = await manager.act(key, "read", {})

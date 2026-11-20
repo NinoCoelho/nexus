@@ -434,6 +434,36 @@ def create_app(
         browser_manager.event_sink = _browser_event_sink
         set_manager(browser_manager)
         agent._browser_handler = BrowserHandler(manager=browser_manager, session_store=sessions)
+
+        # Sub-LLM page extraction (browser/page "extract" action): wire the
+        # fast-model callable the same way voice_ack does — compact_model
+        # (or default) resolved through the agent's provider registry.
+        from ..browser.extract import set_extract_llm
+
+        async def _extract_llm(prompt: str) -> str:
+            target = (
+                getattr(nexus_cfg.agent, "compact_model", None)
+                or getattr(nexus_cfg.agent, "default_model", None)
+                or ""
+            )
+            provider, upstream = agent._resolve_provider(target)
+            if provider is None:
+                raise RuntimeError(f"no provider for model {target!r}")
+            from ..agent.llm import ChatMessage, Role
+
+            resp = await provider.chat(
+                [ChatMessage(role=Role.USER, content=prompt)],
+                model=upstream,
+                max_tokens=500,
+                extra_payload={
+                    "thinking": {"type": "disabled"},
+                    "enable_thinking": False,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+            )
+            return resp.content or ""
+
+        set_extract_llm(_extract_llm)
     # site_credentials — masked HITL prompt + encrypted store + browser fill
     # (CDP debug Chrome / the page tool's real tab). Shares the ask_user and
     # page handlers so YOLO plumbing and panel round-trips stay consistent.

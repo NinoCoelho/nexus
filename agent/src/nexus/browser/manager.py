@@ -184,6 +184,12 @@ class BrowserInstance:
         # A/B benchmark can measure whether agents inspect progressively.
         self.last_read_hash: str | None = None
         self.level_counts: dict[str, int] = {}
+        # Discovery cache (Stagehand-style): last find_element result keyed
+        # by (page textHash, query filters). A repeat query on an unchanged
+        # page returns a compact marker instead of re-sending the element
+        # list; refs into the cached elements stay valid while the hash
+        # holds. Self-invalidating — navigation/mutation changes the hash.
+        self._find_cache: dict[str, Any] | None = None
         self._ws: Any = None
         self._reader: asyncio.Task | None = None
         self._pending: dict[int, asyncio.Future] = {}
@@ -635,9 +641,39 @@ class BrowserInstance:
     async def _act_click(self, args: dict[str, Any]) -> dict[str, Any]:
         x, y = args.get("x"), args.get("y")
         selector = args.get("selector")
+        ref = args.get("ref")
+        if (x is None or y is None) and not selector and ref is not None:
+            # Snapshot-ref addressing (Playwright-CLI-style): resolve a ref
+            # from the last find_element while the page state holds. The
+            # hash check makes it self-invalidating — changed page demands
+            # a fresh find_element, never a stale click.
+            if not self._find_cache or not self._find_cache.get("key"):
+                raise BrowserError("no find_element snapshot — run find_element first")
+            sig = await self._page_signature({})
+            page_hash = sig.get("textHash") or ""
+            snap_hash, _ = self._find_cache["key"]
+            if not page_hash or page_hash != snap_hash:
+                raise BrowserError(
+                    "page changed since find_element — re-run find_element for fresh refs"
+                )
+            try:
+                target = self._find_cache["elements"][int(ref) - 1]
+            except (IndexError, TypeError, ValueError):
+                raise BrowserError(f"no element with ref={ref} in the current snapshot")
+            # Prefer re-resolving by selector (scrolling shifts boxes with
+            # an unchanged text hash); the recorded box center is fallback.
+            sel = target.get("selector")
+            if sel:
+                selector = sel
+            else:
+                box = target.get("box") or {}
+                if not box:
+                    raise BrowserError(f"ref={ref} has neither selector nor box")
+                x = box.get("x", 0) + box.get("w", 0) / 2
+                y = box.get("y", 0) + box.get("h", 0) / 2
         if x is None or y is None:
             if not selector:
-                raise BrowserError("click requires selector or x/y coordinates")
+                raise BrowserError("click requires selector, x/y coordinates, or ref")
             center = await self.evaluate(f"({_CENTER_JS})({json.dumps(str(selector))})")
             if not center:
                 raise BrowserError(f"element not found: {selector}")
@@ -821,7 +857,44 @@ class BrowserInstance:
                 },
             )
         )
-        return raw if isinstance(raw, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        # Discovery cache + snapshot refs. The page hash keys both: a
+        # repeat query on an unchanged page returns a compact marker (the
+        # agent already has the list in context), and numbered refs stay
+        # resolvable by click while the hash holds.
+        sig = await self._page_signature({})
+        page_hash = sig.get("textHash") or ""
+        cache_key = json.dumps(
+            [role, text, tag, aria_label, visible, limit], sort_keys=True, default=str
+        )
+        cached = self._find_cache
+        if (
+            page_hash
+            and cached
+            and cached.get("key") == (page_hash, cache_key)
+        ):
+            return {
+                "ok": True,
+                "cached": True,
+                "count": cached["count"],
+                "snapshotHash": page_hash,
+                "note": (
+                    "same query on an unchanged page — the elements are the "
+                    "ones from your previous find_element; refs still valid"
+                ),
+            }
+        elements = raw.get("elements") or []
+        for i, e in enumerate(elements):
+            e.setdefault("ref", i + 1)
+        out = dict(raw)
+        out["snapshotHash"] = page_hash
+        self._find_cache = {
+            "key": (page_hash, cache_key),
+            "count": len(elements),
+            "elements": elements,
+        }
+        return out
 
     async def _act_inspect_element(self, args: dict[str, Any]) -> dict[str, Any]:
         """Inspect a single element: attributes (password values redacted),
@@ -917,11 +990,40 @@ class BrowserInstance:
             if len(simplified) >= int(args.get("max_nodes", 300)):
                 break
 
+        fmt = str(args.get("format") or "compact")
+        if fmt == "json":
+            return {
+                "ok": True,
+                "rootId": root_id,
+                "nodes": simplified,
+                "count": len(simplified),
+                "total": len(nodes),
+                "format": "json",
+            }
+        # Compact ARIA-snapshot lines (Playwright ariaSnapshot format): one
+        # line per node — role, name, state flags, value — with numbered
+        # refs. ~50-70% smaller than the JSON nodes for the same tree.
+        lines: list[str] = []
+        for i, n in enumerate(simplified):
+            parts = [f"- {n.get('role') or 'generic'}"]
+            name = str(n.get("name") or "").replace("\n", " ").strip()
+            if name:
+                parts.append(f'"{name[:60]}"')
+            for k, v in (n.get("state") or {}).items():
+                if v is True:
+                    parts.append(f"[{k}]")
+                elif v is not None and v is not False:
+                    parts.append(f"[{k}={v}]")
+            if n.get("value"):
+                parts.append(f"[value={str(n['value'])[:40]}]")
+            parts.append(f"[ref={i + 1}]")
+            lines.append(" ".join(parts))
         return {
             "ok": True,
             "rootId": root_id,
-            "nodes": simplified,
-            "count": len(simplified),
+            "format": "compact",
+            "lines": lines,
+            "count": len(lines),
             "total": len(nodes),
         }
 
@@ -1120,15 +1222,17 @@ def aggregate_nbie_events(
         failed = e.get("ok") is False
         if failed:
             errors += 1
-            if len(recent_errors) < 5:
-                recent_errors.append(
-                    {
-                        "ts": e.get("ts"),
-                        "key": k,
-                        "action": a,
-                        "error": e.get("error"),
-                    }
-                )
+            # Keep the LAST 5 (the recent_errors list used to freeze on the
+            # first five, hiding exactly the newest failures).
+            recent_errors.append(
+                {
+                    "ts": e.get("ts"),
+                    "key": k,
+                    "action": a,
+                    "error": e.get("error"),
+                }
+            )
+            recent_errors = recent_errors[-5:]
         is_read = a == "read" and not failed
         if is_read:
             reads += 1

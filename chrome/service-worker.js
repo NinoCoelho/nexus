@@ -370,6 +370,23 @@ function pageClick(selector, text) {
         "td, th, tr, [role='row'], [role='gridcell'], [role='option'], " +
         "[role='menuitem'], [role='tab'], [role='treeitem']"
     );
+    // Prefer in-viewport matches: an open flyout parks the background page
+    // off-screen (negative coords) with size intact — those text matches
+    // are dead. Fall back to the first off-screen match only when nothing
+    // overlaps the viewport (deep scroll flows).
+    const inVp = (n) => {
+      const r = n.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return false;
+      const vh = window.innerHeight || 0;
+      const vw = window.innerWidth || 0;
+      return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    };
+    const climb = (n) =>
+      n.closest(
+        "a, button, [role='button'], [role='row'], [role='gridcell'], " +
+          "[role='option'], [role='menuitem'], [role='tab'], [role='treeitem'], td, li"
+      ) || n;
+    let fallback = null;
     for (const n of nodes) {
       const label = (
         n.innerText ||
@@ -379,23 +396,18 @@ function pageClick(selector, text) {
         ""
       ).trim();
       if (label && label.includes(text)) {
-        el = n;
-        break;
+        if (inVp(n)) {
+          // The matched node is often an inner text span; grid/list
+          // handlers live on the interactive ancestor. closest() stays
+          // within the element's root (cannot cross shadow boundaries),
+          // but the synthetic click still bubbles out of open roots.
+          el = climb(n);
+          break;
+        }
+        if (!fallback) fallback = n;
       }
     }
-    if (el) {
-      // The matched node is often an inner text span; grid/list handlers
-      // live on the interactive ancestor. Native clicks bubble, but
-      // clicking the closest interactive node fires the right handler
-      // even when the parent stops propagation. (closest() stays within
-      // the element's root — it cannot cross shadow boundaries, but the
-      // synthetic click still bubbles out of open roots.)
-      el =
-        el.closest(
-          "a, button, [role='button'], [role='row'], [role='gridcell'], " +
-            "[role='option'], [role='menuitem'], [role='tab'], [role='treeitem'], td, li"
-        ) || el;
-    }
+    if (!el && fallback) el = climb(fallback);
   }
   if (!el) {
     return {

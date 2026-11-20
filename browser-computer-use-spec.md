@@ -159,6 +159,30 @@ dashboard, not an audit log — it dies with the daemon process.
 per-turn tool budgets (15k tokens) were routinely blown by 2-3 extension
 reads alone (observed 5× in production logs, 15-19k tokens).
 
+**Extract (sub-LLM)**: `extract {question}` reads the page with the normal
+caps, hands the text to a fast model (`[agent].compact_model`, wired
+late-bound in app.py), and returns ONLY the answer — the page never enters
+the agent's context. This is the lever against tool-budget blowouts.
+
+**Dialog-first reads**: `readPage` extracts visible
+`[role=dialog]/[aria-modal]` containers BEFORE the page body (labeled
+`[dialog]` / `[page]` sections) — portals park the background off-screen
+and append the flyout at the DOM end, so DOM-order extraction truncated the
+dialog away. The combined text feeds `contentHash`, making cache-hit and
+post-action verification dialog-aware. `findElement`/`interactiveMap`
+rank in-viewport elements first (off-screen matches keep an
+`inViewport: false` flag / `[offscreen]` marker — scroll flows survive).
+
+**Compact ARIA lines**: `ax_tree` (default; `format=json` for structured
+nodes) and `interactive_map` return one line per element —
+`- button "Save" [box=x,y,w,h] [ref=1]` — the Playwright ariaSnapshot
+format, ~50-70% smaller than the JSON nodes. `find_element` numbers
+elements `[ref=N]` keyed to `snapshotHash`; `click {ref}` resolves while
+the hash holds (self-invalidating: a changed page errors with
+"re-run find_element"). A repeat `find_element` with the same filters on
+an unchanged page returns a compact `cached: true` marker instead of
+re-sending the list.
+
 **Verification settle**: mutating actions poll the post-action
 `page_signature` briefly (≤1s) until it stops moving, so
 `url_changed`/`state_changed` report where the page actually landed rather

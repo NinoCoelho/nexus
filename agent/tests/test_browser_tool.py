@@ -15,6 +15,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from nexus.agent.context import CURRENT_SESSION_ID
 from nexus.browser.manager import (
@@ -141,7 +142,8 @@ async def test_browser_error_envelope() -> None:
 async def test_spec_shape() -> None:
     assert BROWSER_TOOL.name == "browser"
     props = BROWSER_TOOL.parameters["properties"]
-    assert props["action"]["enum"] == list(ACTIONS)
+    # Tool-facing enum = manager ACTIONS + the tool-layer extract (sub-LLM).
+    assert props["action"]["enum"] == list(ACTIONS) + ["extract"]
     assert BROWSER_TOOL.parameters["required"] == ["action"]
     for p in ("url", "selector", "text", "x", "y", "delta_y", "expression", "timeout_seconds"):
         assert p in props, p
@@ -748,7 +750,8 @@ async def test_act_ax_tree_redacts_passwords(tmp_path, monkeypatch) -> None:
     ]
     inst = await _make_inst_phase_c(monkeypatch, sends, [])
 
-    r = await inst.act("ax_tree", {})
+    # json format (opt-in) keeps the structured nodes
+    r = await inst.act("ax_tree", {"format": "json"})
     assert r["ok"] is True and r["rootId"] == "r1"
     nodes = r["nodes"]
     pw = next(n for n in nodes if n["name"] == "senha")
@@ -998,5 +1001,129 @@ def test_aggregate_nbie_by_surface() -> None:
     # legacy events without a surface key default to cdp
     r2 = aggregate_nbie_events([{"ts": now, "key": "main", "action": "navigate", "level": "nav", "ok": True, "cache_hit": None}])
     assert "cdp" in r2["by_surface"]
+
+
+# ── discovery cache + snapshot refs + extract ────────────────────────────
+
+
+async def test_find_element_discovery_cache_and_refs(tmp_path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserInstance
+
+    calls: list[str] = []
+    page_hash = "H1"
+
+    async def fake_evaluate(expression, *, await_promise=False, timeout=30.0):
+        calls.append(expression[:160])
+        # The probe expressions embed the WHOLE library source, so bare-name
+        # checks ("pageSignature" in expr) match every expression — key on
+        # the dispatcher call instead.
+        if '("findElement",' in expression:
+            return {
+                "ok": True,
+                "elements": [{"selector": "#go", "tag": "button", "text": "Go", "box": {"x": 1, "y": 2, "w": 10, "h": 10}}],
+                "count": 1,
+            }
+        if '("pageSignature",' in expression:
+            return {"ok": True, "url": "https://x/", "title": "X", "textHash": page_hash, "dialogs": []}
+        if "getBoundingClientRect" in expression:  # _CENTER_JS (standalone)
+            return {"x": 6.0, "y": 7.0}
+        return {}
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+    inst.evaluate = fake_evaluate  # type: ignore[method-assign]
+    inst._send = AsyncMock(return_value={})  # type: ignore[method-assign]
+
+    r1 = await inst.act("find_element", {"role": "button"})
+    assert r1["ok"] is True and r1["count"] == 1
+    assert r1["snapshotHash"] == "H1"
+    assert r1["elements"][0]["ref"] == 1
+
+    # identical query on an unchanged page → compact cache marker
+    r2 = await inst.act("find_element", {"role": "button"})
+    assert r2.get("cached") is True and r2["count"] == 1
+    assert "elements" not in r2  # the list is not re-sent
+
+    # different filters → fresh result
+    r3 = await inst.act("find_element", {"role": "link"})
+    assert r3.get("cached") is not True and r3["elements"][0]["ref"] == 1
+
+    # click by ref resolves through the snapshot (selector-first)
+    click = await inst.act("click", {"ref": 1})
+    assert click.get("url_changed") is False  # executed + verified (hash held)
+    assert any("getBoundingClientRect" in c for c in calls)  # center of #go
+
+    # page changed → refs invalidated
+    page_hash = "H2"
+    from nexus.browser.manager import BrowserError as _BE
+
+    try:
+        await inst.act("click", {"ref": 1})
+    except _BE as exc:
+        assert "page changed" in str(exc)
+    else:
+        raise AssertionError("expected stale-ref error")
+
+
+async def test_ax_tree_compact_default(tmp_path, monkeypatch) -> None:
+    sends = [
+        ("Accessibility.enable", {}),
+        (
+            "Accessibility.getFullAXTree",
+            {
+                "rootId": "r1",
+                "nodes": [
+                    {
+                        "role": {"value": "text field"},
+                        "name": {"value": "senha"},
+                        "value": "secret123",
+                        "backendDOMNodeId": 5,
+                        "properties": [{"name": "required", "value": {"type": "boolean", "value": True}}],
+                    },
+                ],
+            },
+        ),
+        ("DOM.querySelectorAll", {"nodeIds": [1]}),
+        ("DOM.describeNode", {"node": {"backendNodeId": 5}}),
+    ]
+    inst = await _make_inst_phase_c(monkeypatch, sends, [])
+    r = await inst.act("ax_tree", {})
+    assert r["format"] == "compact"
+    assert r["count"] == 1
+    line = r["lines"][0]
+    assert '- text field "senha"' in line
+    assert "[required]" in line
+    assert "secret123" not in line  # redaction holds in compact form
+    assert "•••••" in line and "[ref=1]" in line
+
+
+async def test_browser_tool_extract_subllm(tmp_path, monkeypatch) -> None:
+    from nexus.browser import extract as page_extract
+    from nexus.browser.tool import BrowserHandler
+
+    class ReadManager(StubManager):
+        async def act(self, key: str, action: str, args: dict) -> dict:
+            if action == "read":
+                return {"ok": True, "url": "https://x/", "title": "X", "text": "The price is 42 euros", "contentHash": "h1"}
+            raise AssertionError(f"unexpected action {action}")
+
+    async def fake_llm(prompt: str) -> str:
+        assert "The price is 42 euros" in prompt
+        return "42 euros"
+
+    page_extract.set_extract_llm(fake_llm)
+    try:
+        handler = BrowserHandler(manager=ReadManager(), session_store=None)
+        out = json.loads(await handler.invoke({"action": "extract", "question": "what is the price?"}))
+        assert out["ok"] is True
+        assert out["answer"] == "42 euros"
+        assert "text" not in out  # the page text never enters the result
+        assert out["contentHash"] == "h1"
+
+        out = json.loads(await handler.invoke({"action": "extract"}))
+        assert out["ok"] is False and "question" in out["error"]
+    finally:
+        page_extract.set_extract_llm(None)
 
 

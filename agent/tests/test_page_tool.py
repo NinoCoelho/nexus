@@ -251,3 +251,45 @@ async def test_page_timeout_records_failure(tmp_path: Path, monkeypatch) -> None
     finally:
         set_manager(None)
 
+
+async def test_page_extract_subllm(tmp_path: Path) -> None:
+    from nexus.browser import extract as page_extract
+    from nexus.browser.manager import BrowserManager, set_manager
+
+    async def fake_llm(prompt: str) -> str:
+        assert "Portal page content here" in prompt
+        return "the answer"
+
+    page_extract.set_extract_llm(fake_llm)
+    mgr = BrowserManager()
+    set_manager(mgr)
+    try:
+        store, handler = _handler(tmp_path)
+        sid, token = _bind_session(store)
+        try:
+            task = await _responder(
+                store,
+                sid,
+                '{"ok": true, "text": "Portal page content here", "contentHash": "h9", '
+                '"url": "https://x/", "title": "X"}',
+            )
+            out = json.loads(
+                await handler.invoke({"action": "extract", "question": "what does it say?"})
+            )
+            await asyncio.wait_for(task, timeout=2.0)
+            assert out["ok"] is True
+            assert out["answer"] == "the answer"
+            assert "text" not in out  # page text never enters the result
+            assert out["contentHash"] == "h9"
+            # the inner read was recorded as an ext read; extract as its own action
+            actions = [e["action"] for e in mgr.nbie_events]
+            assert "read" in actions and "extract" in actions
+
+            out = json.loads(await handler.invoke({"action": "extract"}))
+            assert out["ok"] is False and "question" in out["error"]
+        finally:
+            CURRENT_SESSION_ID.reset(token)
+    finally:
+        set_manager(None)
+        page_extract.set_extract_llm(None)
+
