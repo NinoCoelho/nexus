@@ -16,12 +16,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Any
 
 from .context import CURRENT_SESSION_ID
 from .llm import ToolSpec
-from ..browser.flows import META_ACTIONS
+from ..browser.flows import META_ACTIONS, PERCEPTION_ACTIONS
+from ..browser.site_notes import DISTILL_MIN_STEPS, EPISODE_IDLE_SECONDS, note_excerpt
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +58,10 @@ PAGE_TOOL = ToolSpec(
         "state-changing steps (perception dropped, typed values redacted); "
         "replay {name} re-executes the whole flow in ONE call, even in a "
         "fresh session — flows lists what's saved. "
+        "KNOWLEDGE: read results on a known host carry site_notes (an "
+        "excerpt of vault/sites/<host>.md — navigation paths, semantic "
+        "anchors, quirks distilled from past sessions). Prefer the note's "
+        "anchors (visible text/roles) over inventing selectors. "
         "Progressive inspection: 'find_element' (best selector + box "
         "for elements matching role/text/tag/aria_label/visible), "
         "'inspect_element' (attributes, box, accessible name — passwords "
@@ -231,6 +237,10 @@ class PageHandler:
         # Per-session recent successful steps — the raw material for
         # save_flow/replay. Bounded; meta actions never recorded.
         self._recent_steps: dict[str, list[tuple[str, dict]]] = {}
+        # Knowledge distillation: episode tracking (idle gap ⇒ new episode ⇒
+        # distill the previous one's steps into a vault site note).
+        self._episode_last: dict[str, float] = {}
+        self._distilled_upto: dict[str, int] = {}
 
     def _record(self, session_id: str, action: str, *, ok: bool, cache_hit: bool | None = None, error: str | None = None) -> None:
         """Feed the shared NBIE ring buffer (surface=ext), best-effort."""
@@ -291,8 +301,8 @@ class PageHandler:
         if not name:
             return json.dumps({"ok": False, "error": "save_flow requires a name"})
         steps = [
-            {"action": a, "args": p}
-            for a, p in self._recent_steps.get(session_id, [])
+            {"action": s["action"], "args": dict(s.get("args") or {})}
+            for s in self._recent_steps.get(session_id, [])
         ]
         if not steps:
             return json.dumps(
@@ -386,6 +396,7 @@ class PageHandler:
             return json.dumps(
                 {"ok": False, "error": "page: no session context (not inside a chat turn)"}
             )
+        self._maybe_distill(session_id)
         if action == "extract":
             return await self._invoke_extract(args, session_id)
         if action == "click" and args.get("ref") is not None and not args.get("selector"):
@@ -503,11 +514,31 @@ class PageHandler:
         # Record successful steps for save_flow/replay (meta actions never).
         if isinstance(parsed, dict) and parsed.get("ok", True) and action not in META_ACTIONS:
             log_steps = self._recent_steps.setdefault(session_id, [])
-            log_steps.append((action, dict(params)))
+            log_steps.append(
+                {
+                    "action": action,
+                    "args": dict(params),
+                    "url": str(parsed.get("url") or "")[:300],
+                    "page_title": str(parsed.get("title") or "")[:200],
+                }
+            )
             del log_steps[:-100]
             if len(self._recent_steps) > 32:
                 for k in list(self._recent_steps)[:16]:
                     del self._recent_steps[k]
+        # Knowledge injection: reads on a host with distilled notes carry
+        # an excerpt + vault pointer — the agent navigates with knowledge
+        # instead of re-discovering.
+        if (
+            isinstance(parsed, dict)
+            and action == "read"
+            and parsed.get("ok", True)
+            and parsed.get("url")
+        ):
+            hint = note_excerpt(str(parsed.get("url")))
+            if hint:
+                parsed["site_notes"] = hint
+                answer = json.dumps(parsed, ensure_ascii=False)
         self._record(
             session_id, action,
             ok=parsed.get("ok", True) if isinstance(parsed, dict) else True,
@@ -515,3 +546,37 @@ class PageHandler:
             error=(parsed.get("error") if isinstance(parsed, dict) else None),
         )
         return answer
+
+    def _maybe_distill(self, session_id: str) -> None:
+        """Episode heuristic: an idle gap (default 5 min) before a new action
+        means the previous work episode finished — distill its successful
+        steps into the site's vault note (best-effort, detached)."""
+        now = time.time()
+        last = self._episode_last.get(session_id)
+        self._episode_last[session_id] = now
+        if last is None or now - last < EPISODE_IDLE_SECONDS:
+            return
+        log_steps = self._recent_steps.get(session_id) or []
+        upto = self._distilled_upto.get(session_id, 0)
+        fresh = [s for s in log_steps[upto:] if s.get("action") not in META_ACTIONS]
+        if len([s for s in fresh if s.get("action") not in PERCEPTION_ACTIONS]) < DISTILL_MIN_STEPS:
+            return
+        host_url = next((s.get("url") for s in reversed(log_steps) if s.get("url")), "")
+        if not host_url:
+            return
+        self._distilled_upto[session_id] = len(log_steps)
+        tail = list(log_steps[-30:])
+        asyncio.create_task(self._distill_task(host_url, tail))
+
+    async def _distill_task(self, host_url: str, steps: list) -> None:
+        try:
+            from ..browser.site_notes import distill_and_save
+
+            await distill_and_save(
+                host_url,
+                steps,
+                url=str(steps[-1].get("url") or "") if steps else "",
+                title=str(steps[-1].get("page_title") or "") if steps else "",
+            )
+        except Exception as exc:  # noqa: BLE001 — knowledge distillation is best-effort
+            log.debug("page: site-note distill failed: %s", exc)

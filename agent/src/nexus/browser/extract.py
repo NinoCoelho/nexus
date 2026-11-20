@@ -30,6 +30,14 @@ def extract_available() -> bool:
     return _llm_call is not None
 
 
+async def fast_call(prompt: str) -> str:
+    """One-shot call on the late-bound fast model (compact_model fallback:
+    default). Shared by extract and the site-notes distiller."""
+    if _llm_call is None:
+        raise RuntimeError("fast LLM not wired (server setup incomplete)")
+    return (await _llm_call(prompt)).strip()
+
+
 async def extract_answer(
     question: str,
     page_text: str,

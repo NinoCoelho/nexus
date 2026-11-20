@@ -405,6 +405,7 @@ async def test_page_save_flow_and_replay(tmp_path: Path, monkeypatch) -> None:
         await handler.invoke({"action": "click", "selector": "#go"})
         await asyncio.wait_for(asyncio.sleep(0.2), timeout=1.0)
         await handler.invoke({"action": "click", "selector": "[data-x]"})
+        del consumer
 
         saved = json.loads(await handler.invoke({"action": "save_flow", "name": "grant-stuff"}))
         assert saved["ok"] is True and saved["saved"] == "grant-stuff"
@@ -455,5 +456,70 @@ async def test_page_replay_unknown_flow(tmp_path: Path, monkeypatch) -> None:
         assert r["ok"] is False and "no saved flow" in r["error"]
         r = json.loads(await handler.invoke({"action": "flows"}))
         assert r["ok"] is True and r["flows"] == []
+    finally:
+        CURRENT_SESSION_ID.reset(token)
+
+
+async def test_page_read_injects_site_notes(tmp_path: Path, monkeypatch) -> None:
+    from nexus.browser import site_notes as sn
+
+    d = tmp_path / "sites"
+    d.mkdir()
+    monkeypatch.setattr(sn, "sites_dir", lambda: d)
+    (d / "admin.example.md").write_text("## Navigation\n- Apps > API permissions blade\n")
+    store, handler = _handler(tmp_path)
+    sid, token = _bind_session(store)
+    try:
+        task = await _responder(
+            store, sid, '{"ok": true, "text": "t", "contentHash": "h1", "url": "https://admin.example/apps", "title": "Apps"}'
+        )
+        r = json.loads(await handler.invoke({"action": "read"}))
+        await asyncio.wait_for(task, timeout=2.0)
+        assert r["site_notes"]["excerpt"].startswith("## Navigation")
+        assert r["site_notes"]["path"] == "vault://sites/admin.example.md"
+    finally:
+        CURRENT_SESSION_ID.reset(token)
+
+
+async def test_page_episode_idle_triggers_distill(tmp_path: Path, monkeypatch) -> None:
+    from nexus.browser import site_notes as sn
+
+    captured: dict = {}
+
+    async def fake_distill(host, steps, url="", title=""):
+        captured["host"] = host
+        captured["steps"] = steps
+
+    monkeypatch.setattr(sn, "distill_and_save", fake_distill)
+    import nexus.agent.page_tool as pt
+
+    monkeypatch.setattr(pt, "EPISODE_IDLE_SECONDS", 0.0)  # every gap triggers
+    store, handler = _handler(tmp_path)
+    sid, token = _bind_session(store)
+    try:
+        # one state-changing step is below the threshold → no distill
+        handler._episode_last[sid] = 1_000.0  # long ago
+        task = await _responder(
+            store, sid, '{"ok": true, "clicked": "#a", "url": "https://admin.example/", "title": "T"}'
+        )
+        await handler.invoke({"action": "click", "selector": "#a"})
+        await asyncio.wait_for(task, timeout=2.0)
+        await asyncio.sleep(0.05)
+        assert "host" not in captured
+
+        # three more state-changing steps, then a new "episode"
+        for sel in ("#b", "#c", "#d"):
+            task = await _responder(
+                store, sid, f'{{"ok": true, "clicked": "{sel}", "url": "https://admin.example/", "title": "T"}}'
+            )
+            await handler.invoke({"action": "click", "selector": sel})
+            await asyncio.wait_for(task, timeout=2.0)
+        handler._episode_last[sid] = 1_000.0  # idle gap since last action
+        task = await _responder(store, sid, '{"ok": true, "clicked": "#e", "url": "https://admin.example/", "title": "T"}')
+        await handler.invoke({"action": "click", "selector": "#e"})
+        await asyncio.wait_for(task, timeout=2.0)
+        await asyncio.sleep(0.1)
+        assert captured.get("host") == "https://admin.example/"
+        assert len(captured["steps"]) >= 3  # the episode's steps went to the distiller
     finally:
         CURRENT_SESSION_ID.reset(token)
