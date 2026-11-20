@@ -34,6 +34,8 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
+from .probes import probe_expression
+
 log = logging.getLogger(__name__)
 
 # Fixed logical viewport (launch flag --window-size). The UI's human
@@ -149,14 +151,6 @@ async def _probe(port: int, timeout: float = PROBE_TIMEOUT) -> dict[str, Any] | 
         pass
     return None
 
-
-_READ_JS = (
-    "JSON.stringify({url: location.href, title: document.title, "
-    "text: (document.body ? document.body.innerText : '').slice(0, 8000), "
-    "links: Array.from(document.querySelectorAll('a')).slice(0, 80) "
-    "  .map(a => ({t: (a.textContent || '').trim().slice(0, 60), h: a.href})) "
-    "  .filter(l => l.h)})"
-)
 
 _INFO_JS = "JSON.stringify({url: location.href, title: document.title})"
 
@@ -506,11 +500,37 @@ class BrowserInstance:
 
     # ── actions (the spec §4 contract) ───────────────────────────────────────
 
+    async def _page_signature(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Cheap page fingerprint (url + title + text hash + dialogs) for
+        post-action verification. Always returns a dict."""
+        raw = await self.evaluate(probe_expression("pageSignature", args or {}))
+        return raw if isinstance(raw, dict) else {}
+
+    async def _verified(
+        self, action: str, args: dict[str, Any], handler: Callable[..., Any]
+    ) -> dict[str, Any]:
+        """Run a state-changing action and diff the page signature before /
+        after so the caller learns what actually changed (url, text hash,
+        new dialogs)."""
+        before = await self._page_signature({})
+        result = await handler(args)
+        after = await self._page_signature({})
+        if not isinstance(result, dict):
+            result = {}
+        result["url_changed"] = before.get("url") != after.get("url")
+        result["state_changed"] = before.get("textHash") != after.get("textHash")
+        result["dialogs"] = after.get("dialogs", [])
+        result["page_signature"] = after
+        return result
+
     async def act(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
         handler = getattr(self, f"_act_{action}", None)
         if handler is None:
             raise BrowserError(f"unknown action {action!r}")
-        result = await handler(args)
+        if action in _VERIFY_ACTIONS:
+            result = await self._verified(action, args, handler)
+        else:
+            result = await handler(args)
         self.last_active = time.monotonic()
         self._note_page(result)
         return result
@@ -552,11 +572,27 @@ class BrowserInstance:
         return info
 
     async def _act_read(self, args: dict[str, Any]) -> dict[str, Any]:
-        raw = await self.evaluate(_READ_JS)
+        max_chars = args.get("max_chars", 8000)
+        max_links = args.get("max_links", 80)
+        max_fields = args.get("max_fields", 40)
         try:
-            return json.loads(raw)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise BrowserError(f"read failed: {exc}") from exc
+            max_chars, max_links, max_fields = int(max_chars), int(max_links), int(max_fields)
+        except (TypeError, ValueError):
+            max_chars, max_links, max_fields = 8000, 80, 40
+        raw = await self.evaluate(
+            probe_expression(
+                "readPage",
+                {"maxChars": max_chars, "maxLinks": max_links, "maxFields": max_fields},
+            )
+        )
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                return {}
+        return {}
 
     async def _act_dom_text(self, args: dict[str, Any]) -> dict[str, Any]:
         text = await self.evaluate(
@@ -728,6 +764,63 @@ class BrowserInstance:
             await asyncio.sleep(WAIT_FOR_INTERVAL)
         raise BrowserError(f"wait_for: {selector!r} not found within {timeout_s:.0f}s")
 
+    async def _act_find_element(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Stateless element search: best CSS selector + bounding box +
+        metadata for elements matching role/text/tag/aria-label/visible."""
+        role = args.get("role")
+        text = args.get("text")
+        tag = args.get("tag")
+        aria_label = args.get("aria_label")
+        visible = args.get("visible", True)
+        try:
+            limit = int(args.get("limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+        raw = await self.evaluate(
+            probe_expression(
+                "findElement",
+                {
+                    "role": role,
+                    "text": text,
+                    "tag": tag,
+                    "aria_label": aria_label,
+                    "visible": visible,
+                    "limit": limit,
+                },
+            )
+        )
+        return raw if isinstance(raw, dict) else {}
+
+    async def _act_inspect_element(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Inspect a single element: attributes (password values redacted),
+        box, visibility, computed accessible name. Never returns secrets."""
+        selector = str(args.get("selector") or "")
+        if not selector:
+            raise BrowserError("inspect_element requires selector")
+        raw = await self.evaluate(probe_expression("inspectElement", {"selector": selector}))
+        return raw if isinstance(raw, dict) else {}
+
+    async def _act_viewport_info(self, args: dict[str, Any]) -> dict[str, Any]:
+        """True CSS-pixel viewport + scroll + devicePixelRatio (for mapping
+        normalized tap coordinates)."""
+        raw = await self.evaluate(probe_expression("viewportInfo", {}))
+        return raw if isinstance(raw, dict) else {}
+
+    async def _act_page_signature(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Cheap page fingerprint for change detection (url, title, text
+        hash, visible dialogs/toasts)."""
+        return await self._page_signature(args or {})
+
+    async def _act_interactive_map(self, args: dict[str, Any]) -> dict[str, Any]:
+        """JS approximation of the accessibility tree: interactive elements
+        (button/link/input/select/textarea/[role]) with name, state, box."""
+        try:
+            limit = int(args.get("limit", 200))
+        except (TypeError, ValueError):
+            limit = 200
+        raw = await self.evaluate(probe_expression("interactiveMap", {"limit": limit}))
+        return raw if isinstance(raw, dict) else {}
+
 
 ACTIONS = (
     "navigate",
@@ -742,11 +835,23 @@ ACTIONS = (
     "js",
     "wait_for",
     "info",
+    # Progressive-inspection (NBIE) actions — read-only perception. The same
+    # probes run on the Chrome extension surface (page tool).
+    "find_element",
+    "inspect_element",
+    "viewport_info",
+    "page_signature",
+    "interactive_map",
 )
+
+# Read-only perception actions whose result is diffed against a pre-action
+# pageSignature so the caller learns what changed (url, text hash, dialogs).
+_VERIFY_ACTIONS = frozenset({"click", "tap", "type", "key", "scroll"})
 
 # Remote-control actions (state-changing): gated for non-loopback clients by
 # [browser].remote_control. Read-only actions (read/dom_text/info/screenshot/
-# wait_for) stay open to any authenticated client — watching is not driving.
+# wait_for + all *_element/viewport/page_signature/interactive_map) stay open
+# to any authenticated client — watching is not driving.
 CONTROL_ACTIONS = frozenset(
     {"navigate", "click", "tap", "type", "key", "scroll", "js"}
 )

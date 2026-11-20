@@ -579,3 +579,118 @@ async def test_stream_yields_frames_and_acks(tmp_path: Path, monkeypatch) -> Non
     assert sent[0][0] == "Page.startScreencast"
     assert inst._screencast_on is False
     assert inst.screencast_subscribers() == 0
+
+
+# ── new perception actions (NBIE) ────────────────────────────────────────
+
+
+async def test_actions_include_probe_actions() -> None:
+    from nexus.browser.manager import ACTIONS, CONTROL_ACTIONS, _VERIFY_ACTIONS
+
+    for action in ("find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map"):
+        assert action in ACTIONS, action
+    # Perception actions are read-only -> never remote-controlled.
+    assert {"find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map"}.isdisjoint(
+        CONTROL_ACTIONS
+    )
+    # Mutating actions get pre/post pageSignature diffs.
+    assert {"click", "tap", "type", "key", "scroll"} <= _VERIFY_ACTIONS
+
+
+async def _make_inst(monkeypatch, responses) -> "BrowserInstance":
+    from nexus.browser.manager import BrowserInstance
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+
+    async def fake_evaluate(expression, *, await_promise=False, timeout=30.0):
+        for needle, value in responses:
+            if f'self.__nexus_probes("{needle}",' in expression:
+                return value
+        return {}
+
+    inst.evaluate = fake_evaluate  # type: ignore[method-assign]
+    return inst
+
+
+async def test_act_find_element_inspect_viewport_signature_map(tmp_path, monkeypatch) -> None:
+    responses = [
+        ("findElement", {"ok": True, "count": 1, "elements": [{"selector": "#sb", "role": "button", "name": "Search", "text": "Search", "box": {"x": 1, "y": 2, "w": 3, "h": 4}, "enabled": True}]}),
+        ("inspectElement", {"ok": True, "selector": "#pw", "tag": "input", "attrs": {"type": "password", "value": "\u2022\u2022\u2022\u2022\u2022"}}),
+        ("viewportInfo", {"ok": True, "width": 1440, "height": 900, "scrollX": 0, "scrollY": 0, "devicePixelRatio": 1}),
+        ("pageSignature", {"ok": True, "url": "https://example.com/", "title": "Ex", "textHash": "abc", "dialogs": []}),
+        ("interactiveMap", {"ok": True, "count": 0, "nodes": []}),
+    ]
+    inst = await _make_inst(monkeypatch, responses)
+
+    r = await inst.act("find_element", {"role": "button", "limit": 5})
+    assert r["ok"] is True and r["count"] == 1 and r["elements"][0]["selector"] == "#sb"
+
+    r = await inst.act("inspect_element", {"selector": "#pw"})
+    assert r["ok"] is True
+    # Password value redacted inside the probe.
+    assert r["attrs"]["value"] == "\u2022\u2022\u2022\u2022\u2022"
+
+    r = await inst.act("viewport_info", {})
+    assert r["width"] == 1440 and r["height"] == 900
+
+    r = await inst.act("page_signature", {})
+    assert r["textHash"] == "abc" and r["dialogs"] == []
+
+    r = await inst.act("interactive_map", {})
+    assert r["count"] == 0
+
+
+async def test_act_verify_click_diffs_page_signature(tmp_path, monkeypatch) -> None:
+    import json
+
+    from nexus.browser.manager import BrowserInstance
+
+    sigs = [
+        {"url": "https://a.com/", "title": "A", "textHash": "hash1", "dialogs": []},
+        {"url": "https://b.com/", "title": "B", "textHash": "hash2", "dialogs": [{"role": "dialog", "name": "alert"}]},
+    ]
+    idx = 0
+
+    async def fake_evaluate(expression, *, await_promise=False, timeout=30.0):
+        nonlocal idx
+        if "pageSignature" in expression:
+            out = sigs[idx]
+            idx += 1
+            return out
+        if "getBoundingClientRect" in expression:
+            return {"x": 100, "y": 200}
+        return json.dumps({"url": "https://b.com/", "title": "B"})
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+    inst.evaluate = fake_evaluate  # type: ignore[method-assign]
+
+    r = await inst.act("click", {"selector": "#x"})
+    assert r["url_changed"] is True
+    assert r["state_changed"] is True
+    assert r["dialogs"] == [{"role": "dialog", "name": "alert"}]
+    assert r["page_signature"]["textHash"] == "hash2"
+
+
+async def test_act_read_uses_readpage_probe(tmp_path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserInstance
+
+    seen = {}
+
+    async def fake_evaluate(expression, *, await_promise=False, timeout=30.0):
+        seen["expr"] = expression
+        return {"ok": True, "text": "hello", "contentHash": "h1", "complete": True}
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+    inst.evaluate = fake_evaluate  # type: ignore[method-assign]
+
+    r = await inst.act("read", {})
+    assert r["text"] == "hello" and r["complete"] is True
+    assert "readPage" in seen["expr"]
+    assert '"maxChars": 8000' in seen["expr"]
+

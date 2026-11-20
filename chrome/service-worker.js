@@ -5,6 +5,11 @@ const GROUP_TITLE = "Nexus";
 const GROUP_COLOR = "purple";
 const PANEL_PATH = "panel.html";
 
+// Shared text-first perception probes (same canonical source as
+// agent/src/nexus/browser/probes.py). importScripts of a bundled extension
+// file is allowed in MV3; probes are never fetched at runtime.
+importScripts("probes.js");
+
 let openTabs = {};
 let activatedTabs = {};
 
@@ -577,6 +582,42 @@ const PAGE_ACTIONS = {
   },
 };
 
+// Actions implemented by the shared probe library (same source as CDP).
+// Invoked via chrome.scripting.executeScript with the self-contained
+// __nexus_probes function (importScripts'd above). Closure-free by design
+// so executeScript function serialization preserves behavior.
+const PROBE_ACTIONS = new Set([
+  "find_element",
+  "inspect_element",
+  "viewport_info",
+  "page_signature",
+  "interactive_map",
+]);
+
+const PROBE_ARGS = {
+  find_element: (p) => ({
+    role: p.role,
+    text: p.text,
+    tag: p.tag,
+    aria_label: p.aria_label,
+    visible: p.visible,
+    limit: p.limit,
+  }),
+  inspect_element: (p) => ({ selector: p.selector }),
+  viewport_info: () => ({}),
+  page_signature: () => ({}),
+  interactive_map: (p) => ({ limit: p.limit }),
+};
+
+async function runProbe(tabId, name, params) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: self.__nexus_probes,
+    args: [name, (PROBE_ARGS[name] || (() => ({})))((params || {}))],
+  });
+  return res && res.result ? res.result : { ok: false, error: "no result" };
+}
+
 const readCache = new Map();
 const READ_TTL_MS = 15000;
 
@@ -617,6 +658,25 @@ async function handlePageAct(msg) {
     } catch (_) {}
     return { ok: true, navigating: params.url };
   }
+  if (msg.action === "screenshot") {
+    // Visible-tab screenshot (viewport). Degrades with a clear error when
+    // the tab isn't capturable (e.g. no activeTab / <all_urls> grant).
+    try {
+      const result = await chrome.tabs.captureVisibleTab(tabId, {
+        format: "jpeg",
+        quality: 60,
+      });
+      const t = await chrome.tabs.get(tabId);
+      return {
+        ok: true,
+        screenshot: result.dataUrl,
+        url: t.url || "",
+        title: t.title || "",
+      };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
   if (msg.action === "js") {
     try {
       const [res] = await chrome.scripting.executeScript({
@@ -643,16 +703,24 @@ async function handlePageAct(msg) {
       return { ok: false, error: String(err) };
     }
   }
+  if (PROBE_ACTIONS.has(msg.action)) {
+    return runProbe(tabId, msg.action, params);
+  }
+  // Default read (text mode, no selector) uses the shared readPage probe
+  // so CDP and the extension return an identical perception contract.
+  if (msg.action === "read" && !params.selector && (!params.mode || params.mode === "text")) {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: self.__nexus_probes,
+      args: [
+        "readPage",
+        { maxChars: params.full ? 40000 : 12000, maxLinks: 80, maxFields: 40 },
+      ],
+    });
+    return res && res.result ? res.result : { ok: false, error: "extraction failed" };
+  }
   const spec = PAGE_ACTIONS[msg.action];
   if (!spec) return { ok: false, error: `unknown action: ${msg.action}` };
-  if (
-    msg.action === "read" &&
-    !params.selector &&
-    (!params.mode || params.mode === "text")
-  ) {
-    const cached = await extractTab(tabId, params.full ? 40000 : 12000);
-    return cached ? { ok: true, ...cached } : { ok: false, error: "extraction failed" };
-  }
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId },

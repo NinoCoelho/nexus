@@ -146,3 +146,20 @@ async def test_page_missing_session_context(tmp_path: Path) -> None:
     result = json.loads(await handler.invoke({"action": "read"}))
     assert result["ok"] is False
     assert "no session context" in result["error"]
+
+
+async def test_page_tool_spec_new_actions() -> None:
+    enum = PAGE_TOOL.parameters["properties"]["action"]["enum"]
+    for action in (
+        "find_element",
+        "inspect_element",
+        "viewport_info",
+        "page_signature",
+        "interactive_map",
+        "screenshot",
+    ):
+        assert action in enum, action
+    props = PAGE_TOOL.parameters["properties"]
+    for prop in ("role", "aria_label", "tag", "visible", "limit"):
+        assert prop in props, prop
+
