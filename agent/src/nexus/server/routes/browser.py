@@ -1,6 +1,7 @@
 """HTTP surface for the managed-Chrome computer-use subsystem.
 
 ``GET  /browser/instances``            → per-context instance statuses
+``GET  /browser/nbie-report``          → NBIE perception-metrics report
 ``GET  /browser/status?key=``          → one instance's status
 ``POST /browser/action``               → run an action (manual takeover etc.)
 ``GET  /browser/screenshot?key=``      → live PNG (captures fresh)
@@ -21,7 +22,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ...browser.manager import ACTIONS, CONTROL_ACTIONS, BrowserError, BrowserManager
+from ...browser.manager import (
+    ACTIONS,
+    CONTROL_ACTIONS,
+    BrowserError,
+    BrowserManager,
+    aggregate_nbie_events,
+)
 
 router = APIRouter()
 
@@ -92,6 +99,18 @@ def _require_remote_control(request: Request, action: str) -> None:
 @router.get("/browser/instances")
 async def browser_instances(request: Request) -> list[dict[str, Any]]:
     return await _manager(request).list_instances()
+
+
+@router.get("/browser/nbie-report")
+async def browser_nbie_report(request: Request, minutes: float = 0) -> dict[str, Any]:
+    """NBIE perception-metrics report over the in-process telemetry buffer.
+
+    Read-only (like the other perception routes): how many actions per
+    inspection level, the read cache-hit rate, recent errors. ``minutes``
+    filters to a trailing window (0 = everything buffered).
+    """
+    manager = _manager(request)
+    return aggregate_nbie_events(list(manager.nbie_events), minutes=minutes)
 
 
 @router.get("/browser/status")

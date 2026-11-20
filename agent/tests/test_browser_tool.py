@@ -29,7 +29,6 @@ from nexus.browser.manager import (
 from nexus.browser.tool import BROWSER_TOOL, BrowserHandler
 from nexus.server.session_store import SessionStore
 
-
 # ── stubs ───────────────────────────────────────────────────────────────────
 
 
@@ -183,8 +182,8 @@ async def test_success_and_error_emit_events(tmp_path: Path) -> None:
 async def test_event_sink_publishes_session_event(tmp_path: Path) -> None:
     """The app.py sink shape: contextvar → session publish → global fan-out
     membership (browser_event is in _GLOBAL_HITL_KINDS)."""
-    from nexus.server.session_store.pubsub import _GLOBAL_HITL_KINDS
     from nexus.server.events import SessionEvent
+    from nexus.server.session_store.pubsub import _GLOBAL_HITL_KINDS
 
     assert "browser_event" in _GLOBAL_HITL_KINDS
 
@@ -342,7 +341,7 @@ class FakeProc:
         return 0 if self._exited else None
 
 
-def _no_launch(self) -> None:  # noqa: ANN001 — stub
+def _no_launch(self) -> None:
     self._proc = FakeProc(exited=False)  # booting forever, never exits
 
 
@@ -369,7 +368,7 @@ async def test_launch_timeout_persists_port_and_caches_instance(
 
     resets: list[str] = []
 
-    async def record_reset(self, key: str, inst) -> None:  # noqa: ANN001 — stub
+    async def record_reset(self, key: str, inst) -> None:
         resets.append(key)
 
     monkeypatch.setattr(BrowserManager, "_reset_instance", record_reset)
@@ -428,12 +427,12 @@ async def test_second_bot_gets_its_own_port_and_instance(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(bm, "_probe", probe)
 
-    def launch(self) -> None:  # noqa: ANN001 — stub
+    def launch(self) -> None:
         launched.add(self.port)
 
     monkeypatch.setattr(bm.BrowserInstance, "_launch", launch)
 
-    async def connect_ok(self) -> None:  # noqa: ANN001 — stub
+    async def connect_ok(self) -> None:
         return None
 
     monkeypatch.setattr(bm.BrowserInstance, "_connect_with_retry", connect_ok)
@@ -462,7 +461,7 @@ async def test_singleton_handoff_fails_fast(tmp_path: Path, monkeypatch) -> None
 
     monkeypatch.setattr(bm, "_probe", dead_probe)
 
-    def launch(self) -> None:  # noqa: ANN001 — stub
+    def launch(self) -> None:
         self._proc = FakeProc(exited=True)  # singleton handoff: instant exit
 
     monkeypatch.setattr(bm.BrowserInstance, "_launch", launch)
@@ -586,7 +585,7 @@ async def test_stream_yields_frames_and_acks(tmp_path: Path, monkeypatch) -> Non
 
 
 async def test_actions_include_probe_actions() -> None:
-    from nexus.browser.manager import ACTIONS, CONTROL_ACTIONS, _VERIFY_ACTIONS
+    from nexus.browser.manager import _VERIFY_ACTIONS, ACTIONS, CONTROL_ACTIONS
 
     for action in ("find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map"):
         assert action in ACTIONS, action
@@ -598,7 +597,7 @@ async def test_actions_include_probe_actions() -> None:
     assert {"click", "tap", "type", "key", "scroll"} <= _VERIFY_ACTIONS
 
 
-async def _make_inst(monkeypatch, responses) -> "BrowserInstance":
+async def _make_inst(monkeypatch, responses) -> BrowserInstance:
     from nexus.browser.manager import BrowserInstance
 
     inst = BrowserInstance(
@@ -657,7 +656,9 @@ async def test_act_verify_click_diffs_page_signature(tmp_path, monkeypatch) -> N
     async def fake_evaluate(expression, *, await_promise=False, timeout=30.0):
         nonlocal idx
         if "pageSignature" in expression:
-            out = sigs[idx]
+            # Settle-poll re-reads until stable — clamp to the last
+            # signature: the page "lands" on B and stays there.
+            out = sigs[min(idx, len(sigs) - 1)]
             idx += 1
             return out
         if "getBoundingClientRect" in expression:
@@ -699,7 +700,7 @@ async def test_act_read_uses_readpage_probe(tmp_path, monkeypatch) -> None:
 # ── Phase C: CDP-native perception ──────────────────────────────────────
 
 
-async def _make_inst_phase_c(monkeypatch, sends, evaluates) -> "BrowserInstance":
+async def _make_inst_phase_c(monkeypatch, sends, evaluates) -> BrowserInstance:
     from nexus.browser.manager import BrowserInstance
 
     inst = BrowserInstance(
@@ -816,7 +817,7 @@ async def test_act_list_tabs(tmp_path, monkeypatch) -> None:
 
 
 async def test_act_switch_tab_missing_targetid(tmp_path, monkeypatch) -> None:
-    from nexus.browser.manager import BrowserInstance, BrowserError
+    from nexus.browser.manager import BrowserError, BrowserInstance
 
     inst = BrowserInstance(
         key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
@@ -830,7 +831,7 @@ async def test_act_switch_tab_missing_targetid(tmp_path, monkeypatch) -> None:
 
 
 async def test_act_switch_tab_unknown_target(tmp_path, monkeypatch) -> None:
-    from nexus.browser.manager import BrowserInstance, BrowserError
+    from nexus.browser.manager import BrowserError, BrowserInstance
 
     inst = BrowserInstance(
         key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
@@ -909,4 +910,73 @@ async def test_manager_event_carries_nbie_metrics(tmp_path, monkeypatch) -> None
     ev = sink_events[-1][1]
     assert ev["nbie"]["level"] == "vision"
     assert ev["nbie"]["levels"] == {"read": 1, "screenshot": 1}
+
+
+async def test_nbie_ring_buffer_records_success_and_error() -> None:
+    from nexus.browser.manager import BrowserError
+
+    manager = StubManager()
+
+    class BoomInstance(StubInstance):
+        async def act(self, action: str, args: dict) -> dict:
+            if action == "read":
+                return {"url": "https://x/", "contentHash": "h1", "cache_hit": False}
+            raise BrowserError("kaboom")
+
+    stub = BoomInstance("main")
+
+    async def fake_ensure(key: str) -> StubInstance:
+        return stub
+
+    manager.ensure = fake_ensure  # type: ignore[method-assign]
+
+    await manager.act("main", "read", {})
+    try:
+        await manager.act("main", "js", {"expression": "1"})
+    except BrowserError:
+        pass
+    assert len(manager.nbie_events) == 2
+    ok_ev = manager.nbie_events[0]
+    assert ok_ev["action"] == "read" and ok_ev["ok"] is True and ok_ev["level"] == "text"
+    assert ok_ev["cache_hit"] is False
+    err_ev = manager.nbie_events[1]
+    assert err_ev["action"] == "js" and err_ev["ok"] is False
+    assert "kaboom" in (err_ev.get("error") or "")
+
+
+def test_aggregate_nbie_events() -> None:
+    import time as _time
+
+    from nexus.browser.manager import aggregate_nbie_events
+
+    now = _time.time()
+    events = [
+        {"ts": now - 90, "key": "main", "action": "navigate", "level": "nav", "ok": True, "cache_hit": None},
+        {"ts": now - 80, "key": "main", "action": "read", "level": "text", "ok": True, "cache_hit": False},
+        {"ts": now - 70, "key": "main", "action": "read", "level": "text", "ok": True, "cache_hit": True},
+        {"ts": now - 60, "key": "main", "action": "screenshot", "level": "vision", "ok": True, "cache_hit": None},
+        {"ts": now - 10, "key": "p1", "action": "click", "level": "action", "ok": False, "cache_hit": None, "error": "sel not found"},
+    ]
+    r = aggregate_nbie_events(events)
+    assert r["totals"]["actions"] == 5
+    assert r["totals"]["reads"] == 2
+    assert r["totals"]["cache_hits"] == 1
+    assert r["totals"]["cache_hit_rate"] == 0.5
+    assert r["totals"]["errors"] == 1
+    assert r["levels"] == {"nav": 1, "text": 2, "vision": 1, "action": 1}
+    assert r["keys"] == {"main": 4, "p1": 1}
+    assert r["recent_errors"] and r["recent_errors"][0]["action"] == "click"
+
+    # trailing-window filter: only the last 30s (the click error)
+    r30 = aggregate_nbie_events(events, minutes=0.5)
+    assert r30["totals"]["actions"] == 1
+    assert r30["totals"]["errors"] == 1
+
+    # cache-hit rate ignores failed reads
+    r_err_read = aggregate_nbie_events(
+        [{"ts": now, "key": "k", "action": "read", "level": "text", "ok": False, "cache_hit": None, "error": "x"}]
+    )
+    assert r_err_read["totals"]["reads"] == 0
+    assert r_err_read["totals"]["cache_hit_rate"] is None
+
 

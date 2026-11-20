@@ -140,6 +140,27 @@ screencast re-arms automatically).
 `text|element|vision|action|nav` and `levels` is the running per-level call
 tally — the A/B benchmark (`agent/scripts/nbie_benchmark.py`, ~62% saving on
 the modeled paginate task) and the live telemetry share this vocabulary.
+The manager also keeps a bounded in-process ring buffer of the same events;
+`GET /browser/nbie-report?minutes=N` (read-only) and
+`nexus browser report` aggregate it: per-level/action/context totals, the
+read cache-hit rate (redundant re-reads = tokens paid for nothing), and
+recent errors. It is a live dashboard, not an audit log — it dies with the
+daemon process.
+
+**Verification settle**: mutating actions poll the post-action
+`page_signature` briefly (≤1s) until it stops moving, so
+`url_changed`/`state_changed` report where the page actually landed rather
+than a mid-navigation snapshot.
+
+**Integration test**: `agent/tests/test_browser_integration.py` runs the
+full perception cycle against a real managed Chrome over a throwaway local
+HTTP site (opt-in: `NEXUS_BROWSER_IT=1 uv run pytest
+tests/test_browser_integration.py`). It boot-strapped three real defects
+the stubbed suite couldn't see: the `findElement` probe's `visible`
+parameter shadowing the visibility helper (every real call threw), the
+un-flattened computedString `name`/`role` objects in `ax_tree` output, and
+`/json/list`'s `id` → `targetId` normalization for
+`list_tabs`/`switch_tab`.
 
 ### 4.2 Semantics per action (CDP methods in parens):
 

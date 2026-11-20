@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -521,6 +522,18 @@ class BrowserInstance:
         before = await self._page_signature({})
         result = await handler(args)
         after = await self._page_signature({})
+        # Settle: clicks/keys often kick off *async* navigation or DOM
+        # mutation, so the immediate post-signature can be a mid-flight
+        # snapshot (url_changed missed). Poll briefly until the signature
+        # stops moving (or the deadline) so verification reports where the
+        # page actually landed. Static pages cost one extra round-trip.
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.15)
+            latest = await self._page_signature({})
+            if latest == after:
+                break
+            after = latest
         if not isinstance(result, dict):
             result = {}
         result["url_changed"] = before.get("url") != after.get("url")
@@ -870,8 +883,17 @@ class BrowserInstance:
 
         simplified: list[dict[str, Any]] = []
         interesting = ("disabled", "focused", "expanded", "checked", "required", "invalid")
+
+        def _flat(field: Any) -> Any:
+            """CDP AX strings arrive as ``{"type", "value"}`` computedString
+            objects — flatten to the bare value (token-slim payload)."""
+            if isinstance(field, dict):
+                return field.get("value")
+            return field
+
         for node in nodes:
-            role = (node.get("role") or {}).get("value", "")
+            role = _flat(node.get("role")) or ""
+            name = _flat(node.get("name"))
             value = node.get("value")
             if value and int(node.get("backendDOMNodeId") or -1) in password_ids:
                 value = "•••••"
@@ -879,13 +901,13 @@ class BrowserInstance:
             for p in node.get("properties") or []:
                 pname = p.get("name")
                 if pname in interesting:
-                    pval = (p.get("value") or {}).get("value")
+                    pval = _flat(p.get("value"))
                     if pval is not None:
                         state[str(pname)] = pval
             simplified.append(
                 {
                     "role": role,
-                    "name": node.get("name") or "",
+                    "name": name or "",
                     "value": value,
                     "state": state,
                     "ignored": node.get("ignored"),
@@ -968,8 +990,10 @@ class BrowserInstance:
             r = await client.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5.0)
             r.raise_for_status()
             targets = r.json()
+        # Normalize: /json/list names the target id `id`, but every consumer
+        # (list_tabs/switch_tab) speaks `targetId`.
         return [
-            t
+            {**t, "targetId": t.get("targetId") or t.get("id")}
             for t in targets
             if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
         ]
@@ -1062,6 +1086,72 @@ _ACTION_LEVELS = {
     "switch_tab": "nav",
 }
 
+
+def aggregate_nbie_events(
+    events: list[dict[str, Any]], *, minutes: float = 0
+) -> dict[str, Any]:
+    """Aggregate the NBIE telemetry ring buffer into a report.
+
+    ``minutes`` filters to the trailing window (0 = everything buffered).
+    The shape is the answer to "is the agent inspecting text-first?":
+    per-level totals, the read cache-hit rate (re-reads that returned the
+    same contentHash — tokens paid for nothing), and recent errors.
+    """
+    now = time.time()
+    if minutes > 0:
+        cutoff = now - minutes * 60
+        events = [e for e in events if float(e.get("ts") or 0) >= cutoff]
+    levels: dict[str, int] = {}
+    actions: dict[str, int] = {}
+    keys: dict[str, int] = {}
+    reads = cache_hits = errors = 0
+    recent_errors: list[dict[str, Any]] = []
+    for e in events:
+        level = e.get("level")
+        if level:
+            levels[level] = levels.get(level, 0) + 1
+        a = e.get("action")
+        if a:
+            actions[a] = actions.get(a, 0) + 1
+        k = e.get("key")
+        if k:
+            keys[k] = keys.get(k, 0) + 1
+        if e.get("ok") is False:
+            errors += 1
+            if len(recent_errors) < 5:
+                recent_errors.append(
+                    {
+                        "ts": e.get("ts"),
+                        "key": k,
+                        "action": a,
+                        "error": e.get("error"),
+                    }
+                )
+        if a == "read" and e.get("ok") is not False:
+            reads += 1
+            if e.get("cache_hit"):
+                cache_hits += 1
+    ordered = sorted(events, key=lambda e: float(e.get("ts") or 0))
+    first_ts = float(ordered[0].get("ts") or 0) if ordered else None
+    last_ts = float(ordered[-1].get("ts") or 0) if ordered else None
+    return {
+        "totals": {
+            "actions": len(events),
+            "errors": errors,
+            "reads": reads,
+            "cache_hits": cache_hits,
+            # Redundant reads that returned identical content — the waste the
+            # text-first contract exists to avoid.
+            "cache_hit_rate": round(cache_hits / reads, 3) if reads else None,
+            "first_ts": first_ts,
+            "last_ts": last_ts,
+        },
+        "levels": levels,
+        "actions": actions,
+        "keys": keys,
+        "recent_errors": recent_errors,
+    }
+
 # Remote-control actions (state-changing): gated for non-loopback clients by
 # [browser].remote_control. Read-only actions (read/dom_text/info/screenshot/
 # wait_for + all *_element/viewport/page_signature/interactive_map) stay open
@@ -1121,6 +1211,12 @@ class BrowserManager:
         self._instances: dict[str, BrowserInstance] = {}
         self._ensure_lock = asyncio.Lock()
         self._reaper: asyncio.Task | None = None
+        # NBIE telemetry ring buffer (newest last, bounded) — what the
+        # browser_event publishes, persisted in-process so `nexus browser
+        # report` / GET /browser/nbie-report can quantify whether agents
+        # inspect text-first. Not syncthing-replicated, dies with the
+        # process: this is a live dashboard, not an audit log.
+        self.nbie_events: deque[dict[str, Any]] = deque(maxlen=2000)
         self._root = Path.home() / ".nexus" / "browser"
         self._registry: dict[str, dict[str, Any]] | None = None
 
@@ -1228,22 +1324,57 @@ class BrowserManager:
             self._start_reaper()
             return inst
 
+    def _emit(self, key: str, payload: dict[str, Any]) -> None:
+        if self.event_sink is None:
+            return
+        try:
+            self.event_sink(key, payload)
+        except Exception:  # noqa: BLE001 — events are best-effort
+            log.debug("browser: event sink failed", exc_info=True)
+
+    def _record_nbie(
+        self,
+        key: str,
+        action: str,
+        *,
+        ok: bool,
+        cache_hit: bool | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Append one entry to the NBIE telemetry ring buffer (see
+        ``aggregate_nbie_events`` / GET /browser/nbie-report)."""
+        entry: dict[str, Any] = {
+            "ts": time.time(),
+            "key": key,
+            "action": action,
+            "level": _ACTION_LEVELS.get(action),
+            "ok": ok,
+            "cache_hit": cache_hit,
+        }
+        if error:
+            entry["error"] = error[:200]
+        self.nbie_events.append(entry)
+
     async def act(self, key: str, action: str, args: dict[str, Any]) -> dict[str, Any]:
         """Run one action; emit a browser_event on success or error."""
         try:
             inst = await self.ensure(key)
         except BrowserError as exc:
+            self._record_nbie(key, action, ok=False, error=str(exc))
             self._emit(key, {"action": action, "error": str(exc)})
             raise
         try:
             params = {k: v for k, v in args.items() if k != "action"}
             result = await inst.act(action, params)
         except BrowserError as exc:
+            self._record_nbie(key, action, ok=False, error=str(exc))
             self._emit(key, {"action": action, "error": str(exc)})
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a tool error, not a crash
+            self._record_nbie(key, action, ok=False, error=str(exc))
             self._emit(key, {"action": action, "error": str(exc)})
             raise BrowserError(str(exc)) from exc
+        self._record_nbie(key, action, ok=True, cache_hit=result.get("cache_hit"))
         payload = {"action": action}
         payload.update({k: v for k, v in result.items() if k != "text"})
         level = _ACTION_LEVELS.get(action)

@@ -256,11 +256,14 @@ self.__nexus_probes = function __nexus_probes(name, args) {
     text,
     tag,
     aria_label,
-    visible = true,
+    // Aliased: the injected key is `visible` (a boolean gate), while
+    // `visible(el)` is the module-level visibility helper — a plain
+    // `visible = true` param would shadow the function and throw.
+    visible: visibleOnly = true,
     limit = 10,
   } = {}) => {
     const match = (el) => {
-      if (visible && !visible(el)) return false;
+      if (visibleOnly && !visible(el)) return false;
       if (tag && el.tagName.toLowerCase() !== String(tag).toLowerCase())
         return false;
       if (aria_label) {

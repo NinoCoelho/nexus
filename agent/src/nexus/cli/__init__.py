@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from .backup_cmd import backup_app
+from .browser_cmd import browser_app
 from .chrome_cmd import chrome_app
 from .config_cmd import config_app
 from .cookies_cmd import cookies_app
@@ -26,6 +27,7 @@ from .vault_cmd import vault_app
 app = typer.Typer(help="Nexus agent CLI", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
+app.add_typer(browser_app, name="browser")
 app.add_typer(providers_app, name="providers")
 app.add_typer(models_app, name="models")
 app.add_typer(skills_app, name="skills")
