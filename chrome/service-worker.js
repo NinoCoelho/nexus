@@ -750,15 +750,18 @@ async function handlePageAct(msg) {
   if (msg.action === "screenshot") {
     // Visible-tab screenshot (viewport). Degrades with a clear error when
     // the tab isn't capturable (e.g. no activeTab / <all_urls> grant).
+    // captureVisibleTab takes a WINDOW id and returns the data-url string
+    // directly — passing a tabId (as it once did) yields "No window with
+    // id: <tabId>" and an undefined screenshot.
     try {
-      const result = await chrome.tabs.captureVisibleTab(tabId, {
+      const t = await chrome.tabs.get(tabId);
+      const dataUrl = await chrome.tabs.captureVisibleTab(t.windowId, {
         format: "jpeg",
         quality: 60,
       });
-      const t = await chrome.tabs.get(tabId);
       return {
         ok: true,
-        screenshot: result.dataUrl,
+        screenshot: dataUrl,
         url: t.url || "",
         title: t.title || "",
       };
