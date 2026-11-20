@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any
 
 from .context import CURRENT_SESSION_ID
 from .llm import ToolSpec
+
+log = logging.getLogger(__name__)
 
 PAGE_TOOL = ToolSpec(
     name="page",
@@ -64,7 +67,12 @@ PAGE_TOOL = ToolSpec(
             },
             "text": {
                 "type": "string",
-                "description": "For click: visible text to find a button/link when no selector is known.",
+                "description": (
+                    "For click: visible text to find a button/link when no selector "
+                    "is known. Text matching needs the element RENDERED — virtualized "
+                    "lists only contain scrolled-in rows (scroll first); prefer "
+                    "find_element to locate targets before clicking."
+                ),
             },
             "value": {
                 "type": "string",
@@ -84,7 +92,12 @@ PAGE_TOOL = ToolSpec(
             },
             "code": {
                 "type": "string",
-                "description": "For js: JavaScript expression to evaluate in the page.",
+                "description": (
+                    "For js: JavaScript expression to evaluate in the page. Strict-CSP "
+                    "pages (admin portals etc.) block dynamic evaluation — there use "
+                    "selector-based actions or the managed browser (`browser` tool), "
+                    "whose CDP evaluation ignores page CSP."
+                ),
             },
             "lang": {
                 "type": "string",
@@ -184,8 +197,8 @@ class PageHandler:
                     f"ext:{session_id[:8]}", action, ok=ok, cache_hit=cache_hit,
                     error=error, surface="ext",
                 )
-        except Exception:  # noqa: BLE001 — telemetry must never break the tool
-            pass
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break the tool
+            log.debug("page: nbie record failed: %s", exc)
 
     async def invoke(self, args: dict) -> str:
         action = args.get("action")

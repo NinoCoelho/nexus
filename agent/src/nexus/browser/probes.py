@@ -441,7 +441,18 @@ _PROBES_JS = r"""self.__nexus_probes = function __nexus_probes(name, args) {
     viewportInfo,
   };
 
-  const probe = probes[name];
+  // The CDP surface passes camelCase probe names; the Chrome side panel
+  // passes tool action names (snake_case). Accept both spellings so the
+  // two surfaces stay in one contract.
+  const aliases = {
+    find_element: "findElement",
+    inspect_element: "inspectElement",
+    interactive_map: "interactiveMap",
+    page_signature: "pageSignature",
+    viewport_info: "viewportInfo",
+  };
+
+  const probe = probes[name] || probes[aliases[name] || ""];
   if (!probe) return { ok: false, error: "unknown probe: " + String(name) };
   try {
     return probe(args || {});

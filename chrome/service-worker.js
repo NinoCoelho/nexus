@@ -347,19 +347,47 @@ function pageRead(selector, full, mode) {
 function pageClick(selector, text) {
   let el = selector ? document.querySelector(selector) : null;
   if (!el && text) {
+    // Fluent-UI-style grids (M365 admin, etc.) render rows as td/tr/role'd
+    // cells with no anchor — plain button/a/span matching misses them.
     const nodes = document.querySelectorAll(
-      "button, a, input, [role='button'], summary, li, div, span"
+      "button, a, input, [role='button'], summary, li, div, span, " +
+        "td, th, tr, [role='row'], [role='gridcell'], [role='option'], " +
+        "[role='menuitem'], [role='tab'], [role='treeitem']"
     );
     for (const n of nodes) {
-      const label = (n.innerText || n.value || "").trim();
+      const label = (
+        n.innerText ||
+        n.value ||
+        n.getAttribute("aria-label") ||
+        n.title ||
+        ""
+      ).trim();
       if (label && label.includes(text)) {
         el = n;
         break;
       }
     }
+    if (el) {
+      // The matched node is often an inner text span; grid/list handlers
+      // live on the interactive ancestor. Native clicks bubble, but
+      // clicking the closest interactive node fires the right handler
+      // even when the parent stops propagation.
+      el =
+        el.closest(
+          "a, button, [role='button'], [role='row'], [role='gridcell'], " +
+            "[role='option'], [role='menuitem'], [role='tab'], [role='treeitem'], td, li"
+        ) || el;
+    }
   }
   if (!el) {
-    return { ok: false, error: `element not found (${selector || `text: ${text}`})` };
+    return {
+      ok: false,
+      error:
+        `element not found (text: ${text}) — the item may be virtualized ` +
+        "(rendered only while scrolled into view: scroll and retry), or " +
+        "exist only as text with no click handler. Locate it first with " +
+        "find_element / interactive_map, or click by CSS selector via js.",
+    };
   }
   el.scrollIntoView({ block: "center" });
   el.click();
@@ -477,7 +505,18 @@ function pageJs(code) {
       return { ok: true, result: String(r) };
     }
   } catch (err) {
-    return { ok: false, error: String(err) };
+    let msg = String(err);
+    // eval() inside an injected function is subject to the PAGE's CSP
+    // (the injection itself is exempt) — strict pages (M365 admin, etc.)
+    // forbid 'unsafe-eval'. There is no sanctioned extension path around
+    // it, so tell the agent where to run this instead.
+    if (/EvalError|Content Security Policy|unsafe-eval/i.test(msg)) {
+      msg +=
+        " [this page's CSP blocks dynamic JS evaluation. Prefer selector-based " +
+        "actions (click/type, targets via find_element), or run this JS on the " +
+        "managed browser with the `browser` tool — CDP evaluation ignores page CSP.]";
+    }
+    return { ok: false, error: msg };
   }
 }
 
