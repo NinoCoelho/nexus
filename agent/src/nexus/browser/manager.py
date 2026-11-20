@@ -177,6 +177,12 @@ class BrowserInstance:
         self.shots_dir = shots_dir
         self.last_active = time.monotonic()
         self.last_page: dict[str, Any] = {}
+        # NBIE metrics: last read's contentHash (cache-hit detection = same
+        # hash on a re-read) + call counts per inspection level (text /
+        # element / vision / action / nav) — carried on browser_event so the
+        # A/B benchmark can measure whether agents inspect progressively.
+        self.last_read_hash: str | None = None
+        self.level_counts: dict[str, int] = {}
         self._ws: Any = None
         self._reader: asyncio.Task | None = None
         self._pending: dict[int, asyncio.Future] = {}
@@ -532,6 +538,9 @@ class BrowserInstance:
         else:
             result = await handler(args)
         self.last_active = time.monotonic()
+        level = _ACTION_LEVELS.get(action)
+        if level:
+            self.level_counts[level] = self.level_counts.get(level, 0) + 1
         self._note_page(result)
         return result
 
@@ -586,13 +595,23 @@ class BrowserInstance:
             )
         )
         if isinstance(raw, dict):
-            return raw
-        if isinstance(raw, str):
+            out = raw
+        elif isinstance(raw, str):
             try:
-                return json.loads(raw)
+                out = json.loads(raw)
             except (TypeError, json.JSONDecodeError):
-                return {}
-        return {}
+                out = {}
+        else:
+            out = {}
+        if isinstance(out, dict) and out.get("ok") is not False:
+            # NBIE cache-hit metric: a re-read that returns the same
+            # contentHash means the agent paid tokens for nothing — surfaced
+            # on the browser_event so the benchmark can quantify it.
+            h = out.get("contentHash")
+            out["cache_hit"] = bool(h) and h == self.last_read_hash
+            if h:
+                self.last_read_hash = h
+        return out
 
     async def _act_dom_text(self, args: dict[str, Any]) -> dict[str, Any]:
         text = await self.evaluate(
@@ -821,6 +840,171 @@ class BrowserInstance:
         raw = await self.evaluate(probe_expression("interactiveMap", {"limit": limit}))
         return raw if isinstance(raw, dict) else {}
 
+    async def _act_ax_tree(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Native CDP accessibility tree (``Accessibility.getFullAXTree``):
+        role, name, value, state per node. Password-field values are
+        redacted (•••••) so secrets never cross the CDP boundary.
+
+        Progressive: returns a simplified node list rather than the raw AX
+        tree, capped at ``max_nodes`` (default 300).
+        """
+        await self._send("Accessibility.enable")
+        res = await self._send("Accessibility.getFullAXTree")
+        nodes = res.get("nodes") or []
+        root_id = res.get("rootId")
+
+        # Redact password values: find password inputs via the DOM domain and
+        # mask any AX node whose backendDOMNodeId matches one of them.
+        password_ids: set[int] = set()
+        try:
+            q = await self._send("DOM.querySelectorAll", {"selector": "input[type=password]"})
+            for node_id in (q.get("nodeIds") or [])[:25]:
+                d = await self._send("DOM.describeNode", {"nodeId": node_id})
+                b = (d.get("node") or {}).get("backendNodeId")
+                if b is not None:
+                    password_ids.add(int(b))
+        except BrowserError:
+            # DOM domain unavailable on this target — skip redaction rather
+            # than fail the whole tree.
+            pass
+
+        simplified: list[dict[str, Any]] = []
+        interesting = ("disabled", "focused", "expanded", "checked", "required", "invalid")
+        for node in nodes:
+            role = (node.get("role") or {}).get("value", "")
+            value = node.get("value")
+            if value and int(node.get("backendDOMNodeId") or -1) in password_ids:
+                value = "•••••"
+            state: dict[str, Any] = {}
+            for p in node.get("properties") or []:
+                pname = p.get("name")
+                if pname in interesting:
+                    pval = (p.get("value") or {}).get("value")
+                    if pval is not None:
+                        state[str(pname)] = pval
+            simplified.append(
+                {
+                    "role": role,
+                    "name": node.get("name") or "",
+                    "value": value,
+                    "state": state,
+                    "ignored": node.get("ignored"),
+                    "backendDOMNodeId": node.get("backendDOMNodeId"),
+                }
+            )
+            if len(simplified) >= int(args.get("max_nodes", 300)):
+                break
+
+        return {
+            "ok": True,
+            "rootId": root_id,
+            "nodes": simplified,
+            "count": len(simplified),
+            "total": len(nodes),
+        }
+
+    async def _act_element_screenshot(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Screenshot of a single element region.
+
+        ``selector`` (required) is resolved to its bounding box; the box is
+        grown by ``padding`` (default 12 CSS px) and captured via
+        ``Page.captureScreenshot`` with a ``clip``. The PNG is written to the
+        shots dir (like ``screenshot``) and the path returned.
+        """
+        selector = str(args.get("selector") or "").strip()
+        if not selector:
+            raise BrowserError("element_screenshot requires selector")
+        try:
+            padding = float(args.get("padding") or 12)
+        except (TypeError, ValueError):
+            padding = 12.0
+
+        box = await self.evaluate(
+            (
+                "((sel)=>{const el=document.querySelector(sel);"
+                "if(!el)return null;const r=el.getBoundingClientRect();"
+                "return{x:Math.round(r.x),y:Math.round(r.y),"
+                "w:Math.round(r.width),h:Math.round(r.height)}})"
+            )
+            + "("
+            + json.dumps(selector)
+            + ")"
+        )
+        if not box:
+            raise BrowserError(f"element not found: {selector}")
+        x, y, w, h = box["x"], box["y"], box["w"], box["h"]
+        clip = {
+            "x": x - padding,
+            "y": y - padding,
+            "width": w + 2 * padding,
+            "height": h + 2 * padding,
+            "scale": 1,
+        }
+        res = await self._send("Page.captureScreenshot", {"format": "png", "clip": clip})
+        data = res.get("data")
+        if not data:
+            raise BrowserError("element screenshot returned no data")
+        self.shots_dir.mkdir(parents=True, exist_ok=True)
+        path = self.shots_dir / f"elshot-{int(time.time() * 1000)}.png"
+        path.write_bytes(base64.b64decode(data))
+        _prune_screenshots(self.shots_dir)
+        info = await self._act_info({})
+        return {
+            "ok": True,
+            "screenshot": str(path),
+            "selector": selector,
+            "box": box,
+            "clip": clip,
+            **info,
+        }
+
+    async def _list_targets(self) -> list[dict[str, Any]]:
+        """Return all page targets (type == 'page') on this Chrome instance,
+        each with targetId/url/title/type. Fallback to the current page if the
+        HTTP endpoint isn't reachable."""
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5.0)
+            r.raise_for_status()
+            targets = r.json()
+        return [
+            t
+            for t in targets
+            if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
+        ]
+
+    async def _switch_target(self, target_id: str) -> dict[str, Any]:
+        """Re-point this instance's WS session at a different page target
+        (same Chrome process). Reloads the page on the new target."""
+        targets = await self._list_targets()
+        target = next((t for t in targets if t.get("targetId") == target_id), None)
+        if target is None:
+            raise BrowserError(f"no such tab: {target_id}")
+        await self._close_ws()
+        await self._connect(target)
+        info = await self._act_info({})
+        return {"ok": True, "switched": target_id, **info}
+
+    async def _act_list_tabs(self, args: dict[str, Any]) -> dict[str, Any]:
+        targets = await self._list_targets()
+        tabs = [
+            {
+                "targetId": t.get("targetId"),
+                "url": t.get("url"),
+                "title": t.get("title"),
+                "type": t.get("type"),
+            }
+            for t in targets
+        ]
+        return {"ok": True, "tabs": tabs, "count": len(tabs)}
+
+    async def _act_switch_tab(self, args: dict[str, Any]) -> dict[str, Any]:
+        target_id = str(args.get("targetId") or "").strip()
+        if not target_id:
+            raise BrowserError("switch_tab requires targetId")
+        return await self._switch_target(target_id)
+
 
 ACTIONS = (
     "navigate",
@@ -842,11 +1026,41 @@ ACTIONS = (
     "viewport_info",
     "page_signature",
     "interactive_map",
+    # CDP-native perception: full accessibility tree and per-element screenshots.
+    # These are CDP-only (the extension surface already covers them via
+    # interactive_map / captureVisibleTab); both stay read-only.
+    "ax_tree",
+    "element_screenshot",
+    # Multi-target CDP (parity with the extension's tab/tabGroups).
+    "list_tabs",
+    "switch_tab",
 )
 
 # Read-only perception actions whose result is diffed against a pre-action
 # pageSignature so the caller learns what changed (url, text hash, dialogs).
 _VERIFY_ACTIONS = frozenset({"click", "tap", "type", "key", "scroll"})
+
+# NBIE inspection level per action — browser_event metrics measure whether
+# agents work text-first (cheap) or vision-first (expensive).
+_ACTION_LEVELS = {
+    "read": "text",
+    "dom_text": "text",
+    "find_element": "element",
+    "inspect_element": "element",
+    "interactive_map": "element",
+    "ax_tree": "element",
+    "viewport_info": "element",
+    "page_signature": "element",
+    "screenshot": "vision",
+    "element_screenshot": "vision",
+    "click": "action",
+    "tap": "action",
+    "type": "action",
+    "key": "action",
+    "scroll": "action",
+    "navigate": "nav",
+    "switch_tab": "nav",
+}
 
 # Remote-control actions (state-changing): gated for non-loopback clients by
 # [browser].remote_control. Read-only actions (read/dom_text/info/screenshot/
@@ -1032,6 +1246,16 @@ class BrowserManager:
             raise BrowserError(str(exc)) from exc
         payload = {"action": action}
         payload.update({k: v for k, v in result.items() if k != "text"})
+        level = _ACTION_LEVELS.get(action)
+        if level:
+            # NBIE metrics: which inspection level fired, whether this read
+            # was a cache-hit (same contentHash as the previous read), and
+            # the per-level call tally for the session so far.
+            payload["nbie"] = {
+                "level": level,
+                "cache_hit": result.get("cache_hit"),
+                "levels": dict(inst.level_counts),
+            }
         self._emit(key, payload)
         return result
 

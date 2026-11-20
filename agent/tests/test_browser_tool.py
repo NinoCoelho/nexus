@@ -41,6 +41,7 @@ class StubInstance:
         self.calls: list[tuple[str, dict]] = []
         self.last_active = time.monotonic()
         self.last_page: dict = {}
+        self.level_counts: dict[str, int] = {}
 
     async def ensure(self) -> None:
         return None
@@ -693,4 +694,219 @@ async def test_act_read_uses_readpage_probe(tmp_path, monkeypatch) -> None:
     assert r["text"] == "hello" and r["complete"] is True
     assert "readPage" in seen["expr"]
     assert '"maxChars": 8000' in seen["expr"]
+
+
+# ── Phase C: CDP-native perception ──────────────────────────────────────
+
+
+async def _make_inst_phase_c(monkeypatch, sends, evaluates) -> "BrowserInstance":
+    from nexus.browser.manager import BrowserInstance
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+
+    send_table = {method: resp for method, resp in sends}
+
+    async def fake_send(method, params=None, *, timeout=30.0):
+        return send_table.get(method, {})
+
+    inst._send = fake_send  # type: ignore[method-assign]
+
+    async def fake_eval(expression, *, await_promise=False, timeout=30.0):
+        for needle, value in evaluates:
+            if needle in expression:
+                return value
+        return None
+
+    inst.evaluate = fake_eval  # type: ignore[method-assign]
+    return inst
+
+
+async def test_act_ax_tree_redacts_passwords(tmp_path, monkeypatch) -> None:
+    sends = [
+        ("Accessibility.enable", {}),
+        (
+            "Accessibility.getFullAXTree",
+            {
+                "rootId": "r1",
+                "nodes": [
+                    {
+                        "role": {"value": "text field"},
+                        "name": "senha",
+                        "value": "secret123",
+                        "backendDOMNodeId": 5,
+                        "properties": [{"name": "required", "value": {"type": "boolean", "value": True}}],
+                    },
+                    {"role": {"value": "heading"}, "name": "Login", "value": "", "backendDOMNodeId": 9},
+                ],
+            },
+        ),
+        ("DOM.querySelectorAll", {"nodeIds": [1]}),
+        ("DOM.describeNode", {"node": {"backendNodeId": 5}}),
+    ]
+    inst = await _make_inst_phase_c(monkeypatch, sends, [])
+
+    r = await inst.act("ax_tree", {})
+    assert r["ok"] is True and r["rootId"] == "r1"
+    nodes = r["nodes"]
+    pw = next(n for n in nodes if n["name"] == "senha")
+    assert pw["value"] == "•••••", pw  # password redacted
+    assert pw["state"] == {"required": True}  # props surfaced compactly
+    heading = next(n for n in nodes if n["name"] == "Login")
+    assert heading["value"] == ""  # non-password untouched
+    assert heading["state"] == {}
+
+
+async def test_act_element_screenshot(tmp_path, monkeypatch) -> None:
+    import base64
+
+    png = base64.b64encode(b"PNG-FRAME-BYTES").decode()
+    sends = [("Page.captureScreenshot", {"data": png})]
+    evaluates = [
+        ("getBoundingClientRect", {"x": 10, "y": 20, "w": 100, "h": 40}),
+        ("JSON.stringify({url: location.href", '{"url": "https://example.com/", "title": "Ex"}'),
+    ]
+    inst = await _make_inst_phase_c(monkeypatch, sends, evaluates)
+
+    r = await inst.act("element_screenshot", {"selector": "#btn", "padding": 8})
+    assert r["ok"] is True
+    assert r["selector"] == "#btn"
+    assert r["box"] == {"x": 10, "y": 20, "w": 100, "h": 40}
+    assert r["clip"] == {"x": 2, "y": 12, "width": 116, "height": 56, "scale": 1}
+    shot = Path(r["screenshot"])
+    assert shot.exists() and shot.read_bytes() == b"PNG-FRAME-BYTES"
+    assert r["url"]  # info merged in
+
+
+# ── Phase D: multi-target CDP ───────────────────────────────────────────
+
+
+async def test_act_list_tabs(tmp_path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserInstance
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+
+    async def fake_list_targets():
+        return [
+            {
+                "targetId": "t1",
+                "url": "https://example.com/",
+                "title": "Example",
+                "type": "page",
+                "webSocketDebuggerUrl": "ws://x",
+            },
+            {
+                "targetId": "t2",
+                "url": "https://other.com/",
+                "title": "Other",
+                "type": "page",
+                "webSocketDebuggerUrl": "ws://y",
+            },
+        ]
+
+    inst._list_targets = fake_list_targets  # type: ignore[method-assign]
+
+    r = await inst.act("list_tabs", {})
+    assert r["ok"] is True and r["count"] == 2
+    assert [t["targetId"] for t in r["tabs"]] == ["t1", "t2"]
+    assert r["tabs"][0]["url"] == "https://example.com/"
+
+
+async def test_act_switch_tab_missing_targetid(tmp_path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserInstance, BrowserError
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+    try:
+        await inst.act("switch_tab", {})
+    except BrowserError as exc:
+        assert "targetId" in str(exc)
+    else:
+        raise AssertionError("expected BrowserError for missing targetId")
+
+
+async def test_act_switch_tab_unknown_target(tmp_path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserInstance, BrowserError
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+
+    async def fake_list_targets():
+        return [
+            {
+                "targetId": "t1",
+                "url": "https://example.com/",
+                "title": "Example",
+                "type": "page",
+                "webSocketDebuggerUrl": "ws://x",
+            }
+        ]
+
+    inst._list_targets = fake_list_targets  # type: ignore[method-assign]
+    try:
+        await inst.act("switch_tab", {"targetId": "nope"})
+    except BrowserError as exc:
+        assert "no such tab" in str(exc)
+    else:
+        raise AssertionError("expected BrowserError for unknown target")
+
+
+# ── Phase E: NBIE metrics (cache-hit + per-level counts) ────────────────
+
+
+async def test_act_read_cache_hit_metric(tmp_path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserInstance
+
+    async def fake_evaluate(expression, *, await_promise=False, timeout=30.0):
+        return {"ok": True, "text": "hello", "contentHash": "h1", "complete": True}
+
+    inst = BrowserInstance(
+        key="main", port=9223, profile_dir=Path("/tmp/p"), shots_dir=Path("/tmp/s")
+    )
+    inst.evaluate = fake_evaluate  # type: ignore[method-assign]
+
+    r1 = await inst.act("read", {})
+    assert r1["cache_hit"] is False  # first read is never a cache-hit
+    r2 = await inst.act("read", {})
+    assert r2["cache_hit"] is True  # same contentHash → agent re-paid for nothing
+    assert inst.level_counts == {"text": 2}
+
+
+async def test_manager_event_carries_nbie_metrics(tmp_path, monkeypatch) -> None:
+    sink_events: list[tuple[str, dict]] = []
+
+    class LevelStubInstance(StubInstance):
+        async def act(self, action: str, args: dict) -> dict:
+            self.calls.append((action, dict(args)))
+            self.level_counts[action] = self.level_counts.get(action, 0) + 1
+            result = {"url": "https://example.com/", "title": "Example"}
+            if action == "read":
+                result["cache_hit"] = False
+            return result
+
+    manager = StubManager()
+    stub = LevelStubInstance("main")
+    manager._stub = stub
+    manager.event_sink = lambda key, data: sink_events.append((key, data))
+
+    async def fake_ensure(key: str) -> BrowserInstance:
+        return stub
+
+    manager.ensure = fake_ensure  # type: ignore[method-assign]
+
+    await manager.act("main", "read", {})
+    ev = sink_events[-1][1]
+    assert ev["nbie"]["level"] == "text"
+    assert ev["nbie"]["cache_hit"] is False
+    assert ev["nbie"]["levels"] == {"read": 1}
+
+    await manager.act("main", "screenshot", {})
+    ev = sink_events[-1][1]
+    assert ev["nbie"]["level"] == "vision"
+    assert ev["nbie"]["levels"] == {"read": 1, "screenshot": 1}
 
