@@ -338,7 +338,7 @@ function pageRead(selector, full, mode) {
   if (!selector) return { ok: false, error: "selector required for raw reads" };
   const root = document.querySelector(selector);
   if (!root) return { ok: false, error: `selector not found: ${selector}` };
-  const cap = full ? 40000 : 12000;
+  const cap = full ? 24000 : 8000;
   const raw = (root.innerText || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   const text = raw.length > cap ? raw.slice(0, cap) + "\n…[truncated]" : raw;
   return { ok: true, url: location.href, title: document.title, text };
@@ -737,7 +737,10 @@ async function handlePageAct(msg) {
         func: self.__nexus_probes,
         args: [
           "readPage",
-          { maxChars: params.full ? 40000 : 12000, maxLinks: 80, maxFields: 40 },
+          // Parity with the CDP surface (8000) — the page tool used to
+          // return 12k/40k chars, and per-turn tool budgets (15k tokens)
+          // were routinely blown by 2-3 extension reads alone.
+          { maxChars: params.full ? 24000 : 8000, maxLinks: 80, maxFields: 40 },
         ],
       });
       return res && res.result ? res.result : { ok: false, error: "extraction failed" };

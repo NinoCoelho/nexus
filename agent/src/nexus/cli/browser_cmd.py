@@ -37,6 +37,13 @@ def _print_report(p: dict) -> None:
     levels = p.get("levels") or {}
     if levels:
         typer.echo("  levels:   " + ", ".join(f"{k} {v}" for k, v in sorted(levels.items())))
+    surfaces = p.get("by_surface") or {}
+    if surfaces:
+        parts = []
+        for s, d in sorted(surfaces.items()):
+            rate = d["cache_hits"] / d["reads"] if d.get("reads") else None
+            parts.append(f"{s} {d['actions']}a/{d['reads']}r/{_fmt_rate(rate)}")
+        typer.echo("  surfaces: " + ", ".join(parts))
     actions = p.get("actions") or {}
     if actions:
         typer.echo("  actions:  " + ", ".join(f"{k} {v}" for k, v in sorted(actions.items())))

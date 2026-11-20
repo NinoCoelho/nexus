@@ -16,6 +16,7 @@ from pathlib import Path
 
 from nexus.agent.context import CURRENT_SESSION_ID
 from nexus.agent.page_tool import PAGE_TOOL, PageHandler
+from nexus.browser.manager import aggregate_nbie_events
 from nexus.server.session_store import SessionStore
 
 
@@ -162,4 +163,91 @@ async def test_page_tool_spec_new_actions() -> None:
     props = PAGE_TOOL.parameters["properties"]
     for prop in ("role", "aria_label", "tag", "visible", "limit"):
         assert prop in props, prop
+
+
+# ── NBIE telemetry (surface=ext) + read cache-hit ────────────────────────
+
+
+async def test_page_read_cache_hit_flag_and_nbie_events(tmp_path: Path) -> None:
+    from nexus.browser.manager import BrowserManager, set_manager
+
+    mgr = BrowserManager()
+    set_manager(mgr)
+    try:
+        store, handler = _handler(tmp_path)
+        sid, token = _bind_session(store)
+        try:
+            task = await _responder(
+                store, sid, '{"ok": true, "text": "hi", "contentHash": "h1"}'
+            )
+            r1 = json.loads(await handler.invoke({"action": "read"}))
+            await asyncio.wait_for(task, timeout=2.0)
+            assert r1["cache_hit"] is False  # first read is never a hit
+
+            task = await _responder(
+                store, sid, '{"ok": true, "text": "hi", "contentHash": "h1"}'
+            )
+            r2 = json.loads(await handler.invoke({"action": "read"}))
+            await asyncio.wait_for(task, timeout=2.0)
+            assert r2["cache_hit"] is True  # identical content → wasted spend
+
+            assert len(mgr.nbie_events) == 2
+            ev = mgr.nbie_events[-1]
+            assert ev["surface"] == "ext"
+            assert ev["action"] == "read" and ev["ok"] is True
+            assert ev["level"] == "text"
+            assert ev["key"].startswith("ext:")
+            assert mgr.nbie_events[0]["cache_hit"] is False
+            assert ev["cache_hit"] is True
+
+            rep = aggregate_nbie_events(list(mgr.nbie_events))
+            assert rep["by_surface"]["ext"]["actions"] == 2
+            assert rep["by_surface"]["ext"]["cache_hits"] == 1
+        finally:
+            CURRENT_SESSION_ID.reset(token)
+    finally:
+        set_manager(None)
+
+
+async def test_page_error_and_timeout_recorded(tmp_path: Path) -> None:
+    from nexus.browser.manager import BrowserManager, set_manager
+
+    mgr = BrowserManager()
+    set_manager(mgr)
+    try:
+        store, handler = _handler(tmp_path)
+        sid, token = _bind_session(store)
+        try:
+            task = await _responder(store, sid, '{"ok": false, "error": "boom"}')
+            r = json.loads(await handler.invoke({"action": "read"}))
+            await asyncio.wait_for(task, timeout=2.0)
+            assert r["ok"] is False
+            ev = mgr.nbie_events[-1]
+            assert ev["ok"] is False and ev["error"] == "boom"
+        finally:
+            CURRENT_SESSION_ID.reset(token)
+    finally:
+        set_manager(None)
+
+
+async def test_page_timeout_records_failure(tmp_path: Path, monkeypatch) -> None:
+    from nexus.browser.manager import BrowserManager, set_manager
+
+    mgr = BrowserManager()
+    set_manager(mgr)
+    try:
+        store, handler = _handler(tmp_path)
+        _sid, token = _bind_session(store)
+        try:
+            monkeypatch.setattr(
+                "nexus.agent.page_tool._DEFAULT_TIMEOUT", 0.05, raising=False
+            )
+            r = json.loads(await handler.invoke({"action": "read", "timeout": 0.05}))
+            assert r["ok"] is False and "no side panel" in r["error"]
+            ev = mgr.nbie_events[-1]
+            assert ev["ok"] is False and "timeout" in (ev.get("error") or "")
+        finally:
+            CURRENT_SESSION_ID.reset(token)
+    finally:
+        set_manager(None)
 

@@ -1104,6 +1104,7 @@ def aggregate_nbie_events(
     levels: dict[str, int] = {}
     actions: dict[str, int] = {}
     keys: dict[str, int] = {}
+    by_surface: dict[str, dict[str, int]] = {}
     reads = cache_hits = errors = 0
     recent_errors: list[dict[str, Any]] = []
     for e in events:
@@ -1116,7 +1117,8 @@ def aggregate_nbie_events(
         k = e.get("key")
         if k:
             keys[k] = keys.get(k, 0) + 1
-        if e.get("ok") is False:
+        failed = e.get("ok") is False
+        if failed:
             errors += 1
             if len(recent_errors) < 5:
                 recent_errors.append(
@@ -1127,10 +1129,22 @@ def aggregate_nbie_events(
                         "error": e.get("error"),
                     }
                 )
-        if a == "read" and e.get("ok") is not False:
+        is_read = a == "read" and not failed
+        if is_read:
             reads += 1
             if e.get("cache_hit"):
                 cache_hits += 1
+        slot = by_surface.setdefault(
+            e.get("surface") or "cdp",
+            {"actions": 0, "reads": 0, "cache_hits": 0, "errors": 0},
+        )
+        slot["actions"] += 1
+        if failed:
+            slot["errors"] += 1
+        if is_read:
+            slot["reads"] += 1
+            if e.get("cache_hit"):
+                slot["cache_hits"] += 1
     ordered = sorted(events, key=lambda e: float(e.get("ts") or 0))
     first_ts = float(ordered[0].get("ts") or 0) if ordered else None
     last_ts = float(ordered[-1].get("ts") or 0) if ordered else None
@@ -1149,6 +1163,7 @@ def aggregate_nbie_events(
         "levels": levels,
         "actions": actions,
         "keys": keys,
+        "by_surface": by_surface,
         "recent_errors": recent_errors,
     }
 
@@ -1332,7 +1347,7 @@ class BrowserManager:
         except Exception:  # noqa: BLE001 — events are best-effort
             log.debug("browser: event sink failed", exc_info=True)
 
-    def _record_nbie(
+    def record_nbie(
         self,
         key: str,
         action: str,
@@ -1340,9 +1355,13 @@ class BrowserManager:
         ok: bool,
         cache_hit: bool | None = None,
         error: str | None = None,
+        surface: str = "cdp",
     ) -> None:
         """Append one entry to the NBIE telemetry ring buffer (see
-        ``aggregate_nbie_events`` / GET /browser/nbie-report)."""
+        ``aggregate_nbie_events`` / GET /browser/nbie-report). ``surface``
+        distinguishes the two perception transports: ``cdp`` (the browser
+        tool driving managed Chrome) and ``ext`` (the page tool round-tripping
+        through the Chrome side panel)."""
         entry: dict[str, Any] = {
             "ts": time.time(),
             "key": key,
@@ -1350,6 +1369,7 @@ class BrowserManager:
             "level": _ACTION_LEVELS.get(action),
             "ok": ok,
             "cache_hit": cache_hit,
+            "surface": surface,
         }
         if error:
             entry["error"] = error[:200]
@@ -1360,21 +1380,21 @@ class BrowserManager:
         try:
             inst = await self.ensure(key)
         except BrowserError as exc:
-            self._record_nbie(key, action, ok=False, error=str(exc))
+            self.record_nbie(key, action, ok=False, error=str(exc))
             self._emit(key, {"action": action, "error": str(exc)})
             raise
         try:
             params = {k: v for k, v in args.items() if k != "action"}
             result = await inst.act(action, params)
         except BrowserError as exc:
-            self._record_nbie(key, action, ok=False, error=str(exc))
+            self.record_nbie(key, action, ok=False, error=str(exc))
             self._emit(key, {"action": action, "error": str(exc)})
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a tool error, not a crash
-            self._record_nbie(key, action, ok=False, error=str(exc))
+            self.record_nbie(key, action, ok=False, error=str(exc))
             self._emit(key, {"action": action, "error": str(exc)})
             raise BrowserError(str(exc)) from exc
-        self._record_nbie(key, action, ok=True, cache_hit=result.get("cache_hit"))
+        self.record_nbie(key, action, ok=True, cache_hit=result.get("cache_hit"))
         payload = {"action": action}
         payload.update({k: v for k, v in result.items() if k != "text"})
         level = _ACTION_LEVELS.get(action)

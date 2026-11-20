@@ -32,7 +32,7 @@ PAGE_TOOL = ToolSpec(
         "(cleaned main-content text — nav/footer noise stripped; mode "
         "'outline' = heading structure, 'links' = unique anchors, when full "
         "text is not needed; selector = raw text of one element; full=true "
-        "for up to 40k chars), "
+        "for up to 24k chars), "
         "'transcript' (native captions of the current video page — prefer "
         "this over yt-dlp/terminal for YouTube), 'click' (CSS selector or "
         "visible button/link text), 'type' (fill an input; submit=true "
@@ -92,7 +92,7 @@ PAGE_TOOL = ToolSpec(
             },
             "full": {
                 "type": "boolean",
-                "description": "For read: return up to 40k chars instead of 12k.",
+                "description": "For read: return up to 24k chars instead of 8k.",
             },
             "mode": {
                 "type": "string",
@@ -168,6 +168,24 @@ class PageHandler:
 
     def __init__(self, session_store: Any) -> None:
         self._sessions = session_store
+        # Per-session last read contentHash — powers the NBIE cache-hit
+        # metric (a re-read that returns identical content is tokens paid
+        # for nothing; the flag teaches the agent to stop re-reading).
+        self._last_read_hash: dict[str, str] = {}
+
+    def _record(self, session_id: str, action: str, *, ok: bool, cache_hit: bool | None = None, error: str | None = None) -> None:
+        """Feed the shared NBIE ring buffer (surface=ext), best-effort."""
+        try:
+            from ..browser.manager import get_manager
+
+            mgr = get_manager()
+            if mgr is not None:
+                mgr.record_nbie(
+                    f"ext:{session_id[:8]}", action, ok=ok, cache_hit=cache_hit,
+                    error=error, surface="ext",
+                )
+        except Exception:  # noqa: BLE001 — telemetry must never break the tool
+            pass
 
     async def invoke(self, args: dict) -> str:
         action = args.get("action")
@@ -212,6 +230,7 @@ class PageHandler:
                     data={"request_id": request_id, "reason": "timeout"},
                 ),
             )
+            self._record(session_id, action, ok=False, error=f"timeout after {timeout:.0f}s")
             return json.dumps(
                 {
                     "ok": False,
@@ -223,9 +242,31 @@ class PageHandler:
             )
 
         if not isinstance(answer, str):
+            self._record(session_id, action, ok=True)
             return json.dumps({"ok": True, "result": answer}, ensure_ascii=False)
+        # NBIE: tag the result with cache-hit (identical contentHash to the
+        # previous read of this session) and record the telemetry event.
         try:
-            json.loads(answer)
-            return answer
+            parsed = json.loads(answer)
         except json.JSONDecodeError:
+            self._record(session_id, action, ok=True)
             return json.dumps({"ok": True, "result": answer}, ensure_ascii=False)
+        cache_hit: bool | None = None
+        if isinstance(parsed, dict) and action == "read":
+            h = parsed.get("contentHash")
+            prev = self._last_read_hash.get(session_id)
+            cache_hit = bool(h) and h == prev
+            if h:
+                self._last_read_hash[session_id] = h
+                if len(self._last_read_hash) > 64:  # bounded: drop oldest half
+                    for k in list(self._last_read_hash)[:32]:
+                        del self._last_read_hash[k]
+            parsed["cache_hit"] = cache_hit
+            answer = json.dumps(parsed, ensure_ascii=False)
+        self._record(
+            session_id, action,
+            ok=parsed.get("ok", True) if isinstance(parsed, dict) else True,
+            cache_hit=cache_hit,
+            error=(parsed.get("error") if isinstance(parsed, dict) else None),
+        )
+        return answer

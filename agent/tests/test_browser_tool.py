@@ -980,3 +980,23 @@ def test_aggregate_nbie_events() -> None:
     assert r_err_read["totals"]["cache_hit_rate"] is None
 
 
+def test_aggregate_nbie_by_surface() -> None:
+    import time as _time
+
+    from nexus.browser.manager import aggregate_nbie_events
+
+    now = _time.time()
+    events = [
+        {"ts": now - 5, "key": "main", "action": "read", "level": "text", "ok": True, "cache_hit": False, "surface": "cdp"},
+        {"ts": now - 4, "key": "ext:abc12345", "action": "read", "level": "text", "ok": True, "cache_hit": True, "surface": "ext"},
+        {"ts": now - 3, "key": "ext:abc12345", "action": "find_element", "level": "element", "ok": True, "cache_hit": None, "surface": "ext"},
+        {"ts": now - 2, "key": "ext:abc12345", "action": "page_signature", "level": "element", "ok": False, "cache_hit": None, "error": "no access", "surface": "ext"},
+    ]
+    r = aggregate_nbie_events(events)
+    assert r["by_surface"]["cdp"] == {"actions": 1, "reads": 1, "cache_hits": 0, "errors": 0}
+    assert r["by_surface"]["ext"] == {"actions": 3, "reads": 1, "cache_hits": 1, "errors": 1}
+    # legacy events without a surface key default to cdp
+    r2 = aggregate_nbie_events([{"ts": now, "key": "main", "action": "navigate", "level": "nav", "ok": True, "cache_hit": None}])
+    assert "cdp" in r2["by_surface"]
+
+

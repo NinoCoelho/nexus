@@ -144,8 +144,15 @@ The manager also keeps a bounded in-process ring buffer of the same events;
 `GET /browser/nbie-report?minutes=N` (read-only) and
 `nexus browser report` aggregate it: per-level/action/context totals, the
 read cache-hit rate (redundant re-reads = tokens paid for nothing), and
-recent errors. It is a live dashboard, not an audit log — it dies with the
-daemon process.
+recent errors — split `by_surface` (`cdp` = browser tool, `ext` = page
+tool round-tripping through the side panel, recorded by `PageHandler`
+with cache-hit stamped from the read's `contentHash`). It is a live
+dashboard, not an audit log — it dies with the daemon process.
+
+**Read caps are budget-driven**: both surfaces default to 8000 chars
+(`full` → 24000). The extension previously returned 12000/40000, and
+per-turn tool budgets (15k tokens) were routinely blown by 2-3 extension
+reads alone (observed 5× in production logs, 15-19k tokens).
 
 **Verification settle**: mutating actions poll the post-action
 `page_signature` briefly (≤1s) until it stops moving, so
