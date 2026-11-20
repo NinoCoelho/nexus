@@ -49,6 +49,8 @@ PAGE_TOOL = ToolSpec(
         "independent calls in one message, and when replaying a flow already "
         "executed in this session send ONE compound js performing the whole "
         "known sequence (with settle waits) instead of one call per step. "
+        "find_element numbers elements (ref) — click accepts ref to target "
+        "them without hand-written selectors. "
         "Progressive inspection: 'find_element' (best selector + box "
         "for elements matching role/text/tag/aria_label/visible), "
         "'inspect_element' (attributes, box, accessible name — passwords "
@@ -141,6 +143,14 @@ PAGE_TOOL = ToolSpec(
                     "cheaper than read when you need one fact."
                 ),
             },
+            "ref": {
+                "type": "integer",
+                "description": (
+                    "For click: ref number from this session's last find_element "
+                    "(resolves to its selector; a stale ref fails the click — "
+                    "re-run find_element)."
+                ),
+            },
             "timeout": {
                 "type": "integer",
                 "description": "Seconds to wait for the browser (5-180, default 90).",
@@ -204,6 +214,12 @@ class PageHandler:
         # metric (a re-read that returns identical content is tokens paid
         # for nothing; the flag teaches the agent to stop re-reading).
         self._last_read_hash: dict[str, str] = {}
+        # Per-session last find_element snapshot (elements + snapshotHash) —
+        # powers click-by-ref on this surface, mirroring the CDP side.
+        # Deliberately lighter: no hash re-validation round-trip; a ref that
+        # no longer resolves simply fails the click (the verification fields
+        # in the result say what actually happened).
+        self._find_cache: dict[str, dict[str, Any]] = {}
 
     def _record(self, session_id: str, action: str, *, ok: bool, cache_hit: bool | None = None, error: str | None = None) -> None:
         """Feed the shared NBIE ring buffer (surface=ext), best-effort."""
@@ -269,6 +285,35 @@ class PageHandler:
             )
         if action == "extract":
             return await self._invoke_extract(args, session_id)
+        if action == "click" and args.get("ref") is not None and not args.get("selector"):
+            # Ref addressing: resolve a numbered element from the last
+            # find_element of this session (the agent's hand-rolled
+            # data-nx-* tagging in live sessions is this feature, built
+            # manually — this makes it native).
+            snap = self._find_cache.get(session_id)
+            if not snap or not snap.get("elements"):
+                return json.dumps(
+                    {"ok": False, "error": "no find_element snapshot — run find_element first"}
+                )
+            try:
+                target = snap["elements"][int(args["ref"]) - 1]
+            except (IndexError, TypeError, ValueError):
+                return json.dumps(
+                    {"ok": False, "error": f"no element with ref={args['ref']} in the current snapshot"}
+                )
+            sel = target.get("selector")
+            if not sel:
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"ref={args['ref']} has no selector (shadow-DOM element — "
+                            "click by text instead)"
+                        ),
+                    }
+                )
+            args = {**args, "selector": sel}
+            args.pop("ref", None)
 
         try:
             timeout = min(180.0, max(5.0, float(args.get("timeout") or _DEFAULT_TIMEOUT)))
@@ -334,6 +379,16 @@ class PageHandler:
                         del self._last_read_hash[k]
             parsed["cache_hit"] = cache_hit
             answer = json.dumps(parsed, ensure_ascii=False)
+        if isinstance(parsed, dict) and action == "find_element" and parsed.get("ok"):
+            elements = parsed.get("elements") or []
+            if elements:
+                self._find_cache[session_id] = {
+                    "hash": parsed.get("snapshotHash"),
+                    "elements": elements,
+                }
+                if len(self._find_cache) > 64:
+                    for k in list(self._find_cache)[:32]:
+                        del self._find_cache[k]
         self._record(
             session_id, action,
             ok=parsed.get("ok", True) if isinstance(parsed, dict) else True,

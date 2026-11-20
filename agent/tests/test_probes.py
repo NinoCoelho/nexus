@@ -86,8 +86,11 @@ def test_dispatcher_accepts_snake_and_camel_names() -> None:
     out = json.loads(proc.stdout.strip().splitlines()[-1])
 
     # snake_case (panel surface) resolves to the same probes as camelCase
-    assert out["find_element_snake"] == {"ok": True, "elements": [], "count": 0}
-    assert out["find_element_snake"] == out["find_element_camel"]
+    fe = out["find_element_snake"]
+    assert fe["ok"] is True and fe["elements"] == [] and fe["count"] == 0
+    assert fe["snapshotHash"]  # keys the caller's ref cache
+    assert fe["ok"] == out["find_element_camel"]["ok"]
+    assert fe["elements"] == out["find_element_camel"]["elements"]
     sig = out["page_signature_snake"]
     assert sig["ok"] is True and sig["url"] == "https://example.com/"
     assert sig["textHash"]  # hashed the stub body text

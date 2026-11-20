@@ -361,7 +361,15 @@ self.__nexus_probes = function __nexus_probes(name, args) {
       // act on them by text or via js, not by selector.
       shadow: !!(el.getRootNode && el.getRootNode() !== document),
     }));
-    return { ok: true, elements, count: elements.length };
+    // snapshotHash keys the caller's ref cache: refs stay valid while the
+    // page text holds (cheap FNV over body.innerText — the same function
+    // readPage uses for contentHash).
+    return {
+      ok: true,
+      elements,
+      count: elements.length,
+      snapshotHash: textHash(document.body ? document.body.innerText : ""),
+    };
   };
 
   // ---------- inspectElement ----------

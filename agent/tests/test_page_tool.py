@@ -299,3 +299,70 @@ async def test_page_extract_subllm(tmp_path: Path) -> None:
         set_manager(None)
         page_extract.set_extract_llm(None)
 
+
+
+async def test_page_find_element_refs_and_click_by_ref(tmp_path: Path) -> None:
+    """find_element snapshots persist per session; click {ref} resolves to
+    the element's selector (the native version of the data-nx-* tagging the
+    agent hand-rolled in live sessions)."""
+    store, handler = _handler(tmp_path)
+    sid, token = _bind_session(store)
+    try:
+        find_answer = json.dumps(
+            {
+                "ok": True,
+                "snapshotHash": "sh1",
+                "elements": [
+                    {"selector": "#add-permission", "ref": 1, "text": "Add a permission"},
+                    {"selector": "#grant", "ref": 2, "text": "Grant admin consent"},
+                ],
+                "count": 2,
+            }
+        )
+        seen_params: dict = {}
+
+        async def run_find() -> None:
+            async for ev in store.subscribe(sid):
+                if ev.kind == "page_request":
+                    seen_params.update(ev.data)
+                    store.resolve_pending(sid, ev.data["request_id"], find_answer)
+                    return
+
+        task = asyncio.create_task(run_find())
+        await asyncio.sleep(0)
+        r = json.loads(await handler.invoke({"action": "find_element", "role": "button"}))
+        await asyncio.wait_for(task, timeout=2.0)
+        assert r["count"] == 2
+
+        # click by ref → published as a plain selector click
+        async def run_click() -> None:
+            async for ev in store.subscribe(sid):
+                if ev.kind == "page_request":
+                    seen_params.update(ev.data)
+                    store.resolve_pending(
+                        sid, ev.data["request_id"], '{"ok": true, "clicked": "#add-permission"}'
+                    )
+                    return
+
+        task = asyncio.create_task(run_click())
+        await asyncio.sleep(0)
+        r = json.loads(await handler.invoke({"action": "click", "ref": 1}))
+        await asyncio.wait_for(task, timeout=2.0)
+        assert r["ok"] is True
+        assert seen_params["action"] == "click"
+        assert seen_params["params"] == {"selector": "#add-permission"}  # ref resolved
+
+        # stale/unknown ref → clear error, no panel round-trip needed
+        r = json.loads(await handler.invoke({"action": "click", "ref": 99}))
+        assert r["ok"] is False and "no element with ref=99" in r["error"]
+
+        # no snapshot at all (fresh session) → actionable error
+        sid2 = store.create().id
+        tok2 = CURRENT_SESSION_ID.set(sid2)
+        try:
+            r = json.loads(await handler.invoke({"action": "click", "ref": 1}))
+            assert r["ok"] is False and "find_element first" in r["error"]
+        finally:
+            CURRENT_SESSION_ID.reset(tok2)
+    finally:
+        CURRENT_SESSION_ID.reset(token)
