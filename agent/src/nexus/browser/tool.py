@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from ..agent.context import CURRENT_SESSION_ID
@@ -23,6 +24,8 @@ from ..agent.llm import ToolSpec
 from .flows import META_ACTIONS, PERCEPTION_ACTIONS
 from .manager import ACTIONS, BrowserError, BrowserManager
 from .site_notes import DISTILL_MIN_STEPS, EPISODE_IDLE_SECONDS, note_excerpt
+
+log = logging.getLogger(__name__)
 
 # Tool-facing action set: ACTIONS (dispatched by the manager) + the
 # tool-layer extract (sub-LLM) + flow persistence (save_flow/replay/flows).
@@ -203,22 +206,24 @@ class BrowserHandler:
         host_url = next((s.get("url") for s in reversed(log_steps) if s.get("url")), "")
         if not host_url:
             return
-        self._distilled_upto[key] = len(log_steps)
         tail = list(log_steps[-30:])
-        asyncio.create_task(self._distill_task(host_url, tail))
+        asyncio.create_task(self._distill_task(host_url, tail, key, len(log_steps)))
 
-    async def _distill_task(self, host_url: str, steps: list) -> None:
+    async def _distill_task(self, host_url: str, steps: list, key: str, mark_upto: int) -> None:
         try:
             from .site_notes import distill_and_save
 
-            await distill_and_save(
+            path = await distill_and_save(
                 host_url,
                 steps,
                 url=str(steps[-1].get("url") or "") if steps else "",
                 title=str(steps[-1].get("page_title") or "") if steps else "",
             )
-        except Exception:  # noqa: BLE001 — best-effort
-            pass
+            if path is not None:
+                # Success-only marker: failed distills retry next episode.
+                self._distilled_upto[key] = max(self._distilled_upto.get(key, 0), mark_upto)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.debug("browser: site-note distill failed: %s", exc)
 
     def context_key(self) -> str:
         session_id = CURRENT_SESSION_ID.get()

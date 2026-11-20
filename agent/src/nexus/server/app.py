@@ -451,17 +451,24 @@ def create_app(
                 raise RuntimeError(f"no provider for model {target!r}")
             from ..agent.llm import ChatMessage, Role
 
-            resp = await provider.chat(
-                [ChatMessage(role=Role.USER, content=prompt)],
-                model=upstream,
-                max_tokens=500,
-                extra_payload={
-                    "thinking": {"type": "disabled"},
-                    "enable_thinking": False,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            return resp.content or ""
+            msgs = [ChatMessage(role=Role.USER, content=prompt)]
+
+            async def _call(max_tokens: int) -> Any:
+                # NO thinking-suppression payload: always-thinking models
+                # (e.g. GLM 5.3) reject {"type": "disabled"} with HTTP 400
+                # ("cannot be disabled"), which silently killed every
+                # fast_call — extract AND the site-notes distiller.
+                return await provider.chat(msgs, model=upstream, max_tokens=max_tokens)
+
+            resp = await _call(500)
+            content = (resp.content or "").strip()
+            stop = str(getattr(resp, "stop_reason", "") or "")
+            if not content and (stop == "length" or stop.endswith(".LENGTH")):
+                # A thinking model burned the budget reasoning — give it
+                # room and take the visible part of the retry.
+                resp = await _call(1500)
+                content = (resp.content or "").strip()
+            return content
 
         set_extract_llm(_extract_llm)
     # site_credentials — masked HITL prompt + encrypted store + browser fill

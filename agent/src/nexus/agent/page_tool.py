@@ -20,10 +20,10 @@ import time
 import uuid
 from typing import Any
 
-from .context import CURRENT_SESSION_ID
-from .llm import ToolSpec
 from ..browser.flows import META_ACTIONS, PERCEPTION_ACTIONS
 from ..browser.site_notes import DISTILL_MIN_STEPS, EPISODE_IDLE_SECONDS, note_excerpt
+from .context import CURRENT_SESSION_ID
+from .llm import ToolSpec
 
 log = logging.getLogger(__name__)
 
@@ -564,19 +564,25 @@ class PageHandler:
         host_url = next((s.get("url") for s in reversed(log_steps) if s.get("url")), "")
         if not host_url:
             return
-        self._distilled_upto[session_id] = len(log_steps)
         tail = list(log_steps[-30:])
-        asyncio.create_task(self._distill_task(host_url, tail))
+        asyncio.create_task(self._distill_task(host_url, tail, session_id, len(log_steps)))
 
-    async def _distill_task(self, host_url: str, steps: list) -> None:
+    async def _distill_task(self, host_url: str, steps: list, session_id: str, mark_upto: int) -> None:
         try:
             from ..browser.site_notes import distill_and_save
 
-            await distill_and_save(
+            path = await distill_and_save(
                 host_url,
                 steps,
                 url=str(steps[-1].get("url") or "") if steps else "",
                 title=str(steps[-1].get("page_title") or "") if steps else "",
             )
+            if path is not None:
+                # Advance the marker only on success — a failed distill
+                # (LLM down, provider error) retries on the next episode
+                # instead of silently losing the knowledge.
+                self._distilled_upto[session_id] = max(
+                    self._distilled_upto.get(session_id, 0), mark_upto
+                )
         except Exception as exc:  # noqa: BLE001 — knowledge distillation is best-effort
             log.debug("page: site-note distill failed: %s", exc)
