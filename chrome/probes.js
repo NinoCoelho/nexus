@@ -6,6 +6,22 @@ self.__nexus_probes = function __nexus_probes(name, args) {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+  // Deep variant: pierces OPEN shadow roots (component portals — Fluent UI,
+  // YouTube, GitHub's newer bits). Closed roots stay unreachable by design.
+  // The host scan is one extra querySelectorAll("*") pass per root; pages
+  // without shadow DOM pay a single no-op scan.
+  const $$deep = (sel) => {
+    const out = [];
+    const walk = (root) => {
+      out.push(...root.querySelectorAll(sel));
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    };
+    walk(document);
+    return out;
+  };
+
   const NOISE =
     "nav, header, footer, aside, script, style, noscript, svg, iframe, " +
     "[aria-hidden='true'], [hidden], [role='navigation'], [role='banner'], " +
@@ -280,7 +296,7 @@ self.__nexus_probes = function __nexus_probes(name, args) {
       }
       return true;
     };
-    const elements = $$("button, a, input, select, textarea, summary, [role]")
+    const elements = $$deep("button, a, input, select, textarea, summary, [role]")
       .filter(match)
       .slice(0, limit)
       .map((el) => ({
@@ -291,6 +307,10 @@ self.__nexus_probes = function __nexus_probes(name, args) {
         text: cap(trim(el.innerText || el.textContent || ""), 60),
         box: boxOf(el),
         enabled: !el.disabled && visible(el),
+        // Elements inside an open shadow root: their CSS selector is
+        // relative to that root (document.querySelector cannot reach it) —
+        // act on them by text or via js, not by selector.
+        shadow: !!(el.getRootNode && el.getRootNode() !== document),
       }));
     return { ok: true, elements, count: elements.length };
   };
@@ -345,7 +365,7 @@ self.__nexus_probes = function __nexus_probes(name, args) {
 
   // ---------- interactiveMap (JS accessibility-tree approximation) ----------
   const interactiveMap = ({ limit = 200 } = {}) => {
-    const nodes = $$("button, a, input, select, textarea, summary, [role]")
+    const nodes = $$deep("button, a, input, select, textarea, summary, [role]")
       .filter(visible)
       .slice(0, limit)
       .map((el) => {

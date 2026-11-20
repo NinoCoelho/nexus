@@ -124,7 +124,12 @@ The probe JS (`readPage`/`findElement`/`inspectElement`/`interactiveMap`/
 extension bundle (`chrome/probes.js`, `importScripts` in the service worker);
 a unit test fails the build on drift. The same perception contract therefore
 runs on both surfaces: CDP (`Runtime.evaluate`, `browser` tool) and the
-extension (`chrome.scripting.executeScript`, `page` tool).
+extension (`chrome.scripting.executeScript`, `page` tool). `findElement` and
+`interactiveMap` pierce **open shadow roots** (a `$$deep` walker; closed
+roots stay unreachable by design), and elements found inside a root carry
+`shadow: true` — their CSS selector is root-relative, so act on them by text
+or via js, not by selector. The extension's text-click search pierces open
+roots the same way.
 
 **Post-action verification**: mutating actions (`click`, `tap`, `type`,
 `key`, `scroll`) diff `page_signature` before/after and return

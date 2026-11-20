@@ -345,11 +345,27 @@ function pageRead(selector, full, mode) {
 }
 
 function pageClick(selector, text) {
+  if (!selector && !text) {
+    return { ok: false, error: "click requires a CSS selector or visible text" };
+  }
   let el = selector ? document.querySelector(selector) : null;
   if (!el && text) {
+    // Deep text search: pierce open shadow roots (component portals).
+    // Self-contained because chrome.scripting serializes this function.
+    const deepQueryAll = (sel) => {
+      const out = [];
+      const walk = (root) => {
+        out.push(...root.querySelectorAll(sel));
+        for (const n of root.querySelectorAll("*")) {
+          if (n.shadowRoot) walk(n.shadowRoot);
+        }
+      };
+      walk(document);
+      return out;
+    };
     // Fluent-UI-style grids (M365 admin, etc.) render rows as td/tr/role'd
     // cells with no anchor — plain button/a/span matching misses them.
-    const nodes = document.querySelectorAll(
+    const nodes = deepQueryAll(
       "button, a, input, [role='button'], summary, li, div, span, " +
         "td, th, tr, [role='row'], [role='gridcell'], [role='option'], " +
         "[role='menuitem'], [role='tab'], [role='treeitem']"
@@ -371,7 +387,9 @@ function pageClick(selector, text) {
       // The matched node is often an inner text span; grid/list handlers
       // live on the interactive ancestor. Native clicks bubble, but
       // clicking the closest interactive node fires the right handler
-      // even when the parent stops propagation.
+      // even when the parent stops propagation. (closest() stays within
+      // the element's root — it cannot cross shadow boundaries, but the
+      // synthetic click still bubbles out of open roots.)
       el =
         el.closest(
           "a, button, [role='button'], [role='row'], [role='gridcell'], " +
