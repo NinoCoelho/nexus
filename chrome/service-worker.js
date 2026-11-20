@@ -425,14 +425,37 @@ function pageClick(selector, text) {
 }
 
 function pageType(selector, value, submit) {
-  const el = document.querySelector(selector || "input:focus, textarea:focus");
+  // Guard: no selector AND nothing focusable focused → actionable error
+  // instead of "element not found: null". Contenteditable counts (chat
+  // composers — Messenger, Slack web — are editable divs, not inputs).
+  if (
+    !selector &&
+    !document.querySelector("input:focus, textarea:focus, [contenteditable]:focus")
+  ) {
+    return {
+      ok: false,
+      error:
+        "type requires a selector or a focused field — click/focus the input " +
+        "first (or pass the selector from find_element)",
+    };
+  }
+  const el = document.querySelector(
+    selector || "input:focus, textarea:focus, [contenteditable]:focus"
+  );
   if (!el) return { ok: false, error: `element not found: ${selector}` };
   el.focus();
-  const desc = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value");
-  if (desc && desc.set) desc.set.call(el, value);
-  else el.value = value;
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
+  if (el.isContentEditable) {
+    // Editable divs have no value property — set the text and let the
+    // framework's input listener pick it up.
+    el.textContent = value;
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+  } else {
+    const desc = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value");
+    if (desc && desc.set) desc.set.call(el, value);
+    else el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
   if (submit) {
     for (const type of ["keydown", "keyup"]) {
       el.dispatchEvent(
