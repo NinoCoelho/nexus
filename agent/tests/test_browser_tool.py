@@ -142,8 +142,9 @@ async def test_browser_error_envelope() -> None:
 async def test_spec_shape() -> None:
     assert BROWSER_TOOL.name == "browser"
     props = BROWSER_TOOL.parameters["properties"]
-    # Tool-facing enum = manager ACTIONS + the tool-layer extract (sub-LLM).
-    assert props["action"]["enum"] == list(ACTIONS) + ["extract"]
+    # Tool-facing enum = manager ACTIONS + the tool-layer extract (sub-LLM)
+    # + flow persistence (save_flow/replay/flows).
+    assert props["action"]["enum"] == list(ACTIONS) + ["extract", "save_flow", "replay", "flows"]
     assert BROWSER_TOOL.parameters["required"] == ["action"]
     for p in ("url", "selector", "text", "x", "y", "delta_y", "expression", "timeout_seconds"):
         assert p in props, p
@@ -1127,3 +1128,61 @@ async def test_browser_tool_extract_subllm(tmp_path, monkeypatch) -> None:
         page_extract.set_extract_llm(None)
 
 
+
+
+async def test_browser_save_flow_and_replay(tmp_path, monkeypatch) -> None:
+    """CDP surface: successful manager.act calls are recorded per context;
+    save_flow persists them; replay re-executes via the manager."""
+    from nexus.browser import flows as flow_store
+    from nexus.browser.tool import BrowserHandler
+
+    fd = tmp_path / "flows"
+    fd.mkdir()
+    monkeypatch.setattr(flow_store, "flows_dir", lambda: fd)
+
+    class RecManager(StubManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.acts: list[tuple[str, str]] = []
+
+        async def act(self, key: str, action: str, args: dict) -> dict:
+            self.acts.append((key, action))
+            if action == "click" and args.get("selector") == "#gone":
+                raise BrowserError(f"element not found: #gone")
+            return {"url": "https://x/", "title": "X"}
+
+    mgr = RecManager()
+    handler = BrowserHandler(manager=mgr, session_store=None)
+
+    out = json.loads(await handler.invoke({"action": "navigate", "url": "https://x/"}))
+    assert out["ok"] is True
+    await handler.invoke({"action": "read"})
+    await handler.invoke({"action": "click", "selector": "#go"})
+    # failed act must NOT be recorded
+    try:
+        await handler.invoke({"action": "click", "selector": "#gone"})
+    except BrowserError:
+        pass
+
+    saved = json.loads(await handler.invoke({"action": "save_flow", "name": "re-add"}))
+    assert saved["ok"] is True
+    assert saved["steps_state_changing"] == 2  # navigate + click (read dropped)
+
+    # replay on the manager: navigate + click again, then abort on #gone
+    flow = flow_store.load_flow("re-add")
+    assert [s["action"] for s in flow["steps"]] == ["navigate", "click"]
+    mgr.acts.clear()
+    # replay with a flow whose second step fails:
+    flow_store.save_flow(
+        "boom",
+        "cdp",
+        [
+            {"action": "navigate", "args": {"url": "https://x/"}},
+            {"action": "click", "args": {"selector": "#gone"}},
+        ],
+    )
+    r = json.loads(await handler.invoke({"action": "replay", "name": "boom"}))
+    assert r["ok"] is False and r["executed"] == 1 and r["total"] == 2
+    assert r["steps"][1]["ok"] is False and "#gone" in (r["steps"][1]["error"] or "")
+    listing = json.loads(await handler.invoke({"action": "flows"}))
+    assert any(f["name"] == "boom" for f in listing["flows"])

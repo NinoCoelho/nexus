@@ -42,6 +42,7 @@ Work **text-first, then verify**: `read` **once** → `find_element` for targets
 Every tool call costs a full model round-trip — 40 micro-steps is 40 inferences. When the transcript already contains what you need:
 
 - **Replaying a known flow**: if this session already executed the steps (selectors are in the history), send **ONE compound `js`** performing the whole sequence — click, settle (`await new Promise(r => setTimeout(r, 300))`), click, verify — returning the final state. Never re-execute a remembered sequence one call at a time.
+- **Repeating a flow from a PAST session**: `save_flow {name}` right after completing a repeatable sequence (it persists the state-changing steps — perception dropped, typed values redacted). Next time — even in a fresh session or after a restart — `replay {name}` re-executes the whole flow in ONE call; `flows` lists what's saved. A failed step aborts with its error and the step number; take over from there.
 - **Batch independent perception** in a single message (parallel tool calls): `find_element` + `page_signature` together, `extract` alongside a navigation.
 - **One fact from a page** → `extract` (sub-LLM answers; the page never enters context) — cheaper than `read` + reasoning.
 - Native verified actions already report what changed — no follow-up check call.

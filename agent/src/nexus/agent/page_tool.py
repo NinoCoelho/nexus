@@ -21,6 +21,7 @@ from typing import Any
 
 from .context import CURRENT_SESSION_ID
 from .llm import ToolSpec
+from ..browser.flows import META_ACTIONS
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ PAGE_TOOL = ToolSpec(
         "executed in this session send ONE compound js performing the whole "
         "known sequence (with settle waits) instead of one call per step. "
         "find_element numbers elements (ref) — click accepts ref to target "
-        "them without hand-written selectors. "
+        "them without hand-written selectors. FLOWS: after completing a "
+        "repeatable sequence, save_flow {name} persists this session's "
+        "state-changing steps (perception dropped, typed values redacted); "
+        "replay {name} re-executes the whole flow in ONE call, even in a "
+        "fresh session — flows lists what's saved. "
         "Progressive inspection: 'find_element' (best selector + box "
         "for elements matching role/text/tag/aria_label/visible), "
         "'inspect_element' (attributes, box, accessible name — passwords "
@@ -70,7 +75,7 @@ PAGE_TOOL = ToolSpec(
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["read", "click", "type", "scroll", "navigate", "js", "transcript", "find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map", "screenshot", "extract"],
+                "enum": ["read", "click", "type", "scroll", "navigate", "js", "transcript", "find_element", "inspect_element", "viewport_info", "page_signature", "interactive_map", "screenshot", "extract", "save_flow", "replay", "flows"],
                 "description": "The page action to perform.",
             },
             "selector": {
@@ -200,6 +205,9 @@ _ACTIONS = {
     # Allow/Deny card before filling (authenticating as the user).
     "fill_login": ("site", "username", "password", "user_selector", "pass_selector", "submit"),
     "extract": ("question",),
+    "save_flow": ("name",),
+    "replay": ("name",),
+    "flows": (),
 }
 
 _DEFAULT_TIMEOUT = 90.0
@@ -220,6 +228,9 @@ class PageHandler:
         # no longer resolves simply fails the click (the verification fields
         # in the result say what actually happened).
         self._find_cache: dict[str, dict[str, Any]] = {}
+        # Per-session recent successful steps — the raw material for
+        # save_flow/replay. Bounded; meta actions never recorded.
+        self._recent_steps: dict[str, list[tuple[str, dict]]] = {}
 
     def _record(self, session_id: str, action: str, *, ok: bool, cache_hit: bool | None = None, error: str | None = None) -> None:
         """Feed the shared NBIE ring buffer (surface=ext), best-effort."""
@@ -272,6 +283,98 @@ class PageHandler:
             ensure_ascii=False,
         )
 
+    def _invoke_save_flow(self, args: dict, session_id: str) -> str:
+        """Persist this session's recent successful steps as a named flow."""
+        from ..browser import flows as flow_store
+
+        name = str(args.get("name") or "").strip()
+        if not name:
+            return json.dumps({"ok": False, "error": "save_flow requires a name"})
+        steps = [
+            {"action": a, "args": p}
+            for a, p in self._recent_steps.get(session_id, [])
+        ]
+        if not steps:
+            return json.dumps(
+                {"ok": False, "error": "no recorded steps in this session to save"}
+            )
+        try:
+            path = flow_store.save_flow(name, "ext", steps)
+        except ValueError as exc:
+            return json.dumps({"ok": False, "error": str(exc)})
+        saved = flow_store.load_flow(name) or {}
+        self._record(session_id, "save_flow", ok=True)
+        return json.dumps(
+            {
+                "ok": True,
+                "saved": name,
+                "path": str(path),
+                "steps_total": len(steps),
+                "steps_state_changing": len(saved.get("steps") or []),
+                "note": (
+                    "perception steps were dropped; typed values were redacted "
+                    "(replay will stop and ask on those)"
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    async def _invoke_replay(self, args: dict, session_id: str) -> str:
+        """Re-execute a saved flow through the normal invoke machinery —
+        every per-action gate (panel Allow/Deny, HITL) applies per step."""
+        from ..browser import flows as flow_store
+
+        name = str(args.get("name") or "").strip()
+        if not name:
+            return json.dumps({"ok": False, "error": "replay requires a flow name"})
+        flow = flow_store.load_flow(name)
+        if flow is None:
+            return json.dumps({"ok": False, "error": f"no saved flow named {name!r} (use flows to list)"})
+        if flow.get("surface") != "ext":
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": f"flow {name!r} was saved on surface {flow.get('surface')!r} — replay it there",
+                }
+            )
+        steps = flow.get("steps") or []
+        if not steps:
+            return json.dumps({"ok": False, "error": f"flow {name!r} has no steps"})
+        executed: list[dict[str, Any]] = []
+        final: dict[str, Any] = {}
+        for i, step in enumerate(steps, start=1):
+            if step.get("needs_value"):
+                executed.append(
+                    {"n": i, "action": step.get("action"), "ok": False,
+                     "error": "step needs a typed value (values are never persisted) — take over from here"}
+                )
+                final = {"ok": False}
+                break
+            raw = await self.invoke({"action": step.get("action"), **(step.get("args") or {})})
+            try:
+                res = json.loads(raw)
+            except json.JSONDecodeError:
+                res = {"ok": True, "result": raw}
+            entry: dict[str, Any] = {"n": i, "action": step.get("action"), "ok": bool(res.get("ok", True))}
+            if not entry["ok"]:
+                entry["error"] = res.get("error")
+            executed.append(entry)
+            final = res
+            if not entry["ok"]:
+                break
+        self._record(session_id, "replay", ok=bool(final.get("ok", True)))
+        return json.dumps(
+            {
+                "ok": bool(final.get("ok", True)),
+                "replayed": name,
+                "executed": len([e for e in executed if e.get("ok")]),
+                "total": len(steps),
+                "steps": executed,
+                "final": final,
+            },
+            ensure_ascii=False,
+        )
+
     async def invoke(self, args: dict) -> str:
         action = args.get("action")
         if action not in _ACTIONS:
@@ -314,6 +417,14 @@ class PageHandler:
                 )
             args = {**args, "selector": sel}
             args.pop("ref", None)
+        if action == "save_flow":
+            return self._invoke_save_flow(args, session_id)
+        if action == "replay":
+            return await self._invoke_replay(args, session_id)
+        if action == "flows":
+            from ..browser.flows import list_flows
+
+            return json.dumps({"ok": True, "flows": list_flows()}, ensure_ascii=False)
 
         try:
             timeout = min(180.0, max(5.0, float(args.get("timeout") or _DEFAULT_TIMEOUT)))
@@ -389,6 +500,14 @@ class PageHandler:
                 if len(self._find_cache) > 64:
                     for k in list(self._find_cache)[:32]:
                         del self._find_cache[k]
+        # Record successful steps for save_flow/replay (meta actions never).
+        if isinstance(parsed, dict) and parsed.get("ok", True) and action not in META_ACTIONS:
+            log_steps = self._recent_steps.setdefault(session_id, [])
+            log_steps.append((action, dict(params)))
+            del log_steps[:-100]
+            if len(self._recent_steps) > 32:
+                for k in list(self._recent_steps)[:16]:
+                    del self._recent_steps[k]
         self._record(
             session_id, action,
             ok=parsed.get("ok", True) if isinstance(parsed, dict) else True,

@@ -366,3 +366,94 @@ async def test_page_find_element_refs_and_click_by_ref(tmp_path: Path) -> None:
             CURRENT_SESSION_ID.reset(tok2)
     finally:
         CURRENT_SESSION_ID.reset(token)
+
+
+async def test_page_save_flow_and_replay(tmp_path: Path, monkeypatch) -> None:
+    """Steps taken in-session are saved (perception dropped) and replayed
+    through the same invoke machinery, early-aborting on failure."""
+    from nexus.browser import flows as flow_store
+
+    fd = tmp_path / "flows"
+    fd.mkdir()
+    monkeypatch.setattr(flow_store, "flows_dir", lambda: fd)
+    store, handler = _handler(tmp_path)
+    sid, token = _bind_session(store)
+    try:
+        answers = [
+            '{"ok": true, "text": "page", "contentHash": "h1"}',  # read (perception)
+            '{"ok": true, "clicked": "#go", "url_changed": true}',  # click
+            '{"ok": true, "clicked": "[data-x]", "state_changed": true}',  # click 2
+        ]
+        calls: list[str] = []
+
+        async def responder() -> None:
+            n = 0
+            async for ev in store.subscribe(sid):
+                if ev.kind == "page_request":
+                    calls.append(ev.data["action"])
+                    ans = answers[n] if n < len(answers) else '{"ok": true}'
+                    if ev.data["action"] == "save_flow":
+                        ans = None  # save_flow needs no panel round-trip
+                    if ans is not None:
+                        store.resolve_pending(sid, ev.data["request_id"], ans)
+                    n += 1
+
+        consumer = asyncio.create_task(responder())
+        await asyncio.sleep(0)
+        await handler.invoke({"action": "read"})
+        await asyncio.wait_for(asyncio.sleep(0.2), timeout=1.0)
+        await handler.invoke({"action": "click", "selector": "#go"})
+        await asyncio.wait_for(asyncio.sleep(0.2), timeout=1.0)
+        await handler.invoke({"action": "click", "selector": "[data-x]"})
+
+        saved = json.loads(await handler.invoke({"action": "save_flow", "name": "grant-stuff"}))
+        assert saved["ok"] is True and saved["saved"] == "grant-stuff"
+        assert saved["steps_state_changing"] == 2  # read was dropped
+        assert saved["steps_total"] == 3
+
+        # replay: fresh session, same flow — two clicks re-executed
+        sid2 = store.create().id
+        tok2 = CURRENT_SESSION_ID.set(sid2)
+        try:
+            replay_answers = [
+                '{"ok": true, "clicked": "#go", "url_changed": true}',
+                '{"ok": false, "error": "element not found: [data-x]"}',
+            ]
+
+            async def responder2() -> None:
+                n = 0
+                async for ev in store.subscribe(sid2):
+                    if ev.kind == "page_request":
+                        ans = replay_answers[n] if n < len(replay_answers) else "{}"
+                        store.resolve_pending(sid2, ev.data["request_id"], ans)
+                        n += 1
+
+            asyncio.create_task(responder2())
+            await asyncio.sleep(0)
+            r = json.loads(await handler.invoke({"action": "replay", "name": "grant-stuff"}))
+            await asyncio.wait_for(asyncio.sleep(0.3), timeout=1.0)
+            assert r["total"] == 2
+            assert r["executed"] == 1  # first click ok, second failed → abort
+            assert r["ok"] is False
+            assert r["steps"][1]["ok"] is False and "element not found" in r["steps"][1]["error"]
+        finally:
+            CURRENT_SESSION_ID.reset(tok2)
+    finally:
+        CURRENT_SESSION_ID.reset(token)
+
+
+async def test_page_replay_unknown_flow(tmp_path: Path, monkeypatch) -> None:
+    from nexus.browser import flows as flow_store
+
+    fd = tmp_path / "flows"
+    fd.mkdir()
+    monkeypatch.setattr(flow_store, "flows_dir", lambda: fd)
+    store, handler = _handler(tmp_path)
+    _sid, token = _bind_session(store)
+    try:
+        r = json.loads(await handler.invoke({"action": "replay", "name": "ghost"}))
+        assert r["ok"] is False and "no saved flow" in r["error"]
+        r = json.loads(await handler.invoke({"action": "flows"}))
+        assert r["ok"] is True and r["flows"] == []
+    finally:
+        CURRENT_SESSION_ID.reset(token)
