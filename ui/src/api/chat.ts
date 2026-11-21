@@ -33,10 +33,10 @@ export type StreamEvent =
   | { type: "paused_for_cooldown"; retry_after: string; estimated_seconds: number; reason: string }
   | { type: "error"; detail: string; reason?: string; retryable?: boolean; status_code?: number | null; actions?: string[]; rate_limit_reset?: string }
   | { type: "queued"; qid: string; session_id: string }
-  | { type: "user_enqueued"; qid: string; text: string; session_id: string }
-  | { type: "user_injected"; qid: string; text: string; session_id: string }
+  | { type: "user_enqueued"; qid: string; text: string; session_id: string; origin?: string }
+  | { type: "user_injected"; qid: string; text: string; session_id: string; origin?: string; team_pass?: string }
   | { type: "queue_removed"; qid: string; reason?: string; session_id?: string }
-  | { type: "turn_started"; session_id: string; origin?: string; message?: string }
+  | { type: "turn_started"; session_id: string; origin?: string; message?: string; team_pass?: string }
   | { type: "team_cascade_capped"; session_id: string; max: number; pending?: string }
   | { type: "turn_settled"; session_id: string }
   | { type: "turn_bot"; session_id: string; bot: { id: string; handle: string; name: string } | null }
@@ -91,7 +91,10 @@ export async function chatStream(
   if (options?.bypassSecretGuard) {
     headers["X-Bypass-Secret-Guard"] = "1";
   }
-  const body: Record<string, unknown> = { message, session_id, model };
+  // `surface` tells the backend which client sent the turn — it rides the
+  // message origin so other surfaces (and this UI) can badge cross-channel
+  // messages. The web app is always "web".
+  const body: Record<string, unknown> = { message, session_id, model, surface: "web" };
   if (options?.attachments && options.attachments.length > 0) {
     body.attachments = options.attachments;
   }
@@ -227,6 +230,7 @@ async function consumeSSEFrames(
             qid: (parsed.qid as string) ?? "",
             text: (parsed.text as string) ?? "",
             session_id: (parsed.session_id as string) ?? "",
+            origin: parsed.origin as string | undefined,
           });
         } else if (eventName === "user_injected") {
           onEvent({
@@ -234,6 +238,8 @@ async function consumeSSEFrames(
             qid: (parsed.qid as string) ?? "",
             text: (parsed.text as string) ?? "",
             session_id: (parsed.session_id as string) ?? "",
+            origin: parsed.origin as string | undefined,
+            team_pass: parsed.team_pass as string | undefined,
           });
         } else if (eventName === "queue_removed") {
           onEvent({
@@ -248,6 +254,7 @@ async function consumeSSEFrames(
             session_id: (parsed.session_id as string) ?? "",
             origin: parsed.origin as string | undefined,
             message: (parsed.message as string) ?? "",
+            team_pass: parsed.team_pass as string | undefined,
           });
         } else if (eventName === "turn_settled") {
           onEvent({ type: "turn_settled", session_id: (parsed.session_id as string) ?? "" });

@@ -254,6 +254,7 @@ def _cfg_to_dict(cfg: NexusConfig) -> dict[str, Any]:
             "cdp_port": cfg.browser.cdp_port,
             "idle_shutdown_minutes": cfg.browser.idle_shutdown_minutes,
             "remote_control": cfg.browser.remote_control,
+            "extension_policy": cfg.browser.extension_policy,
         },
         "server": {
             "bind": cfg.server.bind,

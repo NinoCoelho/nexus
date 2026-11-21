@@ -24,6 +24,7 @@ import {
   getSessions,
   graphragIndexFile,
   respondToUserRequest,
+  type UserRequestPayload,
 } from "./api";
 import { fetchBotDirectory } from "./hooks/useBotDirectory";
 import { ArrowLeft } from "lucide-react";
@@ -184,8 +185,26 @@ export default function App() {
   const coordinator = useCoordinator(settingsRevision);
   const { hasModel, availableModels, lastUsedModel, defaultModel, yoloMode, bumpSettingsRevision, persistUsedModel } = settings;
 
+  // Cross-session HITL subscription. ``useApprovalQueue`` listens on
+  // /notifications/events so any agent's question (active chat,
+  // backgrounded kanban card, …) pops up regardless of the current
+  // view. Recovers pending requests on mount via
+  // /notifications/pending so a hard reload mid-question still
+  // surfaces the dialog.
+  const { pendingRequest, headItem, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest, dropRequest, injectRequest } = useApprovalQueue();
+
+  // Session-open HITL recovery: history loads surface the detail's
+  // `pending` prompts through the same approval queue/dialog the live
+  // `user_request` event uses (deduped by request_id there).
+  const handlePendingHitl = useCallback(
+    (sessionId: string, pending: UserRequestPayload[]) => {
+      for (const p of pending) injectRequest(sessionId, p);
+    },
+    [injectRequest],
+  );
+
   const chatSession = useChatSession(
-    { availableModels, lastUsedModel, defaultModel, persistUsedModel },
+    { availableModels, lastUsedModel, defaultModel, persistUsedModel, onPendingHitl: handlePendingHitl },
     freshSessionId,
   );
 
@@ -201,6 +220,23 @@ export default function App() {
     handleCompact: _handleCompact, handleRemoveLast,
     handleResumePaused, handleContinueTeam,
   } = chatSession;
+
+  // ── Last-active session restore ─────────────────────────────────────────
+  //
+  // The active chat id is persisted so a reload reopens it (boot restore
+  // below). Captured once at first render so the persist effect can't race
+  // the restore read (activeSession is null at boot, which would otherwise
+  // clear the key before the restore consumed it).
+  const LAST_SESSION_KEY = "nexus.lastSessionId";
+  const [bootStoredSessionId] = useState<string | null>(() => {
+    try { return localStorage.getItem(LAST_SESSION_KEY); } catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if (activeSession) localStorage.setItem(LAST_SESSION_KEY, activeSession);
+      else localStorage.removeItem(LAST_SESSION_KEY);
+    } catch { /* storage unavailable — restore is best-effort */ }
+  }, [activeSession]);
 
   // While a bot chat owns the Bots main pane, the workspace hides behind
   // it. Requires the chat's bot to be the selected one — the active
@@ -267,14 +303,6 @@ export default function App() {
     });
   }, [availableModels, defaultModel, lastUsedModel, setChatStates]);
 
-  // Cross-session HITL subscription. ``useApprovalQueue`` listens on
-  // /notifications/events so any agent's question (active chat,
-  // backgrounded kanban card, …) pops up regardless of the current
-  // view. Recovers pending requests on mount via
-  // /notifications/pending so a hard reload mid-question still
-  // surfaces the dialog.
-  const { pendingRequest, headItem, queueLength, handleApprovalSubmit, handleApprovalTimeout, clearPendingRequest, focusRequest, dropRequest } = useApprovalQueue();
-
   // Bell + Web Push: durable HITL history visible from any view, plus
   // OS-level notifications when no Nexus tab is open. The push hook
   // registers /sw.js once and (after permission) keeps a live
@@ -340,6 +368,36 @@ export default function App() {
     }
     openSessionLocation(pid);
   }, [_handleSessionSelect, chatStates, pendingNewSession, openSessionLocation, setChatStates]);
+
+  // One-shot boot restore of the last active chat. Only fires when the app
+  // would otherwise land on the empty new-chat state (default route) —
+  // explicit navigation (#/bots/<id>, #/vault, deep links) always wins.
+  // Selecting through the normal path gives history load, live follow and
+  // active-turn re-attach (attachToSession) for free.
+  const bootRestoreDoneRef = useRef(false);
+  useEffect(() => {
+    if (bootRestoreDoneRef.current) return;
+    bootRestoreDoneRef.current = true;
+    if (!(route.view === "bots" && route.path == null)) return;
+    const sid = bootStoredSessionId;
+    if (!sid) return;
+    void (async () => {
+      try {
+        const { sessions } = await getSessions(200, 0);
+        if (!sessions.some((s) => s.id === sid)) {
+          // Deleted or archived — forget it and keep the empty new-chat state.
+          try { localStorage.removeItem(LAST_SESSION_KEY); } catch { /* ignore */ }
+          return;
+        }
+        handleSessionSelect(sid);
+      } catch {
+        // Backend unreachable — keep the empty new-chat state.
+      }
+    })();
+    // One-shot at boot: `route`/`bootStoredSessionId` are the boot values;
+    // `handleSessionSelect` is only read on the first run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, bootStoredSessionId, handleSessionSelect]);
 
   const handleNewChat = useCallback((projectId?: string | null) => {
     // Guard: some call sites hand this straight to onClick, whose first

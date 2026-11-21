@@ -1,6 +1,6 @@
 ---
 name: chrome-devtools
-description: Control a dedicated Chrome instance via the `browser` tool (CDP computer-use). Use for browser automation, page interaction, screenshots, form filling, and JS execution. Prefer over web_scrape when you need authenticated sessions, JS-heavy pages, or real browser interaction.
+description: Control a dedicated Chrome instance via the `browser` tool (CDP computer-use). Use for browser automation, page interaction, screenshots, form filling, and JS execution. Prefer over web_scrape when you need authenticated sessions, JS-heavy pages, or real browser interaction. NOT for Chrome side-panel chats — there the `browser` tool is policy-blocked; use the `page` tool on the user's real tab instead.
 ---
 
 ## When to use

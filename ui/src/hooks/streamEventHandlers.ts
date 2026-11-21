@@ -39,16 +39,20 @@ export function applyUserEnqueuedEvent(
   key: string,
   qid: string,
   text: string,
+  origin?: string,
 ) {
   setChatStates((prev) => {
     const next = new Map(prev);
     const cur = next.get(key) ?? emptyState();
     if ((cur.queued ?? []).some((q) => q.qid === qid)) return prev;
+    // Cross-surface queue entries keep their origin so the promoted bubble
+    // can badge it even if the inject event arrives without one.
+    const originPatch = origin && origin !== "web" ? { origin } : {};
     // The sender's optimistic chip (no qid yet) matches by text.
     const idx = (cur.queued ?? []).findIndex((q) => !q.qid && q.text === text);
     const queued = [...(cur.queued ?? [])];
-    if (idx >= 0) queued[idx] = { ...queued[idx], qid };
-    else queued.push({ qid, text });
+    if (idx >= 0) queued[idx] = { ...queued[idx], qid, ...originPatch };
+    else queued.push({ qid, text, ...originPatch });
     next.set(key, { ...cur, queued });
     return next;
   });
@@ -59,13 +63,19 @@ export function applyUserInjectedEvent(
   key: string,
   qid: string,
   text: string,
+  origin?: string,
+  teamPass?: string,
 ) {
   setChatStates((prev) => {
     const next = new Map(prev);
     const cur = next.get(key) ?? emptyState();
+    const injected = (cur.queued ?? []).find((q) => q.qid === qid);
     const queued = (cur.queued ?? []).filter(
       (q) => q.qid !== qid && !(q.qid == null && q.text === text),
     );
+    // Origin badge: the inject event's origin wins; fall back to the one
+    // captured when the message was enqueued. Only non-web surfaces badge.
+    const badgeOrigin = origin === "web" ? undefined : (origin ?? injected?.origin);
     const msgs = [...cur.messages];
     const lastIdx = msgs.length - 1;
     const lastIsStreamingAsst =
@@ -78,7 +88,13 @@ export function applyUserInjectedEvent(
     const alreadyInserted =
       neighbor != null && neighbor.role === "user" && neighbor.content === text;
     if (!alreadyInserted) {
-      msgs.splice(insertBefore, 0, { role: "user", content: text, timestamp: new Date() });
+      msgs.splice(insertBefore, 0, {
+        role: "user",
+        content: text,
+        timestamp: new Date(),
+        ...(badgeOrigin ? { origin: badgeOrigin } : {}),
+        ...(teamPass ? { teamPass } : {}),
+      });
     }
     if (!lastIsStreamingAsst) {
       // Chained turn: the runner already started it server-side — seed
@@ -115,6 +131,8 @@ export function applyTurnStartedEvent(
   setChatStates: SetChatStates,
   key: string,
   text: string,
+  origin?: string,
+  teamPass?: string,
 ) {
   if (!text) return;
   setChatStates((prev) => {
@@ -135,7 +153,13 @@ export function applyTurnStartedEvent(
     const lastIsStreamingAsst =
       lastIdx >= 0 && msgs[lastIdx].role === "assistant" && msgs[lastIdx].streaming;
     const insertBefore = lastIsStreamingAsst ? lastIdx : msgs.length;
-    msgs.splice(insertBefore, 0, { role: "user", content: text, timestamp: new Date() });
+    msgs.splice(insertBefore, 0, {
+      role: "user",
+      content: text,
+      timestamp: new Date(),
+      ...(origin && origin !== "web" ? { origin } : {}),
+      ...(teamPass ? { teamPass } : {}),
+    });
     if (!lastIsStreamingAsst) {
       msgs.push({ role: "assistant", content: "", trace: [], timeline: [], timestamp: new Date(), streaming: true });
     }
@@ -328,6 +352,10 @@ export function applyDoneEvent(
   sounds.finalResponse();
 
   if (!activeSession) {
+    // Fallback migration of __new__ → real session id. The send() path now
+    // promotes on the FIRST SSE frame, so this branch is only reached when
+    // a stream resumed after dying before any frame (zero events) finally
+    // delivers `done`.
     // First message — migrate __new__ to the real session id.
     setChatStates((prev) => {
       const next = new Map(prev);

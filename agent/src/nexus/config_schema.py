@@ -540,6 +540,15 @@ class BrowserConfig(BaseModel):
     # way; this gates the control channel. Loopback clients are never
     # restricted.
     remote_control: bool = False
+    # Policy for the managed `browser` tool when the current turn was
+    # launched from the Chrome side-panel extension. The side panel
+    # already lives in the user's real browser (the `page` tool works
+    # on the actual tab); spinning up the separate CDP Chrome there is
+    # almost never what the user wants. "refuse" (default) blocks it
+    # outright with an explanatory error, "ask" lets the model retry
+    # with approved=true after an explicit user confirmation, "allow"
+    # disables the gate.
+    extension_policy: str = "refuse"
 
 
 class ApnsSettings(BaseModel):

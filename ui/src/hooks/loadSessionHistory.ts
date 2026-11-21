@@ -7,20 +7,25 @@
  * reload so the post-refresh view matches the live-stream view.
  */
 import type { Message, TimelineStep } from "../components/ChatView";
-import { getSession, HIDDEN_SEED_MARKER, type TraceEvent } from "../api";
+import { getSession, HIDDEN_SEED_MARKER, type SessionDetail, type TraceEvent } from "../api";
 import { parseHistoryTimestamp, type ChatState } from "../types/chat";
 
 type SetChatStates = React.Dispatch<React.SetStateAction<Map<string, ChatState>>>;
 
 const PARTIAL_PREFIX_RE = /^\[(interrupted|cancelled|iteration_limit|empty_response|llm_error|crashed|budget_exceeded)\]\s*/;
 
+/**
+ * @returns The fetched session detail (carries `pending` HITL prompts), or
+ * `null` when the request failed. Messages are hydrated into chat state
+ * either way the loader always resolves.
+ */
 export async function loadSessionHistory(
   id: string,
   setChatStates: SetChatStates,
   computeSeedModel: (preferred?: string) => string,
   patchState: (key: string, patch: Partial<ChatState>) => void,
   forceRefresh?: boolean,
-): Promise<void> {
+): Promise<SessionDetail | null> {
   try {
     const detail = await getSession(id);
     const raw = detail.messages;
@@ -81,6 +86,11 @@ export async function loadSessionHistory(
           seq: m.seq,
           pinned: m.pinned ?? false,
           ...(attachments ? { attachments } : {}),
+          ...(m.origin && m.origin !== "web" ? { origin: m.origin } : {}),
+          // Server strips the raw `<!-- nx:team -->` marker from content
+          // and reports the pass handle here (pure pass rows keep just
+          // "@handle" as content). Preserved so ChatView renders the chip.
+          ...(m.team_pass ? { teamPass: m.team_pass } : {}),
         });
         continue;
       }
@@ -167,6 +177,11 @@ export async function loadSessionHistory(
       // Mention-routing attribution rides the persisted rows; the whole
       // bubble shares one routing (a new user message breaks the bubble).
       if (m.bot) bubble.bot = m.bot;
+      // Cross-surface origin rides the persisted rows the same way — the
+      // latest assistant row's origin wins (matches the bot/timestamp
+      // anchoring above).
+      if (m.origin && m.origin !== "web") bubble.origin = m.origin;
+      else if (m.origin === "web") bubble.origin = undefined;
       // A non-partial latest row means the turn finished cleanly even if an
       // earlier iteration was marked partial — drop the flag so the
       // Retry/Continue banner doesn't appear on a completed bubble.
@@ -211,7 +226,9 @@ export async function loadSessionHistory(
       });
       return next;
     });
+    return detail;
   } catch {
     patchState(id, { historyLoaded: true });
+    return null;
   }
 }

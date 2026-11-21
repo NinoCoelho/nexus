@@ -155,9 +155,13 @@ final class NexusClient {
         /// nil (no "model": null on the wire) — omission means "use the
         /// server's default routing".
         var model: String?
+        /// Client surface tag — lets the server (and every other channel)
+        /// tell where each message/turn came from. Always "ios" from this
+        /// app; the server defaults to "web" when absent.
+        var surface: String = "ios"
 
         enum CodingKeys: String, CodingKey {
-            case message, attachments, model
+            case message, attachments, model, surface
             case sessionId = "session_id"
             case projectId = "project_id"
         }
@@ -170,11 +174,12 @@ final class NexusClient {
         message: String,
         attachments: [ChatAttachment]? = nil,
         projectId: String? = nil,
-        model: String? = nil
+        model: String? = nil,
+        surface: String = "ios"
     ) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         var req = request("chat/stream", method: "POST", body: SendMessageBody(
             sessionId: sessionId, message: message, attachments: attachments,
-            projectId: projectId, model: model
+            projectId: projectId, model: model, surface: surface
         ))
         req.timeoutInterval = 60 * 30
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")

@@ -97,12 +97,19 @@ class ChatTurnRunner:
         """Spawn the runner as a detached task and register it."""
         # Announce the turn (and its origin) before the first delta so bus
         # subscribers can prepare per-turn state — the Telegram streamer
-        # echoes web-originated user messages from this event.
+        # echoes web-originated user messages from this event. The echoed
+        # message is display-cleaned (a side-panel <context> pointer must
+        # not be echoed raw into other channels); the runner keeps the
+        # full text for the LLM.
+        from ..message_display import display_fields
+
+        _display_msg, _team_pass = display_fields(self.message)
         self._publish({
             "type": "turn_started",
             "session_id": self.session_id,
             "origin": self.origin,
-            "message": self.message,
+            "message": _display_msg,
+            **({"team_pass": _team_pass} if _team_pass else {}),
         })
         self.task = asyncio.create_task(self._run(), name=f"chat-turn-{self.session_id}")
         _running_turns[self.session_id] = self
@@ -289,6 +296,9 @@ class ChatTurnRunner:
 
     async def _run(self) -> None:
         token = CURRENT_SESSION_ID.set(self.session_id)
+        from ...agent.context import TURN_SURFACE
+
+        surface_token = TURN_SURFACE.set(self.origin)
         self.store._trace_suppressed.add(self.session_id)
         # Bot→bot cascade budget — counts every chained team pass (round
         # fan-out + mention cascade), so a team can never run forever.
@@ -319,12 +329,16 @@ class ChatTurnRunner:
                 nxt = self._next_queued()
                 if nxt is None:
                     break
+                from ..message_display import display_fields as _display_fields
+
+                _inj_text, _inj_pass = _display_fields(nxt.text)
                 self._publish({
                     "type": "user_injected",
                     "qid": nxt.qid,
-                    "text": nxt.text,
+                    "text": _inj_text,
                     "origin": nxt.origin,
                     "session_id": self.session_id,
+                    **({"team_pass": _inj_pass} if _inj_pass else {}),
                 })
                 self._begin_chained_turn(nxt)
                 if nxt.origin == "team":
@@ -357,6 +371,7 @@ class ChatTurnRunner:
             })
             try:
                 CURRENT_SESSION_ID.reset(token)
+                TURN_SURFACE.reset(surface_token)
             except ValueError:
                 log.debug("CURRENT_SESSION_ID reset across contexts")
             if _running_turns.get(self.session_id) is self:
@@ -523,10 +538,18 @@ class ChatTurnRunner:
     # ── Publishing helpers ──────────────────────────────────────────────
 
     def _publish(self, event: dict[str, Any]) -> None:
-        """Publish a run_turn_stream event to the session bus."""
+        """Publish a run_turn_stream event to the session bus.
+
+        ``json_safe`` strips live domain objects (``ChatMessage``s ride
+        the ``done`` event) — subscribers serialise with ``json.dumps``
+        and a raw object crashed the SSE channel mid-turn-completion
+        (2026-11 "spinner forever" bug).
+        """
+        from ..events import json_safe
+
         self.store.publish(
             self.session_id,
-            SessionEvent(kind=event.get("type", "message"), data=event),
+            SessionEvent(kind=event.get("type", "message"), data=json_safe(event)),
         )
 
     def _publish_terminal_error(
@@ -572,6 +595,7 @@ class ChatTurnRunner:
             accumulated_text=self.acc.accumulated_text,
             accumulated_tools=self.acc.accumulated_tools,
             partial_status=self.acc.partial_status,
+            turn_origin=self.origin,
         )
 
 

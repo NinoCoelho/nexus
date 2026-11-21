@@ -615,7 +615,19 @@ async def chat_events(session_id: str, store: SessionStore = Depends(get_session
             if event is None:
                 yield b": ping\n\n"
                 continue
-            yield event.to_sse()
+            # One bad frame must never kill the channel — the whole point
+            # of this stream is that it stays up for the *next* event
+            # (a crash here left turns completing server-side while the
+            # client spun forever waiting for the reply).
+            try:
+                frame = event.to_sse()
+            except Exception:  # noqa: BLE001 — log, skip, keep streaming
+                log.exception(
+                    "session event SSE encode failed (session=%s); skipping frame",
+                    session_id,
+                )
+                continue
+            yield frame
 
     return StreamingResponse(
         stream(),

@@ -36,6 +36,10 @@ class Session:
     history: list[ChatMessage] = field(default_factory=list)
     context: str | None = None
     project_id: str | None = None
+    # Per-message channel tag, keyed by message index (seq): which
+    # surface sent the user message / launched the turn that produced
+    # the assistant reply. Missing key = untagged (legacy or internal).
+    message_origins: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass

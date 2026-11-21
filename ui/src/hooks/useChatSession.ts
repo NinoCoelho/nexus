@@ -6,12 +6,14 @@
  * the auto-send logic for hidden seeds.
  *
  * The special key `NEW_KEY` represents the not-yet-created session (empty input
- * before the first message). On receiving `done` from the backend, the session
- * is promoted to its canonical `session_id` via `setActiveSession`.
+ * before the first message). The server adopts the client-minted id verbatim,
+ * so on the first SSE frame of any kind the session is promoted to its final
+ * `session_id` via `setActiveSession` — a reload mid-first-turn can then
+ * re-attach through the normal session-select path instead of losing the chat.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Message } from "../components/ChatView";
-import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, respondToUserRequestStream, subscribeSessionEvents, continueTeamCascade, type SessionSummary, type StreamEvent } from "../api";
+import { chatStream, truncateSession, compactSession, rollbackLastMessage, resumePausedTurn, HIDDEN_SEED_MARKER, checkTurnActive, resumeTurnStream, cancelChatTurn, deleteQueuedMessage, respondToUserRequestStream, subscribeSessionEvents, continueTeamCascade, type SessionSummary, type StreamEvent, type UserRequestPayload } from "../api";
 import { NEW_KEY, emptyState, type ChatState, type UseChatSessionResult } from "../types/chat";
 import { applyDeltaEvent, applyThinkingEvent, applyToolEvent, applyDoneEvent, applyLimitReachedEvent, applyErrorEvent, applyPausedForCooldownEvent, applyReconnectingEvent, applyQueuedAckEvent, applyUserEnqueuedEvent, applyUserInjectedEvent, applyQueueRemovedEvent, applyTurnBotEvent, applyTurnStartedEvent, applyCascadeCappedEvent } from "./streamEventHandlers";
 import { loadSessionHistory as loadHistory } from "./loadSessionHistory";
@@ -42,15 +44,17 @@ const MAX_CACHED_SESSIONS = 8;
  * @param deps.lastUsedModel - Last model used by the user (persisted).
  * @param deps.defaultModel - Default model from the server configuration.
  * @param deps.persistUsedModel - Persists the chosen model for future sessions.
+ * @param deps.onPendingHitl - Optional sink for pending HITL prompts found on
+ *   a loaded session detail (session-open recovery of lost SSE prompts).
  * @param freshSessionId - Factory that generates a UUID for new pending sessions;
  *   needed to open the event SSE channel before the first send.
  * @returns Full set of state and handlers for the chat views.
  */
 export function useChatSession(
-  deps: { availableModels: string[]; lastUsedModel: string; defaultModel: string; persistUsedModel: (model: string) => void },
+  deps: { availableModels: string[]; lastUsedModel: string; defaultModel: string; persistUsedModel: (model: string) => void; onPendingHitl?: (sessionId: string, pending: UserRequestPayload[]) => void },
   freshSessionId: () => string,
 ): UseChatSessionResult {
-  const { availableModels, lastUsedModel, defaultModel, persistUsedModel } = deps;
+  const { availableModels, lastUsedModel, defaultModel, persistUsedModel, onPendingHitl } = deps;
 
   const [chatStates, setChatStates] = useState<Map<string, ChatState>>(() => {
     const m = new Map<string, ChatState>();
@@ -132,8 +136,14 @@ export function useChatSession(
   }, [chatStates, activeKey, setChatStates]);
 
   const loadSessionHistory = useCallback(
-    (id: string) => loadHistory(id, setChatStates, computeSeedModel, patchState),
-    [computeSeedModel, patchState],
+    async (id: string) => {
+      const detail = await loadHistory(id, setChatStates, computeSeedModel, patchState);
+      // Session-open HITL recovery: a prompt whose live `user_request` event
+      // was lost (dead SSE channel / reload) still rides the session detail.
+      // The approval queue dedupes by request_id against live events.
+      if (detail?.pending?.length && onPendingHitl) onPendingHitl(id, detail.pending);
+    },
+    [computeSeedModel, patchState, onPendingHitl],
   );
 
   // Mirror of chatStates for event subscriptions — the effects below must
@@ -247,7 +257,7 @@ export function useChatSession(
           if (event.type === "queued") {
             applyQueuedAckEvent(setChatStates, k, event.qid);
           } else if (event.type === "user_enqueued") {
-            applyUserEnqueuedEvent(setChatStates, k, event.qid, event.text);
+            applyUserEnqueuedEvent(setChatStates, k, event.qid, event.text, event.origin);
           }
           // Injection/chaining events arrive on the running turn's own
           // stream (the dispatcher below), not on this short ack stream.
@@ -306,10 +316,8 @@ export function useChatSession(
     // immediately, without waiting for the round-trip / `done` event.
     // The hidden-seed turn (vault dispatch / kanban) is intentionally
     // excluded — those flows already manage their own session listing.
-    // We deliberately *don't* promote activeSession here so the existing
-    // NEW_KEY-keyed streaming pipeline (delta/tool/done handlers) keeps
-    // working unchanged; the sidebar treats `pendingSessionId` as the
-    // highlighted row via the placeholder.
+    // The sidebar treats `pendingSessionId` as the highlighted row via the
+    // placeholder until the backend's session list takes over.
     if (!activeSession && !isHidden) {
       const visibleText = (rawText || "Untitled").trim();
       const titleSnippet = visibleText.length > 60
@@ -326,15 +334,51 @@ export function useChatSession(
       });
     }
 
-    // Mutable routing for this stream: the first `done` of a fresh session
-    // migrates NEW_KEY → real session id; a queued follow-up then chains
-    // into another turn on the SAME stream, and its events must target the
-    // migrated key (and skip the migration path in applyDoneEvent).
+    // Mutable routing for this stream. A fresh session is promoted on the
+    // FIRST SSE frame of any kind (see `promote` below); a queued follow-up
+    // then chains into another turn on the SAME stream, and its events must
+    // target the promoted key (and skip the migration path in applyDoneEvent).
     let streamKey = key;
     let streamActiveSession = activeSession;
 
+    // Early session promotion: the server adopts the client-minted
+    // `pendingSessionId` verbatim, so the id is final the moment the POST
+    // is accepted. On the first frame (queued ack, turn_started, first
+    // delta — anything) migrate NEW_KEY → pendingSessionId so a reload
+    // mid-first-turn lands on a real session id and re-attaches via the
+    // normal session-select path. Network/HTTP errors before any frame
+    // never get here and keep the legacy `__new__` behavior.
+    const promotable = !activeSession && key === NEW_KEY && !!sidForPost && sidForPost !== NEW_KEY;
+    let promoted = false;
+    const promote = () => {
+      if (promoted || !promotable) return;
+      promoted = true;
+      streamKey = sidForPost;
+      streamActiveSession = sidForPost;
+      setChatStates((prev) => {
+        const next = new Map(prev);
+        const fresh = next.get(NEW_KEY) ?? emptyState();
+        // Move the live turn state wholesale — messages, thinking, queued
+        // chips, projectId, selectedModel all carry over. input/attachments
+        // were already cleared by the optimistic send patch. historyLoaded
+        // guards the lazy loader against clobbering the streaming state.
+        next.set(sidForPost, { ...fresh, historyLoaded: true, projectId: fresh.projectId ?? null });
+        next.set(NEW_KEY, { ...emptyState(), selectedModel: fresh.selectedModel });
+        return next;
+      });
+      setActiveSession(sidForPost);
+      // Re-key the abort controller so Stop (which resolves the controller
+      // through activeKey) still finds the in-flight stream after promotion.
+      const ac = abortControllersRef.current.get(key);
+      if (ac) {
+        abortControllersRef.current.delete(key);
+        abortControllersRef.current.set(sidForPost, ac);
+      }
+    };
+
     try {
       await chatStream(text, sidForPost, (event) => {
+        promote();
         if (event.type === "delta") {
           applyDeltaEvent(setChatStates, streamKey, event.text);
         } else if (event.type === "thinking") {
@@ -364,9 +408,9 @@ export function useChatSession(
         } else if (event.type === "queued") {
           applyQueuedAckEvent(setChatStates, streamKey, event.qid);
         } else if (event.type === "user_enqueued") {
-          applyUserEnqueuedEvent(setChatStates, streamKey, event.qid, event.text);
+          applyUserEnqueuedEvent(setChatStates, streamKey, event.qid, event.text, event.origin);
         } else if (event.type === "user_injected") {
-          applyUserInjectedEvent(setChatStates, streamKey, event.qid, event.text);
+          applyUserInjectedEvent(setChatStates, streamKey, event.qid, event.text, event.origin, event.team_pass);
         } else if (event.type === "queue_removed") {
           applyQueueRemovedEvent(setChatStates, streamKey, event.qid);
         } else if (event.type === "team_cascade_capped") {
@@ -387,64 +431,65 @@ export function useChatSession(
           if (turnStatus.running) {
             // Reset the trailing assistant message so replayed deltas
             // re-accumulate from scratch (the server replays from turn start).
+            // `streamKey` follows early promotion (NEW_KEY → session id).
             setChatStates((prev) => {
               const next = new Map(prev);
-              const cur = next.get(key) ?? emptyState();
+              const cur = next.get(streamKey) ?? emptyState();
               const msgs = cur.messages.slice();
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === "assistant") {
                 msgs[lastIdx] = { ...msgs[lastIdx], content: "", trace: [], timeline: [], streaming: true };
               }
-              next.set(key, { ...cur, messages: msgs, thinking: true });
+              next.set(streamKey, { ...cur, messages: msgs, thinking: true });
               return next;
             });
             const resumeAbort = new AbortController();
-            abortControllersRef.current.set(key, resumeAbort);
+            abortControllersRef.current.set(streamKey, resumeAbort);
             let resumeDone = false;
             try {
               await resumeTurnStream(recoverSid, (event) => {
                 if (event.type === "delta") {
-                  applyDeltaEvent(setChatStates, key, event.text);
+                  applyDeltaEvent(setChatStates, streamKey, event.text);
                 } else if (event.type === "thinking") {
-                  applyThinkingEvent(setChatStates, key, event.text);
+                  applyThinkingEvent(setChatStates, streamKey, event.text);
                 } else if (event.type === "tool") {
-                  applyToolEvent(setChatStates, key, { name: event.name, args: event.args, result_preview: event.result_preview, result: event.result });
+                  applyToolEvent(setChatStates, streamKey, { name: event.name, args: event.args, result_preview: event.result_preview, result: event.result });
                 } else if (event.type === "done") {
                   resumeDone = true;
-                  applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, key, activeSession, state.selectedModel, event);
+                  applyDoneEvent(setChatStates, (id) => setActiveSession(id), setSessionsRevision, persistUsedModel, streamKey, streamActiveSession, state.selectedModel, event);
                 } else if (event.type === "limit_reached") {
-                  applyLimitReachedEvent(setChatStates, key, event.iterations);
+                  applyLimitReachedEvent(setChatStates, streamKey, event.iterations);
                 } else if (event.type === "reconnecting") {
-                  applyReconnectingEvent(setChatStates, key, { attempt: event.attempt, maxAttempts: event.maxAttempts, delaySeconds: event.delaySeconds, reason: event.reason });
+                  applyReconnectingEvent(setChatStates, streamKey, { attempt: event.attempt, maxAttempts: event.maxAttempts, delaySeconds: event.delaySeconds, reason: event.reason });
                 } else if (event.type === "paused_for_cooldown") {
-                  applyPausedForCooldownEvent(setChatStates, key, event.retry_after, event.estimated_seconds);
+                  applyPausedForCooldownEvent(setChatStates, streamKey, event.retry_after, event.estimated_seconds);
                 } else if (event.type === "error") {
-                  applyErrorEvent(setChatStates, key, event);
+                  applyErrorEvent(setChatStates, streamKey, event);
                 } else if (event.type === "turn_bot") {
-                  applyTurnBotEvent(setChatStates, key, event.bot);
+                  applyTurnBotEvent(setChatStates, streamKey, event.bot);
                 }
               }, resumeAbort.signal);
               if (!resumeDone && !resumeAbort.signal.aborted) {
                 // Resume stream also died — fall back to history reload.
-                setChatStates((prev) => { const next = new Map(prev); const cur = next.get(key) ?? emptyState(); next.set(key, { ...cur, historyLoaded: false, thinking: false }); return next; });
+                setChatStates((prev) => { const next = new Map(prev); const cur = next.get(streamKey) ?? emptyState(); next.set(streamKey, { ...cur, historyLoaded: false, thinking: false }); return next; });
                 void loadSessionHistory(recoverSid);
               }
             } catch (err) {
               if (!(err instanceof DOMException && err.name === "AbortError")) {
-                const recovered = await tryRecoverSession(recoverSid, key, activeSession, setChatStates, setActiveSession, loadSessionHistory);
-                if (!recovered) appendConnectionErrorBanner(err, key, setChatStates);
+                const recovered = await tryRecoverSession(recoverSid, streamKey, streamActiveSession, setChatStates, setActiveSession, loadSessionHistory);
+                if (!recovered) appendConnectionErrorBanner(err, streamKey, setChatStates);
               }
             } finally {
-              if (abortControllersRef.current.get(key) === resumeAbort) abortControllersRef.current.delete(key);
+              if (abortControllersRef.current.get(streamKey) === resumeAbort) abortControllersRef.current.delete(streamKey);
             }
           } else {
             // Turn is not running — reload persisted history for partial progress.
-            setChatStates((prev) => { const next = new Map(prev); const cur = next.get(key) ?? emptyState(); next.set(key, { ...cur, historyLoaded: false, thinking: false }); return next; });
+            setChatStates((prev) => { const next = new Map(prev); const cur = next.get(streamKey) ?? emptyState(); next.set(streamKey, { ...cur, historyLoaded: false, thinking: false }); return next; });
             if (!activeSession) setActiveSession(recoverSid);
             void loadSessionHistory(recoverSid);
           }
         } else {
-          patchState(key, { thinking: false });
+          patchState(streamKey, { thinking: false });
         }
       }
     } catch (err) {
@@ -454,12 +499,12 @@ export function useChatSession(
         // Network/fetch error — try to recover persisted partial progress.
         const recoverSid = activeSession ?? sidForPost;
         const recovered = recoverSid
-          ? await tryRecoverSession(recoverSid, key, activeSession, setChatStates, setActiveSession, loadSessionHistory)
+          ? await tryRecoverSession(recoverSid, streamKey, streamActiveSession, setChatStates, setActiveSession, loadSessionHistory)
           : false;
-        if (!recovered) appendConnectionErrorBanner(err, key, setChatStates);
+        if (!recovered) appendConnectionErrorBanner(err, streamKey, setChatStates);
       }
     } finally {
-      if (abortControllersRef.current.get(key) === abortController) abortControllersRef.current.delete(key);
+      if (abortControllersRef.current.get(streamKey) === abortController) abortControllersRef.current.delete(streamKey);
     }
   }, [activeKey, activeSession, chatStates, patchState, pendingSessionId, loadSessionHistory, persistUsedModel]);
 
@@ -473,18 +518,22 @@ export function useChatSession(
     void send(pending.seed);
   }, [activeSession, send]);
 
-  // Drop the optimistic placeholder once `applyDoneEvent` has promoted
-  // the real session id — the backend's session list now owns that row.
+  // Drop the optimistic placeholder once the session is live AND its first
+  // turn is no longer streaming — the backend's session list owns the row
+  // from then on. (Early promotion makes activeSession match the
+  // placeholder id on the first SSE frame; dropping there would blank the
+  // sidebar row mid-turn because the list only refetches on revision bumps.)
   // Also kick off a delayed second sidebar refresh: the LLM autotitle
   // task runs concurrently with the agent and *usually* finishes first,
   // but on a very short turn it may land just after `done`, so we
   // re-fetch ~2.5s later to pick up the LLM-generated title.
   useEffect(() => {
     if (!pendingNewSession || activeSession !== pendingNewSession.id) return;
+    if (chatStates.get(pendingNewSession.id)?.thinking) return;
     setPendingNewSession(null);
     const t = setTimeout(() => setSessionsRevision((r) => r + 1), 2500);
     return () => clearTimeout(t);
-  }, [activeSession, pendingNewSession]);
+  }, [activeSession, pendingNewSession, chatStates]);
 
   const handleStop = useCallback(() => {
     const key = activeKey;
@@ -557,13 +606,13 @@ export function useChatSession(
       } else if (event.type === "queued") {
         applyQueuedAckEvent(setChatStates, key, event.qid);
       } else if (event.type === "user_enqueued") {
-        applyUserEnqueuedEvent(setChatStates, key, event.qid, event.text);
+        applyUserEnqueuedEvent(setChatStates, key, event.qid, event.text, event.origin);
       } else if (event.type === "user_injected") {
-        applyUserInjectedEvent(setChatStates, key, event.qid, event.text);
+        applyUserInjectedEvent(setChatStates, key, event.qid, event.text, event.origin, event.team_pass);
       } else if (event.type === "queue_removed") {
         applyQueueRemovedEvent(setChatStates, key, event.qid);
       } else if (event.type === "turn_started") {
-        applyTurnStartedEvent(setChatStates, key, event.message ?? "");
+        applyTurnStartedEvent(setChatStates, key, event.message ?? "", event.origin, event.team_pass);
       } else if (event.type === "team_cascade_capped") {
         applyCascadeCappedEvent(setChatStates, key, event.max);
       } else if (event.type === "turn_bot") {
@@ -695,7 +744,7 @@ export function useChatSession(
       try {
         await chatStream(rawText, sessionId, (event) => {
           if (event.type === "queued") applyQueuedAckEvent(setChatStates, key, event.qid);
-          else if (event.type === "user_enqueued") applyUserEnqueuedEvent(setChatStates, key, event.qid, event.text);
+          else if (event.type === "user_enqueued") applyUserEnqueuedEvent(setChatStates, key, event.qid, event.text, event.origin);
         });
       } catch {
         setChatStates((prev) => {
@@ -944,9 +993,9 @@ export function useChatSession(
             } else if (event.type === "queued") {
               applyQueuedAckEvent(setChatStates, activeKey, event.qid);
             } else if (event.type === "user_enqueued") {
-              applyUserEnqueuedEvent(setChatStates, activeKey, event.qid, event.text);
+              applyUserEnqueuedEvent(setChatStates, activeKey, event.qid, event.text, event.origin);
             } else if (event.type === "user_injected") {
-              applyUserInjectedEvent(setChatStates, activeKey, event.qid, event.text);
+              applyUserInjectedEvent(setChatStates, activeKey, event.qid, event.text, event.origin, event.team_pass);
             } else if (event.type === "queue_removed") {
               applyQueueRemovedEvent(setChatStates, activeKey, event.qid);
             } else if (event.type === "turn_bot") {

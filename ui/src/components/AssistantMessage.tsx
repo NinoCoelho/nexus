@@ -22,6 +22,7 @@ import { useBotDirectory, type BotRef } from "../hooks/useBotDirectory";
 import VaultFilePreview from "./VaultFilePreview";
 import ActivityTimeline from "./ActivityTimeline";
 import { useTTS } from "../hooks/useTTS";
+import { originLabel } from "../originLabel";
 import { InternalResourceRenderer } from "./StepDetailModal/ResultRenderers";
 import { tryParseJson } from "./StepDetailModal/types";
 import "./AssistantMessage.css";
@@ -57,6 +58,8 @@ interface Props {
   };
   /** Mention-routing attribution — reply authored by another bot. */
   bot?: { id: string; handle: string; name: string } | null;
+  /** Surface the turn originated from — badged when not "web". */
+  origin?: string;
   /** @handle tokens in the body that match a known bot render as links —
    * clicking opens that bot's chat with this message quoted. */
   onMentionBot?: (handle: string, quote: string) => void;
@@ -98,7 +101,7 @@ function inlineResourcesFromTrace(trace?: TraceEvent[]): { uri: string; toolResu
   return out;
 }
 
-function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting, bot, onMentionBot, onForwardToBot }: Props) {
+function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOpenInVault, model, sessionId, seq, feedback, onFeedbackChange, pinned, onPinChange, msgIndex, thinking, reconnecting, bot, origin, onMentionBot, onForwardToBot }: Props) {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const tts = useTTS();
@@ -210,6 +213,11 @@ function AssistantMessage({ content, trace, timeline, timestamp, streaming, onOp
         )}
         {bot && (
           <span className="asst-bot-badge" title={`Reply from ${bot.name}`}>@{bot.handle} · {bot.name}</span>
+        )}
+        {origin && origin !== "web" && (
+          <span className="asst-origin-badge" title={`Turn started from ${originLabel(origin)}`}>
+            {originLabel(origin)}
+          </span>
         )}
         <span className="asst-time">{fmt(timestamp)}</span>
       </div>

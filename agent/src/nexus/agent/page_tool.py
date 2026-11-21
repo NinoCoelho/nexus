@@ -116,10 +116,12 @@ PAGE_TOOL = ToolSpec(
             "code": {
                 "type": "string",
                 "description": (
-                    "For js: JavaScript expression to evaluate in the page. Strict-CSP "
-                    "pages (admin portals etc.) block dynamic evaluation — there use "
-                    "selector-based actions or the managed browser (`browser` tool), "
-                    "whose CDP evaluation ignores page CSP."
+                    "For js: JavaScript expression to evaluate in the page. "
+                    "Strict-CSP pages may block dynamic evaluation — fall "
+                    "back to selector-based actions (click/type). Do NOT "
+                    "switch to the managed `browser` tool over CSP; if no "
+                    "page-tool action works, say it can't be done on this "
+                    "tab."
                 ),
             },
             "lang": {

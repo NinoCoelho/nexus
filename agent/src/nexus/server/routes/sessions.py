@@ -172,6 +172,7 @@ async def search_sessions(
 @router.get("/sessions/{session_id}")
 async def get_session(
     session_id: str,
+    include_tools: bool = False,
     store: SessionStore = Depends(get_sessions),
     locale: str = Depends(get_locale),
 ) -> dict:
@@ -189,19 +190,52 @@ async def get_session(
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     feedback_map = await asyncio.to_thread(store.get_feedback_map, session_id)
     pinned_set = await asyncio.to_thread(store.get_pinned_set, session_id)
-    messages = [
-        {
-            "seq": i,
-            "role": m.role,
-            "content": m.content,
-            "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
-            "tool_call_id": m.tool_call_id,
-            "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
-            "feedback": feedback_map.get(i),
-            "pinned": i in pinned_set,
-        }
-        for i, m in enumerate(session.history)
-    ]
+    origins = getattr(session, "message_origins", None) or {}
+    from ..message_display import (
+        context_preamble_meta,
+        strip_context_preamble,
+        strip_team_pass_marker,
+    )
+
+    messages = []
+    for i, m in enumerate(session.history):
+        role_val = getattr(m.role, "value", m.role)
+        # Tool rows are LLM plumbing, not conversation. The web UI opts
+        # in (?include_tools=1) to build the per-assistant timeline;
+        # every other surface (iOS, panel history) gets a clean
+        # transcript without reinstalling anything.
+        if role_val == "tool" and not include_tools:
+            continue
+        content = m.content
+        page_meta = None
+        team_pass = None
+        # Display-only clean: side-panel messages carry a <context>
+        # pointer the LLM needs but transcripts must not show raw. In
+        # team sessions a pass marker precedes it — strip both, in
+        # order, and surface the handle as a structured field.
+        if isinstance(content, str) and content and role_val == "user":
+            content, team_pass = strip_team_pass_marker(content)
+            page_meta = context_preamble_meta(content)
+            content = strip_context_preamble(content)
+            if not content and team_pass:
+                content = team_pass
+        messages.append(
+            {
+                "seq": i,
+                "role": m.role,
+                "content": content,
+                "tool_calls": [tc.model_dump() for tc in m.tool_calls] if m.tool_calls else None,
+                "tool_call_id": m.tool_call_id,
+                "created_at": _iso(ts_list[i] if i < len(ts_list) else None),
+                "feedback": feedback_map.get(i),
+                "pinned": i in pinned_set,
+                # Channel that produced this message ("web" | "chrome-extension"
+                # | "ios" | "telegram" | …). Absent = untagged (legacy/internal).
+                **({"origin": origins[i]} if i in origins else {}),
+                **({"page": page_meta} if page_meta else {}),
+                **({"team_pass": team_pass} if team_pass else {}),
+            }
+        )
     from ...agent.bots import attribute_bot_replies
 
     is_master = False
@@ -216,6 +250,34 @@ async def get_session(
         messages, own_project_id=session.project_id, is_master=is_master
     )
     team = await asyncio.to_thread(store.get_team, session_id)
+    # Pending HITL prompts — a surface that opens the session mid-prompt
+    # (or after a dead SSE channel dropped the live ``user_request``
+    # event) can render the question instead of leaving the turn
+    # "spinning" with an invisible blocker.
+    try:
+        pending_rows = await asyncio.to_thread(store.list_pending_for_session, session.id)
+    except Exception:  # noqa: BLE001 — pending is best-effort enrichment
+        pending_rows = []
+    pending = [
+        {
+            "request_id": p.get("request_id"),
+            "kind": p.get("kind"),
+            "prompt": p.get("prompt"),
+            "choices": p.get("choices"),
+            "default": p.get("default"),
+            "timeout_seconds": p.get("timeout_seconds"),
+            "deadline_at": p.get("deadline_at"),
+            "created_at": p.get("created_at"),
+            **({"fields": p.get("fields")} if p.get("fields") else {}),
+            **({"form_title": p.get("form_title")} if p.get("form_title") else {}),
+            **(
+                {"form_description": p.get("form_description")}
+                if p.get("form_description")
+                else {}
+            ),
+        }
+        for p in pending_rows
+    ]
     return {
         "id": session.id,
         "title": session.title,
@@ -223,6 +285,7 @@ async def get_session(
         "project_id": session.project_id,
         "team": team,
         "messages": messages,
+        "pending": pending,
     }
 
 

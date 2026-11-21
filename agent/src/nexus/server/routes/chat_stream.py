@@ -90,7 +90,19 @@ async def chat_stream_route(
             )
             req.message = redacted
 
-    session = store.get_or_create(req.session_id, context=req.context, project_id=req.project_id)
+    # ── Surface tag ────────────────────────────────────────────────────────
+    # Which client sent this message ("web" | "chrome-extension" | "ios").
+    # Drives the turn origin (bus events + per-message persisted origin),
+    # the context prefix stamped on brand-new sessions (any channel can
+    # then tell where the chat started), and the browser-tool gate.
+    _SURFACE_CONTEXTS = {"chrome-extension": "Chrome side panel", "ios": "iOS app"}
+    _surface = req.surface if req.surface in ("web", "chrome-extension", "ios") else "web"
+
+    session = store.get_or_create(
+        req.session_id,
+        context=req.context or _SURFACE_CONTEXTS.get(_surface),
+        project_id=req.project_id,
+    )
 
     # Block if a form is parked on this session — the agent's previous turn
     # is waiting for an async answer, and starting a new turn now would
@@ -135,15 +147,17 @@ async def chat_stream_route(
                     ),
                 },
             )
-        _qid = _active_runner.enqueue(req.message, origin="web")
+        _qid = _active_runner.enqueue(req.message, origin=_surface)
         if _qid is not None:
             from ..events import SessionEvent as _SessionEvent
+            from ..message_display import display_user_text as _display_text
+
             store.publish(session.id, _SessionEvent(
                 kind="user_enqueued",
                 data={
                     "type": "user_enqueued",
                     "qid": _qid,
-                    "text": req.message,
+                    "text": _display_text(req.message),
                     "session_id": session.id,
                 },
             ))
@@ -402,7 +416,11 @@ async def chat_stream_route(
                 user_msg = _CM(role=_R.USER, content=user_content)
             else:
                 user_msg = _CM(role=_R.USER, content=_effective_message)
-            store.replace_history(session.id, pre_turn_history + [user_msg])
+            store.replace_history(
+                session.id,
+                pre_turn_history + [user_msg],
+                origins=[None] * len(pre_turn_history) + [_surface],
+            )
         except Exception:
             log.exception("pre-turn user message persist failed")
 
@@ -457,7 +475,7 @@ async def chat_stream_route(
             turn_job_id=turn_job_id,
             publish_job_event=_publish_job_event,
             is_voice=is_voice,
-            origin="web",
+            origin=_surface,
         )
         runner.start()
         # turn_started is already on the bus (replay buffer) — spawning the

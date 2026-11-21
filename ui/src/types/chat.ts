@@ -14,6 +14,9 @@ export interface QueuedMessage {
    * the optimistic add and the ack. */
   qid?: string;
   text: string;
+  /** Originating surface when the queued message came from another client
+   * (Telegram / Chrome panel / iOS) — carried onto the injected bubble. */
+  origin?: string;
 }
 
 /**

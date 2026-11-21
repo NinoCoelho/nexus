@@ -32,6 +32,16 @@ export interface SessionMessage {
   /** Mention-routing attribution — set when this assistant reply came from a
    * bot other than the chat's owner; null on the owner's own replies. */
   bot?: { id: string; handle: string; name: string } | null;
+  /** Originating surface of this message ("web" | "chrome-extension" |
+   * "ios" | "telegram" | …) — absent on older backends. */
+  origin?: string | null;
+  /** Team-pass handle ("@handle") when this user row was a synthetic
+   * group-chat pass — the raw `<!-- nx:team -->` marker is stripped
+   * from content server-side. Absent on older backends. */
+  team_pass?: string | null;
+  /** Side-panel page pointer ({url, title}) extracted from the stripped
+   * `<context>` preamble. Absent on older backends. */
+  page?: { url?: string; title?: string } | null;
 }
 
 export interface PinnedMessage {
@@ -73,6 +83,10 @@ export interface SessionDetail {
   /** Group-chat membership (parsed object from the detail endpoint). */
   team?: { name: string; members: string[]; mode: "lead" | "round" } | null;
   messages: SessionMessage[];
+  /** Pending HITL prompts waiting on the user (same shape as the live
+   * `user_request` SSE event data) — lets a freshly opened session surface
+   * a question whose live event was lost to a dead SSE channel. */
+  pending?: import("./chat").UserRequestPayload[];
 }
 
 export interface SessionSearchResult {
@@ -144,7 +158,12 @@ export async function searchSessions(
 }
 
 export async function getSession(id: string): Promise<SessionDetail> {
-  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`);
+  // include_tools=1: the timeline pairs tool-result rows with their
+  // assistant message. The server omits them by default (clean
+  // transcript for clients that only render conversation messages).
+  const res = await fetch(
+    `${BASE}/sessions/${encodeURIComponent(id)}?include_tools=1`,
+  );
   if (!res.ok) throw new Error(`Session error: ${res.status}`);
   return res.json();
 }

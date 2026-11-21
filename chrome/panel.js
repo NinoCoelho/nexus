@@ -972,10 +972,21 @@ function assistantIdentity(item) {
   return { bot, name, key: item.bot ? item.bot.id : own ? own.id : "" };
 }
 
+// Channel badge for messages that did not originate in this panel —
+// web/ios/telegram turns surface in shared-session history.
+const ORIGIN_LABELS = { web: "Web", ios: "iOS", telegram: "Telegram" };
+
+function originBadge(origin) {
+  if (!origin || origin === "chrome-extension") return null;
+  return el("span", "origin-badge", ORIGIN_LABELS[origin] || origin);
+}
+
 function renderMessage(item) {
   if (item.role === "user") {
     const wrap = el("div", "user-msg");
     wrap.appendChild(el("div", "user-msg-bubble", item.text));
+    const ob = originBadge(item.origin);
+    if (ob) wrap.appendChild(ob);
     return { wrap, refs: null };
   }
   if (item.role === "pass") {
@@ -1004,6 +1015,8 @@ function renderMessage(item) {
   const nameEl = el("span", "asst-name", identity.name);
   header.appendChild(nameEl);
   if (item.model) header.appendChild(el("span", "asst-model-badge", item.model));
+  const ob = originBadge(item.origin);
+  if (ob) header.appendChild(ob);
   wrap.appendChild(header);
   const refs = { tools: null, thinkText: null, body: null, nameEl, avatarEl: avatar, botKey: identity.key };
   if (item.thinking) {
@@ -1103,6 +1116,15 @@ function ensureEvents() {
     try {
       p = JSON.parse(e.data);
     } catch (_) {
+      return;
+    }
+    // Same prompt already on screen (loaded from session history, or an
+    // SSE replay): keep the card — a re-render would wipe typed input.
+    if (
+      chat.pendingHitl &&
+      chat.pendingHitl.state !== "cancelled" &&
+      chat.pendingHitl.request_id === p.request_id
+    ) {
       return;
     }
     chat.pendingHitl = p;
@@ -1512,6 +1534,7 @@ function send() {
         session_id: state.sessionId,
         model: resolveModel(),
         project_id: state.projectId,
+        surface: "chrome-extension",
       }),
       signal: chat.ctrl.signal,
     }).then(async (res) => {
@@ -1552,7 +1575,12 @@ function sendQueued(text) {
   fetch(`${apiBase()}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: text, session_id: state.sessionId, model: resolveModel() }),
+    body: JSON.stringify({
+      message: text,
+      session_id: state.sessionId,
+      model: resolveModel(),
+      surface: "chrome-extension",
+    }),
   }).then(async (res) => {
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
@@ -1759,18 +1787,29 @@ async function loadHistory() {
         if (content.startsWith(TEAM_MARKER)) {
           return { role: "pass", text: content.slice(TEAM_MARKER.length).trim() };
         }
-        return { role: "user", text: content.replace(CONTEXT_RE, "") };
+        return { role: "user", text: content.replace(CONTEXT_RE, ""), origin: m.origin || null };
       }
       if (!content) return null;
       return {
         role: "assistant",
         text: content.replace(CONTEXT_RE, ""),
         bot: m.bot || null,
+        origin: m.origin || null,
         thinking: "",
         tools: [],
       };
     })
     .filter(Boolean);
+  // A HITL prompt that was pending when the panel closed is still pending
+  // now — surface it through the same card/respond path the live
+  // user_request event uses. Keyed by request_id so a live replay of the
+  // same prompt never stacks a second card (see ensureEvents).
+  if (Array.isArray(sess.pending) && sess.pending.length) {
+    const p = sess.pending[0];
+    if (!chat.pendingHitl || chat.pendingHitl.request_id !== p.request_id) {
+      chat.pendingHitl = p;
+    }
+  }
   chat.historyLoaded = true;
   renderAll();
 }
@@ -2048,6 +2087,7 @@ async function runForward({ bot, sessionId, projectId, text }) {
         session_id: targetSid,
         model: resolveModel(),
         project_id: state.projectId,
+        surface: "chrome-extension",
       }),
       signal: chat.ctrl.signal,
     });

@@ -30,6 +30,11 @@ class ChatRequest(BaseModel):
     project_id: str | None = None
     input_mode: str = "text"
     resume_working_messages_json: str | None = None
+    # Client surface sending this message: "web" | "chrome-extension" |
+    # "ios". Tags the turn (runner origin), the persisted messages and
+    # the session context prefix so any channel can show where each
+    # message came from. Unknown values fall back to "web".
+    surface: str = "web"
 
 
 class ChatReply(BaseModel):

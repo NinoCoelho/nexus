@@ -68,6 +68,21 @@
   min-width: 0;
 }
 
+/* Cross-surface origin — the turn came from a client other than this
+ * web UI (Chrome panel / iOS / Telegram). Muted pill next to the time. */
+.asst-origin-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  color: var(--fg-faint);
+  font-weight: 400;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 .asst-card {
   background: var(--bubble-asst-bg);
   border: 1px solid var(--bubble-asst-border);

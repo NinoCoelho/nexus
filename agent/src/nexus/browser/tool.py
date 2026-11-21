@@ -93,6 +93,15 @@ BROWSER_TOOL = ToolSpec(
                 "enum": _ALL_ACTIONS,
                 "description": "The browser action to perform.",
             },
+            "approved": {
+                "type": "boolean",
+                "description": (
+                    "Only meaningful when this chat runs in the Chrome side panel "
+                    "and [browser] extension_policy = \"ask\": set true ONLY after "
+                    "the user explicitly approved using the managed browser. "
+                    "Never set it speculatively."
+                ),
+            },
             "url": {"type": "string", "description": "navigate: URL (bare host gets https://)."},
             "selector": {
                 "type": "string",
@@ -225,6 +234,55 @@ class BrowserHandler:
         except Exception as exc:  # noqa: BLE001 — best-effort
             log.debug("browser: site-note distill failed: %s", exc)
 
+    def _extension_gate(self, args: dict) -> str | None:
+        """Refuse managed-browser use on side-panel turns per policy.
+
+        Returns a JSON error string when the call must be blocked, or
+        None when it may proceed. [browser] extension_policy:
+        "refuse" (default) — always blocked on chrome-extension turns;
+        "ask" — blocked unless the model retries with approved=true
+        after an explicit user confirmation; "allow" — no gate.
+        """
+        from ..agent.context import TURN_SURFACE
+
+        if TURN_SURFACE.get() != "chrome-extension":
+            return None
+        try:
+            from ..config_file import load_cached as _load_cfg
+
+            policy = (getattr(_load_cfg().browser, "extension_policy", "refuse") or "refuse")
+        except Exception:  # noqa: BLE001 — config hiccup shouldn't bypass the gate
+            policy = "refuse"
+        policy = policy.strip().lower()
+        if policy == "allow":
+            return None
+        if policy == "ask" and args.get("approved") is True:
+            return None
+        hint = ""
+        if policy == "ask":
+            hint = (
+                " If (and only if) the user explicitly approves using the "
+                "managed browser, retry once with approved=true."
+            )
+        return json.dumps(
+            {
+                "ok": False,
+                "error": (
+                    "This chat runs inside the user's real browser (Chrome "
+                    "side panel), so the managed browser tool is disabled "
+                    "here by policy ([browser] extension_policy). Act on the "
+                    "user's current tab with the `page` tool instead. When "
+                    "the page tool can't do something (strict-CSP pages, "
+                    "sites blocking extension scripts), say plainly that it "
+                    "can't be done from this chat and suggest continuing "
+                    "from the web chat." + hint
+                ),
+                "gate": "extension_policy",
+                "policy": policy,
+            },
+            ensure_ascii=False,
+        )
+
     def context_key(self) -> str:
         session_id = CURRENT_SESSION_ID.get()
         if session_id and self._sessions is not None:
@@ -239,10 +297,16 @@ class BrowserHandler:
     async def invoke(self, args: dict) -> str:
         action = args.get("action")
         if action == "extract":
+            denied = self._extension_gate(args)
+            if denied is not None:
+                return denied
             return await self._invoke_extract(args)
         if action == "save_flow":
             return self._invoke_save_flow(args)
         if action == "replay":
+            denied = self._extension_gate(args)
+            if denied is not None:
+                return denied
             return await self._invoke_replay(args)
         if action == "flows":
             from .flows import list_flows
@@ -252,6 +316,9 @@ class BrowserHandler:
             return json.dumps(
                 {"ok": False, "error": f"unknown action {action!r}; expected one of {list(_ALL_ACTIONS)}"}
             )
+        denied = self._extension_gate(args)
+        if denied is not None:
+            return denied
         key = self.context_key()
         self._maybe_distill(key)
         try:

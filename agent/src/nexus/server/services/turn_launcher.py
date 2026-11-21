@@ -402,7 +402,11 @@ async def launch_turn(
             user_msg = _CM(role=_R.USER, content=user_content)
         else:
             user_msg = _CM(role=_R.USER, content=message)
-        store.replace_history(session.id, pre_turn_history + [user_msg])
+        store.replace_history(
+            session.id,
+            pre_turn_history + [user_msg],
+            origins=[None] * len(pre_turn_history) + [origin],
+        )
     except Exception:
         log.exception("pre-turn user message persist failed")
 

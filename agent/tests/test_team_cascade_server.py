@@ -75,7 +75,10 @@ async def test_cascade_chains_until_no_mention(tmp_path: Path) -> None:
     # Beta's pass was queued and chained as its own turn.
     assert "user_injected" in kinds, kinds
     injected = next(d for k, d in events if k == "user_injected")
-    assert injected["text"] == f"<!-- nx:team -->@{beta.handle}"
+    # Echo is display-clean (marker stripped → structured team_pass field);
+    # the persisted history keeps the raw marker for mention routing.
+    assert injected["text"] == f"@{beta.handle}"
+    assert injected["team_pass"] == f"@{beta.handle}"
     # Two turns → two dones, settle only after both; the injection sits
     # between the first turn's done and the second turn's done.
     assert kinds.count("done") == 2, kinds
@@ -109,7 +112,8 @@ async def test_round_fanout_is_chain_only(tmp_path: Path) -> None:
     kinds = [k for k, _ in events]
     assert kinds.count("done") == 2, kinds
     injected = [d for k, d in events if k == "user_injected"]
-    assert [d["text"] for d in injected] == [f"<!-- nx:team -->@{beta.handle}"]
+    assert [d["text"] for d in injected] == [f"@{beta.handle}"]
+    assert [d["team_pass"] for d in injected] == [f"@{beta.handle}"]
 
     # The lead's reply and beta's reply are distinct assistant messages.
     history = store.get(sess.id).history

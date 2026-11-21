@@ -231,6 +231,18 @@ button:disabled { opacity: 0.5; cursor: default; }
   max-width: 120px;
 }
 
+/* Channel badge — shown only on messages that did not originate in this
+   panel (web / ios / telegram turns in shared-session history). */
+.origin-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
 .asst-card {
   background: var(--bubble-asst-bg);
   border: 1px solid var(--bubble-asst-border);

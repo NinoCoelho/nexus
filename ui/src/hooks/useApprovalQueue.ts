@@ -27,6 +27,10 @@ interface UseApprovalQueueResult {
   /** Drop a specific pending request from the queue (e.g., after answering or
    * cancelling it via the bell, so the modal doesn't re-surface it). */
   dropRequest: (request_id: string) => void;
+  /** Feed an out-of-band pending request (e.g. the `pending` array on a
+   * freshly loaded session detail) into the same queue/dialog/answering
+   * path the live `user_request` SSE event uses. Deduped by request_id. */
+  injectRequest: (session_id: string, request: UserRequestPayload) => void;
 }
 
 /**
@@ -134,6 +138,15 @@ export function useApprovalQueue(): UseApprovalQueueResult {
     setQueue((prev) => prev.filter((q) => q.request.request_id !== request_id));
   }, []);
 
+  const injectRequest = useCallback((session_id: string, request: UserRequestPayload) => {
+    setQueue((prev) => {
+      // Same request may already be here from the live SSE event or the
+      // /notifications/pending mount recovery — never render a duplicate.
+      if (prev.some((q) => q.request.request_id === request.request_id)) return prev;
+      return [...prev, { session_id, request }];
+    });
+  }, []);
+
   return {
     pendingRequest: head?.request ?? null,
     headItem: head,
@@ -143,5 +156,6 @@ export function useApprovalQueue(): UseApprovalQueueResult {
     clearPendingRequest,
     focusRequest,
     dropRequest,
+    injectRequest,
   };
 }

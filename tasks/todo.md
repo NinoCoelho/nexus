@@ -1,89 +1,47 @@
-# Best-in-class Context Management — 2026-10-04
+# Multi-channel chat: reliability + origin — 2026-11-20
 
-## Summary
-Benchmarked Nexus chat context management against best-in-class practice
-(Anthropic context-engineering model). Nexus is at parity/ahead on JIT
-retrieval, compaction escalation, relevance-aware retention, and sub-agents.
-Gaps: no microcompaction of old small tool results, no full-context
-soft-threshold auto-compact (only tool-token guard), nothing re-injected
-after compaction (recent files), session memory not persisted across
-fork/resume.
+## Fase 0 — Event delivery (spinner eterno + HITL invisível)
+- [x] Payload do `done` serializável na origem (`chat_turn_runner._publish` via `events.json_safe`)
+- [x] `to_sse()` à prova de falha (frame ruim → log + placeholder; rota de events pula frame em vez de morrer)
+- [x] `GET /sessions/{id}` expõe HITL pendente (`pending[]`)
+- [x] Painel Chrome renderiza prompt pendente ao abrir (mesmo caminho do `user_request`, dedup por request_id)
+- [x] Web UI renderiza prompt pendente ao abrir (via `useApprovalQueue.injectRequest` → mesmo ApprovalDialog)
 
-## Checklist
-- [x] 1: Microcompaction — `auto_compact(stub_older_than=...)` stubs old TOOL
-      results (LLM-free, vault-cache ref, tool_call_id preserved);
-      wired into tools_only/auto/aggressive strategies
-- [x] 2: Soft-threshold auto-compact — `agent.auto_compact_threshold_pct`
-      (default 85, 0=off) triggers `compact_and_summarize` pre-turn;
-      15% growth watermark suppresses re-trigger churn
-      (`budget.should_soft_compact`)
-- [x] 3: Post-compact re-injection — last 5 distinct vault paths from the
-      summarized region appended to the session-memory message (pointers only)
-- [x] 4: Persistent session notes — summary written to
-      `~/.nexus/vault/.session-memory/<sid>.md` on compaction
-      (`persist_session_summary` now returns path); `_seed_session_notes`
-      injects on resume when no `[Session Memory` message present
-- [x] 5: Tests (7 microcompact in test_compact_history.py + 14 in
-      test_context_management.py) + `uv run ruff check src tests` (clean) +
-      `uv run pytest` (1531 passed, 26 skipped; 6 errors are pre-existing
-      live llama-server tests, environmental)
+## Iteração 2 — Transcrição limpa em todos os canais (feedback iOS)
+- [x] `server/message_display.py`: strip do `<context>` + marcador `<!-- nx:team -->` **nessa ordem** (na sessão do @hype o marcador precede o bloco e quebrava o strip por âncora)
+- [x] `GET /sessions/{id}`: rows `tool` omitidas por default (web pede `?include_tools=1`); user content limpo; campos `team_pass` e `page {url,title}`
+- [x] Ecos ao vivo (`turn_started`/`user_injected`/`user_enqueued`) limpos com `team_pass`
+- [x] `_streaming` (whitelist) volta a entregar `origin` + `team_pass` nos frames
+- [x] Títulos: derivação limpa, self-heal de título poluído no próximo write, backfill correu (20/20 sessões)
+- [x] Web: `getSession?include_tools=1`, chip team-pass via campo (fallback marcador), tipos
+- [x] 15 testes em test_multichannel_origin.py (inclui o caso exato do @hype); cascade/telegram/sse em dia (yolo é pre-existing no HEAD)
+- [x] `npm run build` ok; verificado ao vivo na sessão: 4 msgs visíveis, 0 `<context>`, título "lista meus seguidores"
 
-## Review / Results
-- `auto_compact` signature is backward-compatible (new kwargs optional,
-  default off → identical behavior for existing callers).
-- Soft trigger estimates the actual upcoming request (history + new user
-  message) via `check_overflow`, mirroring the usable-window math
-  (window − 4K output − 12K tools/system overhead).
-- Watermark updates even on no-op compaction (records "we tried at this
-  level") — prevents per-turn retry churn when a history can't compact
-  further; loom's per-iteration `NexusCompactor` still owns true overflow.
-- Notes live under `vault/.session-memory/` (dot-dir → not synced/indexed
-  like `_system/`, keeping them out of FTS/graph per existing
-  `.tool-cache` precedent); write/load are best-effort, never fatal.
-- Config default 85% matches Claude Code auto-compact posture; 0 disables.
+## Fase 1 — Reload nunca perde a sessão
+- [x] Promoção `__new__` → id real no 1º frame SSE (server adota o id verbatim; recovery paths re-keyed)
+- [x] Last-active session em `localStorage("nexus.lastSessionId")` + restauração no boot (rota default) + re-attach `/turn/*`
 
----
+## Fase 2 — Origem por canal
+- [x] `ChatRequest.surface` (web | chrome-extension | ios); web, painel (3 call sites) e iOS enviam
+- [x] Runner deixa de hardcodar origin "web" (usa surface; fila idem; telegram via launcher marca "telegram")
+- [x] Coluna `messages.origin` (migração idempotente) + sobrevive a rewrites (merge por índice com snapshot pré-rewrite)
+- [x] `GET /sessions/{id}` retorna `origin` por mensagem; contexto da sessão prefixado ("Chrome side panel" / "iOS app")
+- [x] Badges no painel e na web (só quando origem ≠ canal atual; labels Chrome/iOS/Telegram)
 
-# Scheduler / Heartbeat Reliability Overhaul — 2026-10-04
+## Fase 3 — CDP recusado no plugin
+- [x] ContextVar `TURN_SURFACE` setada pelo runner (herda por task p/ tools e prompt)
+- [x] Gate no `BrowserHandler.invoke` + `[browser].extension_policy = refuse|ask|allow` (default refuse; `_cfg_to_dict` serializa; parse por tabela inteira)
+- [x] Bloco de prompt p/ superfície chrome-extension (zona volátil) + rewording do param `js` do page tool e da skill chrome-devtools (repo + cópia viva em ~/.nexus/skills)
 
-## Summary
-User's "check email every 30 min" calendar routine almost never fired.
-Root causes found (live-verified): scheduler loop froze behind inline LLM
-sweeps (sequential awaits, no timeout), heartbeat.db corruption from
-Syncthing-synced SQLite (138 silent bootstrap failures = zero scheduling),
-tz-naive crash in sweep_missed, twin daemons from racing restarts, and
-`_conflicts-quarantine` calendars firing duplicate events. Workflow
-schedule triggers were dead code (croniter missing, engine ref never wired).
+## Verificação
+- [x] `uv run pytest --ignore=tests/live`: 1983 passed; 6 fails/6 errors pre-existing no HEAD (comprovado em worktree do HEAD) ou live
+- [x] Ruff: nenhum erro novo (E/F) introduzido; repo não é ruff-clean no baseline
+- [x] `node --check chrome/panel.js` / `npm run build` (tsc + vite ok)
+- [ ] Repro manual (reload mid-turn, resposta em outro canal, CDP recusado no painel) — precisa `nexus daemon restart` + reload da extensão
 
-## Checklist
-- [x] A: runtime repair — twin daemons killed, clean single daemon, `~/.nexus/.stignore` (no `*.db*` sync)
-- [x] B1: self-healing bootstrap (`_open_heartbeat_store` quarantine+recreate, `_retry_heartbeat_bootstrap` 60s loop, `/heartbeat` exposes `scheduler_status` + `degraded`)
-- [x] B2: sweep_missed tz-naive regression test (fix was already uncommitted in repo)
-- [x] B3: `_`-prefixed dirs excluded from list_calendars (quarantine dupes)
-- [x] B4: twin-daemon kill on start/stop/restart + port-free wait; restarter = frequent `nexus daemon restart` (248× in history), now race-proof
-- [x] B5: wake catch-up — sleep-gap detection in loop; fire-window events fire once when overdue (test added)
-- [x] B6: ig-engagement-scanner schedule fixed to `0 9 * * * America/New_York`
-- [x] C1: loom scheduler — per-driver task + 300s timeout + skip-if-running
-- [x] C2: loom scheduler — status()/last_tick/tick_count/stalled watchdog surface
-- [x] C3: coordinator sweep + dream cycle detached (create_task + in-flight flags)
-- [x] C4: loom cron — `HH:MM` daily + trailing IANA tz (`0 9 * * * America/New_York`)
-- [x] D: workflow schedule triggers wired (croniter dep, engine/store refs via setters in `_startup_workflows`)
-- [x] E: tests — loom 40 passed (cron+scheduler), nexus 1511 passed / 26 skipped
-- [x] E: deploy — loom editable-installed into daemon venv, daemon restarted, ticks flowing, single process
-- [x] Docs: CLAUDE.md "Heartbeat / scheduling reliability model" + lessons.md
+## Futuro (fora do escopo agora)
+- Persistir resposta parcial em tool-boundaries; persistir fila entre restarts; badges no iOS
+- Testes pre-existing quebrados no HEAD: test_server_sse yolo, test_anthropic_oauth_headers (vale investigar à parte)
 
-## Review / Results
-- Daemon: single process, `GET /heartbeat` shows tick_count advancing,
-  stalled=false, degraded=false; workflow_schedule ticking with engine ref.
-- Email routine: fires on the 30-min boundary inside 08:00–23:00 window
-  (verified once per gap by test + live fire log), duplicates from
-  quarantine gone (list_calendars filter).
-- Deployment note: daemon venv loom is now an EDITABLE install of
-  ~/Code/loom (`uv pip install -e`); nexus tool install was already
-  editable to the repo. Restarting the daemon picks up both.
-- Known limitation (documented): plain-cron schedules still silently skip
-  slots missed while the machine sleeps; interval/fire-window schedules
-  catch up.
-- Pre-existing bug spotted (not fixed here): routes/chat.py SSE
-  `to_sse()` crashes when SessionEvent.data contains a ChatMessage —
-  see daemon log `TypeError: Object of type ChatMessage is not JSON serializable`.
+## Resumo
+34 arquivos, +748/−186. Contrato: `POST /chat/stream {surface}`, `GET /sessions/{id}` → `messages[].origin` + `pending[]`, eventos de turno carregam `origin` fiel. O bug do spinner era o `done` com `ChatMessage` cru chegando ao `json.dumps` do canal SSE — corrigido na origem e defensivamente no `to_sse` + rota.

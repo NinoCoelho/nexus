@@ -41,8 +41,13 @@ async def maybe_autotitle_via_llm(
     """
     from ...agent.llm import ChatMessage, Role
 
+    from ..message_display import display_user_text
+
     try:
-        snippet = (user_message or "").strip()
+        # The side panel prepends a <context> pointer (and team passes
+        # prepend their marker) — a title derived from it reads as raw
+        # preamble noise in every session list.
+        snippet = display_user_text(user_message or "").strip()
         if not snippet:
             return
         # Don't overwrite a user-set title.
@@ -105,12 +110,24 @@ def persist_stream_turn(
     accumulated_text: str,
     accumulated_tools: list[dict[str, Any]],
     partial_status: str,
+    turn_origin: str | None = None,
 ) -> None:
     """Persist the outcome of a streaming turn, handling all four cases:
     - Normal completion (replace history).
     - Truncated/empty/timeout completion with a message list (status-stamped partial).
     - Abnormal exit without a message list (partial persist from accumulated state).
+
+    ``turn_origin`` tags the turn's messages with the channel that
+    launched it ("web" | "chrome-extension" | "ios" | …) so any surface
+    can badge them later; the pre-turn prefix keeps its existing tags.
     """
+    prefix_len = min(len(pre_turn_history), len(final_messages)) if final_messages else 0
+
+    def _origins(msgs: list) -> list[str | None] | None:
+        if not turn_origin:
+            return None
+        return [None] * prefix_len + [turn_origin] * (len(msgs) - prefix_len)
+
     if final_messages is not None and partial_status in (
         "length", "empty_response", "upstream_timeout",
     ):
@@ -145,12 +162,13 @@ def persist_stream_turn(
                 assistant_text=last_asst_text,
                 tool_calls=last_asst_tools,
                 status_note=partial_status,
+                turn_origin=turn_origin,
             )
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("status-stamped partial persist failed")
-            store.replace_history(session_id, final_messages)
+            store.replace_history(session_id, final_messages, origins=_origins(final_messages))
     elif final_messages is not None:
-        store.replace_history(session_id, final_messages)
+        store.replace_history(session_id, final_messages, origins=_origins(final_messages))
     else:
         # Stream didn't reach a `done` event — persist whatever we
         # accumulated so a reload can see the partial reply and the
@@ -165,6 +183,7 @@ def persist_stream_turn(
                 assistant_text=accumulated_text,
                 tool_calls=accumulated_tools,
                 status_note=partial_status,
+                turn_origin=turn_origin,
             )
         except Exception:  # noqa: BLE001 — best-effort
             log.exception("partial turn persist failed")

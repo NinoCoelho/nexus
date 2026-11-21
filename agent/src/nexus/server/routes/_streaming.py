@@ -132,6 +132,11 @@ class TurnAccumulator:
                 q_payload["text"] = event.get("text", "")
             else:
                 q_payload["reason"] = event.get("reason", "")
+            # Surface/origin + team-pass handle ride along so clients can
+            # badge cross-channel messages and render the pass chip.
+            for _k in ("origin", "team_pass"):
+                if event.get(_k) is not None:
+                    q_payload[_k] = event[_k]
             sse_frames.append(_sse(etype, q_payload))
 
         elif etype == "turn_bot":

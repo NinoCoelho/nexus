@@ -549,6 +549,27 @@ def _language_directive(language: str | None) -> str:
     )
 
 
+def _surface_block() -> str:
+    """Standing instructions for non-web chat surfaces (volatile zone)."""
+    from .context import TURN_SURFACE
+
+    surface = TURN_SURFACE.get()
+    if surface == "chrome-extension":
+        return (
+            "## Chat surface: Chrome side panel\n\n"
+            "This conversation runs inside the user's real browser via the "
+            "Nexus side panel. The `page` tool acts on the user's current "
+            "tab — real logins, real session — and is the right way to do "
+            "anything page-related here. The `browser` tool (a separate "
+            "managed CDP Chrome) is disabled on this surface by policy: do "
+            "not propose or attempt it. When the page tool can't do "
+            "something (strict-CSP pages, sites that block extension "
+            "scripts), say plainly that it can't be done from this chat "
+            "and suggest continuing from the web chat."
+        )
+    return ""
+
+
 def _time_location_block() -> str:
     from datetime import datetime, timezone
 
@@ -713,6 +734,11 @@ def build_system_prompt(
     # whole prefix byte-unstable and left nothing cacheable at all.
     parts.append("")
     parts.append(_time_location_block())
+
+    surface_block = _surface_block()
+    if surface_block:
+        parts.append("")
+        parts.append(surface_block)
 
     lang_block = _language_directive(language)
     if lang_block:

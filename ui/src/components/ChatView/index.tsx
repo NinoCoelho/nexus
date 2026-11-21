@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import type { TraceEvent } from "../../api";
 import { classify } from "../../fileTypes";
 import { stripContextPreamble } from "../../contextPreamble";
+import { originLabel } from "../../originLabel";
 import AssistantMessage from "../AssistantMessage";
 import InputBar from "../InputBar";
 import Modal, { type ModalProps } from "../Modal";
@@ -38,6 +39,18 @@ function isTeamPass(content: string): boolean {
 
 function teamPassHandle(content: string): string {
   return content.slice(TEAM_PASS_MARKER.length).trim();
+}
+
+/** A pass row renders as the chip line (never a full user bubble).
+ * History rows carry the structured `teamPass` field with the marker
+ * already stripped from content (content === handle on pure passes);
+ * locally-built live rows may still carry the raw marker. */
+function isTeamPassMessage(msg: { content: string; teamPass?: string }): boolean {
+  return Boolean(msg.teamPass && msg.content === msg.teamPass) || isTeamPass(msg.content);
+}
+
+function teamPassLabel(msg: { content: string; teamPass?: string }): string {
+  return msg.teamPass ?? teamPassHandle(msg.content);
 }
 
 export interface SubTaskState {
@@ -119,6 +132,13 @@ export interface Message {
   /** Mention-routing attribution — the reply came from another bot than the
    * chat's owner. Renders the `@handle · Name` chip on the bubble. */
   bot?: { id: string; handle: string; name: string } | null;
+  /** Surface this message originated from ("chrome-extension" | "ios" |
+   * "telegram" | "web" | …). Badged only when different from "web". */
+  origin?: string;
+  /** Team-pass handle ("@handle") on synthetic group-chat passes. Set
+   * from the server's structured field (history + live events); the
+   * raw `<!-- nx:team -->` marker no longer travels in content. */
+  teamPass?: string;
 }
 
 /**
@@ -317,6 +337,7 @@ export default function ChatView({
                   pinned={msg.pinned ?? false}
                   reconnecting={msg.reconnecting}
                   bot={msg.bot}
+                  origin={msg.origin}
                   msgIndex={idx}
                   onFeedbackChange={onFeedbackChange}
                   onPinChange={onPinChange}
@@ -353,19 +374,24 @@ export default function ChatView({
                 />
               )}
             </div>
-          ) : isTeamPass(msg.content) ? (
+          ) : isTeamPassMessage(msg) ? (
             <div key={idx} ref={setMsgRef(idx)} className="team-pass-row">
               <span className="team-pass-chip">
                 <svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 10h11M11 6l4 4-4 4" />
                 </svg>
-                {teamPassHandle(msg.content)}
+                {teamPassLabel(msg)}
               </span>
             </div>
           ) : (
             <div key={idx} ref={setMsgRef(idx)} className="user-msg">
               <div className="user-msg-meta">
                 <span className="user-msg-label">{t("chat:user.label")}</span>
+                {msg.origin && msg.origin !== "web" && (
+                  <span className="user-msg-origin" title={`Sent from ${originLabel(msg.origin)}`}>
+                    {originLabel(msg.origin)}
+                  </span>
+                )}
                 <span className="user-msg-time">{fmt(msg.timestamp)}</span>
                 {!thinking && onRollback && (
                   <button

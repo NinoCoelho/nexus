@@ -242,6 +242,7 @@ class SessionStore(PubSubMixin, QueryMixin):
             history=history,
             context=d.get("context") or context,
             project_id=d.get("project_id"),
+            message_origins=self._load_message_origins(session_id),
         )
 
     def get(self, session_id: str) -> Session | None:
@@ -252,12 +253,14 @@ class SessionStore(PubSubMixin, QueryMixin):
         if row is None:
             return None
         msg_rows = self._loom._db.execute(
-            "SELECT role, content, tool_calls, tool_call_id, name, created_at, reasoning_content "
+            "SELECT role, content, tool_calls, tool_call_id, name, created_at, "
+            "reasoning_content, origin "
             "FROM messages WHERE session_id = ? ORDER BY seq",
             (session_id,),
         ).fetchall()
         history: list[ChatMessage] = []
         timestamps: list[int] = []
+        origins: dict[int, str] = {}
         for r in msg_rows:
             import loom.types as lt
             loom_tcs: list[lt.ToolCall] | None = None
@@ -304,9 +307,14 @@ class SessionStore(PubSubMixin, QueryMixin):
             rc_val = r[6] if len(r) > 6 else None
             if rc_val and nexus_msg.role == Role.ASSISTANT:
                 nexus_msg = nexus_msg.model_copy(update={"reasoning_content": rc_val})
+            if len(r) > 7 and r[7]:
+                origins[len(history)] = r[7]
             history.append(nexus_msg)
             timestamps.append(_ts_to_int(r[5]))
-        sess = Session(id=row[0], title=row[1] or "New session", history=history, context=row[2], project_id=row[3])
+        sess = Session(
+            id=row[0], title=row[1] or "New session", history=history,
+            context=row[2], project_id=row[3], message_origins=origins,
+        )
         sess._message_timestamps = timestamps  # type: ignore[attr-defined]
         return sess
 
@@ -481,6 +489,7 @@ class SessionStore(PubSubMixin, QueryMixin):
         assistant_text: str,
         tool_calls: list[dict[str, Any]] | None = None,
         status_note: str | None = None,
+        turn_origin: str | None = None,
     ) -> None:
         """Persist the current turn state when the stream didn't reach ``done``.
 
@@ -527,15 +536,51 @@ class SessionStore(PubSubMixin, QueryMixin):
                 tool_call_id=tc.id,
                 name=tc.name,
             ))
-        self.replace_history(session_id, history)
+        self.replace_history(
+            session_id,
+            history,
+            origins=[None] * len(base_history) + [turn_origin, turn_origin]
+            + [turn_origin] * len(tcs),
+        )
 
-    def replace_history(self, session_id: str, history: list[ChatMessage]) -> None:
+    def _load_message_origins(self, session_id: str) -> dict[int, str]:
+        """Read the per-message channel tags for a session (seq → origin).
+
+        Defensive against a pre-migration DB (no ``origin`` column yet)
+        — returns an empty map, callers render untagged messages.
+        """
+        try:
+            rows = self._loom._db.execute(
+                "SELECT seq, origin FROM messages "
+                "WHERE session_id = ? AND origin IS NOT NULL",
+                (session_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {r[0]: r[1] for r in rows}
+
+    def replace_history(
+        self,
+        session_id: str,
+        history: list[ChatMessage],
+        origins: list[str | None] | None = None,
+    ) -> None:
+        """Replace the session's whole history (loom DELETE+INSERT model).
+
+        ``origins`` (optional, aligned by index with ``history``) tags
+        messages with the channel that produced them — typically
+        ``[None] * len(prefix) + [surface]`` for the appended message.
+        Untagged positions keep whatever origin the row already carried
+        (the prefix is rewritten on every turn, but its channel tags
+        must survive the rewrite).
+        """
+        prior_origins = self._load_message_origins(session_id)
         loom_msgs = [_to_loom_msg(m) for m in history]
         self._loom.replace_history(session_id, loom_msgs)
 
-        # Persist reasoning_content for assistant messages that carry it.
-        # Loom's replace_history writes all messages with seq = 0..N, so we
-        # can match by sequence index.
+        # Persist reasoning_content + origin for messages that carry
+        # them. Loom's replace_history writes all messages with
+        # seq = 0..N, so we can match by sequence index.
         db = self._loom._db
         for seq, msg in enumerate(history):
             if msg.role == Role.ASSISTANT and msg.reasoning_content:
@@ -544,14 +589,32 @@ class SessionStore(PubSubMixin, QueryMixin):
                     "WHERE session_id = ? AND seq = ?",
                     (msg.reasoning_content, session_id, seq),
                 )
+            origin_val: str | None = None
+            if origins is not None and seq < len(origins) and origins[seq]:
+                origin_val = origins[seq]
+            elif seq in prior_origins:
+                origin_val = prior_origins[seq]
+            if origin_val:
+                db.execute(
+                    "UPDATE messages SET origin = ? WHERE session_id = ? AND seq = ?",
+                    (origin_val, session_id, seq),
+                )
         db.commit()
 
         # Auto-title: if the session is still "New session", set title from
         # the first user message (loom's replace_history doesn't do this).
+        # Also self-heal titles that were derived from a raw side-panel
+        # <context> preamble or a team-pass marker — re-derive clean.
+        from ..message_display import display_user_text as _display_user_text
+
         row = self._loom._db.execute(
             "SELECT title FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
-        if row and (row[0] is None or row[0] == "New session"):
+        _existing_title = (row[0] or "") if row else ""
+        if row and (
+            _existing_title in ("", "New session")
+            or _existing_title.lstrip().startswith(("<context", "<!--"))
+        ):
             for msg in history:
                 if msg.role != Role.USER or not msg.content:
                     continue
@@ -566,7 +629,7 @@ class SessionStore(PubSubMixin, QueryMixin):
                         if getattr(part, "kind", None) == "text" and part.text:
                             text_for_title = part.text
                             break
-                title = text_for_title.strip()[:40]
+                title = _display_user_text(text_for_title).strip()[:40]
                 if title:
                     self._loom.set_title(session_id, title)
                 break

@@ -364,6 +364,21 @@ def _ensure_reasoning_content_column(db) -> None:
         db.commit()
 
 
+def _ensure_message_origin_column(db) -> None:
+    """Add origin column to loom's messages table if missing.
+
+    Per-message channel tag ("web" | "chrome-extension" | "ios" |
+    "telegram" | …) so any surface can show where each message and
+    each reply came from. Written by ``SessionStore.replace_history``
+    (same seq-index pattern as reasoning_content); NULL = untagged
+    (legacy rows), rendered without a badge.
+    """
+    cols = {r[1] for r in db.execute("PRAGMA table_info(messages)").fetchall()}
+    if cols and "origin" not in cols:
+        db.execute("ALTER TABLE messages ADD COLUMN origin TEXT")
+        db.commit()
+
+
 _ARCHIVE_PARTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts USING fts5(
     content,
@@ -408,6 +423,7 @@ def init_fts(loom_store: LoomSessionStore) -> None:
     _ensure_session_archive_columns(db)
     _ensure_bot_columns(db)
     _ensure_reasoning_content_column(db)
+    _ensure_message_origin_column(db)
     # Backfill FTS for existing messages when the table was just created.
     if not fts_existed:
         msg_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]

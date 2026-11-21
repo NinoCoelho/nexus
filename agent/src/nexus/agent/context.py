@@ -72,3 +72,13 @@ TOOL_BUDGET_EXCEEDED: ContextVar[bool] = ContextVar(
 ALLOWED_TOOLS: ContextVar[frozenset[str] | None] = ContextVar(
     "ALLOWED_TOOLS", default=None
 )
+
+# Surface that launched the current turn — "web" | "chrome-extension" |
+# "ios" | "telegram" | "coordinator" | "mcp" | "team". Set by the
+# ChatTurnRunner from its ``origin`` (contextvars copy into the detached
+# task, so tools dispatched inside the turn see it). Read by:
+# - the `browser` tool gate (managed CDP Chrome is policy-blocked on
+#   side-panel turns),
+# - the prompt builder (per-surface standing instructions).
+# Empty string = unknown/background context; gates treat it as unrestricted.
+TURN_SURFACE: ContextVar[str] = ContextVar("nexus_turn_surface", default="")
