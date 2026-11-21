@@ -333,7 +333,14 @@ def build_loom_agent(
         # loom's hard limit all describe the same usable window.
         overflow_output_headroom=_OVERFLOW_OUTPUT_HEADROOM,
         overflow_tools_overhead=_OVERFLOW_TOOLS_OVERHEAD,
-        compactor=NexusCompactor(nexus_provider),
+        # Resolve the model at compaction time — the turn's own model (see
+        # NexusCompactor.model_resolver). A bare ``model_id`` frozen at build
+        # time goes stale across per-session model picks. ``_choose_model``
+        # takes the outbound messages and ignores them; the compactor's
+        # resolver is zero-arg.
+        compactor=NexusCompactor(
+            nexus_provider, model_resolver=lambda: _choose_model([]),
+        ),
         max_compaction_attempts=3,
     )
     graphrag_engine = None

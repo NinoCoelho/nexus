@@ -28,12 +28,64 @@ from loom.context import (  # noqa: F401 — re-export
 )
 
 try:
-    from loom.context import CURRENT_USER_ID as CURRENT_USER_ID  # noqa: F401
+    from loom.context import CURRENT_USER_ID as CURRENT_USER_ID
 except ImportError:
     from contextvars import ContextVar
     CURRENT_USER_ID: ContextVar[str | None] = ContextVar(
         "loom_current_user_id", default=None,
     )
+
+# The model explicitly chosen for the CURRENT turn (UI picker / caller).
+# The Agent singleton is shared by every chat session, so this must live in
+# task-local context, never on the instance: a second turn launched while
+# another is mid-loop would otherwise hijack the running turn's model at the
+# next ``choose_model`` evaluation (observed 2026-11-21: a master-chat turn
+# running on glm silently switched to an LM Studio model mid-turn because a
+# concurrent session's launch overwrote the shared attribute). ``_UNSET``
+# distinguishes "this task never chose a model" (fall back to instance state)
+# from "this turn explicitly runs on the default" (None must win).
+_UNSET_CHOSEN_MODEL = object()
+CHOSEN_MODEL: ContextVar[object] = ContextVar(
+    "nexus_chosen_model", default=_UNSET_CHOSEN_MODEL,
+)
+
+
+def current_chosen_model(fallback: str | None = None) -> str | None:
+    """The turn's explicitly chosen model, or ``fallback`` when unset here."""
+    value = CHOSEN_MODEL.get()
+    if value is _UNSET_CHOSEN_MODEL:
+        return fallback
+    return value  # type: ignore[return-value]
+
+
+def set_chosen_model(model_id: str | None) -> None:
+    """Record the calling task's turn model (call at every turn entry)."""
+    CHOSEN_MODEL.set(model_id)
+
+
+# Per-turn compaction-round counter (see compactor.CompactionLoopGuardError).
+# Task-local like CHOSEN_MODEL: the compactor is one shared instance, so a
+# dict keyed by session id would leak across turns; a list handed out at turn
+# entry keeps each turn's count isolated. ``reset_turn_compaction_rounds`` is
+# called at the turn entries; readers create lazily so bare call paths
+# (tests, sub-agents) still work.
+_COMPACTION_ROUNDS: ContextVar[object] = ContextVar(
+    "nexus_compaction_rounds", default=None,
+)
+
+
+def turn_compaction_rounds() -> list[int]:
+    """The calling task's compaction-round counter (``[count]``, mutable)."""
+    value = _COMPACTION_ROUNDS.get()
+    if not isinstance(value, list):
+        value = [0]
+        _COMPACTION_ROUNDS.set(value)
+    return value
+
+
+def reset_turn_compaction_rounds() -> None:
+    """Start a fresh compaction-round budget (call at every turn entry)."""
+    _COMPACTION_ROUNDS.set([0])
 
 # Tracks the chain of card_ids whose lane-prompts have been auto-dispatched
 # *into* the current execution context. Used by the lane-change hook to

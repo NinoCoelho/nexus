@@ -168,3 +168,11 @@ live-session report as a code bug. Quick probe that the new code is live:
 - Diagnose with runtime state, not just code: `heartbeat_state.last_check`
   frozen + fire log told the whole story in minutes (scheduler wedged at
   21:12, quarantined DB recreated, twins on the port).
+
+## 2026-11-21 — LM Studio "2 requests" investigation (summarizer + model crosstalk)
+
+- **When the user challenges a diagnosis ("verifica outra vez"), re-verify against runtime evidence, not code reading.** The first hypothesis (autotitle) was plausible from the code but wrong for the case: the chat pre-dated the turn and `default_model` wasn't even the LM Studio provider. The daemon log + sessions DB (messages, llm_errors, projects) gave the actual answer. Check the *preconditions* of the hypothesis (first-turn-only? right provider? right model column?) before presenting it as the cause.
+- **Timestamps: logs are local time, SQLite `CURRENT_TIMESTAMP` is UTC** — a "no rows" query on the wrong window looks like absence of evidence. Align windows before concluding (EST here: log 00:26 = DB 05:26).
+- **Shared singletons must not carry per-turn state**: `app.state.agent` is one Agent for every chat; `self._chosen_model` let a newly launched session hijack a concurrent turn's model at the next `choose_model` evaluation (glm turn silently continued on an LM Studio model → the "2 concurrent requests" the user saw). Fix: task-local ContextVar (`context.CHOSEN_MODEL`) with an UNSET sentinel; set at every turn entry.
+- **`provider.chat` needs the upstream model name, not the registry id** — providers are built with `model=""`, so `model=None` raises "No model specified" locally and failures are silent (compaction degraded to hard_trim and elided 159 messages). Resolve ids → (provider, upstream) at call sites (`_resolve_provider`), and keep a suffix-first variant fallback in the summarizer.
+- **Signature drift bites at the wiring point**: `model_resolver=_choose_model` passed a 1-arg callable into a zero-arg slot — unit tests (zero-arg fake) passed, the integration test caught it. Test the real wiring shape, not just the contract.

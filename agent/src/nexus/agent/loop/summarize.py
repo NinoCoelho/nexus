@@ -4,12 +4,13 @@ import hashlib
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from ..llm import ChatMessage, LLMProvider, Role
-from nexus.home import vault_session_memory as _session_memory_fn
 from nexus.agent.loop.relevance import _content_text, score_messages
 from nexus.agent.loop.retention import partition
+from nexus.home import vault_session_memory as _session_memory_fn
+
+from ..llm import ChatMessage, LLMProvider, Role
 
 log = logging.getLogger(__name__)
 
@@ -368,6 +369,37 @@ def _compact_model() -> str:
         return ""
 
 
+def _candidate_variants(candidate: str | None) -> list[str]:
+    """Concrete model names to try for one configured candidate.
+
+    Callers hand us either an upstream model name or a registry id
+    (``"lmstudio/deepseek-…"``). ``provider.chat`` wants the upstream name —
+    the same convention as ``LoomProviderAdapter._resolve``'s partition
+    fallback (providers are configured per ``[providers.X]`` section, so the
+    first segment is the provider id). Try the bare suffix first, then the
+    full id as-is (covers upstream names that legitimately contain a slash).
+    """
+    if not candidate:
+        return []
+    candidate = candidate.strip()
+    if "/" in candidate:
+        _, _, bare = candidate.partition("/")
+        if bare and bare != candidate:
+            return [bare, candidate]
+    return [candidate]
+
+
+def _default_candidate() -> str | None:
+    """``[agent].default_model`` as a last-resort summarizer candidate."""
+    try:
+        from ...config_file import load_cached
+
+        cfg = load_cached()
+        return str(getattr(getattr(cfg, "agent", None), "default_model", "") or "") or None
+    except Exception:  # noqa: BLE001 — config problems must not block compaction
+        return None
+
+
 async def _call_summarizer(
     provider: LLMProvider,
     conversation: str,
@@ -375,7 +407,8 @@ async def _call_summarizer(
     *,
     existing_summary: str | None = None,
 ) -> str:
-    from ..llm import ChatMessage as Msg, Role as R
+    from ..llm import ChatMessage as Msg
+    from ..llm import Role as R
 
     if existing_summary:
         system_prompt = _UPDATE_SYSTEM_PROMPT
@@ -392,20 +425,42 @@ async def _call_summarizer(
         Msg(role=R.USER, content=user_content),
     ]
 
-    # Try the dedicated compaction model first, then the turn's own model. The
-    # configured fast model may belong to a provider this one can't reach, so
-    # a failure there must fall through rather than lose the summary.
+    # Try the dedicated compaction model first, then the turn's own model,
+    # then the configured default. Providers are built with model="" (the
+    # registry tracks model names separately), so a falsy candidate would
+    # raise "No model specified" locally — every candidate must be concrete.
+    # The configured fast model may belong to a provider this one can't
+    # reach, so a failure there must fall through rather than lose the
+    # summary.
     candidates: list[str | None] = []
     fast = _compact_model()
     if fast and fast != model_id:
         candidates.append(fast)
     candidates.append(model_id)
+    if model_id != _default_candidate():
+        candidates.append(_default_candidate())
 
-    for attempt, candidate in enumerate(candidates):
+    # Flatten to concrete per-candidate variants and drop duplicate names
+    # (a candidate and the default often normalize to the same upstream).
+    seen: set[str] = set()
+    variants: list[str | None] = []
+    for candidate in candidates:
+        for name in _candidate_variants(candidate):
+            if name not in seen:
+                seen.add(name)
+                variants.append(name)
+    if not variants:
+        # No concrete name resolvable (no config, no turn model) — keep the
+        # legacy single call with model=None so providers built with their
+        # own default model still work; empty-model providers raise locally
+        # and the loop degrades to "" (caller keeps full history).
+        variants = [None]
+
+    for attempt, name in enumerate(variants):
         try:
             response = await provider.chat(
                 messages,
-                model=candidate,
+                model=name,
                 max_tokens=1024,
                 tools=[],
             )
@@ -415,15 +470,15 @@ async def _call_summarizer(
                 raise
             log.warning(
                 "summarization LLM call failed for model=%s%s",
-                candidate,
-                " (falling back)" if attempt + 1 < len(candidates) else "",
+                name,
+                " (falling back)" if attempt + 1 < len(variants) else "",
                 exc_info=True,
             )
             continue
         content = (response.content or "").strip()
         if content:
             return content
-        log.warning("summarization returned empty content for model=%s", candidate)
+        log.warning("summarization returned empty content for model=%s", name)
     return ""
 
 
@@ -432,7 +487,7 @@ def persist_session_summary(session_id: str, summary: str, *, model_id: str | No
         sm_dir = _session_memory_fn()
         sm_dir.mkdir(parents=True, exist_ok=True)
         path = sm_dir / f"{session_id}.md"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         frontmatter = (
             "---\n"
             f"session_id: {session_id}\n"
@@ -499,7 +554,7 @@ def persist_summary_part(
         parts_dir.mkdir(parents=True, exist_ok=True)
         path = parts_dir / f"{session_id}.jsonl"
         record = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "reason": reason,
             "count": len(summarized),
             "messages": [
@@ -517,7 +572,7 @@ def persist_summary_part(
             with path.open("rb") as fh:
                 line_no = sum(1 for _ in fh)
             index_record(session_id, path, line_no, record)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("parts index: failed to index record", exc_info=True)
         return str(path)
     except Exception:

@@ -7,13 +7,21 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 import loom.types as lt
-from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
-from ..llm import ChatMessage, ContentPart, LLMProvider, Role, StreamEvent
+
 from ...skills.registry import SkillRegistry
+from ..ask_user_tool import AskUserHandler, parse_parked_sentinel
+from ..context import (
+    current_chosen_model,
+    reset_turn_compaction_rounds,
+    set_chosen_model,
+)
+from ..llm import ChatMessage, ContentPart, LLMProvider, Role, StreamEvent
 from ._builder import build_loom_agent
+from .budget import check_tool_budget
 from .helpers import (
     AgentTurn,
     _annotate_short_reply,
@@ -22,8 +30,7 @@ from .helpers import (
     _to_loom_message,
     tool_result_fields,
 )
-from .overflow import check_overflow, known_context_window, _DEFAULT_FALLBACK_WINDOW
-from .budget import check_tool_budget
+from .overflow import _DEFAULT_FALLBACK_WINDOW, check_overflow, known_context_window
 from .reasoning import ReasoningTracker
 from .retry import RetryManager
 from .stream_translator import StreamTranslator
@@ -260,8 +267,8 @@ class Agent:
         provider_registry: Any | None = None,
         nexus_cfg: Any | None = None,
         ask_user_handler: AskUserHandler | None = None,
-        home: "AgentHome | None" = None,
-        permissions: "AgentPermissions | None" = None,
+        home: AgentHome | None = None,
+        permissions: AgentPermissions | None = None,
         tool_allowlist: set[str] | None = None,
     ) -> None:
         from .._loom_bridge import AgentHandlers
@@ -292,7 +299,9 @@ class Agent:
             handlers=self._handlers,
             provider_registry=self._provider_registry,
             get_nexus_cfg=lambda: self._nexus_cfg,
-            get_chosen_model=lambda: self._chosen_model,
+            # Turn-scoped, not instance-scoped: concurrent turns on this
+            # shared Agent each see their own model (see context.CHOSEN_MODEL).
+            get_chosen_model=lambda: current_chosen_model(self._chosen_model),
             get_turn_trace=lambda: self._turn_trace,
             on_trace_event=self._on_event,
             home=self._home,
@@ -534,6 +543,8 @@ class Agent:
         self._turn_trace = []
         self._skills_touched = []
         self._chosen_model = model_id
+        set_chosen_model(model_id)
+        reset_turn_compaction_rounds()
 
         loom_messages: list[lt.ChatMessage] = []
         stripped: list[ChatMessage] = []
@@ -741,7 +752,7 @@ class Agent:
                     "(actual=%d vs modelled=%d)",
                     session_id, observed, new, actual_input_tokens, modelled,
                 )
-        except Exception:  # noqa: BLE001 — calibration is an optimization
+        except Exception:
             log.debug("token calibration failed", exc_info=True)
 
     def _seed_session_notes(
@@ -785,6 +796,8 @@ class Agent:
         self._turn_trace = []
         self._skills_touched = []
         self._chosen_model = model_id
+        set_chosen_model(model_id)
+        reset_turn_compaction_rounds()
 
         loom_messages: list[lt.ChatMessage] = []
         stripped_history: list[ChatMessage] = []
@@ -804,7 +817,7 @@ class Agent:
             if nm.role == Role.ASSISTANT and nm.reasoning_content:
                 lm._reasoning_content = nm.reasoning_content  # type: ignore[attr-defined]
 
-        from ..context import CURRENT_HISTORY, CURRENT_CONTEXT_WINDOW, TOOL_BUDGET_EXCEEDED
+        from ..context import CURRENT_CONTEXT_WINDOW, CURRENT_HISTORY, TOOL_BUDGET_EXCEEDED
         CURRENT_HISTORY.set(stripped_history)
         CURRENT_CONTEXT_WINDOW.set(effective_window)
         TOOL_BUDGET_EXCEEDED.set(False)
@@ -887,12 +900,17 @@ class Agent:
                 _trigger_reason,
             )
             from .compact import compact_and_summarize
+            # provider.chat wants the *upstream* model name, not the registry
+            # id ("lmstudio/deepseek-…"), and the provider that serves it —
+            # same resolution every other compact_and_summarize caller uses.
+            _cp_model = model_id or self._chosen_model
+            _cp_provider, _cp_upstream = self._resolve_provider(_cp_model)
             compacted, _cs_report = await compact_and_summarize(
                 stripped_history,
                 context_window=effective_window,
                 session_id=session_id,
-                model_id=model_id or self._chosen_model,
-                provider=self._nexus_provider,
+                model_id=_cp_upstream or _cp_model,
+                provider=_cp_provider,
                 strategy="auto",
                 force_summarize=_force_summarize,
             )
@@ -1108,8 +1126,8 @@ class Agent:
                 )
 
         if st.ctx_window > 0 and len(st.tr.working_messages) > 6:
-            from .compact import compact_failed_scrapes, auto_compact
-            from .overflow import estimate_tokens, _TOOLS_AND_SYSTEM_OVERHEAD
+            from .compact import auto_compact, compact_failed_scrapes
+            from .overflow import _TOOLS_AND_SYSTEM_OVERHEAD, estimate_tokens
             from .zones import classify_zone
             class _WM:
                 pass
@@ -1268,8 +1286,8 @@ class Agent:
             return
 
         if st.retry_mgr.should_post_retry_compaction(ev):
-            from .compact import auto_compact
             from .._loom_bridge.message import _loom_to_nexus_message
+            from .compact import auto_compact
 
             _nexus_wm = [_loom_to_nexus_message(m) for m in st.tr.working_messages]
             compacted_wm, compact_report = auto_compact(_nexus_wm)
@@ -1372,16 +1390,16 @@ class Agent:
         error_reason = ev.get("reason") or ""
         if error_reason == "rate_limit" and st.session_id and self._sessions is not None:
             try:
-                from datetime import datetime, timezone, timedelta
+                from datetime import datetime, timedelta
 
                 # Use provider's reset time if available, otherwise default to 60s
                 rate_limit_reset = ev.get("rate_limit_reset")
                 if rate_limit_reset:
                     retry_after = datetime.fromisoformat(rate_limit_reset)
-                    cooldown = max(1, int((retry_after - datetime.now(timezone.utc)).total_seconds()))
+                    cooldown = max(1, int((retry_after - datetime.now(UTC)).total_seconds()))
                 else:
                     cooldown = 60
-                    retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+                    retry_after = datetime.now(UTC) + timedelta(seconds=cooldown)
 
                 wm_json = json.dumps(
                     [{"role": m.role.value if hasattr(m.role, "value") else str(m.role),
@@ -1578,6 +1596,8 @@ class Agent:
         self._turn_trace = []
         self._skills_touched = []
         self._chosen_model = row.get("model_id") or self._chosen_model
+        set_chosen_model(self._chosen_model)
+        reset_turn_compaction_rounds()
 
         history_snapshot = [_from_loom_message(m) for m in loom_messages[:-1]]
         adapter = getattr(self._loom, "_provider", None)

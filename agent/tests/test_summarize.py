@@ -188,3 +188,81 @@ async def test_compute_semantic_sim_all_empty_returns_none() -> None:
     msgs = [ChatMessage(role=Role.USER, content=None)]
     sim = await _compute_semantic_sim(msgs, "q", embedder)
     assert sim is None
+
+
+# ── _call_summarizer candidate resolution ────────────────────────────────
+# Regression: providers are built with model="" (the registry tracks model
+# names), so a falsy candidate raised "No model specified" locally and every
+# compaction degraded to a lossy hard_trim (2026-11-21: 159 messages elided
+# from the coordinator master session). And registry ids ("prov/model-x")
+# must resolve to the bare upstream name before hitting the wire.
+
+
+class _SelectiveSummarizer:
+    """Accepts only an exact upstream model name; records every model asked."""
+
+    def __init__(self, accepts: set[str]):
+        self._accepts = accepts
+        self.asked: list[str | None] = []
+
+    async def chat(self, messages, *, tools=None, model=None, max_tokens=None):
+        self.asked.append(model)
+        if model not in self._accepts:
+            raise RuntimeError(f"unknown model: {model}")
+        return ChatResponse(content="## Session Memory\n- ok", stop_reason=StopReason.STOP)
+
+
+async def test_call_summarizer_strips_registry_prefix(monkeypatch) -> None:
+    from nexus.agent.loop import summarize as sm
+
+    monkeypatch.setattr(sm, "_compact_model", lambda: "")
+    monkeypatch.setattr(sm, "_default_candidate", lambda: None)
+    from nexus.agent.loop.summarize import _call_summarizer
+
+    provider = _SelectiveSummarizer({"model-x"})
+    summary = await _call_summarizer(provider, "conv", "prov/model-x")
+    assert summary.startswith("## Session Memory")
+    # The bare upstream name is tried FIRST — no wasted call with the
+    # registry id.
+    assert provider.asked == ["model-x"]
+
+
+async def test_call_summarizer_falls_through_to_full_id(monkeypatch) -> None:
+    from nexus.agent.loop import summarize as sm
+
+    monkeypatch.setattr(sm, "_compact_model", lambda: "")
+    monkeypatch.setattr(sm, "_default_candidate", lambda: None)
+    from nexus.agent.loop.summarize import _call_summarizer
+
+    # An upstream name that legitimately contains a slash: the suffix variant
+    # fails, the full id is retried before giving up.
+    provider = _SelectiveSummarizer({"prov/org/real-model"})
+    summary = await _call_summarizer(provider, "conv", "prov/org/real-model")
+    assert summary.startswith("## Session Memory")
+    assert provider.asked == ["org/real-model", "prov/org/real-model"]
+
+
+async def test_call_summarizer_falls_back_to_config_default(monkeypatch) -> None:
+    from nexus.agent.loop import summarize as sm
+
+    monkeypatch.setattr(sm, "_compact_model", lambda: "")
+    monkeypatch.setattr(sm, "_default_candidate", lambda: "prov/default-m")
+    from nexus.agent.loop.summarize import _call_summarizer
+
+    provider = _SelectiveSummarizer({"default-m"})
+    summary = await _call_summarizer(provider, "conv", None)
+    assert summary.startswith("## Session Memory")
+    assert provider.asked == ["default-m"]
+
+
+async def test_call_summarizer_no_candidates_keeps_legacy_none_call(monkeypatch) -> None:
+    from nexus.agent.loop import summarize as sm
+
+    monkeypatch.setattr(sm, "_compact_model", lambda: "")
+    monkeypatch.setattr(sm, "_default_candidate", lambda: None)
+    from nexus.agent.loop.summarize import _call_summarizer
+
+    provider = _SelectiveSummarizer({None})
+    summary = await _call_summarizer(provider, "conv", None)
+    assert summary.startswith("## Session Memory")
+    assert provider.asked == [None]

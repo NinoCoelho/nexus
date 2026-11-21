@@ -22,16 +22,18 @@ itself is reasoning-blind.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import loom.types as lt
+from loom.loop.compaction import CompactionRequest, CompactionResult
 
-from nexus.agent.llm import ChatMessage as NexusChatMessage, Role
+from nexus.agent.context import CURRENT_SESSION_ID, turn_compaction_rounds
+from nexus.agent.llm import ChatMessage as NexusChatMessage
+from nexus.agent.llm import Role
 from nexus.agent.loop.compact import compact_and_summarize
-from nexus.agent.context import CURRENT_SESSION_ID
 
 from .._loom_bridge.message import _loom_to_nexus_message, _nexus_to_loom_message
-from loom.loop.compaction import CompactionRequest, CompactionResult
 
 if TYPE_CHECKING:
     from nexus.agent.llm import LLMProvider
@@ -42,6 +44,27 @@ log = logging.getLogger(__name__)
 # 2 adds summarization (auto); attempt 3+ goes aggressive. Bounded by loom's
 # ``max_compaction_attempts`` (default 3).
 _STRATEGY_BY_ATTEMPT = {1: "tools_only", 2: "auto", 3: "aggressive"}
+
+# Compaction *rounds* (not attempts) allowed within one turn before the loop
+# guard refuses. Loom escalates attempts inside a round (tools_only → auto →
+# aggressive+guarantee_fit), and ``guarantee_fit`` means a round always ends
+# fitting — so a turn that starts yet another round has re-grown its history
+# with fresh tool results *after* being force-trimmed. Three rounds means the
+# model has lost its own work to hard_trim three times and is re-reading the
+# same files: continuing just burns tokens on degraded output (observed
+# 2026-11-21: the CFO chat hard-trimmed 23 of 25 messages, re-read, re-trimmed).
+# 0 disables the guard.
+MAX_COMPACTION_ROUNDS_PER_TURN = 3
+
+
+class CompactionLoopGuardError(RuntimeError):
+    """Raised when a turn needs compaction too many times in a row.
+
+    Loom catches compactor exceptions, emits ``compaction_error`` and stops
+    the overflow rescue, so the turn ends with the visible ``context_overflow``
+    error (UI shows compact_history / new_session actions) instead of
+    silently thrashing token after token.
+    """
 
 
 def _loom_to_nexus_with_reasoning(msg: lt.ChatMessage) -> NexusChatMessage:
@@ -78,11 +101,52 @@ class NexusCompactor:
         provider: LLMProvider | None = None,
         *,
         model_id: str | None = None,
+        model_resolver: Callable[[], str | None] | None = None,
+        max_rounds_per_turn: int = MAX_COMPACTION_ROUNDS_PER_TURN,
     ) -> None:
         self._provider = provider
         self._model_id = model_id
+        # Resolved at call time so mid-turn compaction summarizes on the same
+        # model that is driving the turn. Built without one (the default), the
+        # summarizer falls back to ``_call_summarizer``'s config-default
+        # resolution — without it, ``provider.chat(model=None)`` raises
+        # "No model specified" locally (providers are built with model="")
+        # and every compaction degrades to a lossy ``hard_trim``.
+        self._model_resolver = model_resolver
+        self._max_rounds_per_turn = max_rounds_per_turn
 
     async def __call__(self, request: CompactionRequest) -> CompactionResult:
+        # Loop guard: refuse to keep force-trimming a turn that has already
+        # been compacted MAX times. Must run BEFORE the try/except below —
+        # the raise has to reach loom (it turns compactor exceptions into a
+        # turn-ending ``context_overflow``), not be swallowed here.
+        if request.attempt == 1 and self._max_rounds_per_turn > 0:
+            rounds = turn_compaction_rounds()
+            rounds[0] += 1
+            if rounds[0] > self._max_rounds_per_turn:
+                session_hint = None
+                try:
+                    session_hint = CURRENT_SESSION_ID.get()
+                except LookupError:
+                    session_hint = None
+                log.warning(
+                    "compaction loop guard: turn on session %s needed %d compaction "
+                    "rounds (attempt=%d iteration=%d tokens=%d window=%d) — aborting "
+                    "with context_overflow instead of trimming again",
+                    (session_hint or "?")[:12],
+                    rounds[0] - 1,
+                    request.attempt,
+                    request.iteration,
+                    request.estimated_tokens,
+                    request.context_window,
+                )
+                raise CompactionLoopGuardError(
+                    f"Turn needed {rounds[0] - 1} compaction rounds and still outgrew "
+                    "its context budget — the model can't make progress in this "
+                    "window. Compact the history, start a new session, or switch "
+                    "to a model with a larger context window."
+                )
+
         # loom ChatMessage → nexus ChatMessage (preserving reasoning).
         nexus_msgs = [_loom_to_nexus_with_reasoning(m) for m in request.messages]
         if not nexus_msgs:
@@ -100,7 +164,8 @@ class NexusCompactor:
                 nexus_msgs,
                 context_window=request.context_window,
                 session_id=session_id,
-                model_id=self._model_id,
+                model_id=(self._model_resolver() if self._model_resolver else None)
+                or self._model_id,
                 provider=self._provider,
                 strategy=strategy,
                 # Final attempt must not be able to come back still
@@ -108,7 +173,7 @@ class NexusCompactor:
                 # when the summarizer is unavailable.
                 guarantee_fit=request.attempt >= 3,
             )
-        except Exception:  # noqa: BLE001 — contract says degrading is OK
+        except Exception:
             log.warning(
                 "NexusCompactor: compact_and_summarize failed (attempt %d, "
                 "strategy=%s); returning input unchanged",
