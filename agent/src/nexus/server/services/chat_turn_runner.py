@@ -167,6 +167,13 @@ class ChatTurnRunner:
         injectable = [q for q in self.queue if not q.chain_only]
         if injectable:
             self.queue = [q for q in self.queue if q.chain_only]
+            # The newest speaker's surface steers the remaining iterations:
+            # the extension gate (browser tool on/off) and the prompt's
+            # surface block read TURN_SURFACE per LLM call, so a panel
+            # message injected into a web turn must flip it (and vice-versa).
+            from ...agent.context import TURN_SURFACE
+
+            TURN_SURFACE.set(injectable[-1].origin)
         return [{"qid": q.qid, "text": q.text, "origin": q.origin} for q in injectable]
 
     def _drop_queue(self, reason: str) -> None:
@@ -207,6 +214,11 @@ class ChatTurnRunner:
         self.acc = TurnAccumulator()
         self.started_at = datetime.now(timezone.utc)
         self.origin = nxt.origin
+        # Chained turn speaks with the queued message's surface — keep the
+        # gate + prompt surface block in sync (same rationale as drain_pending).
+        from ...agent.context import TURN_SURFACE
+
+        TURN_SURFACE.set(self.origin)
 
     # ── Bot→bot cascade (team sessions) ─────────────────────────────────
     #

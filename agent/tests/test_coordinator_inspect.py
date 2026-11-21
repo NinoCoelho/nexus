@@ -9,10 +9,12 @@ JSON, and crashed outright on any session containing an attachment.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from nexus.agent.llm import ChatMessage, ContentPart, Role
-from nexus.coordinator import CoordinatorService, _clip, _flatten_content
+from nexus.coordinator import CoordinatorService, _clip, _flatten_content, _since_to_epoch
 
 
 class _Session:
@@ -197,16 +199,44 @@ def test_projects_detail_reports_unknown_ids(_projects) -> None:
 
 
 def test_sessions_filters_by_updated_since() -> None:
+    # SessionSummary.updated_at is a unix epoch int (the store converts the
+    # ISO column via _ts_to_int) — the filter must compare in epoch, not
+    # lexicographically (the int >= str TypeError that broke the sweeps).
     rows = [
         _Summary("p1", "old"),
         _Summary("p2", "new"),
     ]
-    rows[0].updated_at = "2026-01-01T00:00:00Z"
-    rows[1].updated_at = "2026-06-01T00:00:00Z"
+    rows[0].updated_at = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+    rows[1].updated_at = int(datetime(2026, 6, 1, tzinfo=UTC).timestamp())
     out = _svc(_FakeStore(rows=rows)).inspect(
         action="sessions", updated_since="2026-03-01T00:00:00Z"
     )
     assert [s["title"] for s in out["sessions"]] == ["new"]
+
+
+def test_sessions_updated_since_accepts_epoch() -> None:
+    rows = [_Summary("p1", "a"), _Summary("p2", "b")]
+    rows[0].updated_at = 1_740_000_000
+    rows[1].updated_at = 1_790_000_000
+    out = _svc(_FakeStore(rows=rows)).inspect(
+        action="sessions", updated_since=1_750_000_000
+    )
+    assert [s["title"] for s in out["sessions"]] == ["b"]
+
+
+def test_sessions_updated_since_junk_returns_a_self_correcting_error() -> None:
+    out = _svc(_FakeStore(rows=[])).inspect(action="sessions", updated_since="nov 1")
+    assert out["ok"] is False
+    assert "updated_since" in out["error"]
+
+
+def test_since_to_epoch_formats() -> None:
+    assert _since_to_epoch("") == 0
+    assert _since_to_epoch(None) == 0
+    assert _since_to_epoch(1_750_000_000) == 1_750_000_000
+    iso = _since_to_epoch("2026-03-01T00:00:00Z")
+    assert iso == int(datetime(2026, 3, 1, tzinfo=UTC).timestamp())
+    assert _since_to_epoch("nov 1") == -1
 
 
 def test_sessions_without_a_filter_returns_everything() -> None:

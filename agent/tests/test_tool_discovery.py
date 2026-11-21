@@ -90,14 +90,19 @@ def test_install_filters_specs_but_keeps_dispatch(discovery) -> None:
 
     names = {s.name for s in reg.specs()}
     core_and_search = tool_discovery._DEFAULT_CORE | {"tool_search"}
-    assert names == ({n for n in ALL_TOOLS if n in core_and_search} | {"tool_search"})
+    # The default test surface is not chrome-extension, so the side-panel
+    # `page` tool is filtered out of the advertisement (surface visibility).
+    expected = ({n for n in ALL_TOOLS if n in core_and_search} | {"tool_search"}) - {"page"}
+    assert names == expected
     assert "kanban_manage" not in names and "ocr_image" not in names
 
-    # Hidden does NOT mean unavailable: dispatch resolves it.
+    # Hidden does NOT mean unavailable: dispatch resolves it — for the
+    # surface-filtered `page` too.
     import asyncio
 
     res = asyncio.run(reg.dispatch("kanban_manage", {}))
     assert res.text == "ran kanban_manage"
+    assert "page" in {h.tool.name for h in reg._handlers.values()}
 
 
 def test_tool_search_returns_schema_and_stickies(discovery) -> None:

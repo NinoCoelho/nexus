@@ -589,11 +589,19 @@ async def kill_terminal(
 
 
 @router.get("/chat/{session_id}/events")
-async def chat_events(session_id: str, store: SessionStore = Depends(get_sessions)) -> StreamingResponse:
+async def chat_events(
+    session_id: str,
+    client: str = "",
+    store: SessionStore = Depends(get_sessions),
+) -> StreamingResponse:
     """SSE stream of in-turn events for one session. The UI opens
     this once and receives every ``iter``, ``tool_call``,
     ``tool_result``, ``user_request``, and ``reply`` until the
     client disconnects.
+
+    ``client=panel`` marks a Chrome side-panel subscription — the
+    panel is the only client that can answer ``page_request``
+    events, so the count feeds the page tool's fast-fail.
 
     The subscribe queue is an in-memory pub-sub keyed by session
     id, so the UI can open this stream *before* sending the first
@@ -611,7 +619,7 @@ async def chat_events(session_id: str, store: SessionStore = Depends(get_session
 
     async def stream() -> AsyncIterator[bytes]:
         yield b": subscribed\n\n"
-        async for event in keepalive(store.subscribe(session_id), interval=20.0):
+        async for event in keepalive(store.subscribe(session_id, client=client), interval=20.0):
             if event is None:
                 yield b": ping\n\n"
                 continue
@@ -660,6 +668,7 @@ async def turn_active(session_id: str) -> dict[str, Any]:
 @router.get("/chat/{session_id}/turn/stream")
 async def turn_stream(
     session_id: str,
+    client: str = "",
     store: SessionStore = Depends(get_sessions),
 ) -> StreamingResponse:
     """Reconnect to a running background turn.
@@ -667,6 +676,7 @@ async def turn_stream(
     Subscribes to the session bus with replay so the client sees the full
     turn from the beginning (deltas, tools, done/error). If no turn is
     active, returns an immediate ``done`` event so the client closes cleanly.
+    ``client=panel`` marks a Chrome side-panel subscription (see chat_events).
     """
     from ..services.chat_turn_runner import get_running_turn
     from ._streaming import TurnAccumulator
@@ -689,7 +699,7 @@ async def turn_stream(
 
         acc = TurnAccumulator()
         async for sevent in keepalive(
-            store.subscribe_with_replay(session_id), interval=15.0,
+            store.subscribe_with_replay(session_id, client=client), interval=15.0,
         ):
             if sevent is None:
                 yield b": ping\n\n"

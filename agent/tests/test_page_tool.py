@@ -11,6 +11,7 @@ page_request_cancelled), invalid action, and missing session context.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 
@@ -35,7 +36,7 @@ async def _responder(store: SessionStore, sid: str, answer: str) -> asyncio.Task
     """Consume the session stream; on page_request resolve with `answer`."""
 
     async def run() -> None:
-        async for ev in store.subscribe(sid):
+        async for ev in store.subscribe(sid, client="panel"):
             if ev.kind == "page_request":
                 store.resolve_pending(sid, ev.data["request_id"], answer)
                 return
@@ -61,7 +62,7 @@ async def test_page_params_passthrough(tmp_path: Path) -> None:
         seen: dict = {}
 
         async def run() -> None:
-            async for ev in store.subscribe(sid):
+            async for ev in store.subscribe(sid, client="panel"):
                 if ev.kind == "page_request":
                     seen.update(ev.data)
                     store.resolve_pending(sid, ev.data["request_id"], '{"ok": true}')
@@ -114,7 +115,7 @@ async def test_page_timeout_cancels_and_publishes(tmp_path: Path) -> None:
         seen: list[str] = []
 
         async def watch() -> None:
-            async for ev in store.subscribe(sid):
+            async for ev in store.subscribe(sid, client="panel"):
                 if ev.kind.startswith("page_"):
                     seen.append(ev.kind)
                     if ev.kind == "page_request_cancelled":
@@ -139,6 +140,49 @@ async def test_page_invalid_action(tmp_path: Path) -> None:
     result = json.loads(await handler.invoke({"action": "explode"}))
     assert result["ok"] is False
     assert "unknown action" in result["error"]
+
+
+async def test_page_fast_fails_without_a_panel(tmp_path: Path) -> None:
+    """Zero panel subscribers → immediate error; no request is published
+    and nothing waits out the timeout (the master-chat page-retry loop)."""
+    store, handler = _handler(tmp_path)
+    sid, token = _bind_session(store)
+    try:
+        out = json.loads(await handler.invoke({"action": "viewport_info"}))
+        assert out["ok"] is False
+        assert "side panel" in out["error"]
+        assert "`browser`" in out["error"]
+        # no page_request event ever hit the channel
+        assert store.panel_subscribers(sid) == 0
+    finally:
+        CURRENT_SESSION_ID.reset(token)
+
+
+async def test_panel_client_subscription_is_counted(tmp_path: Path) -> None:
+    store, _ = _handler(tmp_path)
+    sid = store.create().id
+    assert store.panel_subscribers(sid) == 0
+
+    async def consume(client: str) -> None:
+        async for _ev in store.subscribe(sid, client=client):
+            pass
+
+    panel = asyncio.create_task(consume("panel"))
+    await asyncio.sleep(0)
+    assert store.panel_subscribers(sid) == 1
+
+    web = asyncio.create_task(consume("web"))
+    await asyncio.sleep(0)
+    assert store.panel_subscribers(sid) == 1  # web subscribers never count
+
+    panel.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await panel
+    assert store.panel_subscribers(sid) == 0
+
+    web.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await web
 
 
 async def test_page_missing_session_context(tmp_path: Path) -> None:
@@ -248,10 +292,24 @@ async def test_page_timeout_records_failure(tmp_path: Path, monkeypatch) -> None
             monkeypatch.setattr(
                 "nexus.agent.page_tool._DEFAULT_TIMEOUT", 0.05, raising=False
             )
-            r = json.loads(await handler.invoke({"action": "read", "timeout": 0.05}))
-            assert r["ok"] is False and "no side panel" in r["error"]
-            ev = mgr.nbie_events[-1]
-            assert ev["ok"] is False and "timeout" in (ev.get("error") or "")
+
+            # A connected panel client is required to reach the real timeout
+            # path — with zero panel subscribers the fast-fail short-circuits.
+            async def idle_panel() -> None:
+                async for _ev in store.subscribe(_sid, client="panel"):
+                    pass
+
+            watcher = asyncio.create_task(idle_panel())
+            await asyncio.sleep(0)
+            try:
+                r = json.loads(await handler.invoke({"action": "read", "timeout": 0.05}))
+                assert r["ok"] is False and "no side panel" in r["error"]
+                ev = mgr.nbie_events[-1]
+                assert ev["ok"] is False and "timeout" in (ev.get("error") or "")
+            finally:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
         finally:
             CURRENT_SESSION_ID.reset(token)
     finally:
@@ -322,7 +380,7 @@ async def test_page_find_element_refs_and_click_by_ref(tmp_path: Path) -> None:
         seen_params: dict = {}
 
         async def run_find() -> None:
-            async for ev in store.subscribe(sid):
+            async for ev in store.subscribe(sid, client="panel"):
                 if ev.kind == "page_request":
                     seen_params.update(ev.data)
                     store.resolve_pending(sid, ev.data["request_id"], find_answer)
@@ -336,7 +394,7 @@ async def test_page_find_element_refs_and_click_by_ref(tmp_path: Path) -> None:
 
         # click by ref → published as a plain selector click
         async def run_click() -> None:
-            async for ev in store.subscribe(sid):
+            async for ev in store.subscribe(sid, client="panel"):
                 if ev.kind == "page_request":
                     seen_params.update(ev.data)
                     store.resolve_pending(
@@ -388,7 +446,7 @@ async def test_page_save_flow_and_replay(tmp_path: Path, monkeypatch) -> None:
 
         async def responder() -> None:
             n = 0
-            async for ev in store.subscribe(sid):
+            async for ev in store.subscribe(sid, client="panel"):
                 if ev.kind == "page_request":
                     calls.append(ev.data["action"])
                     ans = answers[n] if n < len(answers) else '{"ok": true}'
@@ -423,7 +481,7 @@ async def test_page_save_flow_and_replay(tmp_path: Path, monkeypatch) -> None:
 
             async def responder2() -> None:
                 n = 0
-                async for ev in store.subscribe(sid2):
+                async for ev in store.subscribe(sid2, client="panel"):
                     if ev.kind == "page_request":
                         ans = replay_answers[n] if n < len(replay_answers) else "{}"
                         store.resolve_pending(sid2, ev.data["request_id"], ans)

@@ -684,6 +684,24 @@ class SessionStore(PubSubMixin, QueryMixin):
         self._loom._db.commit()
         return cur.rowcount or 0
 
+    def expire_stale_parks(self, *, max_age_hours: int = 24) -> int:
+        """Drop rate-limit parks whose retry window is long past.
+
+        A park schedules an in-process resume timer (``retry_after`` + a
+        minute or so); daemon restarts kill that timer, so 429 parks from a
+        long-reset limit window would sit in ``paused_turns`` forever. The
+        sweep that parked re-runs on its own schedule anyway — there is no
+        value in resuming an ancient digest. Called at startup next to the
+        other retention trims.
+        """
+        cur = self._loom._db.execute(
+            "DELETE FROM paused_turns WHERE status = 'paused' "
+            "AND datetime(retry_after) < datetime('now', ?)",
+            (f"-{int(max_age_hours)} hours",),
+        )
+        self._loom._db.commit()
+        return cur.rowcount or 0
+
     # ── feedback ─────────────────────────────────────────────────────────────
 
     def set_feedback(self, session_id: str, seq: int, value: str | None) -> None:

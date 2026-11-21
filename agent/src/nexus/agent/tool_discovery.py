@@ -141,6 +141,26 @@ def _advertised_names() -> set[str]:
     return allowed
 
 
+def _surface_filtered(names: set[str]) -> set[str]:
+    """Drop tools that belong to a different chat surface.
+
+    ``page`` only works when the Nexus Chrome side panel hosts the session —
+    advertising it on web/Telegram/iOS turns teaches the model to wonder
+    whether "the side panel is open" and narrate fallbacks. ``browser`` (the
+    managed CDP Chrome) is refused by the extension gate on panel turns, so
+    don't even show it there. Both stay registered and dispatchable (same
+    invariant as discovery-hidden tools); the runtime backstops (extension
+    gate, page fast-fail) still cover direct or tool_search-discovered calls.
+    """
+    from .context import TURN_SURFACE
+
+    if TURN_SURFACE.get() == "chrome-extension":
+        names.discard("browser")
+    else:
+        names.discard("page")
+    return names
+
+
 def _record_discovery(names: list[str]) -> None:
     """Session-sticky advertisement (no-op in pure mode)."""
     if _MODE != "sticky" or not names:
@@ -217,7 +237,7 @@ def handle_tool_search(args: dict[str, Any]) -> str:
     reg = _INSTALLED_REGISTRY
     if reg is None:
         return json.dumps({"ok": False, "error": "tool_search not installed"}, ensure_ascii=False)
-    advertised = _advertised_names()
+    advertised = _surface_filtered(_advertised_names())
     handlers = getattr(reg, "_handlers", {}) or {}
     hidden = {n: h for n, h in handlers.items() if n not in advertised}
     if not hidden:
@@ -389,7 +409,7 @@ def install_tool_discovery(registry: Any) -> bool:
     registry.register(_ToolSearchHandler())
 
     def _patched_specs() -> list[Any]:
-        allowed = _advertised_names()
+        allowed = _surface_filtered(_advertised_names())
         return [h.tool for name, h in registry._handlers.items() if name in allowed]
 
     try:

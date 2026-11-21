@@ -103,6 +103,10 @@ class PubSubMixin:
     def _init_pubsub(self) -> None:
         self._lock: Lock = Lock()
         self._subscribers: dict[str, list[asyncio.Queue[SessionEvent | None]]] = {}
+        # Chrome side-panel clients per session (``client="panel"`` on the
+        # events/turn-stream routes). ``page`` fast-fail reads this — a
+        # count of zero means no client can answer a page_request.
+        self._panel_counts: dict[str, int] = {}
         # Subscribers to the cross-session HITL notifications channel.
         # Each queue receives ``(session_id, event)`` tuples for whitelisted
         # event kinds (see _GLOBAL_HITL_KINDS).
@@ -664,10 +668,15 @@ class PubSubMixin:
                 )
             )
 
-    async def subscribe(self, session_id: str) -> AsyncIterator[SessionEvent]:
+    async def subscribe(
+        self, session_id: str, *, client: str = "web",
+    ) -> AsyncIterator[SessionEvent]:
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)
+        panel = client == "panel"
         with self._lock:
             self._subscribers.setdefault(session_id, []).append(queue)
+            if panel:
+                self._panel_counts[session_id] = self._panel_counts.get(session_id, 0) + 1
         try:
             while True:
                 event = await queue.get()
@@ -681,9 +690,15 @@ class PubSubMixin:
                     subs.remove(queue)
                     if not subs:
                         self._subscribers.pop(session_id, None)
+                if panel:
+                    count = self._panel_counts.get(session_id, 0) - 1
+                    if count <= 0:
+                        self._panel_counts.pop(session_id, None)
+                    else:
+                        self._panel_counts[session_id] = count
 
     async def subscribe_with_replay(
-        self, session_id: str,
+        self, session_id: str, *, client: str = "web",
     ) -> AsyncIterator[SessionEvent]:
         """Like ``subscribe`` but drains the replay buffer first.
 
@@ -694,9 +709,12 @@ class PubSubMixin:
         - No event appears in both because the snapshot is a point-in-time copy.
         """
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)
+        panel = client == "panel"
         with self._lock:
             buf_snapshot = list(self._replay.get(session_id, ()))
             self._subscribers.setdefault(session_id, []).append(queue)
+            if panel:
+                self._panel_counts[session_id] = self._panel_counts.get(session_id, 0) + 1
         for _seq, event in buf_snapshot:
             try:
                 queue.put_nowait(event)
@@ -716,6 +734,22 @@ class PubSubMixin:
                     subs.remove(queue)
                     if not subs:
                         self._subscribers.pop(session_id, None)
+                if panel:
+                    count = self._panel_counts.get(session_id, 0) - 1
+                    if count <= 0:
+                        self._panel_counts.pop(session_id, None)
+                    else:
+                        self._panel_counts[session_id] = count
+
+    def panel_subscribers(self, session_id: str) -> int:
+        """Live count of Chrome side-panel clients on this session's channel.
+
+        The ``page`` tool fast-fails on zero — no panel can answer a
+        ``page_request`` no matter how long it waits. Non-panel subscribers
+        (web UI, reconnect streams) never count: they can't answer.
+        """
+        with self._lock:
+            return self._panel_counts.get(session_id, 0)
 
     def clear_replay(self, session_id: str) -> None:
         """Drop the replay buffer for a session. Called when a new turn starts

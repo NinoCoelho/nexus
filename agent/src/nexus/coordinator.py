@@ -104,6 +104,29 @@ _PROJECT_DESC_CHARS = 300
 _PROJECT_SESSIONS_LIMIT = 20
 _SESSIONS_LIMIT = 100
 _READ_MAX_TAIL = 50
+
+
+def _since_to_epoch(since: str) -> int:
+    """Parse a sweep's ``updated_since`` into a unix-epoch int.
+
+    ``SessionSummary.updated_at`` is an epoch int (``_ts_to_int`` in the
+    session store), so the filter must compare in epoch, not lexicographically.
+    Returns -1 when a non-empty value can't be parsed (ISO date, ISO datetime,
+    or bare epoch are all accepted) so the caller can return a self-correcting
+    error to the LLM instead of raising.
+    """
+    s = str(since or "").strip()
+    if not s:
+        return 0
+    try:
+        return int(float(s))
+    except ValueError:
+        pass
+    try:
+        # py311+ fromisoformat parses the trailing Z natively.
+        return int(datetime.fromisoformat(s).timestamp())
+    except ValueError:
+        return -1
 _READ_CHARS_PER_MSG = 400
 
 
@@ -282,12 +305,23 @@ class CoordinatorService:
             ql = q.strip().lower()
             if ql:
                 rows = [r for r in rows if ql in (r.title or "").lower()]
-            since = (updated_since or "").strip()
-            if since:
-                # Lexicographic compare works on the stored ISO timestamps and
-                # lets a sweep ask only for what changed instead of pulling a
-                # full page of rows it will ignore.
-                rows = [r for r in rows if (r.updated_at or "") >= since]
+            since_epoch = _since_to_epoch(updated_since)
+            if since_epoch == -1:
+                # SessionSummary.updated_at is a unix epoch int — tell the
+                # caller the accepted formats instead of raising TypeError
+                # (int >= str) like the old lexicographic compare did.
+                return {
+                    "ok": False,
+                    "error": (
+                        "updated_since must be an ISO date 'YYYY-MM-DD', ISO "
+                        "datetime 'YYYY-MM-DD[THH:MM[:SS]]' (optional Z), or a "
+                        "unix epoch number"
+                    ),
+                }
+            if since_epoch:
+                # Epoch compare — lets a sweep ask only for what changed
+                # instead of pulling a full page of rows it will ignore.
+                rows = [r for r in rows if (r.updated_at or 0) >= since_epoch]
             return {
                 "ok": True,
                 "sessions": [

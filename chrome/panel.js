@@ -1099,7 +1099,7 @@ function liveUpdate(item) {
 
 function ensureEvents() {
   if (chat.es) return;
-  const es = new EventSource(`${apiBase()}/chat/${state.sessionId}/events`);
+  const es = new EventSource(`${apiBase()}/chat/${state.sessionId}/events?client=panel`);
   for (const kind of ["user_enqueued", "user_injected", "queue_removed"]) {
     es.addEventListener(kind, (e) => {
       let p;
@@ -1978,7 +1978,7 @@ async function attachActiveTurn(depth) {
   setBusy(true);
   renderAll();
   try {
-    const res = await fetch(`${apiBase()}/chat/${state.sessionId}/turn/stream`);
+    const res = await fetch(`${apiBase()}/chat/${state.sessionId}/turn/stream?client=panel`);
     await readSse(res, (ev, data) => handleEvent(asst, ev, data));
   } catch (_) {}
   const last = chat.messages[chat.messages.length - 1];

@@ -567,7 +567,16 @@ def _surface_block() -> str:
             "scripts), say plainly that it can't be done from this chat "
             "and suggest continuing from the web chat."
         )
-    return ""
+    # Web / Telegram / iOS: the side panel is not hosting this session —
+    # steer straight to the managed browser instead of letting the model
+    # probe for a panel and narrate fallbacks.
+    return (
+        "## Chat surface\n\n"
+        "This chat is NOT hosted by the Nexus Chrome side panel, so the "
+        "`page` tool has no surface to act on here — don't call it or "
+        "mention it. For anything page-related use the managed `browser` "
+        "tool: it opens/drives its own Chrome window with its own logins."
+    )
 
 
 def _time_location_block() -> str:

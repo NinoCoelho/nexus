@@ -206,8 +206,7 @@ _ACTIONS = {
     "viewport_info": (),
     "page_signature": (),
     "interactive_map": ("limit",),
-    "screenshot": (),
-    # Hidden from the LLM-facing spec above: the site_credentials tool calls
+    "screenshot": (),    # Hidden from the LLM-facing spec above: the site_credentials tool calls
     # it programmatically with a server-resolved credential, so the password
     # never appears in tool arguments. The Chrome side panel shows an
     # Allow/Deny card before filling (authenticating as the user).
@@ -219,6 +218,17 @@ _ACTIONS = {
 }
 
 _DEFAULT_TIMEOUT = 90.0
+
+# Shared guidance for both the fast-fail and the timeout paths — the model
+# kept retrying `page` against sessions no panel hosted (each retry stalled
+# the turn for the full timeout) and narrating fallbacks.
+_PAGE_UNREACHABLE = (
+    "no side panel is connected to this session — open this session in the "
+    "Nexus Chrome side panel (session picker), or use the managed `browser` "
+    "tool instead. Do not retry `page` in this chat."
+)
+
+_PAGE_FASTFAIL_GRACE_S = 1.5
 
 
 class PageHandler:
@@ -449,6 +459,16 @@ class PageHandler:
             params["tab"] = args["tab"]
         request_id = uuid.uuid4().hex
 
+        # Fast-fail: with no Chrome side-panel client subscribed to this
+        # session's channel, nobody can ever answer the request — waiting
+        # out the full timeout just stalls the turn and invites retries.
+        # The grace window absorbs a panel SSE that is mid-reconnect.
+        if self._sessions.panel_subscribers(session_id) == 0:
+            await asyncio.sleep(_PAGE_FASTFAIL_GRACE_S)
+        if self._sessions.panel_subscribers(session_id) == 0:
+            self._record(session_id, action, ok=False, error="no side panel connected")
+            return json.dumps({"ok": False, "error": _PAGE_UNREACHABLE}, ensure_ascii=False)
+
         from ..server.events import SessionEvent
 
         fut = self._sessions.register_pending(session_id, request_id)
@@ -474,10 +494,7 @@ class PageHandler:
             return json.dumps(
                 {
                     "ok": False,
-                    "error": (
-                        f"no side panel answered within {timeout:.0f}s — the page tool "
-                        "only works when the Nexus Chrome panel is open on a tab"
-                    ),
+                    "error": f"no side panel answered within {timeout:.0f}s — {_PAGE_UNREACHABLE}",
                 }
             )
 

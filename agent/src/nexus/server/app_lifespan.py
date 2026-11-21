@@ -219,6 +219,12 @@ def _startup_hitl_sweep(sessions: Any) -> None:
             cleaned_errs = store.cleanup_old_llm_errors(keep_days=90)
             if cleaned_errs:
                 log.info("cleaned up %d old llm_errors rows (>90d)", cleaned_errs)
+            # Rate-limit parks whose resume timer died with a restart and
+            # whose window is long past — the parking turn (sweep) re-runs
+            # on its own schedule, so an ancient park is just stale state.
+            expired_parks = store.expire_stale_parks(max_age_hours=24)
+            if expired_parks:
+                log.info("expired %d stale rate-limit park(s) (>24h)", expired_parks)
 
         _sweep_store(sessions)
         if re_published:

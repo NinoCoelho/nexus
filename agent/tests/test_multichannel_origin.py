@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 from nexus.agent.context import TURN_SURFACE
 from nexus.agent.llm import ChatMessage, Role
+from nexus.agent.prompt_builder import _surface_block
 from nexus.browser.tool import BrowserHandler
 from nexus.server.events import SessionEvent, json_safe
 from nexus.server.schemas import ChatRequest
@@ -341,5 +342,98 @@ async def test_browser_gate_allow_mode_disables_gate(monkeypatch) -> None:
     try:
         out = json.loads(await handler.invoke({"action": "read"}))
         assert out["ok"] is True
+    finally:
+        TURN_SURFACE.reset(token)
+
+
+# ── Fix: TURN_SURFACE tracks the newest speaker (injection/chained) ────────
+
+
+async def test_drain_pending_syncs_turn_surface(tmp_path: Path) -> None:
+    """A panel message injected into a web turn flips the surface for the
+    remaining iterations — the browser gate and prompt block follow it."""
+    store = _store(tmp_path)
+    sid = store.create().id
+    runner = _runner(store, sid)
+    token = TURN_SURFACE.set("web")
+    try:
+        runner.enqueue("continue in my tab", origin="chrome-extension")
+        drained = runner.drain_pending()
+        assert drained and drained[0]["origin"] == "chrome-extension"
+        assert TURN_SURFACE.get() == "chrome-extension"
+        assert runner.drain_pending() == []  # nothing left to flip back
+        assert TURN_SURFACE.get() == "chrome-extension"
+    finally:
+        TURN_SURFACE.reset(token)
+
+
+async def test_begin_chained_turn_syncs_turn_surface(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    sid = store.create().id
+    runner = _runner(store, sid)
+    runner.enqueue("from the panel", origin="chrome-extension")
+    token = TURN_SURFACE.set("web")
+    try:
+        nxt = runner._next_queued()
+        assert nxt is not None
+        runner._begin_chained_turn(nxt)
+        assert runner.origin == "chrome-extension"
+        assert TURN_SURFACE.get() == "chrome-extension"
+    finally:
+        TURN_SURFACE.reset(token)
+
+
+async def test_team_origin_does_not_activate_the_panel_surface() -> None:
+    """Cascade passes carry origin="team" — neither the gate nor the panel
+    block may activate for them."""
+    token = TURN_SURFACE.set("team")
+    try:
+        handler = BrowserHandler(manager=_DummyManager(), session_store=None)
+        out = json.loads(await handler.invoke({"action": "read"}))
+        assert out["ok"] is True  # gate did not fire
+        block = _surface_block()
+        assert "NOT hosted by the Nexus Chrome side panel" in block
+        assert "runs inside the user's real browser" not in block  # panel block off
+    finally:
+        TURN_SURFACE.reset(token)
+
+
+# ── Fix: tools of the other surface are not even advertised ────────────────
+
+
+def test_surface_filter_hides_the_other_surfaces_tools() -> None:
+    from nexus.agent.tool_discovery import _surface_filtered
+
+    token = TURN_SURFACE.set("chrome-extension")
+    try:
+        names = _surface_filtered({"browser", "page", "vault_read", "tool_search"})
+        assert "browser" not in names
+        assert "page" in names and "vault_read" in names
+    finally:
+        TURN_SURFACE.reset(token)
+    token = TURN_SURFACE.set("web")
+    try:
+        names = _surface_filtered({"browser", "page", "vault_read"})
+        assert "page" not in names
+        assert "browser" in names
+    finally:
+        TURN_SURFACE.reset(token)
+
+
+def test_surface_block_guides_each_surface() -> None:
+    from nexus.agent.prompt_builder import _surface_block
+
+    token = TURN_SURFACE.set("chrome-extension")
+    try:
+        block = _surface_block()
+        assert "side panel" in block
+        assert "disabled on this surface" in block
+    finally:
+        TURN_SURFACE.reset(token)
+    token = TURN_SURFACE.set("web")
+    try:
+        block = _surface_block()
+        assert "NOT hosted by the Nexus Chrome side panel" in block
+        assert "`browser`" in block
     finally:
         TURN_SURFACE.reset(token)
