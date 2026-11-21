@@ -181,12 +181,13 @@ class PubSubMixin:
         try:
             if event.kind == "user_request":
                 self._record_hitl_pending(session_id, event.data)
-                # Web Push is a prompt surface — skip it when the session
-                # belongs to a Telegram chat (the forwarder delivers there;
-                # the bell history row above is still kept for audit).
-                from ...telegram.bindings import session_is_telegram_routed
+                # Web Push is a prompt surface — skip it when another
+                # surface owns this session's prompts (Telegram forwarder
+                # or the Chrome side panel; the bell history row above is
+                # still kept for audit).
+                from ..hitl_routing import suppress_web_prompt
 
-                if not session_is_telegram_routed(session_id):
+                if not suppress_web_prompt(session_id):
                     self._schedule_push(session_id, event.data)
             elif event.kind == "user_request_auto":
                 self._record_hitl_auto(session_id, event.data)

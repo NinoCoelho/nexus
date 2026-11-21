@@ -24,6 +24,7 @@ from ...agent.loop import Agent
 from ...agent.team_router import RECENT_LINES, route_team_decision
 from ...redact import redact_sensitive_text
 from ..deps import get_agent, get_job_tracker, get_sessions
+from ..hitl_routing import CHROME_PANEL_CONTEXT as _CHROME_PANEL_CONTEXT
 from ..job_tracker import JobTracker
 from ..project_store import ProjectStore
 from ..schemas import ChatRequest
@@ -95,7 +96,12 @@ async def chat_stream_route(
     # Drives the turn origin (bus events + per-message persisted origin),
     # the context prefix stamped on brand-new sessions (any channel can
     # then tell where the chat started), and the browser-tool gate.
-    _SURFACE_CONTEXTS = {"chrome-extension": "Chrome side panel", "ios": "iOS app"}
+    _SURFACE_CONTEXTS = {
+        # Shared constant — server/hitl_routing gates chrome prompts by
+        # this exact sessions.context prefix (single source of truth).
+        "chrome-extension": _CHROME_PANEL_CONTEXT,
+        "ios": "iOS app",
+    }
     _surface = req.surface if req.surface in ("web", "chrome-extension", "ios") else "web"
 
     session = store.get_or_create(
