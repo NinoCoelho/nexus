@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -11,11 +12,21 @@ import loom.types as lt
 from loom.llm.base import LLMProvider as LoomLLMProvider
 
 from nexus.agent.llm import LLMProvider as NexusLLMProvider
-from nexus.agent.llm.types import Role
+from nexus.agent.llm.types import LLMTransportError, Role
 
 from .message import _loom_to_nexus_message, _nexus_stop_to_loom
 
 log = logging.getLogger(__name__)
+
+# Watchdog for wedged upstream streams: once a stream has yielded at least
+# one event, this much total silence (no delta, no thinking, no usage —
+# nothing) means the connection is hung, not slow. The CFO incident
+# (2026-11-21) sat silent for ~40 minutes on a local server that had
+# accepted the request and stopped talking; the pre-first-event window is
+# deliberately NOT bounded here — cold model loads and servers that buffer
+# reasoning before the first token stay covered by the provider's httpx
+# read timeout (600s default).
+STREAM_IDLE_TIMEOUT_SECONDS = 180.0
 
 
 class LoomProviderAdapter(LoomLLMProvider):
@@ -35,11 +46,13 @@ class LoomProviderAdapter(LoomLLMProvider):
         provider_registry: Any | None = None,
         default_model: str | None = None,
         max_tokens_for: Callable[[str | None], int] | None = None,
+        stream_idle_timeout: float = STREAM_IDLE_TIMEOUT_SECONDS,
     ) -> None:
         self._nexus = provider
         self._registry = provider_registry
         self._default_model = default_model
         self._max_tokens_for = max_tokens_for
+        self._stream_idle_timeout = float(stream_idle_timeout)
         self._thinking_sink: Callable[[str], None] | None = None
         self._last_reasoning_content: str | None = None
         # Ordered list of reasoning_content strings, one per assistant message
@@ -177,9 +190,49 @@ class LoomProviderAdapter(LoomLLMProvider):
             type(provider).__name__, upstream, len(nexus_messages), len(tools or []),
         )
         provider_event_count = 0
-        async for ev in provider.chat_stream(
-            nexus_messages, tools=tools, model=upstream,
-            max_tokens=max_toks or None,
+
+        def _watched(
+            gen: AsyncIterator[dict[str, Any]],
+        ) -> AsyncIterator[dict[str, Any]]:
+            """Abort a stream that goes silent mid-flight (see
+            ``STREAM_IDLE_TIMEOUT_SECONDS``). Before the first event the
+            provider's own read timeout governs; after it, any gap longer
+            than the idle timeout raises ``LLMTransportError`` — the same
+            type as the httpx timeout path, so the retry machinery treats
+            it identically."""
+            seen = False
+
+            async def _inner() -> AsyncIterator[dict[str, Any]]:
+                nonlocal seen
+                try:
+                    while True:
+                        try:
+                            if seen:
+                                async with asyncio.timeout(self._stream_idle_timeout):
+                                    ev = await gen.__anext__()
+                            else:
+                                ev = await gen.__anext__()
+                        except TimeoutError as exc:
+                            if not seen:
+                                raise
+                            raise LLMTransportError(
+                                f"stream idle for {self._stream_idle_timeout:.0f}s "
+                                "after last event — upstream hung",
+                            ) from exc
+                        except StopAsyncIteration:
+                            return
+                        seen = True
+                        yield ev
+                finally:
+                    await gen.aclose()
+
+            return _inner()
+
+        async for ev in _watched(
+            provider.chat_stream(
+                nexus_messages, tools=tools, model=upstream,
+                max_tokens=max_toks or None,
+            ),
         ):
             provider_event_count += 1
             etype = ev.get("type")
