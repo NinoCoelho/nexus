@@ -466,6 +466,23 @@ async def chat_stream_route(
         # going. A reconnecting client can resume via GET /chat/{sid}/turn/stream.
         store.clear_replay(session.id)
 
+        # Lazy capability probe (providers/probe.py) — same fire-and-forget
+        # enqueue as launch_turn. The web route builds its own ChatTurnRunner
+        # (it doesn't go through launch_turn), so without this the primary
+        # chat surface would never trigger a probe for non-default models.
+        try:
+            from ...providers.probe import get_probe_service
+
+            has_media = any(
+                getattr(p, "kind", "") in ("image", "audio", "document")
+                for p in (attachment_parts or [])
+            )
+            get_probe_service().enqueue_if_uncached(
+                resolved_model_id, has_media=has_media,
+            )
+        except Exception:  # noqa: BLE001, S110 — probing must never break a turn
+            pass
+
         from ..services.chat_turn_runner import ChatTurnRunner
         runner = ChatTurnRunner(
             agent=a,

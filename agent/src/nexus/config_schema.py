@@ -18,6 +18,11 @@ class ModelEntry(BaseModel):
     provider: str
     model_name: str
     tags: list[str] = Field(default_factory=list)
+    # Capability-probe cache (see providers/probe.py): tag -> confirmed?
+    # Written by the lazy background probe; manual ``tags`` always win over
+    # a probe result because resolution unions both sources.
+    probed: dict[str, bool] = Field(default_factory=dict)
+    probed_at: str = ""
     tier: Tier = "balanced"
     notes: str = ""
     # Total context window in tokens (input + output). Used for pre-flight

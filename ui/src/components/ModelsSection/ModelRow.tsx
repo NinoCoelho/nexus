@@ -17,6 +17,8 @@ interface Props {
   onAssignRole: (role: string, modelId: string) => void;
   onUnassignRole: (role: string) => void;
   onSetDefault: (modelId: string) => void;
+  onReprobe: (modelId: string) => void;
+  reprobing: boolean;
 }
 
 export default function ModelRow({
@@ -34,6 +36,8 @@ export default function ModelRow({
   onAssignRole,
   onUnassignRole,
   onSetDefault,
+  onReprobe,
+  reprobing,
 }: Props) {
   const { t } = useTranslation("models");
   const isEmb = roles.includes("embedding");
@@ -54,6 +58,24 @@ export default function ModelRow({
             {m.tags.map((t) => (
               <span key={t} className="settings-tag-chip">{t}</span>
             ))}
+            {/* Probe-confirmed capabilities not manually tagged — dimmer,
+                read-only (providers/probe.py writes these). */}
+            {Object.entries(m.probed ?? {})
+              .filter(([t, ok]) => ok && !m.tags.includes(t))
+              .map(([t]) => (
+                <span key={t} className="settings-tag-chip settings-tag-chip--probed">
+                  {t}
+                </span>
+              ))}
+            <button
+              type="button"
+              className="settings-tag-chip settings-tag-chip--reprobe"
+              disabled={reprobing}
+              onClick={() => onReprobe(m.id)}
+              title={t("models:row.reprobe")}
+            >
+              {reprobing ? "…" : "↻"}
+            </button>
           </div>
           <div className="model-role-badges">
             <button

@@ -137,6 +137,28 @@ def read_vault_bytes(vault_path: str) -> bytes:
     return full.read_bytes()
 
 
+def image_rejected_by_upstream(status_code: int | None, body_text: str) -> bool:
+    """True when a 4xx error body blames the *image input* specifically.
+
+    Conservative by design: only image-flavoured markers count, so generic
+    400s (bad API key, context overflow, malformed JSON) never strip images.
+    Used by the encoders' graceful retry and by the capability probe.
+    """
+    if not status_code or not (400 <= status_code < 500):
+        return False
+    low = (body_text or "").lower()
+    return any(
+        marker in low
+        for marker in ("image", "vision", "multimodal", "mmproj", "image_url")
+    )
+
+
+async def messages_without_images(messages: list) -> list:
+    """Rebuild ``messages`` with every image part downgraded to a text
+    breadcrumb (empty capability set → nothing passes through)."""
+    return [await materialize_message(m, set()) for m in messages]
+
+
 async def materialize_message(message, capabilities: set[str]):
     from .agent.llm.types import ChatMessage, ContentPart
 

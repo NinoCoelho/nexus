@@ -317,6 +317,23 @@
   border: 1px solid var(--border-soft);
 }
 
+/* Probe-confirmed capability (providers/probe.py) — dashed border marks
+   it as machine-detected rather than user-asserted. */
+.settings-tag-chip--probed {
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+/* Re-test button styled as a chip. */
+.settings-tag-chip--reprobe {
+  cursor: pointer;
+  font-family: inherit;
+}
+.settings-tag-chip--reprobe:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .settings-strength-bars {
   display: flex;
   flex-direction: column;

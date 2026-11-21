@@ -266,6 +266,11 @@ def _user_config_capabilities(model_name: str) -> set[str]:
             for tag in m.tags:
                 if tag in _KNOWN_CAPABILITY_TAGS:
                     out.add(tag)
+            # Probe cache (providers/probe.py): union confirmed tags.
+            # Manual ``tags`` always win — this only adds, never removes.
+            for tag, ok in (m.probed or {}).items():
+                if ok and tag in _KNOWN_CAPABILITY_TAGS:
+                    out.add(tag)
             break
     return out
 
@@ -285,6 +290,14 @@ _FAMILY_PATTERNS: list[tuple[re.Pattern[str], set[str]]] = [
     # Grok 4 supports vision.
     (re.compile(r"grok-4", re.I),
      {"chat", "tools", "vision", "reasoning"}),
+    # Qwen multimodal families (Alibaba): qwen2-vl, qwen2.5-vl, qwen3-vl,
+    # qvq, plus the plain "-vl-" suffix used by ollama/local GGUF names
+    # (e.g. ``qwen2.5vl:7b``, ``Qwen2.5-VL-7B-Instruct-GGUF``).
+    (re.compile(r"qwen[\d.]*-?vl|qvq", re.I),
+     {"chat", "tools", "vision"}),
+    # Common open multimodal families (local GGUFs / LM Studio / Ollama).
+    (re.compile(r"llava|pixtral|internvl|internvl2|minicpm-v|moondream|gemma-3", re.I),
+     {"chat", "tools", "vision"}),
     # Nexus vision model.
     (re.compile(r"nexus-vision", re.I),
      {"chat", "tools", "vision"}),

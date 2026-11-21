@@ -22,7 +22,8 @@
     "lockedTitle": "Não é possível remover — limpe a função primeiro",
     "confirmRemove": "Confirmar",
     "cancelRemove": "Cancelar",
-    "removeTitle": "Remover"
+    "removeTitle": "Remover",
+    "reprobe": "Re-testar capacidades do modelo (limpa o resultado em cache)"
   },
   "form": {
     "providerLabel": "1. Provedor",
@@ -73,6 +74,8 @@
     "updated": "Atualizado {{id}}",
     "updateFailed": "Falha ao atualizar",
     "added": "Modelo {{id}} adicionado",
-    "addFailed": "Falha ao adicionar"
+    "addFailed": "Falha ao adicionar",
+    "reprobeQueued": "Re-testando capacidades: {{id}}",
+    "reprobeFailed": "Falha ao agendar re-teste de capacidades"
   }
 }

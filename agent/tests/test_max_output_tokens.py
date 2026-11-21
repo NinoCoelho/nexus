@@ -61,6 +61,29 @@ async def test_openai_forwards_max_tokens_when_set() -> None:
     assert captured[0].get("max_tokens") == 8000
 
 
+async def test_stream_payload_opts_into_usage_frame() -> None:
+    """stream_options.include_usage é o opt-in do frame de usage em
+    streams OpenAI-compat — sem ele o done event reporta 0/0 tokens."""
+    p = await _provider_with_transport(httpx.MockTransport(_capture_handler([])))
+    payload = p._build_payload(
+        "m", [ChatMessage(role=Role.USER, content="hi")], None, None, stream=True
+    )
+    assert payload["stream"] is True
+    assert payload["stream_options"] == {"include_usage": True}
+
+
+async def test_strict_compat_omits_stream_options() -> None:
+    p = OpenAIProvider(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        auth=StaticBearerAuth("k"),
+        model="m",
+    )
+    payload = p._build_payload(
+        "m", [ChatMessage(role=Role.USER, content="hi")], None, None, stream=True
+    )
+    assert "stream_options" not in payload
+
+
 async def test_openai_strict_compat_strips_penalties_for_gemini() -> None:
     """Gemini's OpenAI-compat endpoint is proto-validated and rejects
     unknown fields (frequency_penalty, presence_penalty) with HTTP 400
@@ -137,9 +160,10 @@ async def test_anthropic_falls_back_to_4096(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 async def test_loom_adapter_resolves_max_tokens_per_call() -> None:
+    import loom.types as lt
+
     from nexus.agent._loom_bridge.adapter import LoomProviderAdapter
     from nexus.agent.llm.types import ChatResponse, StopReason, Usage
-    import loom.types as lt
 
     captured: list[dict[str, Any]] = []
 

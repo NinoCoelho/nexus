@@ -14,6 +14,7 @@ import {
   patchModel,
   fetchProviderModels,
   putRouting,
+  reprobeModel as reprobeApi,
   setModelRole,
   suggestModelTier,
   type Model,
@@ -49,6 +50,7 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
   const [fetching, setFetching] = useState(false);
   const [filter, setFilter] = useState("");
   const [roleSaving, setRoleSaving] = useState(false);
+  const [reprobingId, setReprobingId] = useState<string | null>(null);
 
   const embModelId = routing?.embedding_model_id ?? "";
   const extModelId = routing?.extraction_model_id ?? "";
@@ -108,6 +110,20 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
       toast.error(t("models:toast.clearRoleFailed"), { detail: e instanceof Error ? e.message : undefined });
     } finally {
       setRoleSaving(false);
+    }
+  }
+
+  async function reprobeModel(id: string) {
+    setReprobingId(id);
+    try {
+      await reprobeApi(id);
+      toast.success(t("models:toast.reprobeQueued", { id }));
+      onRefresh();
+    } catch (e) {
+      toast.error(t("models:toast.reprobeFailed"), { detail: e instanceof Error ? e.message : undefined });
+    } finally {
+      // Leave the spinner state a beat — the probe itself is async server-side.
+      setTimeout(() => setReprobingId((cur) => (cur === id ? null : cur)), 1200);
     }
   }
 
@@ -293,6 +309,8 @@ export default function ModelsSection({ models, providers, routing, onRefresh }:
             onAssignRole={assignRole}
             onUnassignRole={unassignRole}
             onSetDefault={setDefaultModel}
+            onReprobe={(id) => void reprobeModel(id)}
+            reprobing={reprobingId === m.id}
           />
         );
       })}

@@ -320,6 +320,24 @@ async def launch_turn(
     """
     from .chat_turn_runner import ChatTurnRunner, get_running_turn
 
+    # Lazy capability probe (providers/probe.py): fire-and-forget enqueue.
+    # The turn itself keeps using the static capability resolution; the
+    # probe result only benefits later turns. Media-carrying turns get
+    # high priority so the model actually receiving an image jumps the
+    # queue. Never let probe wiring break a turn.
+    try:
+        from ...providers.probe import get_probe_service
+
+        has_media = any(
+            getattr(p, "kind", "") in ("image", "audio", "document")
+            for p in (attachment_parts or [])
+        )
+        get_probe_service().enqueue_if_uncached(
+            model_id, has_media=has_media,
+        )
+    except Exception:  # noqa: BLE001, S110 — probing must never break a turn
+        pass
+
     if publish_job_event is None:
         publish_job_event = _default_publish_job_event(store)
 

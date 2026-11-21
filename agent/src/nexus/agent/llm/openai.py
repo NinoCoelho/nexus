@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -23,12 +24,29 @@ from .types import (
     ToolCall,
 )
 
+
+def _image_rejected(exc: LLMTransportError) -> bool:
+    """True when a 4xx blames the image input. Local import: multimodal
+    lives above this package and imports lazily."""
+    from ...multimodal import image_rejected_by_upstream
+
+    return image_rejected_by_upstream(exc.status_code, str(exc))
+
+
+async def _downgrade_images(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Rebuild messages with image parts replaced by text breadcrumbs."""
+    from ...multimodal import messages_without_images
+
+    return await messages_without_images(messages)
+
 _FINISH_MAP = {
     "stop": StopReason.STOP,
     "tool_calls": StopReason.TOOL_USE,
     "function_call": StopReason.TOOL_USE,
     "length": StopReason.LENGTH,
 }
+
+log = logging.getLogger(__name__)
 
 # Max pattern length to consider when scanning for runaway repetition.
 # Catches single-char loops ("@@@@…"), short n-gram loops ("ababab…"), and
@@ -269,6 +287,12 @@ class OpenAIProvider(LLMProvider):
         }
         if stream:
             payload["stream"] = True
+            # Opt in to the usage frame. OpenAI-compat servers (LM Studio,
+            # vLLM, OpenRouter, …) only emit `usage` on streams when this is
+            # set — without it the done event reports in/out tokens as 0 and
+            # cost tracking goes blind. Strict hosts (Gemini) gate below.
+            if not self._strict_compat:
+                payload["stream_options"] = {"include_usage": True}
         if not self._strict_compat:
             if self._frequency_penalty:
                 payload["frequency_penalty"] = self._frequency_penalty
@@ -321,11 +345,43 @@ class OpenAIProvider(LLMProvider):
                     body = {}
             except Exception:
                 body = {}
-            raise LLMTransportError(
+            # Vision fallback: a server can reject image parts even when
+            # static metadata said otherwise (stale probe cache, family
+            # regex guess). Retry once with images downgraded to text
+            # breadcrumbs instead of failing the whole turn.
+            err = LLMTransportError(
                 f"HTTP {resp.status_code}: {resp.text[:400]}",
                 status_code=resp.status_code,
                 body=body,
             )
+            if _image_rejected(err):
+                log.warning(
+                    "openai.chat: %s rejected image input — retrying "
+                    "without images",
+                    resolved_model,
+                )
+                downgraded = await _downgrade_images(messages)
+                payload = self._build_payload(
+                    resolved_model, downgraded, max_tokens, tools,
+                    extra_payload=extra_payload,
+                )
+                try:
+                    resp = await self._client.post(
+                        f"{self._base_url}/chat/completions",
+                        json=payload,
+                        headers={**self._base_headers,
+                                 **(await self._auth.headers())},
+                    )
+                except httpx.HTTPError as exc:
+                    raise LLMTransportError(str(exc)) from exc
+                if resp.status_code >= 400:
+                    raise LLMTransportError(
+                        f"HTTP {resp.status_code}: {resp.text[:400]}",
+                        status_code=resp.status_code,
+                        body=body,
+                    )
+            else:
+                raise err
 
         try:
             return _decode_openai(resp.json())
@@ -333,6 +389,35 @@ class OpenAIProvider(LLMProvider):
             raise MalformedOutputError(str(exc)) from exc
 
     async def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[ToolSpec] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        resolved_model = resolve_model(model, self._model)
+        try:
+            async for ev in self._chat_stream_impl(
+                messages, tools=tools, model=model, max_tokens=max_tokens,
+            ):
+                yield ev
+        except LLMTransportError as exc:
+            if not _image_rejected(exc):
+                raise
+            # Vision fallback (see chat()): retry once without images.
+            log.warning(
+                "openai.chat_stream: %s rejected image input — retrying "
+                "without images",
+                resolved_model,
+            )
+            downgraded = await _downgrade_images(messages)
+            async for ev in self._chat_stream_impl(
+                downgraded, tools=tools, model=model, max_tokens=max_tokens,
+            ):
+                yield ev
+
+    async def _chat_stream_impl(
         self,
         messages: list[ChatMessage],
         *,

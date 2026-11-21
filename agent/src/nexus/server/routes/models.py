@@ -59,6 +59,12 @@ async def patch_model(
             # id and provider are immutable after creation — avoid cascading
             # breakage (role assignments, last_used_model references).
             updates = {k: v for k, v in body.items() if k in {"model_name", "tags", "tier", "notes", "is_embedding_capable", "context_window", "max_output_tokens"}}
+            if "model_name" in updates and updates["model_name"] != m.model_name:
+                # The upstream model string is what capability resolution is
+                # keyed on — a changed name invalidates the probe cache
+                # (providers/probe.py). Manual tags stay: the user owns them.
+                updates["probed"] = {}
+                updates["probed_at"] = ""
             if "tier" in updates and updates["tier"] not in ("fast", "balanced", "heavy"):
                 raise HTTPException(400, "tier must be fast|balanced|heavy")
             if "context_window" in updates:
@@ -82,6 +88,35 @@ async def patch_model(
             _rebuild_registry(cfg, app_state, a)
             return cfg.models[i].model_dump()
     raise HTTPException(404, f"model {model_id!r} not found")
+
+
+@router.post("/models/{model_id:path}/reprobe")
+async def reprobe_model(
+    model_id: str,
+    app_state: dict[str, Any] = Depends(get_app_state),
+) -> dict[str, Any]:
+    """Clear the capability-probe cache and enqueue a fresh probe.
+
+    User-initiated: bypasses the service's backoff (an explicit re-test
+    should win over the anti-hammer guard) but still dedups against an
+    already-queued/in-flight probe for the same model.
+    """
+    from ...config_file import load as load_cfg, save as save_cfg
+
+    cfg = app_state["cfg"] or load_cfg()
+    entry = next((m for m in cfg.models if m.id == model_id), None)
+    if entry is None:
+        raise HTTPException(404, f"model {model_id!r} not found")
+    if entry.probed or entry.probed_at:
+        entry.probed = {}
+        entry.probed_at = ""
+        save_cfg(cfg)
+    from ...providers.probe import get_probe_service
+
+    svc = get_probe_service()
+    svc.clear_backoff(model_id)
+    queued = svc.enqueue_if_uncached(model_id, priority="high")
+    return {"ok": True, "queued": queued, "probing": svc.status()}
 
 
 @router.post("/models/suggest-tier")
@@ -136,7 +171,17 @@ async def get_routing(app_state: dict[str, Any] = Depends(get_app_state)) -> dic
         "embedding_model_id": embedding_id,
         "extraction_model_id": cfg.graphrag.extraction_model_id,
         "vision_model_id": cfg.agent.vision_model,
+        "probing": _probe_status(),
     }
+
+
+def _probe_status() -> dict[str, list[str]]:
+    try:
+        from ...providers.probe import get_probe_service
+
+        return get_probe_service().status()
+    except Exception:  # noqa: BLE001
+        return {"probing": [], "queued": []}
 
 
 @router.put("/routing")
@@ -168,6 +213,14 @@ async def set_routing(
                         f"Start the local model first or check your provider configuration.",
                     )
         cfg.agent.default_model = requested
+    # Lazy capability probe — the user just selected this model for chat.
+    if requested:
+        try:
+            from ...providers.probe import get_probe_service
+
+            get_probe_service().enqueue_if_uncached(requested)
+        except Exception:  # noqa: BLE001, S110 — probing must never break routing
+            pass
     if "last_used_model" in body:
         cfg.agent.last_used_model = body["last_used_model"]
     if "embedding_model_id" in body:

@@ -91,9 +91,10 @@ def _read_ocr_section() -> dict[str, Any]:
 
 def _resolve_vision_model() -> tuple[str, str] | None:
     """Return ``(provider_id, model_name)`` for the model picked as the
-    ``vision`` role in the settings UI (``cfg.agent.vision_model``).
-    Returns ``None`` if the role is unset or points at a model that no
-    longer exists.
+    ``vision`` role in the settings UI (``cfg.agent.vision_model``), or —
+    when the role is unset — the first vision-capable model (manual tag or
+    probe cache; see :func:`_first_vision_capable`). Returns ``None`` if
+    nothing qualifies or the configured id no longer exists.
     """
     try:
         from .config_file import load as load_config
@@ -104,7 +105,11 @@ def _resolve_vision_model() -> tuple[str, str] | None:
         return None
     target_id = (cfg.agent.vision_model or "").strip()
     if not target_id:
-        return None
+        # Auto-resolve: no role assigned → use the first vision-capable
+        # model (manual tag or probe cache). Runtime-only: nothing is
+        # written to config, so the chat-selector exclusion that comes
+        # with an explicit role assignment never triggers.
+        return _first_vision_capable(cfg)
     for entry in cfg.models:
         if entry.id == target_id:
             return entry.provider, entry.model_name
@@ -113,6 +118,21 @@ def _resolve_vision_model() -> tuple[str, str] | None:
         target_id,
     )
     return None
+
+
+def _first_vision_capable(cfg) -> tuple[str, str] | None:
+    """First ``[[models]]`` entry whose manual tags or probe cache say
+    ``vision``. Preference order: manual tag first (explicit user intent),
+    then probe-confirmed."""
+    manual = probe = None
+    for entry in cfg.models:
+        if entry.is_embedding_capable:
+            continue
+        if "vision" in (entry.tags or []):
+            manual = manual or (entry.provider, entry.model_name)
+        elif (entry.probed or {}).get("vision"):
+            probe = probe or (entry.provider, entry.model_name)
+    return manual or probe
 
 
 def is_configured() -> bool:

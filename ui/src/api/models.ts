@@ -8,6 +8,10 @@ export interface Model {
   provider: string;
   model_name: string;
   tags: string[];
+  // Capability-probe cache (providers/probe.py). Read-only in the UI —
+  // written by the lazy background probe; manual tags always win.
+  probed?: Record<string, boolean>;
+  probed_at?: string;
   tier: ModelTier;
   notes: string;
   is_embedding_capable?: boolean;
@@ -48,6 +52,14 @@ export async function patchModel(
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Model update error: ${res.status}`);
+  return res.json();
+}
+
+export async function reprobeModel(id: string): Promise<{ ok: boolean; queued: boolean }> {
+  const res = await fetch(`${BASE}/models/${encodeURIComponent(id)}/reprobe`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Reprobe error: ${res.status}`);
   return res.json();
 }
 
