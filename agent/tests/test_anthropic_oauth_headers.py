@@ -114,15 +114,29 @@ def oauth_provider() -> AnthropicProvider:
 # ── api_key path ────────────────────────────────────────────────────────────
 
 
-async def test_api_key_path_sends_x_api_key_not_bearer(
+async def test_api_key_path_authenticates_with_the_api_key(
     api_key_provider: AnthropicProvider,
 ) -> None:
+    """The credential on the wire is the API key itself — never an OAuth
+    token — and no OAuth beta flag rides along.
+
+    Scheme depends on the SDK major: anthropic 1.x put the key in the
+    ``x-api-key`` header; 2.x (verified against 2.6.0) sends
+    ``Authorization: Bearer <api key>`` and dropped ``x-api-key``
+    entirely. Both are accepted by the API, so accept either — what
+    must NOT happen is a stale OAuth token or the OAuth beta header on
+    this path (the silent-empty-stream bug in reverse).
+    """
     captured, _ = _capture_request(api_key_provider)
     await api_key_provider.chat([ChatMessage(role=Role.USER, content="hi")])
     assert captured, "no request reached the mock transport"
     req = captured[0]
-    assert req.headers.get("x-api-key") == "sk-ant-test-key"
-    assert "Authorization" not in req.headers
+    auth = (req.headers.get("Authorization") or "").strip()
+    x_api_key = (req.headers.get("x-api-key") or "").strip()
+    assert auth == "Bearer sk-ant-test-key" or x_api_key == "sk-ant-test-key", (
+        f"API-key path didn't authenticate with the API key. "
+        f"Got Authorization={auth!r}, x-api-key={x_api_key!r}"
+    )
     # Version header is set by the SDK regardless of auth mode.
     assert req.headers.get("anthropic-version"), "SDK didn't set anthropic-version"
     # API-key path must NOT carry the OAuth beta flag.

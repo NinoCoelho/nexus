@@ -172,15 +172,14 @@ async def test_sse_stream_delivers_iter_events_during_turn(
         events: list[tuple[str, dict]] = []
 
         async def collect() -> None:
-            async with httpx.AsyncClient(timeout=5.0) as c:
-                async with c.stream(
-                    "GET", f"{base}/chat/{sid}/events"
-                ) as resp:
-                    assert resp.status_code == 200
-                    async for kind, data in _iter_sse_events(resp):
-                        events.append((kind, data))
-                        if kind == "reply":
-                            return
+            async with httpx.AsyncClient(timeout=5.0) as c, c.stream(
+                "GET", f"{base}/chat/{sid}/events"
+            ) as resp:
+                assert resp.status_code == 200
+                async for kind, data in _iter_sse_events(resp):
+                    events.append((kind, data))
+                    if kind == "reply":
+                        return
 
         collector = asyncio.create_task(collect())
         await asyncio.sleep(0.1)  # let the SSE connection establish
@@ -216,19 +215,18 @@ async def test_ask_user_full_round_trip(tmp_path: Path) -> None:
         request_id_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
         async def collect() -> None:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                async with c.stream(
-                    "GET", f"{base}/chat/{sid}/events"
-                ) as resp:
-                    async for kind, data in _iter_sse_events(resp):
-                        stream_events.append((kind, data))
-                        if (
-                            kind == "user_request"
-                            and not request_id_future.done()
-                        ):
-                            request_id_future.set_result(data["request_id"])
-                        if kind == "reply":
-                            return
+            async with httpx.AsyncClient(timeout=10.0) as c, c.stream(
+                "GET", f"{base}/chat/{sid}/events"
+            ) as resp:
+                async for kind, data in _iter_sse_events(resp):
+                    stream_events.append((kind, data))
+                    if (
+                        kind == "user_request"
+                        and not request_id_future.done()
+                    ):
+                        request_id_future.set_result(data["request_id"])
+                    if kind == "reply":
+                        return
 
         collector = asyncio.create_task(collect())
         await asyncio.sleep(0.1)
@@ -293,50 +291,47 @@ async def test_respond_returns_404_for_unknown_request(tmp_path: Path) -> None:
 async def test_respond_rejects_empty_request_id(tmp_path: Path) -> None:
     """Pydantic validation catches malformed bodies — saves a layer
     of handwritten guards inside the store."""
-    async with _serve(FakeProvider([]), tmp_path) as base:
-        async with httpx.AsyncClient(timeout=3.0) as c:
-            ack = await c.post(
-                f"{base}/chat/any/respond",
-                json={"request_id": "", "answer": "yes"},
-            )
-            assert ack.status_code == 422  # validation error
+    async with _serve(FakeProvider([]), tmp_path) as base, httpx.AsyncClient(timeout=3.0) as c:
+        ack = await c.post(
+            f"{base}/chat/any/respond",
+            json={"request_id": "", "answer": "yes"},
+        )
+        assert ack.status_code == 422  # validation error
 
 
 # ── /settings endpoints ─────────────────────────────────────────────
 
 
 async def test_get_settings_returns_defaults(tmp_path: Path) -> None:
-    async with _serve(FakeProvider([]), tmp_path) as base:
-        async with httpx.AsyncClient(timeout=3.0) as c:
-            resp = await c.get(f"{base}/settings")
-            assert resp.status_code == 200
-            assert resp.json() == {
-                "yolo_mode": False,
-                "auto_accept_members": False,
-                "ui_mode": "normal",
-            }
+    async with _serve(FakeProvider([]), tmp_path) as base, httpx.AsyncClient(timeout=3.0) as c:
+        resp = await c.get(f"{base}/settings")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "yolo_mode": False,
+            "auto_accept_members": False,
+            "ui_mode": "normal",
+        }
 
 
 async def test_post_settings_persists_change(tmp_path: Path) -> None:
-    async with _serve(FakeProvider([]), tmp_path) as base:
-        async with httpx.AsyncClient(timeout=3.0) as c:
-            resp = await c.post(
-                f"{base}/settings", json={"yolo_mode": True}
-            )
-            assert resp.status_code == 200
-            assert resp.json() == {
-                "yolo_mode": True,
-                "auto_accept_members": False,
-                "ui_mode": "normal",
-            }
+    async with _serve(FakeProvider([]), tmp_path) as base, httpx.AsyncClient(timeout=3.0) as c:
+        resp = await c.post(
+            f"{base}/settings", json={"yolo_mode": True}
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "yolo_mode": True,
+            "auto_accept_members": False,
+            "ui_mode": "normal",
+        }
 
-            # Round-trip GET confirms persistence.
-            follow = await c.get(f"{base}/settings")
-            assert follow.json() == {
-                "yolo_mode": True,
-                "auto_accept_members": False,
-                "ui_mode": "normal",
-            }
+        # Round-trip GET confirms persistence.
+        follow = await c.get(f"{base}/settings")
+        assert follow.json() == {
+            "yolo_mode": True,
+            "auto_accept_members": False,
+            "ui_mode": "normal",
+        }
 
 
 async def test_post_settings_partial_update_preserves_other_fields(
@@ -345,17 +340,16 @@ async def test_post_settings_partial_update_preserves_other_fields(
     """An omitted field is a no-op, not a reset to default. This
     contract matters when more settings land later — the UI will
     PATCH individual toggles."""
-    async with _serve(FakeProvider([]), tmp_path) as base:
-        async with httpx.AsyncClient(timeout=3.0) as c:
-            await c.post(f"{base}/settings", json={"yolo_mode": True})
-            # Empty body → no changes applied.
-            resp = await c.post(f"{base}/settings", json={})
-            assert resp.status_code == 200
-            assert resp.json() == {
-                "yolo_mode": True,
-                "auto_accept_members": False,
-                "ui_mode": "normal",
-            }
+    async with _serve(FakeProvider([]), tmp_path) as base, httpx.AsyncClient(timeout=3.0) as c:
+        await c.post(f"{base}/settings", json={"yolo_mode": True})
+        # Empty body → no changes applied.
+        resp = await c.post(f"{base}/settings", json={})
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "yolo_mode": True,
+            "auto_accept_members": False,
+            "ui_mode": "normal",
+        }
 
 
 # ── streaming + HITL compose ─────────────────────────────────────────
@@ -375,32 +369,30 @@ async def test_ask_user_round_trip_via_chat_stream(tmp_path: Path) -> None:
         request_id_future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
         async def watch_events() -> None:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                async with c.stream(
-                    "GET", f"{base}/chat/{sid}/events"
-                ) as resp:
-                    async for kind, data in _iter_sse_events(resp):
-                        if (
-                            kind == "user_request"
-                            and not request_id_future.done()
-                        ):
-                            request_id_future.set_result(data["request_id"])
-                            return
+            async with httpx.AsyncClient(timeout=10.0) as c, c.stream(
+                "GET", f"{base}/chat/{sid}/events"
+            ) as resp:
+                async for kind, data in _iter_sse_events(resp):
+                    if (
+                        kind == "user_request"
+                        and not request_id_future.done()
+                    ):
+                        request_id_future.set_result(data["request_id"])
+                        return
 
         watcher = asyncio.create_task(watch_events())
         await asyncio.sleep(0.1)
 
         async def run_stream_chat() -> list[str]:
             events: list[str] = []
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                async with c.stream(
-                    "POST",
-                    f"{base}/chat/stream",
-                    json={"message": "do it", "session_id": sid},
-                ) as resp:
-                    async for line in resp.aiter_lines():
-                        if line.startswith("event: "):
-                            events.append(line[len("event: ") :].strip())
+            async with httpx.AsyncClient(timeout=10.0) as c, c.stream(
+                "POST",
+                f"{base}/chat/stream",
+                json={"message": "do it", "session_id": sid},
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        events.append(line[len("event: ") :].strip())
             return events
 
         chat_task = asyncio.create_task(run_stream_chat())
@@ -438,31 +430,39 @@ async def test_yolo_through_stream_does_not_open_dialog(tmp_path: Path) -> None:
 
         sid = "sess-yolo-stream"
         kinds_seen: list[str] = []
+        done_payload: dict[str, Any] = {}
 
         async def collect() -> None:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                async with c.stream(
-                    "GET", f"{base}/chat/{sid}/events"
-                ) as resp:
-                    async for kind, _data in _iter_sse_events(resp):
-                        kinds_seen.append(kind)
-                        if kind == "reply":
-                            return
+            async with httpx.AsyncClient(timeout=10.0) as c, c.stream(
+                "GET", f"{base}/chat/{sid}/events"
+            ) as resp:
+                async for kind, data in _iter_sse_events(resp):
+                    kinds_seen.append(kind)
+                    # Streaming turns finalize with `done` (the reply
+                    # text rides inside its data) + `turn_settled` —
+                    # the same contract the Chrome panel and iOS
+                    # consume. There is no `reply` frame on this
+                    # channel; that kind only exists on the non-stream
+                    # /chat trace path.
+                    if kind == "done":
+                        done_payload.update(data)
+                        return
 
         collector = asyncio.create_task(collect())
         await asyncio.sleep(0.1)
 
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            async with c.stream(
-                "POST",
-                f"{base}/chat/stream",
-                json={"message": "do it", "session_id": sid},
-            ) as resp:
-                async for _line in resp.aiter_lines():
-                    pass
+        async with httpx.AsyncClient(timeout=10.0) as c, c.stream(
+            "POST",
+            f"{base}/chat/stream",
+            json={"message": "do it", "session_id": sid},
+        ) as resp:
+            async for _line in resp.aiter_lines():
+                pass
 
         await asyncio.wait_for(collector, timeout=3.0)
 
         # YOLO path must emit user_request_auto, never user_request.
         assert "user_request_auto" in kinds_seen
         assert "user_request" not in kinds_seen
+        # The turn completed and produced its (auto-approved) reply.
+        assert done_payload.get("reply") == "ok."

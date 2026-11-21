@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,9 +25,10 @@ from nexus.agent.llm import ChatMessage, Role
 from nexus.agent.prompt_builder import _surface_block
 from nexus.browser.tool import BrowserHandler
 from nexus.server.events import SessionEvent, json_safe
+from nexus.server.job_tracker import JobTracker
 from nexus.server.schemas import ChatRequest
-from nexus.server.session_store import SessionStore
 from nexus.server.services.chat_turn_runner import ChatTurnRunner
+from nexus.server.session_store import SessionStore
 
 
 def _store(tmp_path: Path) -> SessionStore:
@@ -238,7 +240,7 @@ async def test_browser_gate_ask_mode_requires_approval(monkeypatch) -> None:
 # ── Display cleaning of the side-panel <context> pointer ───────────────────
 
 
-from nexus.server.message_display import (  # noqa: E402
+from nexus.server.message_display import (
     context_preamble_meta,
     display_user_text,
     strip_context_preamble,
@@ -314,7 +316,7 @@ async def test_turn_started_echo_is_display_clean(tmp_path: Path) -> None:
         pre_turn_history=[],
         attachment_parts=None,
         resume_working_messages=None,
-        tracker=SimpleNamespace(),  # type: ignore[arg-type]
+        tracker=JobTracker(),
         turn_job_id="job",
         publish_job_event=None,
     )
@@ -328,6 +330,13 @@ async def test_turn_started_echo_is_display_clean(tmp_path: Path) -> None:
     runner.start()
     if runner.task is not None:
         runner.task.cancel()  # start() already published turn_started
+        # Await the cancellation: start() registered this runner in the
+        # module-global `_running_turns`, and the pop happens in the
+        # runner task's `finally`. Without awaiting, the pytest loop can
+        # close before that finally runs, leaving a stale entry that makes
+        # every later `wait_turns_done` (telegram harness) time out.
+        with suppress(asyncio.CancelledError):
+            await runner.task
     ev = await asyncio.wait_for(task, timeout=2)
     assert ev.kind == "turn_started"
     assert ev.data["message"] == "resuma isso pra mim"

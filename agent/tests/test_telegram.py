@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from test_chat_queue import GatedProvider
+from test_server_sse import FakeProvider
 
 from nexus.agent.llm import ChatMessage, ChatResponse, Role, StopReason
 from nexus.agent.loop import Agent
@@ -29,10 +31,6 @@ from nexus.skills.registry import SkillRegistry
 from nexus.telegram.bindings import TelegramBindingStore
 from nexus.telegram.formatting import md_to_telegram_html, split_for_telegram, tlen
 from nexus.telegram.router import TelegramRouter
-
-from test_server_sse import FakeProvider
-from test_chat_queue import GatedProvider
-
 
 # ── Fakes ───────────────────────────────────────────────────────────────
 

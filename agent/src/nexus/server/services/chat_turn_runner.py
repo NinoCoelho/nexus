@@ -20,18 +20,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from ..events import SessionEvent
 from ...agent.context import CURRENT_SESSION_ID
+from ..events import SessionEvent
 from ..routes._streaming import TurnAccumulator
 
 if TYPE_CHECKING:
     from ...agent.loop import Agent
-    from ..session_store import SessionStore
     from ..job_tracker import JobTracker
+    from ..session_store import SessionStore
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +59,8 @@ class ChatTurnRunner:
     Attributes are set by the caller (chat_stream route) before ``start()``.
     """
 
-    agent: "Agent"
-    store: "SessionStore"
+    agent: Agent
+    store: SessionStore
     session_id: str
     message: str
     context: str
@@ -68,7 +68,7 @@ class ChatTurnRunner:
     pre_turn_history: list[Any]
     attachment_parts: list[Any] | None
     resume_working_messages: list[Any] | None
-    tracker: "JobTracker"
+    tracker: JobTracker
     turn_job_id: str
     publish_job_event: Any  # callable
     is_voice: bool = False
@@ -78,7 +78,7 @@ class ChatTurnRunner:
     origin: str = "web"
     acc: TurnAccumulator = field(default_factory=TurnAccumulator)
     task: asyncio.Task[Any] | None = None
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Follow-up messages sent while this turn is running. Injected at the
     # next tool-batch boundary (``drain_pending``) or chained as follow-up
     # turns when the current turn ends first (``_next_queued``).
@@ -113,7 +113,18 @@ class ChatTurnRunner:
         })
         self.task = asyncio.create_task(self._run(), name=f"chat-turn-{self.session_id}")
         _running_turns[self.session_id] = self
+        # Release the slot via done-callback as well: a task cancelled
+        # before its first scheduling step throws into the coroutine *before*
+        # `_run`'s try/finally engages, so the finally-based pop never runs
+        # and the stale entry made every later wait-for-idle check hang
+        # (observed as the telegram suite's "turn runners did not finish"
+        # cascade). Done-callbacks always run, whatever ended the task.
+        self.task.add_done_callback(lambda _t: self._release_registry_slot())
         return self.task
+
+    def _release_registry_slot(self) -> None:
+        if _running_turns.get(self.session_id) is self:
+            _running_turns.pop(self.session_id, None)
 
     def cancel(self) -> bool:
         """Cancel the detached task. Returns True if a live task was cancelled."""
@@ -195,7 +206,8 @@ class ChatTurnRunner:
 
     def _begin_chained_turn(self, nxt: QueuedInput) -> None:
         """Re-arm the runner for a follow-up turn with a queued message."""
-        from ...agent.llm import ChatMessage as _CM, Role as _R
+        from ...agent.llm import ChatMessage as _CM
+        from ...agent.llm import Role as _R
 
         session = self.store.get(self.session_id)
         fresh_history = list(session.history) if session else []
@@ -203,7 +215,7 @@ class ChatTurnRunner:
             self.store.replace_history(
                 self.session_id, fresh_history + [_CM(role=_R.USER, content=nxt.text)]
             )
-        except Exception:  # noqa: BLE001 — best-effort eager persist
+        except Exception:
             log.exception("queued-turn user message persist failed")
         self.pre_turn_history = fresh_history
         self.message = nxt.text
@@ -212,7 +224,7 @@ class ChatTurnRunner:
         self.attachment_parts = None
         self.resume_working_messages = None
         self.acc = TurnAccumulator()
-        self.started_at = datetime.now(timezone.utc)
+        self.started_at = datetime.now(UTC)
         self.origin = nxt.origin
         # Chained turn speaks with the queued message's surface — keep the
         # gate + prompt surface block in sync (same rationale as drain_pending).
@@ -285,7 +297,7 @@ class ChatTurnRunner:
                         "origin": "team",
                         "session_id": self.session_id,
                     })
-        except Exception:  # noqa: BLE001 — the cascade is best-effort
+        except Exception:
             log.debug("bot cascade scan failed", exc_info=True)
 
     def _cascade_max(self) -> int:
@@ -371,29 +383,39 @@ class ChatTurnRunner:
                 detail=f"{type(exc).__name__}: {exc}",
             )
         finally:
-            self._persist()
-            self.tracker.done(self.turn_job_id, publish_fn=self.publish_job_event)
+            # Best-effort cleanup below — the registry pop is delegated to
+            # the done-callback (see `_release_registry_slot`) so no raise
+            # here can strand a dead runner in `_running_turns`.
+            try:
+                self._persist()
+            except Exception:
+                log.exception("turn persist failed")
+            try:
+                self.tracker.done(self.turn_job_id, publish_fn=self.publish_job_event)
+            except Exception:
+                log.exception("turn job tracker close failed")
             self.store._trace_suppressed.discard(self.session_id)
             # Terminal marker: subscribers keep the SSE open past `done`
             # (chained turns) and only close on this event.
-            self._publish({
-                "type": "turn_settled",
-                "session_id": self.session_id,
-                "origin": self.origin,
-            })
+            try:
+                self._publish({
+                    "type": "turn_settled",
+                    "session_id": self.session_id,
+                    "origin": self.origin,
+                })
+            except Exception:
+                log.exception("turn_settled publish failed")
             try:
                 CURRENT_SESSION_ID.reset(token)
                 TURN_SURFACE.reset(surface_token)
             except ValueError:
                 log.debug("CURRENT_SESSION_ID reset across contexts")
-            if _running_turns.get(self.session_id) is self:
-                _running_turns.pop(self.session_id, None)
 
     async def _drive_loop(self) -> None:
-        from ...config_file import load_cached as load_config
         from ...agent.llm import LLMTransportError, MalformedOutputError
-        from ..routes._streaming import build_done_sse  # noqa: F401 — not used here but documents format
+        from ...config_file import load_cached as load_config
         from ...voice_ack import _AckTrigger, emit_completion_ack, emit_start_ack
+        from ..routes._streaming import build_done_sse  # noqa: F401 — not used here but documents format
 
         cfg = load_config()
         tts_cfg = cfg.tts
@@ -496,9 +518,9 @@ class ChatTurnRunner:
             rate_limit_reset: str | None = None
             try:
                 from ...error_classifier import (
+                    budget_exceeded_detail,
                     classify_with_reset,
                     is_budget_exceeded,
-                    budget_exceeded_detail,
                 )
                 if is_budget_exceeded(exc):
                     self.acc.partial_status = "budget_exceeded"

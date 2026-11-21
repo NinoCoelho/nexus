@@ -10,7 +10,7 @@ when:
 
 Run::
 
-    uv run pytest tests/test_qwen36_mtp_live.py -v -s
+    NEXUS_LIVE_TESTS=1 uv run pytest tests/test_qwen36_mtp_live.py -v -s
 
 The model is ~16 GB (Q4_K_M default).  Needs ~48 GB RAM / VRAM.
 """
@@ -23,6 +23,13 @@ import time
 
 import httpx
 import pytest
+
+# Gated like tests/live/ — a plain `pytest` run must never download a
+# 16 GB model or spawn a server.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("NEXUS_LIVE_TESTS") != "1",
+    reason="live integration test: set NEXUS_LIVE_TESTS=1 (downloads ~16 GB model)",
+)
 
 HF_REPO = os.environ.get("NEXUS_QWEN_MTP_REPO", "ggml-org/Qwen3.6-27B-MTP-GGUF")
 SPEC_DRAFT_N_MAX = int(os.environ.get("NEXUS_QWEN_MTP_DRAFT_N", "2"))
@@ -138,25 +145,24 @@ def _pick_free_port() -> int:
 
 async def _stream_chat(base_url: str, messages: list[dict], **kwargs) -> list[dict]:
     events: list[dict] = []
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream(
-            "POST",
-            f"{base_url}/v1/chat/completions",
-            json={"messages": messages, "stream": True, **kwargs},
-        ) as resp:
-            assert resp.status_code == 200
-            async for line in resp.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw == "[DONE]":
-                    break
-                import json as _json
-                try:
-                    chunk = _json.loads(raw)
-                except _json.JSONDecodeError:
-                    continue
-                events.append(chunk)
+    async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
+        "POST",
+        f"{base_url}/v1/chat/completions",
+        json={"messages": messages, "stream": True, **kwargs},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            raw = line[5:].strip()
+            if raw == "[DONE]":
+                break
+            import json as _json
+            try:
+                chunk = _json.loads(raw)
+            except _json.JSONDecodeError:
+                continue
+            events.append(chunk)
     return events
 
 
