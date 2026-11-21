@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -44,14 +45,14 @@ def _startup_event_bus() -> None:
 
 def _start_vault_cache_listener() -> asyncio.Task[None]:
     async def _vault_cache_listener() -> None:
-        from . import event_bus as _eb
         from ..vault_datatable_index import invalidate_cache as _inv_dt
+        from . import event_bus as _eb
         q = _eb.subscribe()
         try:
             while True:
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=30.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 if ev.get("type") in ("vault.indexed", "vault.removed"):
                     _inv_dt()
@@ -104,6 +105,7 @@ def _startup_tmp_dir_sweep() -> None:
     # tmp root is safe.
     try:
         import shutil
+
         from .. import home as _home
         _tmp_root = _home.root() / "tmp"
         if _tmp_root.exists():
@@ -153,9 +155,11 @@ async def _startup_local_llm(mutable_state: dict[str, Any], agent: Any) -> None:
 async def _startup_ocr() -> None:
     try:
         from ..ocr_server import (
-            migrate_from_local_llm,
             cleanup_config_entries,
             download_if_missing,
+            migrate_from_local_llm,
+        )
+        from ..ocr_server import (
             start as ocr_start,
         )
 
@@ -173,10 +177,11 @@ async def _startup_ocr() -> None:
 
 def _startup_hitl_sweep(sessions: Any) -> None:
     try:
-        from .events import SessionEvent as _SE
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        from .events import SessionEvent as _SE
+
+        now_iso = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         re_published = 0
 
         def _sweep_store(store: Any) -> None:
@@ -356,19 +361,25 @@ def _startup_heartbeat_calendar(
 ) -> Any:
     scheduler = None
     try:
-        from .. import vault_calendar
-        from ..calendar_runtime import (
-            set_dispatcher as _set_cal_dispatcher,
-            set_notifier as _set_cal_notifier,
-            set_alarm_store as _set_cal_alarm_store,
-        )
-        from ..heartbeat_drivers import DRIVERS_DIR
         from pathlib import Path
+
         from loom.heartbeat import (
             HeartbeatRegistry,
             HeartbeatScheduler,
             HeartbeatStore,
         )
+
+        from .. import vault_calendar
+        from ..calendar_runtime import (
+            set_alarm_store as _set_cal_alarm_store,
+        )
+        from ..calendar_runtime import (
+            set_dispatcher as _set_cal_dispatcher,
+        )
+        from ..calendar_runtime import (
+            set_notifier as _set_cal_notifier,
+        )
+        from ..heartbeat_drivers import DRIVERS_DIR
 
         # Calendar bootstrap issues (bad markdown, tz edge cases) must never
         # take the heartbeat scheduler down with them.
@@ -388,6 +399,7 @@ def _startup_heartbeat_calendar(
             occurrence_start: str | None = None,
         ) -> dict:
             import time as _time
+
             from .. import vault_calendar as _vc
             event_title = ""
             try:
@@ -464,7 +476,7 @@ def _startup_heartbeat_calendar(
         alarm_store = _open_heartbeat_store(AlarmStore, db_path, "alarm")
         _set_cal_alarm_store(alarm_store)
 
-        async def _noop_run_fn(instructions: str, messages):  # noqa: ANN001
+        async def _noop_run_fn(instructions: str, messages):
             from loom.loop import AgentTurn
             return AgentTurn(reply="", input_tokens=0, output_tokens=0, tool_calls=0)
 
@@ -503,9 +515,9 @@ def _startup_heartbeat_calendar(
 
 async def _startup_workflows(app: FastAPI, agent: Any, sessions: Any) -> None:
     try:
-        from ..workflows.store import WorkflowStore
-        from ..workflows.engine import WorkflowEngine
         from .. import home as _wf_home
+        from ..workflows.engine import WorkflowEngine
+        from ..workflows.store import WorkflowStore
 
         wf_db = str(_wf_home.workflow_runs_db())
         wf_store = WorkflowStore(wf_db)
@@ -537,10 +549,13 @@ async def _startup_workflows(app: FastAPI, agent: Any, sessions: Any) -> None:
         from .routes.workflows import init as _wf_init
         _wf_init(wf_store, wf_engine)
 
+        from ..workflows.triggers.event import EventTriggerListener
+        from ..workflows.triggers.event import set_engine_ref as _set_evt_ref
+        from ..workflows.triggers.fs_watch import FsWatchTriggerDriver
+        from ..workflows.triggers.fs_watch import set_engine_ref as _set_fsw_ref
+        from ..workflows.triggers.rss import RssTriggerDriver
+        from ..workflows.triggers.rss import set_engine_ref as _set_rss_ref
         from ..workflows.triggers.webhook import WebhookTriggerDriver
-        from ..workflows.triggers.event import EventTriggerListener, set_engine_ref as _set_evt_ref
-        from ..workflows.triggers.fs_watch import FsWatchTriggerDriver, set_engine_ref as _set_fsw_ref
-        from ..workflows.triggers.rss import RssTriggerDriver, set_engine_ref as _set_rss_ref
 
         webhook_driver = WebhookTriggerDriver(wf_store)
         event_listener = EventTriggerListener(wf_store)
@@ -558,8 +573,8 @@ async def _startup_workflows(app: FastAPI, agent: Any, sessions: Any) -> None:
         # engine and the cleanup driver needs the run store. Without this
         # wiring both drivers silently no-op (state is JSON-persisted, so
         # the refs must be injected, not stored in driver state).
-        from ..heartbeat_drivers.workflow_schedule.driver import set_engine_ref as _set_wsched_ref
         from ..heartbeat_drivers.workflow_cleanup.driver import set_store_ref as _set_wclean_ref
+        from ..heartbeat_drivers.workflow_schedule.driver import set_engine_ref as _set_wsched_ref
         _set_wsched_ref(wf_engine)
         _set_wclean_ref(wf_store)
 
@@ -606,7 +621,6 @@ async def _startup_mcp_manager(nexus_cfg: Any, agent: Any, app: FastAPI) -> Any:
 
 def _startup_mcp_server_mode(nexus_cfg: Any, agent: Any, store: Any, job_tracker: Any, main_loop: Any) -> None:
     try:
-        import asyncio
 
         from ..mcp_lifecycle import start_mcp_server
         tool_reg = getattr(agent._loom, "_tools", None)
@@ -702,6 +716,63 @@ async def _shutdown_telegram(app: FastAPI) -> None:
             await poller.stop()
     except Exception:
         log.exception("telegram poller stop failed")
+
+
+def _discovery_targets(nexus_cfg: Any) -> list[tuple[str, str]]:
+    """Providers whose context windows can be discovered at runtime.
+
+    Today that's LM Studio only (``catalog_id = "lmstudio"``): its native
+    ``/api/v0/models`` reports the per-model window, and OpenAI-compat
+    servers in general don't. A hand-written config without ``catalog_id``
+    opts out silently — probing arbitrary local servers would 404-spam the
+    log every cycle.
+    """
+    targets: list[tuple[str, str]] = []
+    for name, pcfg in (getattr(nexus_cfg, "providers", None) or {}).items():
+        if getattr(pcfg, "catalog_id", "") != "lmstudio":
+            continue
+        base_url = (getattr(pcfg, "base_url", "") or "").strip()
+        if base_url:
+            targets.append((str(name), base_url))
+    return targets
+
+
+def _startup_context_window_discovery(nexus_cfg: Any) -> asyncio.Task[None] | None:
+    """Discover context windows for local LLM servers (LM Studio).
+
+    Configured ``[[models]].context_window`` wins (checked first by
+    ``effective_context_window``); this fills the gap for models the static
+    registry can't classify — a 256K nemotron fell to the 32K fallback and
+    thrashed on a ~10K usable budget (2026-11-21). The task fetches
+    immediately, then re-fetches on the module TTL so a model reloaded with
+    a different context lands without a daemon restart. Failures are soft:
+    LM Studio being off must not break startup.
+    """
+    from ..agent.discovered_windows import TTL_SECONDS, refresh
+
+    targets = _discovery_targets(nexus_cfg)
+    if not targets:
+        return None
+
+    async def _refresh_loop() -> None:
+        while True:
+            for pname, base_url in targets:
+                try:
+                    await refresh(pname, base_url)
+                except Exception:
+                    log.exception("context-window refresh failed for %s", pname)
+            await asyncio.sleep(TTL_SECONDS)
+
+    log.info(
+        "context-window discovery: %d provider target(s): %s",
+        len(targets), [name for name, _ in targets],
+    )
+    return asyncio.create_task(_refresh_loop())
+
+
+def _shutdown_context_window_discovery(task: asyncio.Task[None] | None) -> None:
+    if task is not None:
+        task.cancel()
 
 
 def _shutdown_vault_cache(task: asyncio.Task[None]) -> None:
@@ -843,10 +914,12 @@ def create_lifespan(state: dict[str, Any]):
         _startup_mcp_server_mode(nexus_cfg, agent, sessions, job_tracker, main_loop)
         _startup_broker_poller(app, agent)
         _startup_telegram(app, agent, sessions, job_tracker, publish_job_event)
+        _discovery_task = _startup_context_window_discovery(nexus_cfg)
 
         try:
             yield
         finally:
+            _shutdown_context_window_discovery(_discovery_task)
             _shutdown_vault_cache(_vault_cache_task)
             _shutdown_vault_watcher()
             _shutdown_heartbeat(app)

@@ -30,8 +30,9 @@ dense ratio for non-ASCII / JSON).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 # ``_chars_per_token`` is both used here (multipart scoring) and re-exported
 # for the historical call sites that import it from this module.
@@ -256,10 +257,12 @@ _FAMILY_WINDOWS: tuple[tuple[tuple[str, ...], int], ...] = (
 def known_context_window(model: str) -> int:
     """Best-known context window for ``model``, or 0 when unrecognized.
 
-    Resolution order: exact id, longest matching registry key, then family
-    prefix. Callers should treat 0 as "apply ``DEFAULT_FALLBACK_WINDOW``"
-    rather than "skip the check" — skipping is how an unknown model ended up
-    with no protection at all.
+    Resolution order: exact id, longest matching registry key, discovered
+    live values from local servers (LM Studio, see
+    :mod:`nexus.agent.discovered_windows`), then family prefix. Callers
+    should treat 0 as "apply ``DEFAULT_FALLBACK_WINDOW``" rather than "skip
+    the check" — skipping is how an unknown model ended up with no
+    protection at all.
     """
     if not model:
         return 0
@@ -271,6 +274,14 @@ def known_context_window(model: str) -> int:
     for key in sorted(KNOWN_WINDOWS, key=len, reverse=True):
         if key in name:
             return KNOWN_WINDOWS[key]
+    # A live local server's reported window beats a family guess (LM Studio
+    # knows the model is 256K; the family table only guesses 128K for
+    # unknown families).
+    from ..discovered_windows import lookup as _discovered_lookup
+
+    discovered = _discovered_lookup(name)
+    if discovered:
+        return discovered
     for needles, window in _FAMILY_WINDOWS:
         if all(n in name for n in needles):
             return window
