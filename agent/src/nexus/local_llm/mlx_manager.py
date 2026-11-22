@@ -258,7 +258,9 @@ def cleanup_stale_config() -> None:
         agent_cfg = raw.setdefault("agent", {})
         for key in ("default_model", "last_used_model", "vision_model", "compact_model"):
             value = agent_cfg.get(key, "")
-            if isinstance(value, str) and value.startswith(_PROVIDER_PREFIX) and value not in valid_ids:
+            if not (isinstance(value, str) and value.startswith(_PROVIDER_PREFIX)):
+                continue
+            if value not in valid_ids:
                 agent_cfg[key] = ""
 
     if changed:

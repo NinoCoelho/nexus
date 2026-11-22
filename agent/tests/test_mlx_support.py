@@ -233,7 +233,8 @@ def test_fallback_parses_openai_wrapper():
 
 
 def test_fallback_accepts_parameters_and_args_aliases():
-    assert parse_tool_calls_fallback('{"name":"f","parameters":{"a":1}}')[0]["arguments"] == {"a": 1}
+    out = parse_tool_calls_fallback('{"name":"f","parameters":{"a":1}}')
+    assert out[0]["arguments"] == {"a": 1}
     assert parse_tool_calls_fallback('{"name":"f","args":{"b":2}}')[0]["arguments"] == {"b": 2}
 
 

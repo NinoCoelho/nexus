@@ -230,7 +230,9 @@ def read_snapshot(local_dir: Path | str, *, repo_id: str | None = None) -> MlxMo
     chat_template = _read_chat_template(directory, tokenizer_cfg)
 
     raw_archs = cfg.get("architectures")
-    architectures = [a for a in raw_archs if isinstance(a, str)] if isinstance(raw_archs, list) else []
+    architectures = (
+        [a for a in raw_archs if isinstance(a, str)] if isinstance(raw_archs, list) else []
+    )
     model_type = cfg.get("model_type") if isinstance(cfg.get("model_type"), str) else ""
 
     total_bytes = 0

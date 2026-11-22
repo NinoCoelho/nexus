@@ -54,7 +54,10 @@ def make_info(tmp_path, *, slug="qwen3-4bit", supports_tools=True, window=32768,
         max_position_embeddings=window,
         quantization_bits=4,
         supports_tools=supports_tools,
-        capabilities=caps if caps is not None else (["chat", "tools"] if supports_tools else ["chat"]),
+        capabilities=(
+            caps if caps is not None
+            else (["chat", "tools"] if supports_tools else ["chat"])
+        ),
     )
 
 
@@ -78,7 +81,9 @@ def test_mlx_entries_survive_llama_cpp_cleanup(fake_config, tmp_path, monkeypatc
     info = make_info(tmp_path)
     model_id = mlx_manager.add_to_config(info)
 
-    monkeypatch.setattr(manager, "_load_config", lambda: (tmp_path / "config.toml", fake_config["raw"]))
+    monkeypatch.setattr(
+        manager, "_load_config", lambda: (tmp_path / "config.toml", fake_config["raw"])
+    )
     monkeypatch.setattr(
         manager, "_save_config", lambda _p, raw: fake_config.__setitem__("raw", raw)
     )
@@ -108,7 +113,9 @@ def test_llama_cpp_cleanup_still_removes_its_own_stale_entries(fake_config, tmp_
         ],
         "agent": {},
     }
-    monkeypatch.setattr(manager, "_load_config", lambda: (tmp_path / "config.toml", fake_config["raw"]))
+    monkeypatch.setattr(
+        manager, "_load_config", lambda: (tmp_path / "config.toml", fake_config["raw"])
+    )
     monkeypatch.setattr(
         manager, "_save_config", lambda _p, raw: fake_config.__setitem__("raw", raw)
     )

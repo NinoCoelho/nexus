@@ -91,7 +91,10 @@ def test_context_window_from_nested_text_config_for_vlm(tmp_path):
     """VLM configs nest the language model's window under `text_config`."""
     make_snapshot(
         tmp_path,
-        config={"vision_config": {"image_size": 448}, "text_config": {"max_position_embeddings": 8192}},
+        config={
+            "vision_config": {"image_size": 448},
+            "text_config": {"max_position_embeddings": 8192},
+        },
     )
     info = read_snapshot(tmp_path)
     assert info.max_position_embeddings == 8192
@@ -109,7 +112,10 @@ def test_context_window_applies_rope_scaling_factor(tmp_path):
 def test_context_window_ignores_rope_factor_of_one(tmp_path):
     make_snapshot(
         tmp_path,
-        config={"max_position_embeddings": 8192, "rope_scaling": {"rope_type": "default", "factor": 1.0}},
+        config={
+            "max_position_embeddings": 8192,
+            "rope_scaling": {"rope_type": "default", "factor": 1.0},
+        },
     )
     assert read_snapshot(tmp_path).max_position_embeddings == 8192
 
