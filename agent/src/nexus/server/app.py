@@ -637,6 +637,7 @@ def create_app(
     from .routes.local_creds import router as local_creds_router
     from .routes.local_llm import router as local_llm_router
     from .routes.mcp import router as mcp_router
+    from .routes.mlx import router as mlx_router
     from .routes.models import router as models_router
     from .routes.notifications import router as notifications_router
     from .routes.oauth import router as oauth_router
@@ -688,6 +689,7 @@ def create_app(
     app.include_router(site_credentials_router)
     app.include_router(models_router)
     app.include_router(local_llm_router)
+    app.include_router(mlx_router)
     app.include_router(notifications_router)
     app.include_router(push_router)
     app.include_router(skill_wizard_router)

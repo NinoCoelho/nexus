@@ -86,6 +86,13 @@ def _provider_to_dict(v: ProviderConfig) -> dict[str, Any]:
         out["iam_region"] = v.iam_region
     if v.iam_extra:
         out["iam_extra"] = dict(v.iam_extra)
+    # In-process runtimes (runtime_kind == "mlx") carry a weights path instead
+    # of a base_url. This MUST be serialized: every save() rewrites the whole
+    # config.toml, so omitting it would silently unregister the user's local
+    # models on the next settings change — the same failure the [delegate]
+    # section hit once already.
+    if v.model_path:
+        out["model_path"] = v.model_path
     return out
 
 

@@ -76,8 +76,10 @@ def _is_provider_functional(pcfg: Any, name: str) -> bool:
         or ("anthropic" if name == "anthropic" else "openai_compat")
     )
 
-    # Anonymous providers — always functional
-    if provider_type == "ollama":
+    # Anonymous providers — always functional. MLX runs in-process: there is
+    # no endpoint and no credential, so a key check would filter it out of
+    # ``available_model_ids`` and the model would silently never appear.
+    if provider_type in ("ollama", "mlx"):
         return True
 
     # credential_ref takes priority and disqualifies anonymous fallback —
@@ -120,6 +122,39 @@ def build_registry(cfg: NexusConfig) -> ProviderRegistry:
             or getattr(pcfg, "type", "")
             or ("anthropic" if name == "anthropic" else "openai_compat")
         )
+
+        # MLX is in-process: no base_url, no credential. Registered before the
+        # key-resolution block for the same reason as ollama. The import is
+        # guarded because mlx is a macOS-arm64-only extra (see the `bedrock`
+        # branch below for the same pattern).
+        if provider_type == "mlx":
+            try:
+                from .llm.mlx_provider import MlxProvider
+            except ImportError as exc:
+                log.warning(
+                    "[provider] %s: MLX support requires the 'mlx' extra "
+                    "(`uv sync --extra mlx`) — skipping (%s)",
+                    name,
+                    exc,
+                )
+                continue
+            model_path = (getattr(pcfg, "model_path", "") or "").strip()
+            if not model_path:
+                log.warning(
+                    "[provider] %s: runtime_kind='mlx' requires model_path — skipping", name
+                )
+                continue
+            reg.register_provider(
+                name,
+                MlxProvider(
+                    model_path=model_path,
+                    model="",
+                    temperature=cfg.agent.temperature,
+                    max_tokens=cfg.agent.default_max_output_tokens or None,
+                ),
+            )
+            log.info("[provider] %s initialized (mlx, in-process)", name)
+            continue
 
         # Ollama is anonymous — register without any key
         if provider_type == "ollama":
