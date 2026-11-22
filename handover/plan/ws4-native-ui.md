@@ -140,7 +140,7 @@ dispatched on a frontmatter key by `ui/src/components/VaultEditorPanel.tsx:31-65
    `TextEditor` is not enough: wrap `NSTextView` with syntax highlighting,
    `[[wiki-link]]` autocomplete, click-through and live preview. Link
    resolution already exists server-side in `markdown_links.py` (wiki-links
-   with aliases and anchors, `](note.md#sec)` forms, bare multi-segment paths,
+   with aliases and anchors, inline links with anchors, bare multi-segment paths,
    Obsidian-style unique-stem resolution) — call it, don't re-derive it.
 3. **Search**: FTS5 is already there (`GET /vault/search`, 250 ms debounce in
    the web UI). Render native results with snippets.
