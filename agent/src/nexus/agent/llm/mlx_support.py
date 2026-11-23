@@ -43,12 +43,14 @@ __all__ = [
     "kv_bytes_per_token",
     "parse_tool_calls_fallback",
     "sanitize_chat_template",
+    "parse_xml_function_tool_calls",
+    "NEXUS_TOOL_PARSERS",
 ]
 
 Channel = Literal["prose", "thinking", "tool"]
 
-DEFAULT_OPEN_THINK: tuple[str, ...] = ("<think>", "<thinking>")
-DEFAULT_CLOSE_THINK: tuple[str, ...] = ("</think>", "</thinking>")
+DEFAULT_OPEN_THINK: tuple[str, ...] = ("<think>", "<thinking>", "<|channel>thought")
+DEFAULT_CLOSE_THINK: tuple[str, ...] = ("</think>", "</thinking>", "<channel|>")
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +206,7 @@ _TOOL_PARSER_BY_ARCH: dict[str, str] = {
     "kimi": "kimi_k2",
     "minimax": "minimax_m2",
     "minicpm": "minicpm5",
+    "nemotron": "xml_functions",
     "longcat": "longcat",
     "laguna": "laguna",
     "mistral": "mistral",
@@ -231,6 +234,8 @@ TOOL_SENTINELS: tuple[tuple[str, str], ...] = (
     ("<|python_tag|>", "<|eom_id|>"),
     ("<tool_calls>", "</tool_calls>"),
     ("functools[", "]"),
+    # Gemma 4: <|"..."|> string literals, calls end at the turn marker.
+    ("<|tool_call>", "<turn|>"),
 )
 
 
@@ -262,6 +267,43 @@ def select_tool_parser_name(
         if marker in tpl:
             return parser
     return None
+
+
+# ---------------------------------------------------------------------------
+# Nexus-provided parsers (formats mlx_lm has no module for)
+# ---------------------------------------------------------------------------
+
+# NVIDIA Nemotron (and several fine-tune families) emit old-style function
+# XML inside <tool_call> wrappers::
+#
+#     <tool_call>
+#     <function=get_weather>
+#     <parameter=city>
+#     Tokyo
+#     </parameter>
+#     </function>
+#     </tool_call>
+#
+# mlx_lm 0.32.2 ships no parser for this shape, so without this the call is
+# silently dropped (json_tools raises, the generic fallback finds no JSON).
+_FUNCTION_XML_RE = re.compile(r"<function=([\w\-.]+)>(.*?)</function>", re.DOTALL)
+_PARAMETER_XML_RE = re.compile(r"<parameter=([\w\-.]+)>\s*(.*?)\s*</parameter>", re.DOTALL)
+
+
+def parse_xml_function_tool_calls(raw: str, tools: Any = None) -> list[dict[str, Any]]:
+    """``<function=name><parameter=k>v</parameter></function>`` calls → dicts."""
+    calls: list[dict[str, Any]] = []
+    for m in _FUNCTION_XML_RE.finditer(raw or ""):
+        arguments: dict[str, Any] = {}
+        for key, value in _PARAMETER_XML_RE.findall(m.group(2)):
+            arguments[key] = value
+        calls.append({"name": m.group(1), "arguments": arguments})
+    return calls
+
+
+NEXUS_TOOL_PARSERS: dict[str, Any] = {
+    "xml_functions": parse_xml_function_tool_calls,
+}
 
 
 def sniff_tool_sentinels(chat_template: str) -> tuple[tuple[str, ...], tuple[str, ...]]:

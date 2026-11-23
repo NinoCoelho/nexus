@@ -14,6 +14,7 @@ from nexus.agent.llm.mlx_support import (
     estimate_resident_gb,
     fits_in_unified_memory,
     parse_tool_calls_fallback,
+    parse_xml_function_tool_calls,
     sanitize_chat_template,
     select_tool_parser_name,
     sniff_tool_sentinels,
@@ -160,9 +161,13 @@ def test_no_tool_sentinels_means_tool_channel_never_entered():
     [
         (["Qwen3ForCausalLM"], "qwen3", "qwen3_coder"),
         (["Qwen3MoeForCausalLM"], "qwen3_moe", "qwen3_coder"),
+        (["Qwen3_5MoeForConditionalGeneration"], "qwen3_5_moe", "qwen3_coder"),
         (["MistralForCausalLM"], "mistral", "mistral"),
         (["LlamaForCausalLM"], "llama", "pythonic"),
         (["Gemma3ForCausalLM"], "gemma3", "gemma4"),
+        (["Gemma4ForConditionalGeneration"], "gemma4", "gemma4"),
+        (["Glm4MoeLiteForCausalLM"], "glm4_moe_lite", "glm47"),
+        (["NemotronHForCausalLM"], "nemotron_h", "xml_functions"),
         ([], "", None),
     ],
 )
@@ -262,6 +267,103 @@ def test_sanitize_leaves_clean_template_untouched():
     assert sanitize_chat_template(modern) == modern
     assert sanitize_chat_template("") == ""
     assert sanitize_chat_template("{{ messages }}") == "{{ messages }}"
+
+
+# ---------------------------------------------------------------------------
+# Nexus-provided tool parsers (formats mlx_lm doesn't ship)
+# ---------------------------------------------------------------------------
+
+
+_NEMOTRON_RAW = (
+    "Sure, checking that now.\n</think>\n"
+    "<tool_call>\n<function=get_weather>\n<parameter=city>\nTokyo\n</parameter>\n"
+    "<parameter=unit>\ncelsius\n</parameter>\n</function>\n</tool_call>"
+)
+
+
+def test_xml_functions_parses_nemotron_shape():
+    calls = parse_xml_function_tool_calls(_NEMOTRON_RAW)
+    assert calls == [
+        {"name": "get_weather", "arguments": {"city": "Tokyo", "unit": "celsius"}}
+    ]
+
+
+def test_xml_functions_no_params_and_no_matches():
+    assert parse_xml_function_tool_calls("<function=ping>\n</function>") == [
+        {"name": "ping", "arguments": {}}
+    ]
+    assert parse_xml_function_tool_calls("no calls here") == []
+    assert parse_xml_function_tool_calls("") == []
+
+
+# ---------------------------------------------------------------------------
+# Gemma 4 channel markup (sentinel tables)
+# ---------------------------------------------------------------------------
+
+
+def test_gemma4_tool_sentinels_sniffed():
+    tpl = "... <|tool_call>call:fn{...} <turn|> ..."
+    opens, closes = sniff_tool_sentinels(tpl)
+    assert "<|tool_call>" in opens
+    assert "<turn|>" in closes
+
+
+def test_gemma4_channel_think_detected():
+    assert template_opens_thinking("<|turn>model\n<|channel>thought\n") is True
+    # The generation prompt emits an *empty* thought channel — balanced.
+    assert template_opens_thinking("<|turn>model\n<|channel>thought\n<channel|>") is False
+
+
+# ---------------------------------------------------------------------------
+# Provider render fixup: tool-call arguments as objects
+# ---------------------------------------------------------------------------
+
+
+def test_tool_args_as_dicts_parses_wire_strings():
+    from nexus.agent.llm.mlx_provider import _tool_args_as_dicts
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Tokyo"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "content": "18C", "tool_call_id": "c1"},
+    ]
+    out = _tool_args_as_dicts(msgs)
+    assert out[0]["tool_calls"][0]["function"]["arguments"] == {"city": "Tokyo"}
+
+
+def test_tool_args_as_dicts_handles_garbage_and_missing():
+    from nexus.agent.llm.mlx_provider import _tool_args_as_dicts
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "f1", "arguments": "not json"}},
+                {"id": "c2", "function": {"name": "f2", "arguments": None}},
+                {"id": "c3", "function": {"name": "f3", "arguments": {"a": 1}}},
+                {"id": "c4", "function": {"name": "f4"}},
+            ],
+        }
+    ]
+    out = _tool_args_as_dicts(msgs)
+    fns = [tc["function"] for tc in out[0]["tool_calls"]]
+    assert fns[0]["arguments"] == {}
+    assert fns[1]["arguments"] == {}
+    assert fns[2]["arguments"] == {"a": 1}
+    assert fns[3]["arguments"] == {}
 
 
 # ---------------------------------------------------------------------------
