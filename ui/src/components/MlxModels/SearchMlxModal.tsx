@@ -28,9 +28,11 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onDownloadStarted: () => void;
+  /** Shown when a search finds nothing — jumps to the GGUF catalog. */
+  onBrowseGguf?: () => void;
 }
 
-export default function SearchMlxModal({ open, onClose, onDownloadStarted }: Props) {
+export default function SearchMlxModal({ open, onClose, onDownloadStarted, onBrowseGguf }: Props) {
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -148,7 +150,7 @@ export default function SearchMlxModal({ open, onClose, onDownloadStarted }: Pro
     <div className="modal-backdrop" onClick={onClose}>
       <div className="search-modal" onClick={(e) => e.stopPropagation()}>
         <div className="search-modal-head">
-          <h3 className="search-modal-title">Browse MLX models</h3>
+          <h3 className="search-modal-title">Recommended models</h3>
           <button className="drawer-close" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
 
@@ -156,7 +158,7 @@ export default function SearchMlxModal({ open, onClose, onDownloadStarted }: Pro
           ref={inputRef}
           type="text"
           className="settings-input search-modal-input"
-          placeholder="Search mlx-community — e.g. qwen, llama, gemma…"
+          placeholder="Search models tuned for this Mac — e.g. qwen, llama, gemma…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -164,13 +166,22 @@ export default function SearchMlxModal({ open, onClose, onDownloadStarted }: Pro
         <div className="search-modal-body">
           {searching && <p className="local-empty">Searching…</p>}
           {!searching && query.trim() && results.length === 0 && (
-            <p className="local-empty">No results.</p>
+            <div>
+              <p className="local-empty">No results here.</p>
+              {onBrowseGguf && (
+                <p className="local-empty">
+                  <button type="button" className="settings-btn" onClick={onBrowseGguf}>
+                    Search GGUF models instead
+                  </button>
+                </p>
+              )}
+            </div>
           )}
           {!query.trim() && (
             <p className="local-empty">
-              MLX models run fully in-process on Apple Silicon. Whole snapshots
-              download at once — pick a bit-size variant: smaller uses less
-              memory, larger is more accurate.
+              Whole models tuned for this Mac — they download once and run
+              fully in-process, fast and private. Pick a bit-size variant:
+              smaller uses less memory, larger is more accurate.
             </p>
           )}
 

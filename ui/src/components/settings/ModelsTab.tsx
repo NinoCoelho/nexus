@@ -43,10 +43,10 @@ export default function ModelsTab({ routing, providers, models, onRefresh }: Pro
           title: t("settings:modelsTab.localModelsHelpTitle"),
           body: (
             <>
-              Models running locally via llama.cpp or Ollama. On Apple
-              Silicon, the MLX tab runs models fully in-process. They work
-              without internet and without per-use billing, but depend on
-              your machine's hardware (RAM, GPU).
+              Models running locally on this machine — they work without
+              internet and without per-use billing, but depend on your
+              machine's hardware (RAM, GPU). On Apple Silicon a faster
+              in-process engine is used automatically when available.
             </>
           ),
         }}
