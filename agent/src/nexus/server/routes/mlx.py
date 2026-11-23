@@ -31,6 +31,11 @@ class RepoRequest(BaseModel):
     repo_id: str
 
 
+class ImportRequest(BaseModel):
+    #: Folder to scan for MLX snapshots (e.g. ``~/.lmstudio/models``).
+    path: str
+
+
 class ActivateRequest(BaseModel):
     slug: str
     #: Force this model to become ``[agent].default_model``. Left unset, a
@@ -233,6 +238,26 @@ async def mlx_activate(
         log.warning("[mlx] registry rebuild after activate failed: %s", exc)
 
     return {"model_id": model_id, "slug": info.slug, "supports_tools": info.supports_tools}
+
+
+@router.post("/local/mlx/import")
+async def mlx_import(body: ImportRequest) -> dict[str, Any]:
+    """Register already-downloaded models in place (symlinks, no copying).
+
+    Point at another tool's library — LM Studio's ``~/.lmstudio/models``, a
+    manual HF cache — and every MLX snapshot found under it shows up in
+    ``/local/mlx/installed`` and activates like a native one. Deleting an
+    imported model removes only the link, never the original files.
+    """
+    _available_or_503()
+    from ...local_llm import mlx_manager
+
+    rows = mlx_manager.import_folder(body.path)
+    return {
+        "imported": [r for r in rows if r["action"] == "imported"],
+        "already": [r for r in rows if r["action"] == "already"],
+        "skipped": [r for r in rows if r["action"] == "skipped"],
+    }
 
 
 @router.post("/local/mlx/deactivate")

@@ -14,6 +14,7 @@ import {
   fmtBytes,
   getBinaryStatus,
   getHardware,
+  getMlxAvailable,
   listDownloads,
   listInstalled,
   startModel,
@@ -27,6 +28,7 @@ import {
 } from "../../api";
 import { useToast } from "../../toast/ToastProvider";
 import SearchModal from "./SearchModal";
+import MlxModels from "../MlxModels";
 import Modal, { type ModalProps } from "../Modal";
 import "./LocalModels.css";
 
@@ -34,7 +36,51 @@ interface Props {
   onRefresh: () => void;
 }
 
+/**
+ * Engine switcher: llama.cpp (supervised llama-server processes, GGUF files)
+ * vs MLX (in-process on Apple Silicon). The MLX tab only exists where MLX
+ * can run — on Linux/Intel the section looks exactly like it always did.
+ */
 export default function LocalModels({ onRefresh }: Props) {
+  const [mlxAvailable, setMlxAvailable] = useState(false);
+  const [tab, setTab] = useState<"gguf" | "mlx">("gguf");
+
+  useEffect(() => {
+    getMlxAvailable()
+      .then((a) => setMlxAvailable(a.available))
+      .catch(() => {});
+  }, []);
+
+  return (
+    <div>
+      {mlxAvailable && (
+        <div className="local-tabs">
+          <button
+            type="button"
+            className={`local-tab${tab === "gguf" ? " local-tab--active" : ""}`}
+            onClick={() => setTab("gguf")}
+          >
+            llama.cpp
+          </button>
+          <button
+            type="button"
+            className={`local-tab${tab === "mlx" ? " local-tab--active" : ""}`}
+            onClick={() => setTab("mlx")}
+          >
+            MLX · in-process
+          </button>
+        </div>
+      )}
+      {tab === "mlx" ? (
+        <MlxModels onRefresh={onRefresh} />
+      ) : (
+        <GgufModels onRefresh={onRefresh} />
+      )}
+    </div>
+  );
+}
+
+function GgufModels({ onRefresh }: Props) {
   const toast = useToast();
   const [hw, setHw] = useState<HardwareProbe | null>(null);
   const [installed, setInstalled] = useState<InstalledModel[]>([]);

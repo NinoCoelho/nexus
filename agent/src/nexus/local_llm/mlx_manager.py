@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 from .manager import _load_config, _save_config
 from .mlx_snapshot import MlxModelInfo, is_mlx_snapshot, read_snapshot, slug_for
@@ -274,11 +275,112 @@ def cleanup_stale_config() -> None:
 
 
 def delete_installed(slug: str) -> bool:
-    """Deactivate and delete a snapshot directory. ``False`` if it wasn't there."""
+    """Deactivate and delete a snapshot directory. ``False`` if it wasn't there.
+
+    Imported-in-place models (see :func:`import_folder`) are symlinks into an
+    external library such as LM Studio's — unlink the link only and leave the
+    original download untouched.
+    """
     directory = MLX_MODELS_DIR / slug
     remove_from_config(slug)
+    if directory.is_symlink():
+        directory.unlink()
+        log.info("[mlx] unlinked imported snapshot %s", directory)
+        return True
     if not directory.is_dir():
         return False
     shutil.rmtree(directory, ignore_errors=True)
     log.info("[mlx] deleted snapshot %s", directory)
     return not directory.exists()
+
+
+# ---------------------------------------------------------------------------
+# Import in place (external libraries such as LM Studio's)
+# ---------------------------------------------------------------------------
+
+_IMPORT_SCAN_DEPTH = 3
+
+
+def import_folder(path: str | Path) -> list[dict[str, Any]]:
+    """Register every MLX snapshot under ``path`` **in place**, via symlinks.
+
+    The user may already have models on disk from another tool (LM Studio,
+    a manual ``huggingface-cli download``); re-downloading multi-GB weights
+    is wasteful. Each discovered snapshot is linked into ``MLX_MODELS_DIR``
+    under its slugified directory name, so :func:`list_installed`,
+    activation and the routes see it like any native model — and
+    :func:`delete_installed` removes only the link, never the original.
+
+    Idempotent: re-importing the same folder reports each snapshot as
+    ``already`` instead of duplicating. A slug that is taken by a *different*
+    directory is skipped with a reason rather than overwritten.
+
+    Returns one row per discovered snapshot (not per directory scanned).
+    """
+    root = Path(path).expanduser()
+    if not root.is_dir():
+        return [
+            {
+                "slug": None,
+                "path": str(root),
+                "action": "skipped",
+                "reason": "not a directory",
+            }
+        ]
+
+    snapshots: list[Path] = []
+    if is_mlx_snapshot(root):
+        snapshots.append(root)
+    else:
+
+        def _walk(directory: Path, depth: int) -> None:
+            if depth > _IMPORT_SCAN_DEPTH:
+                return
+            try:
+                children = sorted(p for p in directory.iterdir() if p.is_dir())
+            except OSError:
+                return
+            for child in children:
+                if child.is_symlink():
+                    continue  # never re-import our own links or foreign ones
+                if is_mlx_snapshot(child):
+                    snapshots.append(child)
+                else:
+                    _walk(child, depth + 1)
+
+        _walk(root, 1)
+
+    out: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        slug = slug_for(snapshot.name)
+        link = MLX_MODELS_DIR / slug
+        if link.is_symlink() or link.exists():
+            try:
+                same = link.resolve() == snapshot.resolve()
+            except OSError:
+                same = False
+            out.append(
+                {
+                    "slug": slug,
+                    "path": str(snapshot),
+                    "action": "already" if same else "skipped",
+                    "reason": None if same else "another model already uses this name",
+                }
+            )
+            continue
+        mlx_models_dir()
+        try:
+            link.symlink_to(snapshot.resolve(), target_is_directory=True)
+        except OSError as exc:
+            out.append(
+                {
+                    "slug": slug,
+                    "path": str(snapshot),
+                    "action": "skipped",
+                    "reason": f"symlink failed: {exc}",
+                }
+            )
+            continue
+        log.info("[mlx] imported in place: %s -> %s", snapshot, link)
+        out.append({"slug": slug, "path": str(snapshot), "action": "imported", "reason": None})
+    return out

@@ -486,3 +486,58 @@
   color: var(--fg);
 }
 
+
+/* Engine switcher: llama.cpp | MLX (MLX tab only rendered when available) */
+.local-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(128, 128, 128, 0.12));
+  width: fit-content;
+}
+
+.local-tab {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted, var(--fg));
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.local-tab:hover {
+  opacity: 1;
+}
+
+.local-tab--active {
+  background: var(--surface, var(--bg-elevated, rgba(128, 128, 128, 0.2)));
+  color: var(--fg);
+  font-weight: 600;
+  opacity: 1;
+}
+
+/* MLX capability badge on installed rows */
+.mlx-badge {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(76, 175, 80, 0.16);
+  color: #2e7d32;
+  width: fit-content;
+}
+
+.mlx-badge--warn {
+  background: rgba(255, 152, 0, 0.16);
+  color: #b26a00;
+}
+
+/* "fits" verdict in the MLX search modal */
+.search-file-ok {
+  color: #2e7d32;
+}
