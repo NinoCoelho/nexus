@@ -204,6 +204,7 @@ class MlxRuntime:
 
         from ...local_llm.mlx_snapshot import read_snapshot
         from .mlx_support import (
+            sanitize_chat_template,
             select_tool_parser_name,
             sniff_tool_sentinels,
             template_opens_thinking,
@@ -234,6 +235,23 @@ class MlxRuntime:
         else:
             raw = getattr(tokenizer, "chat_template", "") or ""
             chat_template = raw if isinstance(raw, str) else ""
+
+        # Repair known-broken tool examples shipped inside some chat templates
+        # (e.g. doubled-brace Qwen2.5 instructions that teach the model to emit
+        # invalid JSON). Applied to the tokenizer itself so every
+        # apply_chat_template call renders the fixed text.
+        sanitized = sanitize_chat_template(chat_template)
+        if sanitized != chat_template:
+            log.warning(
+                "[mlx] repaired broken tool-call example in %s chat template",
+                model_path,
+            )
+            chat_template = sanitized
+            try:
+                inner = getattr(tokenizer, "_tokenizer", None) or tokenizer
+                inner.chat_template = sanitized
+            except Exception:  # pragma: no cover - renderer quirks are not fatal
+                log.warning("[mlx] could not persist sanitized chat template")
 
         tool_open, tool_close = sniff_tool_sentinels(chat_template)
         parser_name = select_tool_parser_name(

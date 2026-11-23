@@ -42,6 +42,7 @@ __all__ = [
     "fits_in_unified_memory",
     "kv_bytes_per_token",
     "parse_tool_calls_fallback",
+    "sanitize_chat_template",
 ]
 
 Channel = Literal["prose", "thinking", "tool"]
@@ -279,6 +280,42 @@ def sniff_tool_sentinels(chat_template: str) -> tuple[tuple[str, ...], tuple[str
             if close_s in tpl:
                 closes.append(close_s)
     return tuple(opens), tuple(closes)
+
+
+def sanitize_chat_template(chat_template: str) -> str:
+    """Repair the doubled-brace tool example some Qwen conversions ship.
+
+    Several mlx-community Qwen2/2.5 conversions carry a chat template whose
+    instruction string shows the tool-call example with **doubled** braces::
+
+        <tool_call>
+        {{\"name\": <function-name>, \"arguments\": <args-json-object>}}
+        </tool_call>
+
+    That text sits inside a Jinja *string literal*, so the braces are not an
+    escape — the rendered prompt literally teaches ``{{...}}``, and the model
+    faithfully emits invalid JSON (``json.loads`` fails at column 2). The
+    upstream template was later fixed to single braces; older snapshots still
+    ship the broken one.
+
+    We cannot blanket-collapse ``{{`` → ``{`` — real Jinja expressions like
+    ``{{ tool | tojson }}`` must keep both braces. So the repair targets the
+    exact broken example only, in both its escaped (template source) and
+    plain (pre-rendered) spellings. Templates without the pathology come back
+    untouched.
+    """
+    if not chat_template:
+        return chat_template
+    fixed = chat_template
+    for broken_name in (
+        '\\"name\\": <function-name>, \\"arguments\\": <args-json-object>',
+        '"name": <function-name>, "arguments": <args-json-object>',
+    ):
+        broken = "{{" + broken_name + "}}"
+        repaired = "{" + broken_name + "}"
+        if broken in fixed:
+            fixed = fixed.replace(broken, repaired)
+    return fixed
 
 
 def template_opens_thinking(

@@ -14,6 +14,7 @@ from nexus.agent.llm.mlx_support import (
     estimate_resident_gb,
     fits_in_unified_memory,
     parse_tool_calls_fallback,
+    sanitize_chat_template,
     select_tool_parser_name,
     sniff_tool_sentinels,
     template_opens_thinking,
@@ -210,6 +211,57 @@ def test_template_opens_thinking_detects_unclosed_opener():
     assert template_opens_thinking("<|assistant|>\n<think>\n") is True
     assert template_opens_thinking("<|assistant|>\n") is False
     assert template_opens_thinking("<think>x</think>\n<|assistant|>\n") is False
+
+
+# ---------------------------------------------------------------------------
+# Chat-template sanitizing (doubled-brace Qwen tool example)
+# ---------------------------------------------------------------------------
+
+# The exact pathology shipped in several mlx-community Qwen2/2.5 conversions:
+# the tool-call example sits inside a Jinja string literal, so its doubled
+# braces are literal text and the model learns to emit invalid JSON.
+_BROKEN_QWEN = (
+    '{%- for tool in tools %}\n'
+    '    {{- "\\n" }}\n'
+    '    {{- tool | tojson }}\n'
+    '{%- endfor %}\n'
+    '{{- "For each function call, return a json object with function name and'
+    ' arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n'
+    '{{\\"name\\": <function-name>, \\"arguments\\": <args-json-object>}}\\n'
+    '</tool_call>" }}\n'
+)
+
+
+def test_sanitize_repairs_doubled_brace_example():
+    fixed = sanitize_chat_template(_BROKEN_QWEN)
+    assert '{{\\"name\\"' not in fixed
+    assert '{\\"name\\": <function-name>, \\"arguments\\": <args-json-object>}' in fixed
+    # Real Jinja expressions and control blocks must keep their braces.
+    assert '{{- "\\n" }}' in fixed
+    assert '{{- tool | tojson }}' in fixed
+    assert '{%- for tool in tools %}' in fixed
+    # Idempotent.
+    assert sanitize_chat_template(fixed) == fixed
+
+
+def test_sanitize_repairs_plain_spelling():
+    plain = (
+        '<tool_call>\n{{"name": <function-name>, "arguments": <args-json-object>}}\n</tool_call>'
+    )
+    fixed = sanitize_chat_template(plain)
+    assert fixed == (
+        '<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>'
+    )
+
+
+def test_sanitize_leaves_clean_template_untouched():
+    modern = (
+        '{%- for tool in tools %}\n    {{- tool | tojson }}\n{%- endfor %}\n'
+        '<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>'
+    )
+    assert sanitize_chat_template(modern) == modern
+    assert sanitize_chat_template("") == ""
+    assert sanitize_chat_template("{{ messages }}") == "{{ messages }}"
 
 
 # ---------------------------------------------------------------------------
