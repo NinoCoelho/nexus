@@ -583,17 +583,22 @@ class MlxRuntime:
 
 
 def _resolve_tool_parser(name: str | None) -> Any:
-    """Import an ``mlx_lm.tool_parsers`` module and return its callable.
+    """Resolve a parser name to its callable.
 
-    The per-module entrypoint is pinned to ``parse_tool_call`` as shipped in
-    mlx-lm 0.32.2 (every module under ``mlx_lm.tool_parsers`` exposes it, plus
-    optional ``tool_call_start``/``tool_call_end`` sentinels). The other names
-    are older/alternative spellings kept as a safety net for mlx-lm drift.
-    Returns ``None`` when nothing usable is found — the provider then falls
-    back to ``mlx_support.parse_tool_calls_fallback``.
+    ``NEXUS_TOOL_PARSERS`` (formats mlx_lm doesn't ship) take precedence;
+    otherwise the named module under ``mlx_lm.tool_parsers`` is imported and
+    its ``parse_tool_call`` entrypoint used (pinned in mlx-lm 0.32.2; the
+    older names below are a fallback list for mlx-lm drift). Returns ``None``
+    when nothing usable is found — the provider then falls back to
+    ``mlx_support.parse_tool_calls_fallback``.
     """
     if not name:
         return None
+    from .mlx_support import NEXUS_TOOL_PARSERS
+
+    local = NEXUS_TOOL_PARSERS.get(name)
+    if callable(local):
+        return local
     try:
         import importlib
 

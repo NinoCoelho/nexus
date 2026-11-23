@@ -28,6 +28,7 @@ Serialization, residency and OOM handling live in
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -147,6 +148,7 @@ class MlxProvider(LLMProvider):
         turn still produces *something* rather than dying.
         """
         chat_messages = self._strip_markers(messages)
+        chat_messages = _tool_args_as_dicts(chat_messages)
         encoded_tools = [_encode_tool(t) for t in (tools or [])] or None
 
         def render(with_tools: bool) -> Any:
@@ -399,6 +401,36 @@ def _json_dumps(value: Any) -> str:
         return json.dumps(value)
     except (TypeError, ValueError):
         return "{}"
+
+
+def _tool_args_as_dicts(chat_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Render-shape fixup: tool-call ``arguments`` as objects, not strings.
+
+    ``_encode_msg`` emits OpenAI wire shape, where ``function.arguments`` is a
+    JSON *string*. Several chat templates (GLM-4.x, Gemma, and others) instead
+    iterate the arguments object directly — ``arguments.items()`` — and blow
+    up on a string ('str object' has no attribute 'items'). Parsing to a dict
+    here is universally safe: ``| tojson`` over a dict renders the same JSON
+    the string already carried, and ``.items()``-style templates get what they
+    expect. Only the render path is touched; the OpenAI wire format is
+    unaffected.
+    """
+    for m in chat_messages:
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if not isinstance(fn, dict):
+                continue
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    fn["arguments"] = json.loads(args)
+                except json.JSONDecodeError:
+                    fn["arguments"] = {}
+            elif args is None:
+                fn["arguments"] = {}
+            elif not isinstance(args, dict):
+                fn["arguments"] = {}
+    return chat_messages
 
 
 def _normalize_tool_calls(parsed: Any) -> list[dict]:
