@@ -76,6 +76,8 @@ export interface MlxInstalled {
   total_gb: number;
   is_active: boolean;
   model_id: string;
+  /** Sharded checkpoint missing shard files (interrupted download). */
+  incomplete?: boolean;
 }
 
 export interface MlxImportRow {

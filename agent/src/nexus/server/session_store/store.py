@@ -498,9 +498,14 @@ class SessionStore(PubSubMixin, QueryMixin):
         as partial). Synthesised ``ToolCall`` entries from the live tool events
         go on the assistant message so badges survive reload.
 
-        No-op if there's nothing to persist.
+        No-op when there is no assistant material (no text, no tool calls, no
+        status note): the user message is already persisted eagerly at turn
+        launch, and an empty assistant bubble would just be noise on reload —
+        the actual error reached the UI live over SSE. Status-stamped turns
+        (``length`` / ``empty_response`` / ``upstream_timeout``) keep their
+        banner because that stamp is what drives the Retry UI.
         """
-        if not user_message and not assistant_text and not tool_calls:
+        if not assistant_text and not tool_calls and not status_note:
             return
         tcs: list[ToolCall] = []
         for t in tool_calls or []:

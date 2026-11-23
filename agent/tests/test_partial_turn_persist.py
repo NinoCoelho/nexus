@@ -92,3 +92,46 @@ def test_persist_partial_turn_noop_when_nothing_happened(tmp_path: Path) -> None
     reloaded = store.get(sess.id)
     assert reloaded is not None
     assert reloaded.history == []
+
+
+def test_persist_partial_turn_skips_empty_bubble_with_user_message(tmp_path: Path) -> None:
+    """Provider died before producing anything: no empty assistant bubble.
+
+    Real case: the session's user message is eagerly persisted at launch,
+    then the MLX provider fails to load — the old guard passed (user_message
+    is non-empty) and wrote a 0-char assistant bubble on reload.
+    """
+    store = SessionStore(db_path=tmp_path / "sessions.sqlite")
+    sess = store.create()
+
+    store.persist_partial_turn(
+        sess.id,
+        base_history=[],
+        user_message="o que fizemos hoje?",
+        assistant_text="",
+        tool_calls=[],
+    )
+    reloaded = store.get(sess.id)
+    assert reloaded is not None
+    roles = [m.role.value for m in reloaded.history]
+    assert "assistant" not in roles
+
+
+def test_persist_partial_turn_status_note_still_stamps_empty_turn(tmp_path: Path) -> None:
+    """A status-stamped empty turn keeps its banner (drives the Retry UI)."""
+    store = SessionStore(db_path=tmp_path / "sessions.sqlite")
+    sess = store.create()
+
+    store.persist_partial_turn(
+        sess.id,
+        base_history=[],
+        user_message="hi",
+        assistant_text="",
+        tool_calls=[],
+        status_note="empty_response",
+    )
+    reloaded = store.get(sess.id)
+    assert reloaded is not None
+    asst = [m for m in reloaded.history if m.role.value == "assistant"]
+    assert len(asst) == 1
+    assert "empty_response" in (asst[0].content or "")
