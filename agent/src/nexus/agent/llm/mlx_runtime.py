@@ -33,6 +33,7 @@ import logging
 import platform
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,16 @@ DEFAULT_STALL_TIMEOUT = 120.0
 # A 26k-token history then buys ~520s of prefill silence before the stall
 # trips, while a normal turn is rescued after 2 minutes.
 _STALL_PREFILL_TOK_PER_SEC = 50.0
+
+# Every MLX op — model load, generation, prompt-cache reads/writes — runs on
+# this single dedicated thread. MLX arrays are bound to the thread/stream that
+# created them: let the default asyncio pool round-robin load onto thread A
+# and generation onto thread B and touching the persisted KV cache dies with
+# "There is no Stream(gpu, 1) in current thread". One thread, forever, makes
+# the whole class impossible. It is idle-exit-safe: a wedged worker may keep
+# it busy, and the stall timeout cancels the *consumer*; the daemon process
+# owns the executor's lifetime.
+_MLX_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx")
 
 # Unload a resident model after this much inactivity.
 DEFAULT_IDLE_UNLOAD_SECONDS = 900.0
@@ -197,7 +208,8 @@ class MlxRuntime:
                     model_path,
                 )
                 await self._unload_locked()
-            loaded = await asyncio.to_thread(self._load_blocking, model_path)
+            loop = asyncio.get_running_loop()
+            loaded = await loop.run_in_executor(_MLX_EXECUTOR, self._load_blocking, model_path)
             self._loaded = loaded
             self._last_used = time.monotonic()
             log.info(
@@ -513,7 +525,7 @@ class MlxRuntime:
                 flush(force=True)
                 emit(("error", exc))
 
-        task = loop.run_in_executor(None, worker)
+        task = loop.run_in_executor(_MLX_EXECUTOR, worker)
         # Silence budget: scaled for prefill of big prompts (see constants),
         # overridable for tests.
         stall_seconds = stall_timeout if stall_timeout is not None else max(

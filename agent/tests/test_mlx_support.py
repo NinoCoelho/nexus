@@ -458,6 +458,59 @@ def test_generation_stall_times_out(monkeypatch):
     reset_runtime()
 
 
+def test_load_and_generation_share_one_thread(monkeypatch):
+    """Load and generation must run on the same dedicated thread.
+
+    The daemon failure: MLX arrays are thread/stream-bound; the default
+    asyncio pool put model load on thread A and a later generation (reusing
+    the persisted KV cache) on thread B -> 'There is no Stream(gpu, 1) in
+    current thread'. Both paths must now go through the single dedicated
+    executor.
+    """
+    import asyncio
+    import threading
+
+    mlx_lm = pytest.importorskip("mlx_lm")
+    from nexus.agent.llm.mlx_runtime import MlxRuntime, reset_runtime
+
+    seen = {"load": None, "gen": None}
+
+    def fake_load(path):
+        seen["load"] = threading.get_ident()
+        return object(), object()  # model, tokenizer
+
+    class _Resp:
+        text = "ok"
+        finish_reason = "stop"
+
+    def fake_generate(model, tokenizer, prompt, **kwargs):
+        seen["gen"] = threading.get_ident()
+        yield _Resp()
+
+    monkeypatch.setattr(mlx_lm, "load", fake_load)
+    monkeypatch.setattr(mlx_lm, "stream_generate", fake_generate)
+
+    async def scenario():
+        runtime = MlxRuntime.get()
+        await runtime.ensure_loaded("/fake/model")
+        chunks = []
+        async for kind, _payload in runtime._run_locked(
+            loaded=runtime._loaded,
+            prompt_tokens=[1, 2, 3],
+            max_tokens=8,
+            cache_key=None,
+            sampler=None,
+            stall_timeout=5.0,
+        ):
+            chunks.append(kind)
+        assert chunks  # generation produced events
+        assert seen["load"] is not None and seen["gen"] is not None
+        assert seen["load"] == seen["gen"], "load and generation ran on different threads"
+
+    asyncio.run(scenario())
+    reset_runtime()
+
+
 # ---------------------------------------------------------------------------
 # Fallback tool-call parsing
 # ---------------------------------------------------------------------------
