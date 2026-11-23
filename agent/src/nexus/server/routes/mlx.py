@@ -15,6 +15,7 @@ separate router costs one file and breaks nothing.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -182,6 +183,7 @@ async def mlx_installed() -> list[dict[str, Any]]:
         row = info.to_public()
         row["is_active"] = mlx_manager.model_id_for(info.slug) in active
         row["model_id"] = mlx_manager.model_id_for(info.slug)
+        row["imported"] = Path(info.local_dir).is_symlink()
         out.append(row)
     return out
 

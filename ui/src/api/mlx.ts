@@ -78,6 +78,8 @@ export interface MlxInstalled {
   model_id: string;
   /** Sharded checkpoint missing shard files (interrupted download). */
   incomplete?: boolean;
+  /** Registered in place via a symlink into an external library. */
+  imported?: boolean;
 }
 
 export interface MlxImportRow {
