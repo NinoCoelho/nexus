@@ -55,6 +55,17 @@ _COALESCE_CHARS = 24
 # idle watchdog deliberately does not bound the pre-first-event window.
 DEFAULT_QUEUE_TIMEOUT = 300.0
 
+# Silence budget inside a generation. Real generations emit (coalesced)
+# output every few seconds even while a reasoning model is thinking, and
+# prefill on big prompts is covered by scaling below — so silence beyond
+# this means the worker wedged inside mlx (Metal-land hangs produce no
+# exception and no token), and the turn would otherwise hang forever.
+DEFAULT_STALL_TIMEOUT = 120.0
+# Prefill floor: assume at least 50 prompt tokens/second on Apple Silicon.
+# A 26k-token history then buys ~520s of prefill silence before the stall
+# trips, while a normal turn is rescued after 2 minutes.
+_STALL_PREFILL_TOK_PER_SEC = 50.0
+
 # Unload a resident model after this much inactivity.
 DEFAULT_IDLE_UNLOAD_SECONDS = 900.0
 
@@ -388,6 +399,7 @@ class MlxRuntime:
         cache_key: str | None = None,
         sampler: Any = None,
         queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
+        stall_timeout: float | None = None,
     ) -> Any:
         """Async-iterate ``("text", str)`` chunks then one ``("end", dict)``.
 
@@ -418,6 +430,7 @@ class MlxRuntime:
                 max_tokens=max_tokens,
                 cache_key=cache_key,
                 sampler=sampler,
+                stall_timeout=stall_timeout,
             ):
                 yield item
         finally:
@@ -432,6 +445,7 @@ class MlxRuntime:
         max_tokens: int,
         cache_key: str | None,
         sampler: Any,
+        stall_timeout: float | None = None,
     ) -> Any:
         loop = asyncio.get_running_loop()
         out: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
@@ -500,9 +514,29 @@ class MlxRuntime:
                 emit(("error", exc))
 
         task = loop.run_in_executor(None, worker)
+        # Silence budget: scaled for prefill of big prompts (see constants),
+        # overridable for tests.
+        stall_seconds = stall_timeout if stall_timeout is not None else max(
+            DEFAULT_STALL_TIMEOUT, len(prompt_tokens) / _STALL_PREFILL_TOK_PER_SEC
+        )
         try:
             while True:
-                kind, payload = await out.get()
+                try:
+                    kind, payload = await asyncio.wait_for(out.get(), timeout=stall_seconds)
+                except asyncio.TimeoutError as exc:
+                    # The worker wedged without emitting (no token, no end, no
+                    # exception) — cancel it and drop the resident model so the
+                    # next attempt starts from clean Metal state.
+                    cancel.set()
+                    try:
+                        await self._unload_locked()
+                    except Exception:  # pragma: no cover - best effort
+                        log.debug("[mlx] unload after stall skipped", exc_info=True)
+                    raise LLMTransportError(
+                        f"mlx: generation stalled — no output for {stall_seconds:.0f}s; "
+                        "the attempt was cancelled and the model unloaded for a clean retry",
+                        status_code=504,
+                    ) from exc
                 if kind == "text":
                     yield ("text", payload)
                     continue
