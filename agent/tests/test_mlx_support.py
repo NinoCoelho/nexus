@@ -367,6 +367,98 @@ def test_tool_args_as_dicts_handles_garbage_and_missing():
 
 
 # ---------------------------------------------------------------------------
+# Provider render fixup: multipart content lists → text
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_parts_joins_text_and_placeholders():
+    from nexus.agent.llm.mlx_provider import _flatten_content_parts
+
+    msgs = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "analisa essa foto"},
+                {"type": "image_url", "image_url": {"url": "data:..."}},
+            ],
+        },
+        {"role": "user", "content": "plain string stays"},
+    ]
+    out = _flatten_content_parts(msgs)
+    assert out[0]["content"] == "analisa essa foto\n\n[attachment]"
+    assert out[1]["content"] == "plain string stays"
+
+
+def test_flatten_parts_image_only_becomes_placeholder():
+    from nexus.agent.llm.mlx_provider import _flatten_content_parts
+
+    msgs = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:..."}}]},
+        {"role": "user", "content": []},
+    ]
+    out = _flatten_content_parts(msgs)
+    assert out[0]["content"] == "[attachment]"
+    assert out[1]["content"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Generation stall timeout (silent wedge in the worker thread)
+# ---------------------------------------------------------------------------
+
+
+def test_generation_stall_times_out(monkeypatch):
+    """A worker that goes silent mid-generation must not hang the consumer.
+
+    Real failure this pins: Nemotron on the daemon wedged inside
+    stream_generate (no token, no end, no exception) and the turn showed
+    "processing" forever with the generation lock held. The bridge now
+    times out, unloads the model and raises a 504.
+    """
+    import asyncio
+    import time as _time
+
+    mlx_lm = pytest.importorskip("mlx_lm")
+    from nexus.agent.llm.mlx_runtime import LoadedModel, MlxRuntime, reset_runtime
+
+    class _Resp:
+        def __init__(self, text, finish_reason=None):
+            self.text = text
+            self.finish_reason = finish_reason
+
+    def wedged_generate(model, tokenizer, prompt, **kwargs):
+        # 30 chars > _COALESCE_CHARS so the token actually flushes out
+        yield _Resp("x" * 30)
+        _time.sleep(1.0)  # silence far beyond the test's stall budget
+        yield _Resp("", finish_reason="stop")
+
+    monkeypatch.setattr(mlx_lm, "stream_generate", wedged_generate)
+
+    async def scenario():
+        runtime = MlxRuntime.get()
+        loaded = LoadedModel(model_path="/fake/model", model=object(), tokenizer=object())
+        chunks = []
+        with pytest.raises(Exception) as excinfo:
+            async for kind, payload in runtime._run_locked(
+                loaded=loaded,
+                prompt_tokens=[1, 2, 3],
+                max_tokens=16,
+                cache_key=None,
+                sampler=None,
+                stall_timeout=0.2,
+            ):
+                chunks.append((kind, payload))
+        # the one token made it out before the stall tripped
+        assert any(k == "text" for k, _ in chunks)
+        assert "stalled" in str(excinfo.value)
+        assert getattr(excinfo.value, "status_code", None) == 504
+        # the lock must be free again
+        assert not runtime._gen_lock.locked()
+
+    asyncio.run(scenario())
+    reset_runtime()
+
+
+# ---------------------------------------------------------------------------
 # Fallback tool-call parsing
 # ---------------------------------------------------------------------------
 

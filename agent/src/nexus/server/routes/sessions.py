@@ -453,7 +453,9 @@ async def get_session_usage(
         (session_id,),
     )
     row = row.fetchone()
-    if row is None:
+    # loom's connection wrapper can hand back an empty tuple on no-row; only
+    # a genuinely missing session is a 404.
+    if not row:
         raise HTTPException(status_code=404, detail=t("errors.sessions.not_found", locale))
 
     from ...usage_pricing import estimate_cost

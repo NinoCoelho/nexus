@@ -147,7 +147,7 @@ class MlxProvider(LLMProvider):
         catch it once, mark the model tool-less, and retry without tools so the
         turn still produces *something* rather than dying.
         """
-        chat_messages = self._strip_markers(messages)
+        chat_messages = _flatten_content_parts(self._strip_markers(messages))
         chat_messages = _tool_args_as_dicts(chat_messages)
         encoded_tools = [_encode_tool(t) for t in (tools or [])] or None
 
@@ -401,6 +401,39 @@ def _json_dumps(value: Any) -> str:
         return json.dumps(value)
     except (TypeError, ValueError):
         return "{}"
+
+
+def _flatten_content_parts(chat_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Render-shape fixup: template-safe message shapes.
+
+    Two things in session history kill chat templates:
+
+    * **Multipart part lists** (messages with attachments) — templates are
+      Jinja over plain strings, and a list reaching ``content`` explodes
+      ('can only concatenate str (not "list") to str'). Text parts are
+      joined with blank lines; every non-text part (image/audio/document)
+      becomes a one-word placeholder.
+    * **Missing ``content``** — tool-call-only assistant turns store
+      content=NULL and ``_encode_msg`` (wire-correctly) omits the key;
+      templates expect it to exist (empty string is fine).
+
+    Both are render-path-only; the OpenAI wire format is unaffected.
+    """
+    for m in chat_messages:
+        # Tool-call-only assistant turns store content=NULL and _encode_msg
+        # (wire-correctly) omits the key — but chat templates expect it.
+        m.setdefault("content", "")
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and part.get("text"):
+                texts.append(part["text"])
+            else:
+                texts.append("[attachment]")
+        m["content"] = "\n\n".join(texts)
+    return chat_messages
 
 
 def _tool_args_as_dicts(chat_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
