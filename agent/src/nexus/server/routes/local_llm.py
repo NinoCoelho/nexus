@@ -94,8 +94,13 @@ async def start_download(body: DownloadRequest) -> dict[str, str]:
 
 @router.get("/local/downloads")
 async def list_downloads() -> list[dict[str, Any]]:
+    """GGUF download tasks. MLX snapshot tasks share the same registry and
+    are served by ``/local/mlx/downloads`` — skip them here (parts-empty is
+    the by-construction marker) or the unified UI renders one download
+    twice.
+    """
     from ...local_llm.downloader import list_tasks
-    tasks = list_tasks()
+    tasks = [t for t in list_tasks() if t.parts]
     return [
         {
             "task_id": t.task_id,

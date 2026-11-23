@@ -191,7 +191,15 @@ def get_task(task_id: str) -> DownloadTask | None:
 
 
 def list_tasks() -> list[DownloadTask]:
-    """Return all tracked download tasks."""
+    """All tracked download tasks.
+
+    Includes MLX snapshot tasks (they share this registry — see
+    ``mlx_downloader.start_snapshot_download``). Callers that must not see
+    them: the GGUF ``/local/downloads`` route filters parts-empty tasks out
+    (MLX tasks are parts-empty by construction, GGUF tasks always carry
+    their file list), which is what keeps the unified UI from rendering
+    the same download twice.
+    """
     with _TASKS_LOCK:
         return list(_TASKS.values())
 

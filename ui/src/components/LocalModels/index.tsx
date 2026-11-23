@@ -621,14 +621,21 @@ export default function LocalModels({ onRefresh }: Props) {
         ))}
       </div>
 
-      {/* Downloads — both engines, one section */}
+      {/* Downloads — both engines, one section. task_id dedupe: MLX tasks
+          live in the shared registry and older daemons also list them on
+          /local/downloads; MLX wins. */}
       {(() => {
-        const ggufActive = ggufDownloads.filter(
-          (t) => t.status === "downloading" || t.status === "pending" || cancellingGguf.has(t.task_id),
-        );
-        const mlxActive = mlxDownloads.filter(
-          (t) => t.status === "downloading" || t.status === "pending" || cancellingMlx.has(t.task_id),
-        );
+        const seen = new Set<string>();
+        const ggufActive = ggufDownloads.filter((t) => {
+          if (seen.has(t.task_id)) return false;
+          if (mlxDownloads.some((m) => m.task_id === t.task_id)) return false;
+          seen.add(t.task_id);
+          return t.status === "downloading" || t.status === "pending" || cancellingGguf.has(t.task_id);
+        });
+        const mlxActive = mlxDownloads.filter((t) => {
+          seen.add(t.task_id);
+          return t.status === "downloading" || t.status === "pending" || cancellingMlx.has(t.task_id);
+        });
         if (ggufActive.length === 0 && mlxActive.length === 0) return null;
         return (
           <div className="local-downloads">
