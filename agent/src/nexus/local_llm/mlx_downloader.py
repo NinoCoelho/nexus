@@ -24,10 +24,10 @@ from .downloader import (
     _CANCEL_FLAGS,
     _TASKS,
     _TASKS_LOCK,
+    DownloadTask,
     _cancelled,
     _DownloadTqdm,
     _publish,
-    DownloadTask,
 )
 from .mlx_manager import mlx_models_dir
 from .mlx_snapshot import slug_for
@@ -63,10 +63,19 @@ def start_snapshot_download(repo_id: str, dest_root: Path | None = None) -> Down
     Returns immediately with a pending :class:`DownloadTask`; progress and
     terminal state are published on the event bus under the same event names
     the GGUF downloader uses, so the UI needs no new handling.
+
+    One active download per repo: a second request while one is pending or
+    downloading returns the existing task instead of spawning a rival
+    writer into the same snapshot directory.
     """
     root = Path(dest_root) if dest_root is not None else mlx_models_dir()
     slug = slug_for(repo_id)
     dest_dir = root / slug
+
+    with _TASKS_LOCK:
+        for existing in _TASKS.values():
+            if existing.repo_id == repo_id and existing.status in ("pending", "downloading"):
+                return existing
 
     task_id = uuid.uuid4().hex[:12]
     task = DownloadTask(
@@ -94,6 +103,10 @@ def _worker(task: DownloadTask, dest_dir: Path) -> None:
     """Blocking snapshot download. Runs on its own thread; never raises out."""
     from huggingface_hub import snapshot_download
 
+    if _cancelled(task.task_id):
+        # Cancelled while still pending (before the thread got scheduled).
+        _finish(task, "cancelled", None)
+        return
     task.status = "downloading"
     # Event names and the "kind" key must match downloader.py exactly — the
     # UI's progress component listens for these and nothing else.
@@ -153,6 +166,8 @@ def _make_tqdm(task: DownloadTask) -> Any:
 
 
 def _finish(task: DownloadTask, status: str, error: str | None) -> None:
+    if task.status == "cancelled" and status == "cancelled":
+        return  # the immediate cancel already reported; worker noticed later
     task.status = status
     task.error = error
     if status == "done":
@@ -175,10 +190,26 @@ def _finish(task: DownloadTask, status: str, error: str | None) -> None:
 
 
 def cancel_download(task_id: str) -> bool:
-    """Signal cancellation. Delegates to the shared GGUF implementation."""
-    from .downloader import cancel_download as _cancel
+    """Mark a download cancelled **now**; the worker aborts at its next check.
 
-    return _cancel(task_id)
+    Delegating to the shared GGUF cancel is not enough here:
+    ``snapshot_download`` only observes the cancel flag on tqdm updates, and
+    a stalled transfer can go a long time without one — the UI would keep
+    showing "downloading" after the user asked to cancel. Flip the status
+    immediately so the UI clears on its next poll; when the worker's own
+    ``_finish("cancelled")`` eventually lands it is a no-op. If the transfer
+    actually completed in the race window, the user asked to cancel and the
+    result is treated as cancelled either way.
+    """
+    from .downloader import cancel_download as _gguf_cancel
+
+    _gguf_cancel(task_id)  # set the flag so the worker stops at the next chunk
+    with _TASKS_LOCK:
+        task = _TASKS.get(task_id)
+        if task is not None and task.status in ("pending", "downloading"):
+            _finish(task, "cancelled", None)
+            return True
+    return False
 
 
 def get_task(task_id: str) -> DownloadTask | None:
