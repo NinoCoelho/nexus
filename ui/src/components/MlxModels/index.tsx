@@ -301,9 +301,15 @@ export default function MlxModels({ onRefresh }: Props) {
                 {m.is_vlm && " · vision"}
                 {m.is_active ? " · active" : " · not registered"}
               </span>
-              <span className={`mlx-badge${m.supports_tools ? "" : " mlx-badge--warn"}`}>
-                {m.supports_tools ? "tools" : "no tools"}
+              <span className={`mlx-badge${m.supports_tools && !m.incomplete ? "" : " mlx-badge--warn"}`}>
+                {m.incomplete ? "incomplete" : m.supports_tools ? "tools" : "no tools"}
               </span>
+              {m.incomplete && (
+                <span className="local-row-warn">
+                  Sharded download is incomplete — shard files are missing.
+                  Finish the download in the source tool, or Remove and re-download.
+                </span>
+              )}
             </div>
             <div className="local-row-actions">
               {m.is_active ? (
@@ -318,11 +324,15 @@ export default function MlxModels({ onRefresh }: Props) {
               ) : (
                 <button
                   className="settings-btn"
-                  disabled={busy === m.slug}
+                  disabled={busy === m.slug || !!m.incomplete}
                   onClick={() => onActivate(m.slug)}
-                  title="Register for chat. Becomes the default model if none is set yet."
+                  title={
+                    m.incomplete
+                      ? "Shard files are missing (interrupted download) — finish the download in the source tool, then Remove and re-import"
+                      : "Register for chat. Becomes the default model if none is set yet."
+                  }
                 >
-                  Activate
+                  {m.incomplete ? "Incomplete" : "Activate"}
                 </button>
               )}
               <button

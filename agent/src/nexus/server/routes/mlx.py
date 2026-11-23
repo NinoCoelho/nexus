@@ -210,6 +210,14 @@ async def mlx_activate(
     if info is None:
         raise HTTPException(status_code=404, detail=f"no installed MLX model {body.slug!r}")
 
+    if info.incomplete:
+        raise HTTPException(
+            409,
+            "this snapshot is incomplete — shard files referenced by "
+            "model.safetensors.index.json are missing (interrupted download). "
+            "Finish the download in the source tool, or remove and re-download.",
+        )
+
     if not body.force:
         need = estimate_resident_gb(
             info.local_dir, context_tokens=info.max_position_embeddings or 8192

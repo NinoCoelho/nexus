@@ -15,6 +15,7 @@ becomes activatable without re-downloading multi-GB weights. The contract:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -167,3 +168,73 @@ def test_delete_native_still_rmtree(models_dir, tmp_path, fake_config):
     (real / "config.json").write_text("{}", encoding="utf-8")
     assert mlx_manager.delete_installed("native") is True
     assert not real.exists()
+
+
+# ---------------------------------------------------------------------------
+# Incomplete sharded snapshots (interrupted downloads)
+# ---------------------------------------------------------------------------
+
+
+def _make_sharded_snapshot(parent: Path, name: str, *, shards: int, present: int) -> Path:
+    d = parent / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.json").write_text("{}", encoding="utf-8")
+    weight_map = {}
+    for shard_idx in range(1, shards + 1):
+        fname = f"model-{shard_idx:05d}-of-{shards:05d}.safetensors"
+        for t in range(4):
+            weight_map[f"layer.{shard_idx}.t{t}"] = fname
+        if shard_idx <= present:
+            (d / fname).write_bytes(b"\0" * 16)
+    (d / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": weight_map}), encoding="utf-8"
+    )
+    return d
+
+
+def test_snapshot_incomplete_detects_missing_shards(tmp_path):
+    from nexus.local_llm.mlx_snapshot import snapshot_incomplete
+
+    snap = _make_sharded_snapshot(tmp_path, "broken", shards=3, present=1)
+    assert snapshot_incomplete(snap) is True
+
+
+def test_snapshot_complete_when_all_shards_present(tmp_path):
+    from nexus.local_llm.mlx_snapshot import snapshot_incomplete
+
+    snap = _make_sharded_snapshot(tmp_path, "whole", shards=3, present=3)
+    assert snapshot_incomplete(snap) is False
+
+
+def test_snapshot_part_files_do_not_count(tmp_path):
+    """.part leftovers from an interrupted download are not shards."""
+    from nexus.local_llm.mlx_snapshot import snapshot_incomplete
+
+    snap = _make_sharded_snapshot(tmp_path, "broken", shards=3, present=1)
+    (snap / "model-00002-of-00003.safetensors.part").write_bytes(b"\0")
+    assert snapshot_incomplete(snap) is True
+
+
+def test_snapshot_without_index_is_complete(tmp_path):
+    from nexus.local_llm.mlx_snapshot import snapshot_incomplete
+
+    d = tmp_path / "single"
+    d.mkdir()
+    (d / "config.json").write_text("{}", encoding="utf-8")
+    (d / "model.safetensors").write_bytes(b"\0")
+    assert snapshot_incomplete(d) is False
+
+
+def test_read_snapshot_flags_incomplete(models_dir, tmp_path):
+    from nexus.local_llm.mlx_manager import list_installed
+    from nexus.local_llm.mlx_snapshot import read_snapshot
+
+    broken = _make_sharded_snapshot(tmp_path, "Broken-Model", shards=3, present=1)
+    link = models_dir / "broken-model"
+    link.symlink_to(broken, target_is_directory=True)
+
+    info = read_snapshot(link)
+    assert info.incomplete is True
+    public = info.to_public()
+    assert public["incomplete"] is True
+    assert [i.slug for i in list_installed() if i.incomplete] == ["broken-model"]

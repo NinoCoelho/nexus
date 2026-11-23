@@ -29,7 +29,13 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-__all__ = ["MlxModelInfo", "read_snapshot", "is_mlx_snapshot", "slug_for"]
+__all__ = [
+    "MlxModelInfo",
+    "read_snapshot",
+    "is_mlx_snapshot",
+    "snapshot_incomplete",
+    "slug_for",
+]
 
 
 # Architectures that are vision-language models even when ``vision_config`` is
@@ -61,6 +67,11 @@ class MlxModelInfo:
     capabilities: list[str] = field(default_factory=list)
     chat_template: str = ""
     total_bytes: int = 0
+    #: True when a sharded checkpoint is missing shard files (e.g. an
+    #: interrupted download: ``model-0000X-of-000NN.safetensors`` present for
+    #: only some shards). Such a snapshot cannot load; surfaced so the UI can
+    #: disable activation and explain why.
+    incomplete: bool = False
 
     @property
     def slug(self) -> str:
@@ -89,6 +100,7 @@ class MlxModelInfo:
             "capabilities": list(self.capabilities),
             "total_bytes": self.total_bytes,
             "total_gb": self.total_gb,
+            "incomplete": self.incomplete,
         }
 
 
@@ -217,6 +229,26 @@ def _supports_tools(chat_template: str) -> bool:
     return bool(opens)
 
 
+def snapshot_incomplete(directory: Path | str) -> bool:
+    """True when a sharded checkpoint is missing shard files.
+
+    Reads ``model.safetensors.index.json`` (HF sharded format: ``weight_map``
+    maps every tensor to its shard filename) and checks that each referenced
+    shard exists as a real file. ``.part`` leftovers from an interrupted
+    download don't count. A snapshot without an index (single-file format) is
+    complete by definition. Any read failure answers ``False`` — never let
+    metadata quirks hide a loadable model.
+    """
+    d = Path(directory)
+    index = _read_json(d / "model.safetensors.index.json")
+    weight_map = index.get("weight_map") if isinstance(index, dict) else None
+    if not isinstance(weight_map, dict) or not weight_map:
+        return False
+    needed = {name for name in weight_map.values() if isinstance(name, str)}
+    present = {p.name for p in d.glob("*.safetensors") if p.is_file()}
+    return bool(needed - present)
+
+
 def read_snapshot(local_dir: Path | str, *, repo_id: str | None = None) -> MlxModelInfo:
     """Inspect a snapshot directory. Never raises on malformed metadata.
 
@@ -266,4 +298,5 @@ def read_snapshot(local_dir: Path | str, *, repo_id: str | None = None) -> MlxMo
         capabilities=capabilities,
         chat_template=chat_template,
         total_bytes=total_bytes,
+        incomplete=snapshot_incomplete(directory),
     )

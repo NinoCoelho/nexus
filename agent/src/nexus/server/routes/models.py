@@ -192,6 +192,7 @@ async def set_routing(
 ) -> dict[str, Any]:
     from ...config_file import load as load_cfg, save as save_cfg
     cfg = app_state["cfg"] or load_cfg()
+    requested = None
     if "default_model" in body:
         requested = body["default_model"]
         if requested:
