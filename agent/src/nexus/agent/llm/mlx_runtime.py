@@ -567,11 +567,12 @@ class MlxRuntime:
 def _resolve_tool_parser(name: str | None) -> Any:
     """Import an ``mlx_lm.tool_parsers`` module and return its callable.
 
-    The per-module entrypoint symbol is the one thing that could not be
-    verified from the machine this was written on, so several plausible names
-    are tried and the module itself is returned as a last resort for the caller
-    to poke at. Returns ``None`` when nothing usable is found — the provider
-    then falls back to ``mlx_support.parse_tool_calls_fallback``.
+    The per-module entrypoint is pinned to ``parse_tool_call`` as shipped in
+    mlx-lm 0.32.2 (every module under ``mlx_lm.tool_parsers`` exposes it, plus
+    optional ``tool_call_start``/``tool_call_end`` sentinels). The other names
+    are older/alternative spellings kept as a safety net for mlx-lm drift.
+    Returns ``None`` when nothing usable is found — the provider then falls
+    back to ``mlx_support.parse_tool_calls_fallback``.
     """
     if not name:
         return None
@@ -582,7 +583,9 @@ def _resolve_tool_parser(name: str | None) -> Any:
     except Exception:
         log.warning("[mlx] tool parser module %r not importable", name)
         return None
-    for attr in ("parse", "parse_tools", "parse_tool_calls", "extract_tool_calls", "__call__"):
+    for attr in (
+        "parse_tool_call", "parse", "parse_tools", "parse_tool_calls", "extract_tool_calls",
+    ):
         fn = getattr(module, attr, None)
         if callable(fn):
             return fn
