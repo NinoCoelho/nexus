@@ -116,6 +116,20 @@ bedrock = [
 markitdown = [
     "markitdown[all]>=0.0.1",
 ]
+# Apple Silicon local inference via MLX, loaded in-process by
+# nexus.agent.llm.mlx_provider (no subprocess, unlike the llama.cpp path).
+# Install with: `uv sync --extra mlx`
+#
+# Kept out of [project.dependencies] and additionally marked per-platform:
+# mlx ships macOS-arm64-only wheels, so a bare dependency would break
+# `uv sync` on Linux/Windows dev machines and in CI. The marker means even
+# `--extra mlx` resolves to nothing off Apple Silicon rather than failing, and
+# `registry.build_registry` guards the import so a missing extra degrades to a
+# warning instead of a crash.
+mlx = [
+    "mlx>=0.22; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm>=0.21; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 # Local OCR engines for the multimodal image fallback + the ocr_image tool.
 # The ``llm`` engine (talking to a vision-capable endpoint like vLLM serving
 # datalab-to/chandra-ocr-2) needs no extra deps and rides the existing
@@ -148,4 +162,5 @@ line-length = 100
 asyncio_mode = "auto"
 markers = [
     "slow: tests that download multi-MB models or hit the network",
+    "mlx: requires macOS on Apple Silicon with the 'mlx' extra installed",
 ]

@@ -80,6 +80,12 @@ class ProviderConfig(BaseModel):
     iam_region: str = ""
     iam_extra: dict[str, str] = Field(default_factory=dict)
 
+    # Filesystem path to a locally installed model, for runtimes that load
+    # weights in-process instead of talking to an endpoint
+    # (``runtime_kind == "mlx"``). Mutually exclusive with ``base_url`` in
+    # practice: an in-process provider has no URL.
+    model_path: str = ""
+
 
 class AgentConfig(BaseModel):
     default_model: str = ""
