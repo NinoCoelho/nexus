@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from .hf_search import HfSearchError
@@ -61,30 +62,108 @@ def _list_models(api: Any, **kwargs: Any) -> list[Any]:
         return []
 
 
+def _looks_like_repo_id(query: str) -> str | None:
+    """A pasted ``owner/name`` or huggingface.co URL → ``owner/name``.
+
+    Users arrive with a shared link (chat suggestions, model cards); typing
+    a repo id or pasting its URL should land on exactly that repo instead
+    of keyword search. Returns ``None`` when the query is not repo-like.
+    """
+    q = query.strip()
+    if not q or " " in q:
+        return None
+    m = re.match(
+        r"(?:https?://)?(?:www\.)?huggingface\.co/"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:[/?#].*)?$",
+        q,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    if q.startswith("http"):
+        return None
+    parts = q.split("/")
+    if len(parts) == 2 and all(parts):
+        return q
+    return None
+
+
+def _looks_mlx(repo_id: str, tags: list[str] | None) -> bool:
+    """Cheap client-side MLX verdict: name says it, or the tags do.
+
+    HF's ``library=mlx`` filter keys off ``library_name`` from the model
+    card, and community conversions frequently ship with it unset (the
+    ``mlx-my-repo`` space template adds only a tag). Repos converted by
+    that template — or anyone who put "mlx" in the name — are loadable by
+    this engine; GGUF-only repos are not.
+    """
+    if "mlx" in repo_id.lower():
+        return True
+    for t in tags or []:
+        if t == "mlx" or t.startswith("mlx-"):
+            return True
+    return False
+
+
 def search_mlx_repos(query: str, limit: int = 20) -> list[dict[str, Any]]:
     """Search for MLX repos, newest/most-downloaded first.
 
     Returns dicts with ``id``, ``downloads``, ``likes``, ``tags`` — the same
     shape ``search_gguf_repos`` returns, so the UI's result list is reusable.
-    Results are de-duplicated by repo id across both passes.
+
+    Three passes, de-duplicated by repo id:
+
+    1. ``author=mlx-community`` — the canonical conversion account.
+    2. ``library=mlx`` — HF's library filter. Unreliable in both
+       directions: misses community conversions whose model card says
+       ``library_name: transformers``, and can return non-MLX repos, so
+       every hit goes through :func:`_looks_mlx`.
+    3. Plain ``search`` — everything else, client-side filtered by
+       :func:`_looks_mlx`. This is the pass that finds repos like
+       ``nvythong/Qwen3.8-35B-A3B-Distill-mlx-4Bit``.
+
+    A pasted ``owner/name`` (or huggingface.co URL) short-circuits the
+    passes and returns exactly that repo — the user shared a link, not a
+    keyword.
     """
+    pasted = _looks_like_repo_id(query)
+    if pasted:
+        api = _api()
+        try:
+            info = api.model_info(pasted)
+            row = {
+                "id": getattr(info, "id", None) or pasted,
+                "downloads": int(getattr(info, "downloads", 0) or 0),
+                "likes": int(getattr(info, "likes", 0) or 0),
+                "tags": list(getattr(info, "tags", []) or []),
+            }
+        except Exception:
+            # Still surface it — expansion (repo details) will show the
+            # real reason this repo can't be inspected or loaded.
+            row = {"id": pasted, "downloads": 0, "likes": 0, "tags": []}
+        return [row]
+
     api = _api()
     seen: dict[str, dict[str, Any]] = {}
 
-    passes: list[dict[str, Any]] = [
-        {"search": query, "author": _MLX_AUTHOR, "limit": limit, "sort": "downloads"},
-        {"search": query, "library": "mlx", "limit": limit, "sort": "downloads"},
+    passes: list[tuple[dict[str, Any], bool]] = [
+        ({"search": query, "author": _MLX_AUTHOR, "limit": limit, "sort": "downloads"}, False),
+        ({"search": query, "library": "mlx", "limit": limit, "sort": "downloads"}, True),
+        ({"search": query, "limit": limit * 2, "sort": "downloads"}, True),
     ]
-    for kwargs in passes:
+    for kwargs, needs_mlx_check in passes:
         for model in _list_models(api, **kwargs):
             repo_id = getattr(model, "id", None) or getattr(model, "modelId", None)
             if not repo_id or repo_id in seen:
+                continue
+            tags = list(getattr(model, "tags", []) or [])
+            if needs_mlx_check and not _looks_mlx(repo_id, tags):
                 continue
             seen[repo_id] = {
                 "id": repo_id,
                 "downloads": int(getattr(model, "downloads", 0) or 0),
                 "likes": int(getattr(model, "likes", 0) or 0),
-                "tags": list(getattr(model, "tags", []) or []),
+                "tags": tags,
             }
 
     if not seen:
